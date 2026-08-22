@@ -10,17 +10,18 @@
 //! consumes the entitled receipts the freeze (tags 58-59) creates from the
 //! SELECTED candidate's verified allocation: single-Egg direct slices through
 //! the generalized entitled seam, portfolio full pairs through the layout
-//! crate's `{prepare,apply}_full_pair`.  Unentitled and general shapes —
-//! partial fills, virtual legs, mixed pairs, inexact conversions — keep
-//! refusing honestly (`NotYetImplemented`, the standing ledger rows in the
-//! `pub(super)` `settlement` submodule).
+//! crate's `{prepare,apply}_full_pair`, and one-ended virtual legs — a
+//! `sigma` split or a `mu` merge — through the pooled complete-set primitive.
+//! Partial fills, mixed pairs and inexact conversions all consume; the
+//! `pub(super)` `settlement` submodule's standing ledger row list is empty,
+//! and what still refuses is authority (a fee) rather than a missing join.
 //!
 //! | intent | this wave |
 //! | --- | --- |
 //! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
 //! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
 //! | `SubmitDirectPage` | **narrow constructor**: creates one deterministic `SUBMITTED` Candidate and exact feed from a funded two-order frozen page; it does not verify/select or create a receipt |
-//! | `SettlePage` | **entitled consumption**: consumes one entitled direct slice (7 accounts) or one entitled portfolio full pair (variable list); every receipt consumes exactly once and every consumed reservation persists as its own archive |
+//! | `SettlePage` | **entitled consumption**: consumes one entitled direct slice (7 accounts, 8 with the pot), one entitled virtual leg in either churn direction (11 accounts, the pooled complete-set five among them), or one entitled portfolio full pair (variable list); every receipt consumes exactly once and every consumed reservation persists as its own archive |
 //! | `FreezeEntitlement` / `EntitleSlice` | **entitlement freeze** ([`entitlement`]): pot from the verified summary, resumable per-slice receipts, reservations `ACTIVE → ENTITLED` |
 //!
 //! Nothing here computes a clearing price or selects a candidate. A placement
@@ -248,7 +249,7 @@
 //!   and Epoch must still be open. A replay sees a tombstone and a released
 //!   reservation and cannot release twice.
 //!
-//! ## Settlement: one coupled consumption seam; lifecycle still STOP
+//! ## Settlement: the entitled consumption seams, and what is left
 //!
 //! The original batch relation still does not fit an SBF frame: its measured
 //! `verify_inner` frame is 39,104 bytes against the 4,096-byte maximum.  That
@@ -264,39 +265,27 @@
 //! and binds the layout-owned ClearWork header and page cursor.  It writes
 //! nothing and it does not interpret the opaque checkpoint body.
 //!
-//! The selected V1 subset consumes one pre-frozen direct receipt.  It requires
-//! `Epoch.phase == CLEARED`, `Candidate.status == SELECTED`, a canonical
-//! CandidateFeed PDA, a verified direct pairing slice, two frozen same-page
-//! single-Egg orders, and their exact ACTIVE reservations.  It transfers the
-//! Egg and exact collateral consideration together, consumes both reservations
-//! and the receipt once, and releases unused buy reservation back to free cash.
-//! Fees, partials, portfolios, virtual legs, tombstones, cross-page pairs, and
-//! non-divisible price-unit conversions refuse.
+//! The eight-row STOP this section used to carry — no reservation-set
+//! closure, no live-order join, no frozen policy preimage, no full-width
+//! relation domain, no stable checkpoint codec, no authenticated checkpoint
+//! or feed creation, no on-chain candidate closure and selection, and pot and
+//! receipt as codecs rather than entitlements — is **discharged**, row by row,
+//! by the joins this module and its submodules now execute.  The record is not
+//! this prose: it is `settlement::RETIRED_SETTLEMENT_BLOCKERS` and
+//! `settlement::SETTLEMENT_BLOCKERS`, whose standing list is empty and whose
+//! retirement notes carry each row's derivation.  A fail-closed test pins that
+//! every row filed appears in exactly one of the two.
 //!
-//! The complete venue remains STOP because these lifecycle joins are missing:
+//! What still refuses at this seam is authority rather than a missing join: a
+//! nonzero `max_fee_atoms` on either end is `AuthorizationUnavailable`, the
+//! reserved fee zone of a reservation is validated zero, and the per-owner
+//! conversion coincidence the relation's rounding boundary needs is *checked*
+//! (`distinct_owners == filled_order_count`) rather than assumed.
 //!
-//! 1. the complete frozen page set has no equally complete authenticated
-//!    reservation-set commitment or live-order join, so settlement cannot prove
-//!    every relation order has exactly one active funded reservation;
-//! 2. `EpochAccount.order_count` counts slots including tombstones, while the
-//!    relation candidate counts live orders; the owner codec currently refuses
-//!    both possible interpretations after a cancellation;
-//! 3. the epoch carries a 32-byte policy identity but no `FrozenPolicyV1`
-//!    preimage;
-//! 4. the relation domain carries four `u64` identities while the on-chain
-//!    domain carries `Hash32`; no injective mapping has been specified;
-//! 5. `ClearWorkV1` is `repr(Rust)` state containing enums and booleans, not a
-//!    stable account codec, so casting its opaque bytes would be unsound;
-//! 6. ClearWork and general CandidateFeed submission have no authenticated
-//!    creation/init lifecycle; only the exact two-order constructor is live;
-//! 7. candidate-set closure and selection are not on-chain transitions; and
-//! 8. FinalPot/SettlementReceipt are codecs, not frozen entitlements.
-//!
-//! The typed preflight and ranked STOP remain executable in `settlement`; the
-//! consumption path starts strictly after selection and entitlement freeze.
-//! `SubmitDirectPage` removes the caller-provided feed from the narrow path but
-//! leaves it explicitly `SUBMITTED`; neither it nor the page is selection
-//! authority.
+//! The typed preflight remains executable in `settlement` and is not a
+//! settlement verdict.  `SubmitDirectPage` removes the caller-provided feed
+//! from the narrow path but leaves it explicitly `SUBMITTED`; neither it nor
+//! the page is selection authority.
 //!
 //! **Post-resolution direction (PROPOSED, not integrated).** Verification,
 //! selection, and the complete receipt/pot entitlement set must be frozen
@@ -1744,14 +1733,19 @@ fn settle_page(
     Ok(())
 }
 
-/// Consume one entitled **virtual** slice: the buy end pays into the epoch
-/// pot, or the pot mints and delivers.
+/// Consume one entitled **virtual** slice, in whichever direction the selected
+/// candidate's churn runs.
 ///
-/// The two phases are read off the receipt's own consumption flags, so which
-/// one this is comes from persisted state rather than from the caller.  The
-/// mint, when it happens, goes through [`split::pooled_set_transition`] — the
-/// same kernel step, ledger delta, internal bound, two-term closure,
-/// collateral cap and Hoard mirror `Intent::Split` runs — because there is no
+/// A *split* leg's real end is a buyer: it pays into the epoch pot, and the
+/// pot mints and delivers.  A *merge* leg's real end is a seller: it delivers
+/// into the pot, the delivery that completes `mu` sets burns them, and the pot
+/// pays.  Both phases of both directions are read off the receipt's own
+/// consumption flags, so which one this is comes from persisted state rather
+/// than from the caller.
+///
+/// The mint and the burn both go through [`split::pooled_set_transition`] —
+/// the same kernel step, ledger delta, internal bound, two-term closure and
+/// Hoard mirror `Intent::Split` and `Intent::Merge` run — because there is no
 /// second route to the market's outstanding supply and there must not be.
 #[inline(never)]
 fn settle_virtual_slice(
@@ -1844,12 +1838,12 @@ fn settle_virtual_slice(
                 mint: true,
             },
         )?;
-    } else {
+    } else if plan.burn_sets == 0 {
         /* No transition, but the same two closure obligations: a delivery
-         * hands claims out of the pot's inventory, and the inventory has to
-         * be one the supply ledger accounts for.  The pay phase runs it too,
-         * over an inventory that is still zero, so every virtual instruction
-         * authenticates the five pooled accounts it presents. */
+         * moves claims into or out of the pot's inventory, and the inventory
+         * has to be one the supply ledger accounts for.  Both paying phases
+         * run it too, so every virtual instruction authenticates the five
+         * pooled accounts it presents. */
         split::require_pooled_holder_bound(
             program_id,
             accounts,
@@ -1866,6 +1860,29 @@ fn settle_virtual_slice(
         &mut pot,
         plan,
     );
+
+    /* The burn, *after* the delivery that assembles what it destroys -- the
+     * mirror of the mint's placement, and the whole asymmetry between the two
+     * churn directions.  A split mints before it hands claims out of the pot;
+     * a merge burns once the claims have landed in it, so the primitive is
+     * authorized against an inventory that already includes this slice's
+     * atoms.  Same primitive, `mint: false`: same kernel step, ledger delta,
+     * internal bound, two-term closure and Hoard mirror, with the collateral
+     * cap correctly absent because a burn lowers the backing.  A refusal here
+     * rolls back the apply above with the rest of the instruction. */
+    if plan.burn_sets != 0 {
+        split::pooled_set_transition(
+            program_id,
+            accounts,
+            &SETTLE_VIRTUAL_POOLED_ROLES,
+            epoch.market,
+            &mut pot.pot_internal,
+            split::PooledSetChange {
+                quantity: plan.burn_sets,
+                mint: false,
+            },
+        )?;
+    }
     // All validation remains over staged values.  No account byte has moved.
     position.validate()?;
     reservation.validate()?;

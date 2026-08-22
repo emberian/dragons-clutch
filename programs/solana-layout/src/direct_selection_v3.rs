@@ -177,8 +177,11 @@ const WINDOW_EXTENSION_OFFSET: usize = DIRECT_WINDOW_ACCOUNT_BYTES;
 const _: () = assert!(DIRECT_EPOCH_V4_BYTES == DIRECT_EPOCH_BYTES + 328);
 const _: () = assert!(DIRECT_CANDIDATE_V3_BYTES == DIRECT_CANDIDATE_ACCOUNT_BYTES + 48);
 const _: () = assert!(DIRECT_WINDOW_V3_BYTES == DIRECT_WINDOW_ACCOUNT_BYTES + 176);
-const _: () = assert!(RESERVATION_ACCOUNT_BYTES == 610);
+const _: () = assert!(RESERVATION_ACCOUNT_BYTES == 618);
 const _: () = assert!(DIRECT_RESERVATION_V2_BYTES == 618);
+/* The two planes' bodies are the same length since the general schema took on
+ * its payment ledger, so the `(tag, version)` pair is the whole uniqueness key
+ * — which is the key the header check enforces before a field is read. */
 const _: () = assert!(DIRECT_RESERVATION_V2_VERSION != RESERVATION_ACCOUNT_VERSION);
 const _: () = assert!(DIRECT_BATCH_POLICY_V3_BYTES == 96);
 
@@ -1312,11 +1315,13 @@ fn write_reservation_body(writer: &mut Writer<'_>, value: &ReservationAccount) -
     writer.amounts(&value.initial_internal)?;
     writer.amounts(&value.remaining_internal)?;
     /* The direct plane's body is the frozen 570-byte v1 shape.  It carries no
-     * partial-fill ledger — a direct order fills whole or not at all — so a
-     * stamped or consumed ledger cannot be persisted through this writer, and
-     * a caller holding one is refused rather than silently truncated. */
+     * partial-fill ledger and no payment ledger — a direct order fills whole
+     * or not at all, and pays in the same transition — so a stamped, consumed
+     * or part-paid ledger cannot be persisted through this writer, and a
+     * caller holding one is refused rather than silently truncated. */
     if value.entitled_units != 0
         || value.consumed_units != 0
+        || value.paid_units != 0
         || value.fee_debited_atoms != 0
         || value.fee_carry_numerator != 0
     {
@@ -1353,6 +1358,7 @@ fn read_reservation_body(reader: &mut Reader<'_>) -> Result<ReservationAccount> 
         // Unstamped: the frozen direct body has no ledger words to read.
         entitled_units: 0,
         consumed_units: 0,
+        paid_units: 0,
         fee_debited_atoms: 0,
         fee_carry_numerator: 0,
     })
@@ -2080,12 +2086,15 @@ mod tests {
         assert_eq!(DIRECT_CANDIDATE_V3_BYTES, 488);
         assert_eq!(DIRECT_WINDOW_V3_BYTES, 632);
         assert_eq!(DIRECT_WORK_BUDGET_BYTES, 248);
-        // The general reservation grew to 610 with the partial-fill ledger;
-        // the direct plane's own body stays byte-frozen at 618 and is told
-        // apart from it by both version and length.
-        assert_eq!(RESERVATION_ACCOUNT_BYTES, 610);
+        /* The general reservation grew to 610 with the partial-fill ledger and
+         * to 618 with the payment ledger; the direct plane's own body stays
+         * byte-frozen at 618.  The two now share the tag *and* the length, so
+         * the version byte is the whole discriminator — see
+         * `reservation_v3_and_direct_v2_refuse_each_other`, which proves both
+         * decoders refuse the other plane's exact bytes. */
+        assert_eq!(RESERVATION_ACCOUNT_BYTES, 618);
         assert_eq!(DIRECT_RESERVATION_V2_BYTES, 618);
-        assert_ne!(DIRECT_RESERVATION_V2_BYTES, RESERVATION_ACCOUNT_BYTES);
+        assert_eq!(DIRECT_RESERVATION_V2_BYTES, RESERVATION_ACCOUNT_BYTES);
         assert_ne!(DIRECT_RESERVATION_V2_VERSION, RESERVATION_ACCOUNT_VERSION);
         assert_eq!(DIRECT_BATCH_POLICY_V3_BYTES, 96);
         assert_eq!(DIRECT_WORK_BUDGET_TAG, 23);
@@ -2623,7 +2632,11 @@ mod tests {
     }
 
     #[test]
-    fn reservation_v2_is_exact_618_and_v1_v2_refuse_each_other() {
+    fn reservation_v3_and_direct_v2_refuse_each_other() {
+        /* Both planes' bodies are 618 bytes under tag 19, so the version byte
+         * is the entire separation and this is the test that says so: each
+         * decoder is handed the *other* plane's exact bytes, at the exact
+         * right length, and refuses on the version before reading a field. */
         let value = reservation();
         let mut bytes = [0u8; DIRECT_RESERVATION_V2_BYTES];
         assert_eq!(
@@ -2631,16 +2644,20 @@ mod tests {
             Ok(DIRECT_RESERVATION_V2_BYTES)
         );
         assert_eq!(DirectReservationV2Account::decode(&bytes, h(90)), Ok(value));
+        assert_eq!(bytes[0], RESERVATION_ACCOUNT_TAG);
+        assert_eq!(bytes[1], DIRECT_RESERVATION_V2_VERSION);
         assert_eq!(
             ReservationAccount::decode(&bytes),
-            Err(CodecError::TrailingBytes)
+            Err(CodecError::WrongVersion)
         );
-        let mut v1 = [0u8; RESERVATION_ACCOUNT_BYTES];
-        value.reservation.encode(&mut v1).unwrap();
-        assert_eq!(v1[1], RESERVATION_ACCOUNT_VERSION);
+        let mut general = [0u8; RESERVATION_ACCOUNT_BYTES];
+        value.reservation.encode(&mut general).unwrap();
+        assert_eq!(general[0], RESERVATION_ACCOUNT_TAG);
+        assert_eq!(general[1], RESERVATION_ACCOUNT_VERSION);
+        assert_eq!(general.len(), bytes.len());
         assert_eq!(
-            DirectReservationV2Account::decode(&v1, h(90)),
-            Err(CodecError::Truncated)
+            DirectReservationV2Account::decode(&general, h(90)),
+            Err(CodecError::WrongVersion)
         );
         let mut wrong = bytes;
         wrong[1] = RESERVATION_ACCOUNT_VERSION;

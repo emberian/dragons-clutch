@@ -10434,10 +10434,13 @@ fn general_second_half(
         let res_buy_pre = reservations[1].bytes();
         let res_sell_pre = reservations[2].bytes();
         for rank in [1_usize, 2] {
-            /* The ledger advances by this slice's quantity, and reaching the
-             * stamped total is completion: the same transition releases the
-             * remainder and takes CONSUMED, which is what CONSUMED means. */
+            /* Both ledgers advance by this slice's quantity -- a direct slice
+             * moves the Eggs and settles the collateral in one transition --
+             * and reaching the stamped total is completion: the same
+             * transition releases the remainder and takes CONSUMED, which is
+             * what CONSUMED means. */
             reservations[rank].value.consumed_units += single_receipt.quantity;
+            reservations[rank].value.paid_units += single_receipt.quantity;
             assert_eq!(
                 reservations[rank].value.consumed_units,
                 reservations[rank].value.entitled_units,

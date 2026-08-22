@@ -26,8 +26,9 @@
 //!   and a replayed delivery, a direct account shape presented for a virtual
 //!   receipt, and a tampered candidate record whose churn the digest binding
 //!   refuses.
-//! * **the standing blocker.**  A verified *merge* candidate still refuses
-//!   the entitlement freeze on the honest-stub code: `VirtualMergeCredit`.
+//! * **the other direction, admitted.**  A verified *merge* candidate now
+//!   freezes and opens the same pot; the walk that empties it lives in
+//!   `vpot_merge.rs`, which is this campaign read backwards.
 //!
 //! Claim plane: SBF-EXECUTED (bank), no promotion.  The oracle is the layout
 //! codec plus the host relation, never a second model of either.
@@ -929,10 +930,17 @@ async fn a_tampered_churn_coordinate_never_reaches_the_mint() {
     }
 }
 
-/// The standing blocker, stated on the bank: a verified **merge** candidate
-/// still refuses the entitlement freeze.
+/// The row that used to stand here, retired: a verified **merge** candidate
+/// freezes.
+///
+/// The freeze records `mu` exactly as it records `sigma` and opens the pot the
+/// consumption seam drains; what changed is not this instruction's checks but
+/// the *order* the pot can be drained in, and the schema that expresses it.
+/// The full deliver-burn-pay walk is `vpot_merge.rs`; this gate only pins that
+/// the admission the split wave had to refuse is now open, on the same book
+/// that refused before.
 #[tokio::test]
-async fn a_virtual_merge_candidate_still_refuses_the_entitlement_freeze() {
+async fn a_virtual_merge_candidate_now_freezes_and_opens_its_pot() {
     let (mut context, fixture) = start().await;
     let payer = context.payer.pubkey();
     // Four sells, one per outcome, all marginal at the even price vector: the
@@ -981,18 +989,27 @@ async fn a_virtual_merge_candidate_still_refuses_the_entitlement_freeze() {
     .await;
     result.unwrap();
 
-    let refused = send_walk(
+    let (result, _) = send_walk(
         &mut context,
         fixture.freeze_entitlement(payer, submission.id),
         342,
     )
     .await;
+    result.unwrap();
+    let pot = FinalPotAccount::decode(&bytes_of(&mut context, fixture.pot()).await).unwrap();
     assert_eq!(
-        custom(refused.0),
-        ClutchError::NotYetImplemented as u32,
-        "VirtualMergeCredit: the payee credit falls due before the burn funds it"
+        pot.phase, POT_PHASE_OPEN,
+        "a merged epoch opens the pot its burn will fund"
     );
-    assert!(account(&mut context, fixture.pot()).await.is_none());
+    assert_eq!(pot.pot_internal, [0; MAX_OUTCOMES]);
+    assert_eq!(pot.pot_cash_price_units, 0);
+    assert_eq!(pot.rounding_pot_price_units, 0);
+    let record = CandidateRecord::decode(
+        &bytes_of(&mut context, fixture.candidate_record(submission.id)).await,
+    )
+    .unwrap();
+    assert_eq!(record.virtual_merge, SIGMA);
+    assert_eq!(record.virtual_split, 0, "canonical churn is one-sided");
 }
 
 /// One explicit witness slice whose *buy* end is the global virtual merge.

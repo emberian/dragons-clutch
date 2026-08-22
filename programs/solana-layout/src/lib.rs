@@ -4904,10 +4904,11 @@ pub enum Intent {
     ///
     /// Reads the completed clearing checkpoint (its body holds the streamed
     /// verdict) and funds the pot from the summary's rounding/refund scalars.
-    /// The first cut refuses any summary carrying `virtual_split`/`virtual_merge`
-    /// (the VirtualPot ranked blocker stands) or a nonzero rounding pot (the
-    /// exact-only consumption seam cannot fund one) — refusals stated in code,
-    /// never silently zeroed.
+    /// It now *records* both churn directions and a nonzero rounding pot
+    /// rather than refusing them; the consumption seam realizes the residue by
+    /// never crediting it, mints `sigma` complete sets after the buyers have
+    /// paid, and burns `mu` after the sellers have delivered.  What still
+    /// refuses is authority, not churn: a nonzero verified fee scalar.
     FreezeEntitlement {
         market: MarketId,
         epoch: EpochId,

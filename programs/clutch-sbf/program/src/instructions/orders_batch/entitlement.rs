@@ -10,10 +10,10 @@
 //! `FreezeEntitlement` opens the freeze: it reads the **completed** clearing
 //! checkpoint — whose body still holds the streamed relation verdict — and
 //! creates the epoch's [`FinalPotAccount`] carrying the verified summary's
-//! rounding and churn expectations.  One refusal stands, stated in code and
-//! mapped onto the honest-stub code `NotYetImplemented`: a summary carrying
-//! `virtual_merge`, whose payee credit would fall due before the burn that
-//! funds it (`settlement::SETTLEMENT_BLOCKERS`).
+//! rounding and churn expectations, in both churn directions.  No settlement
+//! refusal stands here any more (`settlement::SETTLEMENT_BLOCKERS` is empty);
+//! what remain are the standing authority gates — a nonzero verified fee
+//! scalar is `AuthorizationUnavailable`, not a stub.
 //!
 //! An epoch expecting neither residue nor churn is created
 //! `POT_PHASE_CLOSED`, whose codec invariant *enforces* emptiness — the V3
@@ -43,11 +43,14 @@
 //!   the same total and requires equality, so a forged stamp cannot survive
 //!   recomputation.  A full one-to-one fill is the one-slice special case.
 //!
-//! * a **virtual** slice, whose sell end is the global split: one real end,
-//!   one `RECEIPT_LEG_SPLIT` receipt whose counterparty is the epoch pot, and
-//!   the same per-order stamp on that end's reservation.  Its virtual side
-//!   converts nothing — the pot carries it in exact price units — so it is
-//!   admissible at prices no ordinary pair could convert.
+//! * a **virtual** slice, whose sell end is the global split *or* whose buy
+//!   end is the global merge: one real end, one `RECEIPT_LEG_SPLIT` or
+//!   `RECEIPT_LEG_MERGE` receipt whose counterparty is the epoch pot, and the
+//!   same per-order stamp on that end's reservation.  Which side is real is
+//!   the only difference between the two — a split's is a buyer who owes the
+//!   pot cash, a merge's a seller the pot owes cash.  The virtual side
+//!   converts nothing — the pot carries it in exact price units — so a
+//!   virtual slice is admissible at prices no ordinary pair could convert.
 //!
 //! All routes require the exact consideration's divisibility of their *real*
 //! ends up front, so no unconsumable receipt is ever minted.
@@ -97,7 +100,7 @@ use clutch_solana_layout::{
     PortfolioRecord, SettlementReceiptAccount, TermsAccount, CANDIDATE_STATUS_SELECTED,
     EPOCH_PHASE_CLEARED, MAX_OUTCOMES, ORDER_KIND_PORTFOLIO, POT_PHASE_CLOSED, POT_PHASE_OPEN,
     RECEIPT_FLAG_BUY_CONSUMED, RECEIPT_FLAG_SELL_CONSUMED, RECEIPT_FLAG_SLICE_EXHAUSTED,
-    RECEIPT_LEG_DIRECT, RECEIPT_LEG_SPLIT,
+    RECEIPT_LEG_DIRECT, RECEIPT_LEG_MERGE, RECEIPT_LEG_SPLIT,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -385,16 +388,24 @@ pub(super) fn freeze_entitlement(
      * collateral.  `settlement.rs`'s `VirtualPot` retirement note carries the
      * rest of the order.
      *
-     * The merge direction is the one that stays refused, and narrowly: with
-     * `mu != 0` the identity above is strictly *negative* before the burn —
-     * the pot must pay a payee before it holds the complete sets whose burn
-     * would fund the payment — and deferring a payee's credit past its Egg
-     * delivery needs a `paid_units` term the v2 `ReservationAccount` schema
-     * does not carry. */
-    require(summary.virtual_merge == 0, ClutchError::NotYetImplemented)?;
+     * The merge direction runs the same argument with both signs flipped.
+     * With `mu != 0` the identity above is strictly *negative* before the
+     * burn, because the merge is the one-ended **buy** (`relation_v1.rs:1562`,
+     * `:3806`) and its real ends are *sellers* the pot owes cash — so paying
+     * one first would release `mu` collateral atoms against claims the market
+     * still has outstanding.  The order that closes is the mirror of the
+     * split's: deliver every merge leg into the pot, burn the `mu` complete
+     * sets they assemble, then pay.  Deferring a payee's credit past its own
+     * Egg delivery is what `ReservationAccount` v3's `paid_units` records.
+     *
+     * Only one direction can be live: `min(sigma, mu) != 0` is the relation's
+     * `ChurnNotCanonical` (`relation_v1.rs:3257-3260`) and
+     * `CandidateRecord::validate`'s `InvalidEnum`, because `(sigma, mu)` is
+     * exactly `(max(c,0), max(-c,0))` for the one net imbalance `c`. */
     /* The record and the streamed verdict must agree on the churn
-     * coordinates: the record is what `SettlePage` reads `sigma` from, and a
-     * record that overstated it would size a mint the summary never priced. */
+     * coordinates: the record is what `SettlePage` reads `sigma` and `mu`
+     * from, and a record that overstated either would size a mint or a burn
+     * the summary never priced. */
     require(
         summary.virtual_split == record.virtual_split
             && summary.virtual_merge == record.virtual_merge,
@@ -463,7 +474,10 @@ pub(super) fn freeze_entitlement(
         pot_cash_price_units: 0,
         rounding_pot_price_units,
         outcome_count: epoch.outcome_count,
-        phase: if rounding_pot_price_units == 0 && record.virtual_split == 0 {
+        phase: if rounding_pot_price_units == 0
+            && record.virtual_split == 0
+            && record.virtual_merge == 0
+        {
             POT_PHASE_CLOSED
         } else {
             POT_PHASE_OPEN
@@ -992,14 +1006,13 @@ pub(super) fn entitle_slice(
     }
     let tail = &accounts[IX_ENTITLE_PAGES + page_count..];
 
-    /* The slice being entitled, routed on its shape.  A slice whose sell end
-     * is the global virtual split has one real end and takes the virtual
-     * route; a slice whose buy end is the global virtual merge is the one
-     * direction the pot cannot fund and keeps the honest stub (the freeze
-     * already refused any summary carrying `mu`, so this is defence in
-     * depth); `Split` on the buy side or `Merge` on the sell side would have
-     * refused at verification as `SliceNotExecutable`
-     * (`relation_v1.rs:3784`, `:3806`) and is a state mismatch here. */
+    /* The slice being entitled, routed on its shape.  Both one-ended shapes
+     * take the virtual route, on the side that is real: a slice whose *sell*
+     * end is the global split has a real buyer who pays the pot, and a slice
+     * whose *buy* end is the global merge has a real seller the pot pays.
+     * `Split` on the buy side or `Merge` on the sell side would have refused
+     * at verification as `SliceNotExecutable` (`relation_v1.rs:3784`,
+     * `:3806`) and is a state mismatch here, as is a virtual self-pair. */
     let slice = {
         let data = accounts[IX_ENTITLE_FEED].data.borrow();
         clearing::slice_at(&data, &feed, slice_index)?
@@ -1024,8 +1037,23 @@ pub(super) fn entitle_slice(
                 pages,
             );
         }
-        (clearing::LegRef::Merge, clearing::LegRef::Order(_)) => {
-            return Err(Refusal::Adapter(ClutchError::NotYetImplemented));
+        (clearing::LegRef::Merge, clearing::LegRef::Order(sell)) => {
+            return entitle_virtual_slice(
+                program_id,
+                accounts,
+                tail,
+                &epoch,
+                &record,
+                &VirtualSliceEnds {
+                    slice,
+                    slice_index,
+                    rank: sell,
+                    side: 1,
+                    expected_residue,
+                    feed: &feed,
+                },
+                pages,
+            );
         }
         _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
     };
@@ -1432,8 +1460,17 @@ fn scan_end_total(
 ///
 /// The receipt's virtual side carries `Hash32::ZERO` for its order id, which
 /// is exactly what the frozen `SettlementReceiptAccount` codec requires of a
-/// `RECEIPT_LEG_SPLIT` row — the layout has always had the shape; this is the
-/// first seam that mints one.
+/// `RECEIPT_LEG_SPLIT` row on its sell side and a `RECEIPT_LEG_MERGE` row on
+/// its buy side — the layout has always had both shapes.
+///
+/// The two directions are one function because they differ in exactly one
+/// thing: which side of the slice is real.  A split's real end is a *buyer*
+/// (`side == 0`) who owes the pot cash; a merge's is a *seller*
+/// (`side == 1`) the pot owes cash.  Every other step — locating the order,
+/// re-deriving its entitled total from the verified fill, the per-outcome
+/// limit check, the convertibility rule, the stamp, the receipt PDA — is the
+/// same, and the *virtual* side converts nothing in either direction, so a
+/// virtual slice stays admissible at prices no ordinary pair could convert.
 #[inline(never)]
 fn entitle_virtual_slice<'a>(
     program_id: &Pubkey,
@@ -1458,14 +1495,18 @@ fn entitle_virtual_slice<'a>(
             || tail.len() == ENTITLE_VIRTUAL_TAIL_ACCOUNT_COUNT + 1,
         ClutchError::AccountCount,
     )?;
-    /* A slice may reference the global virtual split only when the selected
-     * candidate carries one.  The freeze already cross-checked the record's
-     * churn against the streamed verdict, so this is the one place the
-     * witness's shape is bound to the priced quantity. */
-    require(
-        side == 0 && record.virtual_split != 0 && record.virtual_merge == 0,
-        ClutchError::MismatchedState,
-    )?;
+    /* A slice may reference a global virtual leg only when the selected
+     * candidate carries that leg, and on the side the relation puts it: the
+     * split serves buy legs, the merge absorbs sell legs.  The freeze already
+     * cross-checked the record's churn against the streamed verdict, and
+     * `CandidateRecord::validate` refuses a record carrying both, so this is
+     * the one place the witness's shape is bound to the priced quantity. */
+    let churn = if side == 0 {
+        record.virtual_split
+    } else {
+        record.virtual_merge
+    };
+    require(side <= 1 && churn != 0, ClutchError::MismatchedState)?;
     require(
         slice.quantity != 0 && slice.outcome < epoch.outcome_count,
         ClutchError::MismatchedState,
@@ -1503,16 +1544,21 @@ fn entitle_virtual_slice<'a>(
         .checked_mul(u128::from(price))
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     require(epoch.price_scale != 0, ClutchError::MismatchedState)?;
+    let (buy_slot, sell_slot) = if side == 0 {
+        (Some(&located.slot), None)
+    } else {
+        (None, Some(&located.slot))
+    };
     require_convertible_ends(
         &accounts[IX_ENTITLE_FEED],
         feed,
         record,
         epoch.price_scale,
         ConvertibleEnds {
-            buy_slot: Some(&located.slot),
-            sell_slot: None,
-            buy_entitled: entitled,
-            sell_entitled: 0,
+            buy_slot,
+            sell_slot,
+            buy_entitled: if side == 0 { entitled } else { 0 },
+            sell_entitled: if side == 0 { 0 } else { entitled },
             price,
             consideration_price_units,
             expected_residue,
@@ -1530,12 +1576,19 @@ fn entitle_virtual_slice<'a>(
     )?;
 
     let receipt_prior = tail[1].lamports();
+    // The real end takes its own side's order-id slot; the virtual end takes
+    // the zero the receipt codec requires of it.
+    let (buy_order_id, sell_order_id, leg_kind) = if side == 0 {
+        (located.slot.order_id(), Hash32::ZERO, RECEIPT_LEG_SPLIT)
+    } else {
+        (Hash32::ZERO, located.slot.order_id(), RECEIPT_LEG_MERGE)
+    };
     let receipt = SettlementReceiptAccount {
         epoch: epoch.epoch,
         market: epoch.market,
         candidate: record.candidate,
-        buy_order_id: located.slot.order_id(),
-        sell_order_id: Hash32::ZERO,
+        buy_order_id,
+        sell_order_id,
         consideration_price_units,
         quantity: slice.quantity,
         settled_quantity: 0,
@@ -1545,7 +1598,7 @@ fn entitle_virtual_slice<'a>(
             .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
         slice_index,
         outcome: slice.outcome,
-        leg_kind: RECEIPT_LEG_SPLIT,
+        leg_kind,
         consumed_flags: 0,
         stored_bump: 0,
         flags: 0,
