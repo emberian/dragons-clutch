@@ -2,7 +2,7 @@
 
 Evidence ceiling: offline synthetic wire measurement plus analytical lower bounds. No SBF, validator, RPC, fee-market, or landing measurement occurred.
 
-Arms: `layout_hypothesis` (design sketch, retained) and `abi_landed` (read from `programs/solana-layout/src/lib.rs` at `0e4bd51`), plus their `abi_differential`. A landed width is an encoding fact, never a measured cost.
+Arms: `layout_hypothesis` (design sketch, retained) and `abi_landed` (read from `programs/solana-layout/src/lib.rs` at `41c231f`), plus their `abi_differential`. A landed width is an encoding fact, never a measured cost.
 
 ## Claim transition envelope
 
@@ -43,7 +43,7 @@ These minimum transaction counts ignore compute. They cannot be used to claim th
 
 ## Landed ABI inventory
 
-Source: `programs/solana-layout/src/lib.rs` at `0e4bd51`, one instance of each account.
+Source: `programs/solana-layout/src/lib.rs` at `41c231f`, one instance of each account.
 
 | account | Rust constant | data bytes | package-default rent principal (lamports) |
 |---|---|---:|---:|
@@ -57,14 +57,14 @@ Source: `programs/solana-layout/src/lib.rs` at `0e4bd51`, one instance of each a
 | supply_ledger | `account_len::SUPPLY_LEDGER` | 333 | 3208560 |
 | terms | `account_len::TERMS` | 1656 | 12416640 |
 | price_grid | `account_len::PRICE_GRID` | 589 | 4990320 |
-| epoch | `account_len::EPOCH` | 328 | 3173760 |
+| epoch | `account_len::EPOCH` | 329 | 3180720 |
 | candidate_record | `account_len::CANDIDATE` | 337 | 3236400 |
 | final_pot | `account_len::FINAL_POT` | 262 | 2714400 |
 | settlement_receipt | `account_len::SETTLEMENT_RECEIPT` | 217 | 2401200 |
 | resolution | `account_len::RESOLUTION` | 165 | 2039280 |
 | clear_work | `account_len::CLEAR_WORK` | 50054 | 349266720 |
 | candidate_feed | `account_len::CANDIDATE_FEED` | 6266 | 44502240 |
-| **one instance of each (17)** | | **65567** | **471491280** |
+| **one instance of each (17)** | | **65568** | **471498240** |
 
 Of that principal, 15144960 lamports is the per-account 128-byte storage overhead, so account count is a first-class capital term.
 
@@ -100,21 +100,21 @@ Payload widths are landed; the account sets are hypotheses and are labeled as su
 
 | n | orders | pages | order authentications | relation steps floor | frozen epoch state bytes | frozen epoch rent principal (lamports) | V1 |
 |---:|---:|---:|---:|---:|---:|---:|---|
-| 2 | 16 | 1 | 16 | 37 | 5266 | 40214880 | admit |
-| 2 | 32 | 2 | 32 | 69 | 9278 | 69029280 | admit |
-| 2 | 64 | 4 | 64 | 133 | 17302 | 126658080 | admit |
-| 4 | 16 | 1 | 16 | 41 | 5266 | 40214880 | admit |
-| 4 | 32 | 2 | 32 | 73 | 9278 | 69029280 | admit |
-| 4 | 64 | 4 | 64 | 137 | 17302 | 126658080 | admit |
-| 8 | 16 | 1 | 16 | 49 | 5266 | 40214880 | admit |
-| 8 | 32 | 2 | 32 | 81 | 9278 | 69029280 | admit |
-| 8 | 64 | 4 | 64 | 145 | 17302 | 126658080 | admit |
-| 16 | 16 | 1 | 16 | 65 | 5266 | 40214880 | admit |
-| 16 | 32 | 2 | 32 | 97 | 9278 | 69029280 | admit |
-| 16 | 64 | 4 | 64 | 161 | 17302 | 126658080 | admit |
-| 24 | 16 | 1 | 16 | 81 | 5266 | 40214880 | refuse |
-| 24 | 32 | 2 | 32 | 113 | 9278 | 69029280 | refuse |
-| 24 | 64 | 4 | 64 | 177 | 17302 | 126658080 | refuse |
+| 2 | 16 | 1 | 16 | 37 | 5267 | 40221840 | admit |
+| 2 | 32 | 2 | 32 | 69 | 9279 | 69036240 | admit |
+| 2 | 64 | 4 | 64 | 133 | 17303 | 126665040 | admit |
+| 4 | 16 | 1 | 16 | 41 | 5267 | 40221840 | admit |
+| 4 | 32 | 2 | 32 | 73 | 9279 | 69036240 | admit |
+| 4 | 64 | 4 | 64 | 137 | 17303 | 126665040 | admit |
+| 8 | 16 | 1 | 16 | 49 | 5267 | 40221840 | admit |
+| 8 | 32 | 2 | 32 | 81 | 9279 | 69036240 | admit |
+| 8 | 64 | 4 | 64 | 145 | 17303 | 126665040 | admit |
+| 16 | 16 | 1 | 16 | 65 | 5267 | 40221840 | admit |
+| 16 | 32 | 2 | 32 | 97 | 9279 | 69036240 | admit |
+| 16 | 64 | 4 | 64 | 161 | 17303 | 126665040 | admit |
+| 24 | 16 | 1 | 16 | 81 | 5267 | 40221840 | refuse |
+| 24 | 32 | 2 | 32 | 113 | 9279 | 69036240 | refuse |
+| 24 | 64 | 4 | 64 | 177 | 17303 | 126665040 | refuse |
 
 ## Hypothesis versus landed ABI
 
@@ -131,7 +131,7 @@ Payload widths are landed; the account sets are hypotheses and are labeled as su
 | claim_instruction_internal_split | bytes | 11 | 74 | +63 | The landed payload names market and owner by 32-byte identity instead of packing an outcome count and a u64 into 11 bytes. |
 | claim_instruction_materialize_one | bytes | 11 | 107 | +96 | The landed payload adds a 32-byte destination and an outcome index to the market/owner pair, still far inside MAX_INTENT_BYTES. |
 | accumulator_full_summary | bytes | 272 | absent | absent | No accumulator summary account exists in the landed family; FeedHead is a 124-byte cursor plus evidence digest, not a fold summary, so the accumulator arm stays entirely hypothetical. |
-| landed_only_account_family | bytes | absent | 61002 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt, Resolution, ClearWork and CandidateFeed were never in the hypothesis arm, so most of the landed rent inventory is not represented by the design sketch. |
+| landed_only_account_family | bytes | absent | 61003 | absent | Realm, Profile, Market, Hoard, FeedHead, Terms, PriceGrid, Epoch, CandidateRecord, FinalPot, SettlementReceipt, Resolution, ClearWork and CandidateFeed were never in the hypothesis arm, so most of the landed rent inventory is not represented by the design sketch. |
 
 ## Interpretation
 

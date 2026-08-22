@@ -139,7 +139,7 @@ class LandedAbiTests(unittest.TestCase):
             "supply_ledger": 333,
             "terms": 1656,
             "price_grid": 589,
-            "epoch": 328,
+            "epoch": 329,
             "candidate_record": 337,
             "final_pot": 262,
             "settlement_receipt": 217,
@@ -234,8 +234,8 @@ class LandedAbiTests(unittest.TestCase):
 
     def test_one_instance_inventory_totals(self) -> None:
         row = cost_lab.find_row(self.rows, "landed-account-inventory-one-instance")
-        self.assertEqual(row["outputs"]["data_bytes"], 65_567)
-        self.assertEqual(row["outputs"]["rent_principal_lamports"], 471_491_280)
+        self.assertEqual(row["outputs"]["data_bytes"], 65_568)
+        self.assertEqual(row["outputs"]["rent_principal_lamports"], 471_498_240)
         self.assertEqual(row["outputs"]["rent_overhead_component_lamports"], 15_144_960)
         self.assertEqual(row["outputs"]["largest_account"], "clear_work")
         self.assertEqual(row["outputs"]["smallest_account"], "realm")
@@ -336,7 +336,7 @@ class LandedAbiTests(unittest.TestCase):
             self.assertIsNone(output["delta"], scenario_id)
         landed_only = cost_lab.find_row(self.rows, "diff-landed-only-account-family")["outputs"]
         self.assertIsNone(landed_only["hypothesis_value"])
-        self.assertEqual(landed_only["landed_value"], 61_002)
+        self.assertEqual(landed_only["landed_value"], 61_003)
 
     def test_position_rent_delta_is_reported(self) -> None:
         output = cost_lab.find_row(self.rows, "diff-position-account")["outputs"]
@@ -578,7 +578,7 @@ class AbiAuditHardeningTests(unittest.TestCase):
         intent["formula"] = "2 + 32 + 32 + 1 + PORTFOLIO_RECORD_BYTES"
         drift = cost_lab.abi_drift(stale, self.codec_source())
         self.assertIn(
-            "bounds.max_intent_bytes: codec says 310 for MAX_INTENT_BYTES, constants.json pins 302",
+            "bounds.max_intent_bytes: codec says 402 for MAX_INTENT_BYTES, constants.json pins 302",
             drift,
         )
         self.assertIn("intent place_order: codec says 310 bytes, cost lab pins 302", drift)

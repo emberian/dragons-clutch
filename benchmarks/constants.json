@@ -97,18 +97,18 @@
   "abi_landed": {
     "arm": "abi_landed",
     "evidence_class": "landed_codec_constant",
-    "snapshot_date": "2026-08-19",
+    "snapshot_date": "2026-08-22",
     "source": {
       "owner": "programs/solana-layout",
       "codec_path": "programs/solana-layout/src/lib.rs",
-      "commit": "0e4bd51c3de62f5ae965907ff3aba036dae9607c",
-      "commit_short": "0e4bd51",
-      "commit_subject": "feat(sbf): route resumable occupation resolution",
-      "codec_blob_sha256_at_commit": "82a995aeef4c326a683d56f22a1eea41cb190eab6b2158427c0beefcd3e6589b",
+      "commit": "41c231f6b9d1410722710250ae4092f7540741d7",
+      "commit_short": "41c231f",
+      "commit_subject": "Retire VirtualMergeCredit: deliver, then burn, then pay",
+      "codec_blob_sha256_at_commit": "3afadabfb57da9428a0ae724e2288b4e8d2807cbc7e4d0cb20f1f0b1bc661e04",
       "relation_path": "crates/clutch-batch/src/lib.rs",
       "relation_blob_sha256_at_commit": "f25ce5524a71f9e8ad5200992bb69290444865243f26040906d7aa6798013249",
       "relation_v1_path": "crates/clutch-batch/src/relation_v1.rs",
-      "relation_v1_blob_sha256_at_commit": "9d4e3cc0fdfc03a4cd2d08f0257224f79fe4a8f0d1f861a09b75e92755bd30da",
+      "relation_v1_blob_sha256_at_commit": "16d97272fd1e979303f7745e088304263cb8acbe1a20326ba5d9226e93067f74",
       "note": "One codec owner. Every width below is that file's own account_len, account_version and Intent::encoded_len expression restated term by term, so the harness re-derives each total instead of quoting it, and `abi-audit` re-derives them again from the file on disk. Digests are the blobs at the pinned commit, not a mutable working tree. The relation bounds come from crates/clutch-batch and are not re-derived by the audit: their blob digests are checked instead, so a moved relation blob is drift until someone re-verifies the bounds by hand."
     },
     "bounds": {
@@ -136,8 +136,8 @@
       "order_slot_field_terms": [1, 235],
       "max_portfolio_orders": 8,
       "order_page_header_bytes": 236,
-      "max_intent_bytes": 310,
-      "max_intent_field_terms": [2, 64, 8, 1, 235],
+      "max_intent_bytes": 402,
+      "max_intent_field_terms": [2, 32, 368],
       "relation_version": 1,
       "relation_max_orders": 64,
       "relation_max_portfolio_orders": 8,
@@ -228,11 +228,11 @@
       },
       "epoch": {
         "rust_const": "account_len::EPOCH",
-        "bytes": 328,
+        "bytes": 329,
         "discriminator_tag": 11,
         "schema_version": 2,
-        "field_terms": [2, 288, 8, 4, 8, 8, 2, 2, 2, 1, 1, 1, 1],
-        "formula": "2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1"
+        "field_terms": [2, 288, 8, 4, 8, 8, 2, 2, 2, 1, 1, 1, 1, 1],
+        "formula": "2 + (9 * 32) + 8 + 4 + 8 + 8 + 2 + 2 + 2 + 1 + 1 + 1 + 1 + 1"
       },
       "candidate_record": {
         "rust_const": "account_len::CANDIDATE",
@@ -424,7 +424,7 @@
       "Both admitted order families and a retirement share one 236-byte tagged slot, so the page holds every admitted slot kind without a second account, a second order-id chain, or a second fold.",
       "A single-Egg slot pays for the widest admitted body: 107 bytes of body under a kind byte and 128 bytes of required-zero padding. The growth from the 1819-byte v2 single-family page to 4012 is those sixteen wider slots plus one header byte; the padding is required to be zero and is not spare capacity.",
       "A cancellation writes a 80-byte tombstone into the slot and order id it retires, so a retirement never renumbers a later order and never widens the slot.",
-      "place_order is pinned at the widest admitted placement, a portfolio slot at 310 bytes, which is exactly MAX_INTENT_BYTES. A single-Egg placement is 182 bytes and a padding or tombstone placement is refused by the codec at 75 bytes of header.",
+      "place_order is pinned at the widest admitted placement, a portfolio slot at 310 bytes. It is no longer the widest intent of any kind: InitSourceSpecV2 carries a 368-byte source-spec body, so MAX_INTENT_BYTES is now 2 + HASH_BYTES + SOURCE_SPEC_BODY_V2_BYTES = 402 and a placement no longer sits at the ceiling. A single-Egg placement is 182 bytes and a padding or tombstone placement is refused by the codec at 75 bytes of header.",
       "check_count refuses outcome_count below 2 and above 16, so n=24 is a codec refusal in this arm on top of the unchanged V1 policy refusal."
     ]
   }
