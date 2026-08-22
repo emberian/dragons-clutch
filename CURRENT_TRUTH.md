@@ -1,15 +1,18 @@
 # Dragon's Clutch: current truth and control plane
 
-Status date: 2026-08-21. This is the operational entry point for engineering
-handoffs. [`PROJECT.md`](PROJECT.md) is the canonical product brief,
-[`AGENTS.md`](AGENTS.md) is the authority and correctness policy, and
-[`docs/V1_BACKLOG.md`](docs/V1_BACKLOG.md) is the dependency-ordered queue.
+Status date: 2026-08-22. This is the operational entry point for implementation
+and evidence status. [`PROJECT.md`](PROJECT.md) is the canonical product brief,
+[`AGENTS.md`](AGENTS.md) is the authority and correctness policy, and the
+source-backed [`architecture review`](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
+owns the post-Cycle-G repair and successor queue.
 
-This file supersedes current-status, test-count, and next-work claims in
-[`GOAL.md`](GOAL.md), [`CODEX_HANDOFF.md`](CODEX_HANDOFF.md),
-[`CLAUDE_HANDOFF.md`](CLAUDE_HANDOFF.md), and dated drift reviews. Historical
-documents remain useful evidence pointers; they are not a live promotion
-ledger.
+This file supersedes current-status and test-count claims in [`GOAL.md`](GOAL.md),
+[`CODEX_HANDOFF.md`](CODEX_HANDOFF.md), [`CLAUDE_HANDOFF.md`](CLAUDE_HANDOFF.md),
+generated manifest prose, and dated drift reviews. Those documents remain
+useful evidence pointers and execution history; they are not a live promotion
+ledger. “Capability-complete” in a historical handoff means only that its named
+bounded matrix had no unwritten transition. It does not mean the original
+product thesis is complete or that every well-formed profile is adapter-drivable.
 
 ## 1. Claim vocabulary
 
@@ -35,10 +38,10 @@ economics.
 
 ## 2. Snapshot boundary
 
-The accepted local evidence ancestry is the 2026-08-21 **cycle-G** chain:
+The last accepted local evidence ancestry is the 2026-08-21 **cycle-G** chain:
 liveness seal at commit `846afab` over the same runtime ancestry, superseding
 the cycle-E chain (`934bdd6` / `d77d670` / manifest `cb94c27`) and the cycle-F
-chain (`04acf61`). The current sealed default ELF is **2,149,672 bytes with
+chain (`04acf61`). Its sealed default ELF is **2,149,672 bytes with
 SHA-256
 `0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7`** — the
 runtime carrying intents **36–73** (the highest is `SealSourceArchiveV2`, tag
@@ -60,6 +63,18 @@ rows are always remeasured against the current artifact, never relabeled.
 This is exact local artifact/stack/bank evidence, not a release, deployment,
 production source-provider, inclusion, audit, or formal-verification claim.
 
+The current post-Cycle-G source is **UNSEALED**. It includes the loopback bench
+guards, verified-only candidate admission, the receipt slice-bound correction,
+the authenticated receiver-write seam, and canonical nonzero-confidence V2
+interval resolution described in the architecture review. Their current bank
+campaigns pass. A full offline artifact audit at `ba580c6` rebuilt the default
+empty-registry ELF three ways with identical 2,160,072-byte SHA-256
+`a6381fbe211e400788615e1c588938266bed14bc8f0fc12babf76350bc24cbe2`,
+verified the 129-file source closure, dependency/syscall surface, and final-LTO
+stack bounds. This remains engineering evidence, not an accepted baseline: the
+current bytes still need the complete campaign/manifest, a second-host result,
+and an explicit seal before superseding Cycle G.
+
 Runtime evidence is artifact-specific:
 
 - the historical 20-step signed committed walk at `882204f` executed ELF
@@ -80,16 +95,25 @@ Runtime evidence is artifact-specific:
   not a blank-bank venue or the complete schema-v2 baseline. The exact record
   is [`docs/implementation/COMMITTED_SBF_WALK.md`](docs/implementation/COMMITTED_SBF_WALK.md).
 
-**The manifest and the portable attestation both lag the seal, and neither has
-been re-run for `0d52c561…`.** The checked-in `MANIFEST.baseline.json` is
-schema v2, re-emitted for the 2026-08-20 TerminalClosure runtime (`4fded7a6…`,
-1,979,512 bytes, liveness seal `934bdd6`, cycle E) with all 100 declared gates
-executed in the emission run, and `check --run-gates` passes after the
-manifest-only commit (`cb94c27`) — for **that** identity. Re-emitting it for the
-cycle-G identity and obtaining a fresh portable attestation are both owed and
-neither is done here; the cycle-G reseal deliberately emitted no manifest. Until
-they are re-run, everything in the rest of this subsection is a statement about
-a **superseded** artifact, retained because the attestation chain is itself
+**Cycle G's manifest and portable attestation have been run.** The checked-in
+`MANIFEST.baseline.json` is schema v2, emitted from `88fa515` and committed at
+`902e8d2`. It declares 101 gates: 100 match their expected dispositions and the
+one contradiction is the documented `python.liveness_policy_profile_current_seal`
+documentation window. The subsequent Persvati job was reported as 49 PASS across 54
+derived gates, compared 3,036 files with zero mismatches, and byte-checked the
+ELF in six contexts. It found two errors in the seal description — an
+unreachable runtime ref and a stale `r10` count — which were corrected before
+the checked-in manifest was re-emitted. Unlike earlier jobs below, no durable
+Cycle-G attestation report is retained in this tree, so this is a recorded
+second-host result rather than a locally re-checkable report. It does not create
+a release, signature, deployment, audit, or whole-program proof.
+
+The manifest's free-form `claims.not_attested` list still contains historical
+sentences saying Direct V3 and terminal closure are absent. Those capabilities
+landed after the prose was first designed, and the manifest checker does not
+semantically validate that list. Treat it as a generated-document defect, not a
+current capability ledger. Exact gate results and artifact identities remain
+useful; current capability claims live here and must cite their executable
 evidence.
 
 Persvati independently attested the then-current identity
@@ -155,19 +179,14 @@ reproduction of the seal needs a second macOS host. The durable job is
 plus full comparison evidence). This is an independent same-source rebuild
 with classified divergence, not a release, deployment, or audit claim.
 
-No signed tag, macOS byte-level seal reproduction,
-official client URL, or value-bearing market
-exists. On 2026-08-19 ember explicitly authorized public TESTNET/devnet
-deployment with fresh throwaway keys and bounded public-RPC use, superseding
-the earlier local-only boundary for that exact scope; the authorized frame is
-Track C of docs/DEPLOYMENT_REVENUE_BOUNDARY.md (author-affiliated research
-deployment: no real value, exact build identity, measured operation, and no
-claim that devnet answers any legal question). Mainnet, real value, customer
-anything, the production source-registry flip, filings, and official-claim
-language remain outside this authorization. Deployment facts, when they
-exist, are recorded in their own dated record and never promote local
-evidence. Nothing here authorizes real-value signing, funding, publication,
-regulator contact, or an “official” claim.
+No signed tag, macOS byte-level seal reproduction, official client URL, or
+value-bearing market exists. Historical devnet/testnet authorizations are
+expired context, not current authority. Every public RPC read, faucet request,
+key read, signature, funding transfer, deployment, paces campaign, market
+creation, push, publication, or official claim requires a fresh current
+authorization naming the exact act and scope under `AGENTS.md`. Deployment
+facts, if separately authorized later, belong in their own dated record and do
+not promote local evidence.
 
 The scoped adversarial review at `f48b13c` found no hidden active P0 in the
 reviewed artifact, reservation, replay, withdrawal, or spline transitions. It
@@ -394,7 +413,25 @@ payout. The same audit repaired
 public `derive_payout` to be degree-zero-only; smooth callers must use
 `derive_payout_vector` and can no longer cross a preset-membership bridge.
 
-## 4. Capability matrix
+## 4. Current bounded capability matrix
+
+| Surface | Current status | Boundary / repair |
+| --- | --- | --- |
+| General clearing | **current source SBF-EXECUTED / UNSEALED** | Seal is immutable-feed-only; atomic Complete admits only a recomputed full score before the shared deadline. Seven candidate-selection, two lifecycle, and four cone-gate bank tests cover prefill, full-width ordering, displacement, deadline, tampering, and lapse. The honest claim is “best valid submitted candidate among those fully verified before the shared deadline”; separate submission/verification deadlines remain a successor. |
+| General settlement | **current source SBF-EXECUTED / UNSEALED** | Exact receipts and pots work for the measured admitted domain. The receipt bound now shares `MAX_SLICES`; a fixed maximum-book campaign executes slice index 128 at 763,755 CU and four-page/64-order/416-slice direct Entitle at 803,935 CU. Maximum-page portfolio full-pair, virtual, and inexact variants remain unmeasured; some inexact portfolio and multi-order-per-owner shapes correctly refuse. |
+| Collateral | **Token-2022 adapter only** | The codec admits legacy SPL, but V1 runtime and `ImmutableOwner` checks do not. The offline DREGG reference profile is legacy and cannot found a V1 market. A successor must separate Realm-selected collateral CPI from Token-2022 claim issuance without a DREGG branch. |
+| Resolution/source | **current source SBF-EXECUTED locally; production STOP** | The adapter authenticates the exact Pyth post discriminator, seven-account shape/effective flags, writable update, and Clock owner. A writing lab receiver proves consume/rollback, and V2 nonzero-confidence degree-zero interval resolution uses the canonical accumulator/reference authority at 14 accounts. The real Pyth receiver/router/config can be cloned locally, but no upstream encoded-VAA update has completed the seam; production identities remain unset and the default registry fail-closed. |
+| ResolutionWork liveness | **current plan SBF-EXECUTED / UNSEALED** | Runtime minimum deposit for 32 records is 49,431,920 lamports. The profile separates protocol prefund, named-plan payouts/refunds, and external keeper budget; eight Fold(4) calls plus Finalize pay 10,790,000 and refund 38,641,920. Against `a6381fbe…`, `[6,2]` consumes 514,332 CU / 1,228 bytes and 171,765 CU / 704 bytes, with 1,090,000 lamports external Fold budget and singleton/rollback equivalence. The identity-bound overlay does not relabel Cycle-G sealed evidence. |
+| Fees/economics | **arithmetic/model only; runtime zero-fee** | Fee-bearing general clearing, treasury custody, owner carry, and keeper compensation are not live. Hoard principal and future fees are never liveness capital. |
+| Terminal closure | **general clearing machinery routes exist** | Tags 60–67 close/release the general machinery under their admitted states. Protocol-wide mint, bearer-forfeiture, fractional-credit, abandoned-owner, donation, and rent terminality remain open. |
+| Clients | **static docs + offline Glass + loopback test bench** | No live-chain static client, release-manifest binding, wallet path, official URL, or visual browser QA. Host/Origin/media-type checks, a process-local capability cookie, exact integer display, and mechanical DOM/accessibility regressions pass; exact `u64` JSON transport and real browser/visual coverage remain open. |
+| Evidence/release | **last accepted Cycle-G artifact; current source UNSEALED** | The 101-gate Cycle-G manifest had 100 expected dispositions and one documentation-window failure. Current `ba580c6` passes the complete offline artifact audit with three byte-identical builds, but has no current manifest, second-host result, or seal. No release, deployment, signed tag, audit, or mainnet evidence exists. |
+
+The detailed table below is the pre-review ledger retained for evidence links.
+Its stale “missing” and completion prose is superseded by the compact matrix
+above and by the 2026-08-22 architecture review; it is not a current queue.
+
+### Historical pre-review capability ledger
 
 | Surface | Strongest honest status | Established fact | Boundary / STOP |
 | --- | --- | --- | --- |
@@ -459,7 +496,40 @@ The Endow row is the authenticated transition after source-release admission;
 the sealed default ELF has no registered release and therefore refuses it with
 `0x79` before either delta occurs.
 
-## 6. Non-negotiable STOP ledger
+## 6. Non-negotiable current STOP ledger
+
+1. **General selection promotion and fairness:** verified-only retention,
+   deadline ordering, and prefill/eviction regressions pass in the current
+   unsealed source. Do not promote those bytes until the full current campaign
+   and seal close. Do not generalize beyond candidates fully verified before the
+   shared deadline until a successor separates submission and verification time.
+2. **Executable settlement breadth:** the receipt-bound fix and true
+   maximum-book/416-slice direct Entitle campaign pass under the transaction
+   ceiling. Do not extend that result to maximum-page portfolio full-pair,
+   virtual, or inexact routes until equivalent campaigns execute.
+3. **Settlement generality:** preserve inexact portfolio and multi-filled-order
+   owner-rounding refusals until an owner-aggregated ledger or a new named
+   rounding relation proves exact realization.
+4. **Runtime liveness economics:** the projection reconciles reward/call
+   accounting with the 49,431,920-lamport runtime minimum deposit. The current
+   `[6,2]` Fold(4) overlay measures composed CU, packet size, external budget,
+   singleton equivalence, and rollback. Keep it unsealed until the current
+   manifest/seal wave, and do not infer wider-fold economics from it.
+5. **Production source and value:** the default registry has no production
+   identity. Mock provider fixtures are not devnet/provider evidence and cannot
+   authorize value admission.
+6. **Collateral generality:** V1 remains Token-2022-only. Do not relabel or
+   special-case the legacy DREGG reference; build a versioned generic adapter.
+7. **Fees and terminality:** no fee-bearing general Realm, treasury, keeper
+   reward, whole-protocol no-stranding result, or complete bearer/fractional
+   terminal policy exists. Hoard principal and future fees remain unavailable.
+8. **Provenance/release:** the copied `degg-research` site artifacts are removed;
+   copied `breadstuffs` declarations were rewritten as prose. A
+   third-party notice bundle, generator/tool pins, external security review,
+   current seal, signed tag, and explicit publication/deployment authority are
+   still required for a release.
+
+### Historical pre-review STOP ledger
 
 1. **Native mode binding — repaired at runtime; joined evidence landed;
    refinement boundary open:** the Terms-checked immutable basis mode is

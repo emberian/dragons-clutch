@@ -1,4 +1,12 @@
-# Codex handoff — optimization session
+# Codex handoff — historical Cycle-G optimization session
+
+> Superseded for current work on 2026-08-22 by
+> [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) and the
+> [`architecture review`](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md).
+> The measurements and gate pointers below remain useful. Its
+> “capability-complete” phrase names the bounded Cycle-G matrix, not the full
+> recovered product thesis, every collateral profile, or every settlement
+> shape.
 
 Rewritten 2026-08-22 (the prior version pinned an identity five seals old).
 Read order: this file → `MACRO_AND_MICRO_OPTIMIZATION.md` (your work list)
@@ -6,7 +14,7 @@ Read order: this file → `MACRO_AND_MICRO_OPTIMIZATION.md` (your work list)
 
 ## State in one paragraph
 
-The protocol is capability-complete: the general clearing plane runs
+The bounded Cycle-G matrix is capability-complete: the general clearing plane runs
 place → freeze → walk → verify → select → entitle → settle with partial
 fills, realized rounding/virtual pots, and an on-chain no-arbitrage gate
 for degree-2/3 claims; every account has a close path returning exact
@@ -17,8 +25,10 @@ permissionlessly; a browser bench trades it human-vs-automaton.
 `SETTLEMENT_BLOCKERS` is empty. Current sealed identity:
 **`0d52c561909cedef…`, 2,149,672 bytes**, manifest `902e8d2`
 (101 gates, 100/101 with one documented drift window), Persvati-attested.
-Your job is CU/size optimization per `MACRO_AND_MICRO_OPTIMIZATION.md`,
-not new capability.
+The historical next job was CU/size optimization per
+`MACRO_AND_MICRO_OPTIMIZATION.md`. The current review also reopens explicitly
+named generality and product-boundary work; this handoff no longer constrains the
+queue to optimization alone.
 
 ## Where you work
 
