@@ -86,6 +86,21 @@ J. SMALL-FIX BATCH (stale blocker row, mock path-sensitivity, queued
 
 ## Done log (2026-08-19 session)
 
+- CYCLE G SEALED AND MANIFESTED (identity 0d52c561/2,149,672 at 846afab;
+  manifest 5ae3a32, 101 gates, 100/101 with the ONE documented drift
+  window per cycle-F precedent): closure 111->129, W1 35->107 routes with
+  SHAPE COORDINATES and the 1,500-CU quantum stated, the fold plan
+  corrected to the sendable [6,6,6,6,6,2] (cold outlay honestly UP from
+  the unsendable plan's fiction), the amended relocation probe's first
+  reading is INDEPENDENT (three seals' PATH_SENSITIVE was the symlink all
+  along), W2 gaps re-derived (two covered; the portfolio form named as
+  the hole). RECONCILIATION found six drifted gates incl. a tabs/spaces
+  key pattern that had recorded sha256("") as evidence in every prior
+  green run. TRADE MODE LANDED (54/54 tx, painter pinned to the check
+  script, the automaton labeled, StrictUnderfill makes the crank
+  honestly not-a-solver). CANON at 51 concepts, cone promoted to hub,
+  seal_lag closed by cycle G. Persvati attestation of 5ae3a32 RUNNING.
+
 - THE WAVE IS FULLY LANDED — SETTLEMENT_BLOCKERS: []. Cone gate BOUND ON
   CHAIN (epoch carries its degree; refused walks short-circuit cheap;
   discriminating triple green on the bank). V2 WIRE COMPLETE (tags 70-73,
