@@ -21,6 +21,7 @@
       <a href="machines.html">For the Machines</a>
       <a href="disagreement.html">The Disagreement</a>
       <a href="evidence.html" aria-current="page">The Evidence</a>
+      <a href="status.html">Status &amp; Local Run</a>
     </nav>
   </div>
 </header>
@@ -113,13 +114,14 @@ runtime are byte-identical on the sealing host; an independent second-OS
 rebuild diverged and the divergence was <em>exhaustively classified</em> —
 two toolchain CI path strings, one reordered prebuilt intrinsics cluster,
 an eight-byte shift, zero bytes derived from source
-(CURRENT_TRUTH.md &#167;2). The checked evidence manifest executed all 100
-of its declared gates, and the most recent independent second-host
-attestation re-ran the portable evidence from a fresh archive:
-<strong>44/44 gates PASS, 0 STOP</strong>, every file compared twice, the
-sealed ELF byte-verified in six contexts (CURRENT_TRUTH.md &#167;2; GOAL.md
-done-log, Cycle D). None of that is a release, a deployment, or an external
-audit — the tree says so in the same breath, every time.</p>
+(CURRENT_TRUTH.md &#167;2). The last accepted Cycle-G manifest ran 101 declared
+gates: 100 matched their expected dispositions and one exposed a documented
+documentation-window contradiction. A subsequent Persvati run was reported as
+49 PASS across 54 derived checks and found two seal-description errors that
+were corrected before re-emission, but no durable Cycle-G attestation report
+is retained in this tree. The older Cycle-D report remains a separately named
+44/44 historical result, not the most recent baseline. None of that is a
+release, a deployment, or an external audit.</p>
 
 <h2>What honesty looks like when it hurts</h2>
 
@@ -250,29 +252,13 @@ by docs/site-plan/friday_clutch_check.py.</p>
 
 <h2 id="artifacts">Published artifacts</h2>
 
-<p>Some exhibits are small enough to publish whole. The
-<a href="artifacts/manipulation-cost-v1.txt">manipulation-cost table
-(v1)</a> is the 1,080-row deterministic cost surface computed across
-candidate settlement-window designs &#8212; fully synthetic parameter
-tuples, exact integer arithmetic, no market data &#8212; including the run
-whose result refuted a claim in an earlier draft of the author&#8217;s own
-regulatory comment before any human read it. The header of the file
-describes its own columns. A computable design can be wrong in public, and
-corrected; this file is that argument&#8217;s exhibit, correction scar and
-all. Its sequel, the
-<a href="artifacts/manipulation-cost-v2-offhours.txt">off-hours sweep
-(v2)</a>, adds a session-thinness dimension &#8212; 8,640 rows asking how
-each settlement-window design&#8217;s manipulation cost survives a thin
-overnight session. The finding: a window contained in the thin session
-loses its cost linearly with depth; the widest clawback any surveyed
-design achieves is sixfold; no design in the grid holds its daylight cost
-at a tenth of normal depth. Two honesty rails ride in the file&#8217;s own
-header: a ratio above par never means the thin session is <em>more</em>
-protected (the cheapest attack is the minimum across sessions), and the
-model deliberately forbids carrying inventory across liquidity&#8217;s
-return &#8212; a strategy that, if allowed, can make the attack profitable
-&#8212; so these rows must never be read as proving straddling windows
-protective.</p>
+<p>Published exhibits on this site must be generated inside Dragon&#8217;s
+Clutch or carry an explicit reviewed provenance and license manifest. Two
+historical manipulation-cost tables were removed on 2026-08-22 because they
+had been copied byte-for-byte from a separate <code>degg-research</code>
+worktree without that decision. Their former claims are not Dragon&#8217;s Clutch
+evidence. Any replacement must be independently regenerated from a
+Dragon-namespaced model and reproducible source.</p>
 
 <p>A second checkable claim from the same laboratory banks: <strong>terminal
 closure repays recorded principal exactly.</strong> Every program account in

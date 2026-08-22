@@ -42,27 +42,18 @@ batch verifier), `relation_v1_stream.rs` (IMPLEMENTED streaming verifier),
 
 ### 0.1 What Cert-F actually says
 
-`Market.CertF` is generic over `[CommRing R] [PartialOrder R] [IsOrderedRing R]`
-— **not** over `ℚ` or `ℝ`. The only instantiation in the file is `ℤ`. The
-program is `structure FlowLP where A : Matrix V E R; w c : E → R; ε : R`,
-maximizing `wᵀf`:
+The source-independent mathematical interface is an ordered-ring flow LP,
+instantiated over exact integers. A primal witness obeys conservation and
+capacity bounds. A dual witness supplies nonnegative slack whose prices
+dominate every objective coefficient. If the resulting primal-dual gap is at
+most a named epsilon, weak duality bounds every feasible alternative's
+objective by the certified objective plus that epsilon.
 
-```text
-PrimalFeasible lp f  :=  A *ᵥ f = 0  ∧  0 ≤ f  ∧  f ≤ c
-DualFeasible  lp π s :=  0 ≤ s  ∧  w ≤ π ᵥ* A + s
-Certified     lp f π s := PrimalFeasible ∧ DualFeasible ∧ c ⬝ᵥ s − w ⬝ᵥ f ≤ ε
-```
-
-with `weak_duality : PrimalFeasible → DualFeasible → wᵀf ≤ cᵀs`,
-`gap_nonneg`, and
-
-```text
-certifies_epsilon_optimal :
-  Certified lp f π s → PrimalFeasible lp f' → w ⬝ᵥ f' ≤ w ⬝ᵥ f + ε
-```
-
-Zero `sorry`; `#assert_all_clean` pins the axiom set to
-`{propext, Classical.choice, Quot.sound}`.
+This paragraph intentionally does not reproduce sibling-repository type,
+definition, theorem, or axiom-declaration syntax. A historical draft did so
+while claiming “No code moves”; those copied declarations were removed on
+2026-08-22. Any future proof artifact or source movement requires the explicit
+decision and provenance/license manifest described above.
 
 Two properties of that statement matter enormously for us and are easy to miss:
 

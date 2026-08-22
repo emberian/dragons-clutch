@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status &amp; Local Run — Dragon&#8217;s Clutch</title>
+<meta name="description" content="What Dragon's Clutch can do in the current local prototype, what it cannot claim, and how to run its static and trading surfaces locally.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site">
+  <div class="site-inner">
+    <a class="site-name" href="index.html">Dragon&#8217;s Clutch</a>
+    <nav class="pages" aria-label="Pages">
+      <a href="index.html">The Clutch</a>
+      <a href="shape.html">The Shape of a Claim</a>
+      <a href="clearing.html">The Clearing</a>
+      <a href="ledger.html">The Ledger</a>
+      <a href="risk.html">The Price of Risk</a>
+      <a href="machines.html">For the Machines</a>
+      <a href="disagreement.html">The Disagreement</a>
+      <a href="evidence.html">The Evidence</a>
+      <a href="status.html" aria-current="page">Status &amp; Local Run</a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+
+<p class="kicker">Current boundary</p>
+<h1>A real local lifecycle, not a release</h1>
+
+<p>The current bounded program can found and fund a market, split complete
+sets, place and cancel portfolio orders, freeze the canonical book, check a
+submitted candidate through a resumable relation, select the best valid
+candidate admitted by the deadline, entitle its witness, and settle exact
+receipts and pots. The accepted Cycle-G registry does not yet uphold that
+selection property: unverified claims can exclude or evict valid candidates,
+and a verified-only repair is currently unsealed. A local
+keeper and the Operator Bench can drive that path without a Dragon-operated
+network service.</p>
+
+<p>None of that makes this a deployed protocol. There is no signed release
+manifest, production program identity, official frontend URL, production source
+identity, nonzero fee policy, or value-bearing market. Local validators and
+fixtures are local evidence.</p>
+
+<h2>What is bounded today</h2>
+
+<p>As of the last accepted Cycle-G artifact plus the unsealed 2026-08-22 review
+wave, these are structural format bounds unless the third column names executed
+evidence. They are not one tested Cartesian envelope.</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Dimension</th><th>Current profile</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>Outcome basis</td><td>categorical degree 0; B-spline degree 1–3</td><td>exact rational evaluation and integer quantization</td></tr>
+    <tr><td>Width</td><td>16 outcomes/knots</td><td>structural bound; SBF campaigns reach eight outcomes</td></tr>
+    <tr><td>Book</td><td>64 orders in four pages</td><td>executed with 32 witness slices</td></tr>
+    <tr><td>Pairing witness</td><td>416 slices</td><td>structural bound; max-witness entitlement is not yet measured</td></tr>
+    <tr><td>Collateral adapter</td><td>Token-2022 only</td><td>the layout is broader; legacy SPL collateral is not runtime-drivable yet</td></tr>
+    <tr><td>Fees</td><td>runtime routes force zero</td><td>no configured production revenue/carry policy</td></tr>
+  </tbody>
+</table>
+</div>
+
+<aside class="lane lane-degen"><span class="tag">&#10216;degen&#10217;</span>
+You can trade the Friday clutch against a deliberately dumb fixed-belief
+automaton on your own machine. It is not a strategy, a solver, a wallet, or a
+live market.</aside>
+
+<aside class="lane lane-builder"><span class="tag">&#10216;builder&#10217;</span>
+The general settlement route still refuses inexact portfolio consideration and
+some multi-order-per-owner rounding shapes before a receipt exists. Those are
+honest admission restrictions, not conservation TODOs to delete.</aside>
+
+<aside class="lane lane-scholar"><span class="tag">&#10216;scholar&#10217;</span>
+Named Lean and Verus lanes check named models or source subsets. No theorem in
+this repository closes the Rust-to-SBF, account, CPI, or runtime refinement
+boundary for the whole protocol.</aside>
+
+<h2>Three different frontends</h2>
+
+<p><strong>This microsite</strong> is a static explanation and makes no network
+request. <strong>Glass</strong>, under <code>apps/static-client</code>, is an
+offline inspector and unsigned intent-byte compiler with no RPC or wallet.
+<strong>Operator Bench</strong>, under <code>apps/operator</code>, renders a
+loopback daemon that holds ephemeral local test signers. None is yet a
+production transaction client.</p>
+
+<h2>Run the checks locally</h2>
+
+<p>From the repository root, serve this site:</p>
+
+<pre><code>python3 -m http.server 9129 --bind 127.0.0.1 --directory site</code></pre>
+
+<p>Check Glass without an <code>npm install</code> (Node and npm must already be
+installed):</p>
+
+<pre><code>cd apps/static-client
+npm test</code></pre>
+
+<p>Check the Operator browser modules and their exact-integer/accessibility
+invariants (still source/mechanical, not visual QA):</p>
+
+<pre><code>cd apps/operator
+npm test
+npm run check</code></pre>
+
+<p>Drive the complete local trading example:</p>
+
+<pre><code>CARGO_NET_OFFLINE=true scripts/run_operator_trade.sh</code></pre>
+
+<p>The trading gate normally takes several minutes. It waits on the local
+validator&#8217;s real clock for a short freeze deadline and then the fixed
+1,000-slot candidate window. The Epoch screen shows the current slot, target,
+reason, and remaining slots; after settlement the script requires every
+reported conservation identity to close. It exercises the HTTP/event and bank
+lifecycle; it does not load the browser modules or constitute visual QA. The
+loopback daemon requires an exact local Host, same-origin JSON, and a fresh
+process-local capability cookie for its mutation and event endpoints.</p>
+
+<h2>The next architectural work</h2>
+
+<ol>
+  <li>Finish and adversarially test verified-only candidate admission; split submission and verification deadlines in the successor window.</li>
+  <li>Measure 416-slice entitlement and build authenticated location/adjacency indexes; a rank locator alone is only half the cost.</li>
+  <li>Repair the ResolutionWork model/runtime reward mismatch before using its liveness projection.</li>
+  <li>Optimize the streamed checkpoint and repeated FreezeEpoch walks without weakening hostile-byte refusals.</li>
+  <li>Version capacity profiles instead of quietly treating 16 outcomes and 64 orders as the product.</li>
+  <li>Separate Realm-selected collateral CPI from Token-2022 claim issuance so legacy collateral can be supported without a DREGG branch.</li>
+  <li>Promote the payoff compiler into an untrusted, independently checkable market-creation path.</li>
+</ol>
+
+<p><a class="badge" href="evidence.html">READ THE EVIDENCE VOCABULARY — why
+local execution, finite agreement, and model proofs stay separate</a></p>
+
+</main>
+<footer class="site">
+  <div class="foot-inner">
+    <span>Dragon&#8217;s Clutch — a literate explanation of a research prototype</span>
+    <nav class="pn" aria-label="Page order">
+      <a href="evidence.html">&#8592; The Evidence</a>
+      <a href="index.html">Return to The Clutch &#8594;</a>
+    </nav>
+  </div>
+</footer>
+<script src="lanes.js" defer></script>
+</body>
+</html>

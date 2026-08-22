@@ -37,15 +37,13 @@ recursively shrunk, Groth16-wrapped onto `alt_bn128` syscalls.
 
 ## 2. Why the semantics already match
 
-The Cert-F core is LP primal-dual certification, machine-checked in Lean
-over `ℤ`. Its keystone (`metatheory/Market/CertF.lean:133`) quantifies over
-every feasible flow and bounds it by the certified one:
-
-```lean
-theorem certifies_epsilon_optimal (lp : FlowLP V E R) {f π s}
-    (hcert : Certified lp f π s) {f'} (hf' : PrimalFeasible lp f') :
-    lp.w ⬝ᵥ f' ≤ lp.w ⬝ᵥ f + lp.ε
-```
+The prior-art concept audited here is integer LP primal-dual certification: a
+certificate establishes that every feasible alternative flow has objective at
+most the certified flow's objective plus a named epsilon. This is a
+source-independent mathematical statement, not an imported theorem
+declaration. An exact Lean declaration that a historical draft copied from the
+adjacent repository was removed on 2026-08-22 to restore the greenfield
+boundary.
 
 That is verify-not-find as a theorem: the untrusted solver's search is never
 re-examined, only its output certificate is checked, at `O(m + nnz A)`

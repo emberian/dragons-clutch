@@ -24,6 +24,37 @@ Prior ideas may inform a human-authored clean-room specification. The record mus
 distinguish a general concept or public interface from copied expressive source.
 Commit history or a local path is not license permission.
 
+### 2.1 Remediation record — 2026-08-22
+
+A repository-wide audit found two violations of that boundary:
+
+- `site/artifacts/manipulation-cost-v1.txt` was byte-identical to
+  `degg-research/experiments/manipulation-cost/vectors/v1.txt` at source commit
+  `e0af5fe16b64324b1f4c401e8e206d92335206bd` (SHA-256
+  `079d121ea18ed254fe4a0d9ce0be9d44785d80f3b36719c4fefcda7e38939c5d`).
+- `site/artifacts/manipulation-cost-v2-offhours.txt` was byte-identical to the
+  corresponding `degg-research` vector at source commit
+  `2afe802f2a983606795d14c158dc45aa4821ad2b` (SHA-256
+  `da93104878829f3063eb41089cd0b090b4ad3713655db9810957c4c119766257`).
+
+Both files were copied without the generator, derivation manifest, or an
+explicit user decision. They were removed from the current tree; their former
+presence remains visible in Git history and must not be mistaken for reusable
+Dragon's Clutch material. The public evidence page no longer cites them.
+
+The same audit found exact Breadstuffs Lean declarations in two explanatory
+documents despite their “no code moves” boundary. Those declarations were
+removed from `docs/design/SUCCINCT_CLEARING_FEASIBILITY.md` and
+`docs/implementation/OPTIMALITY_CERTIFICATE_MAPPING.md`; the remaining text
+states only source-independent mathematics and high-level comparison.
+
+No prohibited runtime import, Cargo/npm dependency, path dependency, or copied
+first-party source file was found. Release remains blocked on a complete
+third-party notice bundle, pinned generator environments, full-commit pins for
+the Pages actions, and an advisory audit. The Pages workflow is manual-only in
+the in-flight review, so these mutable action tags cannot run merely because
+someone pushes to `main`.
+
 ## 3. Dependency admission
 
 Before adding a dependency, record:
