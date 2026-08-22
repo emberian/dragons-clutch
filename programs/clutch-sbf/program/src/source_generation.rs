@@ -405,6 +405,9 @@ pub fn verify_recorded_sealed_source<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Filler wide enough to slice any tested account length out of.
+    const SCRATCH: [u8; 2_560] = [0_u8; 2_560];
     use clutch_accumulator::{CoveragePolicy, FeedIdentity, Grid};
 
     fn window(start: u64, end: u64) -> WindowDomain {
@@ -449,6 +452,41 @@ mod tests {
          * already required the closing boundary plus grace to have passed. */
         assert!(binding(SourceGeneration::V2, 104).window_has_matured(domain));
         assert!(!binding(SourceGeneration::V2, 103).window_has_matured(domain));
+    }
+
+    #[test]
+    fn a_spec_account_of_neither_length_names_no_generation() {
+        /* The generation is read from the account, so a length that is neither
+         * generation's whole account is a refusal rather than a default.  The
+         * length is consulted before any other byte, which is why dummy
+         * contents are enough to reach it. */
+        let bytes = |len: usize| SourceAccountBytesV1 {
+            key: [0x41; 32],
+            owner: [0x42; 32],
+            executable: false,
+            data: &SCRATCH[..len],
+        };
+        for len in [0_usize, 1, 291, 293, 403, 405, 2_560] {
+            let presented = PresentedSourcePlaneV1 {
+                clutch_program: [0x43; 32],
+                expected_spec_key: [0x41; 32],
+                expected_spec_bump: 254,
+                spec: bytes(len),
+                expected_archive_key: [0x44; 32],
+                archive: bytes(SCRATCH.len()),
+                expected_feed: Hash32::from_bytes([0x45; 32]),
+                window: window(100, 104),
+            };
+            assert_eq!(
+                verify_recorded_sealed_source(presented),
+                Err(ArchiveJoinError::UnknownGeneration),
+                "{len} bytes is neither generation"
+            );
+        }
+        /* And the two admitted lengths are exactly the two account widths, so
+         * the arms above are reachable rather than dead. */
+        assert_eq!(SOURCE_SPEC_ACCOUNT_V1_BYTES, 292);
+        assert_eq!(SOURCE_SPEC_ACCOUNT_V2_BYTES, 404);
     }
 
     #[test]
