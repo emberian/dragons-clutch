@@ -10,16 +10,14 @@
     "paths": [
       "MANIFEST.baseline.json"
     ],
-    "observed": [
-      " M MANIFEST.baseline.json"
-    ],
+    "observed": [],
     "reason": "the manifest is this tool's own output; its git status cannot gate its regeneration. Nothing else is excluded from the dirtiness decision."
   },
   "baseline": {
     "content_identity": {
       "schema": "dragons-clutch/tracked-working-tree/v1",
       "algorithm": "sha256",
-      "sha256": "6ab67c9fc1fa7a18cae346b71d596f64a3a95a682b2271db75500f18bc184be5",
+      "sha256": "a63e04d81335e3b35f9b4390fb77b808ed3b5752447376b1fb9f497d97fab24e",
       "entry_count": 1011,
       "excluded_paths": [
         "MANIFEST.baseline.json"
@@ -30,9 +28,9 @@
       "rule": "enumerate stage-0 entries from `git ls-files --stage -z`, sort by raw path bytes, exclude only excluded_paths, and hash the schema tag followed by length-delimited (observed Git mode/type, kind, raw path, sha256(payload), payload length) records. Payload is working-tree bytes for regular files, link-target bytes for symlinks, and the index object id for gitlinks. Strict cleanliness makes this a complete identity of all checked-in gate/source bytes other than the generated manifest itself."
     },
     "provenance": {
-      "emitted_from_commit": "23d9059ae13ce2d715493a5ef5d97d0ae3d40d6f",
-      "emitted_from_tree_hash": "14fd9d17ec089c581016d5fd1cb2cf7c22c047e1",
-      "commit_subject": "Make the license gate record the evidence line it declares",
+      "emitted_from_commit": "88fa5157c30c26f05c3dcd0f3180d2b48852c920",
+      "emitted_from_tree_hash": "1b61437caec7db4cb2d450465085c0c0a9a9dbbd",
+      "commit_subject": "Correct the seal's two attestation findings: the orphan ref and the stale scalar",
       "remotes": [
         {
           "name": "origin",
@@ -2312,8 +2310,8 @@
     ]
   },
   "run": {
-    "started_at_utc": "2026-08-22T04:31:43Z",
-    "finished_at_utc": "2026-08-22T04:44:07Z",
+    "started_at_utc": "2026-08-22T05:17:04Z",
+    "finished_at_utc": "2026-08-22T05:28:16Z",
     "gate_timeout_seconds": 1800,
     "note": "timestamps here are the only nondeterministic fields in this manifest; `check` ignores them"
   },
