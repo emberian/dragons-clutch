@@ -140,11 +140,23 @@ const DEPLOYMENT_SLOT: u64 = 1;
 const WARP_SLOT: u64 = DEPLOYMENT_SLOT + 1;
 
 const ACTOR_TOKEN: Address = Address::new_from_array([0x8e; 32]);
+/// A second owner, with no position, who takes custody after the founding.
+const ENDOW_OWNER_TOKEN: Address = Address::new_from_array([0x8f; 32]);
+/// Collateral atoms that owner deposits.
+const DEPOSIT: u64 = 500;
 const UPDATE_ACCOUNT: Address = Address::new_from_array([0xc1; 32]);
 const WRITE_AUTHORITY: Address = Address::new_from_array([0xc2; 32]);
 const COLLATERAL_MINT: Address = Address::new_from_array([0x6c; 32]);
 
 const CU_LIMIT: u32 = 1_400_000;
+
+fn endow_owner_keypair() -> Keypair {
+    Keypair::new_from_array([
+        0x71, 0x08, 0xd4, 0x39, 0xb6, 0x2f, 0x83, 0x15, 0xca, 0x64, 0x20, 0x9e, 0x47, 0xf1, 0x5b,
+        0x32, 0xad, 0x06, 0x78, 0xc3, 0x11, 0xe5, 0x59, 0x24, 0x8a, 0x4d, 0x90, 0x37, 0xfb, 0x6e,
+        0x02, 0xac,
+    ])
+}
 
 fn actor_keypair() -> Keypair {
     Keypair::new_from_array([
@@ -501,6 +513,7 @@ struct Campaign {
     /// *refused*, not deduplicated.
     nonce: u32,
     actor: Keypair,
+    endow_owner: Keypair,
     plane: Plane,
     spec: SourceSpecV2,
     start_bucket: u64,
@@ -542,13 +555,10 @@ impl Campaign {
                 false,
             ),
         );
-        test.add_account(
-            actor.pubkey(),
-            genesis_account(Vec::new(), SYSTEM_PROGRAM, false),
-        );
         let mut funded = genesis_account(Vec::new(), SYSTEM_PROGRAM, false);
         funded.lamports = 10_000_000_000;
-        test.add_account(actor.pubkey(), funded);
+        test.add_account(actor.pubkey(), funded.clone());
+        test.add_account(endow_owner_keypair().pubkey(), funded);
 
         let mut context = test.start_with_context().await;
         /* One small warp: a program is invisible until one slot past its
@@ -591,7 +601,16 @@ impl Campaign {
         }
         context.set_account(
             &COLLATERAL_MINT,
-            &genesis_account(collateral_mint_bytes(SETS), TOKEN_2022, false).into(),
+            &genesis_account(collateral_mint_bytes(SETS + DEPOSIT), TOKEN_2022, false).into(),
+        );
+        context.set_account(
+            &ENDOW_OWNER_TOKEN,
+            &genesis_account(
+                token_account_bytes(COLLATERAL_MINT, endow_owner_keypair().pubkey(), DEPOSIT),
+                TOKEN_2022,
+                false,
+            )
+            .into(),
         );
         context.set_account(
             &ACTOR_TOKEN,
@@ -617,6 +636,7 @@ impl Campaign {
             context,
             nonce: 0,
             actor,
+            endow_owner: endow_owner_keypair(),
             plane,
             spec: built.spec,
             start_bucket: built.start_bucket,
@@ -649,6 +669,44 @@ impl Campaign {
                 AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                 AccountMeta::new_readonly(RENT_SYSVAR, false),
             ],
+        )
+    }
+
+    /// Take custody against the spec this family founded.
+    fn endow(&self, amount: u64) -> Instruction {
+        let (position, replay) = self.plane.owner_plane(self.endow_owner.pubkey());
+        let metas = vec![
+            AccountMeta::new(self.endow_owner.pubkey(), true),
+            AccountMeta::new_readonly(self.plane.market.address, false),
+            AccountMeta::new_readonly(self.plane.hoard.address, false),
+            AccountMeta::new(position.address, false),
+            AccountMeta::new(replay.address, false),
+            AccountMeta::new_readonly(self.plane.profile.address, false),
+            AccountMeta::new_readonly(self.plane.policy_account, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
+            AccountMeta::new_readonly(COLLATERAL_MINT, false),
+            AccountMeta::new(ENDOW_OWNER_TOKEN, false),
+            AccountMeta::new(self.plane.hoard_token.address, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
+            AccountMeta::new_readonly(RENT_SYSVAR, false),
+            AccountMeta::new_readonly(self.plane.terms.address, false),
+            AccountMeta::new_readonly(self.plane.source_spec.address, false),
+        ];
+        assert_eq!(
+            metas.len(),
+            clutch_sbf::instructions::genesis::ENDOW_ACCOUNT_COUNT
+        );
+        Instruction::new_with_bytes(
+            PROGRAM_ID,
+            &layout_request(
+                0,
+                Intent::Endow {
+                    market: self.plane.market_id,
+                    owner: Hash32::from_bytes(self.endow_owner.pubkey().to_bytes()),
+                    amount,
+                },
+            ),
+            metas,
         )
     }
 
@@ -908,6 +966,8 @@ impl Campaign {
                 signers.push(&payer);
             } else if *key == self.actor.pubkey() {
                 signers.push(&self.actor);
+            } else if *key == self.endow_owner.pubkey() {
+                signers.push(&self.endow_owner);
             } else {
                 panic!("no keypair for required signer {key}");
             }
@@ -1127,6 +1187,7 @@ const SOURCE_RELEASE_UNAVAILABLE: u32 = 0x0079;
 const SOURCE_ADMISSION_FAILED: u32 = 0x007a;
 const ALREADY_INITIALIZED: u32 = 0x0040;
 const REPLAY: u32 = 0x000d;
+const WRONG_PROGRAM_OWNER: u32 = 0x0004;
 const RESOLUTION_EVIDENCE_UNAVAILABLE: u32 = 0x0010;
 
 fn custom(result: &Result<(), TransactionError>) -> u32 {
@@ -1345,4 +1406,46 @@ async fn a_release_this_elf_does_not_carry_cannot_found_its_source_at_all() {
             .is_none(),
         "and founds no feed head either"
     );
+}
+
+#[tokio::test]
+async fn custody_opens_against_the_spec_this_family_just_founded() {
+    /* `r2_pull_endow.rs` showed the default ELF taking custody against a v2
+     * spec *installed at genesis*, because nothing could create one. This is
+     * the same boundary against a spec the chain founded a transaction
+     * earlier: 0x79 before, accepted after, with the same market and the same
+     * Terms. Only the spec account's existence changes. */
+    let mut campaign = Campaign::start(registered_spec()).await;
+
+    let (result, _) = campaign.send(campaign.endow(DEPOSIT)).await;
+    assert_eq!(
+        custom(&result),
+        WRONG_PROGRAM_OWNER,
+        "an absent SourceSpec is a System-owned hole, and custody refuses it"
+    );
+
+    assert_eq!(campaign.send(campaign.init_spec()).await.0, Ok(()));
+
+    let hoard_token_before = campaign
+        .token_amount(campaign.plane.hoard_token.address)
+        .await;
+    let (result, endow_cu) = campaign.send(campaign.endow(DEPOSIT)).await;
+    assert_eq!(result, Ok(()), "Endow must be accepted after the founding");
+    assert_eq!(
+        campaign.token_amount(ENDOW_OWNER_TOKEN).await,
+        0,
+        "the depositor's whole balance moved"
+    );
+    assert_eq!(
+        campaign
+            .token_amount(campaign.plane.hoard_token.address)
+            .await,
+        hoard_token_before + DEPOSIT,
+        "and landed in the Hoard's real Token-2022 account"
+    );
+    let (position, _) = campaign.plane.owner_plane(campaign.endow_owner.pubkey());
+    let position = PositionAccount::decode(&campaign.data(position.address).await)
+        .expect("Endow created the depositor's position");
+    assert_eq!(position.cash_atoms, DEPOSIT);
+    println!("r2 v2 wire CU: endow={endow_cu}");
 }

@@ -25,6 +25,7 @@ use clutch_sbf::{
         VerifiedSourceSpecAccountV1, WindowDomain, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
         SOURCE_SPEC_ACCOUNT_V1_BYTES,
     },
+    source_generation::VerifiedSealedArchive,
 };
 use clutch_solana_layout::{
     Hash32, PayoutVectorBytes, TermsAccount, MAX_KNOTS, MAX_OUTCOMES, MAX_PAYOUTS,
@@ -302,8 +303,11 @@ fn canonical_archive_drives_the_exact_v4_candidate() {
         window,
     )
     .expect("once-verified archive view");
+    /* Both forms of the same V1 page fold to the same candidate, and the
+     * generation-agnostic seam does not change that: the enum arm is which
+     * verifier built the view, not a different fold. */
     assert_eq!(
-        preflight_verified_archive(&terms, verified_view),
+        preflight_verified_archive(&terms, VerifiedSealedArchive::V1(verified_view)),
         Ok(candidate)
     );
 
