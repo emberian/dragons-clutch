@@ -11752,10 +11752,13 @@ mod tests {
         let n = portfolio_placement.encode(&mut b).unwrap();
         assert_eq!(n, 2 + 32 + 32 + 8 + 1 + PORTFOLIO_RECORD_BYTES);
         assert_eq!(n, 310);
-        assert_eq!(
-            n, MAX_INTENT_BYTES,
-            "a portfolio placement is the widest intent"
+        assert!(
+            n <= MAX_INTENT_BYTES,
+            "a portfolio placement is the widest *order* intent"
         );
+        /* It was the widest intent of any family until the v2 source-spec
+         * construction landed at 402; the exact numbers are pinned side by
+         * side in `account_golden_lengths` so neither can drift silently. */
         assert_eq!(&b[66..74], &9u64.to_le_bytes());
         assert_eq!(b[74], ORDER_KIND_PORTFOLIO);
         assert_eq!(Intent::decode(&b[..n]), Ok(portfolio_placement));
