@@ -363,9 +363,11 @@ Everything it will ever place can be worked out before it places one.
 
 ### The interactive plane
 
-`POST /api` in a trade session takes *intents*, never transactions: `place`,
-`place-portfolio`, `cancel`, `propose`, `paint`, `weights`, `freeze`, `status`,
-`bot`. Each names a knot, a side, a size and a limit; `builders.rs` decides
+`POST /api` in a trade session takes *intents*, never transactions: `endow`,
+`split`, `place`, `place-portfolio`, `cancel`, `propose`, `paint`, `weights`,
+`freeze`, `status`, `bot`.  `endow` and `split` are the founding sequence's own
+two transitions on demand, for when a person wants more room than the session
+opened them with — the same code path, a different caller. Each names a knot, a side, a size and a limit; `builders.rs` decides
 which accounts in which roles that needs and hands the result to
 `clutch_sbf_harness::general_transaction` — the same serializer the sealed
 lane's plan emitter calls, asserted against the program's own exported account

@@ -135,6 +135,19 @@ echo "== the automaton, as it discloses itself =="
 api '{"action":"bot"}' | python3 -m json.tool
 
 echo
+echo "== funding, on demand, the way the Funding tab does it =="
+# The founding sequence already endowed and split both actors; these are the
+# same two transitions posted as intents, which is what makes them a control
+# rather than a script step.
+for fund in \
+  '{"action":"endow","amount":5000}' \
+  '{"action":"split","quantity":1000}'
+do
+  echo "  POST $fund"
+  api "$fund" | python3 -c 'import json,sys; r=json.load(sys.stdin); print("    ->", "ok" if r.get("ok") else "REFUSED "+str(r.get("detail")))'
+done
+
+echo
 echo "== three orders, placed the way the ticket places them =="
 # Each crosses one of the automaton's resting quotes: a sell into its bid at
 # the $160 knot, and two buys lifting its offers at the $120 and $200 knots.
@@ -257,6 +270,11 @@ if with_cu:
           f"{len(with_cu)}/{len(accepted)}")
 if len(with_cu) != len(accepted):
     failed.append("some accepted transactions reported no compute units")
+
+funding = [e for e in accepted if e["family"] == "Funding"]
+print(f"  funding_transactions={len(funding)} ({', '.join(e['name'] for e in funding)})")
+if len(funding) < 6:
+    failed.append("expected four founding fundings plus the two posted as intents")
 
 places = [e for e in accepted if e["family"] == "PlaceOrder"]
 print(f"  orders_placed={len(places)}")

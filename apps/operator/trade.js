@@ -418,6 +418,64 @@ const painter = (state) => {
   return card;
 };
 
+/* Funding: the same two transitions the session used to open the market, on
+ * demand. Endow moves collateral from your ordinary token account into pooled
+ * custody; Split turns cash into one Egg on every active outcome, which is
+ * where a sell order's envelope comes from. Both are signed transactions and
+ * both appear in the step log. */
+const fundingTicket = (state) => {
+  const card = el("section", "card");
+  card.append(el("h2", null, "Funding"));
+  const custody = decodedOf(state, "friday.hoard-token");
+  const hoard = decodedOf(state, "friday.hoard");
+  const position = decodedOf(state, "human.position");
+  const wallet = decodedOf(state, "human.collateral");
+  card.append(
+    fields("", [
+      ["your wallet (outside custody)", numeric(wallet ? wallet.amount : null)],
+      ["your position cash", numeric(position ? position.cash_atoms : null)],
+      ["reserved against your orders", numeric(position ? position.reserved_cash_atoms : null)],
+      ["your eggs on the $100 hat", numeric(position ? position.internal[0] : null)],
+      ["pooled custody", numeric(custody ? custody.amount : null)],
+      ["locked backing", numeric(hoard ? hoard.collateral_atoms : null)]
+    ])
+  );
+
+  const form = el("div", "ticket-form");
+  const amount = el("input");
+  amount.type = "number";
+  amount.min = "1";
+  amount.value = "5000";
+  form.append(el("label", "ticket-label", "collateral atoms to endow"), amount);
+  const sets = el("input");
+  sets.type = "number";
+  sets.min = "1";
+  sets.value = "1000";
+  form.append(el("label", "ticket-label", "complete sets to lock"), sets);
+  card.append(form);
+
+  const controls = el("div", "controls");
+  controls.append(
+    button("Endow", "tab", () => {
+      post({ action: "endow", amount: Number(amount.value) || 0 }, "endow");
+    }),
+    button("Split", "tab", () => {
+      post({ action: "split", quantity: Number(sets.value) || 0 }, "split");
+    })
+  );
+  card.append(controls);
+  card.append(
+    el(
+      "p",
+      "muted",
+      "A split of n sets costs n atoms of cash and yields n Eggs on each of the eight outcomes. Merging them back is not wired into this bench."
+    )
+  );
+  const notice = noticeRow();
+  if (notice) card.append(notice);
+  return card;
+};
+
 const portfolioTicket = () => {
   const card = el("section", "card");
   card.append(el("h2", null, "Portfolio ticket"));
@@ -526,7 +584,8 @@ export const renderTicket = (state) => {
   [
     ["single", "Single hat"],
     ["belief", "Belief"],
-    ["portfolio", "Portfolio"]
+    ["portfolio", "Portfolio"],
+    ["funding", "Funding"]
   ].forEach(([id, label]) => {
     tabs.append(
       button(label, ticket.tab === id ? "tab tab-on" : "tab", () => {
@@ -539,7 +598,13 @@ export const renderTicket = (state) => {
   header.append(el("h2", null, "Ticket"));
   header.append(tabs);
   const body =
-    ticket.tab === "belief" ? painter(state) : ticket.tab === "portfolio" ? portfolioTicket() : singleTicket(state);
+    ticket.tab === "belief"
+      ? painter(state)
+      : ticket.tab === "portfolio"
+        ? portfolioTicket()
+        : ticket.tab === "funding"
+          ? fundingTicket(state)
+          : singleTicket(state);
   return [header, body, yourOrders(state)];
 };
 

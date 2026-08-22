@@ -531,6 +531,69 @@ impl Session {
         Ok(outcome)
     }
 
+    /// Add collateral: the person deposits more atoms into pooled custody.
+    ///
+    /// The founding sequence already endowed both actors so there is a market
+    /// to trade; this is the same transition, on demand, for when a person
+    /// wants more room than the session opened them with.
+    pub fn endow(&self, amount: u64) -> Result<Value> {
+        let mut live = self.lock();
+        if live.phase != "open" {
+            return Ok(refused(&format!(
+                "funding is admitted while the book is open; it is {}",
+                live.phase
+            )));
+        }
+        if amount == 0 {
+            return Ok(refused("an endowment of nothing moves nothing"));
+        }
+        let owner = self.friday.actor("human").ok_or("no human actor")?.key;
+        let sequence = live.sequences.get(&owner).copied().unwrap_or(0);
+        let outcome = self.submit(
+            &mut live,
+            &format!("friday-endow-{amount}"),
+            "Funding",
+            &builders::endow(&self.friday, owner, sequence, amount),
+        )?;
+        if outcome.get("ok").and_then(Value::as_bool) == Some(true) {
+            live.sequences.insert(owner, sequence + 1);
+            live.endowed_total += amount;
+            // Re-publish: the strip's `endowed_total` moved, so the identities
+            // it renders are about a different total than a tick ago.
+            self.publish(&self.conservation(&live));
+        }
+        Ok(outcome)
+    }
+
+    /// Lock complete sets: the person turns cash into one Egg on every active
+    /// outcome, which is what a sell order's envelope is drawn from.
+    pub fn split(&self, quantity: u64) -> Result<Value> {
+        let mut live = self.lock();
+        if live.phase != "open" {
+            return Ok(refused(&format!(
+                "funding is admitted while the book is open; it is {}",
+                live.phase
+            )));
+        }
+        if quantity == 0 {
+            return Ok(refused("a split of nothing locks nothing"));
+        }
+        let owner = self.friday.actor("human").ok_or("no human actor")?.key;
+        let sequence = live.sequences.get(&owner).copied().unwrap_or(0);
+        let outcome = self.submit(
+            &mut live,
+            &format!("friday-split-{quantity}"),
+            "Funding",
+            &builders::split(&self.friday, owner, sequence, quantity),
+        )?;
+        if outcome.get("ok").and_then(Value::as_bool) == Some(true) {
+            live.sequences.insert(owner, sequence + 1);
+            live.split_total += quantity;
+            self.publish(&self.conservation(&live));
+        }
+        Ok(outcome)
+    }
+
     /// The person places one single-Egg order; the automaton answers it if it
     /// crosses.
     pub fn place_single(&self, outcome: u8, side: u8, quantity: u64, limit: u64) -> Result<Value> {

@@ -232,6 +232,8 @@ fn respond(session: &Arc<Session>, request: &Value) -> Value {
             number("lots").unwrap_or(0),
             number("limit_per_lot").unwrap_or(0),
         ),
+        "endow" => session.endow(number("amount").unwrap_or(0)),
+        "split" => session.split(number("quantity").unwrap_or(0)),
         "cancel" => session.cancel(number("rank").unwrap_or(0)),
         "propose" => Ok(session.propose(&vector("belief"))),
         "weights" => Ok(session.weights_at(number("cents").unwrap_or(0))),

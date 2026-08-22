@@ -9,7 +9,9 @@ instead of tailed.
 **Trade** founds the Friday clutch — eight hats on a $100–$240 knot grid,
 `basis_degree` 1 — on a fresh local ledger and hands it to you. You endow, you
 split, you rest orders, you paint a belief, you freeze, and the epoch clears
-against a fixed-belief automaton.
+against a fixed-belief automaton. The market is created by a signed
+`CreateMarket`, the cash arrives by a signed `Endow`, the Eggs by a signed
+`Split`: nothing about the trading plane is injected bank state.
 
 ```sh
 # watch mode: the sealed lane's plan, step by step
@@ -53,7 +55,7 @@ the harness CLI's own output, and requires a single corrupted byte to go red.
 | screen | what it reads, and what it can do |
 | --- | --- |
 | **Clutch** | the founded market's identity — terms digest, basis degree, the eight knots, the frozen limit ladder — the two actors and their positions, the epoch phase, and the Freeze control |
-| **Ticket** | three tabs. *Single hat*: the hat row, a side, a size and a ladder limit. *Belief*: eight sliders, quantized by the daemon, previewing the orders that belief implies against the automaton's resting quotes, with one button to place them all. *Portfolio*: a coefficient vector, lots, and a per-lot collateral bound. Below them, your resting orders with their reservations and a retire button |
+| **Ticket** | four tabs. *Single hat*: the hat row, a side, a size and a ladder limit. *Belief*: eight sliders, quantized by the daemon, previewing the orders that belief implies against the automaton's resting quotes, with one button to place them all. *Portfolio*: a coefficient vector, lots, and a per-lot collateral bound. *Funding*: Endow more collateral into pooled custody, Split more cash into complete sets. Below them, your resting orders with their reservations and a retire button |
 | **Book** | the automaton's own disclosure — what it believes, what it can quote, and the two rules it quotes by — the two beliefs and the cleared vector drawn over the eight hats, and the order page slot by slot |
 | **Settlement** | positions across all eight outcomes, the value plane's identities re-derived from observed bytes, and every reservation's entitled/consumed counters |
 | **Steps** | one row per transaction the session actually submitted, with its family, its confirmed slot, its compute units against the 1 400 000-unit ceiling, and its signature. Not a rail with pending rows: a trade session has no plan, so a row exists only because something was built, signed and confirmed. A refusal is a first-class row carrying the bank's own `Custom(0x….)` |
@@ -63,6 +65,26 @@ Every cell is the latest account image the daemon reloaded from the bank,
 decoded through the frozen `clutch_solana_layout` codecs. A role that has not
 been observed yet says `NOT YET OBSERVED` rather than showing a zero, and a
 number nobody has submitted carries a `MODEL-ONLY` chip.
+
+## The verbs
+
+`POST /api` in a trade session takes intents, one per verb:
+
+| verb | what it means |
+| --- | --- |
+| `endow` | move `amount` collateral atoms from your ordinary token account into pooled custody |
+| `split` | lock `quantity` complete sets: cash becomes one Egg on every active outcome |
+| `place` | rest one single-Egg order: `outcome`, `side`, `quantity`, `limit` |
+| `place-portfolio` | rest one portfolio order: `coefficients`, `side`, `lots`, `limit_per_lot` |
+| `cancel` | retire your order at `rank` |
+| `propose` | quantize a `belief` and return the orders it implies — MODEL-ONLY, submits nothing |
+| `paint` | do that, then place the list |
+| `weights` | the resolution weight vector a terminal statistic at `cents` would carry — MODEL-ONLY |
+| `freeze` | close at the deadline, then drive the epoch to settled |
+| `status`, `bot` | the session's phase and book; the automaton's disclosure |
+
+None of them is a transaction. Each names *what*, and `builders.rs` decides
+*which accounts in which roles*.
 
 ## The opponent
 
