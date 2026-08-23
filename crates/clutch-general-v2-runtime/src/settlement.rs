@@ -6207,7 +6207,7 @@ fn derive_unfilled_reservation_release_transition_id_v1(
     reservation_semantic_id: Id32,
     owner: Id32,
     order_id: Id32,
-    order_index: u8,
+    dense_order_index: u8,
     page_index: u16,
     slot_index: u8,
     position_generation: u64,
@@ -6229,7 +6229,7 @@ fn derive_unfilled_reservation_release_transition_id_v1(
     hash.update(reservation_semantic_id.bytes());
     hash.update(owner.bytes());
     hash.update(order_id.bytes());
-    hash.update([order_index]);
+    hash.update([dense_order_index]);
     hash.update(page_index.to_le_bytes());
     hash.update([slot_index]);
     hash.update(position_generation.to_le_bytes());
