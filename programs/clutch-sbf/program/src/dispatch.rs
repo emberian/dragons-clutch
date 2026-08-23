@@ -55,8 +55,7 @@ use crate::instructions::direct_selection_v3;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
-    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, market_init, observe_resolve, orders_batch, source_ingest_v2,
+    artifact, fractional_redemption, genesis, observe_resolve, orders_batch, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -81,12 +80,7 @@ use solana_pubkey::Pubkey;
 /// its untrusted discriminator happened to select a particular hint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Route {
-    Split,
-    MergeMaterialize,
-    MarketInit,
     ObserveResolve,
-    ExternalExit,
-    CashExit,
     Artifact,
     OrdersBatch,
     Genesis,
@@ -117,21 +111,11 @@ enum Route {
 const ACTION_LAYOUT_HINT: u8 = 0;
 const ACTION_RESOLVE_HINT: u8 = 1;
 const ACTION_REDEEM_INTERNAL_HINT: u8 = 2;
-const INTENT_CREATE_MARKET_HINT: u8 = 1;
-const INTENT_SPLIT_HINT: u8 = 2;
-const INTENT_MERGE_HINT: u8 = 3;
-const INTENT_MATERIALIZE_HINT: u8 = 4;
-const INTENT_DEMATERIALIZE_HINT: u8 = 5;
 const INTENT_FEED_ADVANCE_HINT: u8 = 6;
 const INTENT_PLACE_ORDER_HINT: u8 = 7;
 const INTENT_INIT_REALM_HINT: u8 = 10;
 const INTENT_INIT_PROFILE_HINT: u8 = 11;
-const INTENT_INIT_PRICE_GRID_HINT: u8 = 12;
-const INTENT_INIT_TERMS_HINT: u8 = 13;
 const INTENT_INIT_ORDER_PAGE_HINT: u8 = 14;
-const INTENT_ENDOW_HINT: u8 = 15;
-const INTENT_REDEEM_EXTERNAL_HINT: u8 = 16;
-const INTENT_WITHDRAW_CASH_HINT: u8 = 17;
 const INTENT_BEGIN_ARTIFACT_HINT: u8 = 18;
 const INTENT_WRITE_ARTIFACT_HINT: u8 = 19;
 const INTENT_SEAL_ARTIFACT_HINT: u8 = 20;
@@ -204,15 +188,8 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::RecurringSeries
             }
-            Some(INTENT_SPLIT_HINT) => Route::Split,
-            Some(INTENT_MERGE_HINT | INTENT_MATERIALIZE_HINT | INTENT_DEMATERIALIZE_HINT) => {
-                Route::MergeMaterialize
-            }
-            Some(INTENT_CREATE_MARKET_HINT) => Route::MarketInit,
             #[cfg(feature = "profile-full")]
             Some(INTENT_FEED_ADVANCE_HINT) => Route::ObserveResolve,
-            Some(INTENT_REDEEM_EXTERNAL_HINT) => Route::ExternalExit,
-            Some(INTENT_WITHDRAW_CASH_HINT) => Route::CashExit,
             Some(
                 INTENT_BEGIN_ARTIFACT_HINT
                 | INTENT_WRITE_ARTIFACT_HINT
@@ -225,10 +202,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             Some(
                 INTENT_INIT_REALM_HINT
                 | INTENT_INIT_PROFILE_HINT
-                | INTENT_INIT_PRICE_GRID_HINT
-                | INTENT_INIT_TERMS_HINT
                 | INTENT_INIT_ORDER_PAGE_HINT
-                | INTENT_ENDOW_HINT
                 | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
             #[cfg(feature = "profile-full")]
@@ -312,14 +286,7 @@ pub fn process(
         return Err(ClutchError::UnsupportedInstruction.into());
     }
     match route_hint(instruction_data) {
-        Route::Split => process_split(program_id, accounts, instruction_data),
-        Route::MergeMaterialize => {
-            process_merge_materialize(program_id, accounts, instruction_data)
-        }
-        Route::MarketInit => process_market_init(program_id, accounts, instruction_data),
         Route::ObserveResolve => process_observe_resolve(program_id, accounts, instruction_data),
-        Route::ExternalExit => process_external_exit(program_id, accounts, instruction_data),
-        Route::CashExit => process_cash_exit(program_id, accounts, instruction_data),
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
         Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
@@ -547,75 +514,6 @@ fn disabled_canonical_tag(instruction_data: &[u8]) -> bool {
 }
 
 #[inline(never)]
-fn process_split(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::Split {
-            market,
-            owner,
-            quantity,
-        }) => complete_set_v3::process_complete_set_v3(
-            program_id,
-            accounts,
-            request.sequence,
-            market,
-            owner,
-            quantity,
-            complete_set_v3::CompleteSetActionV3::Split,
-        ),
-        _ => unexpected_route(),
-    }
-}
-
-#[inline(never)]
-fn process_merge_materialize(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::Merge {
-            market,
-            owner,
-            quantity,
-        }) => complete_set_v3::process_complete_set_v3(
-            program_id,
-            accounts,
-            request.sequence,
-            market,
-            owner,
-            quantity,
-            complete_set_v3::CompleteSetActionV3::Merge,
-        ),
-        Action::Layout(Intent::Materialize { .. })
-        | Action::Layout(Intent::Dematerialize { .. }) => {
-            claim_representation_v3::process_claim_representation_v3(program_id, accounts, &request)
-        }
-        _ => unexpected_route(),
-    }
-}
-
-#[inline(never)]
-fn process_market_init(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::CreateMarket { .. }) => {
-            market_init::process(program_id, accounts, &request)
-        }
-        _ => unexpected_route(),
-    }
-}
-
-#[inline(never)]
 fn process_observe_resolve(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -629,36 +527,6 @@ fn process_observe_resolve(
         }
         Action::Resolve { .. } | Action::RedeemInternal { .. } => {
             observe_resolve::process(program_id, accounts, &request)
-        }
-        _ => unexpected_route(),
-    }
-}
-
-#[inline(never)]
-fn process_external_exit(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::RedeemExternal { .. }) => {
-            external_redemption_v3::process_external_redemption_v3(program_id, accounts, &request)
-        }
-        _ => unexpected_route(),
-    }
-}
-
-#[inline(never)]
-fn process_cash_exit(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = Request::decode(instruction_data)?;
-    match request.action {
-        Action::Layout(Intent::WithdrawCash { .. }) => {
-            collateral_cash_v3::process_withdraw_cash_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
@@ -711,14 +579,9 @@ fn process_genesis(
     match request.action {
         Action::Layout(Intent::InitRealm { .. })
         | Action::Layout(Intent::InitProfileV2 { .. })
-        | Action::Layout(Intent::InitPriceGrid { .. })
-        | Action::Layout(Intent::InitTerms { .. })
         | Action::Layout(Intent::InitOrderPage { .. })
         | Action::Layout(Intent::CloseRevenuePolicyRecord { .. }) => {
             genesis::process(program_id, accounts, &request)
-        }
-        Action::Layout(Intent::Endow { .. }) => {
-            collateral_cash_v3::process_endow_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
@@ -882,13 +745,14 @@ mod tests {
     }
 
     #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
-    fn split_request(sequence: u64, quantity: u64) -> Vec<u8> {
+    fn current_realm_request(sequence: u64) -> Vec<u8> {
         layout_request(
             sequence,
-            Intent::Split {
-                market: hash(1),
-                owner: hash(2),
-                quantity,
+            Intent::InitRealm {
+                profile: hash(1),
+                realm_nonce: 2,
+                max_outcomes: MAX_OUTCOMES as u8,
+                profile_version: 2,
             },
         )
     }
@@ -909,23 +773,12 @@ mod tests {
         let kind = ArtifactKind::CollateralPolicy;
         vec![
             (
-                Intent::CreateMarket {
-                    realm: hash(1),
-                    profile: hash(2),
-                    market_nonce: 3,
-                    outcome_count: 2,
-                    terms: hash(4),
-                    feed: hash(5),
-                },
-                Route::MarketInit,
-            ),
-            (
                 Intent::Split {
                     market: hash(1),
                     owner: hash(2),
                     quantity: 3,
                 },
-                Route::Split,
+                Route::DecodeOnly,
             ),
             (
                 Intent::Merge {
@@ -933,7 +786,7 @@ mod tests {
                     owner: hash(2),
                     quantity: 3,
                 },
-                Route::MergeMaterialize,
+                Route::DecodeOnly,
             ),
             (
                 Intent::Materialize {
@@ -943,7 +796,7 @@ mod tests {
                     outcome: 0,
                     quantity: 4,
                 },
-                Route::MergeMaterialize,
+                Route::DecodeOnly,
             ),
             (
                 Intent::Dematerialize {
@@ -953,7 +806,7 @@ mod tests {
                     outcome: 0,
                     quantity: 4,
                 },
-                Route::MergeMaterialize,
+                Route::DecodeOnly,
             ),
             (
                 Intent::FeedAdvance {
@@ -1048,7 +901,7 @@ mod tests {
                     outcome: 0,
                     quantity: 5,
                 },
-                Route::ExternalExit,
+                Route::DecodeOnly,
             ),
             (
                 Intent::WithdrawCash {
@@ -1057,7 +910,7 @@ mod tests {
                     destination: hash(3),
                     amount: 4,
                 },
-                Route::CashExit,
+                Route::DecodeOnly,
             ),
             (
                 Intent::BeginArtifact {
@@ -1410,7 +1263,12 @@ mod tests {
         .filter(|(intent, _)| {
             !matches!(
                 intent,
-                Intent::CancelOrder { .. }
+                Intent::CreateMarket { .. }
+                    | Intent::Split { .. }
+                    | Intent::Merge { .. }
+                    | Intent::Materialize { .. }
+                    | Intent::Dematerialize { .. }
+                    | Intent::CancelOrder { .. }
                     | Intent::SettlePage { .. }
                     | Intent::InitClearWork { .. }
                     | Intent::GrowClearWork { .. }
@@ -1434,7 +1292,14 @@ mod tests {
                     | Intent::CloseGeneralClearWork { .. }
                     | Intent::CloseGeneralEpoch { .. }
                     | Intent::ClosePosition { .. }
+                    | Intent::InitPriceGrid { .. }
+                    | Intent::InitTerms { .. }
+                    | Intent::Endow { .. }
+                    | Intent::RedeemExternal { .. }
+                    | Intent::WithdrawCash { .. }
             )
+                && (!matches!(intent, Intent::PlaceOrder { .. })
+                    || capabilities::legacy_intent_tag_enabled(7))
         })
         .collect()
     }
@@ -1536,11 +1401,10 @@ mod tests {
             cases.push(wrong_version);
         }
 
-        let valid = split_request(7, 5);
-        let mut zero_quantity = valid.clone();
-        let quantity_at = zero_quantity.len() - 8;
-        zero_quantity[quantity_at..].fill(0);
-        cases.push(zero_quantity);
+        let valid = current_realm_request(0);
+        let mut zero_profile = valid.clone();
+        zero_profile[15..47].fill(0);
+        cases.push(zero_profile);
 
         let mut unknown_action = valid.clone();
         unknown_action[10] = 3;
@@ -1688,16 +1552,16 @@ mod tests {
     #[test]
     #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn decode_precedes_account_checks_on_a_routed_request() {
-        let valid = split_request(7, 5);
+        let valid = current_realm_request(0);
         assert_eq!(
             process_without_accounts(&valid),
             ProgramError::Custom(ClutchError::AccountCount as u32)
         );
 
-        let mut invalid_market = valid;
-        invalid_market[15..47].fill(0);
+        let mut invalid_profile = valid;
+        invalid_profile[15..47].fill(0);
         assert_eq!(
-            process_without_accounts(&invalid_market),
+            process_without_accounts(&invalid_profile),
             ProgramError::from(Refusal::from(ReferenceError::Layout(
                 clutch_solana_layout::CodecError::ZeroIdentity
             )))

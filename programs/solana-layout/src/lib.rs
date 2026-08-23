@@ -5522,7 +5522,12 @@ impl Intent {
     const fn is_withdrawn_general_v3(&self) -> bool {
         matches!(
             self,
-            Self::CancelOrder { .. }
+            Self::CreateMarket { .. }
+                | Self::Split { .. }
+                | Self::Merge { .. }
+                | Self::Materialize { .. }
+                | Self::Dematerialize { .. }
+                | Self::CancelOrder { .. }
                 | Self::SettlePage { .. }
                 | Self::InitClearWork { .. }
                 | Self::GrowClearWork { .. }
@@ -5546,6 +5551,11 @@ impl Intent {
                 | Self::CloseGeneralClearWork { .. }
                 | Self::CloseGeneralEpoch { .. }
                 | Self::ClosePosition { .. }
+                | Self::InitPriceGrid { .. }
+                | Self::InitTerms { .. }
+                | Self::Endow { .. }
+                | Self::RedeemExternal { .. }
+                | Self::WithdrawCash { .. }
         )
     }
 
@@ -5635,7 +5645,14 @@ impl Intent {
     /// Validate and encode into a caller-provided buffer.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
         #[cfg(not(feature = "non-production-legacy-general-v3-hostile-decode"))]
-        if !cfg!(test) && self.is_withdrawn_general_v3() {
+        if !cfg!(test)
+            && (self.is_withdrawn_general_v3()
+                || (matches!(self, Self::PlaceOrder { .. })
+                    && !cfg!(any(
+                        feature = "profile-full",
+                        feature = "profile-direct-v3-source-v2-point"
+                    ))))
+        {
             return Err(CodecError::WrongTag);
         }
         if out.len() < self.encoded_len() {
@@ -6470,6 +6487,10 @@ impl Intent {
         }
         let mut r = Reader::new(input, tag, INTENT_VERSION, input.len())?;
         match tag {
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             CREATE_TAG => {
                 let realm = r.hash()?;
                 let profile = r.hash()?;
@@ -6488,6 +6509,10 @@ impl Intent {
                     feed,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             SPLIT_TAG | MERGE_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6512,6 +6537,10 @@ impl Intent {
                     }
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             MATERIALIZE_TAG | DEMATERIALIZE_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6543,6 +6572,10 @@ impl Intent {
                     }
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             REDEEM_EXTERNAL_TAG => {
                 let market = r.hash()?;
                 let claimant = r.hash()?;
@@ -6625,6 +6658,11 @@ impl Intent {
                     _ => return Err(CodecError::InvalidEnum),
                 })
             }
+            #[cfg(any(
+                feature = "profile-full",
+                feature = "profile-direct-v3-source-v2-point",
+                feature = "non-production-legacy-general-v3-hostile-decode"
+            ))]
             PLACE_TAG => {
                 let market = r.hash()?;
                 let epoch = r.hash()?;
@@ -6798,6 +6836,10 @@ impl Intent {
                     profile_version,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             INIT_PRICE_GRID_TAG | INIT_TERMS_TAG => {
                 let realm = r.hash()?;
                 let artifact = r.hash()?;
@@ -6837,6 +6879,10 @@ impl Intent {
                     page_count,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             ENDOW_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6853,6 +6899,10 @@ impl Intent {
                     amount,
                 })
             }
+            #[cfg(any(
+                feature = "non-production-legacy-general-v3-hostile-decode",
+                all(test, feature = "profile-full")
+            ))]
             WITHDRAW_CASH_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;

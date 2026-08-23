@@ -5,8 +5,10 @@
 //! ([`clear_walk`]), the candidate submission and selection lifecycle
 //! ([`selection`]), and the entitlement freeze ([`entitlement`]).
 //!
-//! This module owns the batch-auction plane's account lists.  `PlaceOrder` and
-//! `CancelOrder` own the funded order lifecycle.  Since T2-8, `SettlePage`
+//! This module retains the historical batch-auction account lists for hostile
+//! host fixtures. In checked releases the shared `PlaceOrder` tag enters only
+//! the exact DirectEpochV4 path; General placement/cancellation/settlement are
+//! withdrawn. Since T2-8, the historical `SettlePage`
 //! consumes the entitled receipts the freeze (tags 58-59) creates from the
 //! SELECTED candidate's verified allocation: single-Egg direct slices through
 //! the generalized entitled seam, portfolio full pairs through the layout
@@ -18,7 +20,7 @@
 //!
 //! | intent | this wave |
 //! | --- | --- |
-//! | `PlaceOrder` | **implemented**, both order families: the v3 wire carries an `OrderSlot` and signed fee cap; Position assets move into one reservation |
+//! | `PlaceOrder` | **DirectEpochV4 only in checked releases**; the legacy General account plane is host-test-only |
 //! | `CancelOrder` | **implemented**: the v4 page retires an order in place and returns only its unused reservation (§ *Cancellation*) |
 //! | `SubmitDirectPage` | **narrow constructor**: creates one deterministic `SUBMITTED` Candidate and exact feed from a funded two-order frozen page; it does not verify/select or create a receipt |
 //! | `SettlePage` | **entitled consumption**: consumes one entitled direct slice (7 accounts, 8 with the pot), one entitled virtual leg in either churn direction (11 accounts, the pooled complete-set five among them), or one entitled portfolio full pair (variable list); every receipt consumes exactly once and every consumed reservation persists as its own archive |
@@ -73,7 +75,8 @@
 //!
 //! ## The account lists
 //!
-//! `PlaceOrder`: eight accounts, exact count, no remaining-account tail.
+//! `PlaceOrder`: nine accounts in the sole checked DirectEpochV4 branch,
+//! exact count, no remaining-account tail.
 //!
 //! | index | account | role |
 //! | --- | --- | --- |
@@ -85,6 +88,7 @@
 //! | 5 | reservation | writable, initially absent; canonical PDA created for this exact order |
 //! | 6 | System program | read-only executable; creates the reservation PDA |
 //! | 7 | Rent sysvar | read-only; fixes the reservation's exact rent floor |
+//! | 8 | Direct batch policy | read-only; exact immutable V4 placement policy |
 //!
 //! `CancelOrder`: five, and the grid is **absent**.  A retirement has no limit
 //! and no lots, so nothing in the transition consults a tick vector or a price
@@ -526,9 +530,7 @@ macro_rules! borrow_mut {
 /* Account lists                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// Accounts in a `PlaceOrder` instruction, exactly.
-pub const PLACE_ORDER_ACCOUNT_COUNT: usize = 8;
-/// Accounts in the still-unrouted Direct V3 placement branch, exactly.
+/// Accounts in the exact Direct V4 placement branch, exactly.
 pub const DIRECT_V4_PLACE_ORDER_ACCOUNT_COUNT: usize = 9;
 
 /// Accounts in a `CancelOrder` instruction, exactly.
@@ -782,6 +784,7 @@ fn verify_page(page: &[u8]) -> Outcome<stream::OrderPageHeader> {
 /* ------------------------------------------------------------------------ */
 
 /// Everything a placement needs that is not the page it writes.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct Placement<'a> {
     /// Epoch account bytes.
@@ -835,6 +838,7 @@ struct Cancellation<'a> {
 /// Every check runs before any byte is written, and the writer holds that
 /// property too, so a refusal leaves the account unchanged.  The whole write is
 /// [`stream::append_slot`]: this module computes no offset and folds no digest.
+#[cfg(test)]
 fn validate_place_order(
     page: &[u8],
     placement: &Placement<'_>,
@@ -929,8 +933,9 @@ fn validate_place_order(
 
 /// Validate the fixed two-order Direct V4 admission profile.
 ///
-/// This remains a branch of the existing `PlaceOrder` wire: the account
-/// version selects it, and no Direct V3 lifecycle tag is routed by this seam.
+/// This is the only checked-release owner of the shared `PlaceOrder` wire.
+/// The compiled profile fixes Direct semantics; an exact DirectEpochV4 width
+/// check refuses historical General epochs before their account plane runs.
 #[allow(clippy::too_many_arguments)]
 fn validate_direct_v4_place(
     page: &[u8],
@@ -1134,7 +1139,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             *max_fee_atoms,
             slot,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CancelOrder {
             market,
             epoch,
@@ -1153,7 +1158,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 generation: *generation,
             },
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::SettlePage {
             market,
             epoch,
@@ -1179,7 +1184,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::InitClearWork {
             market,
             epoch,
@@ -1192,7 +1197,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::GrowClearWork {
             market,
             epoch,
@@ -1205,7 +1210,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::InitEpoch {
             market,
             epoch_index,
@@ -1220,11 +1225,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             policy,
             *freeze_deadline_slot,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::FreezeEpoch { market, epoch }) => {
             general_epoch::freeze_epoch(program_id, accounts, request.sequence, market, epoch)
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::AdvanceClearWork {
             market,
             epoch,
@@ -1239,7 +1244,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *max_orders,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::AdvanceClearSlices {
             market,
             epoch,
@@ -1254,7 +1259,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *max_slices,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CompleteClearWork {
             market,
             epoch,
@@ -1267,7 +1272,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::SubmitCandidate {
             market,
             epoch,
@@ -1294,7 +1299,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             *limit_surplus_price_units,
             *distinct_owners,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::WriteCandidateFeed {
             market,
             epoch,
@@ -1309,7 +1314,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             chunk,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::SealCandidate {
             market,
             epoch,
@@ -1322,11 +1327,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::FinalizeSelection { market, epoch }) => {
             selection::finalize_selection(program_id, accounts, request.sequence, market, epoch)
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::FreezeEntitlement {
             market,
             epoch,
@@ -1339,7 +1344,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::EntitleSlice {
             market,
             epoch,
@@ -1354,7 +1359,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *slice_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::ReleaseTerminalReservation { market, epoch }) => {
             terminal_closure::release_terminal_reservation(
                 program_id,
@@ -1364,7 +1369,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralReceipt {
             market,
             epoch,
@@ -1379,7 +1384,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             candidate,
             *slice_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralReservation { market, epoch }) => {
             terminal_closure::close_general_reservation(
                 program_id,
@@ -1389,11 +1394,11 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::ClosePosition { market, owner }) => {
             terminal_closure::close_position(program_id, accounts, request.sequence, market, owner)
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralPage {
             market,
             epoch,
@@ -1406,7 +1411,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             *page_index,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralPot { market, epoch }) => {
             terminal_closure::close_general_pot(
                 program_id,
@@ -1416,7 +1421,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 epoch,
             )
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralCandidate {
             market,
             epoch,
@@ -1429,7 +1434,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralClearWork {
             market,
             epoch,
@@ -1442,7 +1447,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             epoch,
             candidate,
         ),
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+        #[cfg(test)]
         Action::Layout(Intent::CloseGeneralEpoch { market, epoch }) => {
             terminal_closure::close_general_epoch(
                 program_id,
@@ -2033,8 +2038,12 @@ fn read_grid_boxed(bytes: &[u8]) -> Outcome<Box<PriceGridAccount>> {
     Ok(grid)
 }
 
-/// Boxed [`reservation::prepare_placement`]: the staged Position/Reservation
-/// pair lives on the heap rather than beside the handler's other locals.
+/// Private heap boundary around the frozen reservation arithmetic.
+///
+/// DirectEpochV4 authenticates every current-only field before this projection
+/// and reconstructs the resulting current-width Reservation wrapper after it.
+/// The V1 transition stays the sole integer-conservation owner; no historical
+/// account codec or public placement DTO is admitted by this helper.
 #[inline(never)]
 fn prepare_placement_boxed(
     position: &PositionAccount,
@@ -2095,8 +2104,11 @@ fn place_order(
             *slot,
         );
     }
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-    return place_legacy_order(
+    /* The shared tag is current only for the exact DirectEpochV4 account
+     * plane.  A different epoch width is a withdrawn General placement, not
+     * an alternate account list to probe.  Refuse it before any role, signer,
+     * PDA, rent, or account-data inspection. */
+    let _ = (
         program_id,
         accounts,
         sequence,
@@ -2105,156 +2117,7 @@ fn place_order(
         max_fee_atoms,
         slot,
     );
-}
-
-#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-#[inline(never)]
-fn place_legacy_order(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent_market: &Hash32,
-    intent_epoch: &Hash32,
-    max_fee_atoms: u64,
-    slot: &OrderSlot,
-) -> Outcome<()> {
-    require_count(accounts, PLACE_ORDER_ACCOUNT_COUNT)?;
-    require_signer(&accounts[IX_ACTOR])?;
-    require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &PLACE_ORDER_STATE_ROLES)?;
-    #[cfg(feature = "profile-full")]
-    let admitted_epoch_lengths = [
-        account_len::EPOCH,
-        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-    ];
-    #[cfg(feature = "profile-general-source-v2-point")]
-    let admitted_epoch_lengths = [account_len::EPOCH];
-    accounts::validate_state_role_lengths(
-        program_id,
-        &accounts[IX_EPOCH],
-        false,
-        &admitted_epoch_lengths,
-    )?;
-    require(accounts[IX_ACTOR].is_writable, ClutchError::NotWritable)?;
-    require_system_program(&accounts[IX_SYSTEM])?;
-    require_creatable(&accounts[IX_RESERVATION])?;
-    let rent = read_rent(&accounts[IX_RENT])?;
-
-    /* Addresses, recomputed from the frozen seed schema out of each account's
-     * own decoded bytes.  The epoch's identity is itself derived from
-     * `(market, epoch_index)` by its codec, and the grid's identity is a digest
-     * over a body that includes its realm, so neither can lie about the seeds
-     * it is addressed by without failing to decode. */
-    let epoch = accounts::read_epoch(&accounts[IX_EPOCH].data.borrow())?;
-    let grid = accounts::read_price_grid(&accounts[IX_GRID].data.borrow())?;
-    let page_header = {
-        let data = accounts[IX_PAGE].data.borrow();
-        stream::OrderPageHeader::decode(&data)?
-    };
-    let position = decode_position_boxed(&accounts[IX_POSITION].data.borrow())?;
-    expect_pda(
-        accounts[IX_EPOCH].key,
-        seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
-        Some(epoch.stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_GRID].key,
-        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
-        Some(grid.stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_PAGE].key,
-        seeds::page_pda(
-            program_id,
-            &page_header.epoch.bytes(),
-            page_header.page_index,
-        ),
-        Some(page_header.stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_POSITION].key,
-        seeds::position_pda(
-            program_id,
-            &position.market.bytes(),
-            &position.owner.bytes(),
-        ),
-        Some(position.stored_bump),
-    )?;
-
-    let reservation_id = canonical_reservation_id(
-        epoch.market,
-        epoch.epoch,
-        position.owner,
-        position.generation,
-        slot.order_id(),
-    );
-    let reservation_bytes = reservation_id.bytes();
-    let (reservation_address, reservation_bump) =
-        seeds::reservation_pda(program_id, &reservation_bytes);
-    expect_pda(
-        accounts[IX_RESERVATION].key,
-        (reservation_address, reservation_bump),
-        None,
-    )?;
-
-    let actor = Hash32::from_bytes(accounts[IX_ACTOR].key.to_bytes());
-    let staged = {
-        let epoch_data = accounts[IX_EPOCH].data.borrow();
-        let grid_data = accounts[IX_GRID].data.borrow();
-        let page_data = accounts[IX_PAGE].data.borrow();
-        let placement = Placement {
-            epoch: &epoch_data,
-            grid: &grid_data,
-            actor,
-            sequence,
-            intent_market: *intent_market,
-            intent_epoch: *intent_epoch,
-            slot: *slot,
-        };
-        validate_place_order(&page_data, &placement)?;
-        prepare_placement_boxed(
-            &position,
-            &reservation::PlacementInput {
-                actor,
-                domain: reservation::ReservationDomain::from_epoch(&epoch, page_header.page_index),
-                slot: *slot,
-                max_fee_atoms,
-                reservation_bump,
-            },
-        )?
-    };
-    let (next_position, reservation) = &*staged;
-
-    create_pda_account(
-        program_id,
-        &accounts[IX_ACTOR],
-        &accounts[IX_RESERVATION],
-        &accounts[IX_SYSTEM],
-        &rent,
-        RESERVATION_ACCOUNT_BYTES,
-        &[
-            seeds::SEED_RESERVATION,
-            &reservation_bytes,
-            &[reservation_bump],
-        ],
-    )?;
-
-    {
-        /* The System CPI receives neither page nor Position, so it cannot
-         * invalidate the verdict staged above. `append_slot` still performs
-         * the layout owner's complete page validation before writing; rerunning
-         * this module's epoch/grid admission after the CPI only repeated two
-         * immutable decodes and one full page fold. */
-        let mut page_data = borrow_mut!(accounts[IX_PAGE])?;
-        stream::append_slot(&mut page_data, *slot)?;
-    }
-    {
-        let mut position_data = borrow_mut!(accounts[IX_POSITION])?;
-        next_position.encode(&mut position_data)?;
-    }
-    let mut reservation_data = borrow_mut!(accounts[IX_RESERVATION])?;
-    reservation.encode(&mut reservation_data)?;
-    Ok(())
+    Err(ClutchError::UnsupportedInstruction.into())
 }
 
 struct DirectV4PlaceCommit {
@@ -2266,9 +2129,8 @@ struct DirectV4PlaceCommit {
 
 /// Place one of at most two direct orders under an authenticated V4 Epoch.
 ///
-/// The legacy eight-account ABI above is byte- and behavior-stable. V4 is an
-/// exact nine-account branch selected only by the otherwise-unrouted 672-byte
-/// Epoch schema, with the exact 96-byte DirectBatchPolicy artifact appended.
+/// V4 is the exact nine-account checked branch, with the immutable 96-byte
+/// DirectBatchPolicy artifact appended.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn place_direct_v4_order(
@@ -4062,16 +3924,10 @@ mod tests {
                     max_fee_atoms: 0,
                     slot: OrderSlot::Single(order(0x20, 1, 5_000)),
                 }),
-                if cfg!(feature = "profile-direct-v3-source-v2-point")
-                    || cfg!(feature = "profile-non-production-general-v2-empty-book-identity-lab")
-                {
-                    /* Direct placement selects its mandatory V4 epoch account
-                     * before the fixed account-plane validator. With no epoch
-                     * present, that exact version refusal is Unsupported. */
-                    ClutchError::UnsupportedInstruction
-                } else {
-                    ClutchError::AccountCount
-                },
+                /* Direct placement selects its mandatory V4 epoch account
+                 * before the fixed account-plane validator. With no epoch
+                 * present, that exact version refusal is Unsupported. */
+                ClutchError::UnsupportedInstruction,
             ),
             (
                 Action::Layout(Intent::CancelOrder {
