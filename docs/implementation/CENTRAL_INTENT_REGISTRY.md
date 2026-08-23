@@ -198,16 +198,23 @@ FractionalRedemption 79/v1 reserves these local actions, all disabled:
 9. `SealClaimsExhausted`
 10. `CloseEmptyLedger`
 
-The corresponding account coordinates are `0xa4/1` for the immutable
+The current account coordinates are `0xa4/2` for the immutable
 Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
-credit and live-credit count, `0xa6/1` for one owner-scoped canonical numerator,
-and `0xa7/1` for the permanent zero-credit replay tombstone. Their exact body
+credit and live-credit count, `0xa6/2` for one owner-scoped canonical numerator,
+and `0xa7/2` for the permanent zero-credit replay tombstone. Their exact body
 widths are 296, 224, 296, and 232 bytes. Resolution owns the vector,
 ClaimLedger V3 owns native claim supply, Hoard V2 owns locked claim principal
 and cash classification, Position V3 and Replay V3 own internal
 custody/replay, and the Realm collateral adapter owns transfers. The fractional
 accounts copy none of those mutable facts; ClaimLedger and `0xa5` advance one
 sequence and exact cross-account semantic-ID receipt atomically.
+
+The earlier `0xa4/1`, `0xa6/1`, and `0xa7/1` allocations are withdrawn, not
+aliases. Their identity slots meant payout-vector digests; the current V2
+schemas instead commit the PDA-bound Resolution V5 data identity. No current
+decoder accepts V1, no migration is defined, and the policy/credit PDA and
+policy-state identity domains advance to V2. `0xa5/1` is unchanged because it
+never owned either identity and remains the sole aggregate-credit owner.
 
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
@@ -293,8 +300,9 @@ price artifacts, and present-funded liveness before capability admission.
 
 The central collision ledger is the sole allocation owner for the following
 coordinated successor block. Dealer policy transport rows are
-`NonProductionLab`; every other row is `ReservedDisabled`. An account codec or
-pure runtime elsewhere does not make a route executable.
+`NonProductionLab`; current unactivated rows are `ReservedDisabled`, and rows
+named withdrawn remain occupied as `Withdrawn`. An account codec or pure
+runtime elsewhere does not make a route executable.
 
 | tag/version | owner | account |
 |---:|---|---|
@@ -338,10 +346,13 @@ pure runtime elsewhere does not make a route executable.
 | `0xa1/1` | Liveness | immutable runtime policy |
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
 | `0xa3/1` | Terminal/replay | failure-generation tombstone |
-| `0xa4/1` | FractionalRedemption | immutable Market/Resolution/Realm/claim policy (296 bytes) |
+| `0xa4/1` | FractionalRedemption | withdrawn payout-vector-bound policy; never a V2 alias |
+| `0xa4/2` | FractionalRedemption | immutable Resolution-V5-data-bound policy (296 bytes) |
 | `0xa5/1` | FractionalRedemption | sole aggregate numerator-credit ledger (224 bytes) |
-| `0xa6/1` | FractionalRedemption | owner-scoped exact numerator credit (296 bytes) |
-| `0xa7/1` | FractionalRedemption/replay | permanent zero-credit tombstone (232 bytes) |
+| `0xa6/1` | FractionalRedemption | withdrawn payout-vector-bound credit; never a V2 alias |
+| `0xa6/2` | FractionalRedemption | Resolution-V5-data-bound exact numerator credit (296 bytes) |
+| `0xa7/1` | FractionalRedemption/replay | withdrawn payout-vector-bound tombstone; never a V2 alias |
+| `0xa7/2` | FractionalRedemption/replay | Resolution-V5-data-bound zero-credit tombstone (232 bytes) |
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
 | `0xaa/1` | Product | occurrence-scoped counted whole-Market lifecycle root |
