@@ -80,15 +80,31 @@ General V2 reserves local actions 1 through 34, in order:
 These General V2 names allocate local tags only. They do not freeze payload
 bytes, account lists, account codecs, or transition semantics.
 
-Source/Series V2 now allocates six action tags with exact laboratory payload
-codecs in `clutch_solana_layout::product_series`:
+Source/Series V2 partitions its action namespace without aliases. SourcePlane
+V3 exclusively owns local actions 1 through 12:
 
-1. `RegisterSeries`
-2. `ActivateFunding`
-3. `AdvanceOccurrence`
-4. `LapseOccurrence`
-5. `ObserveDonation`
-6. `CloseFunding`
+1. `RegisterRelease`
+2. `InitializeHead`
+3. `OpenRawPage`
+4. `IngestBoundaryBatch`
+5. `SealRawPage`
+6. `InitializeWindowWork`
+7. `FoldWindowPages`
+8. `SealWindow`
+9. `EvaluateStatistic`
+10. `EmitFailureHandoff`
+11. `ReopenGeneration`
+12. `CloseGeneration`
+
+Recurring Series exclusively owns local actions 13 through 18, whose exact
+laboratory payload codecs live in `clutch_solana_layout::product_series`:
+
+13. `RegisterSeries`
+14. `ActivateFunding`
+15. `AdvanceOccurrence`
+16. `LapseOccurrence`
+17. `ObserveDonation`
+18. `CloseFunding`
 
 Allocation still grants no execution capability. The program's executable
 extension set remains empty. In particular, a decoded registry release ID or
@@ -99,12 +115,13 @@ source, collateral, liveness, and failure receipts are authenticated.
 
 Covered Dealer owns `0x7d/1` for its funded facility stage and `0x7e/1` for its
 immutable policy. The Source/Series account namespace therefore reserves the
-disjoint `0x7f/1` for the immutable Series registration and `0x80/1` for the
-mutable Series-funding wrapper. Their exact 168-byte and 376-byte codecs are
-fixed, but their allocation status is reserved-disabled. The funding wrapper
-adds tag/version/bump/flags, exact refundable account-rent principal, and five
-release-selected collateral-vault rent principals around the pure 324-byte
-`SeriesFundingStateV1`; it does not copy its cursor or component-balance facts.
+disjoint `0x7f/1` for the persistent Series registration/replay anchor and
+`0x80/1` for the mutable Series-funding wrapper. Their exact 168-byte and
+376-byte codecs are fixed, but their allocation status is reserved-disabled.
+The funding wrapper adds tag/version/bump/flags, exact refundable account-rent
+principal, and five release-selected collateral-vault rent principals around
+the pure 324-byte `SeriesFundingStateV1`; it does not copy its cursor or
+component-balance facts.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -145,8 +162,9 @@ A later activation must change the following atomically:
    bytes or packet limits.
 
 General V2 local actions 1 through 34 and Source/Series V2 local actions 1
-through 6 listed above are already
+through 18 listed above are already
 **reserved-disabled allocations**: their numeric coordinates are in the
-registry, but they have no payload codec or executable capability. Unlisted
-future local-action proposals, and every proposed account shape, stay outside
-the central ledger until their atomic review is complete.
+registry, but they have no executable capability. A frozen laboratory payload
+codec does not change that status. Unlisted future local-action proposals, and
+every proposed account shape, stay outside the central ledger until their
+atomic review is complete.

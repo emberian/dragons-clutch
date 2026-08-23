@@ -19,12 +19,15 @@ family 77 | version 2 | local action | exact action payload
 
 | local action | name | exact payload |
 | ---: | --- | --- |
-| 1 | `RegisterSeries` | SeriesPlanV5Id (32), FundingTermsV2Id (32), RegistryReleaseId (32), CapabilityProfileId (32) |
-| 2 | `ActivateFunding` | SeriesPlanV5Id (32) |
-| 3 | `AdvanceOccurrence` | SeriesPlanV5Id (32), ordinal LE u32, zero reserved (4), SourceOccurrenceV1Id (32), MarketInstanceV2Id (32) |
-| 4 | `LapseOccurrence` | SeriesPlanV5Id (32), ordinal LE u32, zero reserved (4) |
-| 5 | `ObserveDonation` | SeriesPlanV5Id (32), component (u8), asset kind (u8), zero reserved (6) |
-| 6 | `CloseFunding` | SeriesPlanV5Id (32) |
+| 13 | `RegisterSeries` | SeriesPlanV5Id (32), FundingTermsV2Id (32), RegistryReleaseId (32), CapabilityProfileId (32) |
+| 14 | `ActivateFunding` | SeriesPlanV5Id (32) |
+| 15 | `AdvanceOccurrence` | SeriesPlanV5Id (32), ordinal LE u32, zero reserved (4), SourceOccurrenceV1Id (32), MarketInstanceV2Id (32) |
+| 16 | `LapseOccurrence` | SeriesPlanV5Id (32), ordinal LE u32, zero reserved (4) |
+| 17 | `ObserveDonation` | SeriesPlanV5Id (32), component (u8), asset kind (u8), zero reserved (6) |
+| 18 | `CloseFunding` | SeriesPlanV5Id (32) |
+
+Local actions `1..=12` in this shared family belong exclusively to SourcePlane
+V3. There are no compatibility aliases at the former Series coordinates.
 
 Amounts are deliberately absent. Activation principal comes only from the
 authenticated `SeriesFundingQuoteV1 × SeriesPlanV5.instance_count` join.
@@ -42,12 +45,14 @@ The global account ledger reserves:
 
 | tag/version | bytes | semantic owner |
 | --- | ---: | --- |
-| `0x7f/1` | 168 | immutable Series registration |
+| `0x7f/1` | 168 | persistent Series registration/replay anchor |
 | `0x80/1` | 376 | mutable Series funding/lifecycle wrapper |
 
 The 168-byte registration stores only SeriesPlanV5Id, FundingTermsV2Id,
 RegistryReleaseId, CapabilityProfileId, its exact payer-owned rent principal,
-PDA bump, and zero flags/reserved bytes.
+PDA bump, the canonical one-shot `activation_consumed` bit, and zero reserved
+bytes. Activation changes only that bit from false to true, atomically with
+funding/custody creation. It never changes back.
 It does not persist `RegistryCapabilityProjectionV2`: the central release stays
 the single owner of selector mappings and every value-bearing consumer must
 reauthenticate and reconstruct the projection.
@@ -68,6 +73,10 @@ rent parameters later change. Predictable-address prefunding never discounts
 the payer. FundingTerms V2 remains the sole owner of the refund destination;
 surplus is donation residue for its neutral sink. All other facts remain owned
 by the pure state, quote, and FundingTerms V2.
+
+The registration PDA persists after funding close as the replay anchor. Its
+close remains disabled until a counted-retirement/nullifier successor can
+preserve the consumed activation while safely refunding registration rent.
 
 ## Address schema and custody
 
@@ -150,6 +159,7 @@ need any missing semantic receipt:
   and current-rent-coverage authentication for registry and funding accounts;
 - prefund-safe creation of both accounts, with exact payer rent rather than a
   prefund discount and immediate neutral-sink disposition of account surplus;
+- atomic one-shot consumption of the persistent registry replay anchor;
 - derivation of the five expected lamport/collateral custody balances from the
   state-owned principal/donation fields;
 - exact authentication of five distinct zero-data System-owned lamport PDAs;

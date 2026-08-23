@@ -8,8 +8,11 @@
 //! that its five physical custody compartments hold the balances in its pure
 //! state.
 //!
-//! The six local action tags are allocated by [`crate::registry`]. Every one
-//! remains runtime-disabled until its complete account/receipt join is wired.
+//! The six Series local action tags `13..=18` are allocated by
+//! [`crate::registry`]. SourcePlane V3 exclusively owns this shared family's
+//! tags `1..=12`; no former Series coordinate remains as an alias. Every Series
+//! action remains runtime-disabled until its complete account/receipt join is
+//! wired.
 
 use clutch_product_series::{
     ContentId, FixedCodec, MarketInstanceV2Id, SeriesFundingComponentV1, SeriesFundingStateV1,
@@ -124,8 +127,8 @@ fn require_reserved(input: &[u8]) -> Result<()> {
     }
 }
 
-/// Immutable proof-carrying selection of one V5 Series under one registry
-/// release/profile pair.
+/// Persistent proof-carrying selection and replay anchor for one V5 Series
+/// under one registry release/profile pair.
 ///
 /// The account intentionally stores references rather than a copied registry
 /// projection. The central registry remains the sole owner of selector
@@ -146,8 +149,8 @@ pub struct SeriesRegistryAccountV1 {
     pub rent_principal_lamports: u64,
     /// Canonical account PDA bump.
     pub stored_bump: u8,
-    /// Reserved flags; must be zero.
-    pub flags: u8,
+    /// Whether the one permitted funding activation has been consumed.
+    pub activation_consumed: bool,
 }
 
 impl SeriesRegistryAccountV1 {
@@ -161,9 +164,6 @@ impl SeriesRegistryAccountV1 {
         require_live(self.capability_profile_id.bytes())?;
         if self.rent_principal_lamports == 0 {
             return Err(CodecError::ZeroValue);
-        }
-        if self.flags != 0 {
-            return Err(CodecError::InvalidEnum);
         }
         Ok(())
     }
@@ -181,7 +181,7 @@ impl SeriesRegistryAccountV1 {
         out[0] = registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG;
         out[1] = registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION;
         out[2] = self.stored_bump;
-        out[3] = self.flags;
+        out[3] = u8::from(self.activation_consumed);
         let mut at = 4;
         put_u64(out, &mut at, self.rent_principal_lamports);
         put_id(out, &mut at, self.series_plan_id.bytes());
@@ -205,7 +205,11 @@ impl SeriesRegistryAccountV1 {
             return Err(CodecError::WrongVersion);
         }
         let stored_bump = input[2];
-        let flags = input[3];
+        let activation_consumed = match input[3] {
+            0 => false,
+            1 => true,
+            _ => return Err(CodecError::InvalidEnum),
+        };
         let mut at = 4;
         let rent_principal_lamports = take_u64(input, &mut at);
         let series_plan_id = SeriesPlanV5Id::from_bytes(take_id(input, &mut at));
@@ -224,7 +228,7 @@ impl SeriesRegistryAccountV1 {
             capability_profile_id,
             rent_principal_lamports,
             stored_bump,
-            flags,
+            activation_consumed,
         };
         value.validate()?;
         Ok(value)

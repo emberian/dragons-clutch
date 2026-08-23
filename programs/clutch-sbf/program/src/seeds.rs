@@ -109,7 +109,7 @@ pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
 /// The kind byte is a seed so transparent 32-byte typed IDs are never cast
 /// across artifact meanings. Realm binding remains inside Genesis V2.
 pub const SEED_PRODUCT_ARTIFACT_V1: &[u8] = b"dc:product-artifact:v1";
-/// Immutable V5 Series registry-record prefix.
+/// Persistent V5 Series registration/replay-anchor prefix.
 pub const SEED_SERIES_REGISTRY_V1: &[u8] = b"dc:series-registry:v1";
 /// Mutable V5 Series funding-state prefix.
 pub const SEED_SERIES_FUNDING_V1: &[u8] = b"dc:series-funding:v1";

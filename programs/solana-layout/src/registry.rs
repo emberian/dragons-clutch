@@ -95,7 +95,7 @@ pub const COVERED_DEALER_FACILITY_STAGE_ACCOUNT_VERSION: u8 = 1;
 pub const COVERED_DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
 /// Covered-dealer immutable policy account version.
 pub const COVERED_DEALER_POLICY_ACCOUNT_VERSION: u8 = 1;
-/// Immutable registered-Series account discriminator.
+/// Persistent registered-Series/replay-anchor account discriminator.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
 /// Immutable registered-Series account version.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
@@ -663,33 +663,66 @@ impl GeneralV2Action {
 
 /// Source/Series V2 family-local action allocations.
 ///
-/// These tags have exact payload codecs in [`crate::product_series`] when the
-/// non-production laboratory is compiled. Allocation remains separate from
-/// executable capability; the SBF product keeps every tuple disabled until
-/// the authenticated registry, source, collateral, liveness, and failure
-/// receipt joins required by that action exist together.
+/// SourcePlane V3 exclusively owns tags 1 through 12. Recurring Series
+/// exclusively owns tags 13 through 18, with exact payload codecs in
+/// [`crate::product_series`] when the non-production laboratory is compiled.
+/// Allocation remains separate from executable capability; the SBF product
+/// keeps every tuple disabled until the authenticated joins required by that
+/// action exist together.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceSeriesAction {
-    /// Register one immutable V5 Series against an authenticated registry release.
-    RegisterSeries = 1,
+    /// Register one reviewed SourcePlane V3 release.
+    RegisterRelease = 1,
+    /// Initialize one canonical Source head.
+    InitializeHead = 2,
+    /// Open one raw Source page.
+    OpenRawPage = 3,
+    /// Ingest one authenticated boundary batch.
+    IngestBoundaryBatch = 4,
+    /// Seal one complete raw Source page.
+    SealRawPage = 5,
+    /// Initialize one window-fold work account.
+    InitializeWindowWork = 6,
+    /// Fold one bounded raw-page segment into window work.
+    FoldWindowPages = 7,
+    /// Seal one complete Source window.
+    SealWindow = 8,
+    /// Evaluate one admitted statistic over a sealed window.
+    EvaluateStatistic = 9,
+    /// Emit one exact failure-policy handoff.
+    EmitFailureHandoff = 10,
+    /// Reopen one explicitly funded repair generation.
+    ReopenGeneration = 11,
+    /// Close one terminal Source generation.
+    CloseGeneration = 12,
+    /// Register one persistent V5 Series against an authenticated registry release.
+    RegisterSeries = 13,
     /// Capitalize the five Series funding compartments.
-    ActivateFunding = 2,
+    ActivateFunding = 14,
     /// Create or converge the next eligible occurrence atomically.
-    AdvanceOccurrence = 3,
+    AdvanceOccurrence = 15,
     /// Advance one elapsed ordinal without spending its allocation.
-    LapseOccurrence = 4,
+    LapseOccurrence = 16,
     /// Observe balance surplus as separately owned donation residue.
-    ObserveDonation = 5,
+    ObserveDonation = 17,
     /// Refund remaining payer principal and dispose donation residue.
-    CloseFunding = 6,
+    CloseFunding = 18,
 }
 
 impl SourceSeriesAction {
     /// First allocated Source/Series V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated Source/Series V2 local action tag.
-    pub const LAST_TAG: u8 = 6;
+    pub const LAST_TAG: u8 = 18;
+    /// First SourcePlane V3 action in this shared family.
+    pub const SOURCE_FIRST_TAG: u8 = 1;
+    /// Last SourcePlane V3 action in this shared family.
+    pub const SOURCE_LAST_TAG: u8 = 12;
+    /// First recurring-Series action in this shared family.
+    pub const SERIES_FIRST_TAG: u8 = 13;
+    /// Last recurring-Series action in this shared family.
+    pub const SERIES_LAST_TAG: u8 = 18;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -699,12 +732,24 @@ impl SourceSeriesAction {
     /// Decode one allocated Source/Series V2 local action tag.
     pub const fn from_tag(tag: u8) -> Option<Self> {
         match tag {
-            1 => Some(Self::RegisterSeries),
-            2 => Some(Self::ActivateFunding),
-            3 => Some(Self::AdvanceOccurrence),
-            4 => Some(Self::LapseOccurrence),
-            5 => Some(Self::ObserveDonation),
-            6 => Some(Self::CloseFunding),
+            1 => Some(Self::RegisterRelease),
+            2 => Some(Self::InitializeHead),
+            3 => Some(Self::OpenRawPage),
+            4 => Some(Self::IngestBoundaryBatch),
+            5 => Some(Self::SealRawPage),
+            6 => Some(Self::InitializeWindowWork),
+            7 => Some(Self::FoldWindowPages),
+            8 => Some(Self::SealWindow),
+            9 => Some(Self::EvaluateStatistic),
+            10 => Some(Self::EmitFailureHandoff),
+            11 => Some(Self::ReopenGeneration),
+            12 => Some(Self::CloseGeneration),
+            13 => Some(Self::RegisterSeries),
+            14 => Some(Self::ActivateFunding),
+            15 => Some(Self::AdvanceOccurrence),
+            16 => Some(Self::LapseOccurrence),
+            17 => Some(Self::ObserveDonation),
+            18 => Some(Self::CloseFunding),
             _ => None,
         }
     }

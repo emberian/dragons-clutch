@@ -883,7 +883,7 @@ fn create_series_program_account<'a>(
     )
 }
 
-/// Create and encode one immutable registered-Series PDA after a higher typed
+/// Create and encode one persistent registered-Series PDA after a higher typed
 /// adapter has authenticated its full registry/artifact join.
 ///
 /// Predictable-address prefunding is donation, not a rent discount. The payer
@@ -900,6 +900,7 @@ pub fn create_series_registry_account<'a>(
     value: SeriesRegistryAccountV1,
 ) -> Outcome<()> {
     value.validate()?;
+    require(!value.activation_consumed, ClutchError::Replay)?;
     let (address, bump) = seeds::series_registry_pda(program_id, &value.series_plan_id.bytes());
     expect_pda(target.key, (address, bump), Some(value.stored_bump))?;
     let bump_seed = [bump];
@@ -958,7 +959,7 @@ pub fn create_series_funding_account<'a>(
     Ok(())
 }
 
-/// Authenticate an immutable registered-Series account, including its exact
+/// Authenticate a read-only registered-Series replay anchor, including exact
 /// PDA, program owner, codec, and stored/current rent coverage.
 pub fn read_series_registry_account(
     program_id: &Pubkey,
@@ -966,7 +967,22 @@ pub fn read_series_registry_account(
     expected_series: SeriesPlanV5Id,
     rent: &RentParameters,
 ) -> Outcome<SeriesRegistryAccountV1> {
-    require_program_account(program_id, account, SERIES_REGISTRY_ACCOUNT_BYTES_V1, false)?;
+    read_series_registry_account_with_role(program_id, account, expected_series, rent, false)
+}
+
+fn read_series_registry_account_with_role(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series: SeriesPlanV5Id,
+    rent: &RentParameters,
+    writable: bool,
+) -> Outcome<SeriesRegistryAccountV1> {
+    require_program_account(
+        program_id,
+        account,
+        SERIES_REGISTRY_ACCOUNT_BYTES_V1,
+        writable,
+    )?;
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
@@ -982,6 +998,32 @@ pub fn read_series_registry_account(
     )?;
     require_rent_coverage(account, value.rent_principal_lamports, rent)?;
     Ok(value)
+}
+
+/// Consume the one permitted activation in the persistent registry/replay
+/// anchor while preserving every immutable ID, bump, and rent fact.
+///
+/// Callers must perform this write in the same instruction as funding-account
+/// and custody creation. Any later failure rolls the whole transaction back;
+/// a committed `true` value can never be reset by this ABI.
+pub fn consume_series_activation(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series: SeriesPlanV5Id,
+    rent: &RentParameters,
+) -> Outcome<SeriesRegistryAccountV1> {
+    let current =
+        read_series_registry_account_with_role(program_id, account, expected_series, rent, true)?;
+    require(!current.activation_consumed, ClutchError::Replay)?;
+    let next = SeriesRegistryAccountV1 {
+        activation_consumed: true,
+        ..current
+    };
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    next.encode(&mut data)?;
+    Ok(next)
 }
 
 /// Authenticate a mutable Series-funding account and join it to its exact
