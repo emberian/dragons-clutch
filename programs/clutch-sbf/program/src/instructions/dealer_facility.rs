@@ -134,6 +134,11 @@ const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
 /// fixed book in any SBF call frame before the streaming page cursor fills it.
 static EMPTY_DEALER_ECONOMIC_BOOK_V2: EconomicBookV2 = EconomicBookV2::empty();
 
+/// Static source for heap-first hostile decoding of one signed Dealer quote.
+static EMPTY_DEALER_QUOTE_ADMISSION_V1:
+    clutch_dealer_runtime_contract::DealerQuoteAdmissionV1 =
+    clutch_dealer_runtime_contract::DealerQuoteAdmissionV1::ZEROED;
+
 fn id(key: &Pubkey) -> Id {
     Id::from_bytes(key.to_bytes())
 }
@@ -1034,7 +1039,7 @@ fn authenticate_signed_dealer_quote_v1(
     quote_account: &AccountInfo<'_>,
     instructions_account: &AccountInfo<'_>,
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
-) -> Outcome<clutch_dealer_runtime_contract::DealerQuoteAdmissionV1> {
+) -> Outcome<Box<clutch_dealer_runtime_contract::DealerQuoteAdmissionV1>> {
     require(
         !quote_account.is_writable && !quote_account.is_signer && !quote_account.executable,
         ClutchError::MismatchedState,
@@ -1044,8 +1049,10 @@ fn authenticate_signed_dealer_quote_v1(
             == clutch_dealer_runtime_contract::DEALER_QUOTE_ADMISSION_BYTES_V1,
         ClutchError::WrongDataLength,
     )?;
-    let quote = clutch_dealer_runtime_contract::DealerQuoteAdmissionV1::decode(
+    let mut quote = super::orders_batch::boxed_copy_of(&EMPTY_DEALER_QUOTE_ADMISSION_V1)?;
+    clutch_dealer_runtime_contract::DealerQuoteAdmissionV1::decode_into(
         &quote_account.data.borrow(),
+        &mut quote,
     )
     .map_err(dealer_fault)?;
     let instructions_data = instructions_account

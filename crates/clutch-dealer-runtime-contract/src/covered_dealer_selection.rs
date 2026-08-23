@@ -93,6 +93,53 @@ pub struct DealerQuoteAdmissionV1 {
 }
 
 impl DealerQuoteAdmissionV1 {
+    /// Canonical invalid decode target for allocation-owning adapters.
+    ///
+    /// An SBF adapter can copy this static value directly into heap storage
+    /// and call [`Self::decode_into`] without ever placing the 6,948-byte quote
+    /// body on a 4-KiB call frame.
+    pub const ZEROED: Self = Self {
+        quote_authority: Id::ZERO,
+        policy_id: Id::ZERO,
+        facility_id: Id::ZERO,
+        dealer_state_account_id: Id::ZERO,
+        epoch_id: Id::ZERO,
+        settlement_root_account_id: Id::ZERO,
+        retained_feed_account_id: Id::ZERO,
+        settlement_candidate_id: Id::ZERO,
+        selected_fee_binding_digest: Id::ZERO,
+        issued_slot: 0,
+        expires_slot: 0,
+        collect_deadline_slot: 0,
+        deliver_deadline_slot: 0,
+        outcome_count: 0,
+        dealer: DealerLegCandidateV2 {
+            rows: [EMPTY_DEALER_FILL_ROW_V2; MAX_DEALER_ROWS_V2],
+            row_count: 0,
+        },
+        quote: DealerQuotePreconditionV2 {
+            upstream_economic_candidate_digest: [0; 32],
+            facility: DealerFacilityBindingV2 {
+                version: 0,
+                facility_semantics_digest: [0; 32],
+                policy_semantics_digest: [0; 32],
+                pre_generation: 0,
+            },
+            cash_policy: DealerCashPolicyV2::MinimumGrossHamiltonV1,
+            fee_policy_semantics_digest: [0; 32],
+            trade: AggregateDealerTradeV2 {
+                sell_to_users: [0; MAX_OUTCOMES],
+                buy_from_users: [0; MAX_OUTCOMES],
+            },
+            receipt: DealerReceiptV2 {
+                dealer_net_cash_in_atoms: 0,
+                dealer_net_cash_out_atoms: 0,
+            },
+            rows: [EMPTY_DEALER_QUOTE_ROW_V2; MAX_DEALER_ROWS_V2],
+            semantic_quote_digest: [0; 32],
+        },
+    };
+
     /// Validate identities, lifetime, and canonical row/padding shape.
     pub fn validate(&self) -> Result<()> {
         for identity in [
@@ -167,6 +214,22 @@ impl DealerQuoteAdmissionV1 {
         value.validate_live()?;
         Ok(value)
     }
+
+    /// Hostile-decode directly into caller-owned storage.
+    ///
+    /// This is semantically identical to [`FixedCodec::decode`], including
+    /// complete postimage validation, but it does not require a by-value
+    /// 6,948-byte return object.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.header(
+            &DEALER_QUOTE_ADMISSION_MAGIC_V1,
+            DEALER_QUOTE_ADMISSION_VERSION_V1,
+        )?;
+        read_quote_admission_into(&mut reader, output)?;
+        reader.finish()?;
+        output.validate()
+    }
 }
 
 impl FixedCodec for DealerQuoteAdmissionV1 {
@@ -184,14 +247,8 @@ impl FixedCodec for DealerQuoteAdmissionV1 {
     }
 
     fn decode(input: &[u8]) -> Result<Self> {
-        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.header(
-            &DEALER_QUOTE_ADMISSION_MAGIC_V1,
-            DEALER_QUOTE_ADMISSION_VERSION_V1,
-        )?;
-        let value = read_quote_admission(&mut reader)?;
-        reader.finish()?;
-        value.validate()?;
+        let mut value = Self::ZEROED;
+        Self::decode_into(input, &mut value)?;
         Ok(value)
     }
 }
@@ -730,40 +787,27 @@ fn write_quote_admission(value: &DealerQuoteAdmissionV1, writer: &mut Writer<'_>
     write_dealer_quote(&value.quote, writer);
 }
 
-fn read_quote_admission(reader: &mut Reader<'_>) -> Result<DealerQuoteAdmissionV1> {
-    let quote_authority = reader.id();
-    let policy_id = reader.id();
-    let facility_id = reader.id();
-    let dealer_state_account_id = reader.id();
-    let epoch_id = reader.id();
-    let settlement_root_account_id = reader.id();
-    let retained_feed_account_id = reader.id();
-    let settlement_candidate_id = reader.id();
-    let selected_fee_binding_digest = reader.id();
-    let issued_slot = reader.u64();
-    let expires_slot = reader.u64();
-    let collect_deadline_slot = reader.u64();
-    let deliver_deadline_slot = reader.u64();
-    let outcome_count = reader.u8();
+fn read_quote_admission_into(
+    reader: &mut Reader<'_>,
+    value: &mut DealerQuoteAdmissionV1,
+) -> Result<()> {
+    value.quote_authority = reader.id();
+    value.policy_id = reader.id();
+    value.facility_id = reader.id();
+    value.dealer_state_account_id = reader.id();
+    value.epoch_id = reader.id();
+    value.settlement_root_account_id = reader.id();
+    value.retained_feed_account_id = reader.id();
+    value.settlement_candidate_id = reader.id();
+    value.selected_fee_binding_digest = reader.id();
+    value.issued_slot = reader.u64();
+    value.expires_slot = reader.u64();
+    value.collect_deadline_slot = reader.u64();
+    value.deliver_deadline_slot = reader.u64();
+    value.outcome_count = reader.u8();
     reader.reserved(7)?;
-    Ok(DealerQuoteAdmissionV1 {
-        quote_authority,
-        policy_id,
-        facility_id,
-        dealer_state_account_id,
-        epoch_id,
-        settlement_root_account_id,
-        retained_feed_account_id,
-        settlement_candidate_id,
-        selected_fee_binding_digest,
-        issued_slot,
-        expires_slot,
-        collect_deadline_slot,
-        deliver_deadline_slot,
-        outcome_count,
-        dealer: read_dealer_candidate(reader)?,
-        quote: read_dealer_quote(reader)?,
-    })
+    read_dealer_candidate_into(reader, &mut value.dealer)?;
+    read_dealer_quote_into(reader, &mut value.quote)
 }
 
 fn write_dealer_candidate(value: &DealerLegCandidateV2, writer: &mut Writer<'_>) {
@@ -777,19 +821,20 @@ fn write_dealer_candidate(value: &DealerLegCandidateV2, writer: &mut Writer<'_>)
     writer.reserved(7);
 }
 
-fn read_dealer_candidate(reader: &mut Reader<'_>) -> Result<DealerLegCandidateV2> {
-    let mut rows = [EMPTY_DEALER_FILL_ROW_V2; MAX_DEALER_ROWS_V2];
+fn read_dealer_candidate_into(
+    reader: &mut Reader<'_>,
+    value: &mut DealerLegCandidateV2,
+) -> Result<()> {
     let mut row = 0usize;
     while row < MAX_DEALER_ROWS_V2 {
-        rows[row] = DealerFillRowV2 {
+        value.rows[row] = DealerFillRowV2 {
             order_id: reader.bytes(),
             dealer_fill_units: reader.u64(),
         };
         row += 1;
     }
-    let row_count = reader.u8();
-    reader.reserved(7)?;
-    Ok(DealerLegCandidateV2 { rows, row_count })
+    value.row_count = reader.u8();
+    reader.reserved(7)
 }
 
 fn write_dealer_quote(value: &DealerQuotePreconditionV2, writer: &mut Writer<'_>) {
@@ -826,44 +871,42 @@ fn write_dealer_quote(value: &DealerQuotePreconditionV2, writer: &mut Writer<'_>
     writer.bytes(&value.semantic_quote_digest);
 }
 
-fn read_dealer_quote(reader: &mut Reader<'_>) -> Result<DealerQuotePreconditionV2> {
-    let upstream_economic_candidate_digest = reader.bytes();
+fn read_dealer_quote_into(
+    reader: &mut Reader<'_>,
+    value: &mut DealerQuotePreconditionV2,
+) -> Result<()> {
+    value.upstream_economic_candidate_digest = reader.bytes();
     let version = reader.u8();
     reader.reserved(7)?;
-    let facility = DealerFacilityBindingV2 {
+    value.facility = DealerFacilityBindingV2 {
         version,
         facility_semantics_digest: reader.bytes(),
         policy_semantics_digest: reader.bytes(),
         pre_generation: reader.u64(),
     };
-    let cash_policy = match reader.u8() {
+    value.cash_policy = match reader.u8() {
         1 => DealerCashPolicyV2::MinimumGrossHamiltonV1,
         _ => return Err(Error::InvalidParameter),
     };
     reader.reserved(7)?;
-    let fee_policy_semantics_digest = reader.bytes();
-    let mut trade = AggregateDealerTradeV2 {
-        sell_to_users: [0; MAX_OUTCOMES],
-        buy_from_users: [0; MAX_OUTCOMES],
-    };
+    value.fee_policy_semantics_digest = reader.bytes();
     let mut outcome = 0usize;
     while outcome < MAX_OUTCOMES {
-        trade.sell_to_users[outcome] = reader.u64();
+        value.trade.sell_to_users[outcome] = reader.u64();
         outcome += 1;
     }
     outcome = 0;
     while outcome < MAX_OUTCOMES {
-        trade.buy_from_users[outcome] = reader.u64();
+        value.trade.buy_from_users[outcome] = reader.u64();
         outcome += 1;
     }
-    let receipt = DealerReceiptV2 {
+    value.receipt = DealerReceiptV2 {
         dealer_net_cash_in_atoms: reader.u64(),
         dealer_net_cash_out_atoms: reader.u64(),
     };
-    let mut rows = [EMPTY_DEALER_QUOTE_ROW_V2; MAX_DEALER_ROWS_V2];
     let mut row = 0usize;
     while row < MAX_DEALER_ROWS_V2 {
-        rows[row] = DealerQuoteRowV2 {
+        value.rows[row] = DealerQuoteRowV2 {
             order_id: reader.bytes(),
             maximum_cash_in_atoms: reader.u64(),
             minimum_cash_out_atoms: reader.u64(),
@@ -871,16 +914,8 @@ fn read_dealer_quote(reader: &mut Reader<'_>) -> Result<DealerQuotePreconditionV
         };
         row += 1;
     }
-    Ok(DealerQuotePreconditionV2 {
-        upstream_economic_candidate_digest,
-        facility,
-        cash_policy,
-        fee_policy_semantics_digest,
-        trade,
-        receipt,
-        rows,
-        semantic_quote_digest: reader.bytes(),
-    })
+    value.semantic_quote_digest = reader.bytes();
+    Ok(())
 }
 
 fn write_covered_selection(value: &CoveredDealerSelectionV1, writer: &mut Writer<'_>) {
