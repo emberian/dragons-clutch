@@ -4,18 +4,24 @@
 //! This module does not route an instruction. It authenticates the dedicated
 //! `0xab/v1` mutable work account and permanent `0xac/v1` replay account, then
 //! mints only the private authorities required to restore Failure state and
-//! Product's verified interval capability. Begin remains unavailable until
-//! Product action 15 supplies the exact private capitalization receipt.
+//! Product's verified interval capability. All four actions remain unavailable
+//! until their complete atomic handlers consume these authorities.
 
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::product_occurrence::AuthenticatedProductOccurrenceCapitalizationV1;
 use crate::seeds;
-use clutch_failure_policy_runtime::external_v2::FailureRecoveryWorkReceiptIdV2;
+use clutch_failure_policy_adapter::external_v2::AuthenticatedExternalRootV2;
+use clutch_failure_policy_runtime::external_v2::{
+    FailureRecoveryWorkReceiptIdV2, FailureRuntimeExternalV2,
+};
 use clutch_failure_policy_runtime::interval_consensus_v1::{
-    project_failure_interval_consensus_replay_id_v1, restore_failure_interval_consensus_state_v1,
+    admit_failure_interval_consensus_funding_v1, project_failure_interval_consensus_replay_id_v1,
+    restore_failure_interval_consensus_state_v1, AuthenticatedFailureIntervalConsensusFundingV1,
     AuthenticatedFailureIntervalConsensusStateV1, FailureIntervalConsensusAccountIdV1,
     FailureIntervalConsensusBindingIdV1, FailureIntervalConsensusCloseAuthorizationIdV1,
-    FailureIntervalConsensusFundingReceiptIdV1, FailureIntervalConsensusPersistedFactsV1,
+    FailureIntervalConsensusFundingFactsV1, FailureIntervalConsensusFundingReceiptIdV1,
+    FailureIntervalConsensusFundingReceiptV1, FailureIntervalConsensusPersistedFactsV1,
     FailureIntervalConsensusPhaseV1, FailureIntervalConsensusReplayReceiptIdV1,
     FailureIntervalConsensusReplayV1, FailureIntervalConsensusResolutionReceiptIdV1,
     FailureIntervalConsensusStateV1, FailureIntervalConsensusTransitionReceiptIdV1,
@@ -34,6 +40,151 @@ use clutch_solana_layout::registry;
 use clutch_source_plane_v3::ContentId as SourceContentId;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
+
+/// Private composite authority joining Product's present capitalization to
+/// the separately authenticated Failure/liveness runtime.
+///
+/// Product owns the four disjoint rent principals and their donation floors;
+/// Failure owns the Recovery-compartment/policy/lifecycle/quote identities.
+/// Neither receipt alone can admit interval work funding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFailureIntervalConsensusFundingJoinV1 {
+    capitalization: AuthenticatedProductOccurrenceCapitalizationV1,
+    runtime: FailureRuntimeExternalV2,
+}
+
+impl AuthenticatedFailureIntervalConsensusFundingJoinV1 {
+    /// Exact Product capitalization authentication.
+    pub const fn capitalization(self) -> AuthenticatedProductOccurrenceCapitalizationV1 {
+        self.capitalization
+    }
+
+    /// Exact account-authenticated Failure runtime.
+    pub const fn runtime(self) -> FailureRuntimeExternalV2 {
+        self.runtime
+    }
+}
+
+impl AuthenticatedFailureIntervalConsensusFundingV1
+    for AuthenticatedFailureIntervalConsensusFundingJoinV1
+{
+    fn authenticate_interval_consensus_funding(
+        &self,
+        expected: FailureIntervalConsensusFundingFactsV1,
+    ) -> core::result::Result<(), FailureError> {
+        let principal = self.capitalization.principal_lamports();
+        let creation_floors = self.capitalization.donation_floor_lamports();
+        let observed_balances = self.capitalization.observed_balances();
+        let observed_donations = self.capitalization.observed_donations();
+        if expected.failure_policy_binding_id.bytes()
+            != self.capitalization.failure_policy_binding_id().bytes()
+            || expected.failure_policy_binding_id != self.runtime.binding_id()
+            || expected.market_instance_id != self.capitalization.market_instance_id()
+            || expected.market_instance_id != self.runtime.binding().market_instance_id()
+            || expected.generation != self.capitalization.generation()
+            || expected.generation != self.runtime.binding().generation()
+            || expected.work_account.bytes()
+                != self.capitalization.interval_work_account().to_bytes()
+            || expected.replay_account.bytes()
+                != self.capitalization.interval_replay_account().to_bytes()
+            || expected.rent_payer.bytes() != self.capitalization.rent_payer().bytes()
+            || expected.rent_payer.bytes() != self.runtime.recovery_payer().bytes()
+            || expected.neutral_sink.bytes() != self.capitalization.neutral_lamport_sink().bytes()
+            || expected.neutral_sink.bytes() != self.runtime.recovery_neutral_sink().bytes()
+            || expected.work_rent_principal_lamports != principal[1]
+            || expected.replay_rent_principal_lamports != principal[2]
+            || expected.work_creation_donation_floor_lamports != creation_floors[1]
+            || expected.replay_creation_donation_floor_lamports != creation_floors[2]
+            || expected.work_observed_balance_lamports != observed_balances[1]
+            || expected.replay_observed_balance_lamports != observed_balances[2]
+            || expected.work_observed_donation_lamports != observed_donations[1]
+            || expected.replay_observed_donation_lamports != observed_donations[2]
+            || expected.recovery_compartment_account_id
+                != self.runtime.recovery_compartment_account_id()
+            || expected.liveness_policy_id != self.runtime.liveness_policy_id()
+            || expected.liveness_lifecycle_id != self.runtime.liveness_lifecycle_id()
+            || expected.recovery_quote_schedule_id != self.runtime.recovery_quote_schedule_id()
+        {
+            Err(FailureError::BindingMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Join Product capitalization with an account-authenticated Failure root.
+///
+/// This constructor is crate-private: no instruction payload or decoded ID
+/// can mint the composite funding authority.
+pub(crate) fn join_product_occurrence_failure_interval_funding_v1(
+    failure_root: AuthenticatedExternalRootV2,
+    capitalization: AuthenticatedProductOccurrenceCapitalizationV1,
+) -> Outcome<AuthenticatedFailureIntervalConsensusFundingJoinV1> {
+    let runtime = failure_root.runtime();
+    runtime
+        .check()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        capitalization.failure_policy_binding_id().bytes() == runtime.binding_id().bytes()
+            && capitalization.market_instance_id() == runtime.binding().market_instance_id()
+            && capitalization.generation() == runtime.binding().generation()
+            && capitalization.recovery_state_id().bytes() == runtime.semantic_state_id().bytes()
+            && capitalization.rent_payer().bytes() == runtime.recovery_payer().bytes()
+            && capitalization.neutral_lamport_sink().bytes()
+                == runtime.recovery_neutral_sink().bytes()
+            && capitalization.maximum_interval_width() != u64::MAX
+            && capitalization.maximum_coordinates_per_advance() != 0,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedFailureIntervalConsensusFundingJoinV1 {
+        capitalization,
+        runtime,
+    })
+}
+
+/// Derive the only admissible Failure funding facts from the two private
+/// authorities and mint the pure funding receipt without a caller DTO.
+pub(crate) fn admit_product_occurrence_failure_interval_funding_v1(
+    joined: AuthenticatedFailureIntervalConsensusFundingJoinV1,
+) -> Outcome<FailureIntervalConsensusFundingReceiptV1> {
+    let capitalization = joined.capitalization;
+    let runtime = joined.runtime;
+    let principal = capitalization.principal_lamports();
+    let creation_floors = capitalization.donation_floor_lamports();
+    let observed_balances = capitalization.observed_balances();
+    let observed_donations = capitalization.observed_donations();
+    let facts = FailureIntervalConsensusFundingFactsV1 {
+        failure_policy_binding_id: runtime.binding_id(),
+        market_instance_id: runtime.binding().market_instance_id(),
+        generation: runtime.binding().generation(),
+        work_account: FailureIntervalConsensusAccountIdV1::from_bytes(
+            capitalization.interval_work_account().to_bytes(),
+        ),
+        replay_account: FailureIntervalConsensusAccountIdV1::from_bytes(
+            capitalization.interval_replay_account().to_bytes(),
+        ),
+        rent_payer: FailureIntervalConsensusAccountIdV1::from_bytes(
+            capitalization.rent_payer().bytes(),
+        ),
+        neutral_sink: FailureIntervalConsensusAccountIdV1::from_bytes(
+            capitalization.neutral_lamport_sink().bytes(),
+        ),
+        work_rent_principal_lamports: principal[1],
+        replay_rent_principal_lamports: principal[2],
+        work_creation_donation_floor_lamports: creation_floors[1],
+        work_observed_donation_lamports: observed_donations[1],
+        work_observed_balance_lamports: observed_balances[1],
+        replay_creation_donation_floor_lamports: creation_floors[2],
+        replay_observed_donation_lamports: observed_donations[2],
+        replay_observed_balance_lamports: observed_balances[2],
+        recovery_compartment_account_id: runtime.recovery_compartment_account_id(),
+        liveness_policy_id: runtime.liveness_policy_id(),
+        liveness_lifecycle_id: runtime.liveness_lifecycle_id(),
+        recovery_quote_schedule_id: runtime.recovery_quote_schedule_id(),
+    };
+    admit_failure_interval_consensus_funding_v1(&joined, &runtime, facts)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
 
 /// Private account-authenticated authority for one exact `0xab`/`0xac` pair.
 ///
