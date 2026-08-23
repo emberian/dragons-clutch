@@ -68,14 +68,19 @@ is over the best valid submitted candidate under the frozen rank, never an
 assertion of optimal clearing.
 
 The isolated General SBF source now checks this exact admission before creating
-even a resumable nonempty ClearWork account, and repeats it on the empty-book
-completion path before projecting ScoreV2-Q. Work creation's successor tuple
-also authenticates the canonical PriceGrid PDA and every active tick plus full
-Template/Basis/Policy/Genesis/MarketInstance coordinate ownership. ClearWork
-binds the authenticated feed and successor policy thereafter. The 17-account
-handler is staged pending the shared account-meta/capability join. This is
-source composition only: the non-production profile remains disabled by
-default and no build, local-bank, compute, or deployment claim follows from it.
+even a resumable nonempty ClearWork account, repeats it on every streamed order
+and settlement-slice resume, and repeats it at terminal completion before
+projecting ScoreV2-Q. Work creation, every resume, and completion authenticate
+the canonical PriceGrid PDA and every active tick plus full
+Template/Basis/Policy/Genesis/MarketInstance coordinate ownership. ClearWork V3
+retains many of the checked identities, but
+its version predates the exact finite policy and is not itself authority that
+the full tuple was checked. Each resume therefore remints a private full-tuple
+capability in a separate bounded SBF frame and exact-joins it to the Work body
+before borrowing OrderPages. The current non-production capability manifest
+must rotate for the hardened variable-width resume tuple before a built artifact
+can claim these semantics. This is source composition only: no build,
+local-bank, compute, or deployment claim follows from it.
 
 The page projection validates frozen page commitments, exact market/epoch/
 order-set bindings, grid membership, widths, expiry, and RelationV2 admission.

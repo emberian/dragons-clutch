@@ -7,10 +7,12 @@
 //! phase retains the successful set-authentication fact. Every call skips a
 //! bounded run of tombstones and folds exactly one dense live order, so the
 //! present-funded order schedule never relies on an unpaid page-only call.
-//! The SBF mint path must authenticate the sealed feed's exact finite
-//! atom-mixture certificate before creating Work. This module then rechecks
-//! the successor Relation policy and immutable feed/domain bindings on every
-//! resumed step; it does not expose price admission or execution authority.
+//! The SBF path must authenticate the sealed feed's exact finite atom-mixture
+//! certificate before creating Work. ClearWork V3 does not retain enough
+//! versioned Product/Grid authority for a successor policy bit to stand in for
+//! that proof. Every successor resume therefore remints the full private
+//! Product/Grid capability and joins it to Work before entering the raw
+//! streaming transition. This module exposes no execution authority.
 
 use clutch_batch::relation_v1::MAX_OUTCOMES as RELATION_MAX_OUTCOMES;
 use clutch_batch::relation_v2::{EconomicCandidateV2, PricePreconditionV2, VerifiedEconomicsV2};
@@ -42,6 +44,7 @@ use crate::builder::{project_owner_blind_slot, relation_domain_from_account};
 use crate::{
     decode_sealed_candidate_feed_v1, quantized_relation_v2_policy_id_v2,
     score_v2_q_policy_id_v1, CandidateBuilderErrorV1, CanonicalSha256, GeneralV2RuntimeError,
+    QuantizedRelationProductPriceAdmissionV2,
 };
 
 const _: () = assert!(MAX_OUTCOMES == RELATION_MAX_OUTCOMES);
@@ -141,8 +144,92 @@ impl AdvanceClearOrderPlanV1 {
     }
 }
 
+/// Reauthenticate exact Product/Grid admission and fold the next live order.
+///
+/// WorkV3 predates the quantized Relation policy and therefore cannot assert
+/// from its version alone that the complete Product/Grid tuple was checked at
+/// creation. This successor requires a freshly minted full-tuple capability on
+/// every resume, joins it to every immutable identity retained by Work, and
+/// only then enters the existing streaming transition.
+#[allow(clippy::too_many_arguments)]
+pub fn advance_quantized_clear_order_v2(
+    product_admission: QuantizedRelationProductPriceAdmissionV2,
+    candidate_feed_identity: Id32,
+    market_binding_identity: Id32,
+    sealed_candidate_feed: &[u8],
+    work_account: &[u8],
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    page_bodies: &[&[u8]],
+) -> Result<AdvanceClearOrderPlanV1, GeneralV2WorkErrorV1> {
+    let work = ClearWorkV3AccountV1::decode_account(work_account)?;
+    verify_quantized_clear_work_authority_v2(
+        product_admission,
+        candidate_feed_identity,
+        market_binding_identity,
+        &work,
+        market_binding,
+    )?;
+    advance_clear_order_v1(
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        work_account,
+        economic_domain_account,
+        market_binding,
+        page_bodies,
+    )
+}
+
+/// Join a freshly checked Product/Grid capability to every immutable exact-
+/// price identity retained by a ClearWork V3 account.
+///
+/// Settlement-slice and terminal successors use the same gate before they
+/// consume Work. Returning success proves only identity/coherence admission;
+/// it is not execution authority, a price-quality judgment, or fair value.
+pub fn verify_quantized_clear_work_authority_v2(
+    product_admission: QuantizedRelationProductPriceAdmissionV2,
+    candidate_feed_identity: Id32,
+    market_binding_identity: Id32,
+    work: &ClearWorkV3AccountV1,
+    market_binding: &MarketBindingV1,
+) -> Result<(), GeneralV2WorkErrorV1> {
+    let admission = product_admission.price_admission();
+    let certificate = admission.certificate();
+    let certificate_bindings = certificate.bindings();
+    if candidate_feed_identity != admission.candidate_feed()
+        || candidate_feed_identity != work.feed
+        || admission.economic_domain_digest() != work.economic_domain_digest
+        || admission.price_body_digest() != work.price_body_digest
+        || admission.price().semantic_price_digest != work.candidate_price_digest.bytes()
+        || admission.price().policy_digest != work.price_measure_policy_v1_id.bytes()
+        || admission.domain().relation_policy_digest != work.relation_policy_id.bytes()
+        || admission.domain().market_semantics_digest
+            != product_admission.market_instance_v2_id().bytes()
+        || admission.domain().outcome_count != work.outcome_count
+        || admission.domain().price_scale != market_binding.price_scale
+        || product_admission.market_binding() != market_binding_identity
+        || product_admission.market_genesis_profile_v2_id()
+            != market_binding.market_genesis_profile_v2_id
+        || product_admission.market_instance_v2_id() != market_binding.market_instance_v2_id
+        || certificate_bindings.market_id != work.market.bytes()
+        || certificate_bindings.terms_id
+            != product_admission.market_genesis_profile_v2_id().bytes()
+        || certificate_bindings.basis_id != work.native_claim_basis_id.bytes()
+        || certificate_bindings.price_id != work.candidate_price_digest.bytes()
+        || certificate.outcome_count() != work.outcome_count
+        || certificate.payout_denominator() != market_binding.price_scale
+    {
+        return Err(GeneralV2WorkErrorV1::BindingMismatch);
+    }
+    Ok(())
+}
+
 /// Authenticate a frozen V5 page set and fold exactly the next dense live
 /// order into the account-local RelationV2 checkpoint.
+///
+/// This V1 entry point is retained for legacy callers. The successor SBF path
+/// uses [`advance_quantized_clear_order_v2`] so a policy ID alone cannot stand
+/// in for the exact retained price authority.
 #[allow(clippy::too_many_arguments)]
 pub fn advance_clear_order_v1(
     candidate_feed_identity: Id32,
@@ -463,6 +550,42 @@ struct SliceOrderFactV1 {
     owner: Id32,
 }
 
+/// Reauthenticate exact Product/Grid admission and consume one settlement
+/// slice from a previously accepted RelationV2 candidate.
+///
+/// Phase two is still a resumed candidate-verification phase: route and
+/// remaining-leg checks can change the verdict to checked-refused. It must
+/// therefore consume the same call-local exact-price authority as order
+/// streaming rather than inheriting authority from a V3 policy field.
+#[allow(clippy::too_many_arguments)]
+pub fn advance_quantized_clear_slice_v2(
+    product_admission: QuantizedRelationProductPriceAdmissionV2,
+    candidate_feed_identity: Id32,
+    market_binding_identity: Id32,
+    sealed_candidate_feed: &[u8],
+    work_account: &[u8],
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    page_bodies: &[&[u8]],
+) -> Result<AdvanceClearSlicePlanV1, GeneralV2WorkErrorV1> {
+    let work = ClearWorkV3AccountV1::decode_account(work_account)?;
+    verify_quantized_clear_work_authority_v2(
+        product_admission,
+        candidate_feed_identity,
+        market_binding_identity,
+        &work,
+        market_binding,
+    )?;
+    advance_clear_slice_v1(
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        work_account,
+        economic_domain_account,
+        market_binding,
+        page_bodies,
+    )
+}
+
 /// Authenticate the sealed feed and complete V5 page set, then consume
 /// exactly one canonical settlement slice.
 ///
@@ -471,6 +594,8 @@ struct SliceOrderFactV1 {
 /// exactly one.  Wrong side, same-owner direct pairing, wrong virtual route,
 /// over-consumption, and terminal under-consumption are checked candidate
 /// refusals.  Account/PDA binding and codec faults remain protocol errors.
+/// This raw V1 entry point is retained for legacy callers; successor SBF uses
+/// [`advance_quantized_clear_slice_v2`].
 #[allow(clippy::too_many_arguments)]
 pub fn advance_clear_slice_v1(
     candidate_feed_identity: Id32,

@@ -8,10 +8,11 @@ relation and its fixed-domain best-valid-submitted fold live in
 `crates/clutch-general-v2-runtime` compares the resulting checked certificates
 while composing the sealed General feed and exact quantized degree-two/three
 price certificate. The isolated General SBF handler now authenticates that
-certificate before it can create resumable work, and repeats the gate for its
-empty-book completion projection. Production profiles remain disabled, and no
-build, committing execution, deployed program, fee, bond, or solver-payment
-claim follows from the source checkpoint.
+certificate before it can create resumable work, remints and rejoins the full
+Product/Grid capability for every streamed order and settlement-slice resume,
+and repeats the gate at terminal completion. Production profiles remain disabled,
+and no build, committing execution, deployed program, fee, bond, or
+solver-payment claim follows from the source checkpoint.
 
 ## 1. Question answered
 
@@ -173,9 +174,9 @@ oracle statement.
 
 Before a production SBF profile selects ScoreV2-Q:
 
-1. adopt the staged 17-account nonempty Work tuple in the shared account-meta
-   and capability owners, then retain its exact-price fact through streamed
-   completion;
+1. rotate the non-production capability manifest for the hardened
+   `15 + page_count` action-12/action-13 ABI; every resumed and terminal call
+   already remints the full exact Product/Grid capability;
 2. freeze a separate price-quality rule; quantized measure coherence is not a
    price-quality or welfare theorem;
 3. finish successor-policy projection across every selected-artifact and

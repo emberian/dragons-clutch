@@ -22,14 +22,16 @@ use clutch_general_v2_contract::{
     IdentityLabPayloadV1, Sha256BackendV1, WriteCandidateFeedPayloadV1,
 };
 use clutch_general_v2_runtime::{
-    advance_clear_order_v1, advance_clear_slice_v1, project_owner_blind_book_v3,
-    quantized_relation_v2_policy_id_v2, score_completed_clear_work_v1,
-    score_v2_q_policy_id_v1, verify_quantized_relation_candidate_v2,
+    advance_quantized_clear_order_v2, advance_quantized_clear_slice_v2,
+    project_owner_blind_book_v3, quantized_relation_v2_policy_id_v2,
+    score_completed_clear_work_v1, score_v2_q_policy_id_v1,
+    verify_quantized_relation_candidate_v2,
+    verify_quantized_clear_work_authority_v2,
     verify_quantized_relation_product_price_admission_v2, GeneralOrderPageInputV5,
-    GeneralV2RuntimeError, GeneralV2WorkErrorV1,
+    GeneralV2RuntimeError, GeneralV2WorkErrorV1, QuantizedRelationProductPriceAdmissionV2,
 };
 use clutch_product_series::{
-    FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
+    ContentId, FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1, BASIS_BYTES,
     MARKET_GENESIS_PROFILE_V2_BYTES, MARKET_INSTANCE_PREIMAGE_V2_BYTES,
     PRICE_MEASURE_POLICY_BYTES, PRODUCT_TEMPLATE_BYTES,
@@ -1584,7 +1586,7 @@ fn init_clear_work(
     let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
         program_id,
         &accounts[16],
-        binding.market_instance_v2_id.content_id(),
+        ContentId::from_bytes(binding.market_instance_v2_id.bytes()),
     )?;
     let market_instance = market_instance_artifact.value();
     let template_artifact = authenticate_product_artifact_v1::<ProductTemplateV4>(
@@ -1640,6 +1642,7 @@ fn init_clear_work(
             id(accounts[6].key),
             &feed_data,
             &domain,
+            id(accounts[3].key),
             &binding,
             &price_grid,
             template,
@@ -1697,13 +1700,97 @@ fn init_clear_work(
     encode_account(&accounts[1], |out| post.epoch.encode(out))
 }
 
+/// Rebuild the full exact-price capability in a separate SBF frame.
+///
+/// Large Product bodies are decoded and dropped in this frame before the
+/// streaming order frame borrows any OrderPage. The returned private-field
+/// capability retains only checked fixed-width identities and arithmetic facts.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn authenticate_resumed_quantized_product_admission(
+    program_id: &Pubkey,
+    market_binding_key: &Pubkey,
+    binding: contract::MarketBindingV1,
+    domain: contract::EconomicDomainV2AccountV1,
+    feed_key: &Pubkey,
+    feed_data: &[u8],
+    price_grid_account: &AccountInfo,
+    template_account: &AccountInfo,
+    basis_account: &AccountInfo,
+    genesis_account: &AccountInfo,
+    policy_account: &AccountInfo,
+    market_instance_account: &AccountInfo,
+) -> Outcome<QuantizedRelationProductPriceAdmissionV2> {
+    require_readonly_artifact(program_id, price_grid_account, account_len::PRICE_GRID)?;
+
+    let price_grid = PriceGridAccount::decode(&borrow_data(price_grid_account)?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    let price_grid_pda = seeds::grid_pda(
+        program_id,
+        &price_grid.realm.bytes(),
+        &price_grid.grid.bytes(),
+    );
+    require(
+        *price_grid_account.key == price_grid_pda.0 && price_grid.stored_bump == price_grid_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        market_instance_account,
+        ContentId::from_bytes(binding.market_instance_v2_id.bytes()),
+    )?;
+    let template_artifact = authenticate_product_artifact_v1::<ProductTemplateV4>(
+        program_id,
+        template_account,
+        market_instance_artifact
+            .value()
+            .product_template_id
+            .content_id(),
+    )?;
+    let basis_artifact = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        basis_account,
+        ContentId::from_bytes(binding.native_claim_basis_id.bytes()),
+    )?;
+    let genesis_artifact = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        genesis_account,
+        ContentId::from_bytes(binding.market_genesis_profile_v2_id.bytes()),
+    )?;
+    let policy_artifact = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
+        program_id,
+        policy_account,
+        ContentId::from_bytes(binding.price_measure_policy_v1_id.bytes()),
+    )?;
+    require(
+        genesis_artifact.value().capability_profile_id.bytes() == capabilities::PROFILE_ID
+            && basis_artifact.value().edge_policy_registry_value == 1,
+        ClutchError::MismatchedState,
+    )?;
+    verify_quantized_relation_product_price_admission_v2(
+        id(feed_key),
+        feed_data,
+        &domain,
+        id(market_binding_key),
+        &binding,
+        &price_grid,
+        template_artifact.value(),
+        basis_artifact.value(),
+        policy_artifact.value(),
+        genesis_artifact.value(),
+        market_instance_artifact.value(),
+        QuantizedEdgePolicyV1::Clamp,
+    )
+    .map_err(|_| ClutchError::MismatchedState.into())
+}
+
 #[inline(never)]
 fn advance_clear_orders(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     request: contract::EpochNodePayloadV1,
 ) -> Outcome<()> {
-    require(accounts.len() >= 10, ClutchError::WrongAccountCount)?;
+    require(accounts.len() >= 16, ClutchError::WrongAccountCount)?;
     require_writable_destination(&accounts[0])?;
     require_role(
         program_id,
@@ -1791,11 +1878,35 @@ fn advance_clear_orders(
         work.page_count
     };
     require(
-        (1..=4).contains(&page_count) && accounts.len() == 9usize + usize::from(page_count),
+        (1..=4).contains(&page_count) && accounts.len() == 15usize + usize::from(page_count),
         ClutchError::WrongAccountCount,
     )?;
     let clock_index = 8usize + usize::from(page_count);
+    let price_grid_index = clock_index + 1;
+    let template_index = clock_index + 2;
+    let basis_index = clock_index + 3;
+    let genesis_index = clock_index + 4;
+    let policy_index = clock_index + 5;
+    let market_instance_index = clock_index + 6;
     let slot = read_clock_slot(&accounts[clock_index])?;
+    require_all_distinct(
+        accounts,
+        &[
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            price_grid_index,
+            template_index,
+            basis_index,
+            genesis_index,
+            policy_index,
+            market_instance_index,
+        ],
+    )?;
     require_compartment_balance(&accounts[6], feed.rent, &[feed.close_reward_lamports])?;
     require_compartment_balance(&accounts[7], work.rent, &[work.reward_remaining])?;
     require(
@@ -1856,6 +1967,19 @@ fn advance_clear_orders(
                 && header.order_set.bytes() == epoch.order_set.bytes(),
             ClutchError::WrongPda,
         )?;
+        for artifact_index in [
+            price_grid_index,
+            template_index,
+            basis_index,
+            genesis_index,
+            policy_index,
+            market_instance_index,
+        ] {
+            require(
+                accounts[at].key != accounts[artifact_index].key,
+                ClutchError::AccountAlias,
+            )?;
+        }
         page += 1;
     }
     // Only the keeper and the reward-bearing Work account are both writable.
@@ -1867,9 +1991,25 @@ fn advance_clear_orders(
     )?;
 
     let feed_data = borrow_data(&accounts[6])?;
+    let product_admission = authenticate_resumed_quantized_product_admission(
+        program_id,
+        accounts[3].key,
+        binding,
+        domain,
+        accounts[6].key,
+        &feed_data,
+        &accounts[price_grid_index],
+        &accounts[template_index],
+        &accounts[basis_index],
+        &accounts[genesis_index],
+        &accounts[policy_index],
+        &accounts[market_instance_index],
+    )?;
     let work_data = borrow_data(&accounts[7])?;
     let plan = advance_order_with_page_borrows(
+        product_admission,
         id(accounts[6].key),
+        id(accounts[3].key),
         &feed_data,
         &work_data,
         &domain,
@@ -1889,7 +2029,9 @@ fn advance_clear_orders(
 }
 
 fn advance_order_with_page_borrows(
+    product_admission: QuantizedRelationProductPriceAdmissionV2,
     feed_identity: Id32,
+    market_binding_identity: Id32,
     feed_data: &[u8],
     work_data: &[u8],
     domain: &contract::EconomicDomainV2AccountV1,
@@ -1899,8 +2041,10 @@ fn advance_order_with_page_borrows(
     match pages.len() {
         1 => {
             let page0 = borrow_data(&pages[0])?;
-            advance_clear_order_v1(
+            advance_quantized_clear_order_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -1912,8 +2056,10 @@ fn advance_order_with_page_borrows(
         2 => {
             let page0 = borrow_data(&pages[0])?;
             let page1 = borrow_data(&pages[1])?;
-            advance_clear_order_v1(
+            advance_quantized_clear_order_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -1926,8 +2072,10 @@ fn advance_order_with_page_borrows(
             let page0 = borrow_data(&pages[0])?;
             let page1 = borrow_data(&pages[1])?;
             let page2 = borrow_data(&pages[2])?;
-            advance_clear_order_v1(
+            advance_quantized_clear_order_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -1941,8 +2089,10 @@ fn advance_order_with_page_borrows(
             let page1 = borrow_data(&pages[1])?;
             let page2 = borrow_data(&pages[2])?;
             let page3 = borrow_data(&pages[3])?;
-            advance_clear_order_v1(
+            advance_quantized_clear_order_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -1961,7 +2111,7 @@ fn advance_clear_slices(
     accounts: &[AccountInfo],
     request: contract::EpochNodePayloadV1,
 ) -> Outcome<()> {
-    require(accounts.len() >= 10, ClutchError::WrongAccountCount)?;
+    require(accounts.len() >= 16, ClutchError::WrongAccountCount)?;
     require_writable_destination(&accounts[0])?;
     require_role(
         program_id,
@@ -2013,10 +2163,16 @@ fn advance_clear_slices(
     let work = contract::ClearWorkV3AccountV1::decode_account(&borrow_data(&accounts[7])?)?;
     let page_count = work.page_count;
     require(
-        (1..=4).contains(&page_count) && accounts.len() == 9usize + usize::from(page_count),
+        (1..=4).contains(&page_count) && accounts.len() == 15usize + usize::from(page_count),
         ClutchError::WrongAccountCount,
     )?;
     let clock_index = 8usize + usize::from(page_count);
+    let price_grid_index = clock_index + 1;
+    let template_index = clock_index + 2;
+    let basis_index = clock_index + 3;
+    let genesis_index = clock_index + 4;
+    let policy_index = clock_index + 5;
+    let market_instance_index = clock_index + 6;
     let slot = read_clock_slot(&accounts[clock_index])?;
     require_all_accounts_distinct(accounts)?;
 
@@ -2113,9 +2269,25 @@ fn advance_clear_slices(
     )?;
 
     let feed_data = borrow_data(&accounts[6])?;
+    let product_admission = authenticate_resumed_quantized_product_admission(
+        program_id,
+        accounts[3].key,
+        binding,
+        domain,
+        accounts[6].key,
+        &feed_data,
+        &accounts[price_grid_index],
+        &accounts[template_index],
+        &accounts[basis_index],
+        &accounts[genesis_index],
+        &accounts[policy_index],
+        &accounts[market_instance_index],
+    )?;
     let work_data = borrow_data(&accounts[7])?;
     let plan = advance_slice_with_page_borrows(
+        product_admission,
         id(accounts[6].key),
+        id(accounts[3].key),
         &feed_data,
         &work_data,
         &domain,
@@ -2132,7 +2304,9 @@ fn advance_clear_slices(
 }
 
 fn advance_slice_with_page_borrows(
+    product_admission: QuantizedRelationProductPriceAdmissionV2,
     feed_identity: Id32,
+    market_binding_identity: Id32,
     feed_data: &[u8],
     work_data: &[u8],
     domain: &contract::EconomicDomainV2AccountV1,
@@ -2142,8 +2316,10 @@ fn advance_slice_with_page_borrows(
     match pages.len() {
         1 => {
             let page0 = borrow_data(&pages[0])?;
-            advance_clear_slice_v1(
+            advance_quantized_clear_slice_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -2155,8 +2331,10 @@ fn advance_slice_with_page_borrows(
         2 => {
             let page0 = borrow_data(&pages[0])?;
             let page1 = borrow_data(&pages[1])?;
-            advance_clear_slice_v1(
+            advance_quantized_clear_slice_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -2169,8 +2347,10 @@ fn advance_slice_with_page_borrows(
             let page0 = borrow_data(&pages[0])?;
             let page1 = borrow_data(&pages[1])?;
             let page2 = borrow_data(&pages[2])?;
-            advance_clear_slice_v1(
+            advance_quantized_clear_slice_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -2184,8 +2364,10 @@ fn advance_slice_with_page_borrows(
             let page1 = borrow_data(&pages[1])?;
             let page2 = borrow_data(&pages[2])?;
             let page3 = borrow_data(&pages[3])?;
-            advance_clear_slice_v1(
+            advance_quantized_clear_slice_v2(
+                product_admission,
                 feed_identity,
+                market_binding_identity,
                 feed_data,
                 work_data,
                 domain,
@@ -2242,9 +2424,11 @@ fn runtime_error_is_checked_refusal(error: GeneralV2RuntimeError) -> bool {
 #[inline(never)]
 fn checked_candidate_verdict(
     program_id: &Pubkey,
+    market_binding_key: &Pubkey,
     binding: contract::MarketBindingV1,
     domain: contract::EconomicDomainV2AccountV1,
     node: contract::AdmissionNodeV3AccountV1,
+    work: contract::ClearWorkV3AccountV1,
     feed_key: &Pubkey,
     feed_data: &[u8],
     price_grid_account: &AccountInfo,
@@ -2274,7 +2458,7 @@ fn checked_candidate_verdict(
     let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
         program_id,
         market_instance_account,
-        binding.market_instance_v2_id.content_id(),
+        ContentId::from_bytes(binding.market_instance_v2_id.bytes()),
     )?;
     let market_instance = market_instance_artifact.value();
     let template_artifact = authenticate_product_artifact_v1::<ProductTemplateV4>(
@@ -2310,6 +2494,7 @@ fn checked_candidate_verdict(
         id(feed_key),
         feed_data,
         &domain,
+        id(market_binding_key),
         &binding,
         &price_grid,
         template,
@@ -2325,6 +2510,14 @@ fn checked_candidate_verdict(
         }
         Err(_) => return Err(ClutchError::MismatchedState.into()),
     };
+    verify_quantized_clear_work_authority_v2(
+        admission,
+        id(feed_key),
+        id(market_binding_key),
+        &work,
+        &binding,
+    )
+    .map_err(map_work_error)?;
     let header = contract::CandidateFeedHeaderV2::decode_account(feed_data, true)?;
     let (_, decoded_feed) = clutch_general_v2_runtime::decode_sealed_candidate_feed_v1(feed_data)
         .map_err(|_| ClutchError::MismatchedState)?;
@@ -2354,7 +2547,7 @@ fn checked_candidate_verdict(
         virtual_merge: header.virtual_merge,
     };
     let verified = match verify_quantized_relation_candidate_v2(
-        admission,
+        admission.price_admission(),
         book,
         &candidate,
     ) {
@@ -2406,9 +2599,11 @@ fn checked_candidate_verdict(
 #[allow(clippy::too_many_arguments)]
 fn checked_verdict_with_page_borrows(
     program_id: &Pubkey,
+    market_binding_key: &Pubkey,
     binding: contract::MarketBindingV1,
     domain: contract::EconomicDomainV2AccountV1,
     node: contract::AdmissionNodeV3AccountV1,
+    work: contract::ClearWorkV3AccountV1,
     feed_key: &Pubkey,
     feed_data: &[u8],
     price_grid_account: &AccountInfo,
@@ -2422,9 +2617,11 @@ fn checked_verdict_with_page_borrows(
     match pages.len() {
         0 => checked_candidate_verdict(
             program_id,
+            market_binding_key,
             binding,
             domain,
             node,
+            work,
             feed_key,
             feed_data,
             price_grid_account,
@@ -2439,9 +2636,11 @@ fn checked_verdict_with_page_borrows(
             let page0 = borrow_data(&pages[0])?;
             checked_candidate_verdict(
                 program_id,
+                market_binding_key,
                 binding,
                 domain,
                 node,
+                work,
                 feed_key,
                 feed_data,
                 price_grid_account,
@@ -2461,9 +2660,11 @@ fn checked_verdict_with_page_borrows(
             let page1 = borrow_data(&pages[1])?;
             checked_candidate_verdict(
                 program_id,
+                market_binding_key,
                 binding,
                 domain,
                 node,
+                work,
                 feed_key,
                 feed_data,
                 price_grid_account,
@@ -2490,9 +2691,11 @@ fn checked_verdict_with_page_borrows(
             let page2 = borrow_data(&pages[2])?;
             checked_candidate_verdict(
                 program_id,
+                market_binding_key,
                 binding,
                 domain,
                 node,
+                work,
                 feed_key,
                 feed_data,
                 price_grid_account,
@@ -2524,9 +2727,11 @@ fn checked_verdict_with_page_borrows(
             let page3 = borrow_data(&pages[3])?;
             checked_candidate_verdict(
                 program_id,
+                market_binding_key,
                 binding,
                 domain,
                 node,
+                work,
                 feed_key,
                 feed_data,
                 price_grid_account,
@@ -2730,9 +2935,11 @@ fn complete_candidate_verification(
     }
     let checked = checked_verdict_with_page_borrows(
         program_id,
+        accounts[3].key,
         binding,
         domain,
         node,
+        work,
         accounts[6].key,
         &feed_data,
         &accounts[7],
