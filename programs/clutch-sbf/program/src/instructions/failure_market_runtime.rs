@@ -9,7 +9,9 @@
 
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_admission::{
+    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+};
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
@@ -86,14 +88,23 @@ impl FailureMarketRuntimePostimageV1 {
 /// Authenticate an existing `0xa0/v3` runtime against immutable `0xa0/v2`.
 pub fn authenticate_failure_market_runtime_root_v1<'a>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
     runtime_root: &AccountInfo<'a>,
     admission_root: AuthenticatedFailureMarketRootV2,
     writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
+    let live_admission =
+        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
     require(
-        *runtime_root.key != admission_root.account(),
+        live_admission == admission_root,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        *runtime_root.key != *admission_root_account.key
+            && *runtime_root.key != admission_root.account(),
         ClutchError::AccountAlias,
     )?;
+    let admission_root = live_admission;
     require(
         runtime_root.owner == program_id,
         ClutchError::WrongProgramOwner,
@@ -158,6 +169,7 @@ pub fn authenticate_failure_market_runtime_root_v1<'a>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn initialize_failure_market_runtime_v1<'a, A>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
     runtime_root: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
@@ -169,6 +181,13 @@ pub(crate) fn initialize_failure_market_runtime_v1<'a, A>(
 where
     A: AuthenticatedFailureMarketRuntimeAdmissionV1 + ?Sized,
 {
+    let live_admission =
+        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+    require(
+        live_admission == admission_root,
+        ClutchError::MismatchedState,
+    )?;
+    let admission_root = live_admission;
     require(
         *runtime_root.key != admission_root.account(),
         ClutchError::AccountAlias,
@@ -184,6 +203,7 @@ where
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let root = initialize_prefunded_failure_market_runtime_root_v1(
         program_id,
+        admission_root_account,
         runtime_root,
         rent_sysvar,
         system_program,
@@ -198,6 +218,7 @@ where
 
 fn initialize_prefunded_failure_market_runtime_root_v1<'a>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
     runtime_root: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
@@ -206,6 +227,7 @@ fn initialize_prefunded_failure_market_runtime_root_v1<'a>(
 ) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
     require_system_program(system_program)?;
     require_distinct(&[
+        admission_root_account.clone(),
         runtime_root.clone(),
         rent_sysvar.clone(),
         system_program.clone(),
@@ -278,11 +300,18 @@ fn initialize_prefunded_failure_market_runtime_root_v1<'a>(
             && runtime_root.lamports() == expected_balance,
         ClutchError::AccountCreationFailed,
     )?;
-    persist_failure_market_runtime_root_v1(program_id, runtime_root, admission_root, state)
+    persist_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        state,
+    )
 }
 
 fn persist_failure_market_runtime_root_v1(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
     runtime_root: &AccountInfo<'_>,
     admission_root: AuthenticatedFailureMarketRootV2,
     state: FailureMarketRuntimeV1,
@@ -330,15 +359,16 @@ fn persist_failure_market_runtime_root_v1(
     record
         .encode_into(output)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    let state_commitment = state
-        .commitment()
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    Ok(AuthenticatedFailureMarketRuntimeRootV1 {
-        account: *runtime_root.key,
-        bump,
-        state,
-        state_commitment,
-    })
+    drop(data);
+    let reopened = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(reopened.state == state, ClutchError::MismatchedState)?;
+    Ok(reopened)
 }
 
 /// Persist one exact Recovery-close or final-family runtime transition.
@@ -350,6 +380,7 @@ fn persist_failure_market_runtime_root_v1(
 /// Product, replay, history, or liveness authority.
 pub(crate) fn write_failure_market_runtime_terminal_plan_v2<'a>(
     program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
     runtime_root: &AccountInfo<'a>,
     admission_root: AuthenticatedFailureMarketRootV2,
     authenticated: AuthenticatedFailureMarketRuntimeRootV1,
@@ -361,6 +392,7 @@ pub(crate) fn write_failure_market_runtime_terminal_plan_v2<'a>(
     )?;
     let live = authenticate_failure_market_runtime_root_v1(
         program_id,
+        admission_root_account,
         runtime_root,
         admission_root,
         true,
@@ -397,6 +429,7 @@ pub(crate) fn write_failure_market_runtime_terminal_plan_v2<'a>(
     )?;
     let reopened = authenticate_failure_market_runtime_root_v1(
         program_id,
+        admission_root_account,
         runtime_root,
         admission_root,
         true,
