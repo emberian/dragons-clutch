@@ -1,0 +1,15 @@
+{
+  "schema": "source-plane-v3-adapter-v1",
+  "status": "PROPOSED_NOT_LIVE",
+  "derivation": {
+    "test": "tests/adversarial.rs::frozen_adapter_vectors_match",
+    "v2_source": "MODEL-ONLY SourceSpecV2 368-byte expected body and dragons-clutch/feed/v2 domain; not runtime-produced evidence",
+    "hash": "SHA-256",
+    "toolchain": "Rust 1.93.1"
+  },
+  "v2_feed_id": "6dfde0e914fc5edc31dd54ecde571c9975f2106a70add3625023fc6a9504077c",
+  "source_head_pda_recipe_id": "ee6738750b9c5585b7349a003b500ac23ecdf5ab5fbb2d7ccd122e876d3f64e5",
+  "series_lapse_transition_id": "da278ef56cda1c43756c34572387b3e655d35b2bf80be91c1756ad694867f90c",
+  "series_lapse_intent_id": "39779a0e0524eba6f24d3d92a327cc43f083e34a0bac963c403d816d005bbac1",
+  "series_lapse_intent_hex": "4443535033494e5401000c004545454545454545454545454545454545454545454545454545454545454545da278ef56cda1c43756c34572387b3e655d35b2bf80be91c1756ad694867f90c999999999999999999999999999999999999999999999999999999999999999964000000000000000000000050c30000000000000000000000000000000000000000000000000000000000000000000000000000"
+}

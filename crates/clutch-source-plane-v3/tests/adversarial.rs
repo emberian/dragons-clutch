@@ -329,6 +329,12 @@ fn open_page_matches_real_ingestion_and_immutable_tail_does_not_move() {
     let head = SourceHeadV3::new(id(2), 100, 0).unwrap();
     let same = record(100, 50, 70, 90);
     let mut open = head.open_page().unwrap();
+    open.validate_against_head(&head).unwrap();
+    let wrong_origin = SourceHeadV3::new(id(2), 101, 0).unwrap();
+    assert_eq!(
+        open.validate_against_head(&wrong_origin),
+        Err(Error::DiscontinuousPage)
+    );
     open = open.append_observation(same).unwrap();
     // Current V2 may use one witness for consecutive boundaries.
     open = open.append_observation(same).unwrap();
@@ -349,6 +355,10 @@ fn open_page_matches_real_ingestion_and_immutable_tail_does_not_move() {
     let page = open.seal().unwrap();
     let page_id = page.id().unwrap();
     let head = head.commit_page(&page).unwrap();
+    assert_eq!(
+        open.validate_against_head(&head),
+        Err(Error::DiscontinuousPage)
+    );
     let (window, seal, _, _) = window_fixture();
 
     let (_, later_head) = sealed_page(head, &[record(120, 901, 801, 701)]);

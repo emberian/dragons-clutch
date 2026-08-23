@@ -515,6 +515,30 @@ pub struct OpenRawPageV3 {
 }
 
 impl OpenRawPageV3 {
+    /// Authenticate the immutable page prefix against the exact current head.
+    ///
+    /// Adapters must call this before every one-boundary mutation. Validating
+    /// the open page alone proves internal shape, but only this join prevents a
+    /// caller from replaying a well-formed page opened from another head
+    /// snapshot, repair generation, page index, or predecessor.
+    pub fn validate_against_head(&self, head: &SourceHeadV3) -> Result<()> {
+        self.validate()?;
+        head.validate()?;
+        if self.source_spec_id != head.source_spec_id
+            || self.repair_generation != head.repair_generation
+            || self.page_index != head.page_count
+            || self.start_bucket != head.next_boundary_bucket
+            || self.previous_page_id != head.latest_page_id
+            || self.baseline_source_sequence != head.last_source_sequence
+            || self.baseline_publish_slot != head.last_publish_slot
+            || self.baseline_publish_time != head.last_publish_time
+            || self.baseline_record_body_digest != head.last_record_body_digest
+        {
+            return Err(Error::DiscontinuousPage);
+        }
+        Ok(())
+    }
+
     /// Append one authenticated observation while preserving real V2 semantics:
     /// sequences may jump or repeat, but never regress; a repeated sequence must
     /// repeat the exact source body.
