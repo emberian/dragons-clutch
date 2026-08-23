@@ -14,6 +14,7 @@
 pub mod external_v2;
 pub mod interval_consensus_v1;
 pub mod market_policy_v1;
+pub mod market_runtime_v1;
 pub mod relation_execution_v1;
 pub mod retirement_v1;
 

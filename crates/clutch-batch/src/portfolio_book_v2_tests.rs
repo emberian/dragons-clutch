@@ -1,4 +1,5 @@
 use super::portfolio_book_v2::{
+    authenticate_complete_portfolio_book_for_root_transition_v2,
     authenticate_complete_portfolio_book_v2, PortfolioBookAccountExpectationV2,
     PortfolioBookAccountRoleV2, PortfolioBookAdapterV2, PortfolioBookAuthorityErrorV2,
     PortfolioBookPageSetRecordV2, PortfolioCompleteBookProjectionExpectationV2,
@@ -103,12 +104,17 @@ fn page_set(order_count: u8) -> PortfolioBookPageSetRecordV2 {
 struct BookAdapter {
     projected_book: Option<EconomicBookV2>,
     reject_role: Option<PortfolioBookAccountRoleV2>,
+    root_writable: bool,
     observed_pages: Cell<u8>,
 }
 
 impl PortfolioBookAdapterV2 for BookAdapter {
     fn authenticate_book_account(&self, expected: &PortfolioBookAccountExpectationV2) -> bool {
-        if self.reject_role == Some(expected.role) || expected.writable {
+        if self.reject_role == Some(expected.role)
+            || (expected.role == PortfolioBookAccountRoleV2::SettlementRoot
+                && expected.writable != self.root_writable)
+            || (expected.role != PortfolioBookAccountRoleV2::SettlementRoot && expected.writable)
+        {
             return false;
         }
         if expected.role == PortfolioBookAccountRoleV2::OrderPage {
@@ -134,6 +140,7 @@ fn adapter_privately_projects_all_active_pages_into_one_book() {
     let adapter = BookAdapter {
         projected_book: Some(economic_book(17)),
         reject_role: None,
+        root_writable: false,
         observed_pages: Cell::new(0),
     };
     let authenticated = authenticate_complete_portfolio_book_v2(
@@ -189,6 +196,7 @@ fn all_four_pages_are_bounded_and_authenticated() {
     let adapter = BookAdapter {
         projected_book: Some(economic_book(maximum)),
         reject_role: None,
+        root_writable: false,
         observed_pages: Cell::new(0),
     };
     let authenticated = authenticate_complete_portfolio_book_v2(
@@ -208,6 +216,7 @@ fn adapter_refusal_and_wrong_projection_never_mint_capability() {
     let rejected = BookAdapter {
         projected_book: Some(economic_book(17)),
         reject_role: Some(PortfolioBookAccountRoleV2::OrderPage),
+        root_writable: false,
         observed_pages: Cell::new(0),
     };
     assert_eq!(
@@ -220,6 +229,7 @@ fn adapter_refusal_and_wrong_projection_never_mint_capability() {
     let wrong_count = BookAdapter {
         projected_book: Some(economic_book(16)),
         reject_role: None,
+        root_writable: false,
         observed_pages: Cell::new(0),
     };
     assert_eq!(
@@ -230,6 +240,7 @@ fn adapter_refusal_and_wrong_projection_never_mint_capability() {
     let absent = BookAdapter {
         projected_book: None,
         reject_role: None,
+        root_writable: false,
         observed_pages: Cell::new(0),
     };
     assert_eq!(
@@ -243,6 +254,7 @@ fn root_and_domain_substitution_are_refused_before_projection() {
     let adapter = BookAdapter {
         projected_book: Some(economic_book(17)),
         reject_role: None,
+        root_writable: false,
         observed_pages: Cell::new(0),
     };
     let mut alias = page_set(17);
@@ -257,5 +269,42 @@ fn root_and_domain_substitution_are_refused_before_projection() {
     assert_eq!(
         authenticate_complete_portfolio_book_v2(&adapter, id(200), &domain(), wrong_domain),
         Err(PortfolioBookAuthorityErrorV2::DomainMismatch)
+    );
+}
+
+#[test]
+fn root_transition_constructor_requires_only_root_writable() {
+    let adapter = BookAdapter {
+        projected_book: Some(economic_book(17)),
+        reject_role: None,
+        root_writable: true,
+        observed_pages: Cell::new(0),
+    };
+    let authenticated = authenticate_complete_portfolio_book_for_root_transition_v2(
+        &adapter,
+        id(200),
+        &domain(),
+        page_set(17),
+    )
+    .unwrap();
+    assert_eq!(authenticated.page_count(), 2);
+    assert_eq!(adapter.observed_pages.get(), 2);
+
+    let readonly_adapter = BookAdapter {
+        projected_book: Some(economic_book(17)),
+        reject_role: None,
+        root_writable: false,
+        observed_pages: Cell::new(0),
+    };
+    assert_eq!(
+        authenticate_complete_portfolio_book_for_root_transition_v2(
+            &readonly_adapter,
+            id(200),
+            &domain(),
+            page_set(17),
+        ),
+        Err(PortfolioBookAuthorityErrorV2::AuthenticationFailed {
+            role: PortfolioBookAccountRoleV2::SettlementRoot,
+        })
     );
 }

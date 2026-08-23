@@ -128,13 +128,6 @@ NOT_ATTESTED = [
 
 FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
     # (id, path, handoff-declared sha256 or None, handoff reference or None)
-    (
-        "static_client.terms_json",
-        "apps/static-client/terms.json",
-        None,
-        None,
-    ),
-    ("static_client.manifest_json", "apps/static-client/manifest.json", None, None),
     ("static_client.app_js", "apps/static-client/app.js", None, None),
     ("static_client.index_html", "apps/static-client/index.html", None, None),
     ("static_client.styles_css", "apps/static-client/styles.css", None, None),
@@ -279,24 +272,7 @@ FILE_DIGESTS: list[tuple[str, str, str | None, str | None]] = [
 # Digests that are not the sha256 of a file's bytes but of a declared
 # canonicalization. Each carries its rule so an independent implementation can
 # reproduce it without reading this script.
-DERIVED_DIGESTS = [
-    {
-        "id": "static_client.canonical_terms",
-        "source_path": "apps/static-client/terms.json",
-        "rule": (
-            "sha256 over UTF-8 of JSON.stringify of the `canonicalTerms` object "
-            "with every object's keys sorted recursively and no whitespace "
-            "(separators ',' and ':'), non-ASCII left unescaped"
-        ),
-        "handoff": "62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02",
-        "handoff_reference": (
-            "apps/static-client/terms.json digest; "
-            "apps/static-client/manifest.json canonical-term identities; "
-            "docs/implementation/STATIC_CLIENT.md; enforced by "
-            "apps/static-client/test/smoke.mjs"
-        ),
-    }
-]
+DERIVED_DIGESTS = []
 
 # Identities the handoff declares that are *build outputs*, not repository
 # bytes. They can only be confirmed by running the gate that produces them.

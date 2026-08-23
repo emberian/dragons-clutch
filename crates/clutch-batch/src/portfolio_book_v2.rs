@@ -330,6 +330,44 @@ pub fn authenticate_complete_portfolio_book_v2<A: PortfolioBookAdapterV2>(
     domain: &EconomicDomainV2,
     page_set: PortfolioBookPageSetRecordV2,
 ) -> Result<AuthenticatedCompletePortfolioBookV2, PortfolioBookAuthorityErrorV2> {
+    authenticate_complete_portfolio_book_with_root_privilege_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        page_set,
+        false,
+    )
+}
+
+/// Authenticate the same complete owner-blind book while requiring the exact
+/// counted SettlementRoot to be writable in the caller's atomic transition.
+///
+/// This is a distinct private capability constructor for actions which both
+/// consume the frozen book and apply a checked SettlementRoot successor. Feed
+/// and OrderPage accounts remain strictly read-only; no record or coefficient
+/// schema is duplicated or widened.
+pub fn authenticate_complete_portfolio_book_for_root_transition_v2<A: PortfolioBookAdapterV2>(
+    adapter: &A,
+    owner_program_id: PortfolioBookIdentityV2,
+    domain: &EconomicDomainV2,
+    page_set: PortfolioBookPageSetRecordV2,
+) -> Result<AuthenticatedCompletePortfolioBookV2, PortfolioBookAuthorityErrorV2> {
+    authenticate_complete_portfolio_book_with_root_privilege_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        page_set,
+        true,
+    )
+}
+
+fn authenticate_complete_portfolio_book_with_root_privilege_v2<A: PortfolioBookAdapterV2>(
+    adapter: &A,
+    owner_program_id: PortfolioBookIdentityV2,
+    domain: &EconomicDomainV2,
+    page_set: PortfolioBookPageSetRecordV2,
+    root_writable: bool,
+) -> Result<AuthenticatedCompletePortfolioBookV2, PortfolioBookAuthorityErrorV2> {
     page_set.validate()?;
     domain
         .validate()
@@ -350,7 +388,7 @@ pub fn authenticate_complete_portfolio_book_v2<A: PortfolioBookAdapterV2>(
         data_semantic_id: page_set.settlement_root_pre_semantic_id,
         generation: Some(page_set.settlement_root_epoch_generation),
         page_index: None,
-        writable: false,
+        writable: root_writable,
     };
     if !adapter.authenticate_book_account(&root) {
         return Err(PortfolioBookAuthorityErrorV2::AuthenticationFailed {

@@ -150,6 +150,9 @@ pub const SEED_DEALER_EXIT_TICKET: &[u8] =
 /// Content-addressed Dealer action-work receipt.
 pub const SEED_DEALER_ACTION_RECEIPT: &[u8] =
     clutch_dealer_runtime_contract::DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1;
+/// Counted CoveredDealer selection attachment.
+pub const SEED_DEALER_COVERED_SELECTION: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_COVERED_SELECTION_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
@@ -1035,6 +1038,22 @@ pub fn dealer_exit_ticket_pda(
 /// Canonical content-addressed Dealer action-work receipt address.
 pub fn dealer_action_receipt_pda(program_id: &Pubkey, slot_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_ACTION_RECEIPT, slot_id])
+}
+
+/// Counted CoveredDealer selection keyed by General Epoch and final candidate.
+pub fn dealer_covered_selection_pda(
+    program_id: &Pubkey,
+    epoch_account: &[u8; 32],
+    settlement_candidate_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            SEED_DEALER_COVERED_SELECTION,
+            epoch_account,
+            settlement_candidate_id,
+        ],
+        program_id,
+    )
 }
 
 /// Canonical full-width batch-policy artifact address.

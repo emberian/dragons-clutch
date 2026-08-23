@@ -355,9 +355,14 @@ pure runtime elsewhere does not make a route executable.
 | `0x81/4` | General V2 | historical merge-delivery owner settlement V4 (292 bytes); withdrawn |
 | `0x81/5` | General V2 | sole future rent-owned owner settlement V5 (340 bytes) |
 | `0x82/1` | General V2 | selected fee record |
-| `0x83/1` | General V2 | owner fee carry |
-| `0x84/1` | General V2 | payer allocation |
-| `0x85/1` | General V2 | recipient allocation |
+| `0x83/1` | General V2 history | withdrawn owner fee carry without persisted rent ownership |
+| `0x83/2` | General V2 history | withdrawn terminal carry receipt without persisted rent ownership |
+| `0x83/3` | General V2 | sole future rent-owned live owner fee carry (180 bytes) |
+| `0x83/4` | General V2 | sole future rent-owned terminal carry receipt (548 bytes) |
+| `0x84/1` | General V2 history | withdrawn payer allocation without persisted rent ownership |
+| `0x84/2` | General V2 | sole future rent-owned payer allocation (2,732 bytes) |
+| `0x85/1` | General V2 history | recipient allocation without complete fee-book or rent ownership |
+| `0x85/2` | General V2 | sole future rent-owned complete-book-certified recipient allocation (2,764 bytes) |
 | `0x86/1` | General V2 | treasury ledger |
 | `0x87/1` | General V2 | settlement cash pot |
 | `0x88/1` | StructuredClaim | descriptor |
@@ -376,7 +381,7 @@ pure runtime elsewhere does not make a route executable.
 | `0x94/1` | Dealer | authoritative State V2 with persisted terminal evidence (980 bytes) |
 | `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
 | `0x98/1` | Dealer | immutable-after-activation LP page V2 (980 bytes) |
-| `0x99/1` | Dealer | selected-artifact-bound one-generation Lease V2 (1,076 bytes) |
+| `0x99/1` | Dealer | root-counted CoveredDealer-selection-bound one-generation Lease V2 (1,140 bytes) |
 | `0x9a/1` | Dealer | SettlementPot V2 (1,236 bytes) |
 | `0x9b/1` | Dealer | counted General-generation-bound Epoch V2 (780 bytes) |
 | `0x9c/1` | Dealer | page terminal allocation (756 bytes) |
@@ -397,6 +402,8 @@ pure runtime elsewhere does not make a route executable.
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
 | `0xaa/1` | Product | reserved occurrence-scoped terminal root |
+| `0xad/1` | Product | canonical per-Series MarketLink |
+| `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

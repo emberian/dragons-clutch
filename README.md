@@ -49,7 +49,8 @@ campaign ran at repository HEAD `4e83648`; the strict Operator parser landed at
 `633a366`, the public-safe transcript at `94f5143`, and its current documentation
 at `bbfeaa5`. Read the retained
 [campaign evidence](docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23/)
-or render it with Operator's `pyth-local` mode.
+or render it with Operator's explicitly historical
+`non-production-retained-source-v2` mode.
 
 That is **unpromoted local SBF execution over a synthetic observation**, not a
 production price, devnet or mainnet execution, deployment, live frontend,
@@ -294,7 +295,7 @@ or extending it:
 ```sh
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode pyth-local \
+  serve --mode non-production-retained-source-v2 \
   --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23
 # open http://127.0.0.1:9130/
 ```
@@ -337,7 +338,7 @@ To leave the interactive bench open instead:
 ```sh
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
-  serve --mode trade
+  serve --mode non-production-mock-trade
 # open http://127.0.0.1:9130/
 ```
 
@@ -345,7 +346,8 @@ The daemon, not the browser, holds ephemeral local test signers and builds
 transactions through the canonical harness. This is test infrastructure, not a
 wallet architecture.
 
-The separate `pyth-live` mode uses the real captured local receiver/router
+The separate `non-production-synthetic-source-v2-live` mode uses the real
+captured local receiver/router
 plane. Its daemon owns a private reusable session root and keeps the loopback
 validator and signer roster alive after the fixed campaign reaches terminal
 state. It also rebuilds one result-bound typed plan from public actor identities

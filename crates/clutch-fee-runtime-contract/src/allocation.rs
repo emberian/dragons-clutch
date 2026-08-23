@@ -273,6 +273,60 @@ impl RecipientAllocationV1 {
     pub const fn collected_fee_atoms(&self) -> u64 {
         self.collected_fee_atoms
     }
+
+    /// Restore an immutable program-owned snapshot from exact persisted rows.
+    ///
+    /// This validates canonical ordering, padding, and conservation only. It
+    /// does not re-prove maker weights or fee-book completeness; the adapter
+    /// must authenticate the fresh certified outer account whose creation
+    /// consumed those stronger capabilities.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_persisted(
+        fee_record: Id,
+        maker_len: u8,
+        maker_positions: [Id; MAX_FEE_ROWS_V1],
+        maker_rebate_atoms: [u64; MAX_FEE_ROWS_V1],
+        maker_rebate_total: u64,
+        executor_atoms: u64,
+        treasury_atoms: u64,
+        collected_fee_atoms: u64,
+    ) -> Result<Self> {
+        live(fee_record)?;
+        if usize::from(maker_len) > MAX_FEE_ROWS_V1 {
+            return Err(Error::InvalidWidth);
+        }
+        let mut maker_sum = 0u64;
+        let mut index = 0usize;
+        while index < usize::from(maker_len) {
+            live(maker_positions[index])?;
+            if index != 0 && maker_positions[index] <= maker_positions[index - 1] {
+                return Err(Error::NonCanonicalOrder);
+            }
+            maker_sum = add(maker_sum, maker_rebate_atoms[index])?;
+            index += 1;
+        }
+        while index < MAX_FEE_ROWS_V1 {
+            if !maker_positions[index].is_zero() || maker_rebate_atoms[index] != 0 {
+                return Err(Error::NonCanonicalPadding);
+            }
+            index += 1;
+        }
+        if maker_sum != maker_rebate_total
+            || add(add(maker_sum, executor_atoms)?, treasury_atoms)? != collected_fee_atoms
+        {
+            return Err(Error::ConservationFailure);
+        }
+        Ok(Self {
+            fee_record,
+            maker_len,
+            maker_positions,
+            maker_rebate_atoms,
+            maker_rebate_total,
+            executor_atoms,
+            treasury_atoms,
+            collected_fee_atoms,
+        })
+    }
 }
 
 /// Split one fee and distribute the maker pool by Hamilton largest remainder

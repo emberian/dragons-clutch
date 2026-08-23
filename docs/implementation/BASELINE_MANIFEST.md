@@ -274,12 +274,9 @@ Three kinds:
   file, the economics fixtures, selected core and newly added gate `Cargo.lock`
   files, both toolchain
   pin records, and the Rocq/Verus shadow sources.
-- `derived-sha256` — a declared canonicalization rather than raw bytes.
-  Currently one: `static_client.canonical_terms`, the sha256 of the
-  `canonicalTerms` object serialized as compact UTF-8 JSON with every object's
-  keys sorted recursively. The rule is stored in the manifest so an independent
-  implementation can reproduce it without reading the script;
-  `apps/static-client/test/smoke.mjs` enforces the same rule from the other side.
+- `derived-sha256` — a declared canonicalization rather than raw bytes. The
+  current inventory is empty: the obsolete static-client fixture terms were
+  removed rather than retained as a second protocol truth.
 - `declared-build-output` — a named identity that is *not* a repository file.
   There are three kinds of entry: the E0 SBF `rlib` with its reviewed literal
   pin, plus separately named default and explicitly non-production mock

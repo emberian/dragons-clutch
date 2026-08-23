@@ -556,6 +556,8 @@ fn account_json(version: &IndexedAccountVersion, effective: RpcCommitment) -> Va
         "rentEpoch": version.account.rent_epoch.to_string(),
         "dataBytes": version.account.data.len().to_string(),
         "dataSha256": hex32(version.data_sha256),
+        "accountTag": version.account.data.first().copied().map(|value| value.to_string()),
+        "accountVersion": version.account.data.get(1).copied().map(|value| value.to_string()),
         "family": version.projection.family.name(),
         "kind": version.projection.kind.name(),
         "decode": decode_state,

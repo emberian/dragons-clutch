@@ -19,6 +19,7 @@ use std::time::Duration;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
+const MODE: &str = "non-production-retained-source-v2";
 const FRESHNESS_SCOPE: &str = "freshness authenticated at adjacent PostUpdate plus AppendSourceArchiveV2; final lifecycle consumes the sealed archive";
 const SOURCE_V1_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v1";
 const SOURCE_V2_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v2";
@@ -1745,7 +1746,7 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
     let validator_provenance = object(manifest, "validator_build_provenance")?;
     let identity = json!({
         "type": "identity",
-        "mode": "pyth-local",
+        "mode": MODE,
         "source_profile": PROFILE,
         "elf_sha256": lowercase_hex(string(manifest, "clutch_elf_sha256")?, 32, "Clutch ELF hash")?,
         "program_id": string(manifest, "program_id")?,
@@ -1846,7 +1847,7 @@ pub fn serve(options: Options) -> Result<()> {
     let bus = Bus::new();
     let action: crate::http::Action = Arc::new(|request: &Value| {
         if request.get("action").and_then(Value::as_str) == Some("ping") {
-            json!({"ok": true, "mode": "pyth-local", "authority": "read-only transcript"})
+            json!({"ok": true, "mode": MODE, "authority": "read-only transcript"})
         } else {
             json!({"ok": false, "detail": "the retained Pyth campaign surface is read-only"})
         }
@@ -1862,7 +1863,7 @@ pub fn serve(options: Options) -> Result<()> {
         "verdict": "PASS",
         "scope": "SBF_EXECUTED",
         "promotion": "unpromoted",
-        "mode": "pyth-local",
+        "mode": MODE,
     }));
     println!("Operator Bench (retained local-real Pyth): http://127.0.0.1:{port}/");
     if options.exit_when_done {
@@ -2264,7 +2265,7 @@ mod tests {
     fn public_transcripts_become_exact_decimal_display_events() {
         let (manifest, result, probe) = fixtures();
         let view = build_view(&manifest, &result, &probe).unwrap();
-        assert_eq!(view.identity["mode"], "pyth-local");
+        assert_eq!(view.identity["mode"], MODE);
         assert_eq!(view.campaign["schema"], SOURCE_V1_SCHEMA);
         assert_eq!(view.campaign["source"]["interval_lower"], "99980929");
         assert_eq!(view.campaign["steps"][0]["slot"], "460336312");
