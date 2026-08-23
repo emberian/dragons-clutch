@@ -750,26 +750,6 @@ pub(crate) fn authenticate_failure_market_interval_accounts_v2<'a>(
     })
 }
 
-/// Persist one private-field nonterminal cell transition over the exact
-/// authenticated preimage. Only begin and paid advance can use this writer;
-/// terminal transitions require their narrower typed writers below.
-pub(crate) fn write_failure_market_interval_cell_plan_v2(
-    program_id: &Pubkey,
-    cell_account: &AccountInfo<'_>,
-    history_account: &AccountInfo<'_>,
-    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
-    plan: FailureMarketIntervalCellPlanV2,
-) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
-    write_failure_market_interval_cell_plan_inner_v2(
-        program_id,
-        cell_account,
-        history_account,
-        authenticated,
-        plan,
-        None,
-    )
-}
-
 /// Persist only the deterministic finite-exhaustion terminal.
 ///
 /// The resolved-payout terminal intentionally has no corresponding writer:
