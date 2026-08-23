@@ -20,7 +20,7 @@ use clutch_general_v2_contract::{
 use clutch_retirement::PositionLifecycleV3;
 use sha2::{Digest, Sha256};
 
-struct DealerSha256V1;
+pub(crate) struct DealerSha256V1;
 
 impl Sha256BackendV1 for DealerSha256V1 {
     fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
