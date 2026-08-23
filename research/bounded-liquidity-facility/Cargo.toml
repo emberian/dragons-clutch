@@ -1,0 +1,11 @@
+[package]
+name = "clutch-bounded-liquidity-facility"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Exact bounded quadratic liquidity facility model for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
