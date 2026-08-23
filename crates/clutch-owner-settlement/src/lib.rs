@@ -47,7 +47,7 @@ pub use successor::{
     OwnerSettlementAccountProjectionV2, OwnerSettlementAccountViewV2, OwnerSettlementAccumulatorV2,
     OwnerCashRealizationPlanV2, OwnerFinalizedRowDataHashV2, OwnerSettlementBookV2,
     OwnerSettlementCreatePlanV2, OwnerSettlementExpectationV2, OwnerSettlementPdaProjectionV2,
-    OwnerSettlementReceiptAccountingProjectionV2,
+    OwnerSettlementReceiptAccountingProjectionV2, OwnerSettlementTerminalProjectionV2,
     PresentConsiderationV2, PresentPriceV2, SelectedOwnerRowAuthorityV2,
     SettlementReceiptDataHashV2, SettlementReceiptRouteV2, VerifiedSettlementOrderV2,
     OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V2, OWNER_SETTLEMENT_BODY_V2_BYTES,
