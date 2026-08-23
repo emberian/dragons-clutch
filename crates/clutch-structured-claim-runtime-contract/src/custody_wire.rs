@@ -315,14 +315,20 @@ pub struct StructuredCustodyCallProjectionV1 {
 }
 
 impl StructuredCustodyCallProjectionV1 {
-    /// Encode the exact digest body reconstructed independently on both sides of CPI.
-    pub fn encode_preimage(&self) -> Result<[u8; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES]> {
+    /// Encode the exact digest body into caller-owned storage.
+    ///
+    /// SBF adapters should use this form so the 1,352-byte transcript is not
+    /// materialized as a second stack return value.
+    pub fn encode_preimage_into(
+        &self,
+        output: &mut [u8; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES],
+    ) -> Result<()> {
         self.validate()?;
-        let mut output = [0_u8; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES];
+        output.fill(0);
         let mut cursor = 0_usize;
-        put(&mut output, &mut cursor, &self.target_base_program)?;
+        put(output, &mut cursor, &self.target_base_program)?;
         put(
-            &mut output,
+            output,
             &mut cursor,
             &[
                 GENERAL_V2_FAMILY_TAG,
@@ -341,10 +347,10 @@ impl StructuredCustodyCallProjectionV1 {
             self.deployment.wrapper_program,
             self.deployment.wrapper_program_data,
         ] {
-            put(&mut output, &mut cursor, &identity)?;
+            put(output, &mut cursor, &identity)?;
         }
         put(
-            &mut output,
+            output,
             &mut cursor,
             &self.deployment.wrapper_deployment_slot.to_le_bytes(),
         )?;
@@ -352,10 +358,10 @@ impl StructuredCustodyCallProjectionV1 {
             self.deployment.base_program,
             self.deployment.base_program_data,
         ] {
-            put(&mut output, &mut cursor, &identity)?;
+            put(output, &mut cursor, &identity)?;
         }
         put(
-            &mut output,
+            output,
             &mut cursor,
             &self.deployment.base_deployment_slot.to_le_bytes(),
         )?;
@@ -363,10 +369,10 @@ impl StructuredCustodyCallProjectionV1 {
             self.deployment.token_2022_program,
             self.deployment.token_2022_program_data,
         ] {
-            put(&mut output, &mut cursor, &identity)?;
+            put(output, &mut cursor, &identity)?;
         }
         put(
-            &mut output,
+            output,
             &mut cursor,
             &self.deployment.token_2022_deployment_slot.to_le_bytes(),
         )?;
@@ -393,16 +399,23 @@ impl StructuredCustodyCallProjectionV1 {
             self.destination_replay_account,
             self.destination_replay_body_digest,
         ] {
-            put(&mut output, &mut cursor, &identity)?;
+            put(output, &mut cursor, &identity)?;
         }
         put(
-            &mut output,
+            output,
             &mut cursor,
             &self.transfer.encode_for_authority_digest()?,
         )?;
         if cursor != STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES {
             return Err(Error::InvalidLength);
         }
+        Ok(())
+    }
+
+    /// Encode the exact digest body reconstructed independently on both sides of CPI.
+    pub fn encode_preimage(&self) -> Result<[u8; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES]> {
+        let mut output = [0_u8; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES];
+        self.encode_preimage_into(&mut output)?;
         Ok(output)
     }
 
@@ -565,6 +578,9 @@ mod tests {
             transfer: payload([9; 32]),
         };
         let bytes = projection.encode_preimage().unwrap();
+        let mut caller_owned = [0xa5; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES];
+        projection.encode_preimage_into(&mut caller_owned).unwrap();
+        assert_eq!(caller_owned, bytes);
         assert_eq!(bytes.len(), STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES);
         assert_eq!(&bytes[..32], &[7; 32]);
         assert_eq!(
