@@ -26,6 +26,7 @@ use crate::instructions::product_market::{
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     initialize_failure_market_interval_cell_v2, FailureMarketIntervalCellActivationReceiptV2,
+    FailureMarketIntervalCellAdvancePlanV2, FailureMarketIntervalCellAdvanceReceiptV2,
     FailureMarketIntervalCellDispositionV2, FailureMarketIntervalCellExhaustionPlanV2,
     FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellPlanV2,
     FailureMarketIntervalCellResetReceiptV2, FailureMarketIntervalCellResolutionPlanV2,
@@ -332,6 +333,16 @@ pub(crate) trait AuthenticatedFailureMarketIntervalBeginV2 {
     fn authenticate_failure_market_interval_begin_v2(
         &self,
         _expected: FailureMarketIntervalCellActivationReceiptV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        Err(clutch_failure_policy_runtime::Error::BindingMismatch)
+    }
+}
+
+/// Default-refusing authority for one exact liveness-paid Active transition.
+pub(crate) trait AuthenticatedFailureMarketIntervalPaidAdvanceV2 {
+    fn authenticate_failure_market_interval_paid_advance_v2(
+        &self,
+        _expected: FailureMarketIntervalCellAdvanceReceiptV2,
     ) -> clutch_failure_policy_runtime::Result<()> {
         Err(clutch_failure_policy_runtime::Error::BindingMismatch)
     }
@@ -813,6 +824,7 @@ pub(crate) fn write_failure_market_interval_begin_plan_v2<
     program_id: &Pubkey,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
     authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
     plan: FailureMarketIntervalCellPlanV2,
     receipt: FailureMarketIntervalCellActivationReceiptV2,
@@ -837,14 +849,99 @@ pub(crate) fn write_failure_market_interval_begin_plan_v2<
                     .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?,
         ClutchError::MismatchedState,
     )?;
-    write_failure_market_interval_cell_plan_inner_v2(
+    require(
+        admission.account() == authenticated.admission_root_account
+            && admission
+                .state()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+                == authenticated.admission_state_id,
+        ClutchError::MismatchedState,
+    )?;
+    let projected = write_failure_market_interval_cell_plan_inner_v2(
         program_id,
         cell_account,
         history_account,
         authenticated,
         plan,
         None,
-    )
+    )?;
+    let rebound = authenticate_failure_market_interval_accounts_v2(
+        program_id,
+        cell_account,
+        history_account,
+        admission,
+        projected.funding,
+        projected.quote,
+        true,
+        false,
+    )?;
+    require(rebound == projected, ClutchError::MismatchedState)?;
+    Ok(rebound)
+}
+
+/// Persist exactly one liveness-paid Active-to-Active structural advance.
+///
+/// The caller must have already applied and hostile-reauthenticated the sole
+/// Recovery-compartment debit/payment postimage. Any refusal here rolls that
+/// earlier same-instruction mutation back.
+pub(crate) fn write_failure_market_interval_paid_advance_v2<
+    A: AuthenticatedFailureMarketIntervalPaidAdvanceV2 + ?Sized,
+>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
+    advance: FailureMarketIntervalCellAdvancePlanV2,
+    authority: &A,
+) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    let receipt = advance.receipt();
+    authority
+        .authenticate_failure_market_interval_paid_advance_v2(receipt)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facts = receipt.facts();
+    let resulting_cell = advance.resulting_cell();
+    require(
+        admission.account() == authenticated.admission_root_account
+            && admission
+                .state()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+                == authenticated.admission_state_id
+            && authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Active
+            && authenticated.cell.disposition() == FailureMarketIntervalCellDispositionV2::None
+            && resulting_cell.phase() == FailureMarketIntervalCellPhaseV2::Active
+            && resulting_cell.disposition() == FailureMarketIntervalCellDispositionV2::None
+            && facts.cell_before == authenticated.cell_state_id
+            && facts.history_state == authenticated.history_state_id
+            && facts.cell_after
+                == resulting_cell
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+            && facts.processed_coordinates != 0,
+        ClutchError::MismatchedState,
+    )?;
+    let projected = write_failure_market_interval_cell_plan_inner_v2(
+        program_id,
+        cell_account,
+        history_account,
+        authenticated,
+        advance.cell_plan(),
+        None,
+    )?;
+    let rebound = authenticate_failure_market_interval_accounts_v2(
+        program_id,
+        cell_account,
+        history_account,
+        admission,
+        projected.funding,
+        projected.quote,
+        true,
+        false,
+    )?;
+    require(rebound == projected, ClutchError::MismatchedState)?;
+    Ok(rebound)
 }
 
 /// Persist the Resolved cell only after Product's same-call slot10/0xaa

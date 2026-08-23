@@ -499,6 +499,7 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
         program_id,
         cell_account,
         history_account,
+        admission,
         interval_before,
         cell_plan,
         activation,
@@ -649,7 +650,7 @@ fn require_begin_receipt_prestates_v2(
     )
 }
 
-fn require_exact_successful_source_join_v2(
+pub(crate) fn require_exact_successful_source_join_v2(
     source_join: SourcePolicyHandoffJoinV1,
     source_success: SuccessfulEvaluationHandoffV1,
     link_binding: clutch_product_series::SeriesMarketLinkBindingV1,
@@ -1122,7 +1123,7 @@ fn require_current_product_failure_begin_graph_v1(
     )
 }
 
-fn require_cached_root_and_link(
+pub(crate) fn require_cached_root_and_link(
     expected_root: AuthenticatedMarketLifecycleRootV1<'_>,
     live_root: AuthenticatedMarketLifecycleRootV1<'_>,
     expected_link: AuthenticatedSeriesMarketLinkV1<'_>,
