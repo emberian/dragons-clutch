@@ -32,9 +32,10 @@ pub use account::{
 };
 pub use auth::{
     account_data_id, authenticate_boundary, authenticate_source_route, AdapterInvocationV1,
-    AuthenticatedBoundaryV1, AuthenticatedSourceRouteV1, ClockPolicyV1, ClockSnapshotV1,
-    DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
-    SourceReleaseManifestV1, CLOCK_POLICY_BYTES, SOURCE_RELEASE_MANIFEST_BYTES,
+    AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedSourceRouteV1, ClockPolicyV1,
+    ClockSnapshotV1, DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1,
+    RuntimeDerivedPdaV1, RuntimeKey, SourceReleaseManifestV1, CLOCK_POLICY_BYTES,
+    SOURCE_RELEASE_MANIFEST_BYTES,
 };
 pub use funding::{
     plan_source_account_close, plan_source_account_creation, AccountCloseFundingV1,

@@ -12,6 +12,7 @@ const SOURCE_RELEASE_DOMAIN: &[u8] = b"dragons-clutch/source-release-manifest/v1
 const PARSER_OUTPUT_DOMAIN: &[u8] = b"dragons-clutch/source-parser-output/v1";
 const INVOCATION_DOMAIN: &[u8] = b"dragons-clutch/runtime-invocation/v1";
 const BOUNDARY_DOMAIN: &[u8] = b"dragons-clutch/source-boundary-receipt/v1";
+const CLOCK_BUCKET_DOMAIN: &[u8] = b"dragons-clutch/authenticated-clock-bucket/v1";
 
 const SOURCE_RELEASE_MAGIC: [u8; 8] = *b"DCSREL01";
 const CLOCK_POLICY_MAGIC: [u8; 8] = *b"DCCLOCK1";
@@ -291,6 +292,15 @@ impl ClockPolicyV1 {
             )
             .ok_or(Error::ArithmeticOverflow)
     }
+
+    /// Canonical bucket containing one nonnegative Unix timestamp.
+    pub fn bucket_at_timestamp(&self, unix_timestamp: u64) -> Result<u64> {
+        self.validate()?;
+        let elapsed = unix_timestamp
+            .checked_sub(self.anchor_unix_timestamp)
+            .ok_or(Error::OutsideClockWindow)?;
+        Ok(elapsed / u64::from(self.bucket_seconds))
+    }
 }
 
 /// Adapter-authenticated Clock sysvar projection.
@@ -300,6 +310,54 @@ pub struct ClockSnapshotV1 {
     pub slot: u64,
     /// Current nonnegative Unix timestamp.
     pub unix_timestamp: u64,
+}
+
+/// Policy-bound canonical bucket derived from one adapter-supplied Clock snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedClockBucketV1 {
+    policy_id: ContentId,
+    snapshot: ClockSnapshotV1,
+    bucket: u64,
+    receipt_id: ContentId,
+}
+
+impl AuthenticatedClockBucketV1 {
+    /// Derive the sole canonical bucket without accepting a caller-provided coordinate.
+    pub fn from_snapshot(policy: &ClockPolicyV1, snapshot: ClockSnapshotV1) -> Result<Self> {
+        let policy_id = policy.id()?;
+        let bucket = policy.bucket_at_timestamp(snapshot.unix_timestamp)?;
+        let mut bytes = [0; 56];
+        bytes[..32].copy_from_slice(&policy_id.bytes());
+        bytes[32..40].copy_from_slice(&snapshot.slot.to_le_bytes());
+        bytes[40..48].copy_from_slice(&snapshot.unix_timestamp.to_le_bytes());
+        bytes[48..56].copy_from_slice(&bucket.to_le_bytes());
+        Ok(Self {
+            policy_id,
+            snapshot,
+            bucket,
+            receipt_id: domain_id(CLOCK_BUCKET_DOMAIN, &bytes),
+        })
+    }
+
+    /// Exact ClockPolicy identity used for floor mapping.
+    pub const fn policy_id(self) -> ContentId {
+        self.policy_id
+    }
+
+    /// Exact adapter-supplied Clock snapshot committed by this receipt.
+    pub const fn snapshot(self) -> ClockSnapshotV1 {
+        self.snapshot
+    }
+
+    /// Canonical containing bucket.
+    pub const fn bucket(self) -> u64 {
+        self.bucket
+    }
+
+    /// Complete policy/snapshot/bucket receipt identity.
+    pub const fn id(self) -> ContentId {
+        self.receipt_id
+    }
 }
 
 /// Immutable complete source-release manifest.
