@@ -254,7 +254,7 @@ pub struct FreezeEpochTransitionV1<'a> {
     pub market_runtime_id: Id32,
     /// Current Clock slot.
     pub current_slot: u64,
-    /// Strict action-6 payload.
+    /// Strict freeze payload shared by historical action 6 and V5 action 43.
     pub payload: FreezeEpochPayloadV1,
     /// Prestate Epoch.
     pub epoch: &'a GeneralEpochV6AccountV1,
@@ -268,7 +268,65 @@ pub struct FreezeEpochTransitionV1<'a> {
     pub binding: &'a MarketBindingV1,
 }
 
-/// Exact action-6 pure poststate and funded reward.
+/// Exact nonempty OrderPage V5 facts derived by the adapter's complete
+/// authenticated freeze traversal.
+///
+/// This is not a payload and has no wire decoder. Action 43 constructs it only
+/// from program-owned V5 account bodies after exact PDA, digest, slot,
+/// Position-generation, owner, width, horizon, density, and page-set checks.
+/// The pure transition validates the closed geometry again but never accepts
+/// these values from the transaction caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FreezeOrderSetFactsV5 {
+    /// Canonical V5 order-set identity over all exact page bodies.
+    pub order_set: Id32,
+    /// Canonical page count, one through four.
+    pub page_count: u16,
+    /// Dense populated slots, tombstones included.
+    pub populated_order_count: u16,
+    /// Live RelationV2 orders, tombstones excluded.
+    pub live_order_count: u16,
+    /// Exact distinct live-owner count.
+    pub owner_count: u16,
+    /// Live slots carrying an authenticated nonzero Position generation.
+    pub position_generation_count: u16,
+}
+
+impl FreezeOrderSetFactsV5 {
+    /// Validate dense four-page geometry and disjoint live/count facts.
+    pub fn validate(self) -> Result<(), CodecError> {
+        require_live(self.order_set)?;
+        if !(1..=4).contains(&self.page_count) {
+            return Err(CodecError::InvalidCount);
+        }
+        let prior_pages = self
+            .page_count
+            .checked_sub(1)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let lower = prior_pages
+            .checked_mul(16)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let upper = prior_pages
+            .checked_mul(16)
+            .and_then(|count| count.checked_add(16))
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        if self.populated_order_count < lower
+            || self.populated_order_count > upper
+            || self.live_order_count == 0
+            || self.live_order_count > self.populated_order_count
+            || self.owner_count == 0
+            || self.owner_count > self.live_order_count
+            || self.position_generation_count != self.live_order_count
+            || self.populated_order_count > u16::from(MAX_ORDERS_U8)
+        {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(())
+    }
+}
+
+/// Exact freeze pure poststate and funded reward.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FreezeEpochPoststateV1 {
     /// Frozen Epoch.
@@ -286,6 +344,34 @@ pub fn freeze_epoch_poststate_v1<B: Sha256BackendV1>(
     backend: &B,
     request: FreezeEpochTransitionV1<'_>,
 ) -> Result<FreezeEpochPoststateV1, CodecError> {
+    validate_freeze_epoch_transition(backend, &request)?;
+    let economic_digest = economic_domain_digest_v2(backend, request.economic_domain.transcript)?;
+    let order_set = empty_order_set_digest_v1(backend, economic_digest)?;
+    freeze_epoch_poststate_with_order_set(request, order_set)
+}
+
+/// Freeze one exact nonempty V5 book under fresh General action 43.
+///
+/// The schedule, funded reward, and root lifecycle are the same semantic
+/// transition as action 6, but the order-set identity is the V5 traversal's
+/// nonempty commitment rather than the historical empty-book digest. No page
+/// count, owner count, or Position generation comes from the payload.
+pub fn freeze_epoch_v5_poststate_v1<B: Sha256BackendV1>(
+    backend: &B,
+    request: FreezeEpochTransitionV1<'_>,
+    book: FreezeOrderSetFactsV5,
+) -> Result<FreezeEpochPoststateV1, CodecError> {
+    book.validate()?;
+    validate_freeze_epoch_transition(backend, &request)?;
+    freeze_epoch_poststate_with_order_set(request, book.order_set)
+}
+
+/// Authenticate every root-owned freeze input shared by empty action 6 and
+/// nonempty V5 action 43.
+fn validate_freeze_epoch_transition<B: Sha256BackendV1>(
+    backend: &B,
+    request: &FreezeEpochTransitionV1<'_>,
+) -> Result<(), CodecError> {
     request.epoch.validate()?;
     request.economic_domain.validate()?;
     request.window.validate()?;
@@ -335,8 +421,16 @@ pub fn freeze_epoch_poststate_v1<B: Sha256BackendV1>(
     {
         return Err(CodecError::MismatchedBinding);
     }
-    let economic_digest = economic_domain_digest_v2(backend, request.economic_domain.transcript)?;
-    let order_set = empty_order_set_digest_v1(backend, economic_digest)?;
+    Ok(())
+}
+
+/// Apply the already-authenticated order-set identity to the atomic root,
+/// schedule, and present-funded reward poststate.
+fn freeze_epoch_poststate_with_order_set(
+    request: FreezeEpochTransitionV1<'_>,
+    order_set: Id32,
+) -> Result<FreezeEpochPoststateV1, CodecError> {
+    require_live(order_set)?;
     let reveal_opens_slot = request
         .current_slot
         .checked_add(request.binding.commit_span_slots)
@@ -2782,6 +2876,50 @@ mod tests {
     }
 
     #[test]
+    fn v5_freeze_facts_refuse_impossible_dense_owner_and_generation_shapes() {
+        let valid = FreezeOrderSetFactsV5 {
+            order_set: id(70),
+            page_count: 4,
+            populated_order_count: 64,
+            live_order_count: 60,
+            owner_count: 17,
+            position_generation_count: 60,
+        };
+        assert_eq!(valid.validate(), Ok(()));
+
+        let faults = [
+            FreezeOrderSetFactsV5 {
+                order_set: Id32::ZERO,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                page_count: 0,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                page_count: 2,
+                populated_order_count: 16,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                live_order_count: 0,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                owner_count: 61,
+                ..valid
+            },
+            FreezeOrderSetFactsV5 {
+                position_generation_count: 59,
+                ..valid
+            },
+        ];
+        for fault in faults {
+            assert!(fault.validate().is_err());
+        }
+    }
+
+    #[test]
     fn init_freeze_begin_and_open_have_one_exact_poststate() {
         let payer = id(30);
         let binding_id = id(20);
@@ -2861,6 +2999,39 @@ mod tests {
         assert_eq!(frozen.window.submission_closes_slot, 120);
         assert_eq!(frozen.window.verification_closes_slot, 140);
         assert_eq!(frozen.keeper_reward, binding.freeze_reward);
+
+        let v5_book = FreezeOrderSetFactsV5 {
+            order_set: id(70),
+            page_count: 2,
+            populated_order_count: 18,
+            live_order_count: 17,
+            owner_count: 4,
+            position_generation_count: 17,
+        };
+        let frozen_v5 = freeze_epoch_v5_poststate_v1(
+            &Sha,
+            FreezeEpochTransitionV1 {
+                epoch_id,
+                market_binding_id: binding_id,
+                market_runtime_id: runtime_id,
+                current_slot: 100,
+                payload: FreezeEpochPayloadV1 {
+                    epoch_semantics_id: semantics,
+                },
+                epoch: &initialized.epoch,
+                economic_domain: &initialized.economic_domain,
+                window: &initialized.window,
+                budget: &initialized.budget,
+                binding: &binding,
+            },
+            v5_book,
+        )
+        .unwrap();
+        assert_eq!(frozen_v5.epoch.order_set, v5_book.order_set);
+        assert_ne!(frozen_v5.epoch.order_set, frozen.epoch.order_set);
+        assert_eq!(frozen_v5.window, frozen.window);
+        assert_eq!(frozen_v5.budget, frozen.budget);
+        assert_eq!(frozen_v5.keeper_reward, frozen.keeper_reward);
 
         let mut candidate_feed = CandidateFeedHeaderV2 {
             epoch: epoch_id,
