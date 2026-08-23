@@ -48,6 +48,13 @@ It checks that 64 collateral atoms return to the ephemeral local user while
 position cash, all internal positions and supply, the Hoard obligation, and
 Hoard token balance end at exact zero.
 
+The public-safe transcript from the first completed run of this mode is
+retained at
+`docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22`. It carries
+repository HEAD `04795af507f191e51d9cae094867ec43aabd65b9`; retaining the evidence itself
+is necessarily a later repository commit. Operator consumes only its
+`campaign.json`, `result.json`, and `probe-evidence.json` files.
+
 Trading is deliberately reported as **BLOCKED / NOT SUBSTITUTED** with reason
 `missing-sealed-price-grid-and-epoch-plane`. The immutable real-Pyth-bound Terms
 name a PriceGrid digest, while this campaign currently constructs no matching

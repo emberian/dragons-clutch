@@ -1,0 +1,229 @@
+{
+  "build_toolchain": {
+    "cargo_build_sbf": "cargo-build-sbf 4.0.0; platform-tools v1.53; SBF rustc 1.89.0",
+    "cargo_build_sbf_binary_sha256": "37c37d1a2ef0aa44065cde8c6ad07f0685bcef24699b4a9dd101372d7d4ef6e7",
+    "cargo_home": "private temporary campaign directory",
+    "dependency_source": "locked repository-local .cache vendor tree",
+    "host_cargo": "cargo 1.93.1 (083ac5135 2025-12-15)",
+    "host_cargo_lock_sha256": "730fc1c1d2c25d2194680b850ed1a4340cae214824bd8da103fb40ba14f0bb67",
+    "host_rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "host_toolchain_pin": "programs/clutch-sbf/local-real-pyth/rust-toolchain.toml: 1.93.1",
+    "network": "offline",
+    "sbf_cargo_lock_sha256": "ebe9451a7f6e72bd1e5747c21d44df152742e15f69cfdbda30e7415ed9dda0f0",
+    "wrappers_and_rustflags": "unset by runner"
+  },
+  "campaign_mode": "joined-user-lifecycle-v1",
+  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+  "clock_probe_unix_timestamp": 1787532688,
+  "clutch_elf_sha256": "88ba2709cdf792af52d1bfda70e38e6d116d7c3b446ae76ed2828c236ac94570",
+  "correct": {
+    "archive": "EmqTeka2kP6P5pazLX4KHBsb2mfhjZnB2n5E7NhUbmWE",
+    "feed_id_hex": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "market": "EQ3qhWqPRypuRCvUYkbPFtB1eo6GY922D7VXArw86HYD",
+    "market_genesis_assisted": false,
+    "source_spec": "8gUAKRMzAdcrJWLX5pxL79ibsHoqmkHChHcX81MraQmB",
+    "user_collateral_token": "C9U2FELz5ohrdtK1YzUgneNwgtJgpFx2FG8u3iAJACGM"
+  },
+  "dragons_clutch_repository_head": "04795af507f191e51d9cae094867ec43aabd65b9",
+  "end_bucket_exclusive": 29792208,
+  "fixture_provenance": "programs/clutch-sbf/svm-tests/tests/fixtures/real-pyth-local/PROVENANCE.md",
+  "genesis_accounts": [
+    {
+      "address": "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+      "data_len": 416909,
+      "data_sha256": "7122abc6b5e78d30bf88c869cb5d8783adaf897369d04eca827d3af8ffe18e5d",
+      "executable": false,
+      "lamports": 2902577520,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "receiver-programdata"
+    },
+    {
+      "address": "6kHbgZqXQqutbboQXrJTpHLTnjGnwzx1xaVW3pZVuvtt",
+      "data_len": 1656,
+      "data_sha256": "e830b3d06e8ccb4a5248961f8649fe0929b548a65d15cd90126c1e0d5d338436",
+      "executable": false,
+      "lamports": 12416640,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-3"
+    },
+    {
+      "address": "7MXhiSAY6EGKzCvhXrg3TeeXHdKTLrFbWK8y1F8vwb22",
+      "data_len": 100,
+      "data_sha256": "4a1feecde46e11bd70d1537f462db86dde9f7dd3354383432db0572eb448c3d1",
+      "executable": false,
+      "lamports": 1586880,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-1"
+    },
+    {
+      "address": "8JEvTXJ6sD5U4n1p7GEERYMPN9ijjs9ZM4ysJ3qhgyqM",
+      "data_len": 82,
+      "data_sha256": "ad2fffd830a3553d1f542b756255b09bf5970b926fbcc621e562790118e05754",
+      "executable": false,
+      "lamports": 1461600,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "role": "joined-collateral-mint"
+    },
+    {
+      "address": "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+      "data_len": 656005,
+      "data_sha256": "f26f4b53b0f980455886116f500fa74ba475e51b1acb7f486b18afa9d73d948f",
+      "executable": false,
+      "lamports": 4566685680,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "router-programdata"
+    },
+    {
+      "address": "ATeP3ACRnkaiXg244pfdjZ3oBETBHu7oE8JsADGsbe9y",
+      "data_len": 291,
+      "data_sha256": "ffe6010af329e42aa6f42951ac7844415afebfb8209c1fd44fb65ea1607abf6a",
+      "executable": false,
+      "lamports": 2916240,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-4"
+    },
+    {
+      "address": "C9U2FELz5ohrdtK1YzUgneNwgtJgpFx2FG8u3iAJACGM",
+      "data_len": 165,
+      "data_sha256": "81075f84d23ad430423dd5b5923d6619279ea6a641fa398f56af30572424dbd9",
+      "executable": false,
+      "lamports": 2039280,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "role": "joined-user-collateral-token"
+    },
+    {
+      "address": "DRu1E3NA7wDJfpSiqx8zpoFoBqdKJMAk1qorg8esAKme",
+      "data_len": 70,
+      "data_sha256": "f68330fcf6d75641943a4748fd00df4361ba5d7f3aaa19d4ce4869c477934381",
+      "executable": false,
+      "lamports": 1378080,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-0"
+    },
+    {
+      "address": "FfX15gP5Y2WiDocQBD9S4GwcARKEsT5pB5ogeWtXpWhR",
+      "data_len": 266,
+      "data_sha256": "48adca8dbff3003a14c98ddb9ffc133314b14dcc37adb71f31461fce44dc9328",
+      "executable": false,
+      "lamports": 2742240,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-2"
+    },
+    {
+      "address": "G6c4RFmnnWrAN5bJmE8xEt5N9wyJoGFKZPLWdACYU3FJ",
+      "data_len": 1656,
+      "data_sha256": "9450ac65f575381f0060b2097165759236277603b65fa1e0b694c51e52134bf2",
+      "executable": false,
+      "lamports": 12416640,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "wrong-feed-plane-3"
+    },
+    {
+      "address": "GrgnntFGvTUifYBRwSfNRcHHs9CwCehPBVFLTwyoRPNP",
+      "data_len": 2085437,
+      "data_sha256": "19e1de9568d17e32a004b5e91b792fcada62bc7ba69135f69a2081cb6860e8f8",
+      "executable": false,
+      "lamports": 14515532400,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "clutch-programdata"
+    },
+    {
+      "address": "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+      "data_len": 36,
+      "data_sha256": "1ee590ae23d5ecbf775aba910f06a993dee8f77bfd7028790dbd349651c8034b",
+      "executable": true,
+      "lamports": 1141440,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "router-program"
+    },
+    {
+      "address": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "data_len": 36,
+      "data_sha256": "1c38b76b20c4d916d4fd5ade82df2ba626069b66e50be88bd704d9400b7f0212",
+      "executable": true,
+      "lamports": 1141440,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "clutch-program"
+    },
+    {
+      "address": "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+      "data_len": 36,
+      "data_sha256": "ef37dd1cee22d731902a8c04ed2e13136a2b8aa7068d9db3aff2ed1ec7b634e5",
+      "executable": true,
+      "lamports": 1141440,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "receiver-program"
+    }
+  ],
+  "guardian_laboratory": {
+    "generation": "19 throwaway secp256k1 scalars with first byte 1..19 and remaining bytes zero",
+    "production_keys": false,
+    "selected_quorum_indices": "0..12 inclusive"
+  },
+  "merkle_price_update_sha256": "f8c712710dd8f5e05ab6fca28288ab877981e8fe8fc9d5145c0245609b9c3bf2",
+  "network": "127.0.0.1 loopback only",
+  "observation": "synthetic deterministic local guardian quorum; not devnet price evidence",
+  "payer": "CehwbKADZ7s7SwAXmVi9vo1YB9DHoXbKN8bPNi2qU4nx",
+  "post_update_data_sha256": "1274a42c19ac6833d1bf8c57fb522c870c6cb5b34789d11a0765f3b2cd486d21",
+  "program_id": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+  "provider": [
+    {
+      "address": "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+      "complete_account_body_sha256": "ef37dd1cee22d731902a8c04ed2e13136a2b8aa7068d9db3aff2ed1ec7b634e5",
+      "executable": true,
+      "role": "receiver-program"
+    },
+    {
+      "address": "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+      "complete_account_body_sha256": "7122abc6b5e78d30bf88c869cb5d8783adaf897369d04eca827d3af8ffe18e5d",
+      "executable": false,
+      "role": "receiver-programdata"
+    },
+    {
+      "address": "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+      "complete_account_body_sha256": "1ee590ae23d5ecbf775aba910f06a993dee8f77bfd7028790dbd349651c8034b",
+      "executable": true,
+      "role": "router-program"
+    },
+    {
+      "address": "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+      "complete_account_body_sha256": "f26f4b53b0f980455886116f500fa74ba475e51b1acb7f486b18afa9d73d948f",
+      "executable": false,
+      "role": "router-programdata"
+    }
+  ],
+  "publish_time": 1787532480,
+  "publish_time_derivation": "floor((same-validator warped Clock - 180 seconds) / 60) * 60",
+  "source_admission_limits": {
+    "boundary_grace_seconds": 5,
+    "bucket_seconds": 60,
+    "confidence_multiplier": 3,
+    "max_confidence_atoms": "1000000000000",
+    "max_confidence_bps": 500,
+    "max_future_seconds": 15,
+    "max_staleness_seconds": 600,
+    "max_staleness_slots": 500
+  },
+  "source_profile_snapshot": {
+    "path": "programs/clutch-sbf/source-profiles/devnet-real-source-snapshot-2026-08-22.json",
+    "sha256": "6ca318cb783a1ec61b423533c49875039f3ecbdf46295cbac204396790df2cca"
+  },
+  "start_bucket": 29792207,
+  "upstream_pyth_crosschain_commit": "f50a3faf9fc5a223a22889799b2f778900f186b3",
+  "vaa_sha256": "29ab3ff41dc99545058b9a6b9be9d7794bc683b8e7ae8d980e9749b1564717a1",
+  "validator_binary": "/Users/ember/dev/dragons-clutch/.cache/agave-loopback-validator/bin/solana-test-validator",
+  "validator_binary_sha256": "190f7c847af303957c771a38cab97142ab2e3ab6e5047dc53af2c4d4942bb7c8",
+  "validator_build_provenance": {
+    "patch_sha256": "a5ad8c2896137703c4718252605a9cfa5b7513d757c359a50d558822a8517e9b",
+    "pins_sha256": "fa66f22b557f4fdc9991be25750f9c7367e8e0c76f6f4591736f788047184f78",
+    "provenance_sha256": "67dea8e4769f9a68c7103977aaf30d325dc6dd18c6cdf185abf1e83f5230639f",
+    "selected_build_record_sha256": "edcaa76947388a1d2e18308e5d518b4642b2517876f35e9017786edaeca87102"
+  },
+  "value": "none",
+  "warp_slot": 460336312,
+  "wrong_feed": {
+    "archive": "8NZNcvxh8Jqp5PfpMCZmMuBPYtPk4ARBSTZdHw9xeQPD",
+    "feed_id_hex": "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+    "source_spec": "Eb3mHUmHCRpjVVMsUKzG9fHNBuLUjJPNSqhg1urEXt2Z"
+  }
+}

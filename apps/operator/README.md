@@ -43,6 +43,11 @@ CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
   --transcript docs/reviews/evidence/local-real-pyth-signed-rpc-2026-08-22
+# retained joined lifecycle: the same read-only surface, with 21 signed steps
+CARGO_NET_OFFLINE=true cargo run --offline \
+  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
+  serve --mode pyth-local \
+  --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22
 # then open 127.0.0.1:9130 in a browser
 ```
 

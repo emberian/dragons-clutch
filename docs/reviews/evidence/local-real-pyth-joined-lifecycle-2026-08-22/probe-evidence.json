@@ -1,0 +1,13 @@
+{
+  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+  "selected_validator_sha256": "190f7c847af303957c771a38cab97142ab2e3ab6e5047dc53af2c4d4942bb7c8",
+  "rpc": "127.0.0.1:18537",
+  "websocket": "127.0.0.1:18538",
+  "faucet": "127.0.0.1:18539",
+  "gossip": "127.0.0.1:18540",
+  "configured_dynamic_port_range": "18541-18640",
+  "probe_before_sha256": "971a26f9dcb47e59dd3c2e6743229fc6f52bfc3965690f578f26bca8a40216fe",
+  "probe_after_sha256": "971a26f9dcb47e59dd3c2e6743229fc6f52bfc3965690f578f26bca8a40216fe",
+  "validator_log_sha256": "bb7027fd8369d70f3a008b7a097dd53f0bf4b9d48bce665a07d50602ac0e4b9a",
+  "scope": "proves all child TCP listeners and UDP sockets observed by lsof were loopback-bound; does not claim every loopback socket fell inside the configurable service ranges"
+}

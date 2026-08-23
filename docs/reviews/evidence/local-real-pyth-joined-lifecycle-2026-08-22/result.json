@@ -1,0 +1,419 @@
+{
+  "campaign_mode": "joined-user-lifecycle-v1",
+  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+  "clock": {
+    "epoch": 1065,
+    "epoch_start_timestamp": 1787455799,
+    "leader_schedule_epoch": 1066,
+    "slot": 460336381,
+    "unix_timestamp": 1787532713
+  },
+  "confidence": 6357,
+  "exponent": -8,
+  "genesis_hash": "H5DRPtHGLqr4fxwBj1qbmG9ZoCnDDeLEpxY1TwgPCq4d",
+  "interval": {
+    "lower": "99980929",
+    "upper": "100019071"
+  },
+  "joined_post_append_signature": "2PgtTpxNNY8o3mS3va94nCz5qXDn1s91TwiYamnFCuThLYRHPWCMNh4ppMLGNVR5cXEkmSpZpjbB77YvXfEap5Lg",
+  "lifecycle": {
+    "collateral_atoms": "64",
+    "create_market_signature": "2X8NGZcjzKumabydgKvsKFMiZUpdhBuDZbVe5fUsW8JtiSP6YrkPkCgSQrr3b8xEd1e4Z6DLzb6j3vLTkjFvZJGt",
+    "endow_signature": "64ZFRSUi9phULDAaEiTNm9QvqU8Td99hTxkoUW4vKRPNU7Ed99HzkjY57uicgcrQdm6Bvbp8ELKfj5M4JNWycvtm",
+    "ephemeral_user": "CehwbKADZ7s7SwAXmVi9vo1YB9DHoXbKN8bPNi2qU4nx",
+    "market": "EQ3qhWqPRypuRCvUYkbPFtB1eo6GY922D7VXArw86HYD",
+    "market_genesis_assisted": false,
+    "redeem_internal": [
+      {
+        "outcome": 0,
+        "payout_atoms": "0",
+        "quantity": "64",
+        "signature": "4jeUqKEtxWiMD4BdhDkt9N11kcPFk4rNBki5XuE8XmteSvYyLgx4Dr3dC3YzUCTrG8qeVAAvqFQ9CicxrrV11X3T"
+      },
+      {
+        "outcome": 1,
+        "payout_atoms": "64",
+        "quantity": "64",
+        "signature": "5fR4J23hrHbfFfgQ2qwj3MQMj4mLdgHB4MnCkdpQ2JAbyNCDrxLjXJEiQFbKcwekPyaktqSjiXRytGsG1269fvN6"
+      },
+      {
+        "outcome": 2,
+        "payout_atoms": "0",
+        "quantity": "64",
+        "signature": "Xi75XY3DfEharrWcZozBAzrKKPKkBkpm1AZcwe6FhWYhcoWWjXDLo3MVspk5iMjo2t4vBGYoMQYCnQYYguq7Xmk"
+      },
+      {
+        "outcome": 3,
+        "payout_atoms": "0",
+        "quantity": "64",
+        "signature": "2c1hpyNEZVw1vD5zc3Ei4SyofYeqeEFMMNnHxiPu1ETaMCbgRooyRC82Hsgpw653GSau2MzR1S4PFNfKmjERtutH"
+      }
+    ],
+    "split_signature": "uCVmNUx7bLyvYAgPwYYs8YrKvesHCjA1vEj1Z4ad9h3wLmt7mCTLq8KET8XsWRSPfSTjCmCSmHtqhgbNUj9Die8",
+    "terminal": {
+      "hoard_collateral_atoms": "0",
+      "hoard_token_atoms": "0",
+      "position_cash_atoms": "0",
+      "position_internal": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "supply_internal": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "user_token_atoms": "64"
+    },
+    "trade": {
+      "detail": "the immutable real-Pyth-bound Terms name a PriceGrid digest, but this campaign has no matching sealed PriceGrid artifact, Epoch, order page, or candidate plane; InitEpoch authenticates that exact grid, so placing or settling orders would require additional signed artifact/epoch construction and is not replaced with genesis or mock trading state",
+      "reason_code": "missing-sealed-price-grid-and-epoch-plane",
+      "status": "blocked"
+    },
+    "user_collateral_token": "C9U2FELz5ohrdtK1YzUgneNwgtJgpFx2FG8u3iAJACGM",
+    "withdraw_signature": "2fVk52hzcetptscRf7oQFNzKvBzJw5YFxU4PzWj9BE1Ha1A5vkBXxJXX4eBW7U2rs3MCeGRtP78D888hdd8JVPvS"
+  },
+  "network": "loopback validator only",
+  "price": 100000000,
+  "provider_feed_id": [
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42
+  ],
+  "publish_time": 1787532480,
+  "resolve_signature": "2GvQt1ojP7tzrr1tBHkDwxRdb8HuFdZJrgSyPsUurHGtyoTnJb39S2raNPePPRuyZrZokNp3DtVWMFuWuyWNTFt9",
+  "resolved_payout": 1,
+  "seal_signature": "2M2Z3TWa2mEXPo3x7Ue7tdeofgyF8x2wjjy76HXy8PXLye5VFM5awwTc3aieQenpJSUsRURiUveBm2z2ZZ3CMujc",
+  "sealed": true,
+  "steps": [
+    {
+      "compute_units_consumed": 34183,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "router-initialize",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "5dzf2q47eEiQ7j9zewG49N2jA1dBGCzGDy2gZ9LiQSSzhT42HVX7E6zQ1Lp2iLyftp4a2SftHEPvuLPre9f9gRpi",
+      "signed_wire_sha256": "3d160f59b116182bd0d3a851fae9a6efeb5f5d63be7ee2e08b6ccf92ea16dc99",
+      "slot": 460336359
+    },
+    {
+      "compute_units_consumed": 3038,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "router-init-and-write-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "11111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "Yjueai2RYW881Pw6zcY5pHRbHcrZmZZKeCPcMmKtKF7PZ48yv1D1FoTJzQH1QsvjpG6UN4NPsqK4JpD6mpvC4Me",
+      "signed_wire_sha256": "605946cff1f5afc5be69ca394648275f224bfaf0fa6e46fe9354c84d87ed3d83",
+      "slot": 460336360
+    },
+    {
+      "compute_units_consumed": 336652,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "router-write-and-verify-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "5FAksCDq1ExPGtY5MaufB96A8KjxL8Lc4FwCjtLUhY9UqWGF7eqjbP7LvzZRH3TkjYMkEWtN7JYUYg1ziEavcLF8",
+      "signed_wire_sha256": "b3b5cdfb8ed3ce4fc4b1fb4f24311d750ffb280501a98b34a22ae44895bcb262",
+      "slot": 460336361
+    },
+    {
+      "compute_units_consumed": 7931,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "receiver-initialize",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
+      ],
+      "signature": "4s5K6qHJJ3tZrb4dFmFTbU3UokMyDp2Div5VTpihGUbzhTgsxCNmxEyxYdaRyx8ybqdVY8NhiWRnPMLa7kM3Bu4T",
+      "signed_wire_sha256": "6ea4f36ca2ba8ee22627e99be8b85474dce51dd15dada0db816c8a97debda1b5",
+      "slot": 460336362
+    },
+    {
+      "compute_units_consumed": 29742,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "correct-init-source-spec-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2BwACZh7BoizmhV2KXmcPGGvR2mbYjYK3hmbNNxe4k2A2ZGSwgGnheM3bMtZKnCtUfBu3vAdyrbnuRJF2GQcfioL",
+      "signed_wire_sha256": "3837e3a726c5498b7eeaa4f419ec27a198997c424121d0812751c12f598ad2b2",
+      "slot": 460336363
+    },
+    {
+      "compute_units_consumed": 30519,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "correct-init-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4UwMG8XxgGg7jqKSeXeWi2qm4Ri2hJCrpoLo4a6n3rGTZhJJXs5jjsvR43Uhty8PruBdBCYvwDcrFq2Pifmmsy5m",
+      "signed_wire_sha256": "a2d70bd1ffc29d34f38215b0dd289bde83546d98b4230f77eb2f2be0e014b99f",
+      "slot": 460336364
+    },
+    {
+      "compute_units_consumed": 34242,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "wrong-feed-init-source-spec-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4TxaECxCHfMjpYbR27hLvYLF9dB7H31DeH45wjsWpzGj3xm7CCgwRUDTpfGgNLGowuyV3pwWXQTDZS84wVuH97Lb",
+      "signed_wire_sha256": "f149abe3c23eecf74f999cc2383004088f76c0708eff23dca17350a0a30ce523",
+      "slot": 460336365
+    },
+    {
+      "compute_units_consumed": 33519,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "wrong-feed-init-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3Vn1DMinCz494V6sFP1KEz5KU5zDEsZhnxLQnn1bievNiusyktedD6q3R3AHP4auyZT7dN5J1fQcBNA2hXUKAu4Z",
+      "signed_wire_sha256": "37991b23b8ec1b7bb478635c5226ac24f3f3c6b7cbe17be56633f16b5e7cc5d3",
+      "slot": 460336366
+    },
+    {
+      "compute_units_consumed": 259443,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-create-market",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2X8NGZcjzKumabydgKvsKFMiZUpdhBuDZbVe5fUsW8JtiSP6YrkPkCgSQrr3b8xEd1e4Z6DLzb6j3vLTkjFvZJGt",
+      "signed_wire_sha256": "02a6e6bc03f4bf1f956672b5034e9d19402df1a46c17c52e98664d0ae1baf6a8",
+      "slot": 460336368
+    },
+    {
+      "compute_units_consumed": 63874,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-endow-collateral",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "64ZFRSUi9phULDAaEiTNm9QvqU8Td99hTxkoUW4vKRPNU7Ed99HzkjY57uicgcrQdm6Bvbp8ELKfj5M4JNWycvtm",
+      "signed_wire_sha256": "3fd6a6944b90c1281ed9fd79c4ff799499d617f6aed4ca6cd0d213bd8a39c936",
+      "slot": 460336370
+    },
+    {
+      "compute_units_consumed": 120003,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-split-complete-sets",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "uCVmNUx7bLyvYAgPwYYs8YrKvesHCjA1vEj1Z4ad9h3wLmt7mCTLq8KET8XsWRSPfSTjCmCSmHtqhgbNUj9Die8",
+      "signed_wire_sha256": "0d0c3c6ff5bca6b5a567f0ca5ff19b31dcfadc173c55ca9972f2e8097ea35fdc",
+      "slot": 460336371
+    },
+    {
+      "compute_units_consumed": 70699,
+      "error": {
+        "InstructionError": [
+          2,
+          {
+            "Custom": 122
+          }
+        ]
+      },
+      "fee_lamports": 10000,
+      "label": "wrong-config-post-update-plus-append-rollback",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4pUbNPexpngeKedqe3bUTA2gRbemj1ndFX1DMSgVrcdzhVKhYCF4ugC6JtkSGSj2ApguFsth2ZPDBSvCmFQdQDWN",
+      "signed_wire_sha256": "988494015fa7a6b274e7c72f807a65145b570aa3faa5394a518f30f99b57ed6e",
+      "slot": 460336372
+    },
+    {
+      "compute_units_consumed": 74755,
+      "error": {
+        "InstructionError": [
+          2,
+          {
+            "Custom": 122
+          }
+        ]
+      },
+      "fee_lamports": 10000,
+      "label": "wrong-feed-post-update-plus-append-rollback",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2xL4fF3n18aahDg5AVZ1LL7VRWap5KA6scSUsz48DEymj2ysBES7HPhUMMVycnZWBjoX8hFFJ8HJrkdNdw257VbT",
+      "signed_wire_sha256": "5aadf7fd12015683ebbbd1b7ed3e81185c00f50ae581d829ce86578d299af497",
+      "slot": 460336373
+    },
+    {
+      "compute_units_consumed": 75287,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "real-post-update-plus-clutch-append-atomic",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2PgtTpxNNY8o3mS3va94nCz5qXDn1s91TwiYamnFCuThLYRHPWCMNh4ppMLGNVR5cXEkmSpZpjbB77YvXfEap5Lg",
+      "signed_wire_sha256": "29db1bacfc5e643fbdce3ae6ddc6d5eba81fe5cc49e04c61342409f09ad8f5a8",
+      "slot": 460336374
+    },
+    {
+      "compute_units_consumed": 67753,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "seal-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2M2Z3TWa2mEXPo3x7Ue7tdeofgyF8x2wjjy76HXy8PXLye5VFM5awwTc3aieQenpJSUsRURiUveBm2z2ZZ3CMujc",
+      "signed_wire_sha256": "3b12ae8a2cac52878e89e9d4eb2bc588bea08f610197caade188968678ea0051",
+      "slot": 460336375
+    },
+    {
+      "compute_units_consumed": 166822,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "categorical-resolve-cell-1",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2GvQt1ojP7tzrr1tBHkDwxRdb8HuFdZJrgSyPsUurHGtyoTnJb39S2raNPePPRuyZrZokNp3DtVWMFuWuyWNTFt9",
+      "signed_wire_sha256": "eb52a187495babfac743dbe981bcd20f66e12cd3a9584fd4fb5374c1f06a9870",
+      "slot": 460336376
+    },
+    {
+      "compute_units_consumed": 153131,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-redeem-internal-outcome-0",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4jeUqKEtxWiMD4BdhDkt9N11kcPFk4rNBki5XuE8XmteSvYyLgx4Dr3dC3YzUCTrG8qeVAAvqFQ9CicxrrV11X3T",
+      "signed_wire_sha256": "7c5d1bf07e910b552d9bd77a9bee68b28e6d6fee437df1f429c7c3591d80f5a2",
+      "slot": 460336377
+    },
+    {
+      "compute_units_consumed": 153131,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-redeem-internal-outcome-1",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5fR4J23hrHbfFfgQ2qwj3MQMj4mLdgHB4MnCkdpQ2JAbyNCDrxLjXJEiQFbKcwekPyaktqSjiXRytGsG1269fvN6",
+      "signed_wire_sha256": "f1d300fb4335563579f13f715c01b33e04af60343e6927328533933da565706d",
+      "slot": 460336378
+    },
+    {
+      "compute_units_consumed": 153131,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-redeem-internal-outcome-2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "Xi75XY3DfEharrWcZozBAzrKKPKkBkpm1AZcwe6FhWYhcoWWjXDLo3MVspk5iMjo2t4vBGYoMQYCnQYYguq7Xmk",
+      "signed_wire_sha256": "00cbec2cc9887f8950277af955f1bfe2cc1d41a7b6d87bb4bf2fe3d8659de10d",
+      "slot": 460336379
+    },
+    {
+      "compute_units_consumed": 153131,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-redeem-internal-outcome-3",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2c1hpyNEZVw1vD5zc3Ei4SyofYeqeEFMMNnHxiPu1ETaMCbgRooyRC82Hsgpw653GSau2MzR1S4PFNfKmjERtutH",
+      "signed_wire_sha256": "0c997030b4a6a8900a51db84747d392c25f35c369f6ba93846de692a66a39cd1",
+      "slot": 460336380
+    },
+    {
+      "compute_units_consumed": 49905,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-withdraw-redeemed-collateral",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2fVk52hzcetptscRf7oQFNzKvBzJw5YFxU4PzWj9BE1Ha1A5vkBXxJXX4eBW7U2rs3MCeGRtP78D888hdd8JVPvS",
+      "signed_wire_sha256": "3282fd9d6cb1428e5d73dcdf1ca907298d5c97744a2119ebcc3ddc3da5265830",
+      "slot": 460336381
+    }
+  ],
+  "update_account": "2H8xPHX4Ziw5eTvW3F9aV1T32R9SP6g3Y78ftHunSSqY",
+  "verified_vaa_account": "CddfC1KPsPbLS4niHrBnmywjdzSGcDjeFfz3XRCqMctA",
+  "wrong_config_rollback": true,
+  "wrong_feed_rollback": true
+}
