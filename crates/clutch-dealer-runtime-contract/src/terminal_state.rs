@@ -4,13 +4,12 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerActionLivenessAuthorizationV1, DealerEmptyAssetTransferBundleV1,
-    DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerLivenessScheduleV1, DealerPhaseV2,
-    DealerPolicyV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
-    DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2,
-    DealerTransitionIntentV1, DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2,
-    FixedCodec, Id, PreparedDealerReplayTransitionV1, Result,
-    DEALER_TERMINAL_STATE_RECEIPT_CONTENT_DOMAIN_V2,
+    DealerActionLivenessAuthorizationV1, DealerEmptyAssetTransferBundleV1, DealerFacilityReplayV1,
+    DealerFundedDependenciesV2, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
+    DealerPositionObservationV3, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
+    DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransitionIntentV1,
+    DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2, FixedCodec, Id,
+    PreparedDealerReplayTransitionV1, Result, DEALER_TERMINAL_STATE_RECEIPT_CONTENT_DOMAIN_V2,
 };
 use clutch_retirement::{PositionLifecycleV3, PositionTombstoneV3, PositionV3Sha256Backend};
 use sha2::{Digest, Sha256};
@@ -123,10 +122,20 @@ impl FixedCodec for DealerTerminalStateReceiptV2 {
 /// Opaque result of State-authorized Replay terminalization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerPreparedTerminalReplayV2 {
+    receipt: DealerTerminalStateReceiptV2,
+    prepared_replay: PreparedDealerReplayTransitionV1,
+}
+
+impl DealerPreparedTerminalReplayV2 {
     /// Exact receipt committed by the Replay extension.
-    pub receipt: DealerTerminalStateReceiptV2,
+    pub const fn receipt(self) -> DealerTerminalStateReceiptV2 {
+        self.receipt
+    }
+
     /// Private-field canonical Replay transition prepared for atomic commit.
-    pub prepared_replay: PreparedDealerReplayTransitionV1,
+    pub const fn prepared_replay(self) -> PreparedDealerReplayTransitionV1 {
+        self.prepared_replay
+    }
 }
 
 /// Mint the terminal State receipt and seal Replay only at the exact child cut.
@@ -251,11 +260,8 @@ pub fn prepare_dealer_terminal_replay_v2(
     {
         return Err(Error::MismatchedBinding);
     }
-    let prepared_replay = replay.prepare_terminal_transition(
-        replay_account_binding,
-        intent,
-        receipt_id,
-    )?;
+    let prepared_replay =
+        replay.prepare_terminal_transition(replay_account_binding, intent, receipt_id)?;
     Ok(DealerPreparedTerminalReplayV2 {
         receipt,
         prepared_replay,
@@ -321,8 +327,7 @@ pub fn close_dealer_position_replay_v2(
         || Id::from_bytes(position.owner.bytes()) != state.facility_id
         || Id::from_bytes(position.controller.bytes()) != receipt.dealer_state_account_id
         || Id::from_bytes(position.replay_account.bytes()) != state.facility_replay_account_id
-        || Id::from_bytes(position.purpose_binding_id.bytes())
-            != state.facility_position_binding_id
+        || Id::from_bytes(position.purpose_binding_id.bytes()) != state.facility_position_binding_id
         || position.generation != state.generation
     {
         return Err(Error::InvalidChildGraph);

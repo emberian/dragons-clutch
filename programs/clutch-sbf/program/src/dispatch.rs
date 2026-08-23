@@ -361,6 +361,9 @@ pub fn process(
     if let Some(action) = disabled_source_v3_action(instruction_data) {
         return crate::source_plane_v3::process_reserved_disabled(action);
     }
+    if let Some(action) = disabled_dealer_facility_action(instruction_data) {
+        return crate::instructions::dealer_runtime::process_reserved_disabled(action);
+    }
     if disabled_canonical_tag(instruction_data) {
         return Err(ClutchError::UnsupportedInstruction.into());
     }
@@ -469,6 +472,27 @@ fn disabled_source_v3_action(
         instruction_data[15],
     ) {
         Ok(clutch_solana_layout::registry::ExtensionAction::SourceV3(action)) => Some(action),
+        _ => None,
+    }
+}
+
+/// Identify one exact allocated-but-disabled Dealer facility action.
+///
+/// Policy-catalog actions remain owned by their explicitly non-production
+/// profile. Facility actions always enter the exhaustive account-free refusal
+/// below, so adding a payload/meta contract cannot accidentally activate them.
+fn disabled_dealer_facility_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::DealerFacilityAction> {
+    if !disabled_canonical_tag(instruction_data) {
+        return None;
+    }
+    match clutch_solana_layout::registry::decode_extension_action(
+        instruction_data[13],
+        instruction_data[14],
+        instruction_data[15],
+    ) {
+        Ok(clutch_solana_layout::registry::ExtensionAction::DealerFacility(action)) => Some(action),
         _ => None,
     }
 }
