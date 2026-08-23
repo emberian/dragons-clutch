@@ -37,30 +37,39 @@ CLUTCH_LOOPBACK_TEST_VALIDATOR=/absolute/path/to/solana-test-validator \
 ```
 
 `joined-user-lifecycle-v1` keeps Realm, Profile, policy, immutable Terms, one
-collateral mint, and one ephemeral user's ordinary collateral token account as
-disclosed genesis prerequisites. The market state PDAs, Hoard token account,
-and four outcome mints must be absent before submission. The campaign then
-retains twenty-one signed transactions in exact order: provider/router setup;
-source-spec and archive admission; `CreateMarket`, `Endow`, and `Split`; the two
-atomic rollback negatives; real receiver `PostUpdate` joined to Clutch append;
-seal and categorical resolve; four `RedeemInternal` calls; and `WithdrawCash`.
-It checks that 64 collateral atoms return to the ephemeral local user while
-position cash, all internal positions and supply, the Hoard obligation, and
-Hoard token balance end at exact zero.
+collateral mint, and two ephemeral users' ordinary collateral token accounts as
+disclosed genesis prerequisites. Each user begins with 64 atoms. The sealed
+PriceGrid, market state PDAs, Hoard token account, outcome mints, general Epoch,
+order page, reservations, candidate, verifier work, entitlement pot, and
+settlement receipt must all be absent before their signed lifecycle steps.
 
-The public-safe transcript from the first completed run of this mode is
+The extended campaign initializes the real router/receiver and source plane,
+checks both atomic rollback negatives, posts the real receiver update adjacent
+to Clutch admission, and seals the source evidence without weakening its
+staleness bounds. It then uploads and seals the exact typed PriceGrid and
+zero-fee general clearing policy, creates the market, endows both owners, and
+has the seller split a complete set. The owners place funded opposing orders
+for 16 units of outcome 1. After the fixed freeze and candidate windows, the
+campaign builds the canonical direct witness from the sealed order page,
+submits it, runs both streaming-verifier passes plus slice verification,
+selects the best valid submitted candidate, freezes and realizes entitlement,
+and settles the direct slice. Only then does it resolve from the already sealed
+real-Pyth source evidence, redeem both users' internal claims, and withdraw the
+exact conserved 128 collateral atoms (76 to the buyer and 52 to the seller).
+
+The public-safe transcript from the first, pre-trading run of this mode is
 retained at
 `docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22`. It carries
 repository HEAD `04795af507f191e51d9cae094867ec43aabd65b9`; retaining the evidence itself
 is necessarily a later repository commit. Operator consumes only its
 `campaign.json`, `result.json`, and `probe-evidence.json` files.
 
-Trading is deliberately reported as **BLOCKED / NOT SUBSTITUTED** with reason
-`missing-sealed-price-grid-and-epoch-plane`. The immutable real-Pyth-bound Terms
-name a PriceGrid digest, while this campaign currently constructs no matching
-sealed PriceGrid artifact, Epoch, order page, or candidate plane. `InitEpoch`
-authenticates the exact grid, so the runner does not replace those missing
-signed lifecycle steps with mocked or genesis-injected trading state.
+That retained predecessor transcript truthfully reports trading as
+`BLOCKED / NOT SUBSTITUTED`; it is not evidence for the extension described
+above. The extension is implemented in the driver, but must not be described as
+an end-to-end pass until a new public-safe transcript is retained from a clean
+repository HEAD. The runner never replaces a missing signed lifecycle step
+with mocked or genesis-injected protocol state.
 
 The selected validator must bind RPC, WebSocket (`RPC+1`), and faucet
 listeners exclusively to `127.0.0.1`. The runner inspects the child process's

@@ -99,7 +99,7 @@ sbf_builder="$(command -v cargo-build-sbf)"
 }
 host_lock="$crate/Cargo.lock"
 sbf_lock="$repo/programs/clutch-sbf/Cargo.lock"
-host_lock_sha='730fc1c1d2c25d2194680b850ed1a4340cae214824bd8da103fb40ba14f0bb67'
+host_lock_sha='1734d5b8834363f4dc9f72ce88a8ff86614a1b67df092b76ad5cae5ede4029ad'
 sbf_lock_sha='ebe9451a7f6e72bd1e5747c21d44df152742e15f69cfdbda30e7415ed9dda0f0'
 [ "$(shasum -a 256 "$host_lock" | awk '{print $1}')" = "$host_lock_sha" ] || {
   echo "FAIL: local-real Cargo.lock hash differs" >&2

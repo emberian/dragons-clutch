@@ -18,6 +18,8 @@ path = "src/main.rs"
 [dependencies]
 clutch-sbf = { path = "../program", features = ["laboratory-fixtures", "non-production-real-pyth-lab"] }
 clutch-sbf-svm-tests = { path = "../svm-tests", features = ["non-production-real-pyth-lab"] }
+clutch-batch = { path = "../../../crates/clutch-batch" }
+clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }

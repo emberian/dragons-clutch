@@ -11,7 +11,11 @@ use clutch_sbf::{
     source_identity::{real_pyth_lab, CLOCK_SYSVAR_ID},
     source_v2::fixtures::{programdata_body, receiver_program_body},
 };
-use clutch_solana_layout::Hash32;
+use clutch_solana_layout::clearing::{EpochWindowAccount, CANDIDATE_WINDOW_SLOTS};
+use clutch_solana_layout::{
+    CandidateRecord, EpochAccount, Hash32, PriceGridAccount, CANDIDATE_STATUS_SELECTED,
+    CANDIDATE_STATUS_VERIFIED, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
+};
 use clutch_svm_fixture::{
     compute_unit_limit_data, outcome_mint_bytes, token_account_bytes, COMPUTE_BUDGET, PROGRAM_ID,
     RENT_SYSVAR, SYSTEM_PROGRAM,
@@ -191,6 +195,26 @@ fn mint_supply(rpc: &Rpc, role: &str, key: Address) -> Result<u64> {
 
 fn compute_budget() -> Instruction {
     Instruction::new_with_bytes(COMPUTE_BUDGET, &compute_unit_limit_data(1_400_000), vec![])
+}
+
+fn heap_frame() -> Instruction {
+    let mut data = vec![1_u8];
+    data.extend_from_slice(&262_144_u32.to_le_bytes());
+    Instruction::new_with_bytes(COMPUTE_BUDGET, &data, vec![])
+}
+
+fn wait_for_slot(rpc: &Rpc, target: u64, reason: &str) -> Result<()> {
+    for _attempt in 0..4_800 {
+        let current = rpc.slot()?;
+        if current >= target {
+            return Ok(());
+        }
+        if current % 64 == 0 {
+            println!("waiting reason={reason} slot={current} target={target}");
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Err(format!("timed out waiting for {reason} at slot {target}").into())
 }
 
 fn sign_submit(
@@ -414,6 +438,7 @@ fn expected_genesis_rows(
     correct: &plane::LabPlane,
     wrong_feed: &plane::LabPlane,
     clutch_elf: &[u8],
+    second_owner: Address,
 ) -> Result<BTreeMap<String, GenesisRow>> {
     let mut rows = BTreeMap::new();
     let loader = address(UPGRADEABLE_LOADER_ID);
@@ -459,7 +484,21 @@ fn expected_genesis_rows(
                 role: "joined-collateral-mint".to_string(),
                 address: plane::COLLATERAL_MINT,
                 owner: plane::token_program(),
-                data: collateral_mint_bytes(plane::USER_COLLATERAL_ATOMS),
+                data: collateral_mint_bytes(plane::JOINED_COLLATERAL_SUPPLY),
+                executable: false,
+            },
+        )?;
+        insert_row(
+            &mut rows,
+            GenesisRow {
+                role: "joined-second-owner-collateral-token".to_string(),
+                address: plane::actor_collateral(second_owner),
+                owner: plane::token_program(),
+                data: token_account_bytes(
+                    plane::COLLATERAL_MINT,
+                    second_owner,
+                    plane::USER_COLLATERAL_ATOMS,
+                ),
                 executable: false,
             },
         )?;
@@ -575,6 +614,7 @@ fn prepare(
         "campaign.json",
         "genesis.tsv",
         "payer.pubkey",
+        "second-owner.pubkey",
         "program.pubkey",
     ] {
         require(
@@ -598,8 +638,14 @@ fn prepare(
     }
 
     let payer = Keypair::new();
+    let second_owner = Keypair::new();
     write_key(&secrets_dir.join("payer.json"), &payer)?;
+    write_key(&secrets_dir.join("second-owner.json"), &second_owner)?;
     fs::write(work.join("payer.pubkey"), format!("{}\n", payer.pubkey()))?;
+    fs::write(
+        work.join("second-owner.pubkey"),
+        format!("{}\n", second_owner.pubkey()),
+    )?;
     fs::write(work.join("program.pubkey"), format!("{PROGRAM_ID}\n"))?;
 
     require(publish_time > 0, "publish time must be positive")?;
@@ -645,7 +691,7 @@ fn prepare(
     let observation = provider::observation(publish_time)?;
     let merkle_update_hash = provider::sha256(&borsh::to_vec(&observation.update)?);
 
-    let rows = expected_genesis_rows(&correct, &wrong_feed, &elf_bytes)?;
+    let rows = expected_genesis_rows(&correct, &wrong_feed, &elf_bytes, second_owner.pubkey())?;
 
     let mut index = String::new();
     for (number, row) in rows.values().enumerate() {
@@ -686,6 +732,7 @@ fn prepare(
         "end_bucket_exclusive": end_bucket,
         "warp_slot": WARP_SLOT,
         "payer": payer.pubkey().to_string(),
+        "second_owner": second_owner.pubkey().to_string(),
         "program_id": PROGRAM_ID.to_string(),
         "clutch_elf_sha256": provider::sha256(&elf_bytes),
         "validator_binary": validator.display().to_string(),
@@ -739,6 +786,16 @@ fn prepare(
             "market_genesis_assisted": market_prestate == plane::MarketPrestate::GenesisFunded,
             "user_collateral_token": if market_prestate == plane::MarketPrestate::SignedCreate {
                 Some(plane::actor_collateral(payer.pubkey()).to_string())
+            } else {
+                None
+            },
+            "second_owner": if market_prestate == plane::MarketPrestate::SignedCreate {
+                Some(second_owner.pubkey().to_string())
+            } else {
+                None
+            },
+            "second_owner_collateral_token": if market_prestate == plane::MarketPrestate::SignedCreate {
+                Some(plane::actor_collateral(second_owner.pubkey()).to_string())
             } else {
                 None
             },
@@ -807,12 +864,13 @@ fn verify_genesis_manifest(
     correct: &plane::LabPlane,
     wrong_feed: &plane::LabPlane,
     clutch_elf: &[u8],
+    second_owner: Address,
 ) -> Result<()> {
     let rows = public
         .get("genesis_accounts")
         .and_then(Value::as_array)
         .ok_or("campaign manifest has no genesis_accounts array")?;
-    let mut expected = expected_genesis_rows(correct, wrong_feed, clutch_elf)?;
+    let mut expected = expected_genesis_rows(correct, wrong_feed, clutch_elf, second_owner)?;
     require(
         rows.len() == expected.len(),
         format!(
@@ -1062,6 +1120,121 @@ fn snapshot(rpc: &Rpc, keys: &[Address]) -> Result<Vec<Option<AccountView>>> {
         .collect()
 }
 
+fn upload_artifact(
+    rpc: &Rpc,
+    payer: &Keypair,
+    steps: &mut Vec<Value>,
+    label: &str,
+    upload: &plane::ArtifactUpload,
+) -> Result<Vec<String>> {
+    require(
+        rpc.account(&upload.stage.address.to_string())?.is_none(),
+        format!("{label} artifact stage was not absent before signed upload"),
+    )?;
+    require(
+        rpc.account(&upload.final_account.address.to_string())?
+            .is_none(),
+        format!("{label} final artifact was genesis-assisted"),
+    )?;
+    let expires_slot = rpc
+        .slot()?
+        .checked_add(256)
+        .ok_or("artifact expiry slot overflow")?;
+    let mut signatures = Vec::new();
+    let (signature, status) = sign_submit(
+        rpc,
+        payer,
+        &[],
+        &[
+            compute_budget(),
+            plane::begin_artifact(payer.pubkey(), upload, expires_slot),
+        ],
+    )?;
+    require_accepted(&format!("{label} BeginArtifact"), &status)?;
+    record_step(
+        rpc,
+        steps,
+        &format!("joined-{label}-artifact-begin"),
+        signature.clone(),
+        &status,
+    )?;
+    signatures.push(signature);
+
+    let mut cursor = 0_usize;
+    for (index, chunk) in upload.body.chunks(192).enumerate() {
+        let (signature, status) = sign_submit(
+            rpc,
+            payer,
+            &[],
+            &[
+                compute_budget(),
+                plane::write_artifact(payer.pubkey(), upload, u16::try_from(cursor)?, chunk),
+            ],
+        )?;
+        require_accepted(&format!("{label} WriteArtifact chunk {index}"), &status)?;
+        record_step(
+            rpc,
+            steps,
+            &format!("joined-{label}-artifact-write-{index}"),
+            signature.clone(),
+            &status,
+        )?;
+        signatures.push(signature);
+        cursor += chunk.len();
+    }
+    require(
+        cursor == upload.body.len(),
+        format!("{label} artifact upload cursor differs from body length"),
+    )?;
+
+    let (signature, status) = sign_submit(
+        rpc,
+        payer,
+        &[],
+        &[
+            compute_budget(),
+            plane::seal_artifact(payer.pubkey(), upload),
+        ],
+    )?;
+    require_accepted(&format!("{label} SealArtifact"), &status)?;
+    record_step(
+        rpc,
+        steps,
+        &format!("joined-{label}-artifact-seal"),
+        signature.clone(),
+        &status,
+    )?;
+    signatures.push(signature);
+    let sealed = account(
+        rpc,
+        &format!("sealed {label} artifact"),
+        upload.final_account.address,
+    )?;
+    require(
+        sealed.owner == PROGRAM_ID.to_string() && !sealed.executable && sealed.data == upload.body,
+        format!("sealed {label} artifact bytes or metadata differ"),
+    )?;
+    require(
+        rpc.account(&upload.stage.address.to_string())?.is_none(),
+        format!("{label} stage did not close after sealing"),
+    )?;
+    Ok(signatures)
+}
+
+fn accepted_step(
+    rpc: &Rpc,
+    payer: &Keypair,
+    extras: &[&Keypair],
+    steps: &mut Vec<Value>,
+    label: &str,
+    instructions: &[Instruction],
+) -> Result<String> {
+    let (signature, status) = sign_submit(rpc, payer, extras, instructions)?;
+    require_accepted(label, &status)?;
+    record_step(rpc, steps, label, signature.clone(), &status)?;
+    Ok(signature)
+}
+
 fn run(
     work: &Path,
     url: &str,
@@ -1136,6 +1309,17 @@ fn run(
     )?;
     let payer = read_keypair_file(work.join("lab-secrets/payer.json"))
         .map_err(|error| format!("explicit ephemeral payer: {error}"))?;
+    let second_owner = read_keypair_file(work.join("lab-secrets/second-owner.json"))
+        .map_err(|error| format!("explicit ephemeral second owner: {error}"))?;
+    require(
+        payer.pubkey() != second_owner.pubkey(),
+        "ephemeral owner identities are not distinct",
+    )?;
+    require(
+        public.get("second_owner").and_then(Value::as_str)
+            == Some(second_owner.pubkey().to_string().as_str()),
+        "explicit second owner differs from prepared manifest",
+    )?;
     let market_prestate = if campaign_mode == JOINED_LIFECYCLE_MODE {
         plane::MarketPrestate::SignedCreate
     } else {
@@ -1185,7 +1369,14 @@ fn run(
         "RPC slot is below the captured receiver deployment",
     )?;
     verify_provider_accounts(&rpc)?;
-    verify_genesis_manifest(&rpc, &public, &correct, &wrong_feed, &clutch_elf)?;
+    verify_genesis_manifest(
+        &rpc,
+        &public,
+        &correct,
+        &wrong_feed,
+        &clutch_elf,
+        second_owner.pubkey(),
+    )?;
     assert_clock(&rpc, publish_time)?;
     let mut steps = Vec::new();
     let mut lifecycle_signatures = BTreeMap::new();
@@ -1340,7 +1531,31 @@ fn run(
         )?;
     }
 
-    if campaign_mode == JOINED_LIFECYCLE_MODE {
+    let run_joined_trade = |steps: &mut Vec<Value>,
+                            lifecycle_signatures: &mut BTreeMap<&'static str, String>|
+     -> Result<Value> {
+        if campaign_mode != JOINED_LIFECYCLE_MODE {
+            return Ok(Value::Null);
+        }
+        let grid_upload = plane::price_grid_upload(payer.pubkey(), &correct);
+        let grid_signatures = upload_artifact(&rpc, &payer, steps, "price-grid", &grid_upload)?;
+        let grid = PriceGridAccount::decode(
+            &account(&rpc, "sealed PriceGrid", correct.grid.address)?.data,
+        )
+        .map_err(|error| format!("sealed PriceGrid decode: {error:?}"))?;
+        require(
+            grid == correct.grid_value
+                && grid
+                    .binds_terms(&{
+                        let bytes =
+                            account(&rpc, "immutable Terms", correct.plane.terms.address)?.data;
+                        clutch_solana_layout::TermsAccount::decode(&bytes)
+                            .map_err(|error| format!("Terms decode: {error:?}"))?
+                    })
+                    .is_ok(),
+            "sealed PriceGrid does not exactly bind the immutable real-Pyth Terms",
+        )?;
+
         let mut absent = correct.plane.market_state_addresses().to_vec();
         absent.push(correct.plane.hoard_token.address);
         absent.extend(correct.plane.outcome_mints.iter().map(|mint| mint.address));
@@ -1351,22 +1566,16 @@ fn run(
             )?;
         }
 
-        let (signature, status) = sign_submit(
+        let signature = accepted_step(
             &rpc,
             &payer,
             &[],
+            steps,
+            "joined-create-market",
             &[
                 compute_budget(),
                 plane::create_market(payer.pubkey(), &correct),
             ],
-        )?;
-        require_accepted("signed CreateMarket", &status)?;
-        record_step(
-            &rpc,
-            &mut steps,
-            "joined-create-market",
-            signature.clone(),
-            &status,
         )?;
         lifecycle_signatures.insert("create_market", signature);
         let market = plane::decode_market(
@@ -1394,24 +1603,35 @@ fn run(
             )?;
         }
 
-        let (signature, status) = sign_submit(
+        let signature = accepted_step(
             &rpc,
             &payer,
             &[],
+            steps,
+            "joined-endow-buyer-collateral",
             &[
                 compute_budget(),
                 plane::endow(payer.pubkey(), &correct, 0, plane::USER_COLLATERAL_ATOMS),
             ],
         )?;
-        require_accepted("signed Endow", &status)?;
-        record_step(
+        lifecycle_signatures.insert("buyer_endow", signature);
+        let signature = accepted_step(
             &rpc,
-            &mut steps,
-            "joined-endow-collateral",
-            signature.clone(),
-            &status,
+            &payer,
+            &[&second_owner],
+            steps,
+            "joined-endow-seller-collateral",
+            &[
+                compute_budget(),
+                plane::endow(
+                    second_owner.pubkey(),
+                    &correct,
+                    0,
+                    plane::USER_COLLATERAL_ATOMS,
+                ),
+            ],
         )?;
-        lifecycle_signatures.insert("endow", signature);
+        lifecycle_signatures.insert("seller_endow", signature);
         require(
             token_amount(
                 &rpc,
@@ -1422,37 +1642,46 @@ fn run(
                     &rpc,
                     "Hoard token account",
                     correct.plane.hoard_token.address,
-                )? == plane::USER_COLLATERAL_ATOMS,
-            "Endow did not move the exact collateral into pooled custody",
+                )? == plane::JOINED_COLLATERAL_SUPPLY
+                && token_amount(
+                    &rpc,
+                    "second owner collateral token",
+                    plane::actor_collateral(second_owner.pubkey()),
+                )? == 0,
+            "the two Endow transitions did not move exact collateral into pooled custody",
         )?;
-        let position = plane::decode_position(
+        let buyer_position = plane::decode_position(
             &account(&rpc, "endowed position", correct.plane.position.address)?.data,
         )?;
+        let seller_state = plane::owner_state(second_owner.pubkey(), &correct);
+        let seller_position = plane::decode_position(
+            &account(&rpc, "seller position", seller_state.position.address)?.data,
+        )?;
         require(
-            position.cash_atoms == plane::USER_COLLATERAL_ATOMS,
-            "Endow did not credit exact internal cash",
+            buyer_position.cash_atoms == plane::USER_COLLATERAL_ATOMS
+                && seller_position.cash_atoms == plane::USER_COLLATERAL_ATOMS,
+            "Endow did not credit exact internal cash to both owners",
         )?;
 
-        let (signature, status) = sign_submit(
+        let signature = accepted_step(
             &rpc,
             &payer,
-            &[],
+            &[&second_owner],
+            steps,
+            "joined-seller-split-complete-sets",
             &[
                 compute_budget(),
-                plane::split(payer.pubkey(), &correct, 1, plane::USER_COLLATERAL_ATOMS),
+                plane::split(
+                    second_owner.pubkey(),
+                    &correct,
+                    1,
+                    plane::USER_COLLATERAL_ATOMS,
+                ),
             ],
-        )?;
-        require_accepted("signed Split", &status)?;
-        record_step(
-            &rpc,
-            &mut steps,
-            "joined-split-complete-sets",
-            signature.clone(),
-            &status,
         )?;
         lifecycle_signatures.insert("split", signature);
         let position = plane::decode_position(
-            &account(&rpc, "split position", correct.plane.position.address)?.data,
+            &account(&rpc, "split seller position", seller_state.position.address)?.data,
         )?;
         let supply = plane::decode_supply(
             &account(&rpc, "split supply", correct.plane.supply.address)?.data,
@@ -1470,7 +1699,358 @@ fn run(
                 && hoard.collateral_atoms == plane::USER_COLLATERAL_ATOMS,
             "Split did not create the exact backed four-outcome complete sets",
         )?;
-    }
+
+        let general = plane::general_plane(payer.pubkey(), &correct);
+        let policy_signatures =
+            upload_artifact(&rpc, &payer, steps, "general-policy", &general.policy)?;
+        let freeze_deadline_slot = rpc
+            .slot()?
+            .checked_add(32)
+            .ok_or("general freeze deadline overflow")?;
+        let init_epoch_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-init-epoch",
+            &[
+                compute_budget(),
+                plane::init_epoch(payer.pubkey(), &correct, &general, freeze_deadline_slot),
+            ],
+        )?;
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-init-order-page",
+            &[
+                compute_budget(),
+                plane::init_order_page(payer.pubkey(), &correct, &general),
+            ],
+        )?;
+        let buyer_order = plane::place_single_order(payer.pubkey(), &correct, &general, 0, 0);
+        let buyer_order_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-place-funded-buy",
+            &[compute_budget(), buyer_order.instruction.clone()],
+        )?;
+        let seller_order =
+            plane::place_single_order(second_owner.pubkey(), &correct, &general, 1, 1);
+        let seller_order_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[&second_owner],
+            steps,
+            "joined-general-place-funded-sell",
+            &[compute_budget(), seller_order.instruction.clone()],
+        )?;
+        require(
+            rpc.account(&buyer_order.reservation.address.to_string())?
+                .is_some()
+                && rpc
+                    .account(&seller_order.reservation.address.to_string())?
+                    .is_some(),
+            "funded placements did not create both reservation accounts",
+        )?;
+
+        wait_for_slot(&rpc, freeze_deadline_slot, "general epoch freeze")?;
+        let freeze_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-freeze-epoch",
+            &[compute_budget(), plane::freeze_epoch(&correct, &general)],
+        )?;
+        let epoch = EpochAccount::decode(
+            &account(&rpc, "frozen general epoch", general.epoch.address)?.data,
+        )
+        .map_err(|error| format!("frozen general epoch decode: {error:?}"))?;
+        let window = EpochWindowAccount::decode(
+            &account(&rpc, "general epoch window", general.window.address)?.data,
+        )
+        .map_err(|error| format!("general epoch window decode: {error:?}"))?;
+        require(
+            epoch.phase == EPOCH_PHASE_FROZEN
+                && epoch.owner_count == 2
+                && epoch.order_count == 2
+                && epoch.page_count == 1
+                && window.live_order_count == 2
+                && window.selection_deadline_slot >= freeze_deadline_slot + CANDIDATE_WINDOW_SLOTS,
+            "frozen general epoch did not stamp the exact two-owner book and candidate window",
+        )?;
+        let page = account(&rpc, "frozen general order page", general.page.address)?;
+        let candidate = plane::candidate_plan(&correct, &general, &epoch, &page.data)?;
+
+        let submit_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-submit-candidate",
+            &[
+                compute_budget(),
+                plane::submit_candidate(payer.pubkey(), &correct, &general, &candidate),
+            ],
+        )?;
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-write-candidate-fills",
+            &[
+                compute_budget(),
+                plane::write_candidate_fills(&correct, &general, &candidate),
+            ],
+        )?;
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-write-candidate-slices",
+            &[
+                compute_budget(),
+                plane::write_candidate_slices(&correct, &general, &candidate),
+            ],
+        )?;
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-seal-candidate",
+            &[
+                compute_budget(),
+                plane::seal_candidate(&correct, &general, &candidate),
+            ],
+        )?;
+        let mut create_work = vec![
+            compute_budget(),
+            plane::init_clear_work(payer.pubkey(), &correct, &general, &candidate),
+        ];
+        for sequence in 1..=4 {
+            create_work.push(plane::grow_clear_work(
+                &correct, &general, &candidate, sequence,
+            ));
+        }
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-create-clear-work",
+            &create_work,
+        )?;
+        let reservations = [buyer_order.reservation, seller_order.reservation];
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-verify-pass-one",
+            &[
+                heap_frame(),
+                compute_budget(),
+                plane::advance_clear_work(&correct, &general, &candidate, &reservations),
+            ],
+        )?;
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-verify-slices",
+            &[
+                heap_frame(),
+                compute_budget(),
+                plane::advance_clear_slices(&correct, &general, &candidate),
+            ],
+        )?;
+        accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-verify-pass-two",
+            &[
+                heap_frame(),
+                compute_budget(),
+                plane::advance_clear_work(&correct, &general, &candidate, &[]),
+            ],
+        )?;
+        let complete_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-complete-clear-work",
+            &[
+                heap_frame(),
+                compute_budget(),
+                plane::complete_clear_work(&correct, &general, &candidate),
+            ],
+        )?;
+        let verified = CandidateRecord::decode(
+            &account(&rpc, "verified general candidate", candidate.record.address)?.data,
+        )
+        .map_err(|error| format!("verified candidate decode: {error:?}"))?;
+        require(
+            verified.status == CANDIDATE_STATUS_VERIFIED
+                && verified.score_digest != Hash32::ZERO
+                && verified.distinct_owners == 2,
+            "streaming verifier did not persist a verified two-owner score",
+        )?;
+
+        wait_for_slot(
+            &rpc,
+            window.selection_deadline_slot,
+            "best-valid-submitted-candidate selection",
+        )?;
+        let selection_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-finalize-selection",
+            &[
+                compute_budget(),
+                plane::finalize_selection(&correct, &general, &candidate),
+            ],
+        )?;
+        let selected_epoch = EpochAccount::decode(
+            &account(&rpc, "cleared general epoch", general.epoch.address)?.data,
+        )
+        .map_err(|error| format!("selected epoch decode: {error:?}"))?;
+        let selected = CandidateRecord::decode(
+            &account(&rpc, "selected candidate", candidate.record.address)?.data,
+        )
+        .map_err(|error| format!("selected candidate decode: {error:?}"))?;
+        require(
+            selected_epoch.phase == EPOCH_PHASE_CLEARED
+                && selected.status == CANDIDATE_STATUS_SELECTED,
+            "best valid submitted candidate was not selected into a cleared epoch",
+        )?;
+        let freeze_entitlement_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-freeze-entitlement",
+            &[
+                heap_frame(),
+                compute_budget(),
+                plane::freeze_entitlement(payer.pubkey(), &correct, &general, &candidate),
+            ],
+        )?;
+        let entitle_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-entitle-direct-slice",
+            &[
+                compute_budget(),
+                plane::entitle_slice(
+                    payer.pubkey(),
+                    &correct,
+                    &general,
+                    &candidate,
+                    buyer_order.reservation,
+                    seller_order.reservation,
+                ),
+            ],
+        )?;
+        let settlement_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-general-settle-direct-slice",
+            &[
+                compute_budget(),
+                plane::settle_slice(
+                    payer.pubkey(),
+                    second_owner.pubkey(),
+                    &correct,
+                    &general,
+                    &candidate,
+                    buyer_order.reservation,
+                    seller_order.reservation,
+                ),
+            ],
+        )?;
+        let buyer_position = plane::decode_position(
+            &account(
+                &rpc,
+                "settled buyer position",
+                correct.plane.position.address,
+            )?
+            .data,
+        )?;
+        let seller_position = plane::decode_position(
+            &account(
+                &rpc,
+                "settled seller position",
+                seller_state.position.address,
+            )?
+            .data,
+        )?;
+        require(
+            buyer_position.cash_atoms == 60
+                && buyer_position.reserved_cash_atoms == 0
+                && buyer_position.internal[..4] == [0, 16, 0, 0]
+                && seller_position.cash_atoms == 4
+                && seller_position.reserved_cash_atoms == 0
+                && seller_position.internal[..4] == [64, 48, 64, 64],
+            "direct settlement did not land the exact two-owner cash/Egg conservation state",
+        )?;
+        Ok(json!({
+            "status": "settled",
+            "grid_genesis_assisted": false,
+            "epoch_genesis_assisted": false,
+            "order_genesis_assisted": false,
+            "candidate_genesis_assisted": false,
+            "price_grid": correct.grid.address.to_string(),
+            "price_grid_digest": correct.grid_value.grid.bytes(),
+            "grid_upload_signatures": grid_signatures,
+            "policy_upload_signatures": policy_signatures,
+            "epoch": general.epoch.address.to_string(),
+            "epoch_id": general.epoch_id.bytes(),
+            "init_epoch_signature": init_epoch_signature,
+            "freeze_epoch_signature": freeze_signature,
+            "owners": [payer.pubkey().to_string(), second_owner.pubkey().to_string()],
+            "orders": {
+                "buyer": {"outcome": 1, "side": "buy", "quantity": "16", "limit": "7500"},
+                "seller": {"outcome": 1, "side": "sell", "quantity": "16", "limit": "2500"},
+                "buyer_signature": buyer_order_signature,
+                "seller_signature": seller_order_signature,
+            },
+            "candidate": candidate.candidate.bytes(),
+            "prices": candidate.prices,
+            "fills": [plane::ORDER_QUANTITY, plane::ORDER_QUANTITY],
+            "witness_slices": candidate.slice_count,
+            "submit_signature": submit_signature,
+            "complete_verification_signature": complete_signature,
+            "selection_signature": selection_signature,
+            "freeze_entitlement_signature": freeze_entitlement_signature,
+            "entitle_signature": entitle_signature,
+            "settlement_signature": settlement_signature,
+            "post_settlement": {
+                "buyer_cash": "60",
+                "buyer_internal": ["0", "16", "0", "0"],
+                "seller_cash": "4",
+                "seller_internal": ["64", "48", "64", "64"],
+                "locked_collateral": "64",
+                "pooled_custody": "128",
+            },
+        }))
+    };
 
     let receiver = address(real_pyth_lab::RECEIVER_PROGRAM);
     let treasury = Address::find_program_address(&[b"treasury", &[0]], &receiver).0;
@@ -1667,6 +2247,10 @@ fn run(
         feed.cursor == end_bucket && feed.archive_pages == 1,
         "sealed feed cursor/page count differs",
     )?;
+    // Seal the real source evidence before the protocol's fixed 1,000-slot
+    // candidate window. Resolution remains after trading, so the market stays
+    // live while the exact source admission bounds remain unchanged.
+    let joined_trade = run_joined_trade(&mut steps, &mut lifecycle_signatures)?;
     let (resolve_signature, status) = sign_submit(
         &rpc,
         &payer,
@@ -1701,42 +2285,74 @@ fn run(
 
     let lifecycle = if campaign_mode == JOINED_LIFECYCLE_MODE {
         let mut redeem_signatures = Vec::new();
-        for outcome in 0..4_u8 {
-            let sequence = 2 + u64::from(outcome);
-            let label = format!("joined-redeem-internal-outcome-{outcome}");
-            let (signature, status) = sign_submit(
+        let buyer_redeem = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            &mut steps,
+            "joined-buyer-redeem-winning-eggs",
+            &[
+                compute_budget(),
+                plane::redeem_internal(payer.pubkey(), &correct, 1, 1, 16),
+            ],
+        )?;
+        redeem_signatures.push(json!({
+            "owner": payer.pubkey().to_string(),
+            "outcome": 1,
+            "quantity": "16",
+            "payout_atoms": "16",
+            "signature": buyer_redeem,
+        }));
+        for (index, (outcome, quantity)) in [(0_u8, 64_u64), (1, 48), (2, 64), (3, 64)]
+            .into_iter()
+            .enumerate()
+        {
+            let sequence = 2 + u64::try_from(index)?;
+            let label = format!("joined-seller-redeem-outcome-{outcome}");
+            let signature = accepted_step(
                 &rpc,
                 &payer,
-                &[],
+                &[&second_owner],
+                &mut steps,
+                &label,
                 &[
                     compute_budget(),
                     plane::redeem_internal(
-                        payer.pubkey(),
+                        second_owner.pubkey(),
                         &correct,
                         sequence,
                         outcome,
-                        plane::USER_COLLATERAL_ATOMS,
+                        quantity,
                     ),
                 ],
             )?;
-            require_accepted(&format!("RedeemInternal outcome {outcome}"), &status)?;
-            record_step(&rpc, &mut steps, &label, signature.clone(), &status)?;
             redeem_signatures.push(json!({
+                "owner": second_owner.pubkey().to_string(),
                 "outcome": outcome,
-                "quantity": plane::USER_COLLATERAL_ATOMS.to_string(),
+                "quantity": quantity.to_string(),
                 "payout_atoms": if outcome == 1 {
-                    plane::USER_COLLATERAL_ATOMS.to_string()
+                    quantity.to_string()
                 } else {
                     "0".to_string()
                 },
                 "signature": signature,
             }));
         }
-        let position = plane::decode_position(
+        let buyer_state = plane::owner_state(payer.pubkey(), &correct);
+        let seller_state = plane::owner_state(second_owner.pubkey(), &correct);
+        let buyer_position = plane::decode_position(
             &account(
                 &rpc,
-                "fully redeemed position",
-                correct.plane.position.address,
+                "fully redeemed buyer position",
+                buyer_state.position.address,
+            )?
+            .data,
+        )?;
+        let seller_position = plane::decode_position(
+            &account(
+                &rpc,
+                "fully redeemed seller position",
+                seller_state.position.address,
             )?
             .data,
         )?;
@@ -1747,82 +2363,120 @@ fn run(
             &account(&rpc, "fully redeemed Hoard", correct.plane.hoard.address)?.data,
         )?;
         require(
-            position.cash_atoms == plane::USER_COLLATERAL_ATOMS
-                && position.internal[..4].iter().all(|quantity| *quantity == 0)
+            buyer_position.cash_atoms == 76
+                && buyer_position.internal[..4]
+                    .iter()
+                    .all(|quantity| *quantity == 0)
+                && seller_position.cash_atoms == 52
+                && seller_position.internal[..4]
+                    .iter()
+                    .all(|quantity| *quantity == 0)
                 && supply.internal_supply[..4]
                     .iter()
                     .all(|quantity| *quantity == 0)
                 && hoard.collateral_atoms == 0,
-            "RedeemInternal did not extinguish every internal claim and credit exact cash",
+            "redemption did not extinguish both owners' internal claims and credit exact cash",
         )?;
-        let (withdraw_signature, status) = sign_submit(
+        let buyer_withdraw_signature = accepted_step(
             &rpc,
             &payer,
             &[],
+            &mut steps,
+            "joined-buyer-withdraw-redeemed-collateral",
             &[
                 compute_budget(),
-                plane::withdraw(payer.pubkey(), &correct, 6, plane::USER_COLLATERAL_ATOMS),
+                plane::withdraw(payer.pubkey(), &correct, 2, 76),
             ],
         )?;
-        require_accepted("WithdrawCash after redemption", &status)?;
-        record_step(
+        let seller_withdraw_signature = accepted_step(
             &rpc,
+            &payer,
+            &[&second_owner],
             &mut steps,
-            "joined-withdraw-redeemed-collateral",
-            withdraw_signature.clone(),
-            &status,
+            "joined-seller-withdraw-redeemed-collateral",
+            &[
+                compute_budget(),
+                plane::withdraw(second_owner.pubkey(), &correct, 6, 52),
+            ],
         )?;
-        lifecycle_signatures.insert("withdraw", withdraw_signature.clone());
-        let terminal_position = plane::decode_position(
-            &account(&rpc, "terminal position", correct.plane.position.address)?.data,
+        lifecycle_signatures.insert("buyer_withdraw", buyer_withdraw_signature.clone());
+        lifecycle_signatures.insert("seller_withdraw", seller_withdraw_signature.clone());
+        let terminal_buyer = plane::decode_position(
+            &account(
+                &rpc,
+                "terminal buyer position",
+                buyer_state.position.address,
+            )?
+            .data,
+        )?;
+        let terminal_seller = plane::decode_position(
+            &account(
+                &rpc,
+                "terminal seller position",
+                seller_state.position.address,
+            )?
+            .data,
         )?;
         require(
-            terminal_position.cash_atoms == 0
+            terminal_buyer.cash_atoms == 0
+                && terminal_seller.cash_atoms == 0
                 && token_amount(
                     &rpc,
-                    "terminal user collateral token",
+                    "terminal buyer collateral token",
                     plane::actor_collateral(payer.pubkey()),
-                )? == plane::USER_COLLATERAL_ATOMS
+                )? == 76
+                && token_amount(
+                    &rpc,
+                    "terminal seller collateral token",
+                    plane::actor_collateral(second_owner.pubkey()),
+                )? == 52
                 && token_amount(
                     &rpc,
                     "terminal Hoard token account",
                     correct.plane.hoard_token.address,
                 )? == 0,
-            "WithdrawCash did not return exact redeemed collateral to the ephemeral user",
+            "WithdrawCash did not return the exact conserved collateral to both ephemeral owners",
         )?;
         let create_market_signature = lifecycle_signatures
             .get("create_market")
             .ok_or("joined campaign lost its CreateMarket signature")?;
-        let endow_signature = lifecycle_signatures
-            .get("endow")
-            .ok_or("joined campaign lost its Endow signature")?;
+        let buyer_endow_signature = lifecycle_signatures
+            .get("buyer_endow")
+            .ok_or("joined campaign lost its buyer Endow signature")?;
+        let seller_endow_signature = lifecycle_signatures
+            .get("seller_endow")
+            .ok_or("joined campaign lost its seller Endow signature")?;
         let split_signature = lifecycle_signatures
             .get("split")
             .ok_or("joined campaign lost its Split signature")?;
         json!({
             "market_genesis_assisted": false,
             "market": correct.plane.market.address.to_string(),
-            "ephemeral_user": payer.pubkey().to_string(),
-            "user_collateral_token": plane::actor_collateral(payer.pubkey()).to_string(),
-            "collateral_atoms": plane::USER_COLLATERAL_ATOMS.to_string(),
+            "ephemeral_users": [payer.pubkey().to_string(), second_owner.pubkey().to_string()],
+            "user_collateral_tokens": [
+                plane::actor_collateral(payer.pubkey()).to_string(),
+                plane::actor_collateral(second_owner.pubkey()).to_string()
+            ],
+            "collateral_atoms": plane::JOINED_COLLATERAL_SUPPLY.to_string(),
             "create_market_signature": create_market_signature,
-            "endow_signature": endow_signature,
+            "buyer_endow_signature": buyer_endow_signature,
+            "seller_endow_signature": seller_endow_signature,
             "split_signature": split_signature,
             "redeem_internal": redeem_signatures,
-            "withdraw_signature": withdraw_signature,
+            "buyer_withdraw_signature": buyer_withdraw_signature,
+            "seller_withdraw_signature": seller_withdraw_signature,
             "terminal": {
-                "position_cash_atoms": "0",
-                "position_internal": ["0", "0", "0", "0"],
+                "buyer_position_cash_atoms": "0",
+                "buyer_position_internal": ["0", "0", "0", "0"],
+                "seller_position_cash_atoms": "0",
+                "seller_position_internal": ["0", "0", "0", "0"],
                 "supply_internal": ["0", "0", "0", "0"],
                 "hoard_collateral_atoms": "0",
                 "hoard_token_atoms": "0",
-                "user_token_atoms": plane::USER_COLLATERAL_ATOMS.to_string(),
+                "buyer_token_atoms": "76",
+                "seller_token_atoms": "52",
             },
-            "trade": {
-                "status": "blocked",
-                "reason_code": "missing-sealed-price-grid-and-epoch-plane",
-                "detail": "the immutable real-Pyth-bound Terms name a PriceGrid digest, but this campaign has no matching sealed PriceGrid artifact, Epoch, order page, or candidate plane; InitEpoch authenticates that exact grid, so placing or settling orders would require additional signed artifact/epoch construction and is not replaced with genesis or mock trading state",
-            },
+            "trade": joined_trade,
         })
     } else {
         Value::Null
@@ -1857,7 +2511,7 @@ fn run(
         serde_json::to_vec_pretty(&result)?,
     )?;
     if campaign_mode == JOINED_LIFECYCLE_MODE {
-        println!("PASS: signed CreateMarket -> Endow -> Split -> real router/receiver source -> Seal -> Resolve(1) -> RedeemInternal(all outcomes) -> WithdrawCash");
+        println!("PASS: signed PriceGrid/policy artifacts -> CreateMarket -> two-owner funded general book -> freeze -> best valid submitted candidate verification/selection -> entitlement/settlement -> real router/receiver source -> Resolve(1) -> two-owner redemption/withdrawal");
     } else {
         println!("PASS: real router verify -> persisted VAA -> atomic PostUpdate+Append -> Seal -> Resolve(1)");
     }
