@@ -164,6 +164,8 @@ pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// General V2 owner fee-carry envelope version.
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
+/// General V2 in-place owner fee-finalization successor version.
+pub const GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION: u8 = 2;
 /// General V2 temporary owner payer-allocation envelope discriminator.
 pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
 /// General V2 temporary owner payer-allocation envelope version.
@@ -668,6 +670,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-fee-carry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-fee-finalization-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1644,6 +1655,10 @@ mod tests {
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
                 GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION,
             ),
@@ -1714,6 +1729,10 @@ mod tests {
             (
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,

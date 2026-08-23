@@ -19,17 +19,31 @@
 //! admission and cannot make the deployed dispatcher execute this family.
 
 mod accounts;
+mod custody;
+mod dispatch;
 mod envelope;
 mod handler;
 mod identity;
+mod token2022_wire;
 
 pub use accounts::{
-    authenticate_base_market_v1, authenticate_base_position_v1, authenticate_token_2022_mint_v1,
+    authenticate_base_market_v1, authenticate_general_base_position_v3_v1,
+    authenticate_structured_claim_base_position_v3_v1, authenticate_token_2022_mint_v1,
     authenticate_token_2022_token_v1, decode_owned_descriptor_v1, AccountAccessV1, AccountFrameV1,
-    AccountProgramsV1, AccountRoleV1, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV1,
+    AccountProgramsV1, AccountRoleV1, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV3,
     AuthenticatedTokenMintV1, AuthenticatedTokenV1, BasePositionPdaVerifierV1, RawAccountV1,
     Token2022DecoderV1, MAX_ROUTE_ACCOUNTS,
 };
+pub use custody::{
+    authenticate_structured_custody_call_v1, prepare_structured_custody_call_v1, AdapterSha256V1,
+    AuthenticatedStructuredCustodyCallV1, BasePositionTransferCpiV1, CpiAccountMetaV1,
+    PositionV3WriteV1, ReplayV3WriteV1, StructuredCustodyPdaVerifierV1,
+    StructuredCustodyPoststateV1, StructuredCustodyScratchV1, BASE_POSITION_TRANSFER_CPI_BYTES,
+    MAX_CUSTODY_REPLAY_V3_WRITE_BYTES, POSITION_V3_WRITE_BYTES, STRUCTURED_CUSTODY_ACCOUNT_COUNT,
+    STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
+    STRUCTURED_CUSTODY_MARKET_BODY_DOMAIN_V1,
+};
+pub use dispatch::{dispatch_structured_claim_v1, StructuredClaimAccountLoaderV1};
 pub use envelope::{
     admit_runtime_envelope_v1, decode_instruction_v1, StructuredClaimEnvelopeV1,
     ENABLED_STRUCTURED_CLAIM_ACTION_MASK, RESERVED_STRUCTURED_CLAIM_ACTION_MASK,
@@ -48,6 +62,12 @@ pub use identity::{
     bind_descriptor_v1, canonical_native_claim_id_v1, canonical_wrapper_product_id_v1,
     BoundDescriptorV1, PdaVerifierV1, RuntimeDeploymentsV1, DESCRIPTOR_SEED, MINT_AUTHORITY_SEED,
     MINT_SEED, VAULT_OWNER_SEED,
+};
+pub use token2022_wire::{
+    plan_token_2022_cpi_v1, wrapper_mint_parser_plan_v1, wrapper_token_parser_plan_v1,
+    Token2022InstructionPlanV1, WrapperMintParserPlanV1, WrapperTokenParserPlanV1,
+    TOKEN_2022_BASE_ACCOUNT_BYTES, TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES,
+    TOKEN_2022_INSTRUCTION_DATA_CAPACITY,
 };
 
 /// The canonical semantic/runtime contract consumed by this adapter.
@@ -94,6 +114,10 @@ pub enum Error {
     PostStateMismatch,
     /// The canonical runtime contract refused the request.
     Runtime(runtime_contract::Error),
+    /// A Product artifact, MarketBinding, or Position V3 purpose join failed.
+    ProductBoundary,
+    /// The ephemeral structured-custody call did not reconstruct exactly.
+    CustodyAuthorityMismatch,
 }
 
 impl From<runtime_contract::Error> for Error {

@@ -75,6 +75,7 @@ impl AuthenticatedPositionV3 {
             semantic: self.semantic,
         })
     }
+
     /// Return a successor preserving every identity, lifecycle, purpose, rent,
     /// generation, controller, Replay, and outstanding-reservation fact.
     pub fn settlement_poststate(

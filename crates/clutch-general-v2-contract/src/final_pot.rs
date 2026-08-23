@@ -13,8 +13,8 @@ use crate::{
 };
 
 pub use clutch_owner_settlement::{
-    AuthenticatedFinalPotV1, VirtualInventoryBudgetV1, VirtualInventoryStateV1,
-    VirtualReceiptKindV1, FINAL_POT_BODY_V1_BYTES,
+    AuthenticatedFinalPotV1, FinalPotRetirementProjectionV1, VirtualInventoryBudgetV1,
+    VirtualInventoryStateV1, VirtualReceiptKindV1, FINAL_POT_BODY_V1_BYTES,
 };
 
 /// Adapter-owned authentication facts for one existing FinalPot account.
@@ -117,6 +117,18 @@ impl FinalPotV1AccountV1 {
             .encode_body()
             .map_err(|_| CodecError::InvalidState)?;
         Ok(())
+    }
+
+    /// Consume the semantic owner's zero-liability retirement projection
+    /// after all outer SelectedCandidate/PDA/owner joins pass.
+    pub fn retirement_projection(
+        self,
+        binding: FinalPotAdapterBindingV1<'_>,
+    ) -> Result<FinalPotRetirementProjectionV1, CodecError> {
+        self.validate_against_selected(binding)?;
+        self.semantic
+            .retirement_projection()
+            .map_err(|_| CodecError::InvalidState)
     }
 
     /// Encode the exact canonical 332-byte outer account.

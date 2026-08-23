@@ -11,16 +11,28 @@
 //! recomputes their production payout vectors. The frozen V2 quantized checker
 //! admits smooth degrees two and three. Additive V3 checks mapped exact finite
 //! rows at degree zero or smooth `BasisSpec` evaluation at degrees one through
-//! three through separate entry points. Both reconstruct every simplex-price
-//! coordinate with exact integer arithmetic. This crate does not
+//! three through separate entry points. The positive atom-mixture V1 profile
+//! additionally binds complete Market/Terms/Basis identities and checks direct
+//! payout-denominator-scale integer equations for live degrees two and three.
+//! All profiles reconstruct every simplex-price coordinate with exact integer
+//! arithmetic. This crate does not
 //! parse Solana accounts, compute cryptographic digests, select candidates,
 //! judge price quality beyond measure coherence, or determine fees, bonds, and
 //! solver compensation.
 
 use clutch_bspline::{BasisSpec, ValidatedBasisSpec};
 
+mod atom_mixture_v1;
 mod quantized_v3;
 
+pub use atom_mixture_v1::{
+    verify_quantized_atom_mixture_v1, BoundQuantizedSplineV1, ErrorV1, IdentityFieldV1,
+    QuantizedAtomMixtureBindingsV1, QuantizedAtomMixtureCertificateV1,
+    QuantizedPayoutPriceVectorV1, ResultV1, VerifiedQuantizedAtomMixtureV1,
+    QUANTIZED_ATOM_CARATHEODORY_PROFILE_V1, QUANTIZED_ATOM_MIXTURE_CERTIFICATE_BYTES_V1,
+    QUANTIZED_ATOM_MIXTURE_CERTIFICATE_VERSION_V1, QUANTIZED_ATOM_MIXTURE_MAGIC_V1,
+    QUANTIZED_ATOM_MIXTURE_SEMANTICS_VERSION_V1,
+};
 pub use quantized_v3::{
     verify_quantized_price_measure_v3_degree_zero, verify_quantized_price_measure_v3_smooth,
     AdapterBindingsV3, BindingFieldV3, DegreeZeroPayoutTableV3, DegreeZeroPayoutVectorV3, ErrorV3,

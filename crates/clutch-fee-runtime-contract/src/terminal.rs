@@ -12,14 +12,13 @@
 //! rent, projected future fees, Dealer budgets, or liveness capitalization.
 
 use clutch_owner_settlement::{
-    AuthenticatedPositionCashV1, OwnerCashRealizationPlanV1,
-    OwnerSettlementAccumulatorV1, SettlementCashPotV1,
+    AuthenticatedPositionV3, OwnerCashRealizationPlanV2, SettlementCashPotV1,
 };
 
-use crate::allocation::{FeeEnvelopeFundingV1, FeeEnvelopeV1, RecipientAllocationV1};
+use crate::allocation::RecipientAllocationV1;
 use crate::integration::CandidateFeeSettlementV1;
-use crate::intent::{OwnerFeeTransitionIntentV1, RecipientAllocationIntentV1};
-use crate::projection::{AuthenticatedSelectedOwnerFeeV1, SelectedOwnerFeeBookV1};
+use crate::intent::RecipientAllocationIntentV1;
+use crate::projection::{AuthenticatedSelectedOwnerFeeV2, SelectedOwnerFeeBookV1};
 use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, independent, live, Error, Id, Result, MAX_FEE_ROWS_V1};
@@ -163,6 +162,21 @@ pub struct OwnerFeeFinalizationBindingsV2 {
     pub owner_settlement_final_data_id: Id,
     /// Candidate-wide settlement cash pot account.
     pub settlement_cash_pot: Id,
+    /// Adapter-authenticated semantic ID of the canonical Position V3 poststate.
+    /// The selected Position book owns the prestate ID. Abort requires the
+    /// poststate ID to equal the authenticated prestate ID.
+    pub position_poststate_semantic_id: Id,
+    /// Adapter-authenticated semantic ID of the canonical purpose-owned
+    /// Replay V3 poststate committed atomically with the Position successor.
+    pub replay_poststate_semantic_id: Id,
+    /// Exact `next_sequence` in that Replay V3 successor. Settled realization
+    /// advances the live envelope exactly once; abort may retain the
+    /// authenticated current envelope without claiming a mutation.
+    pub replay_next_sequence: u64,
+    /// Digest of the exact canonical SettlementCashPot poststate body. The
+    /// pot body, rather than copied balance fields, remains the semantic owner
+    /// of collected fee, consideration, rounding, count, and lifecycle.
+    pub settlement_cash_pot_poststate_data_id: Id,
     /// Existing authenticated rent-ledger transition.
     pub rent_disposition: OwnerFeeRentDispositionV2,
 }
@@ -175,8 +189,14 @@ impl OwnerFeeFinalizationBindingsV2 {
             self.owner_settlement_account,
             self.owner_settlement_final_data_id,
             self.settlement_cash_pot,
+            self.position_poststate_semantic_id,
+            self.replay_poststate_semantic_id,
+            self.settlement_cash_pot_poststate_data_id,
             self.rent_disposition.data_id,
         ])?;
+        if self.replay_next_sequence == 0 {
+            return Err(Error::InvalidTerminalDisposition);
+        }
         self.rent_disposition.validate()
     }
 }
@@ -198,26 +218,15 @@ pub struct OwnerFeeFinalizationReceiptV1 {
     position: Id,
     settlement_cash_pot: Id,
     rent_disposition_data_id: Id,
+    position_poststate_semantic_id: Id,
+    replay_poststate_semantic_id: Id,
+    settlement_cash_pot_poststate_data_id: Id,
     outcome: OwnerFeeFinalizationOutcomeV2,
     authorized_fee_atoms: u64,
     position_debit_atoms: u64,
     position_credit_atoms: u64,
     released_cash_atoms: u64,
-    position_cash_before: u64,
-    position_cash_after: u64,
-    position_reserved_before: u64,
-    position_reserved_after: u64,
-    pot_available_before: u64,
-    pot_available_after: u64,
-    pot_collected_fee_before: u64,
-    pot_collected_fee_after: u64,
-    owner_rounding_residue_price_units: u128,
-    pot_rounding_before_price_units: u128,
-    pot_rounding_after_price_units: u128,
-    pot_finalized_owner_count_before: u16,
-    pot_finalized_owner_count_after: u16,
-    pot_state_before: u8,
-    pot_state_after: u8,
+    replay_next_sequence: u64,
 }
 
 impl OwnerFeeFinalizationReceiptV1 {
@@ -226,17 +235,20 @@ impl OwnerFeeFinalizationReceiptV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn settle(
         selected: &SelectedCompositeFeeV1,
-        projection: &AuthenticatedSelectedOwnerFeeV1,
+        projection: &AuthenticatedSelectedOwnerFeeV2,
         carry: &OwnerFeeCarryV1,
         bindings: OwnerFeeFinalizationBindingsV2,
-        position_before: AuthenticatedPositionCashV1,
-        pot_before: SettlementCashPotV1,
-        plan: OwnerCashRealizationPlanV1,
+        plan: OwnerCashRealizationPlanV2,
     ) -> Result<Self> {
         bindings.validate()?;
-        let owner = Id(projection.row().owner);
-        let final_row = OwnerSettlementAccumulatorV1::decode_body(&plan.owner_settlement_body)
+        let expectation = plan.expectation();
+        let disposition = plan.disposition();
+        let position = plan.position();
+        let settlement_cash_pot = plan.settlement_cash_pot();
+        settlement_cash_pot
+            .validate()
             .map_err(|_| Error::InvalidAccountData)?;
+        let owner = Id(projection.row().owner);
         if projection.fee_record() != selected.fee_record()
             || projection.settlement_candidate() != selected.selected_candidate()
             || projection.revenue_policy() != selected.revenue_policy()
@@ -246,20 +258,14 @@ impl OwnerFeeFinalizationReceiptV1 {
             || !carry.is_closed()
             || carry.remainder() != 0
             || carry.paid_atoms() != projection.row().fee_atoms
-            || bindings.owner_settlement_account.0 != plan.owner_settlement_account
-            || position_before.position != plan.position
-            || position_before.owner != owner.0
-            || !position_before.writable
-            || final_row.expectation.owner != owner.0
-            || final_row.expectation.candidate != selected.selected_candidate().0
-            || final_row.expectation.selected_fee_atoms != carry.paid_atoms()
-            || final_row.state != 1
-            || pot_before.expectation.candidate != selected.selected_candidate().0
-            || pot_before.expectation.fee_record != selected.fee_record().0
-            || plan.settlement_cash_pot.expectation != pot_before.expectation
-            || plan.disposition.selected_fee_atoms != carry.paid_atoms()
-            || plan.disposition.position_cash_atoms != plan.position_cash_atoms
-            || plan.disposition.position_reserved_cash_atoms != plan.position_reserved_cash_atoms
+            || bindings.owner_settlement_account.0 != plan.owner_settlement_account()
+            || bindings.owner_settlement_final_data_id.0 != plan.finalized_row_data_id()
+            || expectation.owner != owner.0
+            || expectation.candidate != selected.selected_candidate().0
+            || expectation.selected_fee_atoms != carry.paid_atoms()
+            || settlement_cash_pot.expectation.candidate != selected.selected_candidate().0
+            || settlement_cash_pot.expectation.fee_record != selected.fee_record().0
+            || disposition.selected_fee_atoms != carry.paid_atoms()
             || bindings.rent_disposition.carry_account != projection.carry_account()
             || bindings.rent_disposition.payer_allocation_account
                 != projection.payer_allocation_account()
@@ -274,31 +280,19 @@ impl OwnerFeeFinalizationReceiptV1 {
             payer_allocation_data_id: bindings.payer_allocation_data_id,
             owner_settlement_account: bindings.owner_settlement_account,
             owner_settlement_final_data_id: bindings.owner_settlement_final_data_id,
-            position: Id(plan.position),
+            position: Id(position.account),
             settlement_cash_pot: bindings.settlement_cash_pot,
             rent_disposition_data_id: bindings.rent_disposition.data_id,
+            position_poststate_semantic_id: bindings.position_poststate_semantic_id,
+            replay_poststate_semantic_id: bindings.replay_poststate_semantic_id,
+            settlement_cash_pot_poststate_data_id: bindings
+                .settlement_cash_pot_poststate_data_id,
             outcome: OwnerFeeFinalizationOutcomeV2::Settled,
             authorized_fee_atoms: carry.paid_atoms(),
-            position_debit_atoms: plan.disposition.debit_atoms,
-            position_credit_atoms: plan.disposition.credit_atoms,
-            released_cash_atoms: plan.disposition.released_cash_atoms,
-            position_cash_before: position_before.cash_atoms,
-            position_cash_after: plan.position_cash_atoms,
-            position_reserved_before: position_before.reserved_cash_atoms,
-            position_reserved_after: plan.position_reserved_cash_atoms,
-            pot_available_before: pot_before.available_consideration_atoms,
-            pot_available_after: plan.settlement_cash_pot.available_consideration_atoms,
-            pot_collected_fee_before: pot_before.collected_fee_atoms,
-            pot_collected_fee_after: plan.settlement_cash_pot.collected_fee_atoms,
-            owner_rounding_residue_price_units: plan.disposition.residue_price_units,
-            pot_rounding_before_price_units: pot_before.realized_rounding_price_units,
-            pot_rounding_after_price_units: plan
-                .settlement_cash_pot
-                .realized_rounding_price_units,
-            pot_finalized_owner_count_before: pot_before.finalized_owner_count,
-            pot_finalized_owner_count_after: plan.settlement_cash_pot.finalized_owner_count,
-            pot_state_before: pot_before.state,
-            pot_state_after: plan.settlement_cash_pot.state,
+            position_debit_atoms: disposition.debit_atoms,
+            position_credit_atoms: disposition.credit_atoms,
+            released_cash_atoms: disposition.released_cash_atoms,
+            replay_next_sequence: bindings.replay_next_sequence,
         };
         value.validate()?;
         Ok(value)
@@ -309,62 +303,35 @@ impl OwnerFeeFinalizationReceiptV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn abort(
         selected: &SelectedCompositeFeeV1,
-        transition: &OwnerFeeTransitionIntentV1,
+        projection: &AuthenticatedSelectedOwnerFeeV2,
         carry: &OwnerFeeCarryV1,
         bindings: OwnerFeeFinalizationBindingsV2,
-        position: AuthenticatedPositionCashV1,
+        position: AuthenticatedPositionV3,
         pot: SettlementCashPotV1,
-        envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
-        envelope_len: u8,
     ) -> Result<Self> {
         bindings.validate()?;
+        position.validate().map_err(|_| Error::InvalidAccountData)?;
         let owner = carry.owner();
-        if transition.fee_record().identity() != selected.fee_record()
-            || transition.settlement_candidate() != selected.selected_candidate()
-            || transition.revenue_policy() != selected.revenue_policy()
-            || transition.owner() != owner
-            || transition.carry().identity() != bindings.rent_disposition.carry_account
-            || transition.payer_allocation().identity()
+        let position_fields = position.semantic.fields();
+        if projection.fee_record() != selected.fee_record()
+            || projection.settlement_candidate() != selected.selected_candidate()
+            || projection.revenue_policy() != selected.revenue_policy()
+            || projection.row().owner != owner.0
+            || projection.row().fee_atoms != carry.paid_atoms()
+            || projection.carry_account() != bindings.rent_disposition.carry_account
+            || projection.payer_allocation_account()
                 != bindings.rent_disposition.payer_allocation_account
-            || transition.owner_settlement().identity() != bindings.owner_settlement_account
+            || projection.owner_settlement_account() != bindings.owner_settlement_account
             || carry.fee_record() != selected.fee_record()
             || carry.denominator() != selected.carry_denominator()
             || !carry.is_closed()
             || carry.remainder() != 0
-            || position.owner != owner.0
-            || !position.writable
+            || position_fields.owner.bytes() != owner.0
+            || bindings.position_poststate_semantic_id != Id(position.semantic_id)
             || pot.expectation.candidate != selected.selected_candidate().0
             || pot.expectation.fee_record != selected.fee_record().0
-            || envelope_len == 0
-            || usize::from(envelope_len) > MAX_FEE_ROWS_V1
         {
             return Err(Error::MismatchedBinding);
-        }
-        let mut authorized = 0u64;
-        let mut prior = None;
-        let mut index = 0usize;
-        while index < usize::from(envelope_len) {
-            let envelope = envelopes[index];
-            if envelope.owner != owner || envelope.debited_atoms > envelope.max_fee_atoms {
-                return Err(Error::MismatchedBinding);
-            }
-            live(envelope.intent)?;
-            if let Some(intent) = prior {
-                if envelope.intent <= intent {
-                    return Err(Error::NonCanonicalOrder);
-                }
-            }
-            if envelope.funding == FeeEnvelopeFundingV1::NoCashReservation
-                && (envelope.max_fee_atoms != 0 || envelope.debited_atoms != 0)
-            {
-                return Err(Error::SellerFeeForbidden);
-            }
-            authorized = add(authorized, envelope.debited_atoms)?;
-            prior = Some(envelope.intent);
-            index += 1;
-        }
-        if authorized != carry.paid_atoms() {
-            return Err(Error::ConservationFailure);
         }
         let value = Self {
             runtime_release: bindings.runtime_release,
@@ -374,29 +341,19 @@ impl OwnerFeeFinalizationReceiptV1 {
             payer_allocation_data_id: bindings.payer_allocation_data_id,
             owner_settlement_account: bindings.owner_settlement_account,
             owner_settlement_final_data_id: bindings.owner_settlement_final_data_id,
-            position: Id(position.position),
+            position: Id(position.account),
             settlement_cash_pot: bindings.settlement_cash_pot,
             rent_disposition_data_id: bindings.rent_disposition.data_id,
+            position_poststate_semantic_id: bindings.position_poststate_semantic_id,
+            replay_poststate_semantic_id: bindings.replay_poststate_semantic_id,
+            settlement_cash_pot_poststate_data_id: bindings
+                .settlement_cash_pot_poststate_data_id,
             outcome: OwnerFeeFinalizationOutcomeV2::Aborted,
-            authorized_fee_atoms: authorized,
+            authorized_fee_atoms: carry.paid_atoms(),
             position_debit_atoms: 0,
             position_credit_atoms: 0,
             released_cash_atoms: 0,
-            position_cash_before: position.cash_atoms,
-            position_cash_after: position.cash_atoms,
-            position_reserved_before: position.reserved_cash_atoms,
-            position_reserved_after: position.reserved_cash_atoms,
-            pot_available_before: pot.available_consideration_atoms,
-            pot_available_after: pot.available_consideration_atoms,
-            pot_collected_fee_before: pot.collected_fee_atoms,
-            pot_collected_fee_after: pot.collected_fee_atoms,
-            owner_rounding_residue_price_units: 0,
-            pot_rounding_before_price_units: pot.realized_rounding_price_units,
-            pot_rounding_after_price_units: pot.realized_rounding_price_units,
-            pot_finalized_owner_count_before: pot.finalized_owner_count,
-            pot_finalized_owner_count_after: pot.finalized_owner_count,
-            pot_state_before: pot.state,
-            pot_state_after: pot.state,
+            replay_next_sequence: bindings.replay_next_sequence,
         };
         value.validate()?;
         Ok(value)
@@ -432,6 +389,18 @@ impl OwnerFeeFinalizationReceiptV1 {
     pub const fn rent_disposition_data_id(&self) -> Id {
         self.rent_disposition_data_id
     }
+    pub const fn position_poststate_semantic_id(&self) -> Id {
+        self.position_poststate_semantic_id
+    }
+    pub const fn replay_poststate_semantic_id(&self) -> Id {
+        self.replay_poststate_semantic_id
+    }
+    pub const fn settlement_cash_pot_poststate_data_id(&self) -> Id {
+        self.settlement_cash_pot_poststate_data_id
+    }
+    pub const fn replay_next_sequence(&self) -> u64 {
+        self.replay_next_sequence
+    }
     pub const fn outcome(&self) -> OwnerFeeFinalizationOutcomeV2 {
         self.outcome
     }
@@ -459,6 +428,9 @@ impl OwnerFeeFinalizationReceiptV1 {
             self.position,
             self.settlement_cash_pot,
             self.rent_disposition_data_id,
+            self.position_poststate_semantic_id,
+            self.replay_poststate_semantic_id,
+            self.settlement_cash_pot_poststate_data_id,
         ] {
             put(&mut output, &mut at, &identity.0)?;
         }
@@ -467,40 +439,11 @@ impl OwnerFeeFinalizationReceiptV1 {
             self.position_debit_atoms,
             self.position_credit_atoms,
             self.released_cash_atoms,
-            self.position_cash_before,
-            self.position_cash_after,
-            self.position_reserved_before,
-            self.position_reserved_after,
-            self.pot_available_before,
-            self.pot_available_after,
-            self.pot_collected_fee_before,
-            self.pot_collected_fee_after,
+            self.replay_next_sequence,
         ] {
             put(&mut output, &mut at, &amount.to_le_bytes())?;
         }
-        for amount in [
-            self.owner_rounding_residue_price_units,
-            self.pot_rounding_before_price_units,
-            self.pot_rounding_after_price_units,
-        ] {
-            put(&mut output, &mut at, &amount.to_le_bytes())?;
-        }
-        put(
-            &mut output,
-            &mut at,
-            &self.pot_finalized_owner_count_before.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            &mut at,
-            &self.pot_finalized_owner_count_after.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            &mut at,
-            &[self.pot_state_before, self.pot_state_after],
-        )?;
-        put(&mut output, &mut at, &[0; 10])?;
+        put(&mut output, &mut at, &[0; 24])?;
         if at != output.len() {
             return Err(Error::InvalidWidth);
         }
@@ -514,7 +457,7 @@ impl OwnerFeeFinalizationReceiptV1 {
             || u16::from_le_bytes([input[8], input[9]]) != OWNER_FEE_FINALIZATION_VERSION_V2
             || input[11] != 0
             || input[12..16] != [0; 4]
-            || input[486..496] != [0; 10]
+            || input[472..496] != [0; 24]
         {
             return Err(Error::InvalidAccountData);
         }
@@ -530,26 +473,15 @@ impl OwnerFeeFinalizationReceiptV1 {
         let position = take_id(input, &mut at)?;
         let settlement_cash_pot = take_id(input, &mut at)?;
         let rent_disposition_data_id = take_id(input, &mut at)?;
+        let position_poststate_semantic_id = take_id(input, &mut at)?;
+        let replay_poststate_semantic_id = take_id(input, &mut at)?;
+        let settlement_cash_pot_poststate_data_id = take_id(input, &mut at)?;
         let authorized_fee_atoms = take_u64(input, &mut at)?;
         let position_debit_atoms = take_u64(input, &mut at)?;
         let position_credit_atoms = take_u64(input, &mut at)?;
         let released_cash_atoms = take_u64(input, &mut at)?;
-        let position_cash_before = take_u64(input, &mut at)?;
-        let position_cash_after = take_u64(input, &mut at)?;
-        let position_reserved_before = take_u64(input, &mut at)?;
-        let position_reserved_after = take_u64(input, &mut at)?;
-        let pot_available_before = take_u64(input, &mut at)?;
-        let pot_available_after = take_u64(input, &mut at)?;
-        let pot_collected_fee_before = take_u64(input, &mut at)?;
-        let pot_collected_fee_after = take_u64(input, &mut at)?;
-        let owner_rounding_residue_price_units = take_u128(input, &mut at)?;
-        let pot_rounding_before_price_units = take_u128(input, &mut at)?;
-        let pot_rounding_after_price_units = take_u128(input, &mut at)?;
-        let pot_finalized_owner_count_before = take_u16(input, &mut at)?;
-        let pot_finalized_owner_count_after = take_u16(input, &mut at)?;
-        let pot_state_before = take_u8(input, &mut at)?;
-        let pot_state_after = take_u8(input, &mut at)?;
-        at += 10;
+        let replay_next_sequence = take_u64(input, &mut at)?;
+        at += 24;
         if at != input.len() {
             return Err(Error::InvalidWidth);
         }
@@ -564,26 +496,15 @@ impl OwnerFeeFinalizationReceiptV1 {
             position,
             settlement_cash_pot,
             rent_disposition_data_id,
+            position_poststate_semantic_id,
+            replay_poststate_semantic_id,
+            settlement_cash_pot_poststate_data_id,
             outcome,
             authorized_fee_atoms,
             position_debit_atoms,
             position_credit_atoms,
             released_cash_atoms,
-            position_cash_before,
-            position_cash_after,
-            position_reserved_before,
-            position_reserved_after,
-            pot_available_before,
-            pot_available_after,
-            pot_collected_fee_before,
-            pot_collected_fee_after,
-            owner_rounding_residue_price_units,
-            pot_rounding_before_price_units,
-            pot_rounding_after_price_units,
-            pot_finalized_owner_count_before,
-            pot_finalized_owner_count_after,
-            pot_state_before,
-            pot_state_after,
+            replay_next_sequence,
         };
         value.validate()?;
         Ok(value)
@@ -601,49 +522,23 @@ impl OwnerFeeFinalizationReceiptV1 {
             self.position,
             self.settlement_cash_pot,
             self.rent_disposition_data_id,
+            self.position_poststate_semantic_id,
+            self.replay_poststate_semantic_id,
+            self.settlement_cash_pot_poststate_data_id,
         ])?;
+        if self.replay_next_sequence == 0 {
+            return Err(Error::InvalidTerminalDisposition);
+        }
         match self.outcome {
             OwnerFeeFinalizationOutcomeV2::Settled => {
-                let consideration = self
+                let _consideration = self
                     .position_debit_atoms
                     .checked_sub(self.authorized_fee_atoms)
                     .ok_or(Error::ConservationFailure)?;
-                let expected_cash = self
-                    .position_cash_before
-                    .checked_sub(self.position_debit_atoms)
-                    .and_then(|value| value.checked_add(self.position_credit_atoms))
-                    .ok_or(Error::ConservationFailure)?;
-                let consumed_reservation = self
+                if self
                     .position_debit_atoms
                     .checked_add(self.released_cash_atoms)
-                    .ok_or(Error::ArithmeticOverflow)?;
-                let expected_reserved = self
-                    .position_reserved_before
-                    .checked_sub(consumed_reservation)
-                    .ok_or(Error::ConservationFailure)?;
-                let expected_available = self
-                    .pot_available_before
-                    .checked_add(consideration)
-                    .and_then(|value| value.checked_sub(self.position_credit_atoms))
-                    .ok_or(Error::ConservationFailure)?;
-                if self.position_cash_after != expected_cash
-                    || self.position_reserved_after != expected_reserved
-                    || self.position_reserved_after > self.position_cash_after
-                    || self.pot_available_after != expected_available
-                    || self.pot_collected_fee_after
-                        != add(self.pot_collected_fee_before, self.authorized_fee_atoms)?
-                    || self.pot_rounding_after_price_units
-                        != self
-                            .pot_rounding_before_price_units
-                            .checked_add(self.owner_rounding_residue_price_units)
-                            .ok_or(Error::ArithmeticOverflow)?
-                    || self.pot_finalized_owner_count_after
-                        != self
-                            .pot_finalized_owner_count_before
-                            .checked_add(1)
-                            .ok_or(Error::ArithmeticOverflow)?
-                    || self.pot_state_before != 0
-                    || self.pot_state_after > 1
+                    .is_none()
                 {
                     return Err(Error::ConservationFailure);
                 }
@@ -652,15 +547,6 @@ impl OwnerFeeFinalizationReceiptV1 {
                 if self.position_debit_atoms != 0
                     || self.position_credit_atoms != 0
                     || self.released_cash_atoms != 0
-                    || self.position_cash_before != self.position_cash_after
-                    || self.position_reserved_before != self.position_reserved_after
-                    || self.pot_available_before != self.pot_available_after
-                    || self.pot_collected_fee_before != self.pot_collected_fee_after
-                    || self.owner_rounding_residue_price_units != 0
-                    || self.pot_rounding_before_price_units != self.pot_rounding_after_price_units
-                    || self.pot_finalized_owner_count_before
-                        != self.pot_finalized_owner_count_after
-                    || self.pot_state_before != self.pot_state_after
                 {
                     return Err(Error::InvalidTerminalDisposition);
                 }
@@ -707,6 +593,12 @@ impl AuthenticatedOwnerFeeFinalizationV1 {
             position: self.receipt.position,
             settlement_cash_pot: self.receipt.settlement_cash_pot,
             rent_disposition_data_id: self.receipt.rent_disposition_data_id,
+            position_poststate_semantic_id: self.receipt.position_poststate_semantic_id,
+            replay_poststate_semantic_id: self.receipt.replay_poststate_semantic_id,
+            settlement_cash_pot_poststate_data_id: self
+                .receipt
+                .settlement_cash_pot_poststate_data_id,
+            replay_next_sequence: self.receipt.replay_next_sequence,
             outcome: self.receipt.outcome,
             authorized_fee_atoms: self.receipt.authorized_fee_atoms,
             position_debit_atoms: self.receipt.position_debit_atoms,
@@ -731,6 +623,10 @@ pub struct GeneralOwnerFeeFinalizationProjectionV2 {
     pub position: Id,
     pub settlement_cash_pot: Id,
     pub rent_disposition_data_id: Id,
+    pub position_poststate_semantic_id: Id,
+    pub replay_poststate_semantic_id: Id,
+    pub settlement_cash_pot_poststate_data_id: Id,
+    pub replay_next_sequence: u64,
     pub outcome: OwnerFeeFinalizationOutcomeV2,
     pub authorized_fee_atoms: u64,
     pub position_debit_atoms: u64,
@@ -914,6 +810,24 @@ impl FeeClosureManifestReceiptV1 {
     pub const fn receipt(&self) -> Id {
         self.receipt
     }
+    pub const fn runtime_program(&self) -> Id {
+        self.runtime_program
+    }
+    pub const fn runtime_release(&self) -> Id {
+        self.runtime_release
+    }
+    pub const fn fee_record(&self) -> Id {
+        self.fee_record
+    }
+    pub const fn terminal_authority_receipt(&self) -> Id {
+        self.terminal_authority_receipt
+    }
+    pub const fn outcome(&self) -> FeeTerminalOutcomeV1 {
+        self.outcome
+    }
+    pub const fn owner_count(&self) -> u8 {
+        self.owner_count
+    }
     pub const fn account_count(&self) -> u16 {
         self.account_count
     }
@@ -1024,6 +938,24 @@ pub struct FeeRecordTerminalReceiptV1 {
 impl FeeRecordTerminalReceiptV1 {
     pub const fn terminal_receipt(&self) -> Id {
         self.terminal_receipt
+    }
+    pub const fn closure_manifest(&self) -> Id {
+        self.closure_manifest
+    }
+    pub const fn runtime_program(&self) -> Id {
+        self.runtime_program
+    }
+    pub const fn runtime_release(&self) -> Id {
+        self.runtime_release
+    }
+    pub const fn fee_record(&self) -> Id {
+        self.fee_record
+    }
+    pub const fn terminal_authority_receipt(&self) -> Id {
+        self.terminal_authority_receipt
+    }
+    pub const fn owner_count(&self) -> u8 {
+        self.owner_count
     }
     pub const fn outcome(&self) -> FeeTerminalOutcomeV1 {
         self.outcome
@@ -1216,6 +1148,56 @@ impl FeeRecordTerminalReceiptV1 {
 pub struct FeeTerminalReceiptBundleV1 {
     pub closure_manifest: FeeClosureManifestReceiptV1,
     pub terminal: FeeRecordTerminalReceiptV1,
+}
+
+impl FeeTerminalReceiptBundleV1 {
+    /// Decode and mutually authenticate the two canonical terminal bodies.
+    ///
+    /// Account ownership, addresses, and PDAs remain adapter facts. This
+    /// constructor owns the cross-body semantic join so General and Dealer do
+    /// not independently implement subtly different receipt pairing rules.
+    pub fn decode(
+        closure_manifest: &[u8],
+        terminal: &[u8],
+    ) -> Result<FeeTerminalReceiptBundleV1> {
+        let value = Self {
+            closure_manifest: FeeClosureManifestReceiptV1::decode(closure_manifest)?,
+            terminal: FeeRecordTerminalReceiptV1::decode(terminal)?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Require the manifest and terminal body to describe one exact closure.
+    pub fn validate(&self) -> Result<()> {
+        self.closure_manifest.validate()?;
+        self.terminal.validate()?;
+        let projection = self.terminal.project_general();
+        if self.terminal.closure_manifest != self.closure_manifest.receipt
+            || self.closure_manifest.runtime_program != self.terminal.runtime_program
+            || self.closure_manifest.runtime_release != self.terminal.runtime_release
+            || self.closure_manifest.fee_record != self.terminal.fee_record
+            || self.closure_manifest.terminal_authority_receipt
+                != self.terminal.terminal_authority_receipt
+            || self.closure_manifest.outcome != self.terminal.outcome
+            || self.closure_manifest.owner_count != self.terminal.owner_count
+            || self.closure_manifest.payer_refund_lamports
+                != projection.payer_refund_lamports
+            || self.closure_manifest.neutral_credit_lamports
+                != projection.neutral_credit_lamports
+        {
+            return Err(Error::InvalidTerminalDisposition);
+        }
+        Ok(())
+    }
+
+    pub const fn closure_manifest(&self) -> FeeClosureManifestReceiptV1 {
+        self.closure_manifest
+    }
+
+    pub const fn terminal(&self) -> FeeRecordTerminalReceiptV1 {
+        self.terminal
+    }
 }
 
 /// General V2's read-only terminal dependency.
@@ -1523,10 +1505,12 @@ fn finish_terminal(
         neutral_credit_lamports,
     };
     terminal.validate()?;
-    Ok(FeeTerminalReceiptBundleV1 {
+    let value = FeeTerminalReceiptBundleV1 {
         closure_manifest,
         terminal,
-    })
+    };
+    value.validate()?;
+    Ok(value)
 }
 
 fn validate_global(
@@ -1714,24 +1698,13 @@ const EMPTY_OWNER_FINALIZATION: OwnerFeeFinalizationReceiptV1 =
         position: Id([0; 32]),
         settlement_cash_pot: Id([0; 32]),
         rent_disposition_data_id: Id([0; 32]),
+        position_poststate_semantic_id: Id([0; 32]),
+        replay_poststate_semantic_id: Id([0; 32]),
+        settlement_cash_pot_poststate_data_id: Id([0; 32]),
         outcome: OwnerFeeFinalizationOutcomeV2::Aborted,
         authorized_fee_atoms: 0,
         position_debit_atoms: 0,
         position_credit_atoms: 0,
         released_cash_atoms: 0,
-        position_cash_before: 0,
-        position_cash_after: 0,
-        position_reserved_before: 0,
-        position_reserved_after: 0,
-        pot_available_before: 0,
-        pot_available_after: 0,
-        pot_collected_fee_before: 0,
-        pot_collected_fee_after: 0,
-        owner_rounding_residue_price_units: 0,
-        pot_rounding_before_price_units: 0,
-        pot_rounding_after_price_units: 0,
-        pot_finalized_owner_count_before: 0,
-        pot_finalized_owner_count_after: 0,
-        pot_state_before: 0,
-        pot_state_after: 0,
+        replay_next_sequence: 0,
     };

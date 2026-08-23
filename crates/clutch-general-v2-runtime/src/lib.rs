@@ -47,10 +47,12 @@ use clutch_general_v2_contract::{
     QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
 use clutch_price_measure::{
-    verify_quantized_price_measure_v3_degree_zero, verify_quantized_price_measure_v3_smooth,
-    AdapterBindingsV3, DegreeZeroPayoutTableV3, ErrorV3, PriceVectorV3, QuantizedAtomWitnessV3,
-    VerifiedPriceMeasureV3, PRICE_MEASURE_WITNESS_VERSION_V3,
-    QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1,
+    verify_quantized_atom_mixture_v1, verify_quantized_price_measure_v3_degree_zero,
+    verify_quantized_price_measure_v3_smooth, AdapterBindingsV3, BoundQuantizedSplineV1,
+    DegreeZeroPayoutTableV3, ErrorV1 as AtomMixtureErrorV1, ErrorV3, PriceVectorV3,
+    QuantizedAtomMixtureBindingsV1, QuantizedAtomMixtureCertificateV1, QuantizedAtomWitnessV3,
+    QuantizedPayoutPriceVectorV1, VerifiedPriceMeasureV3, VerifiedQuantizedAtomMixtureV1,
+    PRICE_MEASURE_WITNESS_VERSION_V3, QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1,
 };
 use clutch_product_series::{
     Error as ProductError, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
@@ -365,6 +367,11 @@ pub struct VerifiedSmoothDirectCandidateV1 {
     economic_domain_digest: Id32,
     /// Recomputed exact runtime price-coherence summary.
     price_measure: VerifiedPriceMeasureV3,
+    /// Stronger payout-denominator-scale certificate for degrees two and three.
+    ///
+    /// Degree zero and one use their exact V3 finite/mapped checker and are
+    /// outside the deliberately narrow atom-mixture V1 theorem.
+    quantized_atom_mixture: Option<VerifiedQuantizedAtomMixtureV1>,
     /// Recomputed owner-blind relation economics and ScoreV2-Q fields.
     economics: VerifiedEconomicsV2,
     /// Canonical descending ScoreV2-Q plus first-admitted duplicate tie.
@@ -380,6 +387,14 @@ impl VerifiedSmoothDirectCandidateV1 {
     /// Return the exact checked quantized price-measure summary.
     pub const fn price_measure(&self) -> &VerifiedPriceMeasureV3 {
         &self.price_measure
+    }
+
+    /// Return the exact positive atom-mixture fact for degree two or three.
+    ///
+    /// `None` means the Product selected degree zero or one, for which the
+    /// atom-mixture V1 profile makes no claim.
+    pub const fn quantized_atom_mixture(&self) -> Option<VerifiedQuantizedAtomMixtureV1> {
+        self.quantized_atom_mixture
     }
 
     /// Return the exact checked RelationV2 economics and ScoreV2-Q fields.
@@ -404,6 +419,8 @@ pub enum GeneralV2RuntimeError {
     PriceGrid(LayoutError),
     /// The exact quantized price-measure checker refused the certificate.
     PriceMeasure(ErrorV3),
+    /// The exact positive degree-two/three atom-mixture checker refused.
+    AtomMixture(AtomMixtureErrorV1),
     /// The owner-blind economic relation refused the candidate.
     Relation(EconomicErrorV2),
     /// This path admits Direct candidates only.
@@ -449,6 +466,12 @@ impl From<LayoutError> for GeneralV2RuntimeError {
 impl From<ErrorV3> for GeneralV2RuntimeError {
     fn from(value: ErrorV3) -> Self {
         Self::PriceMeasure(value)
+    }
+}
+
+impl From<AtomMixtureErrorV1> for GeneralV2RuntimeError {
+    fn from(value: AtomMixtureErrorV1) -> Self {
+        Self::AtomMixture(value)
     }
 }
 
@@ -534,6 +557,61 @@ pub fn decode_sealed_candidate_feed_v1(
     Ok((header, body))
 }
 
+/// Reproject the existing General feed atoms into the stronger exact positive
+/// certificate for one degree-two or degree-three Product basis.
+///
+/// The inputs are not self-authenticating. Callers in this crate invoke this
+/// helper only after joining the exact MarketBinding, Genesis V2,
+/// NativeClaimBasis, edge-registry selector, candidate-price digest, and feed
+/// body that own them. Genesis V2 is the complete immutable Terms identity for
+/// this projection because it owns the coordinate domain and selects every
+/// policy joined by MarketBinding. No second atom body or account is created.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_exact_smooth_atom_mixture_v1(
+    market_id: Id32,
+    terms_id: [u8; 32],
+    basis_id: Id32,
+    candidate_price_id: [u8; 32],
+    coordinate_domain_min: u128,
+    coordinate_domain_max: u128,
+    basis: QuantizedBasisSpecV1,
+    prices: [u64; MAX_OUTCOMES],
+    atom_count: u8,
+    common_denominator: u64,
+    atom_coordinates: [u128; MAX_QUANTIZED_ATOMS],
+    atom_masses: [u64; MAX_QUANTIZED_ATOMS],
+) -> Result<VerifiedQuantizedAtomMixtureV1, GeneralV2RuntimeError> {
+    let bindings = QuantizedAtomMixtureBindingsV1 {
+        market_id: market_id.bytes(),
+        terms_id,
+        basis_id: basis_id.bytes(),
+        price_id: candidate_price_id,
+    };
+    let bound = BoundQuantizedSplineV1 {
+        bindings,
+        coordinate_domain_min,
+        coordinate_domain_max,
+        basis,
+    };
+    let prices = QuantizedPayoutPriceVectorV1 {
+        price_id: candidate_price_id,
+        outcome_count: basis.outcome_count,
+        prices,
+    };
+    let certificate = QuantizedAtomMixtureCertificateV1::new(
+        bindings,
+        basis.degree,
+        basis.outcome_count,
+        basis.denominator,
+        common_denominator,
+        atom_count,
+        atom_coordinates,
+        atom_masses,
+    )?;
+    verify_quantized_atom_mixture_v1(&bound, &prices, &certificate)
+        .map_err(GeneralV2RuntimeError::from)
+}
+
 /// Verify one submitted quantized Direct General V2 candidate end to end.
 ///
 /// Refusal order is: sealed-feed codec; contract/Product/grid/domain bindings;
@@ -604,7 +682,7 @@ pub fn verify_smooth_direct_candidate_v1(
         )?)
     };
 
-    let basis_id = native_basis.id()?.bytes();
+    let basis_digest = native_basis.id()?.bytes();
     let price_policy_id = price_measure_policy.id()?.bytes();
     let genesis_id = genesis.id()?.bytes();
     let market_instance_id = market_instance.id()?.bytes();
@@ -640,7 +718,7 @@ pub fn verify_smooth_direct_candidate_v1(
         || market_binding.score_policy_id != score_policy_id
         || genesis.score_policy_id.bytes() != score_policy_id.bytes()
         || market_binding.price_measure_policy_v1_id.bytes() != price_policy_id
-        || market_binding.native_claim_basis_id.bytes() != basis_id
+        || market_binding.native_claim_basis_id.bytes() != basis_digest
         || market_binding.price_scale != price_grid.price_scale
         || market_binding.price_scale != header.price_scale
         || market_binding.relation_version != transcript.relation_version
@@ -736,6 +814,28 @@ pub fn verify_smooth_direct_candidate_v1(
             verify_quantized_price_measure_v3_smooth(&bindings, basis, &prices, &witness)?
         }
     };
+    let quantized_atom_mixture = match projected_basis {
+        QuantizedBasisProjectionV1::Smooth(basis) if (2..=3).contains(&basis.degree) => {
+            if header.price_scale != basis.denominator {
+                return Err(GeneralV2RuntimeError::BindingMismatch);
+            }
+            Some(verify_exact_smooth_atom_mixture_v1(
+                market_binding.market,
+                genesis_id,
+                market_binding.native_claim_basis_id,
+                candidate_price_digest,
+                genesis.coordinate_domain_min,
+                genesis.coordinate_domain_max,
+                basis,
+                feed.prices,
+                header.atom_count,
+                header.common_denominator,
+                feed.atom_coordinates,
+                feed.atom_masses,
+            )?)
+        }
+        _ => None,
+    };
 
     let price_precondition = PricePreconditionV2 {
         policy_digest: transcript.price_measure_policy_v1_id.bytes(),
@@ -770,6 +870,7 @@ pub fn verify_smooth_direct_candidate_v1(
     Ok(VerifiedSmoothDirectCandidateV1 {
         economic_domain_digest: domain_digest,
         price_measure,
+        quantized_atom_mixture,
         economics,
         rank_key,
     })

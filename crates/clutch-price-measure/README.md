@@ -3,6 +3,37 @@
 Safe, `no_std`, allocation-free exact price-coherence certificates for
 continuous smooth payouts and production-quantized payout bases.
 
+## Exact positive atom-mixture profile
+
+`verify_quantized_atom_mixture_v1` is the admission-oriented positive
+certificate for live degree-two and degree-three quantized splines. It accepts
+only prices on the Basis payout-denominator scale and checks the literal
+component equations
+
+```text
+sum_k weight_k = W
+sum_i price_i = D
+atom_k = production_largest_remainder(Basis, Terms, coordinate_k)
+price_i * W = sum_k weight_k * atom_k[i]
+sum_i sum_k weight_k * atom_k[i] = D * W
+```
+
+All operations are checked integers. The verifier receives an ephemeral
+`BoundQuantizedSplineV1` projected from owner-checked Market, complete Terms,
+Basis, edge-registry, and price bodies. The certificate repeats their exact
+identities and cannot select a different evaluator, rounding rule, domain,
+knot vector, or payout denominator. A pure `BoundQuantizedSplineV1` does not
+authenticate those bodies by itself; the account-owning adapter must derive it.
+
+`QuantizedAtomMixtureCertificateV1` is a canonical 544-byte fixed-capacity
+body. Active coordinates are strictly increasing and carry positive primitive
+weights; inactive slots are zero. Profile V1 admits at most `outcome_count`
+coordinates: all payout atoms lie in the affine hyperplane `sum(atom_i) = D`,
+of dimension at most `outcome_count - 1`, so affine Caratheodory gives support
+at most `outcome_count`. This proves membership in the convex hull of the
+actual finite quantized atom set. It neither uses nor accepts the continuous
+moment-cone witness and makes no uniqueness or optimality claim.
+
 ## Continuous exact profile
 
 `verify_continuous_price_measure_v2` implements the per-span Bernstein/Hausdorff witness

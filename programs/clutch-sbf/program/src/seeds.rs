@@ -175,9 +175,17 @@ pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_S
 /// General V2 selected settlement-authority seed prefix.
 pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
+/// Disabled General V2 OrderPage V5 seed prefix.
+pub const SEED_GENERAL_V2_ORDER_PAGE_V5: &[u8] =
+    clutch_general_v2_contract::ORDER_PAGE_SEED_DOMAIN_V1;
+/// Disabled General V2 Reservation V3 seed prefix.
+pub const SEED_GENERAL_V2_RESERVATION_V3: &[u8] =
+    clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V1;
+/// Disabled General SettlementReceipt V3 seed prefix.
+pub const SEED_GENERAL_V2_RECEIPT: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
-    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
 /// Disabled selected composite-fee record seed prefix.
 pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
     clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
@@ -437,7 +445,62 @@ pub fn general_v2_selected_pda(
     )
 }
 
-/// Canonical disabled owner-settlement address for one selected owner row.
+/// Canonical disabled General V2 OrderPage V5 PDA.
+///
+/// The authenticated Epoch owns the MarketRuntime and page-set lifecycle, so
+/// the zero-based page index is the only suffix.
+pub fn general_v2_order_page_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    page_index: u16,
+) -> (Pubkey, u8) {
+    let page_index_le = page_index.to_le_bytes();
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_ORDER_PAGE_V5, epoch, &page_index_le],
+    )
+}
+
+/// Canonical disabled General V2 Reservation V3 PDA.
+///
+/// The semantic identity already commits MarketRuntime, Epoch, owner,
+/// Position generation, and order ID; none is repeated as a second address
+/// projection.
+pub fn general_v2_reservation_v3_pda(
+    program_id: &Pubkey,
+    reservation_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RESERVATION_V3, reservation_id],
+    )
+}
+
+/// Canonical disabled General SettlementReceipt V3 PDA.
+pub fn general_v2_receipt_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    slice_index: u16,
+) -> (Pubkey, u8) {
+    let slice_index_le = slice_index.to_le_bytes();
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_RECEIPT,
+            epoch,
+            settlement_candidate,
+            &slice_index_le,
+        ],
+    )
+}
+
+/// Canonical disabled presence-explicit owner-settlement address for one
+/// selected owner row.
+///
+/// The withdrawn V1 row used a different seed domain. Keeping V2 on its own
+/// address prevents a prefunded or historical V1 account from being promoted
+/// into the zero-price-safe successor by changing only its outer version.
 pub fn general_v2_owner_settlement_pda(
     program_id: &Pubkey,
     epoch: &[u8; 32],
@@ -451,6 +514,48 @@ pub fn general_v2_owner_settlement_pda(
             epoch,
             settlement_candidate,
             owner,
+        ],
+    )
+}
+
+/// Canonical global Position V3 address for one General owner.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn position_v3_pda(
+    program_id: &Pubkey,
+    market_instance: &[u8; 32],
+    owner: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::POSITION_V3_PDA_PREFIX,
+            market_instance,
+            owner,
+            &purpose_seed,
+            purpose_binding,
+        ],
+    )
+}
+
+/// Canonical purpose-owned Replay V3 address paired with one Position.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn purpose_replay_v3_pda(
+    program_id: &Pubkey,
+    position: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::PURPOSE_REPLAY_V3_PDA_PREFIX,
+            position,
+            &purpose_seed,
+            purpose_binding,
         ],
     )
 }
