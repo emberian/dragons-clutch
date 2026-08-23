@@ -39,7 +39,7 @@ and exact canonical postimage derivation. A mock implementation is test
 scaffolding, not runtime evidence.
 
 The adjacent `portfolio_book_v2` module owns the complete-book consumption
-boundary requested by Dealer. Its 600-byte fixed record binds the same
+boundary requested by Dealer. Its 568-byte fixed record binds the same
 read-only SettlementRoot and retained Feed traversal to an active prefix of at
 most four authenticated OrderPage V5 accounts (16 slots each, 64 rows total).
 The caller supplies no `EconomicBookV2`; only the authenticated page adapter
@@ -142,6 +142,6 @@ authoring this slice.
    multi-pair candidates need separately bounded receipt graphs and measured
    SBF routes. They must continue to refuse rather than reuse this full-pair
    capability.
-7. The 568-byte membership and 680-byte receipt codecs need hostile SBF frame,
+7. The 560-byte membership and 680-byte receipt codecs need hostile SBF frame,
    PDA, owner, privilege, rent, rollback, and compute evidence before any release
    manifest can name the route available.

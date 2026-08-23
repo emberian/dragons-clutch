@@ -137,11 +137,11 @@ authorization, lifecycle transition, or SBF dispatch.
 ## Complete portfolio book authority (`portfolio_book_v2`)
 
 `src/portfolio_book_v2.rs` freezes the nonpersisted Dealer consumption seam.
-Its canonical 600-byte identity record binds one read-only counted
+Its canonical 568-byte identity record binds one read-only counted
 SettlementRoot, retained Feed/traversal, order set, selection witness, and the
 active prefix of at most four OrderPage V5 accounts. Page geometry is exactly
-16 slots per page and 64 RelationV2 rows total; inactive page identities and
-generations must be zero.
+16 slots per page and 64 RelationV2 rows total; inactive page identities must
+be zero. Pages are generationless because OrderPage V5 owns no such field.
 
 The constructor accepts no `EconomicBookV2` from the caller. A private adapter
 must authenticate the exact Root/Feed/page accounts, decode every active slot,
@@ -155,7 +155,7 @@ caller-shaped rows or coefficients.
 
 `src/portfolio_execution_v2.rs` replaces the old content-only atomic portfolio
 seam with a narrow execution authority contract. `EconomicOrderV2` remains the
-only coefficient owner. A canonical 568-byte selected-order record binds an
+only coefficient owner. A canonical 560-byte selected-order record binds an
 adapter-authenticated counted SettlementRoot, retained Feed/traversal,
 OrderPage, page slot, dense RelationV2 index, owner, Position incarnation,
 selected fill, and settlement witness; it does not carry a second coefficient,

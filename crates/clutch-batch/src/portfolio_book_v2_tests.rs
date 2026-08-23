@@ -72,13 +72,11 @@ fn page_set(order_count: u8) -> PortfolioBookPageSetRecordV2 {
         .unwrap();
     let mut page_account_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
     let mut page_semantic_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
-    let mut page_generations = [0u64; PORTFOLIO_BOOK_MAX_PAGES_V2];
     let mut page = 0usize;
     while page < page_count {
         let page_byte = u8::try_from(page).unwrap();
         page_account_ids[page] = id(80u8.checked_add(page_byte).unwrap());
         page_semantic_ids[page] = id(90u8.checked_add(page_byte).unwrap());
-        page_generations[page] = u64::try_from(page).unwrap().checked_add(5).unwrap();
         page += 1;
     }
     PortfolioBookPageSetRecordV2 {
@@ -99,7 +97,6 @@ fn page_set(order_count: u8) -> PortfolioBookPageSetRecordV2 {
         settlement_witness_id: id(26),
         page_account_ids,
         page_semantic_ids,
-        page_generations,
     }
 }
 

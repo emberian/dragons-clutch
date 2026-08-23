@@ -14,7 +14,7 @@ use crate::MAX_ORDERS;
 pub const PORTFOLIO_BOOK_AUTHORITY_VERSION_V2: u8 = 2;
 pub const PORTFOLIO_BOOK_MAX_PAGES_V2: usize = 4;
 pub const PORTFOLIO_BOOK_ORDERS_PER_PAGE_V2: usize = 16;
-pub const PORTFOLIO_BOOK_PAGE_SET_RECORD_V2_BYTES: usize = 600;
+pub const PORTFOLIO_BOOK_PAGE_SET_RECORD_V2_BYTES: usize = 568;
 
 const PORTFOLIO_BOOK_PAGE_SET_MAGIC_V2: [u8; 8] = *b"DCPBKS2\0";
 
@@ -29,8 +29,9 @@ pub type PortfolioBookIdentityV2 = [u8; 32];
 /// Canonical identity-only membership for the complete bounded page set.
 ///
 /// Active pages occupy the prefix `0..page_count` in canonical page-index
-/// order. Every inactive page account, semantic identity, and generation is
-/// zero. Coefficients, quantities, sides, limits, and policies are absent.
+/// order. Every inactive page account and semantic identity is zero. OrderPage
+/// V5 has no generation field; exact PDA and V5 digest/body are authoritative.
+/// Coefficients, quantities, sides, limits, and policies are absent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioBookPageSetRecordV2 {
     pub version: u8,
@@ -50,7 +51,6 @@ pub struct PortfolioBookPageSetRecordV2 {
     pub settlement_witness_id: PortfolioBookIdentityV2,
     pub page_account_ids: [PortfolioBookIdentityV2; PORTFOLIO_BOOK_MAX_PAGES_V2],
     pub page_semantic_ids: [PortfolioBookIdentityV2; PORTFOLIO_BOOK_MAX_PAGES_V2],
-    pub page_generations: [u64; PORTFOLIO_BOOK_MAX_PAGES_V2],
 }
 
 impl PortfolioBookPageSetRecordV2 {
@@ -67,19 +67,8 @@ impl PortfolioBookPageSetRecordV2 {
         output[11] = self.order_count;
         output[12..14].copy_from_slice(&self.traversal_index.to_le_bytes());
         output[16..24].copy_from_slice(&self.settlement_root_epoch_generation.to_le_bytes());
-        let mut page = 0usize;
-        while page < PORTFOLIO_BOOK_MAX_PAGES_V2 {
-            let start = 24usize
-                .checked_add(
-                    page.checked_mul(8)
-                        .ok_or(PortfolioBookAuthorityErrorV2::ArithmeticOverflow)?,
-                )
-                .ok_or(PortfolioBookAuthorityErrorV2::ArithmeticOverflow)?;
-            output[start..start + 8].copy_from_slice(&self.page_generations[page].to_le_bytes());
-            page += 1;
-        }
         let identities = self.identities();
-        let mut cursor = 56usize;
+        let mut cursor = 24usize;
         let mut identity = 0usize;
         while identity < identities.len() {
             output[cursor..cursor + 32].copy_from_slice(identities[identity]);
@@ -101,19 +90,7 @@ impl PortfolioBookPageSetRecordV2 {
         if input[14..16].iter().any(|byte| *byte != 0) {
             return Err(PortfolioBookAuthorityErrorV2::NonCanonicalPadding);
         }
-        let mut page_generations = [0u64; PORTFOLIO_BOOK_MAX_PAGES_V2];
-        let mut page = 0usize;
-        while page < PORTFOLIO_BOOK_MAX_PAGES_V2 {
-            let start = 24usize
-                .checked_add(
-                    page.checked_mul(8)
-                        .ok_or(PortfolioBookAuthorityErrorV2::ArithmeticOverflow)?,
-                )
-                .ok_or(PortfolioBookAuthorityErrorV2::ArithmeticOverflow)?;
-            page_generations[page] = read_u64(input, start)?;
-            page += 1;
-        }
-        let mut cursor = 56usize;
+        let mut cursor = 24usize;
         let mut next_identity = || -> Result<PortfolioBookIdentityV2, PortfolioBookAuthorityErrorV2> {
             let end = cursor
                 .checked_add(32)
@@ -136,7 +113,7 @@ impl PortfolioBookPageSetRecordV2 {
         let settlement_candidate_id = next_identity()?;
         let settlement_witness_id = next_identity()?;
         let mut page_account_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
-        page = 0;
+        let mut page = 0usize;
         while page < PORTFOLIO_BOOK_MAX_PAGES_V2 {
             page_account_ids[page] = next_identity()?;
             page += 1;
@@ -168,7 +145,6 @@ impl PortfolioBookPageSetRecordV2 {
             settlement_witness_id,
             page_account_ids,
             page_semantic_ids,
-            page_generations,
         };
         value.validate()?;
         Ok(value)
@@ -242,7 +218,6 @@ impl PortfolioBookPageSetRecordV2 {
             if page < page_count {
                 if is_zero_identity(&self.page_account_ids[page])
                     || is_zero_identity(&self.page_semantic_ids[page])
-                    || self.page_generations[page] == 0
                     || self.page_account_ids[page] == self.settlement_root_account_id
                     || self.page_account_ids[page] == self.retained_feed_account_id
                 {
@@ -257,7 +232,6 @@ impl PortfolioBookPageSetRecordV2 {
                 }
             } else if !is_zero_identity(&self.page_account_ids[page])
                 || !is_zero_identity(&self.page_semantic_ids[page])
-                || self.page_generations[page] != 0
             {
                 return Err(PortfolioBookAuthorityErrorV2::NonCanonicalPadding);
             }
@@ -406,7 +380,9 @@ pub fn authenticate_complete_portfolio_book_v2<A: PortfolioBookAdapterV2>(
             account_id: page_set.page_account_ids[page],
             owner_program_id,
             data_semantic_id: page_set.page_semantic_ids[page],
-            generation: Some(page_set.page_generations[page]),
+            // OrderPage V5 has no generation field. Exact PDA plus the
+            // canonical V5 page digest/body is its complete authority.
+            generation: None,
             page_index: Some(page_index),
             writable: false,
         };
