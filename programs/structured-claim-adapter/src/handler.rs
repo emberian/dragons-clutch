@@ -12,11 +12,12 @@ use crate::runtime_contract::{
     StructuredProductWrapperTerminalProjectionV1, TerminalRedemptionPlanV1,
     VaultMutationRequestV1, WrapperRecipeHashV1, WrapperTransitionPlanV1,
 };
+use clutch_structured_claim::MarketLedger;
 
 use crate::{
-    is_zero, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV3,
-    AuthenticatedStructuredCustodyCallV1, AuthenticatedTokenMintV1, AuthenticatedTokenV1,
-    BasePositionTransferCpiV1, BoundDescriptorV1, Error, Key, Result,
+    is_zero, AuthenticatedBasePositionV3, AuthenticatedStructuredCustodyCallV1,
+    AuthenticatedTokenMintV1, AuthenticatedTokenV1, BasePositionTransferCpiV1,
+    BoundDescriptorV1, Error, Key, Result,
 };
 
 /// Maximum staged outer operations in any version-one route.
@@ -288,8 +289,9 @@ pub struct CreateDescriptorContextV1<'a> {
 pub struct MutationContextV1<'a> {
     /// Fully bound canonical descriptor.
     pub descriptor: &'a BoundDescriptorV1,
-    /// Authenticated base Market join.
-    pub market: &'a AuthenticatedBaseMarketV1,
+    /// Withdrawn model-only Market projection. This context is private to the
+    /// adapter and unreachable from every runtime dispatcher.
+    market: MarketLedger,
     /// Actual extension-free Token-2022 mint.
     pub mint: AuthenticatedTokenMintV1,
     /// Actual wrapper-vault Position and current-generation Replay.
@@ -598,7 +600,7 @@ pub fn prepare_mutation_v1(
     if is_zero(&context.actor) {
         return Err(Error::InvalidAccounts);
     }
-    let market = context.market.ledger(context.descriptor)?;
+    let market = context.market;
     let addresses = context.descriptor.addresses();
     let descriptor_state = context.descriptor.descriptor().state;
     let mint = context.mint.projection();

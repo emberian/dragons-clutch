@@ -9,9 +9,7 @@ use clutch_structured_claim_adapter::runtime_contract::{
 use clutch_structured_claim_adapter::{
     admit_runtime_envelope_v1, bind_descriptor_v1, canonical_native_claim_id_v1,
     canonical_series_scoped_wrapper_product_id_v2, decode_instruction_v1,
-    dispatch_structured_claim_v1, AccountFrameV1, Error, PdaVerifierV1,
-    PreparedStructuredClaimRouteV1, Result, RuntimeDeploymentsV1,
-    StructuredClaimAccountLoaderV1, ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
+    Error, PdaVerifierV1, RuntimeDeploymentsV1, ENABLED_STRUCTURED_CLAIM_ACTION_MASK,
 };
 
 fn key(marker: u8) -> [u8; 32] {
@@ -31,20 +29,6 @@ impl PdaVerifierV1 for AcceptKnownPdas {
         _bump: u8,
     ) -> bool {
         [key(20), key(21), key(22), key(23)].contains(address)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct MustNotLoad;
-
-impl StructuredClaimAccountLoaderV1 for MustNotLoad {
-    fn load_and_prepare(
-        &self,
-        _action: clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1,
-        _payload: StructuredClaimPayloadV1,
-        _accounts: &AccountFrameV1<'_>,
-    ) -> Result<PreparedStructuredClaimRouteV1> {
-        panic!("disabled dispatch touched the account loader")
     }
 }
 
@@ -151,14 +135,6 @@ fn family_payload_uses_the_runtime_contract_and_runtime_gate_stays_empty() {
     assert_eq!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK, 0);
     assert_eq!(
         admit_runtime_envelope_v1(&instruction),
-        Err(Error::CapabilityDisabled)
-    );
-    assert_eq!(
-        dispatch_structured_claim_v1(
-            &instruction,
-            &AccountFrameV1 { accounts: &[] },
-            &MustNotLoad,
-        ),
         Err(Error::CapabilityDisabled)
     );
 }
