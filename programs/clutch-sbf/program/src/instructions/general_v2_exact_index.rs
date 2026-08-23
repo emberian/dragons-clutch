@@ -309,6 +309,9 @@ pub(crate) fn retire_indexed_root_v1(program_id: &Pubkey, root: &AccountInfo<'_>
     let rent = base.root_rent(); rent.validate()?;
     require(indexed.is_terminal() && terminal.base().root_account() == id(root.key)
         && base.market_binding() == id(market_binding_account.key)
+        && binding.base().market == base.market()
+        && binding.base().market_instance_v2_id == base.market_instance_v2_id()
+        && binding.batch_policy_id() == base.batch_policy_id()
         && binding.base().neutral_sink == id(neutral_sink.key)
         && rent.payer == id(root_payer.key) && root_payer.is_writable && neutral_sink.is_writable
         && root_payer.key != neutral_sink.key && root_payer.key != root.key
