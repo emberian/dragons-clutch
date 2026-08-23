@@ -23,15 +23,19 @@ use clutch_fee_runtime_contract::projection::{
 use clutch_fee_runtime_contract::selected::{
     OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
 };
+use clutch_fee_runtime_contract::terminal::OwnerFeeFinalizationOutcomeV2;
 use clutch_fee_runtime_contract::{Error as FeeError, Id as FeeId, MAX_FEE_ROWS_V1};
 use clutch_general_v2_contract::{
     candidate_bundle_digest_v1 as contract_candidate_bundle_digest_v1, complete_candidate_feed_v2,
     project_general_position_replay_prestate_v1, project_general_replay_transition_v1,
+    verify_general_replay_last_transition_v1,
     settlement_witness_digest_v1 as contract_settlement_witness_digest_v1,
-    CandidateFeedHeaderV2, ConsumeDirectReceiptEggsPayloadV1, DeletableRentOwnerV1,
+    owner_fee_finalization_account_data_id_v4, CandidateFeedHeaderV2,
+    ConsumeDirectReceiptEggsPayloadV1, DeletableRentOwnerV1,
     EconomicDomainV2AccountV1, GeneralOrderPageSeedTupleV5, GeneralPositionReplayPrestateV1,
     GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1,
-    GeneralReservationSeedTupleV9, Id32, MarketBindingV1,
+    FinalizeMergeReceiptPaymentPayloadV1, GeneralReservationSeedTupleV9, Id32, MarketBindingV1,
+    OwnerFeeFinalizationV4AccountV1,
     OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1,
     SettlementCashPotV1AccountV1, SettlementReceiptSeedTupleV5,
     SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
@@ -41,6 +45,7 @@ use clutch_general_v2_contract::{
 use clutch_owner_settlement::{
     build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v4,
     derive_settlement_receipt_data_id_v2, prepare_realize_owner_cash_semantic_v4,
+    recover_owner_cash_position_prestate_v4,
     AuthenticatedOrderMembershipV2, AuthenticatedPositionV3,
     AuthenticatedSettlementReceiptEndV2,
     AuthenticatedSettlementReceiptV2, CandidateSettlementTotalsV2,
@@ -102,6 +107,9 @@ const _: () = assert!(MAX_FEE_ROWS_V1 == MAX_ORDERS);
 /// Exact zero-fee action-38 evidence over the counted root, V5 row, and pot.
 pub const ZERO_FEE_OWNER_FINALIZATION_EVIDENCE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/general-v2/zero-fee-owner-finalization-evidence/v5\0";
+/// Stable per-owner evidence carried by every merge-payment Replay successor.
+pub const MERGE_PAYMENT_OWNER_FINALIZATION_EVIDENCE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/general-v2/merge-payment-owner-finalization-evidence/v5\0";
 const _: () = assert!(SETTLEMENT_SLICE_BYTES == 13);
 
 /// Exact reservation funding authenticated for every live frozen order.
@@ -2265,7 +2273,7 @@ pub fn prepare_create_settlement_receipt_v5(
 /// Structural V5 row/Position/cash-pot/root successor for action 38.
 ///
 /// Fee-bearing composition must additionally authenticate the deleted payer
-/// snapshot and durable `0x83/2` receipt. Zero-fee composition must derive its
+/// snapshot and durable rent-owned `0x83/4` receipt. Zero-fee composition must derive its
 /// domain-separated row+pot evidence. Neither evidence source is caller data in
 /// this arithmetic plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2333,13 +2341,37 @@ pub fn derive_zero_fee_owner_finalization_evidence_v5(
         return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
     }
     let expectation = plan.semantic.expectation();
+    derive_zero_fee_owner_finalization_evidence_fields_v5(
+        plan.settlement_root_account,
+        Id32::new(expectation.candidate())?,
+        Id32::new(expectation.owner())?,
+        plan.finalized_owner_row_data_id,
+        plan.pot_poststate_data_id,
+    )
+}
+
+fn derive_zero_fee_owner_finalization_evidence_fields_v5(
+    settlement_root_account: Id32,
+    candidate: Id32,
+    owner: Id32,
+    finalized_owner_row_data_id: Id32,
+    pot_poststate_data_id: Id32,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    if settlement_root_account.is_zero()
+        || candidate.is_zero()
+        || owner.is_zero()
+        || finalized_owner_row_data_id.is_zero()
+        || pot_poststate_data_id.is_zero()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
     let mut hash = Sha256::new();
     hash.update(ZERO_FEE_OWNER_FINALIZATION_EVIDENCE_DOMAIN_V5);
-    hash.update(plan.settlement_root_account.bytes());
-    hash.update(expectation.candidate());
-    hash.update(expectation.owner());
-    hash.update(plan.finalized_owner_row_data_id.bytes());
-    hash.update(plan.pot_poststate_data_id.bytes());
+    hash.update(settlement_root_account.bytes());
+    hash.update(candidate.bytes());
+    hash.update(owner.bytes());
+    hash.update(finalized_owner_row_data_id.bytes());
+    hash.update(pot_poststate_data_id.bytes());
     Id32::new(hash.finalize().into()).map_err(SettlementAdapterErrorV1::Contract)
 }
 
@@ -4034,6 +4066,801 @@ fn require_direct_endpoint_account_partition_v5(
     Ok(())
 }
 
+/// Exact durable fee-finalization account presented to action 40.
+///
+/// The live adapter must authenticate the program owner, fee-carry PDA, bump,
+/// and readonly meta before this pure contract decodes the exact outer bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct MergePaymentFeeFinalizationInputV4<'a> {
+    /// Existing owner carry PDA, now the immutable 0x83/v4 successor.
+    pub account: Id32,
+    /// Exact hostile 548-byte rent-owned finalization account.
+    pub exact_body: &'a [u8],
+}
+
+/// One seller endpoint presented to action 40.
+#[derive(Clone, Copy, Debug)]
+pub struct MergeReceiptPaymentEndpointInputV5<'a> {
+    /// Exact finalized rent-owned owner row.
+    pub owner_row: OwnerSettlementAccountProjectionV5,
+    /// Presented frozen OrderPage V5 account.
+    pub order_page_account: Id32,
+    /// Exact hostile 4,140-byte OrderPage V5 body.
+    pub order_page_body: &'a [u8],
+    /// Presented canonical Reservation V9 account.
+    pub reservation_account: Id32,
+    /// Exact hostile 666-byte Reservation V9 body.
+    pub reservation_body: &'a [u8],
+    /// Presented canonical Position V3 account and body.
+    pub position: PositionAccountInputV3<'a>,
+    /// Presented purpose-owned Replay V3 account.
+    pub replay_account: Id32,
+    /// Canonical Replay PDA bump rederived by the adapter.
+    pub replay_bump: u8,
+    /// Exact next sequence required by the Replay prestate.
+    pub replay_next_sequence: u64,
+    /// Exact hostile purpose-owned Replay V3 body.
+    pub replay_body: &'a [u8],
+}
+
+/// Complete SBF-neutral action-40 input.
+#[derive(Clone, Copy, Debug)]
+pub struct FinalizeMergeReceiptPaymentInputV5<'a> {
+    /// Strict action-40 selector coordinates.
+    pub payload: FinalizeMergeReceiptPaymentPayloadV1,
+    /// Counted SettlementRoot account.
+    pub settlement_root_account: Id32,
+    /// Exact counted SettlementRoot prestate.
+    pub settlement_root: &'a SettlementRootV1AccountV1,
+    /// Counted retained sealed Feed account.
+    pub retained_feed_account: Id32,
+    /// Exact hostile retained sealed Feed body.
+    pub retained_feed_body: &'a [u8],
+    /// Exact payment-pending rent-owned receipt.
+    pub receipt: SettlementReceiptAccountV5,
+    /// PDA-derived V5 receipt evidence from those exact bytes.
+    pub receipt_evidence: SettlementReceiptEvidenceV5,
+    /// Immutable MarketBinding account.
+    pub market_binding_account: Id32,
+    /// Exact decoded immutable MarketBinding.
+    pub market_binding: &'a MarketBindingV1,
+    /// Exact Realm-selected collateral policy/release join.
+    pub collateral: BoundCollateralProfileV2,
+    /// Counted candidate cash-pot account; action 40 never mutates it.
+    pub settlement_cash_pot_account: Id32,
+    /// Exact current candidate cash-pot outer; action 40 never mutates it.
+    pub settlement_cash_pot: SettlementCashPotV1AccountV1,
+    /// Durable fee finalization, present exactly on a fee-bearing root.
+    pub fee_finalization: Option<MergePaymentFeeFinalizationInputV4<'a>>,
+    /// Real seller endpoint whose paid Reservation cursor advances.
+    pub seller: MergeReceiptPaymentEndpointInputV5<'a>,
+}
+
+/// Disjoint semantic source of the stable per-owner payment chain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum MergePaymentFinalizationSourceV5 {
+    /// Current action-38 Replay evidence; no phantom fee account exists.
+    ZeroFeeReplay = 1,
+    /// Durable exact 0x83/v4 owner-fee finalization outer.
+    FeeFinalizationV4 = 2,
+}
+
+/// One atomic V5 action-40 poststate bundle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalizeMergeReceiptPaymentPlanV5 {
+    settlement_root_account: Id32,
+    settlement_root_poststate: SettlementRootV1AccountV1,
+    retained_feed_account: Id32,
+    receipt_account: Id32,
+    receipt_seed: SettlementReceiptSeedTupleV5,
+    receipt_prestate_evidence: SettlementReceiptEvidenceV5,
+    payment_transition_id: Id32,
+    receipt_poststate: SettlementReceiptAccountV5,
+    receipt_poststate_evidence: SettlementReceiptEvidenceV5,
+    receipt_poststate_body: [u8; SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5],
+    owner_settlement_account: Id32,
+    finalized_owner_row_data_id: Id32,
+    owner_settlement_body: [u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5],
+    settlement_cash_pot_account: Id32,
+    settlement_cash_pot_poststate_data_id: Option<Id32>,
+    finalization_source: MergePaymentFinalizationSourceV5,
+    finalization_source_data_id: Option<Id32>,
+    stable_owner_finalization_evidence_id: Id32,
+    order_page_account: Id32,
+    order_page_seed: GeneralOrderPageSeedTupleV5,
+    order_slot_index: u8,
+    position_generation: u64,
+    reservation_account: Id32,
+    reservation_semantic_id: Id32,
+    reservation_seed: GeneralReservationSeedTupleV9,
+    reservation_prestate_data_id: Id32,
+    reservation_poststate_data_id: Id32,
+    reservation_poststate_body: [u8; RESERVATION_ACCOUNT_BYTES_V9],
+    position_account: Id32,
+    position_semantic_id: Id32,
+    replay: GeneralReplayTransitionPlanV1,
+    completes_order: bool,
+}
+
+impl FinalizeMergeReceiptPaymentPlanV5 {
+    /// Counted SettlementRoot account to compare-and-write.
+    pub const fn settlement_root_account(&self) -> Id32 { self.settlement_root_account }
+    /// Exact structural counted-root successor.
+    pub const fn settlement_root_poststate(&self) -> &SettlementRootV1AccountV1 {
+        &self.settlement_root_poststate
+    }
+    /// Retained sealed Feed account authenticated by the composer.
+    pub const fn retained_feed_account(&self) -> Id32 { self.retained_feed_account }
+    /// Payment-pending Receipt V5 account to compare-and-write.
+    pub const fn receipt_account(&self) -> Id32 { self.receipt_account }
+    /// Fresh V5 seed tuple for that receipt.
+    pub const fn receipt_seed(&self) -> SettlementReceiptSeedTupleV5 { self.receipt_seed }
+    /// Exact payment-pending prestate evidence.
+    pub const fn receipt_prestate_evidence(&self) -> SettlementReceiptEvidenceV5 {
+        self.receipt_prestate_evidence
+    }
+    /// PDA-derived disjoint payment transition identity.
+    pub const fn payment_transition_id(&self) -> Id32 { self.payment_transition_id }
+    /// Exact exhausted receipt successor.
+    pub const fn receipt_poststate(&self) -> SettlementReceiptAccountV5 {
+        self.receipt_poststate
+    }
+    /// PDA-derived exact exhausted receipt evidence.
+    pub const fn receipt_poststate_evidence(&self) -> SettlementReceiptEvidenceV5 {
+        self.receipt_poststate_evidence
+    }
+    /// Exact 298-byte exhausted receipt successor.
+    pub const fn receipt_poststate_body(&self) -> &[u8; SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5] {
+        &self.receipt_poststate_body
+    }
+    /// Finalized rent-owned owner row consumed readonly.
+    pub const fn owner_settlement_account(&self) -> Id32 { self.owner_settlement_account }
+    /// Full exact V5 owner-row data identity.
+    pub const fn finalized_owner_row_data_id(&self) -> Id32 {
+        self.finalized_owner_row_data_id
+    }
+    /// Exact unchanged 340-byte finalized owner row.
+    pub const fn owner_settlement_body(&self) -> &[u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5] {
+        &self.owner_settlement_body
+    }
+    /// Candidate cash-pot account consumed readonly.
+    pub const fn settlement_cash_pot_account(&self) -> Id32 {
+        self.settlement_cash_pot_account
+    }
+    /// Exact action-38 pot poststate when available from current/durable evidence.
+    pub const fn settlement_cash_pot_poststate_data_id(&self) -> Option<Id32> {
+        self.settlement_cash_pot_poststate_data_id
+    }
+    /// Disjoint zero-fee versus fee-bearing evidence source.
+    pub const fn finalization_source(&self) -> MergePaymentFinalizationSourceV5 {
+        self.finalization_source
+    }
+    /// Exact source data identity when current/durable evidence exposes it.
+    pub const fn finalization_source_data_id(&self) -> Option<Id32> {
+        self.finalization_source_data_id
+    }
+    /// Stable per-owner evidence carried by this and every later payment.
+    pub const fn stable_owner_finalization_evidence_id(&self) -> Id32 {
+        self.stable_owner_finalization_evidence_id
+    }
+    /// Frozen OrderPage V5 account containing the seller order.
+    pub const fn order_page_account(&self) -> Id32 { self.order_page_account }
+    /// Exact frozen OrderPage V5 seed tuple.
+    pub const fn order_page_seed(&self) -> GeneralOrderPageSeedTupleV5 { self.order_page_seed }
+    /// Physical slot index inside that page.
+    pub const fn order_slot_index(&self) -> u8 { self.order_slot_index }
+    /// Immutable Position generation frozen beside the order.
+    pub const fn position_generation(&self) -> u64 { self.position_generation }
+    /// Seller Reservation V9 account to compare-and-write.
+    pub const fn reservation_account(&self) -> Id32 { self.reservation_account }
+    /// Canonical Reservation V9 semantic identity.
+    pub const fn reservation_semantic_id(&self) -> Id32 { self.reservation_semantic_id }
+    /// Exact Reservation V9 seed tuple.
+    pub const fn reservation_seed(&self) -> GeneralReservationSeedTupleV9 {
+        self.reservation_seed
+    }
+    /// Exact Reservation V9 prestate data identity.
+    pub const fn reservation_prestate_data_id(&self) -> Id32 {
+        self.reservation_prestate_data_id
+    }
+    /// Exact Reservation V9 successor data identity.
+    pub const fn reservation_poststate_data_id(&self) -> Id32 {
+        self.reservation_poststate_data_id
+    }
+    /// Exact 666-byte Reservation V9 successor.
+    pub const fn reservation_poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES_V9] {
+        &self.reservation_poststate_body
+    }
+    /// Canonical seller Position V3 account consumed readonly.
+    pub const fn position_account(&self) -> Id32 { self.position_account }
+    /// Exact unchanged seller Position V3 semantic identity.
+    pub const fn position_semantic_id(&self) -> Id32 { self.position_semantic_id }
+    /// Exact purpose-owned GEN1 Replay successor.
+    pub const fn replay(&self) -> &GeneralReplayTransitionPlanV1 { &self.replay }
+    /// Whether this payment makes the Reservation fully consumed.
+    pub const fn completes_order(&self) -> bool { self.completes_order }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MergePaymentOrderBindingV5 {
+    slot: OrderSlot,
+    page_index: u16,
+    slot_index: u8,
+    position_generation: u64,
+}
+
+fn derive_merge_payment_owner_finalization_evidence_v5(
+    settlement_root_account: Id32,
+    candidate: Id32,
+    owner: Id32,
+    finalized_owner_row_data_id: Id32,
+    pot_poststate_data_id: Id32,
+    source: MergePaymentFinalizationSourceV5,
+    source_data_id: Id32,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    if settlement_root_account.is_zero()
+        || candidate.is_zero()
+        || owner.is_zero()
+        || finalized_owner_row_data_id.is_zero()
+        || pot_poststate_data_id.is_zero()
+        || source_data_id.is_zero()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut hash = Sha256::new();
+    hash.update(MERGE_PAYMENT_OWNER_FINALIZATION_EVIDENCE_DOMAIN_V5);
+    hash.update(settlement_root_account.bytes());
+    hash.update(candidate.bytes());
+    hash.update(owner.bytes());
+    hash.update(finalized_owner_row_data_id.bytes());
+    hash.update(pot_poststate_data_id.bytes());
+    hash.update([source as u8]);
+    hash.update(source_data_id.bytes());
+    Id32::new(hash.finalize().into()).map_err(SettlementAdapterErrorV1::Contract)
+}
+
+/// Prepare one exact merge-receipt payment after owner cash finalization.
+///
+/// The plan moves no cash and does not mutate Position. It atomically advances
+/// only the Reservation paid cursor, the receipt exhausted latch, purpose-owned
+/// Replay, and the counted SettlementRoot payment counter.
+pub fn prepare_finalize_merge_receipt_payment_v5(
+    input: FinalizeMergeReceiptPaymentInputV5<'_>,
+) -> Result<FinalizeMergeReceiptPaymentPlanV5, SettlementAdapterErrorV1> {
+    input.settlement_root.validate()?;
+    input.market_binding.validate()?;
+    input.receipt.validate()?;
+    input.settlement_cash_pot.semantic.validate()?;
+    let root = input.settlement_root;
+    let selected = settlement_coordinates_v4(root)?;
+    let counts = root.counts();
+    let (feed, tail) = complete_candidate_feed_v2(input.retained_feed_body, true)?;
+    let feed_bundle_id = derive_candidate_bundle_digest_v1(input.retained_feed_body)?;
+    let receipt_account = input.payload.receipt;
+    let receipt_pda = LayoutHash32::new(receipt_account.bytes())?;
+    let expected_receipt_evidence = input.receipt.evidence(receipt_pda)?;
+    let mut receipt_semantic = input.receipt.semantic();
+    if input.payload.epoch != selected.epoch
+        || receipt_account.is_zero()
+        || input.settlement_root_account.is_zero()
+        || input.retained_feed_account != selected.retained_feed
+        || feed_bundle_id != selected.candidate_bundle_digest
+        || input.market_binding_account != selected.market_binding
+        || input.market_binding.market != selected.market
+        || root.phase() != SettlementRootPhaseV1::Settling
+        || root.virtual_cash_direction() != VirtualCashDirectionV1::Merge
+        || root.cash_pot_state() != SettlementRootChildStateV1::Live
+        || counts.admitted_receipts != counts.expected_receipts
+        || counts.live_receipts != counts.admitted_receipts
+        || counts.completed_owner_finalizations == 0
+        || input.settlement_cash_pot_account != root.settlement_cash_pot()
+        || input.settlement_cash_pot.semantic.expectation != root.cash_pot_expectation()?
+        || input.settlement_cash_pot.stored_bump != root.cash_pot_bump()
+        || input.settlement_cash_pot.flags != 0
+        || feed.epoch != selected.epoch
+        || feed.market != selected.market
+        || feed.node != selected.source_admission_node
+        || feed.order_set != selected.order_set
+        || feed.settlement_candidate_id != selected.settlement_candidate_id
+        || feed.settlement_witness_digest != selected.settlement_witness_digest
+        || feed.epoch_generation != selected.epoch_generation
+        || feed.slice_count != selected.slice_count
+        || feed.relation_policy_id != input.market_binding.relation_policy_id
+        || feed.price_measure_policy_v1_id != input.market_binding.price_measure_policy_v1_id
+        || feed.native_claim_basis_id != input.market_binding.native_claim_basis_id
+        || feed.price_scale != input.market_binding.price_scale
+        || feed.outcome_count != input.market_binding.outcome_count
+        || root.outcome_count() != feed.outcome_count
+        || root.market_instance_v2_id() != input.market_binding.market_instance_v2_id
+        || input.collateral.market().market.bytes()
+            != input.market_binding.market_instance_v2_id.bytes()
+        || input.receipt.transition() != SettlementReceiptTransitionCommitmentV5::None
+        || expected_receipt_evidence != input.receipt_evidence
+        || input.receipt_evidence.receipt().bytes() != receipt_account.bytes()
+        || receipt_semantic.epoch.bytes() != selected.epoch.bytes()
+        || receipt_semantic.market.bytes() != selected.market.bytes()
+        || receipt_semantic.candidate.bytes() != selected.settlement_candidate_id.bytes()
+        || receipt_semantic.leg_kind != RECEIPT_LEG_MERGE
+        || receipt_semantic.accounted_end_mask != RECEIPT_FLAG_SELL_CONSUMED
+        || receipt_semantic.expected_end_mask() != RECEIPT_FLAG_SELL_CONSUMED
+        || receipt_semantic.delivered_end_mask() != RECEIPT_FLAG_SELL_CONSUMED
+        || receipt_semantic.consumed_flags != RECEIPT_FLAG_SELL_CONSUMED
+        || receipt_semantic.settled_quantity != receipt_semantic.quantity
+        || receipt_semantic.quantity == 0
+        || receipt_semantic.slice_index >= feed.slice_count
+        || receipt_semantic.sequence != u64::from(receipt_semantic.slice_index) + 1
+        || receipt_semantic.buy_order_id != LayoutHash32::ZERO
+        || receipt_semantic.sell_order_id == LayoutHash32::ZERO
+        || receipt_semantic.price
+            != read_feed_u64(tail.prices_le(), usize::from(receipt_semantic.outcome))?
+        || receipt_semantic.consideration_price_units
+            != u128::from(receipt_semantic.quantity)
+                .checked_mul(u128::from(receipt_semantic.price))
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    require_merge_payment_account_partition_v5(&input)?;
+    let target_slice = read_feed_slice_v3(tail.slices_le(), receipt_semantic.slice_index)?;
+    if target_slice.route()? != SettlementReceiptRouteV2::SellToMerge
+        || target_slice.outcome != receipt_semantic.outcome
+        || target_slice.quantity != receipt_semantic.quantity
+    {
+        return Err(SettlementAdapterErrorV1::ReceiptLatchMismatch);
+    }
+    let terminal = input.seller.owner_row.envelope().terminal_projection()?;
+    let finalized = terminal.semantic();
+    let expectation = finalized.expectation();
+    let owner = Id32::new(expectation.owner())?;
+    let order = bind_merge_payment_order_v5(
+        feed,
+        receipt_semantic,
+        target_slice.sell_index,
+        owner,
+        input.seller.order_page_body,
+    )?;
+    let order_bit = 1u64
+        .checked_shl(u32::from(target_slice.sell_index))
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if expectation.market() != selected.market.bytes()
+        || expectation.epoch() != selected.epoch.bytes()
+        || expectation.candidate() != selected.settlement_candidate_id.bytes()
+        || expectation.owner_order_set_digest() != root.owner_order_set_digest().bytes()
+        || expectation.expected_sell_order_mask() & order_bit == 0
+        || input.seller.owner_row.seed().epoch() != &selected.epoch.bytes()
+        || input.seller.owner_row.seed().settlement_candidate()
+            != &selected.settlement_candidate_id.bytes()
+        || input.seller.owner_row.seed().owner() != &owner.bytes()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let reservation_prestate = ReservationAccountV9::decode(input.seller.reservation_body)?;
+    let mut reservation = reservation_prestate.body();
+    let reservation_plan = ReservationPlan::for_order(
+        &order.slot,
+        feed.outcome_count,
+        feed.price_scale,
+        reservation.max_fee_atoms,
+    )?;
+    let expected_reservation = canonical_reservation_id_v9(
+        LayoutHash32(selected.market.bytes()),
+        LayoutHash32(selected.epoch.bytes()),
+        LayoutHash32(owner.bytes()),
+        order.position_generation,
+        order.slot.order_id(),
+    );
+    let next_paid_units = reservation
+        .paid_units
+        .checked_add(receipt_semantic.quantity)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if input.seller.reservation_account.is_zero()
+        || reservation.reservation != expected_reservation
+        || reservation.market.bytes() != selected.market.bytes()
+        || reservation.epoch.bytes() != selected.epoch.bytes()
+        || reservation.owner.bytes() != owner.bytes()
+        || reservation.order_id != order.slot.order_id()
+        || reservation.order_generation != order.slot.generation()
+        || reservation.position_generation != order.position_generation
+        || reservation.page_index != order.page_index
+        || reservation.outcome_count != feed.outcome_count
+        || reservation.side != 1
+        || reservation.order_kind != order.slot.kind()
+        || reservation.state != RESERVATION_STATE_ENTITLED
+        || reservation.initial_cash_atoms != reservation_plan.cash_atoms
+        || reservation.max_fee_atoms != reservation_plan.max_fee_atoms
+        || reservation.initial_internal != reservation_plan.internal
+        || reservation.remaining_cash_atoms != 0
+        || reservation.paid_units >= reservation.consumed_units
+        || next_paid_units > reservation.consumed_units
+        || reservation.consumed_units > reservation.entitled_units
+    {
+        return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+    }
+    reservation.paid_units = next_paid_units;
+    let completes_order = reservation.paid_units == reservation.entitled_units;
+    if completes_order {
+        if reservation.consumed_units != reservation.entitled_units
+            || !reservation.remaining_is_zero()
+        {
+            return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+        }
+        reservation.state = RESERVATION_STATE_CONSUMED;
+    }
+    let reservation_poststate =
+        ReservationAccountV9::new(reservation, reservation_prestate.rent())?;
+    let reservation_prestate_data_id = Id32::new(reservation_prestate.data_id()?.bytes())?;
+    let reservation_poststate_data_id = Id32::new(reservation_poststate.data_id()?.bytes())?;
+    let mut reservation_poststate_body = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
+    reservation_poststate.encode(&mut reservation_poststate_body)?;
+
+    let position_body = PositionAccountV3::decode(input.seller.position.encoded_body)?;
+    project_canonical_general_settlement_position_v3(
+        position_body,
+        owner,
+        order.position_generation,
+        selected.market,
+        AdapterPositionMarketBindingV3 {
+            market_instance_id: retirement_identity(input.market_binding.market_instance_v2_id)?,
+            outcome_count: feed.outcome_count,
+            realm_id: retirement_identity(Id32::new(input.collateral.realm_bound().realm().realm.bytes())?)?,
+            collateral_policy_id: retirement_identity(Id32::new(input.collateral.policy_id().bytes())?)?,
+            collateral_release_id: retirement_identity(Id32::new(input.collateral.release().id()?.bytes())?)?,
+        },
+    )?;
+    let position_semantic_id =
+        Id32::new(position_body.semantic_id(&PositionBodySha256V3)?.bytes())?;
+    let position = AuthenticatedPositionV3 {
+        account: input.seller.position.account.bytes(),
+        general_market_runtime: selected.market.bytes(),
+        semantic: position_body,
+        semantic_id: position_semantic_id.bytes(),
+        account_authenticated: true,
+        semantic_id_authenticated: true,
+        market_binding_authenticated: true,
+        writable: false,
+    };
+    position.validate()?;
+    let position_poststate = position.unchanged_poststate()?;
+    let replay_prestate = project_general_position_replay_prestate_v1(
+        input.seller.replay_account,
+        input.seller.replay_bump,
+        input.seller.replay_next_sequence,
+        input.seller.replay_body,
+        position,
+        &PositionBodySha256V3,
+    )?;
+    let finalized_owner_row_data_id = input.seller.owner_row.data_id();
+    let current_pot_poststate_data_id =
+        clutch_general_v2_contract::settlement_cash_pot_poststate_data_id_v1(
+            input.settlement_cash_pot.semantic,
+            &CanonicalSha256,
+        )?;
+    let (source, source_data_id, owner_pot_poststate_data_id, stable_evidence_id) =
+        bind_merge_payment_finalization_evidence_v5(
+            input.settlement_root_account,
+            root,
+            owner,
+            input.seller.owner_row.account(),
+            finalized_owner_row_data_id,
+            input.seller.position.account,
+            input.settlement_cash_pot_account,
+            current_pot_poststate_data_id,
+            input.payload.stable_zero_fee_finalization_evidence_id,
+            input.fee_finalization,
+            replay_prestate,
+            finalized,
+            position_body,
+            position_semantic_id,
+        )?;
+    let prior_kind = replay_prestate.extension().last_kind();
+    if prior_kind == Some(GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment) {
+        verify_general_replay_last_transition_v1(
+            replay_prestate,
+            position_semantic_id,
+            GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment,
+            replay_prestate.extension().last_transition_id(),
+            stable_evidence_id,
+            &PositionBodySha256V3,
+        )?;
+    } else if prior_kind != Some(GeneralReplayTransitionKindV1::FinalizeOwnerSettlement) {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let payment_transition_id =
+        Id32::new(input.receipt_evidence.payment_transition_id().bytes())?;
+    let replay = project_general_replay_transition_v1(
+        replay_prestate,
+        position_poststate,
+        GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment,
+        payment_transition_id,
+        stable_evidence_id,
+        &PositionBodySha256V3,
+    )?;
+    if replay.position_prestate_semantic_id() != position_semantic_id
+        || replay.position_poststate_semantic_id() != position_semantic_id
+        || replay.transition_id() != payment_transition_id
+        || replay.transition_evidence_id() != stable_evidence_id
+        || replay.kind() != GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    receipt_semantic.consumed_flags |= RECEIPT_FLAG_SLICE_EXHAUSTED;
+    let receipt_poststate = SettlementReceiptAccountV5::new(
+        receipt_semantic,
+        SettlementReceiptTransitionCommitmentV5::None,
+        input.receipt.rent(),
+    )?;
+    let receipt_poststate_body = receipt_poststate.encode_exact()?;
+    let receipt_poststate_evidence = receipt_poststate.evidence(receipt_pda)?;
+    let settlement_root_poststate = root.complete_merge_payment()?;
+    let reservation_semantic_id = Id32::new(reservation.reservation.bytes())?;
+    Ok(FinalizeMergeReceiptPaymentPlanV5 {
+        settlement_root_account: input.settlement_root_account,
+        settlement_root_poststate,
+        retained_feed_account: input.retained_feed_account,
+        receipt_account,
+        receipt_seed: SettlementReceiptSeedTupleV5::new(
+            selected.epoch,
+            selected.settlement_candidate_id,
+            receipt_semantic.slice_index,
+        )?,
+        receipt_prestate_evidence: input.receipt_evidence,
+        payment_transition_id,
+        receipt_poststate,
+        receipt_poststate_evidence,
+        receipt_poststate_body,
+        owner_settlement_account: input.seller.owner_row.account(),
+        finalized_owner_row_data_id,
+        owner_settlement_body: *input.seller.owner_row.exact_body(),
+        settlement_cash_pot_account: input.settlement_cash_pot_account,
+        settlement_cash_pot_poststate_data_id: owner_pot_poststate_data_id,
+        finalization_source: source,
+        finalization_source_data_id: source_data_id,
+        stable_owner_finalization_evidence_id: stable_evidence_id,
+        order_page_account: input.seller.order_page_account,
+        order_page_seed: GeneralOrderPageSeedTupleV5::new(selected.epoch, order.page_index)?,
+        order_slot_index: order.slot_index,
+        position_generation: order.position_generation,
+        reservation_account: input.seller.reservation_account,
+        reservation_semantic_id,
+        reservation_seed: GeneralReservationSeedTupleV9::new(reservation_semantic_id)?,
+        reservation_prestate_data_id,
+        reservation_poststate_data_id,
+        reservation_poststate_body,
+        position_account: input.seller.position.account,
+        position_semantic_id,
+        replay,
+        completes_order,
+    })
+}
+
+fn require_merge_payment_account_partition_v5(
+    input: &FinalizeMergeReceiptPaymentInputV5<'_>,
+) -> Result<(), SettlementAdapterErrorV1> {
+    let mut accounts = [Id32::ZERO; 11];
+    let mut len = 0usize;
+    for account in [
+        input.settlement_root_account,
+        input.retained_feed_account,
+        input.payload.receipt,
+        input.market_binding_account,
+        input.settlement_cash_pot_account,
+        input.seller.owner_row.account(),
+        input.seller.reservation_account,
+        input.seller.position.account,
+        input.seller.replay_account,
+    ] {
+        insert_materialization_account_v5(&mut accounts, &mut len, account)?;
+    }
+    if input.seller.order_page_account.is_zero()
+        || accounts[..len].contains(&input.seller.order_page_account)
+        || input.seller.owner_row.program_owner().is_zero()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    if let Some(fee) = input.fee_finalization {
+        insert_materialization_account_v5(&mut accounts, &mut len, fee.account)?;
+        if fee.account == input.seller.order_page_account {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn bind_merge_payment_order_v5(
+    feed: CandidateFeedHeaderV2,
+    receipt: SettlementReceiptAccountV4,
+    order_index: u8,
+    owner: Id32,
+    order_page_body: &[u8],
+) -> Result<MergePaymentOrderBindingV5, SettlementAdapterErrorV1> {
+    if order_index >= feed.order_count {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let page = verify_page_v5(order_page_body)?;
+    if page.market.bytes() != feed.market.bytes()
+        || page.epoch.bytes() != feed.epoch.bytes()
+        || page.order_set.bytes() != feed.order_set.bytes()
+        || page.frozen != 1
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut cursor = OrderSlotCursorV5::new(order_page_body)?;
+    let mut matched = None;
+    while let Some(next) = cursor.next_slot() {
+        let slot = next?;
+        if slot.slot.is_live() && slot.slot.order_id() == receipt.sell_order_id {
+            if matched.is_some() {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            matched = Some(slot);
+        }
+    }
+    let matched = matched.ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let side = match matched.slot {
+        OrderSlot::Single(record) => record.side,
+        OrderSlot::Portfolio(record) => record.side,
+        OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+            return Err(SettlementAdapterErrorV1::BindingMismatch)
+        }
+    };
+    if side != 1 || matched.slot.owner().bytes() != owner.bytes() {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    Ok(MergePaymentOrderBindingV5 {
+        slot: matched.slot,
+        page_index: page.page_index,
+        slot_index: matched.slot_index,
+        position_generation: matched.position_generation,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bind_merge_payment_finalization_evidence_v5(
+    settlement_root_account: Id32,
+    root: &SettlementRootV1AccountV1,
+    owner: Id32,
+    owner_settlement_account: Id32,
+    finalized_owner_row_data_id: Id32,
+    position_account: Id32,
+    settlement_cash_pot_account: Id32,
+    current_pot_poststate_data_id: Id32,
+    zero_fee_stable_witness: Id32,
+    fee_finalization: Option<MergePaymentFeeFinalizationInputV4<'_>>,
+    replay_prestate: GeneralPositionReplayPrestateV1,
+    finalized: clutch_owner_settlement::OwnerSettlementTerminalProjectionV4,
+    position: PositionAccountV3,
+    position_semantic_id: Id32,
+) -> Result<
+    (
+        MergePaymentFinalizationSourceV5,
+        Option<Id32>,
+        Option<Id32>,
+        Id32,
+    ),
+    SettlementAdapterErrorV1,
+> {
+    let candidate = root.settlement_candidate_id();
+    match (root.fee_record().is_zero(), fee_finalization) {
+        (false, Some(fee_input)) => {
+            if !zero_fee_stable_witness.is_zero() {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            let outer = OwnerFeeFinalizationV4AccountV1::decode(fee_input.exact_body)?;
+            let terminal = outer.terminal_projection(FeeId(fee_input.account.bytes()))?;
+            let source_data_id = owner_fee_finalization_account_data_id_v4(
+                fee_input.exact_body,
+                &CanonicalSha256,
+            )?;
+            let pot_poststate_data_id =
+                Id32::new(terminal.settlement_cash_pot_poststate_data_id.0)?;
+            if terminal.outcome != OwnerFeeFinalizationOutcomeV2::Settled
+                || terminal.carry_account.0 != fee_input.account.bytes()
+                || terminal.fee_record.0 != root.fee_record().bytes()
+                || terminal.settlement_candidate.0 != candidate.bytes()
+                || terminal.owner.0 != owner.bytes()
+                || terminal.owner_settlement_account.0 != owner_settlement_account.bytes()
+                || terminal.owner_settlement_final_data_id.0
+                    != finalized_owner_row_data_id.bytes()
+                || terminal.position.0 != position_account.bytes()
+                || terminal.position_poststate_semantic_id.0 != position_semantic_id.bytes()
+                || terminal.settlement_cash_pot.0 != settlement_cash_pot_account.bytes()
+                || terminal.authorized_fee_atoms != finalized.expectation().selected_fee_atoms()
+            {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            let stable = derive_merge_payment_owner_finalization_evidence_v5(
+                settlement_root_account,
+                candidate,
+                owner,
+                finalized_owner_row_data_id,
+                pot_poststate_data_id,
+                MergePaymentFinalizationSourceV5::FeeFinalizationV4,
+                source_data_id,
+            )?;
+            if replay_prestate.extension().last_kind()
+                == Some(GeneralReplayTransitionKindV1::FinalizeOwnerSettlement)
+                && (terminal.position_poststate_semantic_id.0 != position_semantic_id.bytes()
+                    || terminal.replay_poststate_semantic_id.0
+                        != replay_prestate.replay_semantic_id().bytes()
+                    || terminal.replay_next_sequence != replay_prestate.next_sequence())
+            {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            Ok((
+                MergePaymentFinalizationSourceV5::FeeFinalizationV4,
+                Some(source_data_id),
+                Some(pot_poststate_data_id),
+                stable,
+            ))
+        }
+        (true, None) => {
+            if zero_fee_stable_witness.is_zero() {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            if replay_prestate.extension().last_kind()
+                == Some(GeneralReplayTransitionKindV1::FinalizeOwnerSettlement)
+            {
+                let zero_fee_action38_evidence =
+                    derive_zero_fee_owner_finalization_evidence_fields_v5(
+                        settlement_root_account,
+                        candidate,
+                        owner,
+                        finalized_owner_row_data_id,
+                        current_pot_poststate_data_id,
+                    )?;
+                let derived_stable = derive_merge_payment_owner_finalization_evidence_v5(
+                    settlement_root_account,
+                    candidate,
+                    owner,
+                    finalized_owner_row_data_id,
+                    current_pot_poststate_data_id,
+                    MergePaymentFinalizationSourceV5::ZeroFeeReplay,
+                    zero_fee_action38_evidence,
+                )?;
+                if zero_fee_stable_witness != derived_stable {
+                    return Err(SettlementAdapterErrorV1::BindingMismatch);
+                }
+                let finalized_accumulator = OwnerSettlementAccumulatorV4::decode_body(
+                    clutch_owner_settlement::OWNER_SETTLEMENT_OUTER_TAG_V4,
+                    clutch_owner_settlement::OWNER_SETTLEMENT_OUTER_VERSION_V4,
+                    finalized.finalized_body(),
+                )?;
+                let prior_position = recover_owner_cash_position_prestate_v4(
+                    finalized_accumulator,
+                    position,
+                )?;
+                let prior_position_semantic_id = Id32::new(
+                    prior_position
+                        .semantic_id(&PositionBodySha256V3)?
+                        .bytes(),
+                )?;
+                verify_general_replay_last_transition_v1(
+                    replay_prestate,
+                    prior_position_semantic_id,
+                    GeneralReplayTransitionKindV1::FinalizeOwnerSettlement,
+                    finalized_owner_row_data_id,
+                    zero_fee_action38_evidence,
+                    &PositionBodySha256V3,
+                )?;
+                return Ok((
+                    MergePaymentFinalizationSourceV5::ZeroFeeReplay,
+                    Some(zero_fee_action38_evidence),
+                    Some(current_pot_poststate_data_id),
+                    zero_fee_stable_witness,
+                ));
+            }
+            Ok((
+                MergePaymentFinalizationSourceV5::ZeroFeeReplay,
+                None,
+                None,
+                zero_fee_stable_witness,
+            ))
+        }
+        _ => Err(SettlementAdapterErrorV1::BindingMismatch),
+    }
+}
+
 
 /// Project one terminal owner fee using funding derived from the exact
 /// candidate settlement projection rather than caller-supplied owner totals.
@@ -5377,5 +6204,58 @@ mod scalable_receipt_end_tests {
             prepare_create_settlement_receipt_v5(id(6), seed, 9, semantic, funding),
             Err(SettlementAdapterErrorV1::BindingMismatch)
         );
+    }
+
+    #[test]
+    fn merge_payment_stable_evidence_refuses_cross_chain_splices() {
+        let baseline = derive_merge_payment_owner_finalization_evidence_v5(
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            MergePaymentFinalizationSourceV5::ZeroFeeReplay,
+            id(6),
+        )
+        .unwrap();
+        for changed in [
+            derive_merge_payment_owner_finalization_evidence_v5(
+                id(7), id(2), id(3), id(4), id(5),
+                MergePaymentFinalizationSourceV5::ZeroFeeReplay, id(6),
+            )
+            .unwrap(),
+            derive_merge_payment_owner_finalization_evidence_v5(
+                id(1), id(7), id(3), id(4), id(5),
+                MergePaymentFinalizationSourceV5::ZeroFeeReplay, id(6),
+            )
+            .unwrap(),
+            derive_merge_payment_owner_finalization_evidence_v5(
+                id(1), id(2), id(7), id(4), id(5),
+                MergePaymentFinalizationSourceV5::ZeroFeeReplay, id(6),
+            )
+            .unwrap(),
+            derive_merge_payment_owner_finalization_evidence_v5(
+                id(1), id(2), id(3), id(7), id(5),
+                MergePaymentFinalizationSourceV5::ZeroFeeReplay, id(6),
+            )
+            .unwrap(),
+            derive_merge_payment_owner_finalization_evidence_v5(
+                id(1), id(2), id(3), id(4), id(7),
+                MergePaymentFinalizationSourceV5::ZeroFeeReplay, id(6),
+            )
+            .unwrap(),
+            derive_merge_payment_owner_finalization_evidence_v5(
+                id(1), id(2), id(3), id(4), id(5),
+                MergePaymentFinalizationSourceV5::FeeFinalizationV4, id(6),
+            )
+            .unwrap(),
+            derive_merge_payment_owner_finalization_evidence_v5(
+                id(1), id(2), id(3), id(4), id(5),
+                MergePaymentFinalizationSourceV5::ZeroFeeReplay, id(7),
+            )
+            .unwrap(),
+        ] {
+            assert_ne!(baseline, changed);
+        }
     }
 }
