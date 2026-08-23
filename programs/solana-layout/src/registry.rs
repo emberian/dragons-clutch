@@ -112,9 +112,29 @@ pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
 /// General V2 owner-aggregated settlement account discriminator.
-pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x7d;
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x7f;
 /// General V2 owner-aggregated settlement account version.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// General V2 selected composite-fee record envelope discriminator.
+pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x80;
+/// General V2 selected composite-fee record envelope version.
+pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
+/// General V2 owner fee-carry envelope discriminator.
+pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x81;
+/// General V2 owner fee-carry envelope version.
+pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
+/// General V2 temporary owner payer-allocation envelope discriminator.
+pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x82;
+/// General V2 temporary owner payer-allocation envelope version.
+pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// General V2 temporary candidate-wide recipient-allocation discriminator.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x83;
+/// General V2 temporary candidate-wide recipient-allocation version.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// General V2 selected-record treasury-ledger envelope discriminator.
+pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x84;
+/// General V2 selected-record treasury-ledger envelope version.
+pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -425,6 +445,51 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-settlement-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
+            version: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-selected-fee-record-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-fee-carry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-payer-allocation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-recipient-allocation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
+            version: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-treasury-ledger-v1-account",
     },
 ];
 
@@ -919,6 +984,26 @@ mod tests {
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
+                GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
+                GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {

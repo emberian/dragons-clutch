@@ -65,9 +65,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-fee-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-owner-settlement",
+]
+
+[[package]]
 name = "clutch-general-v2-contract"
 version = "0.1.0"
 dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-fee-runtime-contract",
  "clutch-owner-settlement",
 ]
 

@@ -161,6 +161,21 @@ pub const SEED_GENERAL_V2_SELECTED: &[u8] =
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
     clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
+/// Disabled selected composite-fee record seed prefix.
+pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
+    clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
+/// Disabled owner-scoped fee-carry seed prefix.
+pub const SEED_GENERAL_V2_OWNER_FEE_CARRY: &[u8] =
+    clutch_general_v2_contract::OWNER_FEE_CARRY_SEED_DOMAIN_V1;
+/// Disabled owner payer-allocation seed prefix.
+pub const SEED_GENERAL_V2_PAYER_ALLOCATION: &[u8] =
+    clutch_general_v2_contract::PAYER_ALLOCATION_SEED_DOMAIN_V1;
+/// Disabled candidate-wide recipient-allocation seed prefix.
+pub const SEED_GENERAL_V2_RECIPIENT_ALLOCATION: &[u8] =
+    clutch_general_v2_contract::RECIPIENT_ALLOCATION_SEED_DOMAIN_V1;
+/// Disabled selected-record treasury-ledger seed prefix.
+pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
+    clutch_general_v2_contract::TREASURY_LEDGER_SEED_DOMAIN_V1;
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -350,6 +365,57 @@ pub fn general_v2_owner_settlement_pda(
         program_id,
         &[SEED_GENERAL_V2_OWNER_SETTLEMENT, selected_candidate, owner],
     )
+}
+
+/// Canonical disabled selected fee-record address for one SelectedCandidate.
+pub fn general_v2_selected_fee_record_pda(
+    program_id: &Pubkey,
+    selected_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SELECTED_FEE_RECORD, selected_candidate],
+    )
+}
+
+/// Canonical disabled carry address keyed only by fee record and owner.
+pub fn general_v2_owner_fee_carry_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_OWNER_FEE_CARRY, fee_record, owner],
+    )
+}
+
+/// Canonical disabled temporary payer-allocation address for one owner.
+pub fn general_v2_payer_allocation_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_PAYER_ALLOCATION, fee_record, owner],
+    )
+}
+
+/// Canonical disabled candidate-wide recipient-allocation address.
+pub fn general_v2_recipient_allocation_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RECIPIENT_ALLOCATION, fee_record],
+    )
+}
+
+/// Canonical disabled treasury-ledger address for one selected fee record.
+pub fn general_v2_treasury_ledger_pda(program_id: &Pubkey, fee_record: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_TREASURY_LEDGER, fee_record])
 }
 
 /// Canonical immutable-terms address and bump.

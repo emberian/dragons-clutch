@@ -11,6 +11,7 @@
 //! lamport movement remain adapter obligations.
 
 mod codec;
+mod fee_accounts;
 mod owner_settlement;
 mod payload;
 mod rank;
@@ -18,6 +19,7 @@ mod state;
 mod transition;
 
 pub use codec::{CodecError, Reader, Writer};
+pub use fee_accounts::*;
 pub use owner_settlement::*;
 pub use payload::*;
 pub use rank::{
@@ -114,6 +116,16 @@ pub const ECONOMIC_DOMAIN_SEED_DOMAIN_V1: &[u8] = b"economic-domain:v2";
 pub const SELECTED_CANDIDATE_SEED_DOMAIN_V1: &[u8] = b"selected-candidate:v1";
 /// Fresh disabled owner-settlement envelope PDA seed domain.
 pub const OWNER_SETTLEMENT_SEED_DOMAIN_V1: &[u8] = b"owner-settlement:v1";
+/// Fresh selected composite-fee record PDA seed domain.
+pub const SELECTED_FEE_RECORD_SEED_DOMAIN_V1: &[u8] = b"selected-fee-record:v1";
+/// Fresh owner-scoped fee carry PDA seed domain.
+pub const OWNER_FEE_CARRY_SEED_DOMAIN_V1: &[u8] = b"owner-fee-carry:v1";
+/// Fresh temporary owner payer-allocation PDA seed domain.
+pub const PAYER_ALLOCATION_SEED_DOMAIN_V1: &[u8] = b"owner-payer-allocation:v1";
+/// Fresh temporary candidate-wide recipient-allocation PDA seed domain.
+pub const RECIPIENT_ALLOCATION_SEED_DOMAIN_V1: &[u8] = b"candidate-recipient-allocation:v1";
+/// Fresh selected-record-scoped treasury ledger PDA seed domain.
+pub const TREASURY_LEDGER_SEED_DOMAIN_V1: &[u8] = b"fee-treasury-ledger:v1";
 /// Fresh counted General V2 Epoch PDA seed domain.
 pub const EPOCH_SEED_DOMAIN_V1: &[u8] = b"general-epoch:v2";
 /// Fresh counted General V2 order-page PDA seed domain.
@@ -244,11 +256,41 @@ pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
 /// First RelationV2-native counted General Epoch schema.
 pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
 /// Fresh disabled General V2 owner-settlement envelope tag.
-pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x7d;
+pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x7f;
 /// First exact owner-settlement envelope version.
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
 /// Exact outer owner-settlement account bytes.
 pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 340;
+/// Fresh disabled selected composite-fee record envelope tag.
+pub const SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x80;
+/// First selected composite-fee record envelope version.
+pub const SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
+/// Exact selected composite-fee record outer bytes.
+pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES: usize = 388;
+/// Fresh disabled owner fee-carry envelope tag.
+pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x81;
+/// First owner fee-carry envelope version.
+pub const OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
+/// Exact owner fee-carry outer bytes.
+pub const OWNER_FEE_CARRY_ACCOUNT_BYTES: usize = 180;
+/// Fresh disabled owner payer-allocation envelope tag.
+pub const PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x82;
+/// First owner payer-allocation envelope version.
+pub const PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// Exact owner payer-allocation outer bytes.
+pub const PAYER_ALLOCATION_ACCOUNT_BYTES: usize = 2_732;
+/// Fresh disabled candidate-wide recipient-allocation envelope tag.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x83;
+/// First candidate-wide recipient-allocation envelope version.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// Exact candidate-wide recipient-allocation outer bytes.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES: usize = 2_692;
+/// Fresh disabled selected-record treasury-ledger envelope tag.
+pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x84;
+/// First selected-record treasury-ledger envelope version.
+pub const TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
+/// Exact selected-record treasury-ledger outer bytes.
+pub const TREASURY_LEDGER_ACCOUNT_BYTES: usize = 196;
 /// Existing semantic account tag, fresh successor version: sealed feed.
 pub const CANDIDATE_FEED_ACCOUNT_TAG: u8 = 18;
 /// Active-width General V2 feed version.
@@ -303,8 +345,8 @@ pub struct AccountAllocationV1 {
 ///
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
-/// this dependency-free crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 13] = [
+/// this standalone pure crate does not claim registry authority.
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 18] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -319,6 +361,31 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 13] = [
         tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
         version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/OwnerSettlementV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,
+        version: SELECTED_FEE_RECORD_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/SelectedFeeRecordV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
+        version: OWNER_FEE_CARRY_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerFeeCarryV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: PAYER_ALLOCATION_ACCOUNT_TAG,
+        version: PAYER_ALLOCATION_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/PayerAllocationV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+        version: RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/RecipientAllocationV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: TREASURY_LEDGER_ACCOUNT_TAG,
+        version: TREASURY_LEDGER_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/TreasuryLedgerV1AccountV1",
     },
     AccountAllocationV1 {
         tag: WINDOW_ACCOUNT_TAG,

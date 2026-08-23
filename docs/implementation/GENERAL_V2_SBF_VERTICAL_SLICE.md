@@ -70,7 +70,12 @@ the pinned layout dependency graph.
 | counted-retirement Replay successor | `0x7a/1` | 132 |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
-| disabled `OwnerSettlementV1AccountV1` envelope | `0x7d/1` | 340 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x7f/1` | 340 |
+| disabled selected fee-record envelope | `0x80/1` | 388 |
+| disabled owner fee-carry envelope | `0x81/1` | 180 |
+| disabled temporary payer-allocation envelope | `0x82/1` | 2,732 |
+| disabled temporary recipient-allocation envelope | `0x83/1` | 2,692 |
+| disabled treasury-ledger envelope | `0x84/1` | 196 |
 
 Here `O` is the active outcome count, `N` the active order count, `A` the
 active quantized-atom count, and `S` the active settlement-slice count. Feeds
@@ -87,7 +92,9 @@ state.
 
 The central collision ledger reserves these coordinates as
 `ReservedDisabled`, records retirement's provisional tombstones at `0x75/1`
-and `0x76/1`, and proves its recorded rows internally disjoint. A complete
+and `0x76/1` plus the permanent Position tombstone at `0x75/2`, and proves its
+recorded rows internally disjoint. Source/Series owns `0x7d/1` and `0x7e/1`;
+General does not reinterpret either coordinate. A complete
 legacy-account inventory cross-check remains an activation gate. The numeric
 constants in the standalone General crate describe matching codec bytes, not a
 second allocation authority; the eventual adapter must add an explicit parity
@@ -228,6 +235,11 @@ never authority.
 | ClearWork | `["clear-work:v2", AdmissionNode_PDA]` |
 | SelectedCandidate | `["selected-candidate:v1", Epoch_PDA, settlement_candidate_id]` |
 | OwnerSettlement | `["owner-settlement:v1", SelectedCandidate_PDA, semantic_owner]` |
+| selected fee record | `["selected-fee-record:v1", SelectedCandidate_PDA]` |
+| owner fee carry | `["owner-fee-carry:v1", selected_fee_record_PDA, semantic_owner]` |
+| temporary payer allocation | `["owner-payer-allocation:v1", selected_fee_record_PDA, semantic_owner]` |
+| temporary recipient allocation | `["candidate-recipient-allocation:v1", selected_fee_record_PDA]` |
+| treasury ledger | `["fee-treasury-ledger:v1", selected_fee_record_PDA]` |
 
 The exported order-page, reservation, receipt, and final-pot prefixes do not
 freeze their suffix tuples. Those remain unallocated until their complete
@@ -674,11 +686,19 @@ All other General V2 actions remain disabled. In particular:
   primitive.
 
 Actions 24 and 25 have strict capability-disabled payload and account-envelope
-codecs, including a centrally reserved `0x7d/1` OwnerSettlement envelope, but
+codecs, including a centrally reserved `0x7f/1` OwnerSettlement envelope, but
 no successful SBF transition. They cannot activate until an authenticated,
 complete filled-order projection, exactly one selected fee row per canonical
 owner, checked candidate totals, a canonically derived owner-order-set digest,
 and exact receipt, reservation, and SelectedCandidate joins exist.
+
+The centrally reserved `0x80/1` through `0x84/1` fee envelopes are likewise
+capability-disabled. Their inner codecs re-enter the typed fee constructors;
+the outer bytes add only rent ownership, hostile-prefund accounting, PDA bump,
+and zero flags. Carry and payer allocation are keyed by `(selected fee record,
+owner)`, never by an order, reservation, or intent. No local action or ordered
+SBF meta contract has been allocated for these accounts, so they cannot relax
+the zero-fee boundary or move Position value.
 
 This lab can close completed Work and unlink terminal source nodes while
 retaining the selected Feed. It still leaves the retained Feed,
