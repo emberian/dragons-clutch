@@ -2275,7 +2275,7 @@ fn run(
         "wrong feed changed registered archive or treasury",
     )?;
 
-    let append_clock = assert_clock(&rpc, publish_time)?;
+    assert_clock(&rpc, publish_time)?;
     let update = Keypair::new();
     let (joined_signature, status) = sign_submit(
         &rpc,
@@ -2370,6 +2370,7 @@ fn run(
         99_000_000 < lower && upper < 101_000_000,
         "interval does not uniquely select cell 1",
     )?;
+    let append_clock = assert_clock(&rpc, publish_time)?;
 
     let (seal_signature, status) = sign_submit(
         &rpc,
