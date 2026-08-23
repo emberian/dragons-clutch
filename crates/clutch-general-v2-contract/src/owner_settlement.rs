@@ -14,9 +14,11 @@ use crate::{
 pub use clutch_owner_settlement::{
     build_owner_settlement_book_v1, AuthenticatedOwnerFragmentV1, CandidateSettlementTotalsV1,
     Error as OwnerSettlementError, OwnerSettlementAccumulatorV1, OwnerSettlementBookV1,
-    OwnerSettlementDispositionV1, OwnerSettlementExpectationV1, SelectedOwnerFeeV1,
-    SettlementCashPotExpectationV1, SettlementCashPotV1, SettlementSideV1,
-    VerifiedSettlementOrderV1, OWNER_SETTLEMENT_BODY_V1_BYTES, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+    OwnerSettlementDispositionV1, OwnerSettlementExpectationV1,
+    OwnerSettlementTerminalProjectionV1, SelectedOwnerFeeV1, SettlementCashPotExpectationV1,
+    SettlementCashPotV1, SettlementSideV1, VerifiedSettlementOrderV1,
+    OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V1, OWNER_SETTLEMENT_BODY_V1_BYTES,
+    SETTLEMENT_CASH_POT_BODY_V1_BYTES,
 };
 pub use clutch_owner_settlement::{
     build_owner_settlement_book_v2, derive_settlement_receipt_data_id_v2,
@@ -49,6 +51,14 @@ impl OwnerSettlementV1AccountV1 {
             return Err(CodecError::InvalidState);
         }
         Ok(())
+    }
+
+    /// Consume the semantic owner's finalized-row deletion projection.
+    pub fn retirement_projection(self) -> Result<OwnerSettlementTerminalProjectionV1, CodecError> {
+        self.validate()?;
+        self.semantic
+            .terminal_projection()
+            .map_err(|_| CodecError::InvalidState)
     }
 
     /// Encode the exact canonical 292-byte outer account.
