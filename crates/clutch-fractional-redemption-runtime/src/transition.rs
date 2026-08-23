@@ -7,7 +7,8 @@ use clutch_collateral_adapter_v2::{
     ClaimLedgerV3, FractionalClaimLedgerFoundingPlanV3, FractionalClaimLedgerPlanV3,
     FractionalClaimLedgerRetirementPlanV3, FractionalClaimRedemptionPlanV3,
     FractionalClaimSupplyMutationV3, FractionalPayoutDispositionV3, HoardV2, Id,
-    MarketLiabilityLifecycleV1,
+    MarketLiabilityLifecycleV1, ResolutionPayoutProjectionV5, ResolutionPayoutUnitBoundaryV5,
+    ResolutionStateV5, ResolutionV5,
 };
 use clutch_general_v2_contract::{
     project_general_replay_transition_v1, GeneralPositionReplayPrestateV1,
@@ -72,6 +73,9 @@ pub struct BoundFractionalContextV1 {
     claim_ledger_account: Identity32V1,
     claim_ledger: ClaimLedgerV3,
     hoard: HoardV2,
+    resolution: ResolutionV5,
+    resolution_semantic_id: Identity32V1,
+    resolution_data_id: Identity32V1,
     payout: PayoutVectorV1,
     collateral: BoundCollateralProfileV2,
     claims: BoundClaimIssuanceV1,
@@ -105,6 +109,18 @@ impl BoundFractionalContextV1 {
     /// Canonical locked-claim-principal owner.
     pub const fn hoard(self) -> HoardV2 {
         self.hoard
+    }
+    /// Exact structurally bound Resolution V5 body.
+    pub const fn resolution(self) -> ResolutionV5 {
+        self.resolution
+    }
+    /// Body-only Resolution V5 semantic identity.
+    pub const fn resolution_semantic_id(self) -> Identity32V1 {
+        self.resolution_semantic_id
+    }
+    /// Exact Resolution V5 PDA-and-body identity persisted by policy/credits.
+    pub const fn resolution_data_id(self) -> Identity32V1 {
+        self.resolution_data_id
     }
     /// Ephemeral canonical Resolution projection.
     pub const fn payout(self) -> PayoutVectorV1 {
@@ -197,11 +213,31 @@ pub fn bind_fractional_context_v1(
     claim_ledger_account: Identity32V1,
     claim_ledger: ClaimLedgerV3,
     hoard: HoardV2,
-    payout: PayoutVectorV1,
+    resolution: ResolutionV5,
     collateral: BoundCollateralProfileV2,
     claims: BoundClaimIssuanceV1,
 ) -> Result<BoundFractionalContextV1> {
-    policy.validate_join(payout, collateral, claims)?;
+    map_collateral(resolution.validate())?;
+    if resolution.state != ResolutionStateV5::Finalized
+        || resolution.facts.market_instance_id != collateral_id(policy.market_instance)
+        || resolution.facts.native_claim_basis_id != claim_ledger.native_claim_basis_id
+        || resolution.facts.generation != policy.domain_generation
+        || resolution.facts.outcome_count != policy.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let payout = PayoutVectorV1::from_resolution_v5(resolution)?;
+    let resolution_semantic_id = runtime_identity(
+        resolution
+            .semantic_id(&FractionalSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    let resolution_data_id = runtime_identity(
+        resolution
+            .data_id(collateral_id(policy.resolution_account))
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    policy.validate_join(payout, resolution_data_id, collateral, claims)?;
     ledger.validate_with_policy(policy_account, policy)?;
     if policy_account == ledger_account {
         return Err(Error::MismatchedBinding);
@@ -224,6 +260,9 @@ pub fn bind_fractional_context_v1(
         claim_ledger_account,
         claim_ledger,
         hoard,
+        resolution,
+        resolution_semantic_id,
+        resolution_data_id,
         payout,
         collateral,
         claims,
@@ -423,6 +462,8 @@ pub enum RedemptionSourcePoststateV1 {
 /// One complete exact or credited redemption plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RedemptionPlanV1 {
+    /// Exact Resolution V5 identity, burn quantity, quotient, and raw remainder.
+    pub resolution_payout: ResolutionPayoutProjectionV5,
     /// Sole aggregate-credit owner's exact successor.
     pub ledger_after: FractionalLedgerV1,
     /// Atomic canonical ClaimLedger/Hoard successor and cross-account IDs.
@@ -596,7 +637,7 @@ fn open_credit(
                     ledger_account: context.ledger_account,
                     market_instance: context.policy.market_instance,
                     resolution_account: context.policy.resolution_account,
-                    payout_vector_id: context.policy.payout_vector_id,
+                    resolution_data_id: context.policy.resolution_data_id,
                     claimant,
                     domain_generation: context.policy.domain_generation,
                     account_generation: 1,
@@ -615,7 +656,7 @@ fn open_credit(
                 || tombstone.ledger_account != context.ledger_account
                 || tombstone.market_instance != context.policy.market_instance
                 || tombstone.resolution_account != context.policy.resolution_account
-                || tombstone.payout_vector_id != context.policy.payout_vector_id
+                || tombstone.resolution_data_id != context.policy.resolution_data_id
                 || tombstone.claimant != claimant
                 || tombstone.domain_generation != context.policy.domain_generation
                 || tombstone.closed_next_sequence != expected_sequence
@@ -629,7 +670,7 @@ fn open_credit(
                     ledger_account: context.ledger_account,
                     market_instance: context.policy.market_instance,
                     resolution_account: context.policy.resolution_account,
-                    payout_vector_id: context.policy.payout_vector_id,
+                    resolution_data_id: context.policy.resolution_data_id,
                     claimant,
                     domain_generation: context.policy.domain_generation,
                     account_generation: tombstone
@@ -652,7 +693,7 @@ fn checked_redemption(
     outcome: u8,
     quantity: u64,
     prior_credit: u64,
-) -> Result<(u64, u64)> {
+) -> Result<(u64, u64, ResolutionPayoutProjectionV5)> {
     if context.ledger.phase != FractionalLedgerPhaseV1::Live {
         return Err(Error::WrongPhase);
     }
@@ -672,14 +713,35 @@ fn checked_redemption(
     if canonical_supply(context.claim_ledger)?[index] < quantity {
         return Err(Error::InsufficientClaims);
     }
-    let numerator = u128::from(quantity)
-        .checked_mul(u128::from(context.payout.weights[index]))
+    let resolution_payout = map_collateral(context.resolution.payout_projection(
+        collateral_id(context.policy.resolution_account),
+        outcome,
+        quantity,
+        &FractionalSha256V1,
+    ))?;
+    if resolution_payout.resolution_semantic_id().bytes() != context.resolution_semantic_id.bytes()
+        || resolution_payout.resolution_data_id().bytes() != context.resolution_data_id.bytes()
+        || resolution_payout.market_instance_id() != collateral_id(context.policy.market_instance)
+        || resolution_payout.native_claim_basis_id() != context.claim_ledger.native_claim_basis_id
+        || resolution_payout.generation() != context.policy.domain_generation
+        || resolution_payout.outcome() != outcome
+        || resolution_payout.quantity() != quantity
+        || resolution_payout.payout_weight() != context.payout.weights[index]
+        || resolution_payout.denominator() != context.payout.denominator
+        || resolution_payout.payout_unit_boundary()
+            != ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let denominator = u128::from(resolution_payout.denominator());
+    let numerator = u128::from(resolution_payout.whole_atoms())
+        .checked_mul(denominator)
+        .and_then(|value| value.checked_add(u128::from(resolution_payout.remainder_numerator())))
         .and_then(|value| value.checked_add(u128::from(prior_credit)))
         .ok_or(Error::Arithmetic)?;
-    let denominator = u128::from(context.payout.denominator);
     let paid = u64::try_from(numerator / denominator).map_err(|_| Error::Arithmetic)?;
     let residue = u64::try_from(numerator % denominator).map_err(|_| Error::Arithmetic)?;
-    Ok((paid, residue))
+    Ok((paid, residue, resolution_payout))
 }
 
 fn internal_poststate(
@@ -778,7 +840,8 @@ fn redeem_exact_common(
         FractionalClaimRedemptionPlanV3,
     ) -> Result<RedemptionSourcePoststateV1>,
 ) -> Result<RedemptionPlanV1> {
-    let (paid_atoms, residue) = checked_redemption(context, outcome, quantity, 0)?;
+    let (paid_atoms, residue, resolution_payout) =
+        checked_redemption(context, outcome, quantity, 0)?;
     if residue != 0 {
         return Err(Error::NonIntegralLot);
     }
@@ -792,6 +855,7 @@ fn redeem_exact_common(
         disposition,
     )?;
     Ok(RedemptionPlanV1 {
+        resolution_payout,
         ledger_after,
         custody_after,
         credit_after: None,
@@ -881,7 +945,8 @@ fn redeem_with_credit(
     let (mut credit_after, created_count) =
         open_credit(context, credit_prestate, claimant, expected_credit_sequence)?;
     let prior = credit_after.numerator;
-    let (paid_atoms, residue) = checked_redemption(context, outcome, quantity, prior)?;
+    let (paid_atoms, residue, resolution_payout) =
+        checked_redemption(context, outcome, quantity, prior)?;
     credit_after.numerator = residue;
     let mut ledger_after = context.ledger.advanced(expected_ledger_sequence)?;
     ledger_after.active_credit_accounts = ledger_after
@@ -909,6 +974,7 @@ fn redeem_with_credit(
         disposition,
     )?;
     Ok(RedemptionPlanV1 {
+        resolution_payout,
         ledger_after,
         custody_after,
         credit_after: Some(credit_after),
@@ -1356,7 +1422,7 @@ pub fn close_zero_credit_v1(
             ledger_account: credit.ledger_account,
             market_instance: credit.market_instance,
             resolution_account: credit.resolution_account,
-            payout_vector_id: credit.payout_vector_id,
+            resolution_data_id: credit.resolution_data_id,
             claimant: credit.claimant,
             domain_generation: credit.domain_generation,
             account_generation: credit.account_generation,
@@ -1531,6 +1597,10 @@ fn prepare_fractional_account_close_funding(
 pub struct FractionalDomainTerminalRequirementV1 {
     market_instance_id: Identity32V1,
     domain_generation: u64,
+    resolution_account: Identity32V1,
+    resolution_semantic_id: Identity32V1,
+    resolution_data_id: Identity32V1,
+    native_claim_basis_id: Identity32V1,
     policy_account: Identity32V1,
     policy_terminal_state_id: Identity32V1,
     ledger_account: Identity32V1,
@@ -1550,6 +1620,26 @@ impl FractionalDomainTerminalRequirementV1 {
     /// Exact nonzero fractional/Resolution generation being retired.
     pub const fn domain_generation(self) -> u64 {
         self.domain_generation
+    }
+
+    /// Physical canonical Resolution V5 account for this generation.
+    pub const fn resolution_account(self) -> Identity32V1 {
+        self.resolution_account
+    }
+
+    /// Body-only identity of the exact final Resolution V5 state.
+    pub const fn resolution_semantic_id(self) -> Identity32V1 {
+        self.resolution_semantic_id
+    }
+
+    /// PDA-and-body identity of the exact final Resolution V5 state.
+    pub const fn resolution_data_id(self) -> Identity32V1 {
+        self.resolution_data_id
+    }
+
+    /// Canonical NativeClaimBasis selected by Resolution and ClaimLedger.
+    pub const fn native_claim_basis_id(self) -> Identity32V1 {
+        self.native_claim_basis_id
     }
 
     /// Physical immutable `0xa4/v1` account to delete.
@@ -1664,6 +1754,10 @@ pub fn close_empty_ledger_v1(
     let terminal_requirement = FractionalDomainTerminalRequirementV1 {
         market_instance_id: context.policy.market_instance,
         domain_generation: context.policy.domain_generation,
+        resolution_account: context.policy.resolution_account,
+        resolution_semantic_id: context.resolution_semantic_id,
+        resolution_data_id: context.resolution_data_id,
+        native_claim_basis_id: runtime_identity(context.claim_ledger.native_claim_basis_id)?,
         policy_account: context.policy_account,
         policy_terminal_state_id: context.policy.state_id()?,
         ledger_account: context.ledger_account,
