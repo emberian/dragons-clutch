@@ -96,15 +96,28 @@ MarketBinding neutral sink. Both siblings close atomically.
 
 The current `SettlementRootV1AccountV1` does not count these two accounts. It is
 therefore not lawful to create them merely because Root V1 later becomes
-terminal. The runtime makes this structural: construction requires an
-unforgeable `CountedExactIndexAdmissionV1`, closure requires an unforgeable
-`CountedExactIndexRetirementV1`, and this source defines no constructor for
-either. `EXACT_INDEX_PLANE_LIVE_ENABLED_V1` is false. There is no instruction,
-PDA prefix, artifact discriminator, dispatch route, or profile capability.
+terminal. The source now defines a disabled breaking
+`IndexedSettlementRootV1AccountV1` envelope. It embeds the exact Root V1 body,
+owns both child accounts, both exact body IDs, the shared plane and capability
+profile IDs, and an exhaustive expected/admitted/live/retired partition. Only
+the atomic two-live and atomic two-retired states are representable; partial
+create and partial close are refused.
 
-Promotion requires a breaking counted-root successor that owns exact
-expected/admitted/live/retired index-child counts and mints those private
-capabilities only while atomically changing the corresponding count. It must
-count exactly both siblings, not reuse receipt or Dealer counters. Until that
-join exists, the private typed postwrites are review/test artifacts and no
-persistent child is reachable.
+Raw construction still requires an unforgeable `CountedExactIndexAdmissionV1`
+and raw closure requires an unforgeable `CountedExactIndexRetirementV1`. The
+only constructors are higher-level pure plans that return the matching indexed
+root write in the same rollback domain as both child writes. The bounded read
+authority remains unminted until the adapter can authenticate the live indexed
+root, both program owners, both canonical PDAs, read-only metas, and the exact
+sibling headers in one route.
+
+`EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. The indexed-root envelope
+has review-only magic, not a Solana account discriminator. There is no PDA
+prefix, action, dispatch entry, or profile capability. Promotion must allocate
+a breaking root discriminator/seed and wire every existing root transition
+through its checked indexed-root transition, then wire atomic child create,
+read, and retire routes. The merge-cash-pot activation must retain its existing
+atomic account-creation/rent plan instead of exposing a root-only successor, and
+the larger root allocation must have an exact rent/reallocation plan. It must
+not reuse receipt or Dealer counters. Until those joins exist, the private typed
+postwrites remain unreachable from SBF.
