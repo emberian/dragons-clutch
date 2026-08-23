@@ -1,6 +1,6 @@
 //! The v2 source-spec account and the v2 sealed archive page.
 //!
-//! ## What this owns
+//! ## What this codec owns
 //!
 //! Two account families, both new tags so no V1 account can ever be read as a
 //! v2 one or the reverse:
@@ -9,6 +9,10 @@
 //! | --- | ---: | ---: | --- |
 //! | v2 SourceSpec | `0x73` | 404 | the 368-byte canonical v2 body and its `dragons-clutch/feed/v2` identity |
 //! | v2 source archive | `0x74` | 2 560 | one contiguous page of crossing-rule observations |
+//!
+//! This module owns the account bodies and exact lengths. The central layout
+//! registry owns the v2 archive's tag/version coordinates, which this codec
+//! imports directly so the two cannot drift.
 //!
 //! The archive page's **geometry is deliberately identical to the V1 page**:
 //! the same 512-byte header, the same thirty-two 64-byte record slots, the same
@@ -34,7 +38,7 @@
 //! open half of `docs/implementation/R2_PULL_PROMOTION_PLAN.md` P0.5.
 
 use clutch_accumulator::{WindowDomain, WINDOW_DOMAIN_BYTES, WINDOW_DOMAIN_TAG};
-use clutch_solana_layout::Hash32;
+use clutch_solana_layout::{registry, Hash32};
 
 use crate::source_archive::{
     SOURCE_ARCHIVE_ACCOUNT_V1_BYTES, SOURCE_ARCHIVE_HEADER_V1_BYTES, SOURCE_ARCHIVE_MAX_RECORDS_V1,
@@ -58,8 +62,6 @@ pub const SOURCE_ARCHIVE_MAX_RECORDS_V2: usize = SOURCE_ARCHIVE_MAX_RECORDS_V1;
 
 const SOURCE_SPEC_ACCOUNT_V2_TAG: u8 = 0x73;
 const SOURCE_SPEC_ACCOUNT_V2_VERSION: u8 = 1;
-const SOURCE_ARCHIVE_ACCOUNT_V2_TAG: u8 = 0x74;
-const SOURCE_ARCHIVE_ACCOUNT_V2_VERSION: u8 = 1;
 const SOURCE_ARCHIVE_V2_FLAG_SEALED: u8 = 1;
 const SOURCE_ARCHIVE_V2_COMMITMENT_DOMAIN: &[u8] = b"dragons-clutch/source-archive/v2";
 
@@ -71,11 +73,13 @@ const SPEC_FLAGS_OFFSET: usize = 403;
 const _: () = assert!(SPEC_BODY_OFFSET + SOURCE_SPEC_V2_BYTES == SPEC_BUMP_OFFSET);
 const _: () = assert!(SPEC_FLAGS_OFFSET + 1 == SOURCE_SPEC_ACCOUNT_V2_BYTES);
 const _: () = assert!(ARCHIVE_RECORD_V2_BYTES == SOURCE_ARCHIVE_RECORD_V1_BYTES);
+const _: () = assert!(registry::SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 0x74);
+const _: () = assert!(registry::SOURCE_ARCHIVE_V2_ACCOUNT_VERSION == 1);
 const _: () = assert!(
     SOURCE_ARCHIVE_ACCOUNT_V2_BYTES
         == SOURCE_ARCHIVE_HEADER_V1_BYTES + SOURCE_ARCHIVE_MAX_RECORDS_V2 * ARCHIVE_RECORD_V2_BYTES
 );
-const _: () = assert!(SOURCE_ARCHIVE_ACCOUNT_V2_TAG != SOURCE_SPEC_ACCOUNT_V2_TAG);
+const _: () = assert!(registry::SOURCE_ARCHIVE_V2_ACCOUNT_TAG != SOURCE_SPEC_ACCOUNT_V2_TAG);
 
 /* The v2 page's header offsets are the V1 page's, field for field.  They are
  * restated rather than imported because they are private to `source_archive`;
@@ -407,8 +411,8 @@ pub fn initialize_genesis_archive_v2(
     }
 
     out.fill(0);
-    out[0] = SOURCE_ARCHIVE_ACCOUNT_V2_TAG;
-    out[1] = SOURCE_ARCHIVE_ACCOUNT_V2_VERSION;
+    out[0] = registry::SOURCE_ARCHIVE_V2_ACCOUNT_TAG;
+    out[1] = registry::SOURCE_ARCHIVE_V2_ACCOUNT_VERSION;
     put_32(out, ARCHIVE_FEED_OFFSET, verified_spec.feed.bytes());
     put_32(out, ARCHIVE_ADAPTER_OFFSET, fields.source_adapter_id);
     put_u32(
@@ -730,10 +734,10 @@ fn verify_page(
     require_sealed: bool,
 ) -> Result<PageHeaderV2, ArchiveV2Error> {
     exact_len(archive, SOURCE_ARCHIVE_ACCOUNT_V2_BYTES)?;
-    if archive[0] != SOURCE_ARCHIVE_ACCOUNT_V2_TAG {
+    if archive[0] != registry::SOURCE_ARCHIVE_V2_ACCOUNT_TAG {
         return Err(ArchiveV2Error::WrongTag);
     }
-    if archive[1] != SOURCE_ARCHIVE_ACCOUNT_V2_VERSION {
+    if archive[1] != registry::SOURCE_ARCHIVE_V2_ACCOUNT_VERSION {
         return Err(ArchiveV2Error::WrongVersion);
     }
     let flags = archive[ARCHIVE_FLAGS_OFFSET];
@@ -1835,6 +1839,20 @@ mod tests {
             record_offset(SOURCE_ARCHIVE_MAX_RECORDS_V2 - 1) + ARCHIVE_RECORD_V2_BYTES,
             SOURCE_ARCHIVE_ACCOUNT_V2_BYTES
         );
+    }
+
+    #[test]
+    fn the_archive_frame_uses_central_registry_coordinates() {
+        let (archive, _) = walk_the_window();
+        assert_eq!(
+            &archive[..2],
+            &[
+                registry::SOURCE_ARCHIVE_V2_ACCOUNT_TAG,
+                registry::SOURCE_ARCHIVE_V2_ACCOUNT_VERSION,
+            ]
+        );
+        assert_eq!(registry::SOURCE_ARCHIVE_V2_ACCOUNT_TAG, 0x74);
+        assert_eq!(registry::SOURCE_ARCHIVE_V2_ACCOUNT_VERSION, 1);
     }
 
     #[test]

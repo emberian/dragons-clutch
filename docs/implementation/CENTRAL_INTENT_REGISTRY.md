@@ -96,9 +96,10 @@ namespaces:
 
 `clutch_solana_layout::registry` pins both spellings with compile-time
 assertions. Its collision ledger scopes uniqueness by namespace, tag, and
-version. It records the Source Archive row because this spelling caused the
-allocation confusion; account codec modules remain the semantic owners and the
-ledger is not a competing account-layout inventory.
+version. It is the semantic owner of the Source Archive V2 tag/version pair;
+the SBF codec imports those constants directly while remaining the sole owner
+of that account's body and exact length. The ledger is not a competing
+account-layout inventory.
 
 ## Capability and activation rule
 
@@ -119,5 +120,8 @@ A later activation must change the following atomically:
 5. update this registry and its collision tests without changing legacy golden
    bytes or packet limits.
 
-Proposed account shapes and proposed local actions are not frozen allocations.
-They stay outside the central ledger until that atomic review is complete.
+General V2 local actions 1 through 34 listed above are already
+**reserved-disabled allocations**: their numeric coordinates are in the
+registry, but they have no payload codec or executable capability. Unlisted
+future local-action proposals, and every proposed account shape, stay outside
+the central ledger until their atomic review is complete.
