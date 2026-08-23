@@ -87,6 +87,7 @@ compile_error!("host-forensic General fixtures cannot compile for Solana");
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
     feature = "profile-general-source-v2-point",
+    feature = "profile-successor-chain-attached-v1",
     feature = "profile-non-production-dealer-policy-catalog-lab",
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 )))]
@@ -124,6 +125,16 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
     all(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "non-production-product-series-lab"
+    ),
+    all(
+        feature = "profile-successor-chain-attached-v1",
+        any(
+            feature = "profile-full",
+            feature = "profile-direct-v3-source-v2-point",
+            feature = "profile-general-source-v2-point",
+            feature = "profile-non-production-dealer-policy-catalog-lab",
+            feature = "profile-non-production-general-v2-empty-book-identity-lab"
+        )
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");

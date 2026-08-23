@@ -18,8 +18,13 @@ default = ["profile-full"]
 profile-full = []
 profile-direct-v3-source-v2-point = []
 profile-general-source-v2-point = ["clutch-batch/profile-general-source-v2-point"]
-# Host-only hostile-byte decoder for withdrawn General V3 fixtures. The crate
-# rejects this feature, and all `cfg(test)` forensic decoders, on Solana.
+# Current chain-attached request/account surface.  The exact admitted wire
+# coordinates live in the program capability table and checked manifest; this
+# feature exists here so strict hostile decoders can compile the same closure.
+profile-successor-chain-attached-v1 = []
+# Host-only hostile-byte decoder for the withdrawn General V3 request family.
+# No deployable checked profile forwards this feature, and the crate rejects
+# this feature and all `cfg(test)` forensic decoders on Solana.
 non-production-legacy-general-v3-hostile-decode = []
 # Makes the successor Product/Series-only artifact kinds decodable for the
 # explicit local-bank vertical slice. RegistryRelease and CapabilityProfile

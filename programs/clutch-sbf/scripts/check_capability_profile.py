@@ -34,6 +34,19 @@ DIRECT_V3_TAGS = frozenset(range(36, 47))
 SOURCE_V1_TAGS = frozenset(range(23, 27))
 SOURCE_V2_TAGS = frozenset(range(70, 74))
 CURRENT_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 5)]
+SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE = "profile-successor-chain-attached-v1"
+# This is the complete local-action-zero wire surface of the first
+# chain-attached successor.  It intentionally excludes legacy market founding,
+# retired Source generations, old Direct generations, and every General value
+# or clearing action.  Current Direct V4 owns shared tags 7/14 and its
+# dedicated 36..=46 decoder; current Collateral owns 2..=5 and 15..=17.
+SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS = [
+    [tag, 3]
+    for tag in [2, 3, 4, 5, 7, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 68]
+]
+SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS = [
+    [tag, 3] for tag in range(36, 47)
+]
 
 CAPABILITY_OWNERS: tuple[tuple[str, str], ...] = (
     ("relation", "dragons-clutch/semantic-owner/relation"),
@@ -57,6 +70,7 @@ PROFILE_FEATURES = frozenset(
         "profile-full",
         "profile-direct-v3-source-v2-point",
         "profile-general-source-v2-point",
+        SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
     }
 )
 SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
@@ -352,15 +366,16 @@ def validate_wire_surface(
         for triple in central_registry["enabled_intent_triples"]
         if triple[0] == 77 and triple[1] == 2 and triple[2] != 0
     ]
-    if build_contract["cargo_profile_feature"] == "profile-full":
+    profile_feature = build_contract["cargo_profile_feature"]
+    if profile_feature in {"profile-full", SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE}:
         require(
             required_source_extensions == CURRENT_SOURCE_EXTENSION_TRIPLES,
-            "wire_surface: full successor Source requirements must be exactly 77/v2 actions 1 through 4",
+            "wire_surface: current Source requirements must be exactly 77/v2 actions 1 through 4",
         )
         if source_owner["linkage"] == "linked":
             require(
                 enabled_source_extensions == CURRENT_SOURCE_EXTENSION_TRIPLES,
-                "wire_surface: linked full successor Source must enable exactly 77/v2 actions 1 through 4",
+                "wire_surface: linked current Source must enable exactly 77/v2 actions 1 through 4",
             )
         else:
             require(
@@ -371,6 +386,20 @@ def validate_wire_surface(
         require(
             required_source_extensions == [] and enabled_source_extensions == [],
             "wire_surface: narrow profile unexpectedly retains Source V3 actions",
+        )
+
+    if profile_feature == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
+        require(
+            legacy == SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS,
+            "wire_surface: chain-attached successor legacy intent set is not exact",
+        )
+        require(
+            direct == SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS,
+            "wire_surface: chain-attached successor Direct intent set is not exact",
+        )
+        require(
+            generations == [],
+            "wire_surface: chain-attached successor retains a legacy Source generation",
         )
 
     return {
@@ -1598,6 +1627,26 @@ def validate_manifest(
     )
 
     build_contract = validate_build_contract(data["build_contract"])
+    if classification == "deployable":
+        require(
+            build_contract["source_identity"]
+            in {"production-inert", "runtime-real-pyth-release"},
+            "profile: non-production source identity cannot be deployable",
+        )
+    if build_contract["source_identity"] == "runtime-real-pyth-release":
+        require(
+            build_contract["cargo_profile_feature"]
+            == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+            "profile: runtime real-Pyth release requires the chain-attached successor profile",
+        )
+    if (
+        build_contract["cargo_profile_feature"]
+        == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE
+    ):
+        require(
+            build_contract["source_identity"] == "runtime-real-pyth-release",
+            "profile: chain-attached successor requires the runtime real-Pyth release identity",
+        )
     capabilities = validate_capabilities(data["capabilities"])
     central_registry = validate_registry(data["central_registry"], capabilities)
     wire_surface = validate_wire_surface(

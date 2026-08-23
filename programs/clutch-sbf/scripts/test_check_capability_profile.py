@@ -34,9 +34,24 @@ def capabilities(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for index, (slot, owner) in enumerate(checker.CAPABILITY_OWNERS, start=1):
-        required_intents = [[index, 3, 0]]
-        if slot == "source-plane" and profile_feature == "profile-full":
-            required_intents.extend(copy.deepcopy(checker.CURRENT_SOURCE_EXTENSION_TRIPLES))
+        if profile_feature == checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:
+            required_intents = []
+            if slot == "relation":
+                required_intents.extend(
+                    [pair + [0] for pair in checker.SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS]
+                )
+                required_intents.extend(
+                    [pair + [0] for pair in checker.SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS]
+                )
+            if slot == "source-plane":
+                required_intents.extend(
+                    copy.deepcopy(checker.CURRENT_SOURCE_EXTENSION_TRIPLES)
+                )
+            required_intents.sort()
+        else:
+            required_intents = [[index, 3, 0]]
+            if slot == "source-plane" and profile_feature == "profile-full":
+                required_intents.extend(copy.deepcopy(checker.CURRENT_SOURCE_EXTENSION_TRIPLES))
         rows.append(
             {
                 "slot": slot,
@@ -718,6 +733,108 @@ class CapabilityProfileTests(unittest.TestCase):
                 "non-production-real-pyth-lab",
             ],
         )
+
+    def test_nonproduction_source_identities_cannot_be_deployable(self) -> None:
+        for source_identity in (
+            "non-production-mock-source-lab",
+            "non-production-real-pyth-lab",
+        ):
+            with self.subTest(source_identity=source_identity), self.assertRaisesRegex(
+                checker.ProfileError, "non-production source identity cannot be deployable"
+            ):
+                checker.validate_manifest(
+                    manifest(
+                        source_identity=source_identity,
+                        classification="deployable",
+                    ),
+                    repo=ROOT,
+                )
+
+    def test_runtime_real_pyth_release_never_enables_a_fixture_feature(self) -> None:
+        inert = checker.validate_manifest(
+            manifest(profile_feature="profile-full"), repo=ROOT
+        )
+        runtime = checker.validate_manifest(
+            manifest(
+                linkage="linked",
+                profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                source_identity="runtime-real-pyth-release",
+            ),
+            repo=ROOT,
+        )
+        self.assertNotEqual(
+            inert["profile_identity_sha256"], runtime["profile_identity_sha256"]
+        )
+        self.assertEqual(
+            runtime["cargo_features"],
+            ["custom-heap", checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE],
+        )
+
+    def test_runtime_real_pyth_release_refuses_legacy_narrow_profile(self) -> None:
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "runtime real-Pyth release requires the chain-attached successor profile",
+        ):
+            checker.validate_manifest(
+                manifest(
+                    profile_feature="profile-general-source-v2-point",
+                    source_identity="runtime-real-pyth-release",
+                ),
+                repo=ROOT,
+            )
+
+    def test_chain_attached_successor_requires_runtime_release_identity(self) -> None:
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "chain-attached successor requires the runtime real-Pyth release identity",
+        ):
+            checker.validate_manifest(
+                manifest(
+                    linkage="linked",
+                    profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                    source_identity="production-inert",
+                ),
+                repo=ROOT,
+            )
+
+    def test_chain_attached_successor_wire_surface_is_exact(self) -> None:
+        value = manifest(
+            linkage="linked",
+            profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+            source_identity="runtime-real-pyth-release",
+        )
+        checked = checker.validate_manifest(value, repo=ROOT)
+        self.assertEqual(
+            checked["wire_surface"]["legacy_intent_pairs"],
+            checker.SUCCESSOR_CHAIN_ATTACHED_LEGACY_INTENT_PAIRS,
+        )
+        self.assertEqual(
+            checked["wire_surface"]["dedicated_direct_intent_pairs"],
+            checker.SUCCESSOR_CHAIN_ATTACHED_DIRECT_INTENT_PAIRS,
+        )
+        self.assertEqual(
+            checked["wire_surface"]["source_generation_discriminants"], [],
+        )
+
+        hostile = copy.deepcopy(value)
+        hostile["wire_surface"]["legacy_intent_pairs"].append([69, 3])
+        hostile["central_registry"]["enabled_intent_triples"].append([69, 3, 0])
+        hostile["central_registry"]["enabled_intent_triples"].sort()
+        hostile["capabilities"][0]["required_intent_triples"].append([69, 3, 0])
+        hostile["profile"]["identity_sha256"] = checker.profile_identity(
+            hostile["profile"]["name"],
+            hostile["profile"]["label"],
+            hostile["build_contract"],
+            hostile["capabilities"],
+            hostile["central_registry"],
+            hostile["wire_surface"],
+            hostile["artifact_budget"]["limits"],
+        )
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "chain-attached successor legacy intent set is not exact",
+        ):
+            checker.validate_manifest(hostile, repo=ROOT)
 
     def test_full_profile_records_cargo_default_identity_marker(self) -> None:
         full = checker.validate_manifest(
