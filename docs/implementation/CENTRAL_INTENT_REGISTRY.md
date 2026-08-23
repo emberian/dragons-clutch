@@ -160,6 +160,23 @@ are owned by its separately integrated runtime and adapter, while Recovery
 payload/account contracts are owned by its dedicated modules; this central
 allocation duplicates neither contract and activates none of these actions.
 
+## General SettlementReceipt V3 allocation
+
+The central collision ledger reserves main-account coordinate `0x0f/3` for the
+217-byte General SettlementReceipt successor. This is a fresh version of the
+existing receipt tag, not a reinterpretation of `0x0f/2`; the two hostile
+decoders refuse each other. Runtime capability remains disabled.
+
+V3 uses the fresh PDA seed tuple
+`["general-receipt:v3", Epoch_PDA, final SettlementCandidateId,
+slice_index_le]`. Its former reserved-zero final byte is the independent
+buy/sell accounting mask. The V2 `consumed_flags` byte keeps its meaning as
+delivered-buy, delivered-sell, and exhausted. Stable accounting and delivery
+transition IDs are derived from the authenticated receipt PDA under distinct
+contract domains; neither ID is accepted from a caller or persisted. The
+receipt data ID instead hashes the authenticated PDA plus the exact current
+217-byte prestate, so both mutable latch families are committed.
+
 ## Coordinated successor account block
 
 The central collision ledger is the sole allocation owner for the following

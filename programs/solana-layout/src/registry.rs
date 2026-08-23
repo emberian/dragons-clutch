@@ -47,6 +47,11 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
 /// Existing Source Archive V2 account version.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
+/// General SettlementReceipt successor discriminator. This deliberately
+/// reuses legacy receipt tag `0x0f` under a fresh version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG: u8 = 0x0f;
+/// General SettlementReceipt successor version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION: u8 = 3;
 /// General V2 genesis-assisted Market-runtime account discriminator.
 pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
 /// RelationV2-native General Market-runtime account version.
@@ -238,6 +243,8 @@ const _: () = assert!(LEGACY_INTENT_VERSION == super::INTENT_VERSION);
 const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 116);
 const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 0x74);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG != SOURCE_ARCHIVE_V2_ACCOUNT_TAG);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
 
 /// Disjoint wire namespaces represented in the collision ledger.
@@ -364,6 +371,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::Frozen,
         name: "source-archive-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
+            version: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-settlement-receipt-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1518,6 +1534,10 @@ mod tests {
     #[test]
     fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
+            (
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
+            ),
             (
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
