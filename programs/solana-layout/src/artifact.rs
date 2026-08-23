@@ -30,8 +30,8 @@ use super::{
 ))]
 use clutch_product_series::{
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductTemplateV4, SeriesAttachmentPlanV1, SeriesFundingQuoteV1,
-    SeriesFundingTermsV2, SeriesPlanV5,
+    PriceMeasurePolicyV1, ProductCapabilityRegistryV2, ProductTemplateV4, SeriesAttachmentPlanV1,
+    SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5,
 };
 
 const PRODUCT_BASIS_BYTES: usize = 2_352;
@@ -43,6 +43,7 @@ const PRODUCT_FUNDING_QUOTE_BYTES: usize = 264;
 const PRODUCT_ATTACHMENT_PLAN_BYTES: usize = 112;
 const PRODUCT_SERIES_PLAN_V5_BYTES: usize = 152;
 const PRODUCT_FUNDING_TERMS_V2_BYTES: usize = 240;
+const PRODUCT_CAPABILITY_REGISTRY_V2_BYTES: usize = 936;
 
 #[cfg(feature = "non-production-product-series-lab")]
 const _: () = {
@@ -59,6 +60,10 @@ const _: () = {
     assert!(PRODUCT_ATTACHMENT_PLAN_BYTES == clutch_product_series::SERIES_ATTACHMENT_PLAN_BYTES);
     assert!(PRODUCT_SERIES_PLAN_V5_BYTES == clutch_product_series::SERIES_PLAN_V5_BYTES);
     assert!(PRODUCT_FUNDING_TERMS_V2_BYTES == clutch_product_series::SERIES_FUNDING_TERMS_V2_BYTES);
+    assert!(
+        PRODUCT_CAPABILITY_REGISTRY_V2_BYTES
+            == clutch_product_series::PRODUCT_CAPABILITY_REGISTRY_V2_BYTES
+    );
 };
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 use clutch_batch_policy_identity::BATCH_POLICY_BYTES;
@@ -125,6 +130,8 @@ pub enum ArtifactKind {
     SeriesPlanV5 = 39,
     /// Successor Series funding ownership terms V2.
     SeriesFundingTermsV2 = 40,
+    /// Shared immutable Product capability registry V2.
+    ProductCapabilityRegistryV2 = 41,
 }
 
 impl ArtifactKind {
@@ -159,6 +166,8 @@ impl ArtifactKind {
             39 => Ok(Self::SeriesPlanV5),
             #[cfg(feature = "non-production-product-series-lab")]
             40 => Ok(Self::SeriesFundingTermsV2),
+            #[cfg(feature = "non-production-product-series-lab")]
+            41 => Ok(Self::ProductCapabilityRegistryV2),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -185,6 +194,7 @@ impl ArtifactKind {
             Self::SeriesAttachmentPlanV1 => PRODUCT_ATTACHMENT_PLAN_BYTES,
             Self::SeriesPlanV5 => PRODUCT_SERIES_PLAN_V5_BYTES,
             Self::SeriesFundingTermsV2 => PRODUCT_FUNDING_TERMS_V2_BYTES,
+            Self::ProductCapabilityRegistryV2 => PRODUCT_CAPABILITY_REGISTRY_V2_BYTES,
         }
     }
 
@@ -205,6 +215,7 @@ impl ArtifactKind {
                 | Self::SeriesAttachmentPlanV1
                 | Self::SeriesPlanV5
                 | Self::SeriesFundingTermsV2
+                | Self::ProductCapabilityRegistryV2
         )
     }
 }
@@ -695,6 +706,24 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::ProductCapabilityRegistryV2 => {
+            let value = ProductCapabilityRegistryV2::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(any(
             not(feature = "non-production-product-series-lab"),
             target_os = "solana"
@@ -707,7 +736,8 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
         | ArtifactKind::SeriesFundingQuoteV1
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
-        | ArtifactKind::SeriesFundingTermsV2 => Err(CodecError::InvalidEnum),
+        | ArtifactKind::SeriesFundingTermsV2
+        | ArtifactKind::ProductCapabilityRegistryV2 => Err(CodecError::InvalidEnum),
     }
 }
 

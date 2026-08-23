@@ -21,6 +21,7 @@ mod codec;
 mod compile;
 mod funding;
 mod funding_state;
+mod product_registry;
 mod registry;
 mod source_series;
 mod successor;
@@ -51,6 +52,10 @@ pub use funding_state::{
     SeriesFundingComponentV1, SeriesFundingPhaseV1, SeriesFundingRequirementsV1,
     SeriesFundingStateV1, SeriesFundingTerminalProjectionV1, SERIES_FUNDING_COMPONENT_COUNT,
     SERIES_FUNDING_STATE_BYTES,
+};
+pub use product_registry::{
+    ProductCapabilityRegistryV2, ProductProgramReleaseV1, PRODUCT_CAPABILITY_REGISTRY_V2_BYTES,
+    PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN,
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
