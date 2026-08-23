@@ -12,15 +12,13 @@ use core::cell::Ref;
 
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
-    payer_allocation_account_data_id_v1, OwnerFeeAction38PlanV2, Sha256BackendV1,
-    SettlementCashPotV1AccountV1, OWNER_FEE_CARRY_ACCOUNT_BYTES,
-    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_BYTES,
-    PAYER_ALLOCATION_ACCOUNT_BYTES, SETTLEMENT_CASH_POT_ACCOUNT_BYTES,
+    payer_allocation_account_data_id_v1, OwnerFeeAction38PlanV2, SettlementCashPotV1AccountV1,
+    Sha256BackendV1, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
+    OWNER_SETTLEMENT_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_BYTES,
+    SETTLEMENT_CASH_POT_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::OwnerFinalizedRowDataHashV2;
-use clutch_retirement::{
-    PositionV3Sha256Backend, ReplayV3HashBackend, POSITION_V3_BYTES,
-};
+use clutch_retirement::{PositionV3Sha256Backend, ReplayV3HashBackend, POSITION_V3_BYTES};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -108,7 +106,10 @@ fn require_program_state(
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
     require(account.is_writable, ClutchError::NotWritable)?;
-    require(account.data_len() == exact_len, ClutchError::WrongDataLength)
+    require(
+        account.data_len() == exact_len,
+        ClutchError::WrongDataLength,
+    )
 }
 
 fn require_writable_endpoint(account: &AccountInfo<'_>, signer: bool) -> Outcome<()> {
@@ -162,18 +163,42 @@ pub fn authenticate_owner_fee_action38_prestate_v2(
     let top_up = plan.carry_top_up();
     let refund = plan.payer_rent_refund();
     let donation = plan.payer_donation_credit();
-    require(key(&accounts[IX_OWNER_SETTLEMENT]) == realization.owner_settlement_account(), ClutchError::MismatchedState)?;
-    require(key(&accounts[IX_POSITION]) == position.account, ClutchError::MismatchedState)?;
-    require(key(&accounts[IX_REPLAY]) == replay.replay_account().bytes(), ClutchError::MismatchedState)?;
+    require(
+        key(&accounts[IX_OWNER_SETTLEMENT]) == realization.owner_settlement_account(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        key(&accounts[IX_POSITION]) == position.account,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        key(&accounts[IX_REPLAY]) == replay.replay_account().bytes(),
+        ClutchError::MismatchedState,
+    )?;
     require(
         key(&accounts[IX_SETTLEMENT_CASH_POT]) == finalization.semantic.settlement_cash_pot().0,
         ClutchError::MismatchedState,
     )?;
-    require(key(&accounts[IX_OWNER_FEE_CARRY]) == plan.carry_account().bytes(), ClutchError::MismatchedState)?;
-    require(key(&accounts[IX_PAYER_ALLOCATION]) == plan.payer_allocation_account().bytes(), ClutchError::MismatchedState)?;
-    require(key(&accounts[IX_CARRY_TOP_UP_PAYER]) == top_up.source.bytes(), ClutchError::MismatchedState)?;
-    require(key(&accounts[IX_PAYER_RENT_REFUND]) == refund.destination.bytes(), ClutchError::MismatchedState)?;
-    require(key(&accounts[IX_NEUTRAL_SINK]) == donation.destination.bytes(), ClutchError::MismatchedState)?;
+    require(
+        key(&accounts[IX_OWNER_FEE_CARRY]) == plan.carry_account().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        key(&accounts[IX_PAYER_ALLOCATION]) == plan.payer_allocation_account().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        key(&accounts[IX_CARRY_TOP_UP_PAYER]) == top_up.source.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        key(&accounts[IX_PAYER_RENT_REFUND]) == refund.destination.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        key(&accounts[IX_NEUTRAL_SINK]) == donation.destination.bytes(),
+        ClutchError::MismatchedState,
+    )?;
 
     let owner_settlement_data = borrow_data(&accounts[IX_OWNER_SETTLEMENT])?;
     let owner_settlement_bump = owner_settlement_data[OWNER_SETTLEMENT_STORED_BUMP_OFFSET];
@@ -201,7 +226,10 @@ pub fn authenticate_owner_fee_action38_prestate_v2(
         contract::OWNER_FEE_CARRY_ACCOUNT_VERSION,
     )?;
     let carry_bump = carry_data[OWNER_FEE_CARRY_STORED_BUMP_OFFSET];
-    require(carry_bump == finalization.stored_bump, ClutchError::WrongBump)?;
+    require(
+        carry_bump == finalization.stored_bump,
+        ClutchError::WrongBump,
+    )?;
     expect_pda(
         accounts[IX_OWNER_FEE_CARRY].key,
         seeds::general_v2_owner_fee_carry_pda(
@@ -281,7 +309,10 @@ pub fn authenticate_owner_fee_action38_prestate_v2(
         .carry_balance_after_lamports()
         .checked_sub(top_up.lamports)
         .ok_or(ClutchError::Arithmetic)?;
-    require(accounts[IX_OWNER_FEE_CARRY].lamports() == carry_before, ClutchError::MismatchedState)?;
+    require(
+        accounts[IX_OWNER_FEE_CARRY].lamports() == carry_before,
+        ClutchError::MismatchedState,
+    )?;
     require(
         accounts[IX_PAYER_ALLOCATION].lamports() == plan.payer_balance_before_lamports(),
         ClutchError::MismatchedState,
@@ -307,10 +338,14 @@ fn expected_endpoint_balance(
         plan.payer_donation_credit(),
     ] {
         if account == transfer.source.bytes() {
-            after = after.checked_sub(transfer.lamports).ok_or(ClutchError::Arithmetic)?;
+            after = after
+                .checked_sub(transfer.lamports)
+                .ok_or(ClutchError::Arithmetic)?;
         }
         if account == transfer.destination.bytes() {
-            after = after.checked_add(transfer.lamports).ok_or(ClutchError::Arithmetic)?;
+            after = after
+                .checked_add(transfer.lamports)
+                .ok_or(ClutchError::Arithmetic)?;
         }
     }
     Ok(after)
@@ -362,8 +397,7 @@ pub fn verify_owner_fee_action38_poststate_v2(
     require_exact_data(&accounts[IX_OWNER_FEE_CARRY], &finalization)?;
     require(
         accounts[IX_OWNER_FEE_CARRY].owner == program_id
-            && accounts[IX_OWNER_FEE_CARRY].lamports()
-                == plan.carry_balance_after_lamports(),
+            && accounts[IX_OWNER_FEE_CARRY].lamports() == plan.carry_balance_after_lamports(),
         ClutchError::MismatchedState,
     )?;
     require(
@@ -378,7 +412,10 @@ pub fn verify_owner_fee_action38_poststate_v2(
         (IX_NEUTRAL_SINK, before.neutral_sink),
     ] {
         let expected = expected_endpoint_balance(key(&accounts[index]), balance_before, plan)?;
-        require(accounts[index].lamports() == expected, ClutchError::MismatchedState)?;
+        require(
+            accounts[index].lamports() == expected,
+            ClutchError::MismatchedState,
+        )?;
     }
     Ok(())
 }
