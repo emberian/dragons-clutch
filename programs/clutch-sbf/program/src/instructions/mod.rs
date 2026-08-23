@@ -45,6 +45,9 @@ pub mod artifact;
 pub mod cash_exit;
 pub(crate) mod collateral_position_v3;
 pub mod construction;
+/// Non-production executable Dealer facility slice.
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+pub mod dealer_facility;
 /// Non-production immutable Dealer-policy catalog transport.
 pub mod dealer_policy;
 /// Capability-disabled Dealer facility account and instruction contracts.
