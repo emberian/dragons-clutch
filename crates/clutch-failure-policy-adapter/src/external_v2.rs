@@ -407,9 +407,15 @@ pub struct ExternalRootCloseV2 {
     pub root: AccountId,
     /// Complete typed occurrence-liability authorization.
     pub authorization_id: [u8; 32],
+    /// Exact successful liveness Recovery close joined by the prerequisite.
+    pub closed_recovery_join_id: [u8; 32],
     /// Exact Product occurrence-liability terminal receipt joined by the
     /// authorization.
     pub retirement_root_id: [u8; 32],
+    /// Physical authenticated Product occurrence-liability owner account.
+    pub retirement_root_account: AccountId,
+    /// Runtime program which owns the physical liability owner account.
+    pub retirement_root_owner_program: AccountId,
     /// Exact pre-funded permanent a3 account which must be terminalized.
     pub replay_account: AccountId,
     /// Exact generation-bound replay expectation sealed by the close.
@@ -470,7 +476,14 @@ pub fn project_external_root_close_v2(
     Ok(ExternalRootCloseV2 {
         root: root.root,
         authorization_id: authorization.id().bytes(),
+        closed_recovery_join_id: prerequisite.closed_recovery_join_id().bytes(),
         retirement_root_id: authorization.product_occurrence_terminal_receipt_id(),
+        retirement_root_account: AccountId::from_bytes(
+            authorization.product_occurrence_terminal_account_id(),
+        ),
+        retirement_root_owner_program: AccountId::from_bytes(
+            authorization.product_occurrence_terminal_owner_program_id(),
+        ),
         replay_account: AccountId::from_bytes(prerequisite.replay_account_id()),
         replay_join_id: prerequisite.replay_join_id().bytes(),
         source_release_account: AccountId::from_bytes(prerequisite.source_release_account_id()),

@@ -27,19 +27,24 @@ use clutch_evidence_recovery::Identity as RecoveryIdentity;
 use clutch_failure_policy_adapter::external_v2::{
     authenticate_external_root_readonly_v2, authenticate_external_root_v2,
     initialize_external_root_v2, project_external_recovery_close_v2,
-    project_external_semantic_transition_v2, project_external_work_transition_v2,
-    AuthenticatedExternalRootV2, ExternalAdapterErrorV2, ExternalRecoveryCloseV2,
-    ExternalRootFundingObservationV2, ExternalRootInitializationV2, ExternalSemanticMutationV2,
-    ExternalWorkMutationV2,
+    project_external_root_close_v2, project_external_semantic_transition_v2,
+    project_external_work_transition_v2, AuthenticatedExternalRootV2, ExternalAdapterErrorV2,
+    ExternalRecoveryCloseV2, ExternalRootCloseV2, ExternalRootFundingObservationV2,
+    ExternalRootInitializationV2, ExternalSemanticMutationV2, ExternalWorkMutationV2,
 };
 use clutch_failure_policy_adapter::{AccountId, AccountView};
 use clutch_failure_policy_runtime::external_v2::{
     FailureExternalAdmissionReceiptV2, FailureExternalTransitionPlanV2,
-    FailureRecoveryTerminalReceiptV2, FailureRuntimeExternalV2,
+    FailureRecoveryTerminalDispositionV2, FailureRecoveryTerminalReceiptV2,
+    FailureRuntimeExternalV2,
 };
 use clutch_failure_policy_runtime::relation_execution_v1::{
     execute_failure_relation_v1, ExecutedFailureRelationV1, FailureRelationDispositionV1,
     FailureRelationPolicyV1,
+};
+use clutch_failure_policy_runtime::retirement_v1::{
+    authenticate_closed_failure_recovery_close_v1, FailureRetirementPrerequisiteV1,
+    FailureRootCloseAuthorizationV1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_compartment_account_v1, decode_runtime_policy_account_v1,
@@ -55,10 +60,10 @@ use clutch_product_series::{
 use clutch_solana_layout::failure_recovery::{
     account_metas_v1, decode_failure_account_body_v1, decode_payload_v1,
     encode_failure_account_header_v1, AcceptRecoveryWorkV1, AdvanceRecoveryScheduleV1,
-    CloseRecoveryFundingV1, FailureRecoveryPayloadV1, FailureReplayTombstonePhaseV1,
-    FailureReplayTombstoneV1, RecoveryAccountRoleV1, RecoveryCommonV1, ResolveCallerFundedV1,
-    ResolvePaidRecoveryV1, TriggerRelationRefusalV1, TriggerSourceFailureV1,
-    ACCEPT_RECOVERY_WORK_METAS_V1, CLOSE_RECOVERY_FUNDING_METAS_V1,
+    CloseFailureRootV1, CloseRecoveryFundingV1, FailureRecoveryPayloadV1,
+    FailureReplayTombstonePhaseV1, FailureReplayTombstoneV1, RecoveryAccountRoleV1,
+    RecoveryCommonV1, ResolveCallerFundedV1, ResolvePaidRecoveryV1, TriggerRelationRefusalV1,
+    TriggerSourceFailureV1, ACCEPT_RECOVERY_WORK_METAS_V1, CLOSE_RECOVERY_FUNDING_METAS_V1,
     FAILURE_ACCOUNT_HEADER_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
     FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1,
     FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
@@ -110,11 +115,10 @@ pub fn process(
     Err(ClutchError::UnsupportedInstruction.into())
 }
 
-// Semantic-root close intentionally has no mutation helper here. Its allocated
-// wire shape grants no authority while Product has no per-occurrence
-// zero-liability terminal owner. Relation mutations below are complete but can
-// only consume the private atomic capability minted by the still-separate
-// Product/registry authentication seam.
+// The semantic-root writer below is complete but grants no authority while
+// Product has no per-occurrence zero-liability terminal owner. Relation
+// mutations likewise consume only private atomic capabilities minted from
+// live Product/registry authentication.
 
 /// Source-owned maturity-failure join. Private fields prevent ID-only use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1287,6 +1291,10 @@ pub fn apply_recovery_close_v1<'a>(
             && receipt.transition_nonce() == payload.common.expected_transition_nonce,
         ClutchError::Replay,
     )?;
+    require(
+        receipt.disposition() == FailureRecoveryTerminalDispositionV2::Dormant,
+        ClutchError::MismatchedState,
+    )?;
     let root = authenticate_failure_root_readonly_v1(program_id, root_account, payload.common)?;
     let close = project_close_with_framed_accounts(
         program_id,
@@ -1300,6 +1308,109 @@ pub fn apply_recovery_close_v1<'a>(
         ClutchError::MismatchedState,
     )?;
     apply_liveness_close(recovery_account, payer, sink, &close.liveness)?;
+    Ok(close)
+}
+
+/// Atomically close a resolved a0 semantic root and its sole a2 Recovery
+/// custody while permanently sealing (never closing) a3.
+///
+/// The whole-Market occurrence-liability owner is intentionally an input, not
+/// something Failure can infer. Its typed authorization is currently
+/// unmintable, so this complete writer does not by itself enable action 9.
+pub fn apply_failure_root_close_v1<'a>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'a>],
+    payload: CloseFailureRootV1,
+    prerequisite: FailureRetirementPrerequisiteV1,
+    authorization: FailureRootCloseAuthorizationV1,
+) -> Outcome<ExternalRootCloseV2> {
+    authenticate_ordered_metas_v1(RecoveryAction::CloseFailureRoot, accounts)?;
+    let root_account = &accounts[0];
+    let root_rent_payer = &accounts[1];
+    let neutral_sink = &accounts[2];
+    let policy_account = &accounts[3];
+    let recovery_account = &accounts[4];
+    let retirement_root = &accounts[5];
+    let replay_account = &accounts[6];
+    let source_release_account = &accounts[7];
+
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
+    let receipt = root
+        .runtime()
+        .recovery_terminal_receipt()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        receipt.disposition() == FailureRecoveryTerminalDispositionV2::Resolved,
+        ClutchError::MismatchedState,
+    )?;
+    let recovery_close = project_close_with_framed_accounts(
+        program_id,
+        policy_account,
+        recovery_account,
+        root,
+        receipt,
+    )?;
+    let closed_recovery_join = authenticate_closed_failure_recovery_close_v1(
+        recovery_close.liveness,
+        receipt,
+        recovery_account.key.to_bytes(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let close = project_external_root_close_v2(root, prerequisite, authorization)
+        .map_err(map_external_error)?;
+
+    let source_release =
+        crate::source_plane_v3::authenticate_release(program_id, source_release_account)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        close.root == id(root_account.key)
+            && close.authorization_id == payload.failure_terminal_join_id
+            && close.closed_recovery_join_id == closed_recovery_join.bytes()
+            && close.retirement_root_id == payload.retirement_root_id
+            && close.retirement_root_account == id(retirement_root.key)
+            && close.retirement_root_owner_program == id(retirement_root.owner)
+            && close.replay_account == id(replay_account.key)
+            && close.replay_join_id == payload.replay_tombstone_id
+            && close.source_release_account == id(source_release_account.key)
+            && close.source_release_receipt_id == payload.source_release_receipt_id
+            && close.source_release_receipt_id == source_release.id().bytes()
+            && close.rent_refund_recipient == id(root_rent_payer.key)
+            && close.donation_neutral_sink == id(neutral_sink.key)
+            && close.expected_root_pre_balance == root_account.lamports()
+            && close
+                .rent_refund_lamports
+                .checked_add(close.donation_neutral_lamports)
+                == Some(close.expected_root_pre_balance),
+        ClutchError::MismatchedState,
+    )?;
+
+    let replay = authenticate_pending_replay_v1(program_id, replay_account, payload.common)?;
+    require(
+        replay.permanent_rent_funder == root_rent_payer.key.to_bytes()
+            && replay.failure_terminal_join_id == [0; 32]
+            && replay.retirement_root_id == [0; 32]
+            && replay.source_release_receipt_id == [0; 32],
+        ClutchError::MismatchedState,
+    )?;
+    let terminal_replay = replay
+        .terminalized(
+            close.authorization_id,
+            close.retirement_root_id,
+            close.source_release_receipt_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+
+    // Every check and postimage is complete before the first write. Solana's
+    // instruction atomicity rolls all three account changes back together on
+    // any subsequent runtime failure.
+    apply_liveness_close(
+        recovery_account,
+        root_rent_payer,
+        neutral_sink,
+        &recovery_close.liveness,
+    )?;
+    write_terminal_replay(replay_account, terminal_replay)?;
+    apply_root_close(root_account, root_rent_payer, neutral_sink, close)?;
     Ok(close)
 }
 
@@ -1647,6 +1758,98 @@ fn apply_liveness_close(
     Ok(())
 }
 
+fn authenticate_pending_replay_v1(
+    program_id: &Pubkey,
+    replay_account: &AccountInfo<'_>,
+    common: RecoveryCommonV1,
+) -> Outcome<FailureReplayTombstoneV1> {
+    require(
+        replay_account.owner == program_id,
+        ClutchError::WrongProgramOwner,
+    )?;
+    let data = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let replay = FailureReplayTombstoneV1::decode(&data)?;
+    expect_pda(
+        replay_account.key,
+        seeds::failure_replay_tombstone_pda(
+            program_id,
+            &common.market_instance_v2_id,
+            common.generation,
+        ),
+        Some(replay.stored_bump),
+    )?;
+    let admitted_balance = replay
+        .permanent_rent_lamports
+        .checked_add(replay.prior_donation_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        replay.phase == FailureReplayTombstonePhaseV1::Pending
+            && replay.binding_id == common.binding_id
+            && replay.market_instance_v2_id == common.market_instance_v2_id
+            && replay.generation == common.generation
+            && replay_account.lamports() >= admitted_balance,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(replay)
+}
+
+fn write_terminal_replay(
+    replay_account: &AccountInfo<'_>,
+    replay: FailureReplayTombstoneV1,
+) -> Outcome<()> {
+    let balance_before = replay_account.lamports();
+    let mut data = replay_account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    replay.encode(&mut data)?;
+    drop(data);
+    require(
+        replay_account.lamports() == balance_before
+            && replay_account.data_len() == FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn apply_root_close(
+    root: &AccountInfo<'_>,
+    payer: &AccountInfo<'_>,
+    sink: &AccountInfo<'_>,
+    close: ExternalRootCloseV2,
+) -> Outcome<()> {
+    require(
+        root.lamports() == close.expected_root_pre_balance,
+        ClutchError::MismatchedState,
+    )?;
+    let payer_after = payer
+        .lamports()
+        .checked_add(close.rent_refund_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let sink_after = sink
+        .lamports()
+        .checked_add(close.donation_neutral_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    {
+        let mut root_lamports = root
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut payer_lamports = payer
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut sink_lamports = sink
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **root_lamports = 0;
+        **payer_lamports = payer_after;
+        **sink_lamports = sink_after;
+    }
+    root.resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    root.assign(&SYSTEM_PROGRAM_ID);
+    Ok(())
+}
+
 fn write_root_poststate(
     root: &AccountInfo<'_>,
     mutation: &ExternalSemanticMutationV2,
@@ -1934,7 +2137,8 @@ fn map_external_error(error: ExternalAdapterErrorV2) -> Refusal {
         | ExternalAdapterErrorV2::ReceiptMismatch
         | ExternalAdapterErrorV2::DigestMismatch
         | ExternalAdapterErrorV2::WrongTransitionKind
-        | ExternalAdapterErrorV2::RootRentUnderfunded => ClutchError::MismatchedState,
+        | ExternalAdapterErrorV2::RootRentUnderfunded
+        | ExternalAdapterErrorV2::RetirementMismatch => ClutchError::MismatchedState,
     };
     Refusal::Adapter(code)
 }
