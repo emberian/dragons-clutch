@@ -8,7 +8,7 @@
 //! remainder projection.
 
 use crate::accounts::{expect_pda, require, Outcome};
-use crate::claim_release::authenticate_claim_issuance_v1;
+use crate::claim_release::authenticate_claim_issuance_release_with_programdata_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
 use crate::{seeds, token};
@@ -31,9 +31,12 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_resolution_v5,
+    authenticate_general_market_value_authority_v2, authenticate_resolution_v5,
     validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
+
+const EXTERNAL_REDEMPTION_RUNTIME_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/external-redemption/runtime-receipt/v3\0";
 
 /// Fixed account prefix before one mint per active native outcome.
 pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize =
@@ -270,12 +273,13 @@ pub fn process_external_redemption_v3(
         ClutchError::UnauthorizedActor,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[ix::REALM],
         &accounts[ix::PROFILE],
         &accounts[ix::POLICY],
         &accounts[ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[ix::COLLATERAL_TOKEN_PROGRAMDATA],
         &accounts[ix::MARKET_BINDING],
         &accounts[ix::MARKET_RUNTIME],
         &accounts[ix::MARKET_INSTANCE],
@@ -284,11 +288,12 @@ pub fn process_external_redemption_v3(
         true,
         true,
     )?;
+    let liabilities = value_authority.liabilities;
     require(
         request.market_instance_id.bytes()
-            == liabilities.market_binding.market_instance_v2_id.bytes()
-            && liabilities.market_binding.outcome_count == observed_outcome_count
-            && request.outcome < liabilities.market_binding.outcome_count
+            == liabilities.market_binding.base().market_instance_v2_id.bytes()
+            && liabilities.market_binding.base().outcome_count == observed_outcome_count
+            && request.outcome < liabilities.market_binding.base().outcome_count
             && accounts[ix::COLLATERAL_MINT].key.to_bytes()
                 == liabilities.bound.policy().mint.bytes()
             && accounts[ix::HOARD_TOKEN].key.to_bytes() == liabilities.hoard.token_account.bytes()
@@ -309,18 +314,21 @@ pub fn process_external_redemption_v3(
     )?;
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[ix::RESOLUTION], liabilities)?;
-    let claim =
-        authenticate_claim_issuance_v1(liabilities.bound, &accounts[ix::OUTCOME_TOKEN_PROGRAM])?;
+    let claim = authenticate_claim_issuance_release_with_programdata_v1(
+        liabilities.bound,
+        &accounts[ix::OUTCOME_TOKEN_PROGRAM],
+        &accounts[ix::OUTCOME_TOKEN_PROGRAMDATA],
+    )?;
     let observed_before = observe_mints(
         program_id,
         accounts,
         request.market_instance_id.bytes(),
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         request.outcome,
     )?;
     let token_before = bearer_observation(accounts, request.outcome)?;
     let prepared = prepare_bearer_claim_redemption_v3(
-        claim,
+        claim.bound(),
         resolution.account_id,
         resolution.resolution,
         CollateralId::from_bytes(accounts[ix::MARKET_RUNTIME].key.to_bytes()),
@@ -356,7 +364,7 @@ pub fn process_external_redemption_v3(
         program_id,
         accounts,
         request.market_instance_id.bytes(),
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         request.outcome,
     )?;
     let token_after = bearer_observation(accounts, request.outcome)?;
@@ -424,6 +432,21 @@ pub fn process_external_redemption_v3(
     };
     let accepted = accept_bearer_claim_redemption_v3(accepted_burn, collateral)
         .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
+    let runtime_receipt = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            EXTERNAL_REDEMPTION_RUNTIME_RECEIPT_DOMAIN_V3,
+            &accepted.receipt_id().bytes(),
+            &value_authority.receipt_id.bytes(),
+            &claim.receipt_id().bytes(),
+            &claim.token_programdata().bytes(),
+            &claim.deployment_slot().to_le_bytes(),
+            &claim.loader_receipt_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    runtime_receipt
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     accepted
         .claim_ledger_after()
         .encode(

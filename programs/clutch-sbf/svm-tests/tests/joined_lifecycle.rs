@@ -67,6 +67,7 @@ use {
     clutch_kernel::{BasisMode, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES},
     clutch_sbf::{
         error::ClutchError,
+        loader_state::UPGRADEABLE_LOADER_ID,
         instructions::{
             cash_exit, external_exit, genesis, market_init, observe_resolve,
             observe_resolve::{BUFFER_VERSION, EVIDENCE_BUFFER_HEADER_BYTES, EVIDENCE_BUFFER_TAG},
@@ -175,6 +176,14 @@ fn bearer_outcome_keypair() -> Keypair {
 
 fn derive(parts: &[&[u8]]) -> (Address, u8) {
     Address::find_program_address(parts, &PROGRAM_ID)
+}
+
+fn token_2022_programdata() -> Address {
+    Address::find_program_address(
+        &[TOKEN_2022.as_ref()],
+        &Address::new_from_array(UPGRADEABLE_LOADER_ID),
+    )
+    .0
 }
 
 fn encode<F, E>(len: usize, encoder: F) -> Vec<u8>
@@ -1216,6 +1225,8 @@ async fn prepare_founding(
                     AccountMeta::new_readonly(policy, false),
                     AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                     AccountMeta::new_readonly(RENT_SYSVAR, false),
+                    AccountMeta::new_readonly(TOKEN_2022, false),
+                    AccountMeta::new_readonly(token_2022_programdata(), false),
                 ],
             ),
         ],

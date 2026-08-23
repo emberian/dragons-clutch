@@ -48,6 +48,9 @@ pub const FRACTIONAL_FAMILY_RENT_DISPOSITION_DOMAIN_V1: &[u8] =
 /// Semantic domain proving exact a4/a5/ClaimLedger terminal postimages before deletion.
 pub const FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fractional/family-terminal-postwrite/v1\0";
+/// Fractional-owned identity of one exact external owner-credit payout action.
+pub const FRACTIONAL_EXTERNAL_CREDIT_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/external-credit-transition/v1\0";
 
 #[derive(Clone, Copy, Debug)]
 struct FractionalSha256V1;
@@ -1943,6 +1946,42 @@ struct PreparedCreditTransferStateV1 {
     paid_atoms: u64,
 }
 
+fn external_credit_transition_id_v1(
+    context: BoundFractionalContextV1,
+    source_before: FractionalCreditV2,
+    state: PreparedCreditTransferStateV1,
+    collateral_destination: Identity32V1,
+) -> Result<Identity32V1> {
+    let source_before = source_before.encode()?;
+    let source_after = state.source_after.encode()?;
+    let destination_after = state.destination_after.encode()?;
+    let fractional_ledger_before_id = context.ledger.state_id()?;
+    let fractional_ledger_after_id = state.ledger_after.state_id()?;
+    let claim_ledger_before_id = map_collateral(
+        context
+            .claim_ledger
+            .semantic_id(&FractionalSha256V1),
+    )?;
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_EXTERNAL_CREDIT_TRANSITION_DOMAIN_V1);
+    hasher.update(context.policy.market_instance.bytes());
+    hasher.update(context.policy_account.bytes());
+    hasher.update(context.ledger_account.bytes());
+    hasher.update(context.claim_ledger_account.bytes());
+    hasher.update(claim_ledger_before_id.bytes());
+    hasher.update(fractional_ledger_before_id.bytes());
+    hasher.update(fractional_ledger_after_id.bytes());
+    hasher.update(context.ledger.next_sequence.to_le_bytes());
+    hasher.update([0u8]);
+    hasher.update(source_before);
+    hasher.update(source_after);
+    hasher.update(destination_after);
+    hasher.update(state.destination_after.claimant.bytes());
+    hasher.update(collateral_destination.bytes());
+    hasher.update(state.paid_atoms.to_le_bytes());
+    Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_credit_transfer_state_v1(
     context: BoundFractionalContextV1,
@@ -2038,12 +2077,18 @@ pub struct PreparedExternalCreditTransferV1 {
     destination_after: FractionalCreditV2,
     ledger_after: FractionalLedgerV1,
     custody: PreparedFractionalExternalCreditPayoutV3,
+    credit_transition_id: Identity32V1,
     paid_atoms: u64,
     claimant: Identity32V1,
     collateral_destination: Identity32V1,
 }
 
 impl PreparedExternalCreditTransferV1 {
+    /// Fractional-owned commitment to the exact credit action and successors.
+    pub const fn credit_transition_id(self) -> Identity32V1 {
+        self.credit_transition_id
+    }
+
     /// Exact Realm-selected collateral request admitted by both credits.
     pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
         self.custody.collateral_request()
@@ -2074,20 +2119,31 @@ fn prepare_external_credit_transfer_state_v1(
     )?;
     let before_id = collateral_id(context.ledger.state_id()?);
     let after_id = collateral_id(state.ledger_after.state_id()?);
+    let credit_transition_id =
+        external_credit_transition_id_v1(context, source, state, collateral_destination)?;
     let custody = map_collateral(prepare_fractional_external_credit_payout_v3(
         context.hoard,
         context.claim_ledger,
         before_id,
         after_id,
         expected_ledger_sequence,
+        collateral_id(credit_transition_id),
         state.paid_atoms,
         collateral_id(destination_claimant),
         collateral_id(collateral_destination),
         &FractionalSha256V1,
     ))?;
-    if custody.fractional().fractional_ledger_before_id() != before_id
+    let fractional = custody.fractional();
+    let request = custody.collateral_request();
+    if custody.fractional_credit_transition_id() != collateral_id(credit_transition_id)
+        || fractional.fractional_ledger_before_id() != before_id
         || custody.fractional().fractional_ledger_after_id() != after_id
-        || custody.fractional().consumed_sequence() != expected_ledger_sequence
+        || fractional.consumed_sequence() != expected_ledger_sequence
+        || fractional.supply_mutation() != FractionalClaimSupplyMutationV3::Unchanged
+        || request.claim_redemption_id != fractional.transition_id()
+        || request.destination_token_account != collateral_id(collateral_destination)
+        || request.claim_semantic_owner != collateral_id(destination_claimant)
+        || request.payout_atoms != state.paid_atoms
     {
         return Err(Error::MismatchedBinding);
     }
@@ -2103,6 +2159,7 @@ fn prepare_external_credit_transfer_state_v1(
         destination_after: state.destination_after,
         ledger_after: state.ledger_after,
         custody,
+        credit_transition_id,
         paid_atoms: state.paid_atoms,
         claimant: destination_claimant,
         collateral_destination,
@@ -2170,6 +2227,16 @@ pub fn finish_external_credit_transfer_v1(
     prepared: PreparedExternalCreditTransferV1,
     collateral: AcceptedBearerRedemptionCollateralV3,
 ) -> Result<CreditTransferPlanV1> {
+    let accepted_request = match collateral {
+        AcceptedBearerRedemptionCollateralV3::Zero(accepted) => accepted.request(),
+        AcceptedBearerRedemptionCollateralV3::Nonzero(accepted) => accepted.request(),
+    };
+    if prepared.custody.fractional_credit_transition_id()
+        != collateral_id(prepared.credit_transition_id)
+        || accepted_request != prepared.custody.collateral_request()
+    {
+        return Err(Error::MismatchedBinding);
+    }
     let custody_after = map_collateral(accept_fractional_external_credit_payout_v3(
         prepared.custody,
         collateral,

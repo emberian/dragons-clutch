@@ -38,6 +38,11 @@ non-production-real-pyth-lab = []
 # that can only read one. The builders exist so a bank campaign exercises the
 # real decoders at the real offsets instead of a convenient parallel encoding.
 laboratory-fixtures = []
+# Selects a separately reviewed, checked-in collateral release manifest whose
+# rows bind an observed positive-slot Upgradeable Loader deployment. The
+# repository manifest is intentionally empty until exact cluster observations
+# and ELF digests are committed; it never accepts build-time environment rows.
+observed-positive-collateral-release-manifest = []
 # Enables the non-activating Product/Series artifact-catalog laboratory. It can
 # publish exact successor artifacts, including immutable funding-requirement
 # bodies, but deliberately cannot register a Series or create an occurrence.
@@ -180,6 +185,14 @@ solana-pubkey = { version = "=4.2.0", default-features = false }
 # source on this host holds 5.1.0 but not the newer 5.2.0 the resolver would
 # otherwise pick.  The dependency is used only through `solana-address`.
 solana-define-syscall = "=5.1.0"
+
+[dev-dependencies]
+# Historical General intent bytes remain available only to host adversarial
+# fixtures. The layout crate rejects this feature on the Solana target, so it
+# cannot enter an ELF or reopen a checked dispatch route.
+clutch-solana-layout = { path = "../../solana-layout", default-features = false, features = [
+    "non-production-legacy-general-v3-hostile-decode",
+] }
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

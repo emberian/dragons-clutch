@@ -18,8 +18,11 @@ use clutch_general_v2_contract::{
     ClaimSolverTransitionV1, CleanupCandidateTransitionV1, ClearWorkHeaderV2,
     CloseClearWorkTransitionV1, EpochBudgetV2AccountV1, ExpireCommittedCandidateTransitionV1,
     GeneralEpochPhaseV1, GeneralEpochV6AccountV1, IdentityLabPayloadV1, MarketRuntimeV3AccountV1,
-    OwnerSettlementPayloadV1, SelectedCandidateRetirementContractV1, SelectedCandidateV1AccountV1,
-    WriteCandidateFeedPayloadV1,
+    OwnerSettlementPayloadV1, WriteCandidateFeedPayloadV1,
+};
+#[cfg(test)]
+use clutch_general_v2_contract::{
+    SelectedCandidateRetirementContractV1, SelectedCandidateV1AccountV1,
 };
 use clutch_owner_settlement::{
     prepare_account_receipt_end_v1, prepare_direct_egg_settlement_v1,
@@ -1588,6 +1591,9 @@ pub struct CandidateCrankObservation<'a> {
     pub node: Option<&'a AdmissionNodeV3AccountV1>,
     pub feed: Option<(&'a CandidateFeedHeaderV2, bool)>,
     pub work: Option<&'a ClearWorkHeaderV2>,
+    /// Historical hostile-fixture input; no checked client exposes a live
+    /// SelectedCandidate mapping.
+    #[cfg(test)]
     pub selected: Option<&'a SelectedCandidateV1AccountV1>,
     pub observed_state_sha256: [u8; 32],
 }
@@ -1603,17 +1609,21 @@ impl CandidateCrankObservation<'_> {
         self.window
             .validate()
             .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        #[cfg(test)]
         let expected_epoch_phase = if self.selected.is_some() {
             GeneralEpochPhaseV1::Finalized
         } else {
             GeneralEpochPhaseV1::Frozen
         };
+        #[cfg(not(test))]
+        let expected_epoch_phase = GeneralEpochPhaseV1::Frozen;
         if self.epoch.phase != expected_epoch_phase
             || self.window.market != self.epoch.market_runtime
             || self.window.epoch_generation != self.epoch.generation
         {
             return Err(WorkflowGraphError::InvalidCanonicalState);
         }
+        #[cfg(test)]
         if let Some(selected) = self.selected {
             selected
                 .validate()
@@ -2071,6 +2081,7 @@ pub enum RecoveryObservation<'a> {
     CleanupCandidate(CleanupCandidateTransitionV1<'a>),
     ClaimSolver(ClaimSolverTransitionV1<'a>),
     CloseClearWork(CloseClearWorkTransitionV1<'a>),
+    #[cfg(test)]
     CloseSelected(&'a SelectedCandidateRetirementContractV1),
     CloseEpoch {
         epoch: &'a GeneralEpochV6AccountV1,
@@ -2150,6 +2161,7 @@ impl RecoveryObservation<'_> {
                     ProtocolFlow::RecoveryRetirement,
                 ))
             }
+            #[cfg(test)]
             Self::CloseSelected(contract) => {
                 if !contract
                     .retirable()
