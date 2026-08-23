@@ -37,6 +37,22 @@ distinct General V2 FinalPot terminal/disposition authority is not yet owned,
 and rounding or virtual-claim principal cannot be sent to the neutral donation
 sink.
 
+The successor direct-Egg contract closes the value-plane half of receipt
+accounting without reintroducing per-slice cash rounding. It authenticates both
+frozen order memberships, both Position generations and replay accounts, both
+ENTITLED Reservations, the paired selected receipt, and both owner rows. One
+pure plan transfers the exact Egg quantity, advances quantity and exact
+price-unit ledgers, returns a completing portfolio seller's entire unfilled
+Egg vector, hands a completing buyer Reservation's cash-envelope ownership to
+the frozen owner row, and sets the independently named buy/sell receipt-end
+latches. Position cash and replay sequences are preserved; their eventual cash
+poststates remain owned by terminal owner-level realization.
+
+No General action number is assigned to this contract. A future SBF adapter
+must authenticate the opaque complete-transition identity, bind it by equality
+to its payload, and write both Positions, both Reservations, both owner rows,
+and the receipt latch atomically.
+
 This crate contains no Solana SDK, account memory, hashing implementation,
 dynamic allocation, fee policy selection, or persisted DTO. It does not make
 General V1 accept shapes that its current per-order realization cannot settle;

@@ -13,6 +13,7 @@
 
 mod adapter;
 mod builder;
+mod direct;
 
 pub use adapter::{
     authenticate_owner_settlement_account_v1, prepare_account_receipt_end_v1,
@@ -28,6 +29,13 @@ pub use adapter::{
 pub use builder::{
     build_owner_settlement_book_v1, CandidateSettlementTotalsV1, OwnerSettlementBookV1,
     SelectedOwnerFeeV1, VerifiedSettlementOrderV1,
+};
+
+pub use direct::{
+    prepare_direct_egg_settlement_v1, AuthenticatedDirectSettlementReceiptV1,
+    AuthenticatedOrderMembershipV1, AuthenticatedPositionV1, AuthenticatedReservationV1,
+    DirectEggSettlementInputV1, DirectEggSettlementPlanV1, DirectEggTransferAuditV1, OrderKindV1,
+    ReservationStateV1, DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
 };
 
 /// Maximum orders in one frozen General book.
