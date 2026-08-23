@@ -20,6 +20,18 @@ liquidity, entitlement, token settlement, source/provider integration,
 deployability evidence, or mainnet evidence. Those capabilities require later
 vertical slices and must remain disabled until their own evidence gates pass.
 
+The current source successor is narrower and stronger than the original
+degree-zero-through-three price declaration below. It admits only degree-two
+and degree-three bases to candidate ranking because those are the degrees
+covered by the exact finite production atom-mixture verifier. The successor
+Relation policy identity commits that restriction and the certificate profile.
+`InitClearWork` verifies the sealed feed against that certificate before
+creating resumable work, and the empty-book completion path repeats the same
+admission before projecting ScoreV2-Q. The witness body stays outside candidate
+identity; the exact semantic price and successor policy stay inside it. This
+checkpoint has not been built or executed and does not activate a production
+profile.
+
 ## 1. Why this is a separate profile
 
 The General V2 extension family is centrally reserved at outer intent family
@@ -218,10 +230,12 @@ PriceMeasurePolicyV1, and eventually MarketGenesisProfileV2 and SeriesPlanV5.
 It must authenticate exact codecs and content-derived PDAs rather than adding a
 generic blob kind.
 
-The selected Product policy admits QuantizedIntegerGrid V3 degrees zero through
-three. General V2 pins that same finite range, witness schema V3, and quantized
-semantics V1; it has no continuous or floating-point fallback. The initial lab
-uses a degree-two fixture but that fixture does not narrow the declared policy.
+The legacy selected Product policy admits QuantizedIntegerGrid V3 degrees zero
+through three. The exact finite Relation successor deliberately narrows live
+candidate admission to degree two and three, witness schema V3, and quantized
+semantics V1; it has no continuous or floating-point fallback. Degree zero and
+one require their own equally exact admitted-certificate profile before they
+can re-enter successor ranking.
 
 ### 3.4 RelationV2 verification
 

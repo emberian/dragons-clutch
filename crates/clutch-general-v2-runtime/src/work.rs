@@ -7,6 +7,10 @@
 //! phase retains the successful set-authentication fact. Every call skips a
 //! bounded run of tombstones and folds exactly one dense live order, so the
 //! present-funded order schedule never relies on an unpaid page-only call.
+//! The SBF mint path must authenticate the sealed feed's exact finite
+//! atom-mixture certificate before creating Work. This module then rechecks
+//! the successor Relation policy and immutable feed/domain bindings on every
+//! resumed step; it does not expose price admission or execution authority.
 
 use clutch_batch::relation_v1::MAX_OUTCOMES as RELATION_MAX_OUTCOMES;
 use clutch_batch::relation_v2::{EconomicCandidateV2, PricePreconditionV2, VerifiedEconomicsV2};
@@ -27,8 +31,8 @@ use clutch_solana_layout::{CodecError as LayoutError, MAX_ORDER_PAGES};
 
 use crate::builder::{project_owner_blind_slot, relation_domain_from_account};
 use crate::{
-    decode_sealed_candidate_feed_v1, relation_v2_policy_id_v1, score_v2_q_policy_id_v1,
-    CandidateBuilderErrorV1, CanonicalSha256, GeneralV2RuntimeError,
+    decode_sealed_candidate_feed_v1, quantized_relation_v2_policy_id_v2,
+    score_v2_q_policy_id_v1, CandidateBuilderErrorV1, CanonicalSha256, GeneralV2RuntimeError,
 };
 
 const _: () = assert!(MAX_OUTCOMES == RELATION_MAX_OUTCOMES);
@@ -175,7 +179,7 @@ pub fn advance_clear_order_v1(
         || market_binding.outcome_count != work.outcome_count
         || market_binding.price_scale != feed_header.price_scale
         || market_binding.relation_policy_id
-            != relation_v2_policy_id_v1().map_err(map_runtime_projection_error)?
+            != quantized_relation_v2_policy_id_v2().map_err(map_runtime_projection_error)?
         || market_binding.score_policy_id
             != score_v2_q_policy_id_v1().map_err(map_runtime_projection_error)?
         || (work.phase != 0 && page_bodies.len() != usize::from(work.page_count))
