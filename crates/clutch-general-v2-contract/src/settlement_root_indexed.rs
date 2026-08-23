@@ -12,9 +12,9 @@ use clutch_owner_settlement::SettlementCashPotV1;
 
 use crate::{
     prepare_activate_merge_cash_pot_v1, CodecError, DeletableRentOwnerV1, Id32, Reader,
-    SettlementRootPhaseV1, SettlementRootSeedTupleV1, SettlementRootTerminalProjectionV1,
-    SettlementRootV1AccountV1, Sha256BackendV1, Writer, SETTLEMENT_ROOT_ACCOUNT_BYTES,
-    SETTLEMENT_ROOT_ACCOUNT_TAG,
+    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootSeedTupleV1,
+    SettlementRootTerminalProjectionV1, SettlementRootV1AccountV1, Sha256BackendV1, Writer,
+    SETTLEMENT_ROOT_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_TAG,
 };
 
 /// Central persisted-account discriminator shared with the in-place Root V1.
@@ -585,6 +585,42 @@ impl IndexedSettlementRootTerminalProjectionV1 {
 }
 
 impl IndexedSettlementRootV1AccountV1 {
+    /// Exact last frontier at which the retained Feed is still readable but
+    /// every other base child liability has already been discharged.
+    fn at_pre_feed_terminal_frontier(base: &SettlementRootV1AccountV1) -> bool {
+        let counts = base.counts();
+        let Some(expected_unfilled) = counts
+            .expected_reservations
+            .checked_sub(counts.expected_filled_reservations)
+        else {
+            return false;
+        };
+        base.phase() == SettlementRootPhaseV1::Retiring
+            && counts.admitted_receipts == counts.expected_receipts
+            && counts.live_receipts == 0
+            && counts.admitted_owner_rows == counts.expected_owner_rows
+            && counts.live_owner_rows == 0
+            && counts.admitted_reservations == counts.expected_filled_reservations
+            && counts.live_reservations == 0
+            && counts.released_unfilled_reservations == expected_unfilled
+            && counts.completed_owner_finalizations == counts.expected_owner_rows
+            && counts.live_fee_finalizations == 0
+            && counts.admitted_dealer_children == counts.expected_dealer_children
+            && counts.live_dealer_children == 0
+            && counts.admitted_merge_payments == counts.expected_merge_payments
+            && counts.completed_merge_payments == counts.expected_merge_payments
+            && base.cash_pot_state() == SettlementRootChildStateV1::Retired
+            && matches!(
+                base.final_pot_state(),
+                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Retired
+            )
+            && base.retained_feed_state() == SettlementRootChildStateV1::Live
+            && matches!(
+                base.fee_record_state(),
+                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Retired
+            )
+    }
+
     /// Atomically introduce a live, already-admitted exact sibling pair.
     ///
     /// The runtime must have derived all six identities from the complete V5
@@ -712,10 +748,18 @@ impl IndexedSettlementRootV1AccountV1 {
             left += 1;
         }
         self.counts.validate(self.state)?;
-        if self.state == ExactIndexChildrenStateV1::Retired
-            && self.base.phase() != SettlementRootPhaseV1::Terminal
+        if self.state == ExactIndexChildrenStateV1::Live
+            && self.base.retained_feed_state() != SettlementRootChildStateV1::Live
         {
             return Err(CodecError::InvalidState);
+        }
+        if self.state == ExactIndexChildrenStateV1::Retired {
+            match self.base.phase() {
+                SettlementRootPhaseV1::Retiring
+                    if Self::at_pre_feed_terminal_frontier(&self.base) => {}
+                SettlementRootPhaseV1::Terminal => {}
+                _ => return Err(CodecError::InvalidState),
+            }
         }
         Ok(())
     }
@@ -789,14 +833,14 @@ impl IndexedSettlementRootV1AccountV1 {
         })
     }
 
-    /// Atomically count both live siblings retired after the base graph is terminal.
+    /// Atomically count both live siblings retired immediately before Feed retirement.
     ///
     /// The runtime must close both exact accounts, transfer both rent principals
     /// and donations, and write this successor in one rollback domain.
     pub fn retire_index_children(&self) -> Result<Self, CodecError> {
         self.validate()?;
         if self.state != ExactIndexChildrenStateV1::Live
-            || self.base.phase() != SettlementRootPhaseV1::Terminal
+            || !Self::at_pre_feed_terminal_frontier(&self.base)
         {
             return Err(CodecError::InvalidState);
         }
@@ -936,6 +980,23 @@ impl IndexedSettlementRootV1AccountV1 {
 mod tests {
     use super::*;
 
+    fn id(value: u8) -> Id32 {
+        Id32::new([value; 32]).unwrap()
+    }
+
+    fn live_indexed_root() -> IndexedSettlementRootV1AccountV1 {
+        IndexedSettlementRootV1AccountV1::new_live(
+            crate::settlement_root::tests::materializing_root(),
+            id(21),
+            id(22),
+            id(23),
+            id(24),
+            id(25),
+            id(26),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn counts_refuse_partial_admission_and_partial_retirement() {
         assert_eq!(
@@ -994,5 +1055,35 @@ mod tests {
             IndexedSettlementRootV1AccountV1::decode(&bytes),
             Err(CodecError::NonCanonicalPadding)
         );
+    }
+
+    #[test]
+    fn exact_children_retire_only_at_live_feed_terminal_frontier() {
+        let mut early = live_indexed_root();
+        early.base = crate::settlement_root::tests::portfolio_settling_root();
+        early.validate().unwrap();
+        assert_eq!(early.retire_index_children(), Err(CodecError::InvalidState));
+
+        let mut frontier = live_indexed_root();
+        frontier.base = crate::settlement_root::tests::pre_feed_terminal_frontier_root();
+        frontier.validate().unwrap();
+        let retired = frontier.retire_index_children().unwrap();
+        assert_eq!(retired.index_state(), ExactIndexChildrenStateV1::Retired);
+        retired.validate().unwrap();
+        let mut terminal = retired;
+        terminal.base = crate::settlement_root::tests::terminal_root();
+        terminal.validate().unwrap();
+
+        let mut feed_closed_first = live_indexed_root();
+        feed_closed_first.base = crate::settlement_root::tests::terminal_root();
+        assert_eq!(feed_closed_first.validate(), Err(CodecError::InvalidState));
+        assert_eq!(
+            feed_closed_first.retire_index_children(),
+            Err(CodecError::InvalidState),
+        );
+
+        let mut refeed_wrong_order = terminal;
+        refeed_wrong_order.base = crate::settlement_root::tests::materializing_root();
+        assert_eq!(refeed_wrong_order.validate(), Err(CodecError::InvalidState));
     }
 }

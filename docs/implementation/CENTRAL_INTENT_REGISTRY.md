@@ -427,8 +427,8 @@ pure runtime elsewhere does not make a route executable.
 | `0xb2/1` | Direct | current exact Selection owner |
 | `0xb3/1` | Direct/replay | permanent action replay and terminal receipt |
 | `0xb4/1` | Direct | current funded Reservation owner |
-| `0xb5/1` | General V2 | reserved-disabled exact active-width frozen-order locator (at most 920 bytes) |
-| `0xb6/1` | General V2 | reserved-disabled exact active-width selected-candidate adjacency (at most 16,024 bytes) |
+| `0xb5/1` | General V2 | reserved-disabled compact frozen-order locator (at most 528 bytes) |
+| `0xb6/1` | General V2 | reserved-disabled compact Feed-slice reference index (at most 2,448 bytes; CandidateFeed remains semantic owner) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

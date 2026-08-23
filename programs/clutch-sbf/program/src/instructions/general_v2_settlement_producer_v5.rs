@@ -16,22 +16,21 @@ use clutch_batch_policy_identity::revenue_policy_v1::{
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_settlement_root_payload_v1, AdmissionNodeV4AccountV1,
-    CandidateWindowV5AccountV1, DeletableRentOwnerV1, EconomicDomainV2AccountV1,
-    GeneralEpochV6AccountV1, Id32, InitializeSettlementRootV1, OptionalSettlementRentV1,
+    CandidateWindowV5AccountV1, DeletableRentOwnerV1, GeneralEpochV6AccountV1,
+    Id32, InitializeSettlementRootV1, OptionalSettlementRentV1,
     SettlementCashPotV1AccountV1, SettlementRootPayloadV1, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
 };
 use clutch_general_v2_runtime::{
     derive_settlement_root_expectation_v1,
     exact_index_plane::{
-        ConstructExactIndexPlaneInputV1, ExactIndexCreateAccountInputV1,
         CANDIDATE_ORDER_AGGREGATE_ROW_BYTES_V1, CANDIDATE_ORDER_SLICE_EDGE_BYTES_V1,
         EXACT_INDEX_COMMON_HEADER_BYTES_V1, FROZEN_ORDER_LOCATOR_ROW_BYTES_V1,
     },
-    CandidateFeeAggregateProjectionV1, GeneralOrderPageInputV5, SettlementLegV1,
+    CandidateFeeAggregateProjectionV1, SettlementLegV1,
     SettlementRootExpectationProjectionV1, SettlementRouteV1,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
-use clutch_solana_layout::{PriceGridAccount, MAX_ORDER_PAGES};
+use clutch_solana_layout::MAX_ORDER_PAGES;
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
@@ -351,7 +350,6 @@ fn initialize_settlement_root(
     let feed = authenticated.feed();
     let market = *authenticated.market();
     let genesis = *authenticated.genesis();
-    let collateral = authenticated.collateral();
     let traversal = authenticated.traversal();
     let base = market.base();
 
@@ -581,35 +579,6 @@ fn initialize_settlement_root(
     let locator_minimum = rent.minimum_balance(locator_len)?;
     let adjacency_minimum = rent.minimum_balance(adjacency_len)?;
     let payer_before = accounts[ix_payer].lamports();
-    let locator_create = ExactIndexCreateAccountInputV1 {
-        account: id(accounts[ix_locator].key),
-        program_id: id(program_id),
-        system_program: id(accounts[ix_system].key),
-        payer: id(accounts[ix_payer].key),
-        payer_lamports: payer_before,
-        target_lamports: accounts[ix_locator].lamports(),
-        target_owner: id(accounts[ix_locator].owner),
-        target_data_len: accounts[ix_locator].data_len(),
-        target_writable: accounts[ix_locator].is_writable,
-        target_executable: accounts[ix_locator].executable,
-        rent_exempt_minimum: locator_minimum,
-        stored_bump: locator_pda.1,
-    };
-    let adjacency_create = ExactIndexCreateAccountInputV1 {
-        account: id(accounts[ix_adjacency].key),
-        program_id: id(program_id),
-        system_program: id(accounts[ix_system].key),
-        payer: id(accounts[ix_payer].key),
-        payer_lamports: payer_before,
-        target_lamports: accounts[ix_adjacency].lamports(),
-        target_owner: id(accounts[ix_adjacency].owner),
-        target_data_len: accounts[ix_adjacency].data_len(),
-        target_writable: accounts[ix_adjacency].is_writable,
-        target_executable: accounts[ix_adjacency].executable,
-        rent_exempt_minimum: adjacency_minimum,
-        stored_bump: adjacency_pda.1,
-    };
-
     let mut total_principal = root_rent.refundable_principal
         .checked_add(locator_minimum)
         .and_then(|value| value.checked_add(adjacency_minimum))
@@ -626,58 +595,18 @@ fn initialize_settlement_root(
     }
     require(payer_before >= total_principal, ClutchError::MismatchedState)?;
 
-    let domain = EconomicDomainV2AccountV1::decode(&borrow_data(
-        &accounts[IX_ECONOMIC_DOMAIN],
-    )?)?;
-    let grid = PriceGridAccount::decode(&borrow_data(&accounts[IX_PRICE_GRID])?)?;
-    let feed_body = borrow_data(&accounts[IX_FEED])?;
-    let mut page_refs: [Option<Ref<'_, [u8]>>; MAX_ORDER_PAGES] = [None, None, None, None];
-    let mut page_inputs = [GeneralOrderPageInputV5 {
-        account: Id32::ZERO,
-        body: &[],
-    }; MAX_ORDER_PAGES];
-    let mut page_index = 0usize;
-    while page_index < accounts[first_page..].len() {
-        page_refs[page_index] = Some(borrow_data(&accounts[first_page + page_index])?);
-        page_index += 1;
-    }
-    page_index = 0;
-    while page_index < accounts[first_page..].len() {
-        page_inputs[page_index] = GeneralOrderPageInputV5 {
-            account: id(accounts[first_page + page_index].key),
-            body: page_refs[page_index]
-                .as_ref()
-                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?,
-        };
-        page_index += 1;
-    }
     create_fresh_counted_root_v1(
         program_id,
         &accounts[ix_payer],
         &accounts[ix_root],
         &accounts[ix_locator],
         &accounts[ix_adjacency],
+        &accounts[IX_FEED],
         &accounts[ix_system],
         &rent,
         plan.root(),
         base.neutral_sink,
-        ConstructExactIndexPlaneInputV1 {
-            pages: &page_inputs[..accounts[first_page..].len()],
-            economic_domain: &domain,
-            market_binding_account: id(accounts[IX_MARKET_BINDING].key),
-            market_binding: &market,
-            price_grid: &grid,
-            market_genesis_profile: &genesis,
-            collateral,
-            selected_feed_account: id(accounts[IX_FEED].key),
-            selected_feed_body: &feed_body,
-            reservation_terms: base.series_funding_terms_v2_id,
-            reservation_policy: base.settlement_policy_id,
-            settlement_root_account: id(accounts[ix_root].key),
-            settlement_root: plan.root(),
-            locator_create,
-            adjacency_create,
-        },
+        &authenticated,
     )?;
 
     let root_epoch = request.epoch.bytes();

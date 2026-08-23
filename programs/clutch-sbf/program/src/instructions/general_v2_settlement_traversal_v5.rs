@@ -118,6 +118,7 @@ pub struct AuthenticatedSettlementTraversalV5 {
     feed: CandidateFeedHeaderV2,
     frame_accounts: [Id32; 11],
     page_semantic_ids: [Id32; MAX_ORDER_PAGES],
+    page_physical_slot_counts: [u8; MAX_ORDER_PAGES],
     traversal: Box<SettlementTraversalProjectionV4>,
 }
 
@@ -150,6 +151,11 @@ impl AuthenticatedSettlementTraversalV5 {
     /// Exhaustive candidate-wide settlement projection.
     pub const fn traversal(&self) -> &SettlementTraversalProjectionV4 {
         &self.traversal
+    }
+
+    /// Physical populated-slot widths captured during the sole hostile page decode.
+    pub(crate) const fn page_physical_slot_counts(&self) -> [u8; MAX_ORDER_PAGES] {
+        self.page_physical_slot_counts
     }
 
     fn order_placement(
@@ -424,6 +430,7 @@ pub fn authenticate_settlement_traversal_v5(
 
     let mut page_refs: [Option<Ref<'_, [u8]>>; MAX_ORDER_PAGES] = [None, None, None, None];
     let mut page_semantic_ids = [Id32::ZERO; MAX_ORDER_PAGES];
+    let mut page_physical_slot_counts = [0u8; MAX_ORDER_PAGES];
     let mut page_inputs = [GeneralOrderPageInputV5 {
         account: Id32::ZERO,
         body: &[],
@@ -451,6 +458,10 @@ pub fn authenticate_settlement_traversal_v5(
             ClutchError::MismatchedState,
         )?;
         page_semantic_ids[page_index] = Id32::new(page.page_digest.bytes())?;
+        // V5 `order_count` is the physical populated width, including
+        // tombstones. It bounds page-local locator slots; it is deliberately
+        // not equated to the dense live Feed order count.
+        page_physical_slot_counts[page_index] = page.order_count;
         page_refs[page_index] = Some(data);
         page_index += 1;
     }
@@ -499,6 +510,7 @@ pub fn authenticate_settlement_traversal_v5(
             id(frame.market_genesis.key),
         ],
         page_semantic_ids,
+        page_physical_slot_counts,
         traversal,
     })
 }
