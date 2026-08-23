@@ -12,7 +12,8 @@ use crate::{
     AuthenticatedPositionV3, Error, OwnerSettlementCreateFundingV1,
     PositionSettlementPoststateV3, PresentConsiderationV2, Result, SelectedOwnerFeeV1,
     SettlementCashPotV1, SettlementSideV1, AuthenticatedReservationHandoffV3,
-    AuthenticatedSettlementReceiptEndV4, SettlementReceiptDataIdV4, MAX_ORDERS,
+    AuthenticatedSettlementReceiptEndV4, AuthenticatedSettlementReceiptEndV5,
+    SettlementReceiptDataIdV4, MAX_ORDERS,
 };
 
 /// Canonical General outer tag selecting an owner-settlement row.
@@ -35,6 +36,52 @@ const OWNER_SETTLEMENT_PRESENCE_MASK_V4: u8 = EXPECTED_BUY_PRESENT_V4
     | EXPECTED_SELL_PRESENT_V4
     | CONSUMED_BUY_PRESENT_V4
     | CONSUMED_SELL_PRESENT_V4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReceiptEndSemanticV4 {
+    market: [u8; 32],
+    epoch: [u8; 32],
+    candidate: [u8; 32],
+    owner_order_set_digest: [u8; 32],
+    owner: [u8; 32],
+    order_index: u8,
+    side: SettlementSideV1,
+    consideration_price_units: PresentConsiderationV2,
+    completes_order: bool,
+    reservation_handoff: Option<AuthenticatedReservationHandoffV3>,
+}
+
+impl ReceiptEndSemanticV4 {
+    const fn from_v4(value: &AuthenticatedSettlementReceiptEndV4) -> Self {
+        Self {
+            market: value.market,
+            epoch: value.epoch,
+            candidate: value.candidate,
+            owner_order_set_digest: value.owner_order_set_digest,
+            owner: value.owner,
+            order_index: value.order_index,
+            side: value.side,
+            consideration_price_units: value.consideration_price_units,
+            completes_order: value.completes_order,
+            reservation_handoff: value.reservation_handoff,
+        }
+    }
+
+    const fn from_v5(value: &AuthenticatedSettlementReceiptEndV5) -> Self {
+        Self {
+            market: value.market,
+            epoch: value.epoch,
+            candidate: value.candidate,
+            owner_order_set_digest: value.owner_order_set_digest,
+            owner: value.owner,
+            order_index: value.order_index,
+            side: value.side,
+            consideration_price_units: value.consideration_price_units,
+            completes_order: value.completes_order,
+            reservation_handoff: value.reservation_handoff,
+        }
+    }
+}
 const BUY_END_MASK: u8 = 1;
 const SELL_END_MASK: u8 = 2;
 
@@ -568,8 +615,19 @@ impl OwnerSettlementAccumulatorV4 {
 
     /// Consume one receipt end and its inseparable terminal-buy cash handoff.
     pub fn consume(&mut self, receipt: &AuthenticatedSettlementReceiptEndV4) -> Result<()> {
-        self.validate()?;
         receipt.validate()?;
+        self.consume_semantic(ReceiptEndSemanticV4::from_v4(receipt))
+    }
+
+    /// Consume one fresh rent-owned V5 receipt end through the same sole V4
+    /// arithmetic state machine.
+    pub fn consume_v5(&mut self, receipt: &AuthenticatedSettlementReceiptEndV5) -> Result<()> {
+        receipt.validate()?;
+        self.consume_semantic(ReceiptEndSemanticV4::from_v5(receipt))
+    }
+
+    fn consume_semantic(&mut self, receipt: ReceiptEndSemanticV4) -> Result<()> {
+        self.validate()?;
         if self.state != OwnerSettlementStateV4::Accumulating {
             return Err(Error::Terminal);
         }
@@ -1638,6 +1696,53 @@ pub struct OwnerCashRealizationPlanV4 {
     disposition: OwnerSettlementDispositionV4,
 }
 
+/// Outer-version-neutral V4 semantic cash realization.
+///
+/// This plan owns the one arithmetic transition shared by historical V4 and
+/// the rent-owned V5 envelope. It deliberately derives no outer-row data ID;
+/// the versioned General envelope must hash its complete poststate separately.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerCashRealizationSemanticPlanV4 {
+    owner_settlement_account: [u8; 32],
+    expectation: OwnerSettlementExpectationV4,
+    owner_settlement_body: [u8; OWNER_SETTLEMENT_BODY_V4_BYTES],
+    position: PositionSettlementPoststateV3,
+    settlement_cash_pot: SettlementCashPotV1,
+    disposition: OwnerSettlementDispositionV4,
+}
+
+impl OwnerCashRealizationSemanticPlanV4 {
+    /// Owner row whose versioned envelope must be compare-and-written.
+    pub const fn owner_settlement_account(&self) -> [u8; 32] {
+        self.owner_settlement_account
+    }
+
+    /// Immutable selected expectation.
+    pub const fn expectation(&self) -> OwnerSettlementExpectationV4 {
+        self.expectation
+    }
+
+    /// Exact finalized 288-byte semantic body.
+    pub const fn owner_settlement_body(&self) -> &[u8; OWNER_SETTLEMENT_BODY_V4_BYTES] {
+        &self.owner_settlement_body
+    }
+
+    /// Exact canonical Position V3 successor.
+    pub const fn position(&self) -> PositionSettlementPoststateV3 {
+        self.position
+    }
+
+    /// Exact candidate-wide settlement-pot successor.
+    pub const fn settlement_cash_pot(&self) -> SettlementCashPotV1 {
+        self.settlement_cash_pot
+    }
+
+    /// Exact handoff-derived Floor/Ceil disposition.
+    pub const fn disposition(&self) -> OwnerSettlementDispositionV4 {
+        self.disposition
+    }
+}
+
 impl OwnerCashRealizationPlanV4 {
     /// V4 owner row to compare-and-write.
     pub const fn owner_settlement_account(&self) -> [u8; 32] {
@@ -1682,10 +1787,36 @@ pub fn prepare_realize_owner_cash_v4<H: OwnerFinalizedRowDataHashV4>(
     pot: SettlementCashPotV1,
     hash: &H,
 ) -> Result<OwnerCashRealizationPlanV4> {
+    let semantic = prepare_realize_owner_cash_semantic_v4(
+        account.address,
+        account.accumulator,
+        position,
+        pot,
+    )?;
+    let finalized_row_data_id =
+        derive_owner_finalized_row_data_id_v4(semantic.owner_settlement_body(), hash)?;
+    Ok(OwnerCashRealizationPlanV4 {
+        owner_settlement_account: semantic.owner_settlement_account,
+        expectation: semantic.expectation,
+        owner_settlement_body: semantic.owner_settlement_body,
+        finalized_row_data_id,
+        position: semantic.position,
+        settlement_cash_pot: semantic.settlement_cash_pot,
+        disposition: semantic.disposition,
+    })
+}
+
+/// Realize one exact V4 semantic row independent of its General outer version.
+pub fn prepare_realize_owner_cash_semantic_v4(
+    owner_settlement_account: [u8; 32],
+    accumulator: OwnerSettlementAccumulatorV4,
+    position: AuthenticatedPositionV3,
+    pot: SettlementCashPotV1,
+) -> Result<OwnerCashRealizationSemanticPlanV4> {
     pot.validate()?;
     position.validate_writable()?;
     let position_prestate = position;
-    let expected = account.accumulator.expectation;
+    let expected = accumulator.expectation;
     let position_fields = position.semantic.fields();
     if pot.state != 0
         || position.general_market_runtime != expected.market
@@ -1694,11 +1825,12 @@ pub fn prepare_realize_owner_cash_v4<H: OwnerFinalizedRowDataHashV4>(
         || pot.expectation.epoch != expected.epoch
         || pot.expectation.candidate != expected.candidate
         || pot.expectation.owner_order_set_digest != expected.owner_order_set_digest
-        || account.address == position.account
+        || owner_settlement_account == [0; 32]
+        || owner_settlement_account == position.account
     {
         return Err(Error::AuthorityUnavailable);
     }
-    let mut next_row = account.accumulator;
+    let mut next_row = accumulator;
     let disposition = next_row.finalize(
         position_fields.cash_atoms,
         position_fields.reserved_cash_atoms,
@@ -1739,13 +1871,10 @@ pub fn prepare_realize_owner_cash_v4<H: OwnerFinalizedRowDataHashV4>(
         position_fields.native_eggs,
     )?;
     let owner_settlement_body = next_row.encode_body()?;
-    let finalized_row_data_id =
-        derive_owner_finalized_row_data_id_v4(&owner_settlement_body, hash)?;
-    Ok(OwnerCashRealizationPlanV4 {
-        owner_settlement_account: account.address,
+    Ok(OwnerCashRealizationSemanticPlanV4 {
+        owner_settlement_account,
         expectation: expected,
         owner_settlement_body,
-        finalized_row_data_id,
         position,
         settlement_cash_pot: next_pot,
         disposition,
