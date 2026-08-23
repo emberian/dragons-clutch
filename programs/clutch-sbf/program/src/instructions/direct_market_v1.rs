@@ -34,14 +34,20 @@ use clutch_direct_market_runtime::selection_v1::{
     begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
     prepare_direct_selection_freeze_v1, submit_direct_candidate_v1,
     verify_next_direct_candidate_v1, AuthenticatedDirectSelectionFreezeV1,
+    DirectSelectionPhaseV1,
 };
 use clutch_direct_market_runtime::{
-    DirectActionReplayV1, DirectHashBackendV1, DirectMarketErrorV1, DirectMarketRootV1,
-    DirectRentOwnerV1, DirectRootReplayPostV1, DirectTerminalReasonV1,
+    build_direct_retirement_transfer_v1, prepare_direct_family_terminal_v1,
+    prepare_direct_foundation_v1, AuthenticatedDirectFoundationV1,
+    AuthenticatedDirectTerminalV1, DirectActionReplayV1, DirectHashBackendV1,
+    DirectMarketBindingV1, DirectMarketErrorV1, DirectMarketRootV1, DirectRentOwnerV1,
+    DirectRetirementSourceV1, DirectRetirementTransferV1, DirectRootPhaseV1,
+    DirectRootReplayPostV1, DirectScheduleV1, DirectTerminalReasonV1,
 };
 use clutch_direct_market_runtime::settlement_v1::{
     prepare_direct_reservation_admission_with_replay_v1, prepare_direct_reservation_cancel_v1,
-    prepare_direct_economic_terminal_v1, DirectEndpointPrestateV1,
+    prepare_direct_economic_terminal_v1, prepare_direct_missed_freeze_terminal_v1,
+    DirectEndpointPrestateV1,
     DirectReservationOrderInputV1,
 };
 use clutch_collateral_adapter_v2::{
@@ -58,14 +64,20 @@ use clutch_batch::relation_v2::{
 use clutch_price_measure::PriceVectorV3;
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    NativeClaimBasisV1, PriceMeasurePolicyV1,
+    MarketFamilyV1, MarketInstanceV2Id, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    SeriesPlanV5Id,
 };
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
     DirectSelectionAccountV1, DIRECT_ACTION_REPLAY_BODY_BYTES_V1,
     DIRECT_MARKET_ROOT_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
-    DIRECT_SELECTION_BODY_BYTES_V1, decode_direct_empty_payload_v1,
-    DirectAdmitOrderPayloadV1, DirectFreezeBookPayloadV1, DirectSubmitCandidatePayloadV1,
+    DIRECT_SELECTION_BODY_BYTES_V1, DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1,
+    decode_direct_empty_payload_v1,
+    DirectAdmitOrderPayloadV1, DirectFreezeBookPayloadV1, DirectInitializeMarketPayloadV1,
+    DirectSubmitCandidatePayloadV1,
+};
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
 };
 use clutch_solana_layout::registry::DirectMarketAction;
 use clutch_solana_layout::{account_len, PriceGridAccount};
@@ -82,11 +94,18 @@ use super::product_artifact::authenticate_product_artifact_v1;
 use super::artifact::read_clock_slot;
 use super::collateral_position_v3::authenticate_general_market_v2;
 use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
+use super::product_market::{
+    authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
+    AuthenticatedMarketLifecycleRootV1,
+};
 
 const DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/account-authentication/v1\0";
 const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/price-authentication/v1\0";
+const DIRECT_MARKET_V1_MAX_ACCOUNTS: usize = 26;
+const DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES: usize = 128;
+const DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS: usize = 15;
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == RUNTIME_ROOT_BODY_BYTES);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == RUNTIME_SELECTION_BODY_BYTES);
@@ -112,6 +131,63 @@ impl PositionV3Sha256Backend for DirectRuntimeSha256V1 {
 impl ReplayV3HashBackend for DirectRuntimeSha256V1 {
     fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
         solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
+
+/// Disabled family-internal dispatcher for the complete current `80/1`
+/// lifecycle. Shared program dispatch does not call this function until the
+/// capability profile admits the whole family as one release unit.
+pub(crate) fn process(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DirectMarketAction,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(
+        accounts.len() <= DIRECT_MARKET_V1_MAX_ACCOUNTS,
+        ClutchError::AccountCount,
+    )?;
+    require(
+        payload.len() <= DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    match action {
+        DirectMarketAction::InitializeMarket => {
+            process_direct_initialize_market_v1(program_id, accounts, sequence, payload)
+        }
+        DirectMarketAction::AdmitOrder => {
+            process_direct_admit_order_v1(program_id, accounts, sequence, payload)
+        }
+        DirectMarketAction::CancelOrder => {
+            process_direct_cancel_order_v1(program_id, accounts, sequence, payload)
+        }
+        DirectMarketAction::FreezeBook => {
+            process_direct_freeze_book_v1(program_id, accounts, sequence, payload)
+        }
+        DirectMarketAction::SubmitCandidate
+        | DirectMarketAction::BeginVerification
+        | DirectMarketAction::VerifyCandidate
+        | DirectMarketAction::FinalizeSelection => process_direct_selection_lifecycle_v1(
+            program_id,
+            accounts,
+            sequence,
+            action,
+            payload,
+        ),
+        DirectMarketAction::SettlePair
+        | DirectMarketAction::LapseEmpty
+        | DirectMarketAction::LapseUnselected
+        | DirectMarketAction::LapseSelected => process_direct_economic_terminal_v1(
+            program_id,
+            accounts,
+            sequence,
+            action,
+            payload,
+        ),
+        DirectMarketAction::RetireTerminal => {
+            process_direct_retire_terminal_v1(program_id, accounts, sequence, payload)
+        }
     }
 }
 
@@ -373,6 +449,15 @@ pub(crate) fn process_direct_selection_lifecycle_v1(
     action: DirectMarketAction,
     payload: &[u8],
 ) -> Outcome<()> {
+    if action == DirectMarketAction::FinalizeSelection && accounts.len() != 4 {
+        return process_direct_economic_terminal_v1(
+            program_id,
+            accounts,
+            sequence,
+            action,
+            payload,
+        );
+    }
     require_count(accounts, 4)?;
     require_distinct(accounts)?;
     let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
@@ -551,7 +636,7 @@ pub(crate) fn process_direct_freeze_book_v1(
     };
     selection_rent.validate().map_err(map_direct_error_v1)?;
 
-    let mut authenticated = [None; 2];
+    let mut authenticated: [Option<AuthenticatedDirectReservationV1>; 2] = [None; 2];
     let mut index = 0usize;
     while index < reservation_count {
         authenticated[index] = Some(authenticate_direct_reservation_readonly_v1(
@@ -666,6 +751,7 @@ pub(crate) fn process_direct_freeze_book_v1(
 struct DirectReservationAdmissionAuthoritySbfV1 {
     root: DirectMarketRootV1,
     position: AuthenticatedPositionV3,
+    existing_peer: Option<DirectReservationV1>,
     reservation_account: [u8; 32],
     order_id: [u8; 32],
     side: clutch_batch::Side,
@@ -678,11 +764,321 @@ struct DirectReservationAdmissionAuthoritySbfV1 {
     rent: DirectRentOwnerV1,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DirectFoundationAuthoritySbfV1 {
+    product_root: clutch_product_series::MarketLifecycleRootV1,
+    founder_link: clutch_product_series::SeriesMarketLinkV1,
+    bundle: CompiledProductSeriesBundleV5,
+    binding: DirectMarketBindingV1,
+    schedule: DirectScheduleV1,
+    root_rent: DirectRentOwnerV1,
+    replay_rent: DirectRentOwnerV1,
+    family_sequence: u32,
+    observed_slot: u64,
+}
+
+impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1 {
+    fn authenticate_foundation(
+        &self,
+        product_root: &clutch_product_series::MarketLifecycleRootV1,
+        founder_link: &clutch_product_series::SeriesMarketLinkV1,
+        compiler_bundle: &CompiledProductSeriesBundleV5,
+        binding: DirectMarketBindingV1,
+        schedule: DirectScheduleV1,
+        root_rent: DirectRentOwnerV1,
+        action_replay_rent: DirectRentOwnerV1,
+        family_admission_sequence: u32,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if *product_root == self.product_root
+            && *founder_link == self.founder_link
+            && *compiler_bundle == self.bundle
+            && binding == self.binding
+            && schedule == self.schedule
+            && root_rent == self.root_rent
+            && action_replay_rent == self.replay_rent
+            && family_admission_sequence == self.family_sequence
+            && self.observed_slot <= schedule.admission_opens_slot
+        {
+            Ok(())
+        } else {
+            Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+        }
+    }
+}
+
+/// Execute action 1 and atomically admit the Product Direct-family child.
+///
+/// The nineteen accounts are Product root, founder link, BundleV5, fresh b1,
+/// fresh b3, payer, Realm, Profile, collateral policy, token program, General
+/// MarketBindingV2, General runtime, MarketInstanceV2, GenesisV2,
+/// ResolutionV5, System, Rent, Clock, and PriceGrid. Every immutable binding
+/// field is copied only from these authenticated semantic owners.
+pub(crate) fn process_direct_initialize_market_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, 19)?;
+    require_distinct(accounts)?;
+    require(sequence == 0, ClutchError::Replay)?;
+    require_signer(&accounts[5])?;
+    require(accounts[5].is_writable, ClutchError::NotWritable)?;
+    require_system_program(&accounts[15])?;
+    let rent_parameters = read_rent(&accounts[16])?;
+    let observed_slot = read_clock_slot(&accounts[17])?;
+    let request = DirectInitializeMarketPayloadV1::decode(payload)?;
+    let schedule = DirectScheduleV1 {
+        admission_opens_slot: request.admission_opens_slot,
+        admission_closes_slot: request.admission_closes_slot,
+        submission_closes_slot: request.submission_closes_slot,
+        selection_deadline_slot: request.selection_deadline_slot,
+        settlement_deadline_slot: request.settlement_deadline_slot,
+    };
+    require(
+        observed_slot <= schedule.admission_opens_slot,
+        ClutchError::NotActive,
+    )?;
+
+    let mut link_output = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    {
+        let data = accounts[1]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        SeriesMarketLinkAccountV1::decode_into(&data, &mut link_output)?;
+    }
+    let link_binding = link_output.state.binding();
+    let mut product_output = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let product_root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        &accounts[0],
+        link_binding.market_instance_id,
+        link_binding.generation,
+        true,
+        &mut product_output,
+    )?;
+    let founder_link = authenticate_series_market_link_v1(
+        program_id,
+        &accounts[1],
+        link_binding.series_plan_id,
+        link_binding.ordinal,
+        link_binding.market_instance_id,
+        link_binding.generation,
+        product_root.account(),
+        false,
+        &mut link_output,
+    )?;
+    let product_binding = product_root.state().binding();
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
+        program_id,
+        &accounts[2],
+        founder_link.state().binding().compiler_output_id,
+    )?;
+    let realm = crate::collateral_release::authenticate_realm_collateral_v2(
+        program_id,
+        &accounts[6],
+        &accounts[7],
+        &accounts[8],
+        &accounts[9],
+    )?;
+    let (market_binding, market_runtime) = authenticate_general_market_v2(
+        program_id,
+        &accounts[10],
+        &accounts[11],
+    )?;
+    let general_market = market_binding.base();
+    let market_instance = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        &accounts[12],
+        general_market.market_instance_v2_id.content_id(),
+    )?;
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        &accounts[13],
+        market_instance.value().market_genesis_profile_id.content_id(),
+    )?;
+    let grid = authenticate_direct_price_grid_v1(
+        program_id,
+        &accounts[18],
+        genesis.value().price_grid_id,
+        product_binding.realm_id,
+    )?;
+    let release_id = realm
+        .release()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require(
+        product_binding.market_instance_id == general_market.market_instance_v2_id
+            && product_binding.outcome_count == general_market.outcome_count
+            && product_binding.realm_id == genesis.value().realm_id
+            && product_binding.collateral_profile_id == genesis.value().profile_id
+            && product_binding.collateral_policy_id.bytes() == realm.policy_id().bytes()
+            && product_binding.collateral_release_id.bytes() == release_id.bytes()
+            && product_binding.price_measure_policy_id.bytes()
+                == general_market.price_measure_policy_v1_id.bytes()
+            && product_binding.native_claim_basis_id.bytes()
+                == general_market.native_claim_basis_id.bytes()
+            && general_market.relation_policy_id.bytes()
+                == genesis.value().relation_policy_id.bytes()
+            && general_market.price_scale == grid.price_scale
+            && market_runtime.market_instance_v2_id == general_market.market_instance_v2_id
+            && accounts[11].key.to_bytes() == general_market.market.bytes()
+            && product_root.state().resolution_semantic_id().bytes() != [0; 32]
+            && product_root.state().resolution_data_id().bytes() != [0; 32],
+        ClutchError::MismatchedState,
+    )?;
+
+    let (root_pda, root_bump) = seeds::direct_market_root_v1_pda(
+        program_id,
+        &product_binding.market_instance_id.bytes(),
+        product_binding.generation,
+    );
+    let (replay_pda, replay_bump) = seeds::direct_action_replay_v1_pda(program_id, &root_pda);
+    let (_, root_donation) = authenticate_fresh_direct_pda_v1(
+        &accounts[3],
+        (root_pda, root_bump),
+    )?;
+    let (_, replay_donation) = authenticate_fresh_direct_pda_v1(
+        &accounts[4],
+        (replay_pda, replay_bump),
+    )?;
+    require(
+        product_root
+            .state()
+            .product_families()
+            .binding()
+            .family_root_id(MarketFamilyV1::Direct)
+            .bytes() == accounts[3].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let root_rent = DirectRentOwnerV1 {
+        payer: accounts[5].key.to_bytes(),
+        principal_lamports: rent_parameters.minimum_balance(DIRECT_MARKET_ROOT_ACCOUNT_BYTES)?,
+        donation_floor_lamports: root_donation,
+    };
+    let replay_rent = DirectRentOwnerV1 {
+        payer: accounts[5].key.to_bytes(),
+        principal_lamports: rent_parameters.minimum_balance(DIRECT_ACTION_REPLAY_ACCOUNT_BYTES)?,
+        donation_floor_lamports: replay_donation,
+    };
+    let direct_binding = DirectMarketBindingV1 {
+        market_instance_id: product_binding.market_instance_id.bytes(),
+        generation: product_binding.generation,
+        outcome_count: product_binding.outcome_count,
+        realm_id: product_binding.realm_id.bytes(),
+        collateral_profile_id: product_binding.collateral_profile_id.bytes(),
+        collateral_policy_id: product_binding.collateral_policy_id.bytes(),
+        collateral_release_id: product_binding.collateral_release_id.bytes(),
+        resolution_account: product_binding.resolution_account_id.bytes(),
+        resolution_semantic_id: product_root.state().resolution_semantic_id().bytes(),
+        resolution_data_id: product_root.state().resolution_data_id().bytes(),
+        product_root_account: accounts[0].key.to_bytes(),
+        founder_series_link_account: accounts[1].key.to_bytes(),
+        founder_series_link_binding_id: founder_link
+            .state()
+            .binding()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes(),
+        compiler_bundle_v5_id: bundle.semantic_id().bytes(),
+        founder_series_plan_id: founder_link.state().binding().series_plan_id.bytes(),
+        founder_series_ordinal: founder_link.state().binding().ordinal,
+        direct_root_account: accounts[3].key.to_bytes(),
+        action_replay_account: accounts[4].key.to_bytes(),
+        general_market_runtime: accounts[11].key.to_bytes(),
+        neutral_lamport_sink: founder_link.state().binding().neutral_lamport_sink.bytes(),
+        relation_policy_id: general_market.relation_policy_id.bytes(),
+        price_policy_id: general_market.price_measure_policy_v1_id.bytes(),
+        price_scale: grid.price_scale,
+    };
+    authenticate_direct_resolution_binding_v5(
+        program_id,
+        direct_binding,
+        &accounts[14],
+    )?;
+    require(
+        direct_binding.neutral_lamport_sink == general_market.neutral_sink.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let family_sequence = product_root
+        .state()
+        .product_families()
+        .family(MarketFamilyV1::Direct)
+        .counts()
+        .admitted;
+    let authority = DirectFoundationAuthoritySbfV1 {
+        product_root: *product_root.state(),
+        founder_link: *founder_link.state(),
+        bundle: *bundle.value(),
+        binding: direct_binding,
+        schedule,
+        root_rent,
+        replay_rent,
+        family_sequence,
+        observed_slot,
+    };
+    let plan = prepare_direct_foundation_v1(
+        &authority,
+        *product_root.state(),
+        *founder_link.state(),
+        bundle.value(),
+        direct_binding,
+        schedule,
+        root_rent,
+        replay_rent,
+        family_sequence,
+        &DirectRuntimeSha256V1,
+    )
+    .map_err(map_direct_error_v1)?;
+    let product_post = product_root
+        .state()
+        .admit_product_family_child(
+            &plan.product_authority,
+            MarketFamilyV1::Direct,
+            family_sequence,
+            plan.admission_receipt_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let market_bytes = direct_binding.market_instance_id;
+    let generation_bytes = direct_binding.generation.to_le_bytes();
+    let root_bump_seed = [root_bump];
+    let root_seeds: [&[u8]; 4] = [
+        seeds::SEED_DIRECT_MARKET_ROOT_V1,
+        &market_bytes,
+        &generation_bytes,
+        &root_bump_seed,
+    ];
+    create_current_direct_account_v1(
+        program_id, &accounts[5], &accounts[3], &accounts[15], &rent_parameters,
+        DIRECT_MARKET_ROOT_ACCOUNT_BYTES, root_rent.principal_lamports,
+        root_donation, &root_seeds,
+    )?;
+    let root_account_bytes = accounts[3].key.to_bytes();
+    let replay_bump_seed = [replay_bump];
+    let replay_seeds: [&[u8]; 3] = [
+        seeds::SEED_DIRECT_ACTION_REPLAY_V1,
+        &root_account_bytes,
+        &replay_bump_seed,
+    ];
+    create_current_direct_account_v1(
+        program_id, &accounts[5], &accounts[4], &accounts[15], &rent_parameters,
+        DIRECT_ACTION_REPLAY_ACCOUNT_BYTES, replay_rent.principal_lamports,
+        replay_donation, &replay_seeds,
+    )?;
+    write_direct_market_root_v1(&accounts[3], root_bump, plan.state.root)?;
+    write_direct_action_replay_v1(
+        &accounts[4], replay_bump, plan.state.replay, plan.state.root,
+    )?;
+    write_product_root_post_v1(&accounts[0], product_root, &product_post)
+}
+
 impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAuthoritySbfV1 {
     fn authenticate_admission(
         &self,
         root: DirectMarketRootV1,
         position: AuthenticatedPositionV3,
+        existing_peer: Option<DirectReservationV1>,
         reservation_account: [u8; 32],
         order_id: [u8; 32],
         side: clutch_batch::Side,
@@ -696,6 +1092,7 @@ impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAut
     ) -> Result<(), DirectMarketErrorV1> {
         if root == self.root
             && position == self.position
+            && existing_peer == self.existing_peer
             && reservation_account == self.reservation_account
             && order_id == self.order_id
             && side == self.side
@@ -716,21 +1113,29 @@ impl AuthenticatedDirectReservationAdmissionV1 for DirectReservationAdmissionAut
 
 /// Execute action 2 across b1/b3, a fresh b4, PositionV3, and GEN1.
 ///
-/// The nineteen-account frame is frozen: root, Direct replay, fresh
+/// The fixed nineteen-account prefix is root, Direct replay, fresh
 /// Reservation, owner/payer, Position, GEN1, Realm, Profile, collateral
 /// policy, token program, General MarketBindingV2, General runtime,
 /// MarketInstanceV2 artifact, System, Rent, Clock, BundleV5, GenesisV2, and
-/// PriceGrid. All order funding is derived from authenticated Position state.
+/// PriceGrid. When the root owns one live Reservation, its exact read-only b4
+/// peer is the sole suffix account; the root count, never payload data, fixes
+/// whether that suffix exists. All funding is derived from Position state.
 pub(crate) fn process_direct_admit_order_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
     payload: &[u8],
 ) -> Outcome<()> {
-    require_count(accounts, 19)?;
-    require_distinct(accounts)?;
+    require(accounts.len() >= 19, ClutchError::AccountCount)?;
     let request = DirectAdmitOrderPayloadV1::decode(payload)?;
     let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
+    let peer_count = usize::from(root.value().live_reservations());
+    require(peer_count <= 1, ClutchError::MismatchedState)?;
+    let expected_count = 19usize
+        .checked_add(peer_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require_count(accounts, expected_count)?;
+    require_distinct(accounts)?;
     let direct_replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
@@ -771,6 +1176,23 @@ pub(crate) fn process_direct_admit_order_v1(
         &accounts[5],
         accounts[3].key.to_bytes(),
     )?;
+    let existing_peer = if peer_count == 0 {
+        None
+    } else {
+        let peer = authenticate_direct_reservation_readonly_v1(
+            program_id,
+            &accounts[19],
+            root,
+        )?;
+        require(
+            peer.account().to_bytes()
+                == root.value().reservation_account(0).map_err(map_direct_error_v1)?
+                && peer.semantic_id()
+                    == root.value().reservation_semantic_id(0).map_err(map_direct_error_v1)?,
+            ClutchError::MismatchedState,
+        )?;
+        Some(peer.value())
+    };
     let (reservation_pda, reservation_bump) = seeds::direct_reservation_v1_pda(
         program_id,
         &root.account(),
@@ -789,6 +1211,7 @@ pub(crate) fn process_direct_admit_order_v1(
     let authority = DirectReservationAdmissionAuthoritySbfV1 {
         root: root.value(),
         position: position_replay.position,
+        existing_peer,
         reservation_account: accounts[2].key.to_bytes(),
         order_id: request.order_id,
         side: request.side,
@@ -807,6 +1230,7 @@ pub(crate) fn process_direct_admit_order_v1(
             replay: direct_replay.value(),
         },
         position_replay.replay,
+        existing_peer,
         sequence,
         observed_slot,
         DirectReservationOrderInputV1 {
@@ -1042,7 +1466,613 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySb
     }
 }
 
-/// Execute one of actions 9..=12 over the complete b2-owned endpoint prefix.
+#[derive(Clone, Copy, Debug)]
+struct DirectMissedFreezeTerminalAuthoritySbfV1 {
+    state: DirectRootReplayPostV1,
+    selection_account: [u8; 32],
+    selection_rent: DirectRentOwnerV1,
+    reservation_accounts: [[u8; 32]; 2],
+    reservation_semantic_ids: [[u8; 32]; 2],
+    reservation_count: u8,
+    price: AuthenticatedDirectPricePreconditionV1,
+    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    sequence: u64,
+    slot: u64,
+}
+
+impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthoritySbfV1 {
+    fn authenticate_terminal(
+        &self,
+        state: DirectRootReplayPostV1,
+        selection: DirectSelectionV1,
+        ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        reason: DirectTerminalReasonV1,
+        consumed_sequence: u64,
+        observed_slot: u64,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if state != self.state
+            || selection.account() != self.selection_account
+            || selection.rent() != self.selection_rent
+            || selection.reservation_count() != self.reservation_count
+            || *selection.domain() != self.price.domain()
+            || *selection.price() != self.price.price()
+            || selection.candidate_count() != 0
+            || selection.verification_cursor() != 0
+            || selection.selected_pair().is_some()
+            || selection.terminal_receipt_id() != [0; 32]
+            || *ordered_endpoints != self.endpoints
+            || reason != DirectTerminalReasonV1::MissedFreezeLapse
+            || consumed_sequence != self.sequence
+            || observed_slot != self.slot
+        {
+            return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        let expected_phase = if self.reservation_count == 2 {
+            DirectSelectionPhaseV1::SubmissionOpen
+        } else {
+            DirectSelectionPhaseV1::FrozenEmpty
+        };
+        if selection.phase() != expected_phase {
+            return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        let mut index = 0usize;
+        while index < 2 {
+            if index < usize::from(self.reservation_count) {
+                let bounded = u8::try_from(index)
+                    .map_err(|_| DirectMarketErrorV1::Arithmetic)?;
+                if selection.reservation_account(bounded)? != self.reservation_accounts[index]
+                    || selection.reservation_semantic_id(bounded)?
+                        != self.reservation_semantic_ids[index]
+                {
+                    return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+                }
+            } else if self.reservation_accounts[index] != [0; 32]
+                || self.reservation_semantic_ids[index] != [0; 32]
+            {
+                return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+            }
+            index += 1;
+        }
+        Ok(())
+    }
+}
+
+/// Execute action 10 directly from an open root after submission close.
+///
+/// Fixed accounts 0..=19 are b1, b3, fresh b2, payer, System, Rent, Clock,
+/// BundleV5, NativeClaimBasis, PriceMeasurePolicy, GenesisV2, PriceGrid,
+/// Realm, Profile, collateral policy, token program, General MarketBindingV2,
+/// General runtime, MarketInstanceV2, and ResolutionV5. Exactly the root-owned
+/// live count of `(b4, PositionV3, GEN1)` triples follows in canonical order.
+/// The 128-byte action payload is the same exact Product-grid price vector
+/// used by action 4; it is required only because the absent b2 has no retained
+/// price owner yet.
+#[inline(never)]
+fn process_direct_missed_freeze_lapse_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(accounts.len() >= 20, ClutchError::AccountCount)?;
+    let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
+    require(root.value().phase() == DirectRootPhaseV1::Open, ClutchError::MismatchedState)?;
+    let endpoint_count = usize::from(root.value().live_reservations());
+    let expected_count = endpoint_count
+        .checked_mul(3)
+        .and_then(|value| value.checked_add(20))
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require_count(accounts, expected_count)?;
+    require_distinct(&accounts[..20])?;
+    require_direct_endpoint_alias_contract_v1(accounts, 20, endpoint_count)?;
+    let prices = DirectFreezeBookPayloadV1::decode(payload)?.prices;
+    let replay = authenticate_direct_action_replay_writable_v1(
+        program_id,
+        &accounts[1],
+        root,
+    )?;
+    require_signer(&accounts[3])?;
+    require(accounts[3].is_writable, ClutchError::NotWritable)?;
+    require_system_program(&accounts[4])?;
+    let rent_parameters = read_rent(&accounts[5])?;
+    let observed_slot = read_clock_slot(&accounts[6])?;
+    authenticate_direct_resolution_v5(program_id, root, &accounts[19])?;
+    let (selection_pda, selection_bump) =
+        seeds::direct_selection_v1_pda(program_id, &root.account());
+    let (_, donation_floor_lamports) = authenticate_fresh_direct_pda_v1(
+        &accounts[2],
+        (selection_pda, selection_bump),
+    )?;
+    let principal_lamports = rent_parameters.minimum_balance(DIRECT_SELECTION_ACCOUNT_BYTES)?;
+    let selection_rent = DirectRentOwnerV1 {
+        payer: accounts[3].key.to_bytes(),
+        principal_lamports,
+        donation_floor_lamports,
+    };
+    selection_rent.validate().map_err(map_direct_error_v1)?;
+
+    let bound = authenticate_direct_general_market_v1(
+        program_id,
+        root,
+        &accounts[12],
+        &accounts[13],
+        &accounts[14],
+        &accounts[15],
+        &accounts[16],
+        &accounts[17],
+        &accounts[18],
+        &accounts[10],
+    )?;
+    let mut authenticated: [Option<AuthenticatedDirectReservationV1>; 2] = [None; 2];
+    let mut endpoints = [None; 2];
+    let mut reservation_limits = [None; 2];
+    let mut reservation_accounts = [[0u8; 32]; 2];
+    let mut reservation_semantic_ids = [[0u8; 32]; 2];
+    let mut index = 0usize;
+    while index < endpoint_count {
+        let first = direct_endpoint_first_from_v1(20, index)?;
+        let reservation = authenticate_direct_reservation_writable_v1(
+            program_id,
+            &accounts[first],
+            root,
+        )?;
+        if index != 0 {
+            let previous = authenticated[index - 1]
+                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+            require(
+                previous.value().order_id() < reservation.value().order_id(),
+                ClutchError::MismatchedState,
+            )?;
+        }
+        let position_replay = authenticate_current_general_position_replay_v2(
+            program_id,
+            bound,
+            &accounts[16],
+            &accounts[17],
+            &accounts[first + 1],
+            &accounts[first + 2],
+            reservation.value().owner(),
+        )?;
+        authenticated[index] = Some(reservation);
+        endpoints[index] = Some(DirectEndpointPrestateV1 {
+            reservation: reservation.value(),
+            position_replay: position_replay.replay,
+        });
+        reservation_limits[index] = Some(reservation.value().limit_price_units_per_egg());
+        reservation_accounts[index] = reservation.account().to_bytes();
+        reservation_semantic_ids[index] = reservation.semantic_id();
+        index += 1;
+    }
+    let price = authenticate_direct_price_precondition_v1(
+        program_id,
+        root,
+        &accounts[7],
+        &accounts[8],
+        &accounts[9],
+        &accounts[10],
+        &accounts[11],
+        prices,
+        reservation_limits,
+    )?;
+    let reservation_count = u8::try_from(endpoint_count)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let freeze_authority = DirectSelectionFreezeAuthoritySbfV1 {
+        root: root.value(),
+        selection_account: accounts[2].key.to_bytes(),
+        rent: selection_rent,
+        reservation_accounts,
+        reservation_semantic_ids,
+        reservation_count,
+        price,
+    };
+    let state = DirectRootReplayPostV1 {
+        root: root.value(),
+        replay: replay.value(),
+    };
+    let terminal_authority = DirectMissedFreezeTerminalAuthoritySbfV1 {
+        state,
+        selection_account: accounts[2].key.to_bytes(),
+        selection_rent,
+        reservation_accounts,
+        reservation_semantic_ids,
+        reservation_count,
+        price,
+        endpoints,
+        sequence,
+        slot: observed_slot,
+    };
+    let mut reservations = [None; 2];
+    index = 0;
+    while index < endpoint_count {
+        reservations[index] = Some(
+            authenticated[index]
+                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?
+                .value(),
+        );
+        index += 1;
+    }
+    let plan = prepare_direct_missed_freeze_terminal_v1(
+        &freeze_authority,
+        &terminal_authority,
+        state,
+        accounts[2].key.to_bytes(),
+        selection_rent,
+        reservations,
+        price.domain(),
+        price.price(),
+        endpoints,
+        sequence,
+        observed_slot,
+        &DirectRuntimeSha256V1,
+    )
+    .map_err(map_direct_error_v1)?;
+
+    let root_bytes = root.account().to_bytes();
+    let bump_seed = [selection_bump];
+    let signer_seeds: [&[u8]; 3] = [
+        seeds::SEED_DIRECT_SELECTION_V1,
+        &root_bytes,
+        &bump_seed,
+    ];
+    create_current_direct_account_v1(
+        program_id,
+        &accounts[3],
+        &accounts[2],
+        &accounts[4],
+        &rent_parameters,
+        DIRECT_SELECTION_ACCOUNT_BYTES,
+        principal_lamports,
+        donation_floor_lamports,
+        &signer_seeds,
+    )?;
+    index = 0;
+    while index < endpoint_count {
+        let first = direct_endpoint_first_from_v1(20, index)?;
+        let endpoint = plan.endpoints[index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let reservation = authenticated[index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        write_position_post_v1(&accounts[first + 1], &endpoint.position_poststate)?;
+        write_general_replay_post_v1(&accounts[first + 2], &endpoint.replay_transition)?;
+        write_direct_reservation_v1(
+            &accounts[first],
+            reservation.bump(),
+            endpoint.reservation_post,
+            plan.state.root,
+        )?;
+        index += 1;
+    }
+    write_direct_market_root_v1(&accounts[0], root.bump(), plan.state.root)?;
+    write_direct_action_replay_v1(
+        &accounts[1],
+        replay.bump(),
+        plan.state.replay,
+        plan.state.root,
+    )?;
+    write_direct_selection_v1(
+        &accounts[2],
+        selection_bump,
+        plan.selection,
+        plan.state.root,
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DirectFamilyTerminalAuthoritySbfV1 {
+    product_root: clutch_product_series::MarketLifecycleRootV1,
+    founder_link: clutch_product_series::SeriesMarketLinkV1,
+    bundle: CompiledProductSeriesBundleV5,
+    root: DirectMarketRootV1,
+    root_semantic_id: [u8; 32],
+    replay: DirectActionReplayV1,
+    replay_semantic_id: [u8; 32],
+    selection: DirectSelectionV1,
+    reservations: [Option<DirectReservationV1>; 2],
+    retirement: DirectRetirementTransferV1,
+    retirement_transfer_id: [u8; 32],
+    sequence: u64,
+    slot: u64,
+    family_sequence: u32,
+}
+
+impl AuthenticatedDirectTerminalV1 for DirectFamilyTerminalAuthoritySbfV1 {
+    fn authenticate_terminal(
+        &self,
+        product_root: &clutch_product_series::MarketLifecycleRootV1,
+        founder_link: &clutch_product_series::SeriesMarketLinkV1,
+        compiler_bundle: &CompiledProductSeriesBundleV5,
+        root: DirectMarketRootV1,
+        root_semantic_id: [u8; 32],
+        replay: DirectActionReplayV1,
+        replay_semantic_id: [u8; 32],
+        selection: DirectSelectionV1,
+        reservations: &[Option<DirectReservationV1>; 2],
+        retirement: DirectRetirementTransferV1,
+        retirement_transfer_id: [u8; 32],
+        consumed_sequence: u64,
+        observed_slot: u64,
+        family_terminal_sequence: u32,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if *product_root == self.product_root
+            && *founder_link == self.founder_link
+            && *compiler_bundle == self.bundle
+            && root == self.root
+            && root_semantic_id == self.root_semantic_id
+            && replay == self.replay
+            && replay_semantic_id == self.replay_semantic_id
+            && selection == self.selection
+            && *reservations == self.reservations
+            && retirement == self.retirement
+            && retirement_transfer_id == self.retirement_transfer_id
+            && consumed_sequence == self.sequence
+            && observed_slot == self.slot
+            && family_terminal_sequence == self.family_sequence
+        {
+            Ok(())
+        } else {
+            Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+        }
+    }
+}
+
+/// Execute action 13, retain the permanent b3 receipt, terminalize Product,
+/// refund exact persisted principal, sink every surplus lamport, and delete
+/// b1, b2, and the complete still-live b4 archive set.
+///
+/// Fixed accounts 0..=8 are Product root, founder link, BundleV5, b1, b3,
+/// b2, ResolutionV5, Clock, and the Realm neutral sink. The exact b2-order
+/// live b4 prefix follows, then the sorted unique persisted payer accounts.
+/// Both suffix lengths are derived from authenticated state.
+#[inline(never)]
+pub(crate) fn process_direct_retire_terminal_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(accounts.len() >= 9, ClutchError::AccountCount)?;
+    require(
+        accounts.len() <= DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS,
+        ClutchError::AccountCount,
+    )?;
+    decode_direct_empty_payload_v1(payload)?;
+    let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[3])?;
+    let replay = authenticate_direct_action_replay_writable_v1(
+        program_id,
+        &accounts[4],
+        root,
+    )?;
+    let selection = authenticate_direct_selection_writable_v1(
+        program_id,
+        &accounts[5],
+        root,
+    )?;
+    authenticate_direct_resolution_v5(program_id, root, &accounts[6])?;
+    let observed_slot = read_clock_slot(&accounts[7])?;
+    require(
+        accounts[8].is_writable
+            && !accounts[8].is_signer
+            && !accounts[8].executable
+            && accounts[8].key.to_bytes() == root.value().binding.neutral_lamport_sink,
+        ClutchError::MismatchedState,
+    )?;
+    let reservation_count = usize::from(selection.value().reservation_count());
+    require(
+        reservation_count == usize::from(root.value().live_reservations()),
+        ClutchError::MismatchedState,
+    )?;
+    let reservation_end = 9usize
+        .checked_add(reservation_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(accounts.len() >= reservation_end, ClutchError::AccountCount)?;
+    require_distinct(&accounts[..reservation_end])?;
+
+    let mut link_output = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    {
+        let data = accounts[1]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        SeriesMarketLinkAccountV1::decode_into(&data, &mut link_output)?;
+    }
+    let binding = root.value().binding();
+    let link_binding = link_output.state.binding();
+    let mut product_output = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let product_root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        &accounts[0],
+        MarketInstanceV2Id::from_bytes(binding.market_instance_id),
+        binding.generation,
+        true,
+        &mut product_output,
+    )?;
+    let founder_link = authenticate_series_market_link_v1(
+        program_id,
+        &accounts[1],
+        SeriesPlanV5Id::from_bytes(binding.founder_series_plan_id),
+        binding.founder_series_ordinal,
+        MarketInstanceV2Id::from_bytes(binding.market_instance_id),
+        binding.generation,
+        product_root.account(),
+        false,
+        &mut link_output,
+    )?;
+    require(
+        link_binding == founder_link.state().binding()
+            && accounts[0].key.to_bytes() == binding.product_root_account
+            && accounts[1].key.to_bytes() == binding.founder_series_link_account,
+        ClutchError::MismatchedState,
+    )?;
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
+        program_id,
+        &accounts[2],
+        ContentId::from_bytes(binding.compiler_bundle_v5_id),
+    )?;
+
+    let mut authenticated: [Option<AuthenticatedDirectReservationV1>; 2] = [None; 2];
+    let mut reservations = [None; 2];
+    let mut sources: [Option<DirectRetirementSourceV1>; 4] = [None; 4];
+    sources[0] = Some(DirectRetirementSourceV1 {
+        account: accounts[3].key.to_bytes(),
+        rent: root.value().root_rent(),
+        observed_lamports: root.observed_lamports(),
+    });
+    sources[1] = Some(DirectRetirementSourceV1 {
+        account: accounts[5].key.to_bytes(),
+        rent: selection.value().rent(),
+        observed_lamports: selection.observed_lamports(),
+    });
+    let mut index = 0usize;
+    while index < reservation_count {
+        let reservation = authenticate_direct_reservation_writable_v1(
+            program_id,
+            &accounts[9 + index],
+            root,
+        )?;
+        let bounded = u8::try_from(index)
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+        require(
+            reservation.account().to_bytes()
+                == selection.value().reservation_account(bounded).map_err(map_direct_error_v1)?
+                && reservation.semantic_id()
+                    != selection.value().reservation_semantic_id(bounded)
+                        .map_err(map_direct_error_v1)?
+                && reservation.value().terminal_receipt_id()
+                    == selection.value().terminal_receipt_id(),
+            ClutchError::MismatchedState,
+        )?;
+        authenticated[index] = Some(reservation);
+        reservations[index] = Some(reservation.value());
+        sources[2 + index] = Some(DirectRetirementSourceV1 {
+            account: reservation.account().to_bytes(),
+            rent: reservation.value().rent(),
+            observed_lamports: reservation.observed_lamports(),
+        });
+        index += 1;
+    }
+    let retirement = build_direct_retirement_transfer_v1(
+        sources,
+        accounts[8].key.to_bytes(),
+    )
+    .map_err(map_direct_error_v1)?;
+    let expected_count = reservation_end
+        .checked_add(usize::from(retirement.refund_count))
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require_count(accounts, expected_count)?;
+    index = reservation_end;
+    while index < expected_count {
+        require(
+            accounts[index].is_writable
+                && !accounts[index].is_signer
+                && !accounts[index].executable,
+            ClutchError::NotWritable,
+        )?;
+        let mut prior = 0usize;
+        while prior < reservation_end {
+            require(accounts[index].key != accounts[prior].key, ClutchError::AccountAlias)?;
+            prior += 1;
+        }
+        if index != reservation_end {
+            require(
+                accounts[index - 1].key.to_bytes() < accounts[index].key.to_bytes(),
+                ClutchError::AccountAlias,
+            )?;
+        }
+        let refund_index = index
+            .checked_sub(reservation_end)
+            .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+        let refund = retirement.refunds[refund_index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            accounts[index].key.to_bytes() == refund.recipient,
+            ClutchError::MismatchedState,
+        )?;
+        index += 1;
+    }
+    let retirement_transfer_id = retirement
+        .semantic_id(&DirectRuntimeSha256V1)
+        .map_err(map_direct_error_v1)?;
+    let family_sequence = product_root
+        .state()
+        .product_families()
+        .family(MarketFamilyV1::Direct)
+        .counts()
+        .terminal;
+    let state = DirectRootReplayPostV1 {
+        root: root.value(),
+        replay: replay.value(),
+    };
+    let authority = DirectFamilyTerminalAuthoritySbfV1 {
+        product_root: *product_root.state(),
+        founder_link: *founder_link.state(),
+        bundle: *bundle.value(),
+        root: root.value(),
+        root_semantic_id: root.semantic_id(),
+        replay: replay.value(),
+        replay_semantic_id: replay.semantic_id(),
+        selection: selection.value(),
+        reservations,
+        retirement,
+        retirement_transfer_id,
+        sequence,
+        slot: observed_slot,
+        family_sequence,
+    };
+    let plan = prepare_direct_family_terminal_v1(
+        &authority,
+        *product_root.state(),
+        *founder_link.state(),
+        bundle.value(),
+        state,
+        selection.value(),
+        reservations,
+        retirement,
+        sequence,
+        observed_slot,
+        family_sequence,
+        &DirectRuntimeSha256V1,
+    )
+    .map_err(map_direct_error_v1)?;
+    let product_post = product_root
+        .state()
+        .terminalize_product_family_child(
+            &plan.product_authority,
+            MarketFamilyV1::Direct,
+            family_sequence,
+            plan.terminal_receipt_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    index = 0;
+    while index < usize::from(plan.retirement.refund_count) {
+        let refund = plan.retirement.refunds[index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        credit_lamports_v1(&accounts[reservation_end + index], refund.lamports)?;
+        index += 1;
+    }
+    credit_lamports_v1(&accounts[8], plan.retirement.surplus_lamports)?;
+    write_direct_action_replay_v1(
+        &accounts[4],
+        replay.bump(),
+        plan.replay_post,
+        root.value(),
+    )?;
+    write_product_root_post_v1(&accounts[0], product_root, &product_post)?;
+    index = 0;
+    while index < reservation_count {
+        let reservation = authenticated[index]
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        close_direct_program_account_v1(
+            &accounts[9 + index],
+            reservation.observed_lamports(),
+        )?;
+        index += 1;
+    }
+    close_direct_program_account_v1(&accounts[5], selection.observed_lamports())?;
+    close_direct_program_account_v1(&accounts[3], root.observed_lamports())
+}
+
+/// Execute action 8's empty no-trade branch or actions 9..=12 over the
+/// complete b2-owned endpoint prefix.
 ///
 /// Fixed accounts 0..=12 are b1, b3, b2, Realm, Profile, collateral policy,
 /// token program, General MarketBindingV2, General runtime, MarketInstanceV2,
@@ -1058,9 +2088,25 @@ pub(crate) fn process_direct_economic_terminal_v1(
     action: DirectMarketAction,
     payload: &[u8],
 ) -> Outcome<()> {
-    require(accounts.len() >= 13, ClutchError::AccountCount)?;
-    decode_direct_empty_payload_v1(payload)?;
+    require(accounts.len() >= 3, ClutchError::AccountCount)?;
     let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
+    if action == DirectMarketAction::LapseEmpty
+        && root.value().phase() == DirectRootPhaseV1::Open
+    {
+        return process_direct_missed_freeze_lapse_v1(
+            program_id,
+            accounts,
+            sequence,
+            payload,
+        );
+    }
+    require(accounts.len() >= 13, ClutchError::AccountCount)?;
+    let lapse_prices = if action == DirectMarketAction::LapseEmpty {
+        Some(DirectFreezeBookPayloadV1::decode(payload)?.prices)
+    } else {
+        decode_direct_empty_payload_v1(payload)?;
+        None
+    };
     let direct_replay = authenticate_direct_action_replay_writable_v1(
         program_id,
         &accounts[1],
@@ -1071,6 +2117,9 @@ pub(crate) fn process_direct_economic_terminal_v1(
         &accounts[2],
         root,
     )?;
+    if let Some(prices) = lapse_prices {
+        require(selection.value().price().prices == prices, ClutchError::MismatchedState)?;
+    }
     let endpoint_count = usize::from(selection.value().reservation_count());
     let expected_count = endpoint_count
         .checked_mul(3)
@@ -1078,7 +2127,7 @@ pub(crate) fn process_direct_economic_terminal_v1(
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
     require_count(accounts, expected_count)?;
     require_distinct(&accounts[..13])?;
-    require_direct_endpoint_alias_contract_v1(accounts, endpoint_count)?;
+    require_direct_endpoint_alias_contract_v1(accounts, 13, endpoint_count)?;
     let observed_slot = read_clock_slot(&accounts[12])?;
     authenticate_direct_resolution_v5(program_id, root, &accounts[11])?;
     let bound = authenticate_direct_general_market_v1(
@@ -1127,6 +2176,7 @@ pub(crate) fn process_direct_economic_terminal_v1(
         index += 1;
     }
     let reason = match action {
+        DirectMarketAction::FinalizeSelection => DirectTerminalReasonV1::NoCandidate,
         DirectMarketAction::SettlePair => DirectTerminalReasonV1::Settled,
         DirectMarketAction::LapseEmpty => DirectTerminalReasonV1::EmptyLapse,
         DirectMarketAction::LapseUnselected => DirectTerminalReasonV1::UnselectedLapse,
@@ -1194,13 +2244,14 @@ pub(crate) fn process_direct_economic_terminal_v1(
 
 fn require_direct_endpoint_alias_contract_v1(
     accounts: &[AccountInfo<'_>],
+    fixed_count: usize,
     endpoint_count: usize,
 ) -> Outcome<()> {
     let mut index = 0usize;
     while index < endpoint_count {
-        let first = direct_endpoint_first_v1(index)?;
+        let first = direct_endpoint_first_from_v1(fixed_count, index)?;
         let mut fixed = 0usize;
-        while fixed < 13 {
+        while fixed < fixed_count {
             require(
                 accounts[first].key != accounts[fixed].key
                     && accounts[first + 1].key != accounts[fixed].key
@@ -1218,8 +2269,10 @@ fn require_direct_endpoint_alias_contract_v1(
         index += 1;
     }
     if endpoint_count == 2 {
-        let left = 13usize;
-        let right = 16usize;
+        let left = fixed_count;
+        let right = fixed_count
+            .checked_add(3)
+            .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
         require(accounts[left].key != accounts[right].key, ClutchError::AccountAlias)?;
         let positions_alias = accounts[left + 1].key == accounts[right + 1].key;
         let replays_alias = accounts[left + 2].key == accounts[right + 2].key;
@@ -1238,9 +2291,13 @@ fn require_direct_endpoint_alias_contract_v1(
 }
 
 fn direct_endpoint_first_v1(index: usize) -> Outcome<usize> {
+    direct_endpoint_first_from_v1(13, index)
+}
+
+fn direct_endpoint_first_from_v1(base: usize, index: usize) -> Outcome<usize> {
     index
         .checked_mul(3)
-        .and_then(|offset| offset.checked_add(13))
+        .and_then(|offset| offset.checked_add(base))
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))
 }
 
@@ -1421,6 +2478,102 @@ fn authenticate_direct_order_limit_v1(
             && grid.price_scale == binding.price_scale,
         ClutchError::MismatchedState,
     )
+}
+
+fn authenticate_direct_price_grid_v1(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_grid_id: ContentId,
+    expected_realm_id: ContentId,
+) -> Outcome<PriceGridAccount> {
+    require(
+        account.owner == program_id
+            && !account.is_signer
+            && !account.executable
+            && !account.is_writable
+            && account.data_len() == account_len::PRICE_GRID,
+        ClutchError::MismatchedState,
+    )?;
+    let grid = PriceGridAccount::decode(&account.data.borrow())?;
+    expect_pda(
+        account.key,
+        seeds::grid_pda(program_id, &grid.realm.0, &grid.grid.0),
+        Some(grid.stored_bump),
+    )?;
+    require(
+        grid.grid.0 == expected_grid_id.bytes()
+            && grid.realm.0 == expected_realm_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(grid)
+}
+
+fn authenticate_direct_resolution_binding_v5(
+    program_id: &Pubkey,
+    binding: DirectMarketBindingV1,
+    account: &AccountInfo<'_>,
+) -> Outcome<()> {
+    use clutch_collateral_adapter_v2::{ResolutionStateV5, ResolutionV5, RESOLUTION_V5_BYTES};
+    require(
+        account.owner == program_id
+            && !account.is_signer
+            && !account.executable
+            && !account.is_writable
+            && account.data_len() == RESOLUTION_V5_BYTES
+            && account.key.to_bytes() == binding.resolution_account,
+        ClutchError::MismatchedState,
+    )?;
+    let resolution = ResolutionV5::decode(&account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expect_pda(
+        account.key,
+        seeds::resolution_v5_pda(program_id, &binding.market_instance_id),
+        Some(resolution.stored_bump),
+    )?;
+    let account_id = CollateralId::from_bytes(account.key.to_bytes());
+    let semantic_id = resolution
+        .semantic_id(&DirectRuntimeSha256V1)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let data_id = resolution
+        .data_id(account_id)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let minimum_balance = resolution.rent
+        .refundable_principal()
+        .checked_add(resolution.rent.donation_floor())
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        resolution.state == ResolutionStateV5::Finalized
+            && resolution.facts.market_instance_id.bytes() == binding.market_instance_id
+            && resolution.facts.generation == binding.generation
+            && resolution.facts.outcome_count == binding.outcome_count
+            && semantic_id.bytes() == binding.resolution_semantic_id
+            && data_id.bytes() == binding.resolution_data_id
+            && account.lamports() >= minimum_balance,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn write_product_root_post_v1(
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV1<'_>,
+    successor: &clutch_product_series::MarketLifecycleRootV1,
+) -> Outcome<()> {
+    require(
+        account.is_writable
+            && *account.key == authenticated.account()
+            && successor.binding() == authenticated.state().binding(),
+        ClutchError::MismatchedState,
+    )?;
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    MarketLifecycleRootAccountV1::encode_parts(
+        successor,
+        authenticated.rent_principal_lamports(),
+        authenticated.value().stored_bump,
+        &mut data,
+    )?;
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1958,5 +3111,19 @@ mod tests {
         assert_ne!(root, changed_data);
         assert_ne!(root, changed_semantic);
         assert_ne!(root, changed_lamports);
+    }
+
+    #[test]
+    fn current_family_frames_are_statically_bounded() {
+        assert_eq!(direct_endpoint_first_from_v1(13, 0).unwrap(), 13);
+        assert_eq!(direct_endpoint_first_from_v1(13, 1).unwrap(), 16);
+        assert_eq!(direct_endpoint_first_from_v1(20, 0).unwrap(), 20);
+        assert_eq!(direct_endpoint_first_from_v1(20, 1).unwrap(), 23);
+        assert_eq!(20 + 2 * 3, DIRECT_MARKET_V1_MAX_ACCOUNTS);
+        assert_eq!(9 + 2 + 4, DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS);
+        assert_eq!(
+            DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1,
+            DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES,
+        );
     }
 }

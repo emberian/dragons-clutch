@@ -545,6 +545,36 @@ fn retirement_refunds_principal_only_and_coalesces_sorted_payers() {
 }
 
 #[test]
+fn retirement_builder_derives_sorted_sources_and_coalesced_refunds() {
+    let transfer = build_direct_retirement_transfer_v1(
+        [
+            Some(DirectRetirementSourceV1 {
+                account: id(21),
+                rent: rent(30, 200, 7),
+                observed_lamports: 220,
+            }),
+            None,
+            Some(DirectRetirementSourceV1 {
+                account: id(20),
+                rent: rent(30, 100, 5),
+                observed_lamports: 110,
+            }),
+            None,
+        ],
+        id(31),
+    )
+    .unwrap();
+    assert_eq!(transfer, retirement());
+    assert_eq!(
+        build_direct_retirement_transfer_v1(
+            [transfer.sources[0], transfer.sources[0], None, None],
+            id(31),
+        ),
+        Err(DirectMarketErrorV1::IdentityAlias)
+    );
+}
+
+#[test]
 fn retirement_refuses_duplicate_sources_and_nonzero_tail() {
     let mut duplicate = retirement();
     duplicate.sources[1] = duplicate.sources[0];

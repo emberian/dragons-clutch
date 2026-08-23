@@ -2510,7 +2510,7 @@ pub enum DirectMarketAction {
     FinalizeSelection = 8,
     /// Atomically settle the selected Egg/cash pair and both GEN1 replays.
     SettlePair = 9,
-    /// Terminalize a frozen epoch with no submitted candidate.
+    /// Terminalize a no-trade prefix, creating Selection if freeze was missed.
     LapseEmpty = 10,
     /// Terminalize a nonempty epoch whose verification never selected.
     LapseUnselected = 11,

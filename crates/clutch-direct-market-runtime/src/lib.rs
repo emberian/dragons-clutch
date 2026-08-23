@@ -299,6 +299,94 @@ impl DirectRetirementTransferV1 {
     }
 }
 
+/// Derive the sole canonical principal-refund/surplus vector from an
+/// unordered fixed-capacity source set. The active count, sorted source
+/// prefix, coalesced payer prefix, and surplus are all derived here; no caller
+/// count or refund amount is accepted.
+pub fn build_direct_retirement_transfer_v1(
+    supplied: [Option<DirectRetirementSourceV1>; MAX_DIRECT_RETIREMENT_SOURCES_V1],
+    neutral_lamport_sink: [u8; 32],
+) -> Result<DirectRetirementTransferV1, DirectMarketErrorV1> {
+    require_live(neutral_lamport_sink)?;
+    let mut sources: [Option<DirectRetirementSourceV1>; MAX_DIRECT_RETIREMENT_SOURCES_V1] =
+        [None; MAX_DIRECT_RETIREMENT_SOURCES_V1];
+    let mut source_count = 0usize;
+    let mut index = 0usize;
+    while index < MAX_DIRECT_RETIREMENT_SOURCES_V1 {
+        if let Some(source) = supplied[index] {
+            source.validate()?;
+            if source.account == neutral_lamport_sink {
+                return Err(DirectMarketErrorV1::IdentityAlias);
+            }
+            let mut at = 0usize;
+            while at < source_count {
+                let current = sources[at].ok_or(DirectMarketErrorV1::InvalidCount)?;
+                if current.account >= source.account {
+                    break;
+                }
+                at += 1;
+            }
+            if at < source_count
+                && sources[at].ok_or(DirectMarketErrorV1::InvalidCount)?.account
+                    == source.account
+            {
+                return Err(DirectMarketErrorV1::IdentityAlias);
+            }
+            let mut cursor = source_count;
+            while cursor > at {
+                sources[cursor] = sources[cursor - 1];
+                cursor -= 1;
+            }
+            sources[at] = Some(source);
+            source_count = source_count
+                .checked_add(1)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        }
+        index += 1;
+    }
+    if source_count == 0 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut payers = [[0u8; 32]; MAX_DIRECT_REFUND_RECIPIENTS_V1];
+    let mut amounts = [0u64; MAX_DIRECT_REFUND_RECIPIENTS_V1];
+    let mut refund_count = 0usize;
+    let mut surplus_lamports = 0u64;
+    index = 0;
+    while index < source_count {
+        let source = sources[index].ok_or(DirectMarketErrorV1::InvalidCount)?;
+        insert_refund(
+            &mut payers,
+            &mut amounts,
+            &mut refund_count,
+            source.rent.payer,
+            source.rent.principal_lamports,
+        )?;
+        surplus_lamports = surplus_lamports
+            .checked_add(source.surplus_lamports()?)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        index += 1;
+    }
+    let mut refunds = [None; MAX_DIRECT_REFUND_RECIPIENTS_V1];
+    index = 0;
+    while index < refund_count {
+        refunds[index] = Some(DirectPrincipalRefundV1 {
+            recipient: payers[index],
+            lamports: amounts[index],
+        });
+        index += 1;
+    }
+    let transfer = DirectRetirementTransferV1 {
+        sources,
+        source_count: u8::try_from(source_count).map_err(|_| DirectMarketErrorV1::Arithmetic)?,
+        refunds,
+        refund_count: u8::try_from(refund_count).map_err(|_| DirectMarketErrorV1::Arithmetic)?,
+        neutral_lamport_sink,
+        surplus_lamports,
+    };
+    transfer.validate()?;
+    Ok(transfer)
+}
+
 /// Immutable Direct binding to Product, Realm collateral, and Resolution V5.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectMarketBindingV1 {
