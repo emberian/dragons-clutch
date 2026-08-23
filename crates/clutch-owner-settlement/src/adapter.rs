@@ -19,6 +19,29 @@ pub const SETTLEMENT_CASH_POT_BODY_V1_BYTES: usize = 256;
 const BUY_END_MASK: u8 = 1;
 const SELL_END_MASK: u8 = 2;
 
+/// Direction of the selected candidate's sole canonical virtual cash leg.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum VirtualCashDirectionV1 {
+    /// The selected candidate has no virtual complete-set conversion.
+    None = 0,
+    /// Buyer consideration leaves terminal cash that must fund a split.
+    Split = 1,
+    /// A completed merge contributes opening cash before seller realization.
+    Merge = 2,
+}
+
+impl VirtualCashDirectionV1 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Split),
+            2 => Ok(Self::Merge),
+            _ => Err(Error::InvalidExpectation),
+        }
+    }
+}
+
 /// A canonical PDA derivation performed by the trusted SBF adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
@@ -428,8 +451,10 @@ pub struct SettlementCashPotExpectationV1 {
     pub selected_fee_atoms: Amount,
     /// Relation-certified terminal rounding slack.
     pub rounding_pot_price_units: u128,
-    /// Whole atoms retained under an explicit virtual-claim cash ledger.
-    pub terminal_claim_cash_atoms: Amount,
+    /// Direction of the sole canonical virtual complete-set conversion.
+    pub virtual_cash_direction: VirtualCashDirectionV1,
+    /// Exact virtual cash atoms: terminal split funding or opening merge proceeds.
+    pub virtual_cash_atoms: Amount,
 }
 
 impl SettlementCashPotExpectationV1 {
@@ -461,11 +486,17 @@ impl SettlementCashPotExpectationV1 {
             || self.owner_count == 0
             || (self.selected_fee_atoms == 0) != (self.fee_record == [0; 32])
             || self.rounding_pot_price_units % u128::from(self.price_scale) != 0
+            || (self.virtual_cash_atoms == 0)
+                != (self.virtual_cash_direction == VirtualCashDirectionV1::None)
         {
             return Err(Error::InvalidExpectation);
         }
+        let opening_merge = self.opening_merge_cash_atoms();
+        let terminal_split = self.terminal_split_cash_atoms();
         let available = self
             .consideration_debit_atoms
+            .checked_add(opening_merge)
+            .ok_or(Error::ArithmeticOverflow)?
             .checked_sub(self.seller_credit_atoms)
             .ok_or(Error::InvariantViolation)?;
         let rounding_atoms =
@@ -473,12 +504,28 @@ impl SettlementCashPotExpectationV1 {
                 .map_err(|_| Error::ArithmeticOverflow)?;
         if available
             != rounding_atoms
-                .checked_add(self.terminal_claim_cash_atoms)
+                .checked_add(terminal_split)
                 .ok_or(Error::ArithmeticOverflow)?
         {
             return Err(Error::InvariantViolation);
         }
         Ok(())
+    }
+
+    /// Merge proceeds that must exist before any owner cash realization.
+    pub const fn opening_merge_cash_atoms(self) -> Amount {
+        match self.virtual_cash_direction {
+            VirtualCashDirectionV1::Merge => self.virtual_cash_atoms,
+            VirtualCashDirectionV1::None | VirtualCashDirectionV1::Split => 0,
+        }
+    }
+
+    /// Split principal remaining after every owner cash realization.
+    pub const fn terminal_split_cash_atoms(self) -> Amount {
+        match self.virtual_cash_direction {
+            VirtualCashDirectionV1::Split => self.virtual_cash_atoms,
+            VirtualCashDirectionV1::None | VirtualCashDirectionV1::Merge => 0,
+        }
     }
 }
 
@@ -506,7 +553,7 @@ impl SettlementCashPotV1 {
         expectation.validate()?;
         Ok(Self {
             expectation,
-            available_consideration_atoms: 0,
+            available_consideration_atoms: expectation.opening_merge_cash_atoms(),
             collected_fee_atoms: 0,
             realized_rounding_price_units: 0,
             finalized_owner_count: 0,
@@ -519,12 +566,18 @@ impl SettlementCashPotV1 {
         self.expectation.validate()?;
         if self.state > 1
             || self.finalized_owner_count > self.expectation.owner_count
-            || self.available_consideration_atoms > self.expectation.consideration_debit_atoms
+            || self.available_consideration_atoms
+                > self
+                    .expectation
+                    .consideration_debit_atoms
+                    .checked_add(self.expectation.opening_merge_cash_atoms())
+                    .ok_or(Error::ArithmeticOverflow)?
             || self.collected_fee_atoms > self.expectation.selected_fee_atoms
             || self.realized_rounding_price_units > self.expectation.rounding_pot_price_units
             || (self.state == 0 && self.finalized_owner_count == self.expectation.owner_count)
             || (self.finalized_owner_count == 0
-                && (self.available_consideration_atoms != 0
+                && (self.available_consideration_atoms
+                    != self.expectation.opening_merge_cash_atoms()
                     || self.collected_fee_atoms != 0
                     || self.realized_rounding_price_units != 0))
         {
@@ -533,11 +586,13 @@ impl SettlementCashPotV1 {
         if self.state == 1
             && (self.finalized_owner_count != self.expectation.owner_count
                 || self.available_consideration_atoms
-                    != self
-                        .expectation
-                        .consideration_debit_atoms
-                        .checked_sub(self.expectation.seller_credit_atoms)
-                        .ok_or(Error::InvariantViolation)?
+                    != Amount::try_from(
+                        self.expectation.rounding_pot_price_units
+                            / u128::from(self.expectation.price_scale),
+                    )
+                    .map_err(|_| Error::ArithmeticOverflow)?
+                    .checked_add(self.expectation.terminal_split_cash_atoms())
+                    .ok_or(Error::ArithmeticOverflow)?
                 || self.collected_fee_atoms != self.expectation.selected_fee_atoms
                 || self.realized_rounding_price_units != self.expectation.rounding_pot_price_units)
         {
@@ -593,7 +648,12 @@ impl SettlementCashPotV1 {
         put(
             &mut output,
             &mut cursor,
-            &self.expectation.terminal_claim_cash_atoms.to_le_bytes(),
+            &self.expectation.virtual_cash_atoms.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            &mut cursor,
+            &[self.expectation.virtual_cash_direction as u8],
         )?;
         put(
             &mut output,
@@ -616,7 +676,7 @@ impl SettlementCashPotV1 {
             &self.finalized_owner_count.to_le_bytes(),
         )?;
         put(&mut output, &mut cursor, &[self.state])?;
-        put(&mut output, &mut cursor, &[0; 3])?;
+        put(&mut output, &mut cursor, &[0; 2])?;
         if cursor != SETTLEMENT_CASH_POT_BODY_V1_BYTES {
             return Err(Error::InvariantViolation);
         }
@@ -641,7 +701,8 @@ impl SettlementCashPotV1 {
             seller_credit_atoms: read_u64(input, &mut cursor)?,
             selected_fee_atoms: read_u64(input, &mut cursor)?,
             rounding_pot_price_units: read_u128(input, &mut cursor)?,
-            terminal_claim_cash_atoms: read_u64(input, &mut cursor)?,
+            virtual_cash_atoms: read_u64(input, &mut cursor)?,
+            virtual_cash_direction: VirtualCashDirectionV1::decode(read_u8(input, &mut cursor)?)?,
         };
         let value = Self {
             expectation,
@@ -651,7 +712,7 @@ impl SettlementCashPotV1 {
             finalized_owner_count: read_u16(input, &mut cursor)?,
             state: read_u8(input, &mut cursor)?,
         };
-        if take(input, &mut cursor, 3)? != &[0; 3] || cursor != input.len() {
+        if take(input, &mut cursor, 2)? != &[0; 2] || cursor != input.len() {
             return Err(Error::InvalidAccount);
         }
         value.validate()?;
@@ -901,7 +962,8 @@ mod tests {
             seller_credit_atoms: 1,
             selected_fee_atoms: 0,
             rounding_pot_price_units: 10,
-            terminal_claim_cash_atoms: 0,
+            virtual_cash_direction: VirtualCashDirectionV1::None,
+            virtual_cash_atoms: 0,
         })
         .unwrap()
     }
