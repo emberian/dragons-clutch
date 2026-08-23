@@ -5,7 +5,7 @@ use core::fmt;
 use clutch_batch::relation_v1::{
     BookV1, CandidateV1, LegRefV1, OrderV1, PairingWitnessV1, MAX_OUTCOMES, MAX_SLICES,
 };
-use clutch_batch::MAX_ORDERS;
+use clutch_batch::{Side, MAX_ORDERS};
 use clutch_solana_layout::{canonical_order_id, stream::OrderPageHeader, Hash32};
 
 /// Borrowed, untrusted projection presented to the current settlement client.
@@ -140,6 +140,8 @@ pub enum SettlementRefusal {
     MixedSinglePortfolioPair,
     /// A direct slice is self-referential, empty, or outside the outcome set.
     InvalidDirectLeg,
+    /// Direct endpoints do not bind the named outcome and buy/sell roles.
+    DirectOrderRoleMismatch,
     /// More than one receipt would be required for the same direct pair.
     DuplicateDirectPair,
     /// Summing witness coverage overflowed an exact integer.
@@ -173,6 +175,7 @@ impl fmt::Display for SettlementRefusal {
             Self::ExclusivePortfolioPair => "Operator trade settlement does not yet build the atomic exclusive-portfolio account shape",
             Self::MixedSinglePortfolioPair => "Operator trade settlement does not yet build the per-slice mixed single/portfolio account shape",
             Self::InvalidDirectLeg => "a witness slice is not an executable direct settlement leg",
+            Self::DirectOrderRoleMismatch => "a direct witness slice does not bind a buy and sell order on its named outcome",
             Self::DuplicateDirectPair => "Operator trade settlement does not yet track more than one receipt for a direct order pair",
             Self::CoverageOverflow => "witness coverage overflowed",
             Self::IncompleteFillCoverage => "the direct settlement groups do not exhaust the selected candidate's fills",
@@ -230,8 +233,10 @@ pub fn classify_direct_settlement(
             .get(sell_index)
             .filter(|_| sell_index < book_len)
             .ok_or(SettlementRefusal::OrderIndexOutOfRange)?;
-        match (buy_order, sell_order) {
-            (OrderV1::SingleEgg(_), OrderV1::SingleEgg(_)) => {}
+        let (buy_single, sell_single) = match (buy_order, sell_order) {
+            (OrderV1::SingleEgg(buy_single), OrderV1::SingleEgg(sell_single)) => {
+                (buy_single, sell_single)
+            }
             (OrderV1::Portfolio(_), OrderV1::Portfolio(_)) => {
                 if !pair_is_exclusive(shape.witness, witness_len, buy, sell) {
                     return Err(SettlementRefusal::NonexclusivePortfolioPair);
@@ -239,9 +244,16 @@ pub fn classify_direct_settlement(
                 return Err(SettlementRefusal::ExclusivePortfolioPair);
             }
             _ => return Err(SettlementRefusal::MixedSinglePortfolioPair),
-        }
+        };
         if buy == sell || slice.quantity == 0 || slice.outcome >= shape.outcome_count {
             return Err(SettlementRefusal::InvalidDirectLeg);
+        }
+        if buy_single.side != Side::Buy
+            || sell_single.side != Side::Sell
+            || buy_single.outcome != slice.outcome
+            || sell_single.outcome != slice.outcome
+        {
+            return Err(SettlementRefusal::DirectOrderRoleMismatch);
         }
         if plan
             .groups()
@@ -319,6 +331,11 @@ fn require_supported_page(shape: &SettlementProjection<'_>) -> Result<(), Settle
             .ok_or(SettlementRefusal::ProjectionCardinalityMismatch)?;
         if *identity != canonical_order_id(rank) || shape.book.orders[index].id() != rank {
             return Err(SettlementRefusal::LiveRankIdentityMismatch);
+        }
+        if let OrderV1::SingleEgg(single) = shape.book.orders[index] {
+            if single.outcome >= shape.outcome_count {
+                return Err(SettlementRefusal::ProjectionCardinalityMismatch);
+            }
         }
     }
     if shape.price_scale == 0 {
@@ -494,6 +511,48 @@ mod tests {
                 sell: 1,
                 slice: 0,
             }]
+        );
+    }
+
+    #[test]
+    fn direct_roles_and_outcomes_bind_the_account_plan() {
+        let page = header(2);
+        let ids = identities(2);
+        let candidate = candidate(&[500, 500], 200);
+        let outcome_zero = witness(&[direct(0, 1, 0, 500)]);
+
+        let swapped = book_of(&[single(1, 0, Side::Sell), single(2, 0, Side::Buy)]);
+        assert_eq!(
+            classify(&page, &swapped, &ids[..2], &candidate, &outcome_zero),
+            Err(SettlementRefusal::DirectOrderRoleMismatch)
+        );
+
+        let cross_outcome = book_of(&[single(1, 0, Side::Buy), single(2, 1, Side::Sell)]);
+        assert_eq!(
+            classify(&page, &cross_outcome, &ids[..2], &candidate, &outcome_zero,),
+            Err(SettlementRefusal::DirectOrderRoleMismatch)
+        );
+
+        let direct_book = book_of(&[single(1, 0, Side::Buy), single(2, 0, Side::Sell)]);
+        let wrong_slice_outcome = witness(&[direct(0, 1, 1, 500)]);
+        assert_eq!(
+            classify(
+                &page,
+                &direct_book,
+                &ids[..2],
+                &candidate,
+                &wrong_slice_outcome,
+            ),
+            Err(SettlementRefusal::DirectOrderRoleMismatch)
+        );
+
+        let out_of_range = book_of(&[
+            single(1, OUTCOMES, Side::Buy),
+            single(2, OUTCOMES, Side::Sell),
+        ]);
+        assert_eq!(
+            classify(&page, &out_of_range, &ids[..2], &candidate, &outcome_zero),
+            Err(SettlementRefusal::ProjectionCardinalityMismatch)
         );
     }
 
