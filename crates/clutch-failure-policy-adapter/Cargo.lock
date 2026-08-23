@@ -35,6 +35,7 @@ dependencies = [
  "clutch-evidence-recovery",
  "clutch-failure-policy-runtime",
  "clutch-product-series",
+ "clutch-source-plane-v3",
  "sha2",
 ]
 

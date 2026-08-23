@@ -30,3 +30,18 @@ quote schedule and exact per-call ceiling for paid work, progress, and refusal
 code. Inactive action fields must be zero. Submission identity, resolver
 identity, caller-selected payout, and arbitrary transfer destinations are
 absent.
+
+Action-specific pure projections consume the existing runtime's private-field
+accepted-resolution, liveness-work, and terminal capabilities. They bind every
+authenticated artifact back to the fixed intent before producing the exact
+root/reserve mutation. Source and relation refusal projections likewise pass
+the complete SourcePlane objects through the semantic runtime; an intent alone
+can never establish a refusal or accepted value.
+
+Terminal projection is acyclic. A resolved or dormant failure runtime emits a
+recovery-funding close receipt for the liveness Recovery compartment; dormancy
+means only that the finite funded campaign ended. A distinct full lifecycle
+join is emitted only after resolution plus authenticated retirement root,
+permanent replay tombstone, and final SourcePlane release. Neither receipt
+consumes a liveness terminal receipt as an input; its own typed ID is the
+family-specific receipt projected into liveness.

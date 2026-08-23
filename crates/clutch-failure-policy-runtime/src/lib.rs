@@ -34,6 +34,8 @@ const POLICY_BINDING_DOMAIN: &[u8] = b"dragons-clutch/failure-policy-binding/v1"
 const ADMISSION_RECEIPT_DOMAIN: &[u8] = b"dragons-clutch/failure-admission-receipt/v1";
 const TRIGGER_DOMAIN: &[u8] = b"dragons-clutch/failure-trigger/v1";
 const ACCEPTED_RESOLUTION_DOMAIN: &[u8] = b"dragons-clutch/failure-accepted-resolution/v1";
+const RECOVERY_TERMINAL_RECEIPT_DOMAIN: &[u8] =
+    b"dragons-clutch/failure-recovery-terminal-receipt/v1";
 const TERMINAL_JOIN_DOMAIN: &[u8] = b"dragons-clutch/failure-terminal-join/v1";
 const FAILURE_RUNTIME_MAGIC: [u8; 8] = *b"DCFAILR1";
 const FAILURE_RUNTIME_SCHEMA: u16 = 1;
@@ -84,6 +86,10 @@ typed_id!(
 typed_id!(
     AcceptedResolutionId,
     "Typed identity of one source- and relation-bound accepted resolution."
+);
+typed_id!(
+    FailureRecoveryTerminalReceiptId,
+    "Typed receipt closing a finite recovery-liveness funding compartment."
 );
 typed_id!(
     FailureTerminalJoinId,
@@ -381,6 +387,19 @@ pub enum RelationRefusalV1 {
     NoAcceptedCoverage = 5,
 }
 
+impl RelationRefusalV1 {
+    /// Stable code committed by trigger and adapter intent preimages.
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::AmbiguousInterval => 1,
+            Self::AmbiguousDenominator => 2,
+            Self::ValueOutOfRange => 3,
+            Self::NonPointEvidence => 4,
+            Self::NoAcceptedCoverage => 5,
+        }
+    }
+}
+
 /// Adapter-authenticated deterministic relation refusal.
 ///
 /// This is a forgeable boundary DTO. A live adapter must construct it only
@@ -524,6 +543,21 @@ impl AcceptedResolutionV1 {
     /// Typed accepted-resolution identity passed to the funded recovery owner.
     pub const fn id(&self) -> AcceptedResolutionId {
         self.id
+    }
+
+    /// Exact SourcePlane Window whose accepted evidence was related.
+    pub const fn window_id(&self) -> SourceContentId {
+        self.window_id
+    }
+
+    /// Exact successful SourcePlane statistic-result identity.
+    pub const fn statistic_result_id(&self) -> SourceContentId {
+        self.statistic_result_id
+    }
+
+    /// Exact adapter-authenticated frozen-relation record identity.
+    pub const fn relation_record_id(&self) -> [u8; 32] {
+        self.relation_record_id
     }
 }
 
@@ -958,7 +992,7 @@ impl FailureRuntimeV1 {
         let trigger = self.make_trigger(
             FailureTriggerKindV1::ResolutionRelationRefused,
             result_id.bytes(),
-            refusal.refusal as u32,
+            refusal.refusal.code(),
             clock,
         )?;
         let recovery = self
@@ -1093,18 +1127,7 @@ impl FailureRuntimeV1 {
         reward_recipient: RecoveryIdentity,
         receipt: LivenessWorkReceiptJoinV1,
     ) -> Result<FailureTransitionPlanV1> {
-        let expected = self.recovery_work_join(clock)?;
-        if receipt.binding_id != self.binding_id
-            || receipt.market_instance_id != self.binding.market_instance_id
-            || receipt.generation != self.binding.generation
-            || receipt.attempt_index != expected.attempt_index
-            || receipt.window_id != expected.window_id
-            || receipt.quote_schedule_id != expected.funding_quote_id.bytes()
-            || window.id()? != expected.window_id
-            || window.repair_generation != expected.repair_generation
-        {
-            return Err(Error::BindingMismatch);
-        }
+        self.validate_liveness_receipt(clock, window, receipt)?;
         self.plan_accept_work_progress(
             clock,
             actual_reserve_balance,
@@ -1206,6 +1229,9 @@ impl FailureRuntimeV1 {
             return Err(Error::WrongRecoveryWindow);
         }
         self.validate_accepted_resolution(accepted)?;
+        if accepted.window_id != expected.window_id {
+            return Err(Error::BindingMismatch);
+        }
         let evidence = EvidenceDecision::from_adapter(RecoveryIdentity::from_bytes(
             accepted.id.bytes(),
         ))?;
@@ -1218,6 +1244,66 @@ impl FailureRuntimeV1 {
             evidence,
         )?;
         self.wrap_plan(recovery, None)
+    }
+
+    /// Resolve with one final adapter-authenticated liveness work receipt.
+    ///
+    /// The receipt is rechecked against the current progress cursor, FundingQuote
+    /// schedule, exact call ceiling, attempt, generation, and repair Window. The
+    /// accepted resolution must come from that same repair Window.
+    pub fn plan_resolve_paid_liveness_progress(
+        &self,
+        clock: RecoveryClock,
+        actual_reserve_balance: u64,
+        window: &WindowSpecV3,
+        reward_recipient: RecoveryIdentity,
+        receipt: LivenessWorkReceiptJoinV1,
+        accepted: AcceptedResolutionV1,
+    ) -> Result<FailureTransitionPlanV1> {
+        self.validate_liveness_receipt(clock, window, receipt)?;
+        self.plan_resolve_paid_progress(
+            clock,
+            actual_reserve_balance,
+            window,
+            RecoveryIdentity::from_bytes(receipt.work_receipt_id),
+            reward_recipient,
+            receipt.accepted_progress_total,
+            accepted,
+        )
+    }
+
+    fn validate_liveness_receipt(
+        &self,
+        clock: RecoveryClock,
+        window: &WindowSpecV3,
+        receipt: LivenessWorkReceiptJoinV1,
+    ) -> Result<()> {
+        let expected = self.recovery_work_join(clock)?;
+        let prior = self.recovery.accepted_progress_units(expected.attempt_index)?;
+        let progress_delta = receipt
+            .accepted_progress_total
+            .checked_sub(prior)
+            .ok_or(Error::BindingMismatch)?;
+        let exact_reward = progress_delta
+            .checked_mul(expected.lamports_per_progress_unit)
+            .ok_or(Error::BindingMismatch)?;
+        if receipt.binding_id != self.binding_id
+            || receipt.market_instance_id != self.binding.market_instance_id
+            || receipt.generation != self.binding.generation
+            || receipt.attempt_index != expected.attempt_index
+            || receipt.window_id != expected.window_id
+            || receipt.accepted_progress_total > expected.max_progress_units
+            || receipt.quote_schedule_id != expected.funding_quote_id.bytes()
+            || receipt.scheduled_ceiling_lamports == 0
+            || exact_reward == 0
+            || exact_reward > receipt.scheduled_ceiling_lamports
+            || receipt.scheduled_ceiling_lamports > expected.maximum_remaining_lamports
+            || window.id()? != expected.window_id
+            || window.repair_generation != expected.repair_generation
+        {
+            return Err(Error::BindingMismatch);
+        }
+        Ok(())
     }
 
     fn validate_primary_result(
@@ -1437,6 +1523,119 @@ impl FailureRuntimeV1 {
     }
 }
 
+/// Exact disposition of the finite recovery-liveness funding compartment.
+///
+/// `Dormant` closes only the finite funded repair campaign. It does not settle,
+/// retire, or make the unresolved market terminal; caller-funded evidence
+/// recovery remains available.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FailureRecoveryTerminalDispositionV1 {
+    /// Accepted evidence resolved the market.
+    Resolved = 1,
+    /// The immutable finite funded schedule ended without accepted evidence.
+    Dormant = 2,
+}
+
+impl FailureRecoveryTerminalDispositionV1 {
+    /// Stable receipt-preimage and liveness-projection code.
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Resolved => 1,
+            Self::Dormant => 2,
+        }
+    }
+}
+
+/// Immutable receipt consumed by the separately owned liveness runtime to
+/// close only its Recovery compartment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureRecoveryTerminalReceiptV1 {
+    id: FailureRecoveryTerminalReceiptId,
+    binding_id: FailurePolicyBindingId,
+    market_instance_id: MarketInstanceV2Id,
+    funding_quote_id: SeriesFundingQuoteId,
+    recovery_state_id: RecoveryIdentity,
+    generation: u64,
+    transition_nonce: u64,
+    disposition: FailureRecoveryTerminalDispositionV1,
+}
+
+impl FailureRecoveryTerminalReceiptV1 {
+    /// Construct from one checked terminal phase of the finite recovery campaign.
+    pub fn from_runtime(runtime: &FailureRuntimeV1) -> Result<Self> {
+        runtime.check()?;
+        let disposition = match runtime.phase() {
+            RecoveryPhase::Resolved => FailureRecoveryTerminalDispositionV1::Resolved,
+            RecoveryPhase::RecoveryDormant => FailureRecoveryTerminalDispositionV1::Dormant,
+            RecoveryPhase::Active | RecoveryPhase::DegradedRecoverable => {
+                return Err(Error::WrongPhase)
+            }
+        };
+        let transition_nonce = runtime.transition_nonce();
+        let mut hasher = Sha256::new();
+        hasher.update(RECOVERY_TERMINAL_RECEIPT_DOMAIN);
+        hasher.update(runtime.binding_id.bytes());
+        hasher.update(runtime.binding.market_instance_id.bytes());
+        hasher.update(runtime.binding.funding_quote_id.bytes());
+        hasher.update(runtime.binding.recovery_state_id.bytes());
+        hasher.update(runtime.binding.generation.to_le_bytes());
+        hasher.update(transition_nonce.to_le_bytes());
+        hasher.update([disposition.code()]);
+        let id = FailureRecoveryTerminalReceiptId::from_bytes(hasher.finalize().into());
+        Ok(Self {
+            id,
+            binding_id: runtime.binding_id,
+            market_instance_id: runtime.binding.market_instance_id,
+            funding_quote_id: runtime.binding.funding_quote_id,
+            recovery_state_id: runtime.binding.recovery_state_id,
+            generation: runtime.binding.generation,
+            transition_nonce,
+            disposition,
+        })
+    }
+
+    /// Typed receipt identity projected to liveness `terminal_receipt_id`.
+    pub const fn id(&self) -> FailureRecoveryTerminalReceiptId {
+        self.id
+    }
+
+    /// Exact immutable failure-policy binding.
+    pub const fn binding_id(&self) -> FailurePolicyBindingId {
+        self.binding_id
+    }
+
+    /// Exact full-width V2 market identity.
+    pub const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    /// Exact immutable funding quote for the Recovery compartment.
+    pub const fn funding_quote_id(&self) -> SeriesFundingQuoteId {
+        self.funding_quote_id
+    }
+
+    /// Exact funded recovery state/reserve identity.
+    pub const fn recovery_state_id(&self) -> RecoveryIdentity {
+        self.recovery_state_id
+    }
+
+    /// Exact recovery generation.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Exact terminal recovery-state replay nonce.
+    pub const fn transition_nonce(&self) -> u64 {
+        self.transition_nonce
+    }
+
+    /// Closed disposition mapped to liveness success/failure.
+    pub const fn disposition(&self) -> FailureRecoveryTerminalDispositionV1 {
+        self.disposition
+    }
+}
+
 /// Typed terminal boundary to separately authenticated lifecycle owners.
 ///
 /// Construction does not infer zero liabilities. A live adapter must first
@@ -1452,7 +1651,6 @@ pub struct FailureTerminalJoinV1 {
     retirement_root_id: [u8; 32],
     replay_tombstone_id: [u8; 32],
     source_release_receipt_id: [u8; 32],
-    liveness_terminal_receipt_id: [u8; 32],
 }
 
 impl FailureTerminalJoinV1 {
@@ -1463,7 +1661,6 @@ impl FailureTerminalJoinV1 {
         retirement_root_id: [u8; 32],
         replay_tombstone_id: [u8; 32],
         source_release_receipt_id: [u8; 32],
-        liveness_terminal_receipt_id: [u8; 32],
     ) -> Result<Self> {
         runtime.check()?;
         if runtime.phase() != RecoveryPhase::Resolved {
@@ -1473,9 +1670,6 @@ impl FailureTerminalJoinV1 {
             || retirement_root_id.iter().all(|byte| *byte == 0)
             || replay_tombstone_id.iter().all(|byte| *byte == 0)
             || source_release_receipt_id.iter().all(|byte| *byte == 0)
-            || liveness_terminal_receipt_id
-                .iter()
-                .all(|byte| *byte == 0)
         {
             return Err(Error::BindingMismatch);
         }
@@ -1487,7 +1681,6 @@ impl FailureTerminalJoinV1 {
         hasher.update(retirement_root_id);
         hasher.update(replay_tombstone_id);
         hasher.update(source_release_receipt_id);
-        hasher.update(liveness_terminal_receipt_id);
         let id = FailureTerminalJoinId::from_bytes(hasher.finalize().into());
         Ok(Self {
             id,
@@ -1497,7 +1690,6 @@ impl FailureTerminalJoinV1 {
             retirement_root_id,
             replay_tombstone_id,
             source_release_receipt_id,
-            liveness_terminal_receipt_id,
         })
     }
 
@@ -1536,10 +1728,6 @@ impl FailureTerminalJoinV1 {
         self.source_release_receipt_id
     }
 
-    /// Adapter-authenticated liveness-runtime terminal receipt identity.
-    pub const fn liveness_terminal_receipt_id(&self) -> [u8; 32] {
-        self.liveness_terminal_receipt_id
-    }
 }
 
 const fn kind_code(kind: FailureTriggerKindV1) -> u8 {

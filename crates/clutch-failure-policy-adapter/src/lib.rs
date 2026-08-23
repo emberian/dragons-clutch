@@ -9,9 +9,14 @@
 
 use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock, TransferPlan};
 use clutch_failure_policy_runtime::{
-    FailurePolicyBindingId, FailureRuntimeV1, FailureTransitionPlanV1, FAILURE_RUNTIME_V1_BYTES,
+    AcceptedResolutionV1, AdapterAuthenticatedRelationRefusalV1, FailurePolicyBindingId,
+    FailureRecoveryTerminalReceiptV1, FailureRuntimeV1, FailureTerminalJoinV1,
+    FailureTransitionPlanV1, LivenessWorkReceiptJoinV1, FAILURE_RUNTIME_V1_BYTES,
 };
 use clutch_product_series::MarketInstanceV2Id;
+use clutch_source_plane_v3::{
+    StatisticKeyV3, StatisticResultV3, SummaryProgramV3, WindowSealV3, WindowSpecV3,
+};
 use sha2::{Digest, Sha256};
 
 const ROOT_MAGIC: [u8; 8] = *b"DCFAILA1";
@@ -43,6 +48,11 @@ pub enum Error {
     NonCanonicalPadding,
     /// An enum discriminant or action-specific field shape was invalid.
     InvalidParameter,
+    /// An otherwise valid intent named another action.
+    WrongAction,
+    /// An authenticated source, relation, work, or terminal artifact did not
+    /// match the exact identity committed by the intent.
+    ArtifactMismatch,
     /// A required identity was the all-zero sentinel.
     ZeroIdentity,
     /// An account key did not match the exact expected identity.
@@ -66,6 +76,12 @@ pub enum Error {
 impl From<clutch_failure_policy_runtime::Error> for Error {
     fn from(value: clutch_failure_policy_runtime::Error) -> Self {
         Self::Runtime(value)
+    }
+}
+
+impl From<clutch_source_plane_v3::Error> for Error {
+    fn from(value: clutch_source_plane_v3::Error) -> Self {
+        Self::Runtime(clutch_failure_policy_runtime::Error::Source(value))
     }
 }
 
@@ -360,6 +376,8 @@ pub enum FailureActionV1 {
     ResolvePaidWork = 7,
     /// Bind separately authenticated terminal-owner receipts.
     BindTerminal = 8,
+    /// Bind the finite recovery campaign's success/failure close receipt.
+    BindRecoveryFundingClose = 9,
 }
 
 /// Exact fixed intent preimage; inactive action fields are canonical zero.
@@ -492,7 +510,7 @@ impl FailureIntentV1 {
                     && self.accepted_progress_total != 0
                     && self.refusal_code == 0
             }
-            FailureActionV1::BindTerminal => {
+            FailureActionV1::BindTerminal | FailureActionV1::BindRecoveryFundingClose => {
                 clock_is_zero
                     && !has_window
                     && !has_evidence
@@ -612,6 +630,263 @@ impl FailureIntentV1 {
     }
 }
 
+/// Project an immutable-maturity failure trigger from one authenticated intent.
+pub fn project_maturity_transition(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    actual_reserve_post_balance: u64,
+) -> Result<FailureAccountMutationV1> {
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::TriggerMaturity)?;
+    let plan = runtime.plan_trigger_maturity(intent.clock, accounts.reserve_lamports)?;
+    project_failure_transition(accounts, plan, actual_reserve_post_balance)
+}
+
+/// Project an immutable-maturity trigger classified by one exact refused
+/// SourcePlane result.
+pub fn project_source_refusal_transition(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    result: &StatisticResultV3,
+    key: &StatisticKeyV3,
+    summary: &SummaryProgramV3,
+    seal: &WindowSealV3,
+    window: &WindowSpecV3,
+    actual_reserve_post_balance: u64,
+) -> Result<FailureAccountMutationV1> {
+    let runtime = intent_runtime(
+        &accounts,
+        &intent,
+        FailureActionV1::TriggerSourceRefusal,
+    )?;
+    if intent.window_id != window.id()?.bytes()
+        || intent.evidence_id != result.id()?.bytes()
+        || intent.refusal_code != result.refusal_code()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let plan = runtime.plan_trigger_source_refusal(
+        intent.clock,
+        accounts.reserve_lamports,
+        result,
+        key,
+        summary,
+        seal,
+        window,
+    )?;
+    project_failure_transition(accounts, plan, actual_reserve_post_balance)
+}
+
+/// Project an immutable-maturity trigger classified by an adapter-authenticated
+/// frozen-relation refusal over one successful SourcePlane result.
+pub fn project_relation_refusal_transition(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    refusal: AdapterAuthenticatedRelationRefusalV1,
+    result: &StatisticResultV3,
+    key: &StatisticKeyV3,
+    summary: &SummaryProgramV3,
+    seal: &WindowSealV3,
+    window: &WindowSpecV3,
+    actual_reserve_post_balance: u64,
+) -> Result<FailureAccountMutationV1> {
+    let runtime = intent_runtime(
+        &accounts,
+        &intent,
+        FailureActionV1::TriggerRelationRefusal,
+    )?;
+    if intent.window_id != window.id()?.bytes()
+        || intent.evidence_id != result.id()?.bytes()
+        || intent.refusal_code != refusal.refusal.code()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let plan = runtime.plan_trigger_relation_refusal(
+        intent.clock,
+        accounts.reserve_lamports,
+        refusal,
+        result,
+        key,
+        summary,
+        seal,
+        window,
+    )?;
+    project_failure_transition(accounts, plan, actual_reserve_post_balance)
+}
+
+/// Project the deterministic finite repair-schedule advance or close.
+pub fn project_schedule_advance_transition(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    actual_reserve_post_balance: u64,
+) -> Result<FailureAccountMutationV1> {
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::AdvanceSchedule)?;
+    let plan = runtime.plan_advance_schedule(intent.clock, accounts.reserve_lamports)?;
+    project_failure_transition(accounts, plan, actual_reserve_post_balance)
+}
+
+/// Project exact paid work from an independently authenticated liveness receipt.
+///
+/// The live adapter must authenticate the receipt under the liveness runtime
+/// before obtaining `receipt`; this function then rechecks every receipt field
+/// against the intent and current failure/recovery cursor.
+pub fn project_accept_work_transition(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    window: &WindowSpecV3,
+    receipt: LivenessWorkReceiptJoinV1,
+    actual_reserve_post_balance: u64,
+) -> Result<FailureAccountMutationV1> {
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::AcceptWork)?;
+    validate_work_artifacts(&intent, window, receipt)?;
+    let plan = runtime.plan_accept_liveness_work_progress(
+        intent.clock,
+        accounts.reserve_lamports,
+        window,
+        intent.reward_recipient,
+        receipt,
+    )?;
+    project_failure_transition(accounts, plan, actual_reserve_post_balance)
+}
+
+/// Project caller-funded resolution from one previously authenticated accepted
+/// resolution capability. Caller funding never debits recovery principal.
+pub fn project_caller_funded_resolution_transition(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    accepted: AcceptedResolutionV1,
+    actual_reserve_post_balance: u64,
+) -> Result<FailureAccountMutationV1> {
+    let runtime = intent_runtime(
+        &accounts,
+        &intent,
+        FailureActionV1::ResolveCallerFunded,
+    )?;
+    if intent.window_id != accepted.window_id().bytes()
+        || intent.evidence_id != accepted.id().bytes()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let plan = runtime.plan_resolve_caller_funded(
+        intent.clock,
+        accounts.reserve_lamports,
+        accepted,
+    )?;
+    project_failure_transition(accounts, plan, actual_reserve_post_balance)
+}
+
+/// Project resolution with one final independently authenticated paid-work
+/// receipt and accepted evidence from that same repair Window.
+pub fn project_paid_resolution_transition(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    window: &WindowSpecV3,
+    receipt: LivenessWorkReceiptJoinV1,
+    accepted: AcceptedResolutionV1,
+    actual_reserve_post_balance: u64,
+) -> Result<FailureAccountMutationV1> {
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::ResolvePaidWork)?;
+    validate_work_artifacts(&intent, window, receipt)?;
+    if intent.evidence_id != accepted.id().bytes()
+        || intent.window_id != accepted.window_id().bytes()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let plan = runtime.plan_resolve_paid_liveness_progress(
+        intent.clock,
+        accounts.reserve_lamports,
+        window,
+        intent.reward_recipient,
+        receipt,
+        accepted,
+    )?;
+    project_failure_transition(accounts, plan, actual_reserve_post_balance)
+}
+
+/// Authenticate a terminal intent against the current resolved runtime and all
+/// separately authenticated terminal-owner receipts embedded in `terminal`.
+///
+/// This emits no transfer and performs no state mutation. The terminal owner
+/// must consume the returned join under its own replay tombstone.
+pub fn authenticate_terminal_join_intent(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    terminal: FailureTerminalJoinV1,
+) -> Result<FailureTerminalJoinV1> {
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::BindTerminal)?;
+    let expected = FailureTerminalJoinV1::from_adapter(
+        &runtime,
+        terminal.generation(),
+        terminal.retirement_root_id(),
+        terminal.replay_tombstone_id(),
+        terminal.source_release_receipt_id(),
+    )?;
+    if expected != terminal
+        || intent.terminal_join_id != terminal.id().bytes()
+        || terminal.binding_id() != intent.binding_id
+        || terminal.market_instance_id() != intent.market_instance_id
+        || terminal.generation() != intent.generation
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok(terminal)
+}
+
+/// Authenticate the current finite recovery campaign's success/failure close
+/// receipt for projection into the separately owned liveness runtime.
+///
+/// A dormant receipt closes only finite Recovery funding; it is not a market
+/// settlement or retirement fact, and caller-funded recovery remains live.
+pub fn authenticate_recovery_funding_close_intent(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    receipt: FailureRecoveryTerminalReceiptV1,
+) -> Result<FailureRecoveryTerminalReceiptV1> {
+    let runtime = intent_runtime(
+        &accounts,
+        &intent,
+        FailureActionV1::BindRecoveryFundingClose,
+    )?;
+    let expected = FailureRecoveryTerminalReceiptV1::from_runtime(&runtime)?;
+    if expected != receipt
+        || intent.terminal_join_id != receipt.id().bytes()
+        || intent.binding_id != receipt.binding_id()
+        || intent.market_instance_id != receipt.market_instance_id()
+        || intent.generation != receipt.generation()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok(receipt)
+}
+
+fn intent_runtime(
+    accounts: &AuthenticatedFailureAccountsV1,
+    intent: &FailureIntentV1,
+    expected_action: FailureActionV1,
+) -> Result<FailureRuntimeV1> {
+    if intent.action != expected_action {
+        return Err(Error::WrongAction);
+    }
+    let runtime = accounts.root.runtime();
+    intent.validate_runtime(&runtime)?;
+    Ok(runtime)
+}
+
+fn validate_work_artifacts(
+    intent: &FailureIntentV1,
+    window: &WindowSpecV3,
+    receipt: LivenessWorkReceiptJoinV1,
+) -> Result<()> {
+    if intent.window_id != window.id()?.bytes()
+        || intent.work_receipt_id != receipt.work_receipt_id()
+        || intent.quote_schedule_id != receipt.quote_schedule_id()
+        || intent.scheduled_ceiling_lamports != receipt.scheduled_ceiling_lamports()
+        || intent.accepted_progress_total != receipt.accepted_progress_total()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok(())
+}
+
 fn runtime_digest(bump: u8, runtime: &FailureRuntimeV1) -> Result<[u8; 32]> {
     let mut bytes = [0; FAILURE_RUNTIME_V1_BYTES];
     runtime.encode_into(&mut bytes)?;
@@ -632,6 +907,7 @@ fn decode_action(value: u8) -> Result<FailureActionV1> {
         6 => Ok(FailureActionV1::ResolveCallerFunded),
         7 => Ok(FailureActionV1::ResolvePaidWork),
         8 => Ok(FailureActionV1::BindTerminal),
+        9 => Ok(FailureActionV1::BindRecoveryFundingClose),
         _ => Err(Error::InvalidParameter),
     }
 }

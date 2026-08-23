@@ -42,7 +42,11 @@ future revenue, and treasury funds do not appear in this API.
 An accepted-resolution capability binds a successful exact SourcePlane result
 to the frozen relation-policy identity and an adapter-authenticated resolution
 record. It does not expose a resolver identity. A dormant market can still
-resolve caller-funded. A terminal join is only a typed boundary to separately
-authenticated retirement, replay tombstone, source-release, and liveness
-terminal receipts; this crate cannot infer zero liabilities or retire those
-owners itself.
+resolve caller-funded. Resolved and dormant phases emit distinct typed receipts
+for closing the finite liveness Recovery compartment as success or failure;
+dormancy does not settle or retire the market. The full lifecycle terminal join
+is a separate typed output, available only after resolution plus independently
+authenticated retirement, replay tombstone, and source release. These outputs
+are the receipts projected into liveness and never consume a liveness terminal
+receipt as an input, avoiding a cyclic authorization graph. This crate cannot
+infer zero liabilities or retire those owners itself.
