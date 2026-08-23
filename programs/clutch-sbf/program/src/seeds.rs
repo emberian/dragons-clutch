@@ -134,6 +134,31 @@ pub const SEED_RESOLUTION_WORK: &[u8] = b"resolution-work-v1";
 /// Program-owned prepaid Reserve bound to one deterministic Work PDA.
 pub const SEED_RESOLUTION_RESERVE: &[u8] = b"resolution-reserve-v1";
 
+/// Immutable General V2 MarketBinding seed prefix.
+pub const SEED_GENERAL_V2_MARKET_BINDING: &[u8] =
+    clutch_general_v2_contract::MARKET_BINDING_SEED_DOMAIN_V1;
+/// Genesis-assisted General V2 mutable Market runtime seed prefix.
+pub const SEED_GENERAL_V2_MARKET_RUNTIME: &[u8] =
+    clutch_general_v2_contract::MARKET_RUNTIME_SEED_DOMAIN_V1;
+/// Counted General V2 Epoch seed prefix.
+pub const SEED_GENERAL_V2_EPOCH: &[u8] = clutch_general_v2_contract::EPOCH_SEED_DOMAIN_V1;
+/// General V2 EconomicDomain artifact seed prefix.
+pub const SEED_GENERAL_V2_ECONOMIC_DOMAIN: &[u8] =
+    clutch_general_v2_contract::ECONOMIC_DOMAIN_SEED_DOMAIN_V1;
+/// General V2 candidate Window seed prefix.
+pub const SEED_GENERAL_V2_WINDOW: &[u8] = clutch_general_v2_contract::WINDOW_SEED_DOMAIN_V1;
+/// General V2 root Budget seed prefix.
+pub const SEED_GENERAL_V2_BUDGET: &[u8] = clutch_general_v2_contract::EPOCH_BUDGET_SEED_DOMAIN_V1;
+/// General V2 ordinal-owned AdmissionNode seed prefix.
+pub const SEED_GENERAL_V2_NODE: &[u8] = clutch_general_v2_contract::CANDIDATE_NODE_SEED_DOMAIN_V1;
+/// General V2 active-width Feed/Stage seed prefix.
+pub const SEED_GENERAL_V2_FEED: &[u8] = clutch_general_v2_contract::CANDIDATE_FEED_SEED_DOMAIN_V1;
+/// General V2 active-width ClearWork seed prefix.
+pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V1;
+/// General V2 selected settlement-authority seed prefix.
+pub const SEED_GENERAL_V2_SELECTED: &[u8] =
+    clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
+
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_REALM, realm])
@@ -227,6 +252,89 @@ pub fn resolution_reserve_pda(
     work: &[u8; 32],
 ) -> (Pubkey, u8) {
     find(program_id, &[SEED_RESOLUTION_RESERVE, market, work])
+}
+
+/// Canonical immutable General V2 MarketBinding PDA.
+pub fn general_v2_market_binding_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_MARKET_BINDING, market_instance_v2_id],
+    )
+}
+
+/// Canonical genesis-assisted General V2 Market runtime PDA.
+pub fn general_v2_market_runtime_pda(
+    program_id: &Pubkey,
+    market_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_MARKET_RUNTIME, market_binding],
+    )
+}
+
+/// Canonical counted General V2 Epoch PDA.
+pub fn general_v2_epoch_pda(
+    program_id: &Pubkey,
+    market_binding: &[u8; 32],
+    epoch_index: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_EPOCH,
+            market_binding,
+            &epoch_index.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical General V2 EconomicDomain artifact PDA.
+pub fn general_v2_economic_domain_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_ECONOMIC_DOMAIN, epoch])
+}
+
+/// Canonical General V2 candidate Window PDA.
+pub fn general_v2_window_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WINDOW, epoch])
+}
+
+/// Canonical General V2 root Budget PDA.
+pub fn general_v2_budget_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_BUDGET, epoch])
+}
+
+/// Canonical General V2 ordinal-owned AdmissionNode PDA.
+pub fn general_v2_node_pda(program_id: &Pubkey, epoch: &[u8; 32], ordinal: u64) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_NODE, epoch, &ordinal.to_le_bytes()],
+    )
+}
+
+/// Canonical General V2 Feed/Stage PDA inherited from its AdmissionNode.
+pub fn general_v2_feed_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_FEED, node])
+}
+
+/// Canonical General V2 ClearWork PDA inherited from its AdmissionNode.
+pub fn general_v2_work_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WORK, node])
+}
+
+/// Canonical General V2 selected settlement-authority PDA.
+pub fn general_v2_selected_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SELECTED, epoch, settlement_candidate_id],
+    )
 }
 
 /// Canonical immutable-terms address and bump.

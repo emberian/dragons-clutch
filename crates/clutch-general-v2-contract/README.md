@@ -13,6 +13,8 @@ counted Epoch codecs must not be described as General V2-compatible.
 
 | Semantic owner | Tag/version | Exact length |
 |---|---:|---:|
+| genesis-assisted `MarketRuntimeV3AccountV1` | `3/3` | 148 |
+| counted `GeneralEpochV6AccountV1` | `11/6` | 321 |
 | `ClearWorkV2` | `17/2` | `672 + 16*O + 8*N*O`, max 9,120 |
 | sealed `CandidateFeedV2` | `18/2` | `538 + 8*O + 8*N + 24*A + 13*S`, max 6,970 |
 | `CandidateWindowV4` | `24/4` | 565 |
@@ -45,6 +47,7 @@ The first-spine tuples are exact ordered seeds:
 | Account | Ordered seeds after the program ID |
 |---|---|
 | MarketBinding | `general-market-binding:v1`, full `MarketInstanceV2Id` |
+| MarketRuntime | `general-market-runtime:v1`, MarketBinding PDA |
 | Epoch | `general-epoch:v2`, MarketBinding PDA, `epoch_index_le` |
 | EconomicDomain | `economic-domain:v2`, Epoch PDA |
 | Window | `general-window:v4`, Epoch PDA |
@@ -146,10 +149,13 @@ be synchronized before activation.
   payer; its root-close compartment remains fully present in every live Budget.
   A keeper top-up, future fee, or refundable principal is not liveness funding.
 
-## Action allocation
+## Action allocation and pure payload contracts
 
-General family `74/1` retains local action names `1..=34`, but none has a
-payload/account-meta handler contract yet and therefore none may be activated.
+General family `74/1` retains local action names `1..=34`. Strict allocation-free
+payload decoders and pure poststate owners now exist for the identity-lab spine
+at actions 2, 6, 7, 8, 9, 10, 14, and 15. This pure crate does not provide an
+account-meta handler or itself activate a runtime route; those remain separate
+adapter and release obligations.
 The intended phases are:
 
 | Actions | Intended phase |
@@ -174,10 +180,9 @@ transitions, refusal rollback tests, and a capability-specific evidence gate.
 
 ## Remaining activation blockers
 
-The next runnable vertical slice still needs a RelationV2-native counted Epoch
-and Market identity/cursor codec, one canonical frozen order-set owner, a
-streaming RelationV2 accumulator contract in addition to the raw SHA checkpoint,
-Product-successor authentication, exact intent payload/account-meta codecs, and
+The next runnable vertical slice still needs a streaming RelationV2 accumulator
+contract in addition to the raw SHA checkpoint, Product-successor authentication,
+exact account-meta codecs, and
 atomic retirement transitions that include EconomicDomain and the counted
 SelectedCandidate artifact. Product/policy fields are labeled 32-byte slots in
 this dependency-free crate; the adapter must authenticate and convert the

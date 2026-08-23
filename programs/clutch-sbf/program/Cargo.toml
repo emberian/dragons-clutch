@@ -49,6 +49,14 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# A deliberately non-production product whose only successes are the eight
+# General V2 empty-book identity actions.  The dependency profiles provide the
+# narrow legacy codec substrate; this crate's capability table still rejects
+# every legacy action before account inspection.
+profile-non-production-general-v2-empty-book-identity-lab = [
+    "clutch-solana-layout/profile-general-source-v2-point",
+    "clutch-solana-reference/profile-general-source-v2-point",
+]
 
 [dependencies]
 # The window/summary algebra the observation and resolution plane folds
@@ -62,6 +70,9 @@ clutch-bspline = { path = "../../../crates/clutch-bspline" }
 clutch-bspline-accumulator = { path = "../../../crates/clutch-bspline-accumulator" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
+clutch-price-measure = { path = "../../../crates/clutch-price-measure" }
+clutch-product-series = { path = "../../../crates/clutch-product-series" }
 # The liveness kernel's `TreasuryServiceLedger` — the B4b mid-epoch-close
 # grief rider as fixed-memory bookkeeping.  Already in the graph through
 # `clutch-batch-policy-identity`; naming it here is what lets

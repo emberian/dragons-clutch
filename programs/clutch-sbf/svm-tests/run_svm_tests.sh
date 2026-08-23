@@ -15,6 +15,8 @@
 #   ./run_svm_tests.sh --non-production-mock-source [test filters ...]
 # The deployed-Pyth local campaign is a separate, explicit test-only ELF:
 #   ./run_svm_tests.sh --non-production-real-pyth-lab real_pyth_router_verifies_then_post_update
+# The successor identity-only campaign is a mutually exclusive SBF product:
+#   ./run_svm_tests.sh --general-v2-identity-lab general_v2_identity
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 program="$(cd "$here/.." && pwd)"
@@ -22,6 +24,7 @@ program="$(cd "$here/.." && pwd)"
 profile="default-production-inert"
 build_features=()
 test_features=()
+build_lab_receiver=1
 if [ "${1:-}" = "--non-production-mock-source" ]; then
   shift
   profile="NON-PRODUCTION-non-production-mock-source"
@@ -32,6 +35,12 @@ elif [ "${1:-}" = "--non-production-real-pyth-lab" ]; then
   profile="NON-PRODUCTION-non-production-real-pyth-lab"
   build_features=(--features non-production-real-pyth-lab)
   test_features=(--features non-production-real-pyth-lab)
+elif [ "${1:-}" = "--general-v2-identity-lab" ]; then
+  shift
+  profile="NON-PRODUCTION-general-v2-empty-book-identity-lab"
+  build_features=(--no-default-features --features custom-heap,profile-non-production-general-v2-empty-book-identity-lab)
+  test_features=(--no-default-features --features profile-non-production-general-v2-empty-book-identity-lab)
+  build_lab_receiver=0
 fi
 
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"
@@ -47,10 +56,12 @@ CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="${SBF_TARGET_DIR:-$program/target/sbf-b
 # before append. It is not a provider-proof model; it exists so the bank proves
 # the real write/consume/rollback transaction seam rather than reading bytes
 # installed by the host harness. See `r2_v2_wire.rs`.
-echo "== building the laboratory receiver writer =="
-CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="${LAB_TARGET_DIR:-$program/target/lab-receiver-build}" \
-  "$build_sbf" --manifest-path "$here/lab-receiver/Cargo.toml" \
-  --sbf-out-dir "$here/tests/fixtures"
+if [ "$build_lab_receiver" -eq 1 ]; then
+  echo "== building the laboratory receiver writer =="
+  CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="${LAB_TARGET_DIR:-$program/target/lab-receiver-build}" \
+    "$build_sbf" --manifest-path "$here/lab-receiver/Cargo.toml" \
+    --sbf-out-dir "$here/tests/fixtures"
+fi
 
 elf="$here/tests/fixtures/clutch_sbf.so"
 elf_hash="$(shasum -a 256 "$elf" | awk '{print $1}')"

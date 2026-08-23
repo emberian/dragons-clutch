@@ -11,15 +11,19 @@
 //! lamport movement remain adapter obligations.
 
 mod codec;
+mod payload;
 mod rank;
 mod state;
+mod transition;
 
 pub use codec::{CodecError, Reader, Writer};
+pub use payload::*;
 pub use rank::{
     encode_score_v2_q_first_admitted_tie_v1, FirstAdmittedTieV1, ScoreV2QComponentsV1,
     SCORE_V2_Q_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
 pub use state::*;
+pub use transition::*;
 
 /// Number of bytes in every persisted identity or digest.
 pub const ID_BYTES: usize = 32;
@@ -100,6 +104,8 @@ pub const CLEAR_WORK_SEED_DOMAIN_V1: &[u8] = b"clear-work:v2";
 pub const EPOCH_BUDGET_SEED_DOMAIN_V1: &[u8] = b"candidate-budget:v2";
 /// Fresh immutable General V2 Market-binding PDA seed domain.
 pub const MARKET_BINDING_SEED_DOMAIN_V1: &[u8] = b"general-market-binding:v1";
+/// Fresh genesis-assisted General V2 Market-runtime PDA seed domain.
+pub const MARKET_RUNTIME_SEED_DOMAIN_V1: &[u8] = b"general-market-runtime:v1";
 /// Fresh canonical EconomicDomainV2 artifact PDA seed domain.
 pub const ECONOMIC_DOMAIN_SEED_DOMAIN_V1: &[u8] = b"economic-domain:v2";
 /// Fresh selected-candidate settlement-authority PDA seed domain.
@@ -115,10 +121,86 @@ pub const RECEIPT_SEED_DOMAIN_V1: &[u8] = b"general-receipt:v2";
 /// Fresh General V2 final-pot PDA seed domain.
 pub const FINAL_POT_SEED_DOMAIN_V1: &[u8] = b"general-final-pot:v2";
 
+/// Validated ordered seed tuple for the genesis-assisted MarketRuntime PDA.
+///
+/// The runtime is anchored only to the immutable MarketBinding PDA. The full
+/// MarketInstanceV2 identity is authenticated in both account bodies rather
+/// than truncated into a seed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketRuntimeSeedTupleV1 {
+    market_binding: [u8; ID_BYTES],
+}
+
+impl MarketRuntimeSeedTupleV1 {
+    /// Construct the canonical tuple from an authenticated MarketBinding PDA.
+    pub fn new(market_binding: Id32) -> Result<Self, CodecError> {
+        if market_binding.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Ok(Self {
+            market_binding: market_binding.bytes(),
+        })
+    }
+
+    /// First seed: the fresh General V2 Market-runtime domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        MARKET_RUNTIME_SEED_DOMAIN_V1
+    }
+
+    /// Second seed: full authenticated MarketBinding PDA bytes.
+    pub const fn market_binding(&self) -> &[u8; ID_BYTES] {
+        &self.market_binding
+    }
+}
+
+/// Validated ordered seed tuple for a General V2 Epoch PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochSeedTupleV1 {
+    market_binding: [u8; ID_BYTES],
+    epoch_index_le: [u8; 8],
+}
+
+impl EpochSeedTupleV1 {
+    /// Construct the canonical tuple from the immutable binding and exact
+    /// runtime-owned next Epoch index.
+    pub fn new(market_binding: Id32, epoch_index: u64) -> Result<Self, CodecError> {
+        if market_binding.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Ok(Self {
+            market_binding: market_binding.bytes(),
+            epoch_index_le: epoch_index.to_le_bytes(),
+        })
+    }
+
+    /// First seed: the fresh counted General V2 Epoch domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        EPOCH_SEED_DOMAIN_V1
+    }
+
+    /// Second seed: full authenticated MarketBinding PDA bytes.
+    pub const fn market_binding(&self) -> &[u8; ID_BYTES] {
+        &self.market_binding
+    }
+
+    /// Third seed: exact runtime-owned Epoch index in little-endian order.
+    pub const fn epoch_index_le(&self) -> &[u8; 8] {
+        &self.epoch_index_le
+    }
+}
+
 /// Existing semantic account tag, fresh successor version: Window.
 pub const WINDOW_ACCOUNT_TAG: u8 = 24;
 /// Codec version matching the disabled central Window reservation.
 pub const WINDOW_ACCOUNT_VERSION: u8 = 4;
+/// Existing Market semantic tag, fresh General V2 runtime version.
+pub const MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
+/// First RelationV2-native General Market-runtime schema.
+pub const MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
+/// Existing Epoch semantic tag, fresh counted General V2 version.
+pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
+/// First RelationV2-native counted General Epoch schema.
+pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
 /// Existing semantic account tag, fresh successor version: sealed feed.
 pub const CANDIDATE_FEED_ACCOUNT_TAG: u8 = 18;
 /// Active-width General V2 feed version.
@@ -174,7 +256,17 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this dependency-free crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 10] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 12] = [
+    AccountAllocationV1 {
+        tag: MARKET_RUNTIME_ACCOUNT_TAG,
+        version: MARKET_RUNTIME_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/MarketRuntimeV3AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: GENERAL_EPOCH_ACCOUNT_TAG,
+        version: GENERAL_EPOCH_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/GeneralEpochV6AccountV1",
+    },
     AccountAllocationV1 {
         tag: WINDOW_ACCOUNT_TAG,
         version: WINDOW_ACCOUNT_VERSION,
@@ -234,3 +326,37 @@ const _: () = assert!(MAX_ORDERS_U8 == 64);
 const _: () = assert!(MAX_QUANTIZED_ATOMS == 16);
 const _: () = assert!(MAX_QUANTIZED_ATOMS_U8 == 16);
 const _: () = assert!(MAX_SLICES_U16 == 416);
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id32 {
+        Id32::new([byte; ID_BYTES]).unwrap()
+    }
+
+    #[test]
+    fn runtime_and_epoch_seed_tuples_are_exact_and_ordered() {
+        let binding = id(7);
+        let runtime = MarketRuntimeSeedTupleV1::new(binding).unwrap();
+        assert_eq!(runtime.domain(), b"general-market-runtime:v1");
+        assert_eq!(runtime.market_binding(), &[7; ID_BYTES]);
+
+        let epoch = EpochSeedTupleV1::new(binding, 0x0102_0304_0506_0708).unwrap();
+        assert_eq!(epoch.domain(), b"general-epoch:v2");
+        assert_eq!(epoch.market_binding(), &[7; ID_BYTES]);
+        assert_eq!(epoch.epoch_index_le(), &[8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_ne!(
+            epoch,
+            EpochSeedTupleV1::new(binding, 0x0102_0304_0506_0709).unwrap()
+        );
+        assert_eq!(
+            MarketRuntimeSeedTupleV1::new(Id32::ZERO),
+            Err(CodecError::ZeroIdentity)
+        );
+        assert_eq!(
+            EpochSeedTupleV1::new(Id32::ZERO, 1),
+            Err(CodecError::ZeroIdentity)
+        );
+    }
+}

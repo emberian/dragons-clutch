@@ -47,6 +47,14 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
 /// Existing Source Archive V2 account version.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
+/// General V2 genesis-assisted Market-runtime account discriminator.
+pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
+/// RelationV2-native General Market-runtime account version.
+pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
+/// General V2 counted Epoch account discriminator.
+pub const GENERAL_V2_EPOCH_ACCOUNT_TAG: u8 = 11;
+/// RelationV2-native counted General Epoch account version.
+pub const GENERAL_V2_EPOCH_ACCOUNT_VERSION: u8 = 6;
 /// General V2 active-width ClearWork successor account discriminator.
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
 /// General V2 active-width ClearWork successor account version.
@@ -226,6 +234,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::Frozen,
         name: "source-archive-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-runtime-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_EPOCH_ACCOUNT_TAG,
+            version: GENERAL_V2_EPOCH_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-epoch-v6-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -776,6 +802,14 @@ mod tests {
     #[test]
     fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
+            (
+                GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_EPOCH_ACCOUNT_TAG,
+                GENERAL_V2_EPOCH_ACCOUNT_VERSION,
+            ),
             (
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION,
