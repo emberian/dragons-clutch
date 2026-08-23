@@ -5,11 +5,12 @@ use crate::runtime_contract::{
     prepare_retire_descriptor_v1, prepare_unwrap_canonical_v1, prepare_unwrap_full_v1,
     prepare_wrap_canonical_v1, prepare_wrap_full_v1, AuthenticatedVaultRetirementV1,
     CanonicalUnwrapRequestV1, CanonicalWrapRequestV1, CreateDescriptorPayloadV1,
-    DescriptorRetirementPlanV1, DescriptorStateV1, DonationCompactionPlanV1,
+    DescriptorStateV1, DonationCompactionPlanV1,
     MarketChangingWrapperTransitionPlanV1, PermanentIdentityFundingPlanV1,
     PermanentTargetProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV2,
-    StructuredClaimPayloadV1, TerminalRedemptionPlanV1, VaultMutationRequestV1,
-    WrapperTransitionPlanV1,
+    StructuredClaimPayloadV1, StructuredDescriptorTerminalPlanV1, StructuredMarketRootV1,
+    StructuredProductWrapperTerminalProjectionV1, TerminalRedemptionPlanV1,
+    VaultMutationRequestV1, WrapperRecipeHashV1, WrapperTransitionPlanV1,
 };
 
 use crate::{
@@ -76,6 +77,16 @@ pub trait BaseCapabilityVerifierV1 {
     fn verify_retirement(&self, evidence: &AuthenticatedVaultRetirementV1) -> bool;
 }
 
+/// Named trust boundary that authenticates the base-owned Structured root and,
+/// for the last descriptor, Product's exact Wrapper-obligation successor.
+pub trait StructuredTerminalVerifierV1: WrapperRecipeHashV1 + core::fmt::Debug {
+    /// Exact reviewed owner release implementing this verification/hash boundary.
+    fn owner_release_id(&self) -> Key;
+
+    /// Verify the full root bytes/balance and the optional private Product receipt.
+    fn verify_structured_terminal(&self, evidence: &StructuredTerminalEvidenceV1) -> bool;
+}
+
 /// Base vault construction capability minted only by the named verifier seam.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundBaseVaultCreationV1(BaseVaultCreationEvidenceV1);
@@ -95,6 +106,37 @@ impl BoundBaseVaultRetirementV1 {
     /// Canonical runtime-contract retirement evidence.
     pub const fn evidence(&self) -> AuthenticatedVaultRetirementV1 {
         self.0
+    }
+}
+
+/// Base-owned state required to terminalize one descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredTerminalEvidenceV1 {
+    /// Canonical Structured root account.
+    pub root_account: Key,
+    /// Exact authenticated root body before the operation.
+    pub root: StructuredMarketRootV1,
+    /// Actual root lamports before the operation.
+    pub observed_root_lamports: u64,
+    /// Private Product terminal successor, present only for the last descriptor.
+    pub product_terminal: Option<StructuredProductWrapperTerminalProjectionV1>,
+}
+
+/// Unforgeable adapter capability minted by the named terminal verifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundStructuredTerminalV1 {
+    evidence: StructuredTerminalEvidenceV1,
+    verifier_release_id: Key,
+}
+
+impl BoundStructuredTerminalV1 {
+    /// Exact authenticated root/Product evidence.
+    pub const fn evidence(self) -> StructuredTerminalEvidenceV1 {
+        self.evidence
+    }
+
+    fn matches_verifier(self, verifier: &dyn StructuredTerminalVerifierV1) -> bool {
+        self.verifier_release_id == verifier.owner_release_id()
     }
 }
 
@@ -154,16 +196,70 @@ pub fn authenticate_base_vault_retirement_v1<V: BaseCapabilityVerifierV1>(
     evidence: AuthenticatedVaultRetirementV1,
     verifier: &V,
 ) -> Result<BoundBaseVaultRetirementV1> {
-    if is_zero(&evidence.close_receipt)
-        || is_zero(&evidence.market)
-        || is_zero(&evidence.vault_owner)
-        || is_zero(&evidence.tombstone)
-        || evidence.close_receipt == evidence.tombstone
+    let identities = [
+        evidence.close_receipt,
+        evidence.market,
+        evidence.vault_owner,
+        evidence.position_account,
+        evidence.replay_account,
+        evidence.tombstone,
+        evidence.terminal_replay_semantic_id,
+        evidence.rent_transition_id,
+        evidence.rent_refund_owner,
+        evidence.neutral_lamport_sink,
+    ];
+    let mut left = 0_usize;
+    while left < identities.len() {
+        if is_zero(&identities[left]) {
+            return Err(Error::BaseCapabilityUnavailable);
+        }
+        let mut right = left + 1;
+        while right < identities.len() {
+            if identities[left] == identities[right] {
+                return Err(Error::BaseCapabilityUnavailable);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    if evidence.position_tombstone_principal_lamports == 0
+        || evidence
+            .position_tombstone_principal_lamports
+            .checked_add(evidence.position_refund_lamports)
+            .and_then(|value| value.checked_add(evidence.position_donation_lamports))
+            .is_none()
+        || evidence
+            .replay_refund_lamports
+            .checked_add(evidence.replay_donation_lamports)
+            .is_none()
         || !verifier.verify_retirement(&evidence)
     {
         return Err(Error::BaseCapabilityUnavailable);
     }
     Ok(BoundBaseVaultRetirementV1(evidence))
+}
+
+/// Authenticate the base-owned Structured root and optional Product successor.
+pub fn authenticate_structured_terminal_v1<V: StructuredTerminalVerifierV1>(
+    evidence: StructuredTerminalEvidenceV1,
+    verifier: &V,
+) -> Result<BoundStructuredTerminalV1> {
+    if is_zero(&evidence.root_account)
+        || evidence.observed_root_lamports
+            < evidence
+                .root
+                .rent_principal_lamports
+                .checked_add(evidence.root.current_donation_lamports)
+                .ok_or(Error::Arithmetic)?
+        || verifier.owner_release_id() != evidence.root.binding.owner_release_id.bytes()
+        || !verifier.verify_structured_terminal(&evidence)
+    {
+        return Err(Error::BaseCapabilityUnavailable);
+    }
+    Ok(BoundStructuredTerminalV1 {
+        evidence,
+        verifier_release_id: verifier.owner_release_id(),
+    })
 }
 
 /// Construction inputs after descriptor/deployment/PDA and base capability checks.
@@ -208,6 +304,10 @@ pub struct MutationContextV1<'a> {
     pub canonical_custody: Option<AuthenticatedStructuredCustodyCallV1>,
     /// Authenticated base close capability, present only for retirement.
     pub vault_retirement: Option<BoundBaseVaultRetirementV1>,
+    /// Authenticated Structured root and optional Product terminal successor.
+    pub structured_terminal: Option<BoundStructuredTerminalV1>,
+    /// Same reviewed verifier/hash release that minted `structured_terminal`.
+    pub structured_terminal_verifier: Option<&'a dyn StructuredTerminalVerifierV1>,
 }
 
 /// One predictable-PDA System allocation/assignment operation.
@@ -312,8 +412,9 @@ pub enum BaseCpiV1 {
     CompactDonation(DonationCompactionPlanV1),
     /// Redeem the exact terminal aggregate vector into beneficiary cash.
     RedeemTerminal(TerminalRedemptionPlanV1),
-    /// Close the empty vault through the authenticated base capability.
-    CloseVault(AuthenticatedVaultRetirementV1),
+    /// Atomically close the vault, update/delete the Structured root, and, for
+    /// the last descriptor, consume Product's Wrapper obligation.
+    TerminalizeDescriptor(StructuredDescriptorTerminalPlanV1),
 }
 
 /// Exact wrapper-owned descriptor write.
@@ -360,7 +461,7 @@ pub enum PreparedStructuredClaimSemanticV1 {
     /// Exact terminal redemption.
     RedeemTerminal(TerminalRedemptionPlanV1),
     /// Permanent descriptor retirement.
-    RetireDescriptor(DescriptorRetirementPlanV1),
+    RetireDescriptor(StructuredDescriptorTerminalPlanV1),
 }
 
 /// Completely staged action with canonical empty step padding.
@@ -604,6 +705,7 @@ pub fn prepare_mutation_v1(
         }
         StructuredClaimPayloadV1::CompactDonation(request) => {
             require_vault_only(context, request.wrapper_product_id)?;
+            require_no_terminal_capabilities(context)?;
             let plan = prepare_compact_donation_v1(
                 descriptor_state,
                 context.descriptor.identity(),
@@ -665,7 +767,7 @@ pub fn prepare_mutation_v1(
                 .vault_retirement
                 .ok_or(Error::BaseCapabilityUnavailable)?
                 .evidence();
-            let plan = prepare_retire_descriptor_v1(
+            let descriptor_retirement = prepare_retire_descriptor_v1(
                 *context.descriptor.descriptor(),
                 context.descriptor.identity(),
                 &market,
@@ -678,19 +780,43 @@ pub fn prepare_mutation_v1(
                 },
                 retirement,
             )?;
+            let structured_terminal = context
+                .structured_terminal
+                .ok_or(Error::BaseCapabilityUnavailable)?;
+            let verifier = context
+                .structured_terminal_verifier
+                .ok_or(Error::BaseCapabilityUnavailable)?;
+            if !structured_terminal.matches_verifier(verifier) {
+                return Err(Error::BaseCapabilityUnavailable);
+            }
+            let terminal_evidence = structured_terminal.evidence();
+            let plan = crate::runtime_contract::prepare_structured_descriptor_terminal_v1(
+                terminal_evidence.root,
+                terminal_evidence.observed_root_lamports,
+                terminal_evidence.root_account,
+                context.descriptor.wrapper_product_id(),
+                context.descriptor.addresses().mint,
+                context.descriptor.addresses().descriptor,
+                *context.descriptor.descriptor(),
+                descriptor_retirement,
+                terminal_evidence.product_terminal,
+                verifier,
+            )?;
             let mut builder = StepBuilder::new();
-            builder.push(ExecutionStepV1::Base(BaseCpiV1::CloseVault(retirement)))?;
+            builder.push(ExecutionStepV1::Base(
+                BaseCpiV1::TerminalizeDescriptor(plan),
+            ))?;
             builder.push(ExecutionStepV1::Token2022(
                 Token2022CpiV1::RevokeMintAuthority {
                     mint: addresses.mint,
-                    authority_before: plan.mint_authority_before,
-                    authority_after: plan.mint_authority_after,
+                    authority_before: plan.descriptor_retirement.mint_authority_before,
+                    authority_after: plan.descriptor_retirement.mint_authority_after,
                 },
             ))?;
             builder.push(ExecutionStepV1::Descriptor(DescriptorWriteV1 {
                 address: addresses.descriptor,
                 before: Some(*context.descriptor.descriptor()),
-                after: plan.descriptor,
+                after: plan.descriptor_retirement.descriptor,
             }))?;
             Ok(builder.finish(
                 StructuredClaimActionV1::RetireDescriptor,
@@ -884,7 +1010,10 @@ fn quantity_accounts(
 )> {
     let holder = context.holder.ok_or(Error::Token2022Boundary)?.projection();
     let user = context.user.ok_or(Error::BaseClosureMismatch)?.projection();
-    if context.vault_retirement.is_some() {
+    if context.vault_retirement.is_some()
+        || context.structured_terminal.is_some()
+        || context.structured_terminal_verifier.is_some()
+    {
         return Err(Error::InvalidAccounts);
     }
     Ok((holder, user))
@@ -911,6 +1040,16 @@ fn require_product(context: &MutationContextV1<'_>, product: Key) -> Result<()> 
 fn require_vault_only(context: &MutationContextV1<'_>, product: Key) -> Result<()> {
     require_product(context, product)?;
     if context.user.is_some() || context.holder.is_some() || context.canonical_custody.is_some() {
+        return Err(Error::InvalidAccounts);
+    }
+    Ok(())
+}
+
+fn require_no_terminal_capabilities(context: &MutationContextV1<'_>) -> Result<()> {
+    if context.vault_retirement.is_some()
+        || context.structured_terminal.is_some()
+        || context.structured_terminal_verifier.is_some()
+    {
         return Err(Error::InvalidAccounts);
     }
     Ok(())
