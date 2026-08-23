@@ -731,6 +731,7 @@ pub struct OwnerBlindBookProjectionV2 {
     position_generations: [u64; MAX_ORDERS],
     order_page_accounts: [Id32; MAX_ORDERS],
     order_page_indices: [u16; MAX_ORDERS],
+    order_page_slots: [u8; MAX_ORDERS],
 }
 
 impl OwnerBlindBookProjectionV2 {
@@ -781,6 +782,15 @@ impl OwnerBlindBookProjectionV2 {
     pub fn order_page_index(&self, order_index: u8) -> Option<u16> {
         if order_index < self.base.book.len {
             Some(self.order_page_indices[usize::from(order_index)])
+        } else {
+            None
+        }
+    }
+
+    /// Canonical physical V5 page-slot index containing one dense live order.
+    pub fn order_page_slot(&self, order_index: u8) -> Option<u8> {
+        if order_index < self.base.book.len {
+            Some(self.order_page_slots[usize::from(order_index)])
         } else {
             None
         }
@@ -1120,6 +1130,7 @@ fn project_owner_blind_book_with_score_v1(
     let mut position_generations = [0u64; MAX_ORDERS];
     let mut order_page_accounts = [Id32::ZERO; MAX_ORDERS];
     let mut order_page_indices = [0u16; MAX_ORDERS];
+    let mut order_page_slots = [0u8; MAX_ORDERS];
     page = 0;
     while page < pages.len() {
         let header = verify_page_v5(pages[page].body)?;
@@ -1168,6 +1179,7 @@ fn project_owner_blind_book_with_score_v1(
                 position_generations[at] = verified.position_generation;
                 order_page_accounts[at] = pages[page].account;
                 order_page_indices[at] = header.page_index;
+                order_page_slots[at] = verified.slot_index;
                 book.len = book
                     .len
                     .checked_add(1)
@@ -1198,6 +1210,7 @@ fn project_owner_blind_book_with_score_v1(
         position_generations,
         order_page_accounts,
         order_page_indices,
+        order_page_slots,
     })
 }
 
