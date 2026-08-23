@@ -334,6 +334,8 @@ pub fn stream_counted_exact_index_root_v1(
     let adjacency_rent = input.adjacency_create.validate(adjacency_len, &forbidden)?;
     if input.locator_create.account == input.adjacency_create.account
         || input.locator_create.program_id != input.adjacency_create.program_id
+        || input.locator_create.payer != input.adjacency_create.payer
+        || input.locator_create.payer != root_rent.rent_after().payer
         || input.locator_create.payer_lamports != input.adjacency_create.payer_lamports
     { return Err(ExactIndexPlaneErrorV1::InvalidCreateAccount); }
     let mut combined = root_rent.payer_debit_lamports();
