@@ -31,9 +31,10 @@ pub use account::{
     RUNTIME_ACCOUNT_HEADER_BYTES, RUNTIME_ACCOUNT_LAYOUT_VERSION,
 };
 pub use auth::{
-    account_data_id, authenticate_boundary, authenticate_source_route, AdapterInvocationV1,
-    AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedSourceRouteV1, ClockPolicyV1,
-    ClockSnapshotV1, DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1,
+    account_data_id, authenticate_boundary, authenticate_source_release_account,
+    authenticate_source_route, AdapterInvocationV1, AuthenticatedBoundaryV1,
+    AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
+    ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1,
     RuntimeDerivedPdaV1, RuntimeKey, SourceReleaseManifestV1, CLOCK_POLICY_BYTES,
     SOURCE_RELEASE_MANIFEST_BYTES,
 };
