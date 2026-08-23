@@ -55,8 +55,8 @@ use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
-    artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
-    orders_batch, source_ingest_v2, split,
+    artifact, collateral_cash_v3, external_exit, genesis, market_init, merge_materialize,
+    observe_resolve, orders_batch, source_ingest_v2, split,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -685,7 +685,7 @@ fn process_cash_exit(
     let request = Request::decode(instruction_data)?;
     match request.action {
         Action::Layout(Intent::WithdrawCash { .. }) => {
-            cash_exit::process(program_id, accounts, &request)
+            collateral_cash_v3::process_withdraw_cash_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
