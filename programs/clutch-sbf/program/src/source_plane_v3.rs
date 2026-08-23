@@ -29,22 +29,23 @@ use clutch_source_plane_v3_adapter::{PdaRecipeV3, MAX_PDA_SEEDS};
 use clutch_source_plane_v3_runtime::{
     account_data_id, authenticate_boundary, authenticate_evaluation_authority,
     authenticate_open_raw_page_account, authenticate_raw_page_account,
-    authenticate_reopen_lineage_account, authenticate_source_generation_request,
-    authenticate_source_head_account, authenticate_source_release_account,
-    authenticate_source_route, authenticate_source_work_receipt_account,
-    authenticate_statistic_result, authenticate_statistic_result_absence,
-    authenticate_statistic_result_account, authenticate_window_seal_account,
-    authenticate_window_work_account, decode_runtime_account, join_source_occurrence,
-    AdapterInvocationV1, AuthenticatedBoundaryV1, AuthenticatedClockBucketV1,
-    AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1,
-    AuthenticatedReopenLineageV1, AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
-    AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
+    authenticate_receiver_route_v2, authenticate_reopen_lineage_account,
+    authenticate_source_generation_request, authenticate_source_head_account,
+    authenticate_source_release_account, authenticate_source_route,
+    authenticate_source_work_receipt_account, authenticate_statistic_result,
+    authenticate_statistic_result_absence, authenticate_statistic_result_account,
+    authenticate_window_seal_account, authenticate_window_work_account, decode_runtime_account,
+    join_source_occurrence, AdapterInvocationV1, AuthenticatedBoundaryV1,
+    AuthenticatedClockBucketV1, AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1,
+    AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2, AuthenticatedReopenLineageV1,
+    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceReleaseV1,
+    AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
     ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, LineageAccessV1,
     OccurrenceDispositionV1, OccurrenceSourceReceiptV1, ParserOutputV1, ReopenLineageV1,
     RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey, SourceGenerationRequestV1,
-    SourceReceiptDispositionV1, SourceReleaseManifestV1, SourceWorkReceiptAccessV1,
+    SourceReceiptDispositionV1, SourceReleaseManifestV2, SourceWorkReceiptAccessV1,
     SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
     OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
     REOPEN_LINEAGE_ACCOUNT_VERSION, RUNTIME_ACCOUNT_GLOBAL_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
@@ -280,7 +281,7 @@ pub fn authenticate_release(
     let data = release_account
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
-    let manifest = SourceReleaseManifestV1::decode(&data)?;
+    let manifest = SourceReleaseManifestV2::decode(&data)?;
     let recipe = PdaRecipeV3::source_release(manifest.id()?)?;
     let derived = derive_runtime_pda(program_id, &recipe)?;
     authenticate_source_release_account(
@@ -524,6 +525,32 @@ pub fn authenticate_route(
     .map_err(Into::into)
 }
 
+/// Authenticate action 4's release-selected receiver Program, ProgramData,
+/// and exact Config bytes.
+pub fn authenticate_receiver_route(
+    route: AuthenticatedSourceRouteV1,
+    receiver_program: &AccountInfo<'_>,
+    receiver_programdata: &AccountInfo<'_>,
+    receiver_config: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedReceiverRouteV2> {
+    let program_data = receiver_program
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let programdata_data = receiver_programdata
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let config_data = receiver_config
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    authenticate_receiver_route_v2(
+        route,
+        runtime_account_view(receiver_program, &program_data),
+        runtime_account_view(receiver_programdata, &programdata_data),
+        runtime_account_view(receiver_config, &config_data),
+    )
+    .map_err(Into::into)
+}
+
 /// Authenticate one immutable Product/failure generation request under the
 /// exact authority program selected by the Source release.
 ///
@@ -582,6 +609,40 @@ pub fn authenticate_clock_bucket(
         u64::try_from(clock.unix_timestamp).map_err(|_| SourceV3SbfError::WrongClockAccount)?;
     AuthenticatedClockBucketV1::from_snapshot(
         &release.clock_policy(),
+        ClockSnapshotV1 {
+            slot: clock.slot,
+            unix_timestamp,
+        },
+    )
+    .map_err(Into::into)
+}
+
+/// Derive the current bucket from canonical Clock under the exact clock policy
+/// already selected by the fully authenticated Source route.
+pub fn authenticate_route_clock_bucket(
+    route: AuthenticatedSourceRouteV1,
+    clock_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedClockBucketV1> {
+    if clock_account.key.to_bytes() != CLOCK_SYSVAR_ID
+        || clock_account.is_signer
+        || clock_account.is_writable
+    {
+        return Err(SourceV3SbfError::WrongClockAccount);
+    }
+    let data = clock_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let clock = decode_clock_view(AccountViewV2::new(
+        clock_account.key.to_bytes(),
+        clock_account.owner.to_bytes(),
+        clock_account.executable,
+        &data,
+    ))
+    .map_err(SourceV3SbfError::Clock)?;
+    let unix_timestamp =
+        u64::try_from(clock.unix_timestamp).map_err(|_| SourceV3SbfError::WrongClockAccount)?;
+    AuthenticatedClockBucketV1::from_snapshot(
+        &route.clock_policy(),
         ClockSnapshotV1 {
             slot: clock.slot,
             unix_timestamp,
@@ -895,6 +956,7 @@ pub fn invoke_statistic_evaluator(
 #[allow(clippy::too_many_arguments)]
 pub fn invoke_parser_boundary(
     route: AuthenticatedSourceRouteV1,
+    receiver: AuthenticatedReceiverRouteV2,
     clock: AuthenticatedClockBucketV1,
     feed: &AccountInfo<'_>,
     expected_bucket: u64,
@@ -932,6 +994,7 @@ pub fn invoke_parser_boundary(
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
     authenticate_boundary(
         route,
+        receiver,
         &route.clock_policy(),
         clock.snapshot(),
         runtime_account_view(feed, &feed_data),
@@ -989,6 +1052,9 @@ fn validate_parser_account_vector(
     }
     let mut feed_count = 0_u8;
     let mut config_count = 0_u8;
+    let mut receiver_program_count = 0_u8;
+    let mut receiver_programdata_count = 0_u8;
+    let mut receiver_config_count = 0_u8;
     let mut left = 0_usize;
     while left < accounts.len() {
         let account = &accounts[left];
@@ -1005,6 +1071,30 @@ fn validate_parser_account_vector(
                 .checked_add(1)
                 .ok_or(SourceV3SbfError::ParserAccountVector)?;
         }
+        if runtime_key(account.key) == route.receiver_program() {
+            if account.is_signer || account.is_writable || !account.executable {
+                return Err(SourceV3SbfError::ParserAccountVector);
+            }
+            receiver_program_count = receiver_program_count
+                .checked_add(1)
+                .ok_or(SourceV3SbfError::ParserAccountVector)?;
+        }
+        if runtime_key(account.key) == route.receiver_programdata() {
+            if account.is_signer || account.is_writable || account.executable {
+                return Err(SourceV3SbfError::ParserAccountVector);
+            }
+            receiver_programdata_count = receiver_programdata_count
+                .checked_add(1)
+                .ok_or(SourceV3SbfError::ParserAccountVector)?;
+        }
+        if runtime_key(account.key) == route.receiver_config() {
+            if account.is_signer || account.is_writable || account.executable {
+                return Err(SourceV3SbfError::ParserAccountVector);
+            }
+            receiver_config_count = receiver_config_count
+                .checked_add(1)
+                .ok_or(SourceV3SbfError::ParserAccountVector)?;
+        }
         let mut right = left + 1;
         while right < accounts.len() {
             if account.key == accounts[right].key {
@@ -1014,7 +1104,12 @@ fn validate_parser_account_vector(
         }
         left += 1;
     }
-    if feed_count != 1 || config_count != 1 {
+    if feed_count != 1
+        || config_count != 1
+        || receiver_program_count != 1
+        || receiver_programdata_count != 1
+        || receiver_config_count != 1
+    {
         return Err(SourceV3SbfError::ParserAccountVector);
     }
     Ok(())

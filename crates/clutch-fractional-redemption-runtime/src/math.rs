@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use clutch_collateral_adapter_v2::ResolutionV5;
 use clutch_retirement::Identity32V1;
 use sha2::{Digest, Sha256};
 
@@ -13,7 +14,8 @@ pub const PAYOUT_VECTOR_ID_DOMAIN_V1: &[u8] =
 ///
 /// This value is never persisted by fractional-redemption accounts. A Solana
 /// adapter must reconstruct it from the authenticated canonical owner on every
-/// transition; [`Self::id`] only gives the policy an exact content join.
+/// transition. [`Self::id`] remains a diagnostic content digest; persisted
+/// joins use Resolution V5's account-bound data identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PayoutVectorV1 {
     /// Active prefix width.
@@ -25,6 +27,20 @@ pub struct PayoutVectorV1 {
 }
 
 impl PayoutVectorV1 {
+    /// Reconstruct the only payout vector from an exact Resolution V5 body.
+    pub fn from_resolution_v5(resolution: ResolutionV5) -> Result<Self> {
+        resolution
+            .validate()
+            .map_err(|_| Error::MismatchedBinding)?;
+        let value = Self {
+            outcome_count: resolution.facts.outcome_count,
+            denominator: resolution.facts.payout_denominator,
+            weights: resolution.facts.payout_weights,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Validate the active prefix, exact simplex sum, and zero tail.
     pub fn validate(self) -> Result<()> {
         let count = usize::from(self.outcome_count);
@@ -51,7 +67,7 @@ impl PayoutVectorV1 {
         Ok(())
     }
 
-    /// Content identity recomputed from the canonical ephemeral projection.
+    /// Diagnostic content identity of the canonical ephemeral projection.
     pub fn id(self) -> Result<Identity32V1> {
         self.validate()?;
         let mut hasher = Sha256::new();

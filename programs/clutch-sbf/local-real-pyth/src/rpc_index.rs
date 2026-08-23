@@ -6,11 +6,14 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use solana_address::Address;
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
 pub type Result<T> = core::result::Result<T, RpcIndexError>;
+
+pub const RPC_ENDPOINT_BINDING_DOMAIN_V1: &[u8] = b"dragons-clutch/rpc-endpoint-binding/v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcIndexError {
@@ -106,7 +109,12 @@ impl RpcClusterBinding {
 }
 
 fn safe_endpoint(url: &str, websocket: bool) -> bool {
-    if url.contains('@') || url.contains('#') || url.chars().any(char::is_whitespace) {
+    if url.is_empty()
+        || url.len() > 2_048
+        || url.contains('@')
+        || url.contains('#')
+        || url.chars().any(char::is_whitespace)
+    {
         return false;
     }
     let public_prefix = if websocket { "wss://" } else { "https://" };
@@ -115,10 +123,52 @@ fn safe_endpoint(url: &str, websocket: bool) -> bool {
     } else {
         "http://127.0.0.1:"
     };
-    url.starts_with(public_prefix)
+    let public = url.strip_prefix(public_prefix).is_some_and(|remainder| {
+        let authority_end = remainder
+            .find(|character| matches!(character, '/' | '?'))
+            .unwrap_or(remainder.len());
+        authority_end > 0
+    });
+    public
         || url
             .strip_prefix(loopback_prefix)
             .is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicRpcEndpointBinding {
+    pub redacted: String,
+    pub binding_sha256: [u8; 32],
+}
+
+/// Produce a stable exact-byte endpoint join without publishing a query value
+/// or path token. Userinfo is rejected by `RpcClusterBinding::validate`; this
+/// projection retains only the scheme/authority plus the presence of a hidden
+/// path or query. The hash is domain-separated and covers the complete URL.
+pub fn public_rpc_endpoint_binding(url: &str) -> PublicRpcEndpointBinding {
+    let (scheme, remainder) = url.split_once("://").unwrap_or(("invalid", "invalid"));
+    let authority_end = remainder
+        .find(|character| matches!(character, '/' | '?'))
+        .unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let suffix = &remainder[authority_end..];
+    let (path, query) = suffix
+        .split_once('?')
+        .map_or((suffix, None), |(path, query)| (path, Some(query)));
+    let redacted_path = match path {
+        "" => "",
+        "/" => "/",
+        _ => "/<redacted>",
+    };
+    let redacted_query = query.map_or("", |_| "?<redacted>");
+    let redacted = format!("{scheme}://{authority}{redacted_path}{redacted_query}");
+    let mut hasher = Sha256::new();
+    hasher.update(RPC_ENDPOINT_BINDING_DOMAIN_V1);
+    hasher.update(url.as_bytes());
+    PublicRpcEndpointBinding {
+        redacted,
+        binding_sha256: hasher.finalize().into(),
+    }
 }
 
 /// One exact executable release and the account families it may own.
@@ -633,6 +683,65 @@ pub struct ObservedRpcAccount {
     pub provenance: RpcObservationProvenance,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RpcAccountRemovalKind {
+    Closed,
+    OwnerChanged,
+}
+
+impl RpcAccountRemovalKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::OwnerChanged => "owner-changed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedRpcAccountRemoval {
+    pub address: Address,
+    pub observed_owner: Address,
+    pub observed_lamports: u64,
+    pub observed_executable: bool,
+    pub observed_data_bytes: usize,
+    pub kind: RpcAccountRemovalKind,
+    pub provenance: RpcObservationProvenance,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ObservedRpcProgramUpdate {
+    Present(ObservedRpcAccount),
+    Removed(ObservedRpcAccountRemoval),
+}
+
+impl ObservedRpcProgramUpdate {
+    #[must_use]
+    pub const fn address(&self) -> Address {
+        match self {
+            Self::Present(account) => account.address,
+            Self::Removed(removal) => removal.address,
+        }
+    }
+
+    #[must_use]
+    pub const fn slot(&self) -> u64 {
+        match self {
+            Self::Present(account) => account.provenance.slot,
+            Self::Removed(removal) => removal.provenance.slot,
+        }
+    }
+
+    #[must_use]
+    pub fn retained_data_bytes(&self) -> usize {
+        match self {
+            Self::Present(account) => account.data.len(),
+            Self::Removed(_) => 0,
+        }
+    }
+}
+
 pub fn decode_program_scan_result(
     plan: &RpcIndexPlan,
     request: &PlannedRpcRequest,
@@ -654,6 +763,7 @@ pub fn decode_program_scan_result(
         .get("context")
         .and_then(|value| value.get("slot"))
         .and_then(Value::as_u64)
+        .filter(|slot| *slot > 0)
         .ok_or(RpcIndexError::MalformedResponse)?;
     let values = result
         .get("value")
@@ -673,7 +783,10 @@ pub fn decode_program_scan_result(
         let account = value
             .get("account")
             .ok_or(RpcIndexError::MalformedResponse)?;
-        let data = decode_account_value(account, release, plan.bounds)?;
+        let data = decode_account_value(account, plan.bounds)?;
+        if data.owner != release.program_id {
+            return Err(RpcIndexError::WrongOwner);
+        }
         total = total
             .checked_add(data.data.len())
             .ok_or(RpcIndexError::ResponseTooLarge)?;
@@ -719,7 +832,7 @@ pub fn decode_program_notification(
     request: &PlannedRpcRequest,
     notification: &Value,
     receive_sequence: u64,
-) -> Result<ObservedRpcAccount> {
+) -> Result<ObservedRpcProgramUpdate> {
     plan.validate()?;
     if request.purpose != RpcRequestPurpose::ProgramSubscription
         || request.commitment != RpcCommitment::Processed
@@ -745,6 +858,7 @@ pub fn decode_program_notification(
         .get("context")
         .and_then(|value| value.get("slot"))
         .and_then(Value::as_u64)
+        .filter(|slot| *slot > 0)
         .ok_or(RpcIndexError::MalformedResponse)?;
     let value = result
         .get("value")
@@ -756,23 +870,38 @@ pub fn decode_program_notification(
     let account = value
         .get("account")
         .ok_or(RpcIndexError::MalformedResponse)?;
-    let data = decode_account_value(account, release, plan.bounds)?;
-    Ok(ObservedRpcAccount {
-        address: Address::from_str(address).map_err(|_| RpcIndexError::InvalidAccount)?,
+    let data = decode_account_value(account, plan.bounds)?;
+    let address = Address::from_str(address).map_err(|_| RpcIndexError::InvalidAccount)?;
+    let provenance = RpcObservationProvenance {
+        cluster_key: plan.cluster.key(),
+        release_key: request.release_key.clone(),
+        slot,
+        commitment: RpcCommitment::Processed,
+        source: RpcObservationSource::ProcessedSubscription { subscription_id },
+        receive_sequence,
+    };
+    if let Some(kind) = classify_program_removal(&data, release)? {
+        return Ok(ObservedRpcProgramUpdate::Removed(
+            ObservedRpcAccountRemoval {
+                address,
+                observed_owner: data.owner,
+                observed_lamports: data.lamports,
+                observed_executable: data.executable,
+                observed_data_bytes: data.data.len(),
+                kind,
+                provenance,
+            },
+        ));
+    }
+    Ok(ObservedRpcProgramUpdate::Present(ObservedRpcAccount {
+        address,
         owner: data.owner,
         lamports: data.lamports,
         executable: data.executable,
         rent_epoch: data.rent_epoch,
         data: data.data,
-        provenance: RpcObservationProvenance {
-            cluster_key: plan.cluster.key(),
-            release_key: request.release_key.clone(),
-            slot,
-            commitment: RpcCommitment::Processed,
-            source: RpcObservationSource::ProcessedSubscription { subscription_id },
-            receive_sequence,
-        },
-    })
+        provenance,
+    }))
 }
 
 struct DecodedAccountValue {
@@ -783,9 +912,23 @@ struct DecodedAccountValue {
     data: Vec<u8>,
 }
 
+fn classify_program_removal(
+    account: &DecodedAccountValue,
+    release: &IndexedProgramRelease,
+) -> Result<Option<RpcAccountRemovalKind>> {
+    if account.lamports == 0 && !account.executable && account.data.is_empty() {
+        Ok(Some(RpcAccountRemovalKind::Closed))
+    } else if account.owner != release.program_id && !account.executable {
+        Ok(Some(RpcAccountRemovalKind::OwnerChanged))
+    } else if account.owner != release.program_id {
+        Err(RpcIndexError::WrongOwner)
+    } else {
+        Ok(None)
+    }
+}
+
 fn decode_account_value(
     value: &Value,
-    release: &IndexedProgramRelease,
     bounds: RpcAcquisitionBounds,
 ) -> Result<DecodedAccountValue> {
     let owner = value
@@ -793,9 +936,6 @@ fn decode_account_value(
         .and_then(Value::as_str)
         .and_then(|value| Address::from_str(value).ok())
         .ok_or(RpcIndexError::MalformedResponse)?;
-    if owner != release.program_id {
-        return Err(RpcIndexError::WrongOwner);
-    }
     let tuple = value
         .get("data")
         .and_then(Value::as_array)
@@ -847,4 +987,71 @@ fn hex(bytes: &[u8; 32]) -> String {
         let _ = write!(output, "{byte:02x}");
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn release() -> IndexedProgramRelease {
+        IndexedProgramRelease {
+            program_id: Address::new_from_array([0x31; 32]),
+            program_data: Address::new_from_array([0x32; 32]),
+            elf_sha256: [0x33; 32],
+            deployment_slot: 1,
+            families: vec![CanonicalFamily::General],
+        }
+    }
+
+    fn account(
+        owner: Address,
+        lamports: u64,
+        executable: bool,
+        data: &[u8],
+    ) -> DecodedAccountValue {
+        DecodedAccountValue {
+            owner,
+            lamports,
+            executable,
+            rent_epoch: 0,
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn endpoint_binding_redacts_path_and_query_but_hashes_exact_bytes() {
+        let first = public_rpc_endpoint_binding("wss://rpc.example/v2/secret?api-key=alpha");
+        let second = public_rpc_endpoint_binding("wss://rpc.example/v2/secret?api-key=beta");
+        assert_eq!(first.redacted, "wss://rpc.example/<redacted>?<redacted>");
+        assert!(!first.redacted.contains("secret"));
+        assert!(!first.redacted.contains("alpha"));
+        assert_ne!(first.binding_sha256, second.binding_sha256);
+    }
+
+    #[test]
+    fn only_unambiguous_non_executable_removals_are_admitted() {
+        let release = release();
+        assert_eq!(
+            classify_program_removal(&account(release.program_id, 0, false, &[]), &release),
+            Ok(Some(RpcAccountRemovalKind::Closed))
+        );
+        assert_eq!(
+            classify_program_removal(
+                &account(Address::new_from_array([0x44; 32]), 7, false, &[1]),
+                &release
+            ),
+            Ok(Some(RpcAccountRemovalKind::OwnerChanged))
+        );
+        assert_eq!(
+            classify_program_removal(
+                &account(Address::new_from_array([0x44; 32]), 7, true, &[1]),
+                &release
+            ),
+            Err(RpcIndexError::WrongOwner)
+        );
+        assert_eq!(
+            classify_program_removal(&account(release.program_id, 7, false, &[1]), &release),
+            Ok(None)
+        );
+    }
 }

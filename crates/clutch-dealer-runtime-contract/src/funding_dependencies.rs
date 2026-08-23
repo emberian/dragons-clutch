@@ -9,6 +9,30 @@ use crate::{
     FixedCodec, Id, Result, DELETABLE_RENT_OWNER_BYTES,
 };
 
+/// Derive the canonical immutable identity of a generic runtime-liveness
+/// policy used by Dealer. Every exact codec byte participates except the
+/// embedded policy ID itself, whose fixed region is replaced by zero bytes.
+pub fn dealer_runtime_liveness_policy_id_v1(
+    policy: clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1,
+) -> Result<Id> {
+    use sha2::{Digest, Sha256};
+
+    let mut bytes = [0u8; clutch_liveness::runtime_v1::RUNTIME_LIVENESS_POLICY_BYTES_V1];
+    policy
+        .encode(&mut bytes)
+        .map_err(|_| Error::MismatchedBinding)?;
+    bytes[HEADER_BYTES..HEADER_BYTES + 32].fill(0);
+    let mut hasher = Sha256::new();
+    hasher.update(crate::DEALER_RUNTIME_LIVENESS_POLICY_CONTENT_DOMAIN_V1);
+    hasher.update(bytes);
+    let identity = Id::from_bytes(hasher.finalize().into());
+    identity.validate_live()?;
+    if policy.policy_id.bytes() != identity.bytes() {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(identity)
+}
+
 /// Number of frozen Dealer action coordinates in one liveness schedule.
 pub const DEALER_LIVENESS_ACTION_COUNT_V1: usize = 22;
 /// Local semantic-body magic for a Dealer maximum-call liveness schedule.
@@ -462,10 +486,6 @@ pub struct DealerRuntimeLivenessBindingV1 {
     pub(crate) maximum_calls: [u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Largest admitted reward for one successful call by compartment.
     pub(crate) maximum_lamports_per_call: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
-    /// Account balance observed before present admission funding.
-    pub(crate) account_balance_before: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
-    /// Account balance observed after present admission funding.
-    pub(crate) account_balance_after: [u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     /// Four canonical terminal-path call vectors in external path order.
     pub(crate) terminal_path_calls: [[u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
         DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
@@ -480,14 +500,16 @@ impl DealerRuntimeLivenessBindingV1 {
     ///
     /// This copies admission facts only; it does not create a second mutable
     /// balance/call owner. Advanced compartments reconstruct the same binding
-    /// because capitalized principal, maxima, original donation, identities,
-    /// and policy terminal vectors are immutable.
+    /// because capitalized work/rent principal, maxima, identities, and policy
+    /// terminal vectors are immutable. Runtime-owned hostile donation totals
+    /// are deliberately excluded because they may increase after admission.
     pub fn from_canonical(
         policy: &clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1,
         compartments: &[clutch_liveness::runtime_v1::RuntimeCompartmentV1;
              DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     ) -> Result<Self> {
         policy.validate().map_err(|_| Error::MismatchedBinding)?;
+        dealer_runtime_liveness_policy_id_v1(*policy)?;
         let mut value = Self {
             runtime_policy_id: from_liveness_id(policy.policy_id),
             realm_id: from_liveness_id(policy.realm_id),
@@ -505,8 +527,6 @@ impl DealerRuntimeLivenessBindingV1 {
             rent_principal_lamports: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             maximum_calls: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             maximum_lamports_per_call: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
-            account_balance_before: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
-            account_balance_after: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             terminal_path_calls: [[0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
                 DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
             terminal_path_work_lamports: [[0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
@@ -543,12 +563,6 @@ impl DealerRuntimeLivenessBindingV1 {
             value.rent_principal_lamports[index] = compartment.rent_principal_lamports;
             value.maximum_calls[index] = compartment.maximum_calls;
             value.maximum_lamports_per_call[index] = compartment.maximum_lamports_per_call;
-            value.account_balance_before[index] = compartment.donation_received_lamports;
-            value.account_balance_after[index] = compartment
-                .donation_received_lamports
-                .checked_add(compartment.capitalized_work_lamports)
-                .and_then(|amount| amount.checked_add(compartment.rent_principal_lamports))
-                .ok_or(Error::ArithmeticOverflow)?;
             index += 1;
         }
         let mut path = 0usize;
@@ -629,16 +643,6 @@ impl DealerRuntimeLivenessBindingV1 {
         self.rent_principal_lamports[compartment.index()]
     }
 
-    /// Exact admitted account balance immediately before present funding.
-    pub const fn account_balance_before(self, compartment: DealerLivenessCompartmentV1) -> u64 {
-        self.account_balance_before[compartment.index()]
-    }
-
-    /// Exact admitted account balance immediately after present funding.
-    pub const fn account_balance_after(self, compartment: DealerLivenessCompartmentV1) -> u64 {
-        self.account_balance_after[compartment.index()]
-    }
-
     /// Validate identities, account uniqueness, funding arithmetic, and bounds.
     pub fn validate(&self) -> Result<()> {
         for identity in [
@@ -675,16 +679,6 @@ impl DealerRuntimeLivenessBindingV1 {
                         .ok_or(Error::ArithmeticOverflow)?
             {
                 return Err(Error::InvalidParameter);
-            }
-            let required = self.work_principal_lamports[index]
-                .checked_add(self.rent_principal_lamports[index])
-                .ok_or(Error::ArithmeticOverflow)?;
-            if self.account_balance_before[index]
-                .checked_add(required)
-                .ok_or(Error::ArithmeticOverflow)?
-                != self.account_balance_after[index]
-            {
-                return Err(Error::ConservationFailure);
             }
             let mut prior = 0usize;
             while prior < index {
@@ -751,8 +745,6 @@ impl DealerRuntimeLivenessBindingV1 {
             hasher.update(self.rent_principal_lamports[index].to_le_bytes());
             hasher.update(self.maximum_calls[index].to_le_bytes());
             hasher.update(self.maximum_lamports_per_call[index].to_le_bytes());
-            hasher.update(self.account_balance_before[index].to_le_bytes());
-            hasher.update(self.account_balance_after[index].to_le_bytes());
             index += 1;
         }
         let mut path = 0usize;
