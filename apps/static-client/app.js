@@ -79,7 +79,7 @@
     const status = $("configuration-status");
     status.className = "status-panel ready";
     status.textContent = `Explicit target recorded for ${configuration.clusterKey}. No endpoint has been contacted yet.`;
-    $("configuration-json").textContent = JSON.stringify(configuration, null, 2);
+    $("configuration-json").textContent = JSON.stringify(CHAIN.redactedConfiguration(configuration), null, 2);
     $("read-chain").disabled = false;
     $("export-configuration").disabled = false;
     resetProjection("No operatord projection acquired for this configuration.");
@@ -152,7 +152,8 @@
       metric("Unsafe fork rows", finality.unsafeForkAccountCount, finality.unsafeForkAccountCount === "0" ? "good" : "bad"),
       metric("Bootstrap", snapshot.acquisition.bootstrapComplete ? "complete" : "incomplete", snapshot.acquisition.bootstrapComplete ? "good" : "warn"),
       metric("Pending accounts", snapshot.acquisition.pendingAccounts, snapshot.acquisition.pendingAccounts === "0" ? "good" : "warn"),
-      metric("Processed transport", finality.processedTransport ? `${finality.processedTransport.phase} · generation ${finality.processedTransport.connectionGeneration} · rollback epoch ${finality.processedTransport.rollbackEpoch}` : "not configured", finality.requestedCommitment === "processed" ? "warn" : ""),
+      metric("Processed transport", finality.processedTransport ? `${finality.processedTransport.phase} · generation ${finality.processedTransport.connectionGeneration} · rollback epoch ${finality.processedTransport.rollbackEpoch} · WS genesis ${finality.processedTransport.websocketGenesisMatched ? "matched" : "unmatched"}` : "not configured", finality.requestedCommitment === "processed" ? "warn" : ""),
+      metric("Processed removals", finality.processedTransport ? `${finality.processedTransport.accountProjectionsWithdrawn} withdrawn / ${finality.processedTransport.accountRemovalEvents} observed` : "0", finality.processedTransport && finality.processedTransport.accountProjectionsWithdrawn !== "0" ? "warn" : ""),
       metric("Response budget left", `${snapshot.acquisitionBounds.remainingResponseBytes} bytes`)
     );
   };
@@ -364,7 +365,7 @@
 
   const buildWorkflow = async () => {
     if (!state.configuration || !state.snapshot) throw new Error("Acquire a chain projection before constructing a workflow node.");
-    if (state.snapshot.configuration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
+    if (state.snapshot.sourceConfiguration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
     if (state.snapshot.finality.requestedCommitment === "processed") throw new Error("Processed observations are rollbackable and never authority-eligible; switch to finalized and reacquire before constructing a workflow.");
     let draft;
     try { draft = JSON.parse($("draft-json").value); } catch (_) { throw new Error("Semantic-owner draft is not valid JSON."); }
@@ -428,7 +429,7 @@
       } catch (error) { resetProjection(`Acquisition refused: ${error.message}`); setError("configuration-error", error.message); }
       finally { button.disabled = false; button.textContent = "Read bounded operatord state"; }
     });
-    $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(state.configuration, null, 2), $("export-configuration")); });
+    $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(CHAIN.redactedConfiguration(state.configuration), null, 2), $("export-configuration")); });
     $("copy-snapshot").addEventListener("click", () => { if (state.snapshot) copy($("snapshot-json").textContent, $("copy-snapshot")); });
     for (const id of ["compiler-release-sha256", "compiler-definition", "compiler-bundle-inputs"]) {
       $(id).addEventListener("input", () => { compilerRevision += 1; });
