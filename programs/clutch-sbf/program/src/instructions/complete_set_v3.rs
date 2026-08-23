@@ -26,7 +26,8 @@ use super::collateral_position_v3::{
 };
 
 /// Exact full-width Split/Merge account list.
-pub const COMPLETE_SET_ACCOUNT_COUNT_V3: usize = 14;
+pub const COMPLETE_SET_ACCOUNT_COUNT_V3: usize =
+    clutch_solana_layout::collateral_v3_accounts::COMPLETE_SET_ACCOUNT_COUNT_V3;
 
 const IX_ACTOR: usize = 0;
 const IX_REALM: usize = 1;

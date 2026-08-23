@@ -11,7 +11,8 @@ use clutch_solana_layout::registry::{
     EXTENSION_ENVELOPE_BYTES, MAX_EXTENSION_PAYLOAD_BYTES,
 };
 use clutch_solana_layout::source_series::{validate_account_metas_v2, ObservedSourceAccountMetaV2};
-use clutch_solana_reference::ExtensionRequest;
+use clutch_solana_layout::Intent;
+use clutch_solana_reference::{Action, ExtensionRequest, Request};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_transaction::Transaction;
@@ -86,6 +87,7 @@ impl std::error::Error for ConstructionError {}
 /// dispatcher has enabled a corresponding capability.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ProtocolFlow {
+    CollateralCustodyV3,
     MarketEpochCreation,
     SourcePlaneV3,
     GeneralV2Candidate,
@@ -227,6 +229,14 @@ pub enum OwnedWireContract {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
+    /// Enabled legacy outer request whose instruction account ABI is the
+    /// full-width V3 collateral contract. This does not authorize a lowered
+    /// Market/Hoard/Kernel interpretation of the request body.
+    CollateralReplayRequestV3 {
+        action: clutch_solana_layout::collateral_v3_accounts::CollateralActionV3,
+        outcome_count: u8,
+        selected_outcome: Option<u8>,
+    },
 }
 
 /// One semantic-owner-produced instruction ready for outer construction.
@@ -246,6 +256,62 @@ pub struct OwnedInstructionDraft {
 }
 
 impl OwnedInstructionDraft {
+    /// Admit an enabled full-width collateral instruction after decoding the
+    /// exact request variant and validating every account role. The first
+    /// role is the authenticated owner/claimant signer and is retained as a
+    /// required signer automatically.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enabled_full_width_collateral_v3(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        action: clutch_solana_layout::collateral_v3_accounts::CollateralActionV3,
+        outcome_count: u8,
+        data: Vec<u8>,
+    ) -> Result<Self> {
+        use clutch_solana_layout::collateral_v3_accounts::{
+            validate_collateral_account_metas_v3, ObservedCollateralAccountMetaV3,
+        };
+
+        let request = Request::decode(&data).map_err(|_| ConstructionError::WrongWirePrefix)?;
+        let selected_outcome = collateral_request_outcome_v3(action, &request)?;
+        let observed = accounts
+            .iter()
+            .map(|account| ObservedCollateralAccountMetaV3 {
+                key: account.pubkey.to_bytes(),
+                writable: account.is_writable,
+                signer: account.is_signer,
+            })
+            .collect::<Vec<_>>();
+        validate_collateral_account_metas_v3(action, outcome_count, selected_outcome, &observed)
+            .map_err(|_| ConstructionError::InvalidAccountContract)?;
+        let actor = accounts
+            .first()
+            .ok_or(ConstructionError::InvalidAccountContract)?
+            .pubkey;
+        let value = Self {
+            flow: ProtocolFlow::CollateralCustodyV3,
+            action_name: action_name.into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers: vec![actor],
+            equations,
+            registry_binding: None,
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::CollateralReplayRequestV3 {
+                action,
+                outcome_count,
+                selected_outcome,
+            },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Wrap an exact liveness runtime intent without creating a parallel codec.
     pub fn liveness(
         action_name: impl Into<String>,
@@ -471,7 +537,11 @@ impl OwnedInstructionDraft {
             OwnedWireContract::MainSuccessorRequest { binding, .. }
                 if binding.family == ExtensionFamily::SourceSeries
         );
-        if !source_request {
+        let collateral_request = matches!(
+            self.wire,
+            OwnedWireContract::CollateralReplayRequestV3 { .. }
+        );
+        if !source_request && !collateral_request {
             let mut accounts = BTreeSet::new();
             for account in &self.accounts {
                 if !accounts.insert(account.pubkey) {
@@ -541,7 +611,7 @@ impl OwnedInstructionDraft {
                         family == ExtensionFamily::SourceSeries
                     }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
-                    ProtocolFlow::Liveness => false,
+                    ProtocolFlow::CollateralCustodyV3 | ProtocolFlow::Liveness => false,
                 };
                 if !family_matches {
                     return Err(ConstructionError::WrongFlow);
@@ -588,6 +658,41 @@ impl OwnedInstructionDraft {
                     .collect::<Vec<_>>();
                 validate_account_metas_v2(action, &observed)
                     .map_err(|_| ConstructionError::InvalidAccountContract)?;
+            }
+            OwnedWireContract::CollateralReplayRequestV3 {
+                action,
+                outcome_count,
+                selected_outcome,
+            } => {
+                use clutch_solana_layout::collateral_v3_accounts::{
+                    validate_collateral_account_metas_v3, ObservedCollateralAccountMetaV3,
+                };
+
+                let request =
+                    Request::decode(&self.data).map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if self.registry_binding.is_some()
+                    || self.flow != ProtocolFlow::CollateralCustodyV3
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || collateral_request_outcome_v3(action, &request)? != selected_outcome
+                {
+                    return Err(ConstructionError::WrongFlow);
+                }
+                let observed = self
+                    .accounts
+                    .iter()
+                    .map(|account| ObservedCollateralAccountMetaV3 {
+                        key: account.pubkey.to_bytes(),
+                        writable: account.is_writable,
+                        signer: account.is_signer,
+                    })
+                    .collect::<Vec<_>>();
+                validate_collateral_account_metas_v3(
+                    action,
+                    outcome_count,
+                    selected_outcome,
+                    &observed,
+                )
+                .map_err(|_| ConstructionError::InvalidAccountContract)?;
             }
         }
         Ok(())
@@ -730,9 +835,25 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
+                    | OwnedWireContract::CollateralReplayRequestV3 { .. }
             ) && draft.program_id != self.clutch_program
             {
                 return Err(ConstructionError::ForeignProgram);
+            }
+            if matches!(
+                draft.wire,
+                OwnedWireContract::CollateralReplayRequestV3 {
+                    action:
+                        clutch_solana_layout::collateral_v3_accounts::CollateralActionV3::RedeemExternal,
+                    ..
+                }
+            ) && draft.accounts.first().map(|account| account.pubkey) == Some(self.payer)
+            {
+                // External redemption alone requires the claimant AccountInfo
+                // itself to remain read-only. A transaction payer is globally
+                // writable after privilege union even if this instruction's
+                // meta says read-only, so that alias cannot be submitted.
+                return Err(ConstructionError::InvalidAccountContract);
             }
             for signer in &draft.required_signers {
                 let represented = *signer == self.payer
@@ -851,6 +972,34 @@ impl ProtocolTransactionBuilder {
     }
 }
 
+fn collateral_request_outcome_v3(
+    expected: clutch_solana_layout::collateral_v3_accounts::CollateralActionV3,
+    request: &Request,
+) -> Result<Option<u8>> {
+    use clutch_solana_layout::collateral_v3_accounts::CollateralActionV3 as Expected;
+
+    let actual = match request.action {
+        Action::Layout(Intent::Endow { .. }) => (Expected::Endow, None),
+        Action::Layout(Intent::WithdrawCash { .. }) => (Expected::WithdrawCash, None),
+        Action::Layout(Intent::Split { .. }) => (Expected::Split, None),
+        Action::Layout(Intent::Merge { .. }) => (Expected::Merge, None),
+        Action::Layout(Intent::Materialize { outcome, .. }) => {
+            (Expected::Materialize, Some(outcome))
+        }
+        Action::Layout(Intent::Dematerialize { outcome, .. }) => {
+            (Expected::Dematerialize, Some(outcome))
+        }
+        Action::Layout(Intent::RedeemExternal { outcome, .. }) if request.sequence == 0 => {
+            (Expected::RedeemExternal, Some(outcome))
+        }
+        _ => return Err(ConstructionError::WrongWirePrefix),
+    };
+    if actual.0 != expected {
+        return Err(ConstructionError::WrongWirePrefix);
+    }
+    Ok(actual.1)
+}
+
 fn require_nonempty_flow(expected: ProtocolFlow, drafts: &[OwnedInstructionDraft]) -> Result<()> {
     if drafts.is_empty() {
         return Err(ConstructionError::EmptyBundle);
@@ -890,8 +1039,12 @@ const fn map_registry_error(error: RegistryError) -> ConstructionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_solana_layout::collateral_v3_accounts::{
+        account_contract_v3, CollateralAccountRoleV3, CollateralActionV3,
+    };
     use clutch_solana_layout::registry::{GeneralV2Action, SourceSeriesAction};
     use clutch_solana_layout::source_series::account_contract_v2;
+    use clutch_solana_layout::{Hash32, Intent};
 
     fn owner() -> SemanticOwner {
         SemanticOwner {
@@ -930,6 +1083,151 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn collateral_accounts(
+        action: CollateralActionV3,
+        selected: Option<u8>,
+        coalesce_token_programs: bool,
+    ) -> Vec<AccountMeta> {
+        let contract = account_contract_v3(action, 2, selected).unwrap();
+        let collateral_program = (0..contract.len())
+            .find(|index| {
+                contract.meta(*index).unwrap().role
+                    == CollateralAccountRoleV3::CollateralTokenProgram
+            })
+            .unwrap();
+        (0..contract.len())
+            .map(|index| {
+                let required = contract.meta(index).unwrap();
+                let identity_index = if coalesce_token_programs
+                    && required.role == CollateralAccountRoleV3::OutcomeTokenProgram
+                {
+                    collateral_program
+                } else {
+                    index
+                };
+                AccountMeta {
+                    pubkey: Address::new_from_array(
+                        [u8::try_from(identity_index + 40).unwrap(); 32],
+                    ),
+                    is_signer: required.signer,
+                    is_writable: required.writable,
+                }
+            })
+            .collect()
+    }
+
+    fn collateral_request(sequence: u64, intent: Intent) -> Vec<u8> {
+        let mut inner = vec![0; intent.encoded_len()];
+        let written = intent.encode(&mut inner).unwrap();
+        inner.truncate(written);
+        let mut data = vec![0xd1, 1];
+        data.extend_from_slice(&sequence.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&(inner.len() as u16).to_le_bytes());
+        data.extend_from_slice(&inner);
+        data
+    }
+
+    fn collateral_equation() -> Vec<ExactEquation> {
+        vec![ExactEquation {
+            name: "collateral atoms conserved".into(),
+            unit: IntegerUnit::CollateralAtoms {
+                mint: Address::new_from_array([90; 32]),
+            },
+            left: 7,
+            right: 7,
+        }]
+    }
+
+    #[test]
+    fn enabled_collateral_request_uses_full_width_roles_and_closed_program_alias() {
+        let action = CollateralActionV3::Materialize;
+        let mut accounts = collateral_accounts(action, Some(1), true);
+        accounts[0].is_writable = true;
+        let draft = OwnedInstructionDraft::enabled_full_width_collateral_v3(
+            "materialize-v3",
+            owner(),
+            Address::new_from_array([2; 32]),
+            accounts,
+            collateral_equation(),
+            action,
+            2,
+            collateral_request(
+                4,
+                Intent::Materialize {
+                    market: Hash32::from_bytes([91; 32]),
+                    owner: Hash32::from_bytes([40; 32]),
+                    destination: Hash32::from_bytes([92; 32]),
+                    outcome: 1,
+                    quantity: 7,
+                },
+            ),
+        )
+        .unwrap();
+        assert_eq!(draft.flow, ProtocolFlow::CollateralCustodyV3);
+        assert_eq!(
+            draft.runtime_admission,
+            RuntimeAdmission::ReleaseBoundEnabled
+        );
+        assert_eq!(
+            draft.required_signers,
+            vec![Address::new_from_array([40; 32])]
+        );
+    }
+
+    #[test]
+    fn enabled_collateral_request_refuses_action_or_role_substitution() {
+        let action = CollateralActionV3::Materialize;
+        let data = collateral_request(
+            4,
+            Intent::Dematerialize {
+                market: Hash32::from_bytes([91; 32]),
+                owner: Hash32::from_bytes([40; 32]),
+                source: Hash32::from_bytes([92; 32]),
+                outcome: 1,
+                quantity: 7,
+            },
+        );
+        assert_eq!(
+            OwnedInstructionDraft::enabled_full_width_collateral_v3(
+                "materialize-v3",
+                owner(),
+                Address::new_from_array([2; 32]),
+                collateral_accounts(action, Some(1), false),
+                collateral_equation(),
+                action,
+                2,
+                data,
+            ),
+            Err(ConstructionError::WrongWirePrefix)
+        );
+
+        let mut aliased = collateral_accounts(action, Some(1), false);
+        aliased[1].pubkey = aliased[0].pubkey;
+        assert_eq!(
+            OwnedInstructionDraft::enabled_full_width_collateral_v3(
+                "materialize-v3",
+                owner(),
+                Address::new_from_array([2; 32]),
+                aliased,
+                collateral_equation(),
+                action,
+                2,
+                collateral_request(
+                    4,
+                    Intent::Materialize {
+                        market: Hash32::from_bytes([91; 32]),
+                        owner: Hash32::from_bytes([40; 32]),
+                        destination: Hash32::from_bytes([92; 32]),
+                        outcome: 1,
+                        quantity: 7,
+                    },
+                ),
+            ),
+            Err(ConstructionError::InvalidAccountContract)
+        );
     }
 
     #[test]

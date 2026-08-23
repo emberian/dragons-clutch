@@ -40,9 +40,11 @@ use super::collateral_position_v3::{
 use super::genesis::SYSTEM_PROGRAM_ID;
 
 /// Exact full-width WithdrawCash account list.
-pub const WITHDRAW_ACCOUNT_COUNT_V3: usize = 16;
+pub const WITHDRAW_ACCOUNT_COUNT_V3: usize =
+    clutch_solana_layout::collateral_v3_accounts::WITHDRAW_ACCOUNT_COUNT_V3;
 /// Exact full-width Endow account list, including owner-plane construction.
-pub const ENDOW_ACCOUNT_COUNT_V3: usize = 18;
+pub const ENDOW_ACCOUNT_COUNT_V3: usize =
+    clutch_solana_layout::collateral_v3_accounts::ENDOW_ACCOUNT_COUNT_V3;
 
 const IX_ACTOR: usize = 0;
 const IX_REALM: usize = 1;

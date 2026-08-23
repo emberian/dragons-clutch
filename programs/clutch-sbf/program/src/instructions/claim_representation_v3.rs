@@ -30,7 +30,8 @@ use super::collateral_position_v3::{
 };
 
 /// Fixed prefix before one mint per active outcome.
-pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize = 14;
+pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize =
+    clutch_solana_layout::collateral_v3_accounts::CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3;
 
 const IX_ACTOR: usize = 0;
 const IX_REALM: usize = 1;
