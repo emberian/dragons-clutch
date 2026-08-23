@@ -259,12 +259,17 @@ impl RentParameters {
 /// silently enormous or `NaN` lamport figure.
 pub fn read_rent(account: &AccountInfo) -> Outcome<RentParameters> {
     require(*account.key == RENT_SYSVAR_ID, ClutchError::WrongRentSysvar)?;
-    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(
+        !account.is_signer && !account.is_writable && !account.executable,
+        ClutchError::UnexpectedWritable,
+    )?;
     require(
         account.data_len() == RENT_SYSVAR_LEN,
         ClutchError::WrongRentSysvar,
     )?;
-    let data = account.data.borrow();
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let mut rate = [0_u8; 8];
     rate.copy_from_slice(&data[0..8]);
     let mut threshold = [0_u8; 8];

@@ -71,6 +71,8 @@ pub mod failure_market_runtime;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 pub mod fractional_redemption;
+/// Capability-disabled executable admission/retirement boundary for Fractional.
+mod fractional_lifecycle;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
 #[cfg(any(
     all(

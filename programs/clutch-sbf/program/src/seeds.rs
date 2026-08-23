@@ -60,8 +60,8 @@ pub const SEED_POSITION: &[u8] = b"dragons-clutch:position:v1";
 pub const SEED_KERNEL: &[u8] = b"dragons-clutch:kernel:v1";
 /// Full-width native ClaimLedger V3 seed prefix.
 pub const SEED_CLAIM_LEDGER_V3: &[u8] = b"dc:claim-ledger:v3";
-/// Immutable exact fractional-redemption policy V2.
-pub const SEED_FRACTIONAL_POLICY_V2: &[u8] =
+/// Immutable exact fractional-redemption policy V3.
+pub const SEED_FRACTIONAL_POLICY_V3: &[u8] =
     clutch_fractional_redemption_runtime::FRACTIONAL_POLICY_PDA_PREFIX;
 /// Sole aggregate numerator-credit ledger V1.
 pub const SEED_FRACTIONAL_LEDGER_V1: &[u8] =
@@ -888,19 +888,17 @@ pub fn purpose_replay_v3_pda(
 }
 
 /// Canonical immutable fractional policy for one exact Resolution V5 body.
-pub fn fractional_policy_v2_pda(
+pub fn fractional_policy_v3_pda(
     program_id: &Pubkey,
     market_instance: &[u8; 32],
     resolution_account: &[u8; 32],
-    resolution_data_id: &[u8; 32],
 ) -> (Pubkey, u8) {
     find(
         program_id,
         &[
-            SEED_FRACTIONAL_POLICY_V2,
+            SEED_FRACTIONAL_POLICY_V3,
             market_instance,
             resolution_account,
-            resolution_data_id,
         ],
     )
 }

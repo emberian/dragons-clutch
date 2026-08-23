@@ -1,32 +1,35 @@
 # Exact fractional-redemption runtime contract
 
 This crate promotes `research/fractional-redemption` into a safe, `no_std`,
-allocation-free, fixed-layout runtime contract. The SBF adapter contains the
-complete action-2 exact-internal, action-3 exact-bearer, and action-9
-claims-exhausted handlers, but their capability remains disabled
-until Product's canonical Hoard/ClaimLedger founding, Resolution activation,
-and family-admission account producers land. Intent family `79/v1`, actions
-`1..=10`, and account coordinates
-`0xa4/v2`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2` are centrally reserved as
+allocation-free, fixed-layout runtime contract. The SBF adapter contains all
+ten handlers, including Product-owned atomic family admission and terminal
+consumption around the Fractional-owned account writes, deletion, and rent
+splits. Their capability remains disabled until the whole family passes one
+release review. Intent family `79/v1`, actions `1..=10`, and account coordinates
+`0xa4/v3`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2` are centrally reserved as
 `ReservedDisabled`.
 
 The new persisted facts have one owner each:
 
 | account | owner | exact body |
 | --- | --- | ---: |
-| `0xa4/v2` | immutable Market/Resolution-V5-data/Realm/claim policy and resolved common lot | 296 |
+| `0xa4/v3` | immutable Market/Resolution-V5-data/Realm/claim policy and resolved common lot; Foundation-computable Market/Resolution-account PDA | 296 |
 | `0xa5/v1` | ClaimLedger account binding, aggregate numerator `K`, live-credit count, and global replay sequence | 224 |
 | `0xa6/v2` | one claimant's canonical numerator `<D`, generation, replay, and rent | 296 |
 | `0xa7/v2` | permanent zero-credit close/reopen identity | 232 |
 
 The never-activated `0xa4/v1`, `0xa6/v1`, and `0xa7/v1` coordinates are
 explicitly withdrawn. Their identity slots were allocated as payout-vector
-digests, so no V2 decoder accepts them and no migration or fallback aliases
-them. V2 uses fresh policy/credit PDA domains; unchanged `0xa5/v1` continues to
-own only aggregate credit, live-credit count, and its cross-account sequence.
+digests, so no current decoder accepts them and no migration or fallback
+aliases them. Policy V2 is separately withdrawn before activation because its
+address depended on future final Resolution bytes and could not be prefunded.
+Policy V3 keeps that exact data identity in the immutable body while its PDA is
+fixed by Market and Resolution account. Credit V2 remains unchanged;
+`0xa5/v1` continues to own only aggregate credit, live-credit count, and its
+cross-account sequence.
 
 Resolution V5 remains the sole vector owner. The policy and every owner credit
-persist its exact PDA-bound Resolution data ID, while each transition also
+persist its exact physical-account-bound Resolution data ID, while each transition also
 recomputes the body-only semantic ID and returns the V5 quotient/remainder
 projection that names the exact outcome and burned quantity. Full-width ClaimLedger V3
 remains the sole internal-plus-bearer supply owner. Hoard V2 remains the sole
@@ -41,7 +44,7 @@ ClaimLedger V3 begins in the explicit fractional `OpenUnlatched` state with
 zero policy/ledger identities. This fractional state is distinct from the
 Market liability lifecycle and survives Resolution activation unchanged.
 Only `Initialize` may move it once to `Latched`: that transition stores the
-exact a4/v2 and a5/v1 accounts, advances sequence zero to one, and emits the
+exact a4/v3 and a5/v1 accounts, advances sequence zero to one, and emits the
 private child receipt consumed by Product's five-family Market aggregator.
 No credit liability or fractional action can exist before the latch, and no
 Resolution transition may populate or relatch these identities.
@@ -114,11 +117,14 @@ authority.
 
 ## Solana activation boundary
 
-The frozen future account order is:
+The executable-but-capability-disabled account order is:
 
-- `Initialize`: payer; MarketInstance; Realm; collateral Profile/policy;
-  Resolution; claim-issuance binding; policy PDA; ledger PDA; ClaimLedger V3;
-  System Program; Rent sysvar; neutral sink; capability/release manifest.
+- `Initialize`: the 14 Product Foundation core accounts in slot order, the
+  active OutcomeMint prefix, the active OutcomeCustody prefix, then Realm,
+  Profile, collateral policy/program/ProgramData, claim program/ProgramData,
+  MarketInstance artifact, founder Series link, FundingQuoteV4 artifact,
+  SeriesRegistryV2, this Program/ProgramData, ReleaseV2/ProfileV4 artifacts,
+  System Program, and Rent. No signer or second Foundation debit exists.
 - Exact internal redeem: owner; Realm; collateral Profile/policy/program;
   MarketBinding; MarketRuntime; MarketInstance artifact; Hoard V2; ClaimLedger
   V3; Resolution V5; fractional policy; aggregate ledger; Position V3; GEN1
@@ -152,22 +158,25 @@ The frozen future account order is:
 - Terminal seal: Realm; collateral Profile/policy/token program; MarketBinding;
   MarketRuntime; MarketInstance artifact; Hoard V2; writable ClaimLedger V3;
   Resolution V5; policy; writable aggregate ledger.
-- Terminal close: policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
-  writable Product five-family aggregator authorization; capability manifest; policy
-  rent payer; ledger rent payer; neutral sink. It deletes `0xa4` and `0xa5`
-  atomically and advances ClaimLedger to Retiring.
+- Terminal close: the same Foundation core/mint/custody graph, then Realm,
+  Profile, collateral policy/program/ProgramData, MarketInstance artifact,
+  founder Series link, FundingQuoteV4, SeriesRegistryV2, this
+  Program/ProgramData, ReleaseV2/ProfileV4, writable shared rent refund owner,
+  and writable neutral sink. It consumes Product terminality before deleting
+  `0xa4` and `0xa5`, refunds only both stored principals, sends every surplus
+  lamport to the exact System-owned neutral sink, and advances ClaimLedger to
+  Retiring. Any later refusal rolls the whole instruction back.
 
-Disabled tuples refuse before parsing payloads or inspecting accounts. Actions
-2 through 9 already perform their complete typed authentication, external-
-effect ordering where applicable, and atomic writeback. Action 2 remains
-independent of bearer claim-release availability. Enabling actions 1 and 2
-together still depends on Product exposing its stable per-slot Foundation
-preallocation authority and atomic family-admission consumer. Slots 11 and 12
+Disabled tuples refuse before parsing payloads or inspecting accounts. All ten
+handlers perform their typed authentication, external-effect ordering where
+applicable, and atomic writeback. Action 2 remains independent of bearer
+claim-release availability. Slots 11 and 12
 are Product-prefunded, zero-data, System-owned writable PDAs before action 1;
 Fractional will allocate, assign, and write those exact prestates without
 debiting or refunding them again. Product remains the sole owner of the
 Foundation debit/donation evidence and persisted typed claim-issuance binding;
 the Fractional adapter will not invent a duplicate owner or provision mock
-state. Action 10 analogously waits only for Product's private terminal
-consumer; Fractional already owns the release authentication, terminal
-postwrite verification, account deletion, and the two exact rent splits.
+state. Action 10 consumes Product's private terminal writer before deletion;
+Fractional owns release authentication, terminal postwrite verification,
+account deletion, and both exact rent splits. Whole-family release review is
+the remaining activation gate.
