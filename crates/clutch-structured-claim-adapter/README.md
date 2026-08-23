@@ -19,6 +19,13 @@ They admit resolved-market canonical unwind and never spend reserved Position
 cash. Full-vector compression, direct redemption, donation compaction, and live
 descriptor creation remain subsequent runtime slices.
 
+The family-local wire allocates eight strict actions: descriptor creation,
+canonical/full wrap, canonical/full unwind, beneficiary-free donation
+compaction, exact terminal redemption, and retirement. Every quantity route
+binds the wrapper product, user/vault generations, and both Replay sequences;
+trailing, truncated, zero-quantity, and unknown-action payloads have no
+interpretation.
+
 The descriptor contains no mutable supply shadow. Actual wrapper supply must
 always come from the authenticated extension-free Token-2022 mint. Direct
 burns create beneficiary-free surplus backing, never a fee or treasury claim.
