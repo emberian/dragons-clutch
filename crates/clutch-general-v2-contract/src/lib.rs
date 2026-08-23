@@ -156,6 +156,9 @@ pub const RESERVATION_SEED_DOMAIN_V1: &[u8] = b"general-reservation:v2";
 pub const RECEIPT_SEED_DOMAIN_V1: &[u8] = b"general-receipt:v2";
 /// Canonical General SettlementReceipt V3 PDA seed domain.
 pub const RECEIPT_SEED_DOMAIN_V3: &[u8] = b"general-receipt:v3";
+/// Canonical General SettlementReceipt V4 PDA seed domain.
+/// V3 remains withdrawn and never aliases this fresh address family.
+pub const RECEIPT_SEED_DOMAIN_V4: &[u8] = b"general-receipt:v4";
 /// Fresh General V2 final-pot PDA seed domain.
 pub const FINAL_POT_SEED_DOMAIN_V1: &[u8] = b"general-final-pot:v2";
 
@@ -386,6 +389,15 @@ pub struct SettlementReceiptSeedTupleV3 {
     slice_index_le: [u8; 2],
 }
 
+/// Validated ordered seed tuple for one canonical General SettlementReceipt
+/// V4 PDA. Its coordinates match V3 structurally but its domain is disjoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementReceiptSeedTupleV4 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    slice_index_le: [u8; 2],
+}
+
 impl SettlementReceiptSeedTupleV3 {
     /// Construct the canonical tuple from authenticated selection facts.
     pub fn new(
@@ -412,6 +424,50 @@ impl SettlementReceiptSeedTupleV3 {
     /// First seed: the non-aliasing V3 receipt domain.
     pub const fn domain(&self) -> &'static [u8] {
         RECEIPT_SEED_DOMAIN_V3
+    }
+
+    /// Second seed: full authenticated counted Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: stable final SettlementCandidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: exact selected slice index in little-endian order.
+    pub const fn slice_index_le(&self) -> &[u8; 2] {
+        &self.slice_index_le
+    }
+}
+
+impl SettlementReceiptSeedTupleV4 {
+    /// Construct the canonical tuple from authenticated selection facts.
+    pub fn new(
+        epoch: Id32,
+        settlement_candidate: Id32,
+        slice_index: u16,
+    ) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if slice_index >= MAX_SLICES_U16 {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            slice_index_le: slice_index.to_le_bytes(),
+        })
+    }
+
+    /// First seed: the non-aliasing V4 receipt domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        RECEIPT_SEED_DOMAIN_V4
     }
 
     /// Second seed: full authenticated counted Epoch PDA bytes.
@@ -884,6 +940,12 @@ mod seed_tests {
         assert_eq!(receipt.epoch(), &[8; ID_BYTES]);
         assert_eq!(receipt.settlement_candidate(), &[9; ID_BYTES]);
         assert_eq!(receipt.slice_index_le(), &[2, 1]);
+        let receipt_v4 = SettlementReceiptSeedTupleV4::new(id(8), id(9), 0x0102).unwrap();
+        assert_eq!(receipt_v4.domain(), b"general-receipt:v4");
+        assert_eq!(receipt_v4.epoch(), &[8; ID_BYTES]);
+        assert_eq!(receipt_v4.settlement_candidate(), &[9; ID_BYTES]);
+        assert_eq!(receipt_v4.slice_index_le(), &[2, 1]);
+        assert_ne!(receipt.domain(), receipt_v4.domain());
         let page = GeneralOrderPageSeedTupleV5::new(id(8), 0x0304).unwrap();
         assert_eq!(page.domain(), b"general-order-page:v2");
         assert_eq!(page.epoch(), &[8; ID_BYTES]);
@@ -910,6 +972,10 @@ mod seed_tests {
         );
         assert_eq!(
             SettlementReceiptSeedTupleV3::new(id(8), id(9), MAX_SLICES_U16),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            SettlementReceiptSeedTupleV4::new(id(8), id(9), MAX_SLICES_U16),
             Err(CodecError::InvalidCount)
         );
         assert_eq!(

@@ -237,8 +237,10 @@ pub const SOURCE_V3_HEAD_ACCOUNT_TAG: u8 = 0x8b;
 pub const SOURCE_V3_HEAD_ACCOUNT_VERSION: u8 = 1;
 /// Durable SourcePlane V3 reopen-lineage account discriminator.
 pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_TAG: u8 = 0x8c;
-/// SourcePlane V3 reopen-lineage account version.
-pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = 1;
+/// SourcePlane V3 release/route-bound reopen-lineage account version.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = 2;
+/// Exact SourcePlane V3 release/route-bound reopen-lineage account width.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_BYTES: usize = 352;
 /// Mutable SourcePlane V3 open-page account discriminator.
 pub const SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_TAG: u8 = 0x8d;
 /// SourcePlane V3 open-page account version.
