@@ -1,11 +1,10 @@
 use clutch_product_series::{
     AuthenticatedSeriesFundingAuthorityV2, ComponentDebitV1, ContentId, Error,
-    MarketFoundationScheduleV1, MarketInstanceV2Id, RecoveryAttemptFundingV1,
-    SeriesFundingComponentV2, SeriesFundingPhaseV2, SeriesFundingQuoteV2,
-    SeriesFundingReservationV2, SeriesFundingStateV2, SeriesFundingTermsV2Id,
+    MarketFoundationScheduleV1, MarketInstanceV2Id, SeriesFundingComponentV2, SeriesFundingPhaseV2,
+    SeriesFundingQuoteV2, SeriesFundingReservationV2, SeriesFundingStateV2, SeriesFundingTermsV2Id,
     SeriesMarketDispositionV1, SeriesMarketLinkV1Id, SeriesOrdinalFulfillmentV2, SeriesPlanV5Id,
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
-    MARKET_FOUNDATION_SLOT_COUNT_V1, MAX_RECOVERY_ATTEMPTS, SERIES_FUNDING_COMPONENT_COUNT_V2,
+    MARKET_FOUNDATION_SLOT_COUNT_V1, SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 
 fn id(byte: u8) -> ContentId {
@@ -27,21 +26,16 @@ fn quote() -> SeriesFundingQuoteV2 {
     let custody = MARKET_FOUNDATION_CORE_SLOT_COUNT_V1 + MARKET_FOUNDATION_MAX_OUTCOMES_V1;
     slots[custody] = 1;
     slots[custody + 1] = 1;
-    let mut attempts = [RecoveryAttemptFundingV1::ZERO; MAX_RECOVERY_ATTEMPTS];
-    attempts[0] = RecoveryAttemptFundingV1 {
-        max_progress_units: 2,
-        lamports_per_progress_unit: 3,
-    };
     SeriesFundingQuoteV2 {
         evidence_only_recovery_policy_id: id(1),
+        failure_liveness_policy_id: id(2),
+        failure_recovery_quote_schedule_id: id(3),
         components: [debit(16), debit(7), debit(10), debit(3), debit(4), debit(5)],
         foundation: MarketFoundationScheduleV1 {
             outcome_count: 2,
             slot_principal_lamports: slots,
             founding_timeout_buckets: 8,
         },
-        recovery_attempt_count: 1,
-        recovery_attempt_funding: attempts,
         recovery_rent_principal_lamports: 4,
     }
 }

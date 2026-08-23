@@ -401,7 +401,10 @@ pure runtime elsewhere does not make a route executable.
 | `0xa7/2` | FractionalRedemption/replay | Resolution-V5-data-bound zero-credit tombstone (232 bytes) |
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
-| `0xaa/1` | Product | reserved occurrence-scoped terminal root |
+| `0xaa/1` | Product | shared MarketLifecycleRoot V1; phased prepaid founding and whole-Market terminal owner |
+| `0xab/1` | Failure | mutable interval-consensus work |
+| `0xac/1` | Failure/replay | permanent interval-consensus replay receipt |
+| `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

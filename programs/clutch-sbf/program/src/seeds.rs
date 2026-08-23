@@ -286,6 +286,12 @@ pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-work:v1";
 /// Permanent exhaustive interval-consensus replay receipt.
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY: &[u8] = b"dc:failure-interval-replay:v1";
+/// Shared Product Market lifecycle root, keyed by Market and generation.
+pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root:v1";
+/// Zero-data Product foundation principal/donation vault.
+pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
+/// Per-Series/ordinal Product Market-admission link.
+pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -423,6 +429,54 @@ pub fn failure_replay_tombstone_pda(
             SEED_FAILURE_REPLAY_TOMBSTONE,
             market_instance_v2_id,
             &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical shared Product MarketLifecycleRoot PDA.
+pub fn product_market_lifecycle_root_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical zero-data Product FoundationVault PDA.
+pub fn product_market_foundation_vault_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical per-Series/ordinal Product Market-link PDA.
+pub fn product_series_market_link_pda(
+    program_id: &Pubkey,
+    series_plan_v5_id: &[u8; 32],
+    ordinal: u32,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_SERIES_MARKET_LINK,
+            series_plan_v5_id,
+            &ordinal.to_le_bytes(),
         ],
     )
 }
@@ -1784,5 +1838,23 @@ mod tests {
             failure_market_root_v2_pda(&program_id, &market, 3).0,
             failure_external_root_pda(&program_id, &market, 3).0,
         );
+    }
+
+    #[test]
+    fn product_market_and_link_prefixes_are_pairwise_disjoint() {
+        let prefixes = [
+            SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
+            SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+            SEED_PRODUCT_SERIES_MARKET_LINK,
+            SEED_FAILURE_MARKET_ROOT_V2,
+            SEED_FAILURE_EXTERNAL_ROOT,
+            SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
+            SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
+        ];
+        for (index, prefix) in prefixes.iter().enumerate() {
+            for later in prefixes.iter().skip(index + 1) {
+                assert_ne!(*prefix, *later);
+            }
+        }
     }
 }
