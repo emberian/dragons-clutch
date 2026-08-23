@@ -91,9 +91,9 @@ Before a live route exists, all of the following must close:
    trades native Eggs; it neither mints wrapper liabilities nor accepts a UI
    label as a position.
 8. **Resolution.** Bind the exact authenticated payout vector and atomically
-   redeem/burn retained Eggs. External users redeem their own Eggs; the model's
-   recorded external payout is a conservation check, not a facility-owned
-   asset.
+   redeem/burn retained Eggs. Preserve the recorded external payout as Hoard
+   backing until external users redeem their own Eggs. That backing is a
+   conservation check and claimant principal, not a facility-owned asset.
 9. **Fractional policy.** V1 uses full-denominator lots. A smaller-lot successor
    must reuse or extend the protocol's one semantic fractional-credit owner and
    prove carry conservation, rather than flooring terminal payout.

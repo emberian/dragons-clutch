@@ -94,9 +94,9 @@ Trading -> BuybackOnly -> Resolved -> Retired
   open/close window.
 - The sponsor may halt early. Anyone may close at the frozen close slot.
 - `BuybackOnly` permits only componentwise inventory reduction before maturity.
-- Authenticated resolution redeems retained Eggs and records the payout owed to
-  externally held Eggs. It may also close a stale `Trading` phase at maturity,
-  so a missed close transaction cannot block resolution.
+- Authenticated resolution redeems retained Eggs and preserves the payout owed
+  to externally held Eggs as Hoard backing. It may also close a stale `Trading`
+  phase at maturity, so a missed close transaction cannot block resolution.
 - Sponsor withdrawal is possible only after resolution or a complete flat
   unwind.
 

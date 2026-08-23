@@ -177,7 +177,8 @@ receive
 E = sum_i(q_i*w_i)/D,
 ```
 
-while the facility's retained complement receives `H-E`. Its terminal cash is
+while the facility's retained complement receives `H-E`. The remaining `E`
+stays in Hoard as backing for externally held claims. Facility terminal cash is
 
 ```text
 F + H-E = K+C_hat(q)-E >= 0.
@@ -352,9 +353,10 @@ BuybackOnly --fully flat, sponsor withdrawal----------> Retired
 ```
 
 Safety does not require a successful buyback. At maturity, retained complement
-Eggs redeem for `H-E`; external holders independently redeem for `E`; sponsor
-cash remains nonnegative. Users are never forced to sell to retire the
-facility. An unresolved nonflat state cannot return sponsor capital early.
+Eggs redeem for `H-E`; exactly `E` remains as Hoard backing while external
+holders independently redeem; sponsor cash remains nonnegative. Users are never
+forced to sell to retire the facility. An unresolved nonflat state cannot
+return sponsor capital early.
 
 The conditional liveness theorem is deliberately narrow and executable: at
 the close slot, one permissionless transition reaches `BuybackOnly`; at

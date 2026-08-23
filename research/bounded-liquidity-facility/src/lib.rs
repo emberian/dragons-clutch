@@ -314,8 +314,8 @@ pub struct FacilityStateV1 {
     pub inventory: [u64; MAX_OUTCOMES],
     /// Facility-held complement Eggs.
     pub retained_eggs: [u64; MAX_OUTCOMES],
-    /// Collateral atoms moved to Market Hoard by this facility's complete sets.
-    pub hoard_complete_sets: u64,
+    /// Facility-attributed Market Hoard backing: live sets or resolved claims.
+    pub hoard_backing_atoms: u64,
     /// External inventory payout recorded at resolution.
     pub terminal_external_payout_atoms: u64,
     /// Terminal collateral withdrawn to the immutable sponsor.
@@ -354,7 +354,7 @@ impl FacilityStateV1 {
             cash_atoms: sponsor_capital_atoms,
             inventory: [0; MAX_OUTCOMES],
             retained_eggs: [0; MAX_OUTCOMES],
-            hoard_complete_sets: 0,
+            hoard_backing_atoms: 0,
             terminal_external_payout_atoms: 0,
             sponsor_withdrawn_atoms: 0,
             generation: 0,
@@ -384,7 +384,7 @@ impl FacilityStateV1 {
                 if self.terminal_external_payout_atoms != 0 || self.sponsor_withdrawn_atoms != 0 {
                     return Err(Error::InvariantViolation);
                 }
-                if self.hoard_complete_sets != liability {
+                if self.hoard_backing_atoms != liability {
                     return Err(Error::InvariantViolation);
                 }
                 let expected_retained =
@@ -402,7 +402,7 @@ impl FacilityStateV1 {
                 }
             }
             FacilityPhase::Resolved => {
-                if self.hoard_complete_sets != 0
+                if self.hoard_backing_atoms != self.terminal_external_payout_atoms
                     || any_nonzero(self.policy.outcome_count, &self.retained_eggs)
                     || self.sponsor_withdrawn_atoms != 0
                 {
@@ -422,7 +422,7 @@ impl FacilityStateV1 {
             }
             FacilityPhase::Retired => {
                 if self.cash_atoms != 0
-                    || self.hoard_complete_sets != 0
+                    || self.hoard_backing_atoms != self.terminal_external_payout_atoms
                     || any_nonzero(self.policy.outcome_count, &self.retained_eggs)
                 {
                     return Err(Error::InvariantViolation);
@@ -556,7 +556,7 @@ impl FacilityStateV1 {
         next.inventory = receipt.new_inventory;
         next.cash_atoms = receipt.new_cash_atoms;
         next.retained_eggs = receipt.new_retained_eggs;
-        next.hoard_complete_sets =
+        next.hoard_backing_atoms =
             full_simplex_liability(next.policy.outcome_count, &next.inventory)?;
         next.generation = receipt.post_generation;
         next.validate()?;
@@ -635,7 +635,7 @@ impl FacilityStateV1 {
             .cash_atoms
             .checked_add(retained_payout)
             .ok_or(Error::ArithmeticOverflow)?;
-        next.hoard_complete_sets = 0;
+        next.hoard_backing_atoms = external_payout;
         next.retained_eggs = [0; MAX_OUTCOMES];
         next.terminal_external_payout_atoms = external_payout;
         next.phase = FacilityPhase::Resolved;

@@ -158,7 +158,9 @@ F + H - E = K + C_hat(q) - E >= K + C_hat(q) - H >= 0.
 Every inventory coordinate is a multiple of `D`, so both divisions are exact
 under every admitted integer payout vector. The state records both terminal
 sponsor cash and external-holder payout, and validates their sum against
-`K+C_hat(q)`.
+`K+C_hat(q)`. It also retains exactly `E` as facility-attributed Hoard backing;
+that collateral remains claimant principal until external holders redeem under
+the protocol's ordinary resolved-claim owner.
 
 ## 7. Conditional lifecycle progress
 

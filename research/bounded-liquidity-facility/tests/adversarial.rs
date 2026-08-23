@@ -154,7 +154,7 @@ fn endpoint_potential_makes_splitting_and_round_trips_exact() {
     assert_eq!(direct.inventory, split.inventory);
     assert_eq!(direct.cash_atoms, split.cash_atoms);
     assert_eq!(direct.retained_eggs, split.retained_eggs);
-    assert_eq!(direct.hoard_complete_sets, split.hoard_complete_sets);
+    assert_eq!(direct.hoard_backing_atoms, split.hoard_backing_atoms);
     assert_eq!(
         direct_receipt.trader_cash_in_atoms,
         first.trader_cash_in_atoms + second.trader_cash_in_atoms
@@ -171,7 +171,7 @@ fn endpoint_potential_makes_splitting_and_round_trips_exact() {
     assert_eq!(round_trip.cash_atoms, original.cash_atoms);
     assert_eq!(round_trip.inventory, original.inventory);
     assert_eq!(round_trip.retained_eggs, original.retained_eggs);
-    assert_eq!(round_trip.hoard_complete_sets, 0);
+    assert_eq!(round_trip.hoard_backing_atoms, 0);
 }
 
 #[test]
@@ -319,7 +319,10 @@ fn authenticated_resolution_conserves_user_payout_and_sponsor_equity() {
         let terminal_cash = facility.resolve(30, payout).unwrap();
         assert_eq!(terminal_cash, expected_equity);
         assert_eq!(facility.phase, FacilityPhase::Resolved);
-        assert_eq!(facility.hoard_complete_sets, 0);
+        assert_eq!(
+            facility.hoard_backing_atoms,
+            facility.terminal_external_payout_atoms
+        );
         assert_eq!(facility.retained_eggs, [0; MAX_OUTCOMES]);
         facility.validate().unwrap();
         assert_eq!(facility.withdraw_and_retire(id(7)), Ok(expected_equity));
@@ -465,7 +468,7 @@ fn cached_backing_mutants_are_detected() {
     assert_eq!(retained.validate(), Err(Error::InvariantViolation));
 
     let mut hoard = facility;
-    hoard.hoard_complete_sets -= 2;
+    hoard.hoard_backing_atoms -= 2;
     assert_eq!(hoard.validate(), Err(Error::InvariantViolation));
 
     let mut external = facility;
