@@ -16,10 +16,17 @@ use clutch_batch::relation_v2::{
 };
 use clutch_batch::Side;
 use clutch_batch_policy_identity::batch_policy_digest;
-use clutch_general_v2_contract::{CodecError, Id32, MAX_ORDERS};
+use clutch_general_v2_contract::{
+    encode_score_v2_q_cost_first_admitted_tie_v1, AdmissionNodeStatusV1,
+    AdmissionNodeV4AccountV1, CandidateWindowV5AccountV1, CodecError,
+    CompleteCostedCandidateRankPoststateV1, CompleteCostedCandidateRankTransitionV1,
+    CostedCandidateVerdictProjectionV1, FirstAdmittedTieV1, Id32, MarketBindingV2,
+    ScoreV2QComponentsV1, ScoreV2QCostComponentsV1, MAX_ORDERS,
+    SCORE_V2_Q_COST_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
+};
 use sha2::{Digest, Sha256};
 
-use crate::builder::OwnerBlindBookProjectionV2;
+use crate::{builder::OwnerBlindBookProjectionV2, VerifiedCostedSmoothDirectCandidateV1};
 
 /// Domain for the canonical aggregate certificate identity.
 pub const CANDIDATE_COST_CERTIFICATE_DOMAIN_V1: &[u8] =
@@ -71,6 +78,22 @@ impl CandidateCostPolicyV1 {
     pub const fn policy_id(&self) -> Id32 {
         self.policy_id
     }
+
+    /// Exact-join this content-addressed preimage to the immutable V2 Market
+    /// owner and the breaking score-policy identity.
+    pub fn binds_market(&self, market: &MarketBindingV2) -> Result<(), CandidateCostErrorV1> {
+        market
+            .validate()
+            .map_err(CandidateCostErrorV1::Codec)?;
+        let score_policy_id = crate::score_v2_q_cost_policy_id_v1()
+            .map_err(|_| CandidateCostErrorV1::BindingMismatch)?;
+        if market.batch_policy_id() != self.policy_id
+            || market.base().score_policy_id != score_policy_id
+        {
+            return Err(CandidateCostErrorV1::BindingMismatch);
+        }
+        Ok(())
+    }
 }
 
 /// Private, relation-derived preselection cost result.
@@ -99,6 +122,284 @@ pub struct CandidateCostCertificateV1 {
     virtual_split_atoms: u64,
     virtual_merge_atoms: u64,
     owner_transcript_id: Id32,
+}
+
+/// Private action-14 projection from a successful cost-aware runtime verdict.
+///
+/// A caller cannot construct this value or replace its rank/certificate facts.
+/// It is request-scoped and not a persisted authority. A future SBF action 14
+/// must obtain it in the same invocation that mutates Node/Window state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CostedCandidateAction14ProjectionV1 {
+    economic_candidate_id: Id32,
+    batch_policy_id: Id32,
+    score_policy_id: Id32,
+    certificate_id: Id32,
+    owner_transcript_id: Id32,
+    components: ScoreV2QCostComponentsV1,
+    rank_key: [u8; SCORE_V2_Q_RANK_CAPACITY],
+}
+
+impl CostedCandidateAction14ProjectionV1 {
+    /// Checked RelationV2 candidate identity.
+    pub const fn economic_candidate_id(&self) -> Id32 {
+        self.economic_candidate_id
+    }
+
+    /// Immutable batch-policy identity owned by MarketBinding V2.
+    pub const fn batch_policy_id(&self) -> Id32 {
+        self.batch_policy_id
+    }
+
+    /// Breaking cost-aware ScoreV2-Q policy identity.
+    pub const fn score_policy_id(&self) -> Id32 {
+        self.score_policy_id
+    }
+
+    /// Canonical ephemeral certificate content identity.
+    pub const fn certificate_id(&self) -> Id32 {
+        self.certificate_id
+    }
+
+    /// Canonical sorted owner-net transcript identity.
+    pub const fn owner_transcript_id(&self) -> Id32 {
+        self.owner_transcript_id
+    }
+
+    /// Exact components consumed by the General mutation owner.
+    pub const fn components(&self) -> ScoreV2QCostComponentsV1 {
+        self.components
+    }
+
+    /// Exact 96-byte rank consumed by the General mutation owner.
+    pub const fn rank_key(&self) -> &[u8; SCORE_V2_Q_RANK_CAPACITY] {
+        &self.rank_key
+    }
+}
+
+/// Request-scoped action-15 join to a rank persisted only by action 14.
+///
+/// This join does not recreate or independently own the certificate. It checks
+/// that the selected Node and Window carry the exact 96-byte rank written by
+/// the cost-aware action-14 policy and that the same immutable MarketBinding
+/// still owns the batch/score policies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CostedCandidateAction15ProjectionV1 {
+    selected_candidate_id: Id32,
+    selected_node_id: Id32,
+    batch_policy_id: Id32,
+    score_policy_id: Id32,
+    certificate_id: Id32,
+    rank_key: [u8; SCORE_V2_Q_RANK_CAPACITY],
+}
+
+impl CostedCandidateAction15ProjectionV1 {
+    /// Best valid submitted settlement candidate selected by the Window.
+    pub const fn selected_candidate_id(&self) -> Id32 {
+        self.selected_candidate_id
+    }
+
+    /// AdmissionNode whose action-14 transition persisted the winning rank.
+    pub const fn selected_node_id(&self) -> Id32 {
+        self.selected_node_id
+    }
+
+    /// Immutable batch-policy identity reread from MarketBinding V2.
+    pub const fn batch_policy_id(&self) -> Id32 {
+        self.batch_policy_id
+    }
+
+    /// Breaking score-policy identity shared by Market, Window, and Node.
+    pub const fn score_policy_id(&self) -> Id32 {
+        self.score_policy_id
+    }
+
+    /// Exact winning certificate ID persisted by action 14 for the counted
+    /// settlement root that will own action-15 output.
+    pub const fn certificate_id(&self) -> Id32 {
+        self.certificate_id
+    }
+
+    /// Exact winning rank already persisted by action 14.
+    pub const fn rank_key(&self) -> &[u8; SCORE_V2_Q_RANK_CAPACITY] {
+        &self.rank_key
+    }
+}
+
+/// Project a successful private runtime verdict into the only action-14 facts
+/// the General state transition may consume.
+pub fn project_costed_candidate_action14_v1(
+    verified: &VerifiedCostedSmoothDirectCandidateV1,
+    market: &MarketBindingV2,
+    node: &AdmissionNodeV4AccountV1,
+) -> Result<CostedCandidateAction14ProjectionV1, CandidateCostErrorV1> {
+    market
+        .validate()
+        .map_err(CandidateCostErrorV1::Codec)?;
+    node.validate().map_err(CandidateCostErrorV1::Codec)?;
+    let node_base = node.base();
+    let certificate = verified.cost_certificate();
+    let economics = verified.economics();
+    let score_policy_id = crate::score_v2_q_cost_policy_id_v1()
+        .map_err(|_| CandidateCostErrorV1::BindingMismatch)?;
+    let candidate_id = Id32::new(economics.economic_candidate_digest)
+        .map_err(CandidateCostErrorV1::Codec)?;
+    if market.batch_policy_id() != certificate.batch_policy_id()
+        || market.base().score_policy_id != score_policy_id
+        || node_base.market != market.base().market
+        || node_base.relation_policy_id != market.base().relation_policy_id
+        || node_base.admission_policy_id != market.base().admission_policy_id
+        || node_base.score_policy_id != score_policy_id
+        || node_base.settlement_candidate_id != candidate_id
+        || certificate.economic_candidate_id() != candidate_id
+        || !node.cost_certificate_id().is_zero()
+    {
+        return Err(CandidateCostErrorV1::BindingMismatch);
+    }
+    let components = ScoreV2QCostComponentsV1 {
+        score: ScoreV2QComponentsV1 {
+            certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
+            cash_equivalent_direct_flow_atoms: economics.score.cash_equivalent_direct_flow_atoms,
+            virtual_churn_atoms: economics.score.virtual_churn_atoms,
+            settlement_candidate_id: candidate_id,
+        },
+        owner_net_cost_atoms: certificate.owner_net_cost_atoms(),
+    };
+    let rank_key = encode_score_v2_q_cost_first_admitted_tie_v1(
+        components,
+        FirstAdmittedTieV1 {
+            ordinal: node_base.ordinal,
+        },
+    )
+    .map_err(CandidateCostErrorV1::Codec)?;
+    if rank_key != *verified.rank_key() {
+        return Err(CandidateCostErrorV1::BindingMismatch);
+    }
+    Ok(CostedCandidateAction14ProjectionV1 {
+        economic_candidate_id: candidate_id,
+        batch_policy_id: certificate.batch_policy_id(),
+        score_policy_id,
+        certificate_id: certificate.content_id()?,
+        owner_transcript_id: certificate.owner_transcript_id(),
+        components,
+        rank_key,
+    })
+}
+
+/// Rejoin action 15 to the rank and policy chain persisted by action 14.
+pub fn project_costed_candidate_action15_v1(
+    market: &MarketBindingV2,
+    window: &CandidateWindowV5AccountV1,
+    selected_node: &AdmissionNodeV4AccountV1,
+) -> Result<CostedCandidateAction15ProjectionV1, CandidateCostErrorV1> {
+    market
+        .validate()
+        .map_err(CandidateCostErrorV1::Codec)?;
+    window.validate().map_err(CandidateCostErrorV1::Codec)?;
+    selected_node
+        .validate()
+        .map_err(CandidateCostErrorV1::Codec)?;
+    let window_base = window.base();
+    let node_base = selected_node.base();
+    let score_policy_id = crate::score_v2_q_cost_policy_id_v1()
+        .map_err(|_| CandidateCostErrorV1::BindingMismatch)?;
+    if market.base().score_policy_id != score_policy_id
+        || window_base.market != market.base().market
+        || node_base.market != market.base().market
+        || window_base.relation_policy_id != market.base().relation_policy_id
+        || node_base.relation_policy_id != market.base().relation_policy_id
+        || window_base.admission_policy_id != market.base().admission_policy_id
+        || node_base.admission_policy_id != market.base().admission_policy_id
+        || window_base.score_policy_id != score_policy_id
+        || node_base.score_policy_id != score_policy_id
+        || window_base.epoch != node_base.epoch
+        || window_base.epoch_generation != node_base.epoch_generation
+        || node_base.status != AdmissionNodeStatusV1::VerifiedValid
+        || usize::from(node_base.rank_key_len) != SCORE_V2_Q_COST_ACTIVE_RANK_BYTES
+        || selected_node.cost_certificate_id().is_zero()
+        || window_base.best_candidate_node != node_base.node
+        || window_base.best_settlement_candidate_id != node_base.settlement_candidate_id
+        || window_base.best_rank_key != node_base.rank_key
+        || window_base.best_ordinal != node_base.ordinal
+    {
+        return Err(CandidateCostErrorV1::BindingMismatch);
+    }
+    Ok(CostedCandidateAction15ProjectionV1 {
+        selected_candidate_id: node_base.settlement_candidate_id,
+        selected_node_id: node_base.node,
+        batch_policy_id: market.batch_policy_id(),
+        score_policy_id,
+        certificate_id: selected_node.cost_certificate_id(),
+        rank_key: node_base.rank_key,
+    })
+}
+
+/// Private executable action-14 plan. Work V3 terminalization must still be
+/// composed atomically by the SBF adapter; this plan owns only the exact
+/// Node/Window cost-rank mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedCostedCandidateAction14V1 {
+    poststate: CompleteCostedCandidateRankPoststateV1,
+    certificate_id: Id32,
+    rank_key: [u8; SCORE_V2_Q_RANK_CAPACITY],
+}
+
+impl PreparedCostedCandidateAction14V1 {
+    /// Exact Window successor poststate.
+    pub const fn window(&self) -> &CandidateWindowV5AccountV1 {
+        &self.poststate.window
+    }
+
+    /// Exact AdmissionNode successor poststate.
+    pub const fn node(&self) -> &AdmissionNodeV4AccountV1 {
+        &self.poststate.node
+    }
+
+    /// Checked certificate content identity persisted on the Node.
+    pub const fn certificate_id(&self) -> Id32 {
+        self.certificate_id
+    }
+
+    /// Exact 96-byte rank persisted by the transition.
+    pub const fn rank_key(&self) -> &[u8; SCORE_V2_Q_RANK_CAPACITY] {
+        &self.rank_key
+    }
+}
+
+/// Compose the private checked certificate into the contract-owned action-14
+/// Node/Window successor transition.
+pub fn prepare_costed_candidate_action14_v1(
+    verified: &VerifiedCostedSmoothDirectCandidateV1,
+    market: &MarketBindingV2,
+    window: &CandidateWindowV5AccountV1,
+    node: &AdmissionNodeV4AccountV1,
+    current_slot: u64,
+) -> Result<PreparedCostedCandidateAction14V1, CandidateCostErrorV1> {
+    let projection = project_costed_candidate_action14_v1(verified, market, node)?;
+    let poststate = clutch_general_v2_contract::complete_costed_candidate_rank_poststate_v1(
+        CompleteCostedCandidateRankTransitionV1 {
+            current_slot,
+            verdict: CostedCandidateVerdictProjectionV1 {
+                components: projection.components(),
+                certificate_id: projection.certificate_id(),
+                rank_key: *projection.rank_key(),
+            },
+            window,
+            node,
+            market,
+        },
+    )
+    .map_err(CandidateCostErrorV1::Codec)?;
+    if poststate.node.cost_certificate_id() != projection.certificate_id()
+        || poststate.node.base().rank_key != *projection.rank_key()
+    {
+        return Err(CandidateCostErrorV1::BindingMismatch);
+    }
+    Ok(PreparedCostedCandidateAction14V1 {
+        poststate,
+        certificate_id: projection.certificate_id(),
+        rank_key: *projection.rank_key(),
+    })
 }
 
 impl CandidateCostCertificateV1 {

@@ -81,6 +81,9 @@ enum QuantizedBasisProjectionV1 {
 pub const RELATION_V2_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/relation-v2-policy/v1\0";
 /// SHA-256 domain for General V2's canonical ScoreV2-Q selection policy.
 pub const SCORE_V2_Q_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/score-v2-q-policy/v1\0";
+/// SHA-256 domain for the owner-net cost-aware ScoreV2-Q successor.
+pub const SCORE_V2_Q_COST_POLICY_DIGEST_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/score-v2-q-cost-policy/v1\0";
 
 /// Exact canonical RelationV2 policy body.
 ///
@@ -101,6 +104,16 @@ pub const RELATION_V2_POLICY_BODY_V1: [u8; 24] = [
 pub const SCORE_V2_Q_POLICY_BODY_V1: [u8; 16] = [
     b'D', b'C', b'S', b'V', b'2', b'Q', b'1', 0, 1, 2, 0, 0, 0, 0, 0, 0,
 ];
+/// Exact canonical owner-net cost-aware ScoreV2-Q successor body.
+///
+/// The final bytes commit to owner aggregation, signed payoff netting,
+/// complete-set quotienting, exact state-price valuation, terminal-owner
+/// ceiling, insertion after churn, and absence of fee/identity/optimality
+/// claims.
+pub const SCORE_V2_Q_COST_POLICY_BODY_V1: [u8; 24] = [
+    b'D', b'C', b'S', b'V', b'2', b'Q', b'C', 0, 1, 2, 1, 1, 1, 1, 1, 3, 0, 0, 0, 0, 0, 0, 0,
+    0,
+];
 
 /// Maximum exact active-width bytes in the contract-owned V3 witness body.
 pub const QUANTIZED_WITNESS_BODY_MAX_BYTES_V1: usize = QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES
@@ -113,6 +126,7 @@ const _: () = assert!(MAX_QUANTIZED_ATOMS == 16);
 const _: () = assert!(QUANTIZED_WITNESS_BODY_MAX_BYTES_V1 == 661);
 const _: () = assert!(RELATION_V2_POLICY_BODY_V1.len() == 24);
 const _: () = assert!(SCORE_V2_Q_POLICY_BODY_V1.len() == 16);
+const _: () = assert!(SCORE_V2_Q_COST_POLICY_BODY_V1.len() == 24);
 const _: () = assert!(PRICE_MEASURE_WITNESS_SCHEMA_V3 == PRICE_MEASURE_WITNESS_VERSION_V3);
 const _: () =
     assert!(QUANTIZED_PRICE_MEASURE_SEMANTICS_V1 == QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1);
@@ -131,6 +145,15 @@ pub fn score_v2_q_policy_id_v1() -> Result<Id32, GeneralV2RuntimeError> {
     Id32::new(hash_parts(&[
         SCORE_V2_Q_POLICY_DIGEST_DOMAIN_V1,
         &SCORE_V2_Q_POLICY_BODY_V1,
+    ]))
+    .map_err(GeneralV2RuntimeError::Contract)
+}
+
+/// Derive the breaking owner-net cost-aware ScoreV2-Q policy identity.
+pub fn score_v2_q_cost_policy_id_v1() -> Result<Id32, GeneralV2RuntimeError> {
+    Id32::new(hash_parts(&[
+        SCORE_V2_Q_COST_POLICY_DIGEST_DOMAIN_V1,
+        &SCORE_V2_Q_COST_POLICY_BODY_V1,
     ]))
     .map_err(GeneralV2RuntimeError::Contract)
 }
@@ -427,9 +450,15 @@ pub struct VerifiedCostedSmoothDirectCandidateV1 {
 }
 
 impl VerifiedCostedSmoothDirectCandidateV1 {
-    /// Existing exact price/RelationV2 verdict.
-    pub const fn verified_candidate(&self) -> &VerifiedSmoothDirectCandidateV1 {
-        &self.verified_candidate
+    /// Exact checked RelationV2 economics without exposing the internal V1
+    /// rank representation used during checker reuse.
+    pub const fn economics(&self) -> &VerifiedEconomicsV2 {
+        &self.verified_candidate.economics
+    }
+
+    /// Exact checked price-measure summary.
+    pub const fn price_measure(&self) -> &VerifiedPriceMeasureV3 {
+        &self.verified_candidate.price_measure
     }
 
     /// Owner-net, complete-set-quotiented preselection cost certificate.
@@ -678,6 +707,41 @@ pub fn verify_smooth_direct_candidate_v1(
     authenticated_edge_policy: QuantizedEdgePolicyV1,
     book: &EconomicBookV2,
 ) -> Result<VerifiedSmoothDirectCandidateV1, GeneralV2RuntimeError> {
+    verify_smooth_direct_candidate_with_score_policy_v1(
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        admission_node,
+        economic_domain_account,
+        market_binding,
+        price_grid,
+        product_template,
+        native_basis,
+        price_measure_policy,
+        genesis,
+        market_instance,
+        authenticated_edge_policy,
+        book,
+        score_v2_q_policy_id_v1()?,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_smooth_direct_candidate_with_score_policy_v1(
+    candidate_feed_identity: Id32,
+    sealed_candidate_feed: &[u8],
+    admission_node: &AdmissionNodeV3AccountV1,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    price_grid: &PriceGridAccount,
+    product_template: &ProductTemplateV4,
+    native_basis: &NativeClaimBasisV1,
+    price_measure_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    market_instance: &MarketInstancePreimageV2,
+    authenticated_edge_policy: QuantizedEdgePolicyV1,
+    book: &EconomicBookV2,
+    expected_score_policy_id: Id32,
+) -> Result<VerifiedSmoothDirectCandidateV1, GeneralV2RuntimeError> {
     if candidate_feed_identity.is_zero() {
         return Err(GeneralV2RuntimeError::Contract(CodecError::ZeroIdentity));
     }
@@ -730,7 +794,7 @@ pub fn verify_smooth_direct_candidate_v1(
     let genesis_id = genesis.id()?.bytes();
     let market_instance_id = market_instance.id()?.bytes();
     let relation_policy_id = relation_v2_policy_id_v1()?;
-    let score_policy_id = score_v2_q_policy_id_v1()?;
+    let score_policy_id = expected_score_policy_id;
     let transcript = economic_domain_account.transcript;
     let domain_digest = economic_domain_digest_v2(&CanonicalSha256, transcript)?;
 
@@ -932,9 +996,9 @@ pub fn verify_smooth_direct_candidate_v1(
 pub fn verify_smooth_direct_candidate_costed_v1(
     candidate_feed_identity: Id32,
     sealed_candidate_feed: &[u8],
-    admission_node: &AdmissionNodeV3AccountV1,
+    admission_node: &clutch_general_v2_contract::AdmissionNodeV4AccountV1,
     economic_domain_account: &EconomicDomainV2AccountV1,
-    market_binding: &MarketBindingV1,
+    market_binding: &clutch_general_v2_contract::MarketBindingV2,
     price_grid: &PriceGridAccount,
     product_template: &ProductTemplateV4,
     native_basis: &NativeClaimBasisV1,
@@ -945,13 +1009,19 @@ pub fn verify_smooth_direct_candidate_costed_v1(
     owner_projection: &OwnerBlindBookProjectionV2,
     cost_policy: &CandidateCostPolicyV1,
 ) -> Result<VerifiedCostedSmoothDirectCandidateV1, GeneralV2RuntimeError> {
+    market_binding.validate()?;
+    admission_node.validate()?;
+    cost_policy.binds_market(market_binding)?;
+    let relation_binding = market_binding.relation_projection();
+    let relation_node = admission_node.base();
     let base = owner_projection.base();
-    let verified_candidate = verify_smooth_direct_candidate_v1(
+    let cost_score_policy_id = score_v2_q_cost_policy_id_v1()?;
+    let verified_candidate = verify_smooth_direct_candidate_with_score_policy_v1(
         candidate_feed_identity,
         sealed_candidate_feed,
-        admission_node,
+        relation_node,
         economic_domain_account,
-        market_binding,
+        &relation_binding,
         price_grid,
         product_template,
         native_basis,
@@ -960,11 +1030,12 @@ pub fn verify_smooth_direct_candidate_costed_v1(
         market_instance,
         authenticated_edge_policy,
         base.book(),
+        cost_score_policy_id,
     )?;
     let (header, feed) = decode_sealed_candidate_feed_v1(sealed_candidate_feed)?;
     let domain = base.domain();
     let transcript = economic_domain_account.transcript;
-    if base.market_binding() != market_binding
+    if base.market_binding() != &relation_binding
         || base.market() != header.market
         || base.epoch() != header.epoch
         || base.order_set() != header.order_set
@@ -976,6 +1047,7 @@ pub fn verify_smooth_direct_candidate_costed_v1(
         || domain.epoch_index != transcript.epoch_index
         || domain.outcome_count != transcript.outcome_count
         || domain.price_scale != transcript.price_scale
+        || relation_binding.score_policy_id != cost_score_policy_id
     {
         return Err(GeneralV2RuntimeError::BindingMismatch);
     }
@@ -1011,7 +1083,7 @@ pub fn verify_smooth_direct_candidate_costed_v1(
             owner_net_cost_atoms: cost_certificate.owner_net_cost_atoms(),
         },
         FirstAdmittedTieV1 {
-            ordinal: admission_node.ordinal,
+            ordinal: relation_node.ordinal,
         },
     )?;
     Ok(VerifiedCostedSmoothDirectCandidateV1 {

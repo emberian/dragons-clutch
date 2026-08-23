@@ -84,11 +84,15 @@ not reinterpret them as fee revenue, volume quality, identity/personhood,
 collateral funding, or evidence of optimal clearing.
 
 The certificate binds a canonical batch-policy preimage and its full content
-ID without accepting an authentication boolean. The current MarketBinding does
-not yet carry that batch-policy ID, so the cost-aware rank is an explicitly
-breaking, capability-disabled comparison successor. The existing ScoreV2-Q
-rank encoder and live action 14/15 ABI remain unchanged; a central successor
-must bind the immutable policy ID before persisting the cost-aware rank.
+ID without accepting an authentication boolean. `MarketBindingV2` now owns that
+immutable `batch_policy_id` under the existing MarketBinding account tag, and
+the cost-aware wrapper exact-joins the preimage, Market ID, breaking score
+policy, owner projection, RelationV2 candidate, and certificate. The existing
+ScoreV2-Q rank encoder and live action 14/15 ABI remain unchanged. Same-tag
+`CandidateWindowV5AccountV1` and `AdmissionNodeV4AccountV1` pure contracts own
+the 96-byte rank and checked certificate ID for the future action-14 seam; all
+SBF capabilities remain disabled pending Work V3 composition and the counted
+settlement root that will own action-15 output.
 
 The settlement constructor privately rejoins owner/replay membership retained
 from the complete frozen page projection, decodes and recomputes one active
