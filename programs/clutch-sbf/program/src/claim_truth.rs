@@ -13,16 +13,46 @@
 //! Token-2022 bytes, not the cache, own the balance truth.
 
 use crate::accounts::{expect_pda, require, Outcome};
+use crate::claim_release::AuthenticatedClaimIssuanceReleaseV1;
 use crate::error::{ClutchError, Refusal};
 use crate::{seeds, token};
 use clutch_collateral_adapter_v2::{
-    accept_claim_mint_founding_step_v2, AcceptedClaimMintFoundingStepV2, BoundClaimIssuanceV1,
+    accept_claim_mint_founding_step_v2, AcceptedClaimMintFoundingStepV2,
     ClaimMintFoundingPostwriteV2, ClaimMintFoundingStepV2, Id as CollateralId,
 };
 use clutch_solana_layout::{Hash32, SupplyLedgerAccount, MAX_OUTCOMES};
 use clutch_solana_reference::KernelAccount;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
+
+const OUTCOME_MINT_FOUNDING_RUNTIME_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/outcome-mint/founding-runtime-receipt/v2\0";
+
+/// Private SBF receipt combining exact current claim-release admission with
+/// the hostile-reloaded OutcomeMintV2 postwrite accepted by the pure adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedOutcomeMintFoundingPostwriteV2 {
+    accepted: AcceptedClaimMintFoundingStepV2,
+    claim_release_receipt_id: CollateralId,
+    receipt_id: CollateralId,
+}
+
+impl AuthenticatedOutcomeMintFoundingPostwriteV2 {
+    /// Pure accepted step consumed by the exhaustive Market-core join.
+    pub(crate) const fn accepted(self) -> AcceptedClaimMintFoundingStepV2 {
+        self.accepted
+    }
+
+    /// Exact current loader/release receipt used for this mint.
+    pub(crate) const fn claim_release_receipt_id(self) -> CollateralId {
+        self.claim_release_receipt_id
+    }
+
+    /// Product-consumable runtime receipt for this bounded founding step.
+    pub(crate) const fn receipt_id(self) -> CollateralId {
+        self.receipt_id
+    }
+}
 
 /// Exact observed Token-2022 supply for every active outcome.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,10 +124,10 @@ pub fn observe_outcome_mints_v2(
 #[inline(never)]
 pub(crate) fn accept_outcome_mint_founding_postwrite_v2(
     program_id: &Pubkey,
-    claim: BoundClaimIssuanceV1,
+    claim: AuthenticatedClaimIssuanceReleaseV1,
     step: ClaimMintFoundingStepV2,
     mint: &AccountInfo<'_>,
-) -> Outcome<AcceptedClaimMintFoundingStepV2> {
+) -> Outcome<AuthenticatedOutcomeMintFoundingPostwriteV2> {
     expect_pda(
         mint.key,
         seeds::outcome_mint_v2_pda(
@@ -112,8 +142,8 @@ pub(crate) fn accept_outcome_mint_founding_postwrite_v2(
         .map_err(Refusal::from)?;
     let account_bytes = u16::try_from(mint.data_len())
         .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
-    accept_claim_mint_founding_step_v2(
-        claim,
+    let accepted = accept_claim_mint_founding_step_v2(
+        claim.bound(),
         step,
         ClaimMintFoundingPostwriteV2 {
             mint: CollateralId::from_bytes(mint.key.to_bytes()),
@@ -130,7 +160,27 @@ pub(crate) fn accept_outcome_mint_founding_postwrite_v2(
             extensions: observation.extensions,
         },
     )
-    .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))
+    .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))?;
+    let claim_release_receipt_id = claim.receipt_id();
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            OUTCOME_MINT_FOUNDING_RUNTIME_RECEIPT_DOMAIN_V2,
+            &accepted.receipt_id().bytes(),
+            &claim_release_receipt_id.bytes(),
+            &claim.token_programdata().bytes(),
+            &claim.deployment_slot().to_le_bytes(),
+            &claim.loader_receipt_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedOutcomeMintFoundingPostwriteV2 {
+        accepted,
+        claim_release_receipt_id,
+        receipt_id,
+    })
 }
 
 /// Boxed [`observe_outcome_mints`]: the observed vector lives in this helper's

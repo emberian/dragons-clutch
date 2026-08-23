@@ -72,8 +72,10 @@ and whether either order trades with another real counterparty or a virtual
 split/merge. It does not scan unrelated pages or unrelated witness slices.
 The bounded sealed-account reader rechecks both constant headers, both local
 locations and aggregates, every selected local edge, and direct-edge symmetry.
-It requires an unforgeable root/account read authority; no constructor exists
-until the counted-root successor and program-owner/PDA adapter join lands.
+It requires an unforgeable root/account read authority. The pure authentication
+projection hostile-decodes the complete `0xa9/2` root and both child bodies,
+checks adapter-derived canonical PDAs/bumps and read-only program ownership, and
+recomputes both root-held full child data IDs before minting that authority.
 
 Standalone decoding rechecks:
 
@@ -94,17 +96,38 @@ prefund discount, and hostile prefund donation floor. Terminal close returns
 only principal to that payer and routes every other lamport to the immutable
 MarketBinding neutral sink. Both siblings close atomically.
 
-The current `SettlementRootV1AccountV1` does not count these two accounts. It is
-therefore not lawful to create them merely because Root V1 later becomes
-terminal. The runtime makes this structural: construction requires an
-unforgeable `CountedExactIndexAdmissionV1`, closure requires an unforgeable
-`CountedExactIndexRetirementV1`, and this source defines no constructor for
-either. `EXACT_INDEX_PLANE_LIVE_ENABLED_V1` is false. There is no instruction,
-PDA prefix, artifact discriminator, dispatch route, or profile capability.
+The historical `SettlementRootV1AccountV1` does not count these two accounts.
+It is therefore not lawful to create them merely because Root V1 later becomes
+terminal. The source now defines the reserved-disabled breaking
+`IndexedSettlementRootV1AccountV1` `0xa9/2` successor. It retains the canonical
+in-place `general-settlement-root:v1` PDA and embeds the exact Root V1 body,
+owns both child accounts, both exact body IDs, the shared plane and capability
+profile IDs, and an exhaustive expected/admitted/live/retired partition. Only
+the atomic two-live and atomic two-retired states are representable; partial
+create and partial close are refused.
 
-Promotion requires a breaking counted-root successor that owns exact
-expected/admitted/live/retired index-child counts and mints those private
-capabilities only while atomically changing the corresponding count. It must
-count exactly both siblings, not reuse receipt or Dealer counters. Until that
-join exists, the private typed postwrites are review/test artifacts and no
-persistent child is reachable.
+The Root may be allocated directly at 1,196 bytes or atomically reallocated
+from the 980-byte `0xa9/1` body. Both paths preserve one persisted payer, require
+the full 1,196-byte rent principal without a hostile-prefund discount, preserve
+all observed nonprincipal lamports as donation, and expose one exact
+source/poststate/rent/width projector ID. Construction aggregates this root
+debit with both child debits when any payer aliases across the three creates.
+
+Raw construction still requires an unforgeable `CountedExactIndexAdmissionV1`
+and raw closure requires an unforgeable `CountedExactIndexRetirementV1`. The
+only constructors are higher-level pure plans that return the matching indexed
+root write and its rent preparation in the same rollback domain as both child
+writes. Merge cash-pot activation has a separate typed plan that never exposes
+the indexed root successor without the canonical pot body, account, bump, and
+rent owner. The bounded read authority is minted only by the complete
+owner/PDA/body-ID authentication projection.
+
+`EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. The indexed-root envelope
+uses the centrally reserved `0xa9/2` coordinate and canonical Root PDA. Each
+child has a fresh one-per-Root canonical PDA domain, while both child codecs
+still have review-only magic and no global account discriminator.
+There is no action, dispatch entry, or profile capability. Promotion must wire
+every existing root transition through its checked indexed-root transition,
+allocate the two child coordinates/PDAs, and wire atomic child create, read, and
+retire routes. It must not reuse receipt or Dealer counters. Until those joins
+exist, the private typed postwrites remain unreachable from SBF.

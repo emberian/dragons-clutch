@@ -1362,7 +1362,7 @@ the `invoke_signed` seed plumbing, written and host-tested.
 | intent | accounts | creates | oracle |
 | --- | ---: | --- | --- |
 | `InitRealm` | 5 | `RealmAccount`, 70 B | layout codec |
-| `InitProfile` | 6 | `ProfileAccount`, 100 B, policy frozen | layout codec + `verify_profile_identity` |
+| `InitProfileV2` | 8 | `ProfileAccount`, 100 B, policy/release frozen after exact immutable token ProgramData authentication | layout codec + `verify_profile_identity` |
 | `InitPriceGrid` | 6 | `PriceGridAccount`, 589 B | layout codec, verbatim buffer copy |
 | `InitTerms` | 7 | `TermsAccount`, 1,656 B | layout codec, verbatim buffer copy |
 | `InitOrderPage` | 6 | one order page, 4,012 B | `stream::init_page` |
