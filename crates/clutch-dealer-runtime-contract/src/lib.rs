@@ -45,6 +45,7 @@ mod state_v2;
 mod terminal_claims;
 mod terminal_state;
 mod transitions;
+mod transitions_v3;
 
 pub use budget::*;
 pub use epoch_v2::*;
@@ -73,6 +74,7 @@ pub use state_v2::*;
 pub use terminal_claims::*;
 pub use terminal_state::*;
 pub use transitions::*;
+pub use transitions_v3::*;
 
 use sha2::{Digest, Sha256};
 
