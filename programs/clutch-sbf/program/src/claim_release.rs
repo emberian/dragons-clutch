@@ -115,6 +115,16 @@ fn validate_compiled_claim_issuance_release_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
+fn require_claim_release_separate_from_collateral_v1(
+    claim: BoundClaimIssuanceV1,
+    collateral_release: AdapterReleaseV2,
+) -> Outcome<()> {
+    claim
+        .binding()
+        .require_separate_from_collateral(collateral_release)
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
 /// Private runtime proof that the independently selected claim plane is the
 /// exact current loader deployment named by its compiled release and is
 /// distinct from the authenticated Realm collateral release.
@@ -191,9 +201,7 @@ pub(crate) fn authenticate_claim_issuance_release_with_programdata_v1(
         token_program,
         token_programdata,
     )?;
-    LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
-        .require_separate_from_collateral(collateral.release())
-        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require_claim_release_separate_from_collateral_v1(bound, collateral.release())?;
     let collateral_release_id = collateral
         .release()
         .id()
@@ -311,5 +319,38 @@ mod checked_claim_release_tests {
             LOCAL_REAL_TOKEN_2022_RELEASE_V2,
         );
         assert!(validate_compiled_claim_issuance_release_v1(aliased_parser).is_err());
+    }
+
+    #[test]
+    fn selected_claim_binding_not_local_constant_owns_collateral_separation() {
+        let selected_binding = ClaimIssuanceBindingV1 {
+            adapter_release: Id::from_bytes([94; 32]),
+            parser_cpi_code: Id::from_bytes([95; 32]),
+            ..LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
+        };
+        let expected = selected_binding.id().unwrap();
+        let bound = bind_claim_issuance_v1(
+            expected,
+            selected_binding,
+            ClaimRuntimeObservationV1 {
+                token_program: selected_binding.token_program,
+                token_program_executable: true,
+                token_program_writable: false,
+                token_program_signer: false,
+                token_program_deployment: selected_binding.token_program_deployment,
+                parser_cpi_code: selected_binding.parser_cpi_code,
+            },
+            LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+        )
+        .unwrap();
+        let aliased_collateral = AdapterReleaseV2::legacy_spl(
+            Id::from_bytes([96; 32]),
+            selected_binding.parser_cpi_code,
+        );
+        assert!(LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
+            .require_separate_from_collateral(aliased_collateral)
+            .is_ok());
+        assert!(require_claim_release_separate_from_collateral_v1(bound, aliased_collateral)
+            .is_err());
     }
 }
