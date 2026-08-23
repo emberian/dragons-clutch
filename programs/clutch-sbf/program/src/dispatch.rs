@@ -222,6 +222,24 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::StructuredCustody
             }
+            #[cfg(feature = "non-production-structured-custody-lab")]
+            Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG)
+                if instruction_data.get(14).copied()
+                    == Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION)
+                    && instruction_data.get(15).copied()
+                        == Some(
+                            clutch_solana_layout::registry::StructuredClaimAction::CreateDescriptor
+                                .tag(),
+                        )
+                    && capabilities::extension_intent_action_enabled(
+                        clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG,
+                        clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION,
+                        clutch_solana_layout::registry::StructuredClaimAction::CreateDescriptor
+                            .tag(),
+                    ) =>
+            {
+                Route::StructuredCustody
+            }
             #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
             Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
                 if instruction_data.get(14).copied()
@@ -438,6 +456,14 @@ fn process_structured_custody(
         ExtensionAction::GeneralV2(
             clutch_solana_layout::registry::GeneralV2Action::TransferPositionAssets,
         ) => structured_custody::process(
+            program_id,
+            accounts,
+            request.sequence,
+            request.envelope.payload,
+        ),
+        ExtensionAction::StructuredClaim(
+            clutch_solana_layout::registry::StructuredClaimAction::CreateDescriptor,
+        ) => structured_custody::process_create(
             program_id,
             accounts,
             request.sequence,

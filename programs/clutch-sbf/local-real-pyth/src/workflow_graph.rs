@@ -56,7 +56,7 @@ use clutch_source_plane_v3_runtime::{
 };
 use clutch_structured_claim_runtime_contract::{
     decode_structured_claim_payload_v1, DescriptorStateV1, StructuredClaimActionV1,
-    StructuredClaimDescriptorV1,
+    StructuredClaimDescriptorV2,
 };
 use solana_address::Address;
 use solana_instruction::AccountMeta;
@@ -1785,7 +1785,7 @@ pub enum RecoveryObservation<'a> {
     },
     CloseSourceGeneration(&'a ReopenLineageV1),
     RetireStructuredClaim {
-        descriptor: &'a StructuredClaimDescriptorV1,
+        descriptor: &'a StructuredClaimDescriptorV2,
         vault_generation: u64,
     },
 }

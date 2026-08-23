@@ -34,9 +34,10 @@ pub use custody_wire::{
     STRUCTURED_CUSTODY_CALL_V1_DOMAIN,
 };
 pub use descriptor::{
-    reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1, DescriptorStateV1,
-    StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
-    DESCRIPTOR_ACCOUNT_VERSION,
+    decode_historical_descriptor_v1, reconstruct_descriptor_identity_v1, DescriptorBasisV1,
+    DescriptorIdentityV1, DescriptorStateV1, StructuredClaimDescriptorV2,
+    DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
+    HISTORICAL_DESCRIPTOR_ACCOUNT_BYTES_V1, HISTORICAL_DESCRIPTOR_ACCOUNT_VERSION_V1,
 };
 pub use market_projection::{
     project_structured_market_v1, StructuredMarketProjectionStateV1,

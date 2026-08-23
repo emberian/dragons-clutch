@@ -1,6 +1,7 @@
 use clutch_structured_claim::DeploymentBinding;
 use clutch_structured_claim_adapter::runtime_contract::{
-    DescriptorBasisV1, DescriptorStateV1, StructuredClaimDescriptorV1, StructuredClaimPayloadV1,
+    decode_historical_descriptor_v1, DescriptorBasisV1, DescriptorStateV1,
+    StructuredClaimDescriptorV2, StructuredClaimPayloadV1,
     StructuredClaimRuntimeAddressesV1, WrapperQuantityPayloadV1, DESCRIPTOR_ACCOUNT_BYTES,
     DESCRIPTOR_ACCOUNT_TAG, STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
     WRAPPER_QUANTITY_PAYLOAD_BYTES,
@@ -46,13 +47,13 @@ impl StructuredClaimAccountLoaderV1 for MustNotLoad {
     }
 }
 
-fn descriptor() -> StructuredClaimDescriptorV1 {
+fn descriptor() -> StructuredClaimDescriptorV2 {
     let mut primitive = [0_u64; 16];
     primitive[0] = 1;
     primitive[1] = 2;
-    StructuredClaimDescriptorV1 {
+    StructuredClaimDescriptorV2 {
         tag: DESCRIPTOR_ACCOUNT_TAG,
-        version: 1,
+        version: 2,
         flags: 0,
         base_program: key(1),
         base_program_data: key(2),
@@ -68,7 +69,8 @@ fn descriptor() -> StructuredClaimDescriptorV1 {
         state: DescriptorStateV1::Active,
         descriptor_bump: 11,
         mint_bump: 12,
-        vault_bump: 13,
+        mint_authority_bump: 13,
+        vault_owner_bump: 14,
     }
 }
 
@@ -95,18 +97,29 @@ fn deployments() -> RuntimeDeploymentsV1 {
 }
 
 #[test]
-fn canonical_descriptor_is_exactly_0x88_v1_and_old_adapter_tag_refuses() {
+fn canonical_descriptor_is_exactly_0x88_v2_and_old_adapter_tag_refuses() {
     let bytes = descriptor().encode().unwrap();
     assert_eq!(bytes.len(), DESCRIPTOR_ACCOUNT_BYTES);
-    assert_eq!(&bytes[..2], &[0x88, 1]);
+    assert_eq!(&bytes[..2], &[0x88, 2]);
     assert_eq!(
-        StructuredClaimDescriptorV1::decode(&bytes),
+        StructuredClaimDescriptorV2::decode(&bytes),
         Ok(descriptor())
     );
 
     let mut historical_parallel_tag = bytes;
     historical_parallel_tag[0] = 0xd1;
-    assert!(StructuredClaimDescriptorV1::decode(&historical_parallel_tag).is_err());
+    assert!(StructuredClaimDescriptorV2::decode(&historical_parallel_tag).is_err());
+}
+
+#[test]
+fn descriptor_v1_is_archivally_decodable_but_cannot_promote_live() {
+    let v2 = descriptor().encode().unwrap();
+    let mut v1 = [0_u8; 384];
+    v1[..383].copy_from_slice(&v2[..383]);
+    v1[1] = 1;
+    v1[383] = v2[384];
+    assert_eq!(decode_historical_descriptor_v1(&v1), Ok(()));
+    assert!(StructuredClaimDescriptorV2::decode(&v1).is_err());
 }
 
 #[test]

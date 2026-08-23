@@ -46,7 +46,7 @@ use crate::{
     BoundDescriptorV1, Error, Key, RawAccountV1, Result, RuntimeDeploymentsV1,
 };
 
-/// Digest domain for an exact canonical 0x88/1 descriptor body.
+/// Digest domain for an exact canonical live descriptor body.
 pub const STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-custody/descriptor-body/v1\0";
 /// Digest domain for an exact full-width Hoard V2 prestate.
@@ -1165,7 +1165,9 @@ fn validate_account_frame(
         }
         let mut later = index + 1;
         while later < accounts.len() {
-            if accounts[index].key == accounts[later].key {
+            if accounts[index].key == accounts[later].key
+                && !is_admitted_readonly_program_alias(index, later)
+            {
                 return Err(Error::InvalidAccounts);
             }
             later += 1;
@@ -1210,6 +1212,14 @@ fn validate_account_frame(
         }
     }
     Ok(())
+}
+
+/// A Realm may select Token-2022 as its collateral program. In that case the
+/// collateral executable and the wrapper-token executable are the same
+/// read-only account. No data-bearing, signer, writable, ProgramData, or
+/// semantically distinct role is permitted to alias.
+const fn is_admitted_readonly_program_alias(left: usize, right: usize) -> bool {
+    left == IX_COLLATERAL_TOKEN_PROGRAM && right == IX_WRAPPER_TOKEN_2022_PROGRAM
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1535,5 +1545,18 @@ mod tests {
             build_cpi([200; 32], &[], transfer()),
             Err(Error::InvalidAccounts)
         );
+    }
+
+    #[test]
+    fn account_frame_allows_only_the_token_2022_collateral_executable_alias() {
+        let mut accounts = raw_accounts();
+        accounts[IX_COLLATERAL_TOKEN_PROGRAM].key =
+            accounts[IX_WRAPPER_TOKEN_2022_PROGRAM].key;
+        assert!(is_admitted_readonly_program_alias(
+            IX_COLLATERAL_TOKEN_PROGRAM,
+            IX_WRAPPER_TOKEN_2022_PROGRAM
+        ));
+        accounts[IX_REALM].key = accounts[IX_PROFILE].key;
+        assert!(!is_admitted_readonly_program_alias(IX_REALM, IX_PROFILE));
     }
 }

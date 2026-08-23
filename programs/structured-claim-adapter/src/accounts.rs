@@ -17,7 +17,7 @@ use clutch_solana_layout::{HoardAccount, MarketAccount, SupplyLedgerAccount, Ter
 use clutch_structured_claim::MarketLedger;
 
 use crate::runtime_contract::{
-    DescriptorBasisV1, PositionProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV1,
+    DescriptorBasisV1, PositionProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV2,
     StructuredClaimReplayExtensionV1, WrapperMintProjectionV1, WrapperTokenProjectionV1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1,
 };
@@ -443,12 +443,12 @@ pub fn authenticate_base_market_v1(
     })
 }
 
-/// Decode the canonical 0x88/1 descriptor from a wrapper-owned account.
+/// Decode the canonical live descriptor-v2 body from a wrapper-owned account.
 pub fn decode_owned_descriptor_v1(
     wrapper_program: Key,
     expected_address: Key,
     account: &RawAccountV1<'_>,
-) -> Result<StructuredClaimDescriptorV1> {
+) -> Result<StructuredClaimDescriptorV2> {
     if account.role != AccountRoleV1::Descriptor
         || account.key != expected_address
         || account.owner != wrapper_program
@@ -457,7 +457,7 @@ pub fn decode_owned_descriptor_v1(
     {
         return Err(Error::InvalidAccounts);
     }
-    StructuredClaimDescriptorV1::decode(account.data).map_err(|_| Error::InvalidAccountData)
+    StructuredClaimDescriptorV2::decode(account.data).map_err(|_| Error::InvalidAccountData)
 }
 
 /// Base-owned Position/Replay PDA verifier.

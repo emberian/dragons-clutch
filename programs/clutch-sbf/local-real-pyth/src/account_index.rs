@@ -77,7 +77,7 @@ use clutch_source_plane_v3_runtime::{
     STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
 };
 use clutch_structured_claim_runtime_contract::{
-    DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
+    DescriptorStateV1, StructuredClaimDescriptorV2, DESCRIPTOR_ACCOUNT_BYTES,
     DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
 };
 use sha2::{Digest, Sha256};
@@ -1033,7 +1033,7 @@ fn decode_structured(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> 
     {
         return Ok(None);
     }
-    let value = StructuredClaimDescriptorV1::decode(data)
+    let value = StructuredClaimDescriptorV2::decode(data)
         .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
     let mut projection = CanonicalAccountProjection::canonical(
         CanonicalFamily::StructuredClaim,

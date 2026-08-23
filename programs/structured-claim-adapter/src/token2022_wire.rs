@@ -52,14 +52,14 @@ impl CanonicalToken2022DecoderV1 {
             || is_zero(&token.owner)
             || token.address == token.owner
             || token.address == token.mint
-            || mint.exact_data_len as usize != TOKEN_2022_MINT_BYTES
+            || usize::from(mint.exact_data_len) != TOKEN_2022_MINT_BYTES
             || mint.decimals != 0
             || mint.allowed_extensions != 0
             || !mint.require_no_freeze_authority
             || !mint.require_initialized
-            || token.base_data_len as usize != TOKEN_2022_ACCOUNT_BYTES
-            || token.immutable_owner_data_len as usize
-                != TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES as usize
+            || usize::from(token.base_data_len) != TOKEN_2022_ACCOUNT_BYTES
+            || usize::from(token.immutable_owner_data_len)
+                != usize::from(TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES)
             || token.allowed_extensions != IMMUTABLE_OWNER_EXTENSION_MASK
             || !token.require_no_delegate
             || !token.require_no_close_authority
@@ -79,29 +79,7 @@ impl Token2022DecoderV1 for CanonicalToken2022DecoderV1 {
         address: Key,
         data: &[u8],
     ) -> core::result::Result<WrapperMintProjectionV1, ()> {
-        if address != self.mint.address || data.len() != TOKEN_2022_MINT_BYTES {
-            return Err(());
-        }
-        let mint_authority = read_required_coption_key(data, 0)?;
-        let supply = read_u64(data, 36)?;
-        let decimals = *data.get(44).ok_or(())?;
-        let initialized = match data.get(45) {
-            Some(1) => true,
-            _ => return Err(()),
-        };
-        require_absent_coption_key(data, 46)?;
-        if mint_authority != self.mint.mint_authority || decimals != self.mint.decimals {
-            return Err(());
-        }
-        Ok(WrapperMintProjectionV1 {
-            address,
-            mint_authority,
-            supply,
-            decimals,
-            freeze_authority: [0; 32],
-            extension_mask: 0,
-            initialized,
-        })
+        decode_mint_with_plan(self.mint, address, data)
     }
 
     fn decode_token(
@@ -109,13 +87,52 @@ impl Token2022DecoderV1 for CanonicalToken2022DecoderV1 {
         address: Key,
         data: &[u8],
     ) -> core::result::Result<WrapperTokenProjectionV1, ()> {
-        if address != self.token.address
+        decode_token_with_plan(self.token, address, data)
+    }
+}
+
+fn decode_mint_with_plan(
+    plan: WrapperMintParserPlanV1,
+    address: Key,
+    data: &[u8],
+) -> core::result::Result<WrapperMintProjectionV1, ()> {
+    if address != plan.address || data.len() != TOKEN_2022_MINT_BYTES {
+        return Err(());
+    }
+    let mint_authority = read_required_coption_key(data, 0)?;
+    let supply = read_u64(data, 36)?;
+    let decimals = *data.get(44).ok_or(())?;
+    let initialized = match data.get(45) {
+        Some(1) => true,
+        _ => return Err(()),
+    };
+    require_absent_coption_key(data, 46)?;
+    if mint_authority != plan.mint_authority || decimals != plan.decimals {
+        return Err(());
+    }
+    Ok(WrapperMintProjectionV1 {
+        address,
+        mint_authority,
+        supply,
+        decimals,
+        freeze_authority: [0; 32],
+        extension_mask: 0,
+        initialized,
+    })
+}
+
+fn decode_token_with_plan(
+    plan: WrapperTokenParserPlanV1,
+    address: Key,
+    data: &[u8],
+) -> core::result::Result<WrapperTokenProjectionV1, ()> {
+        if address != plan.address
             || (data.len() != TOKEN_2022_ACCOUNT_BYTES
-                && data.len() != TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES as usize)
+                && data.len() != usize::from(TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES))
         {
             return Err(());
         }
-        if data.len() == TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES as usize {
+        if data.len() == usize::from(TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES) {
             let extension_type = IMMUTABLE_OWNER_EXTENSION_TYPE.to_le_bytes();
             if data[165] != TOKEN_2022_ACCOUNT_TYPE_ACCOUNT
                 || data[166..168] != extension_type
@@ -136,7 +153,7 @@ impl Token2022DecoderV1 for CanonicalToken2022DecoderV1 {
             return Err(());
         }
         require_absent_coption_key(data, 129)?;
-        if mint != self.token.mint || owner != self.token.owner {
+        if mint != plan.mint || owner != plan.owner {
             return Err(());
         }
         Ok(WrapperTokenProjectionV1 {
@@ -146,7 +163,6 @@ impl Token2022DecoderV1 for CanonicalToken2022DecoderV1 {
             amount,
             initialized: true,
         })
-    }
 }
 
 fn read_key(data: &[u8], offset: usize) -> core::result::Result<Key, ()> {
@@ -261,7 +277,8 @@ pub fn wrapper_mint_parser_plan_v1(
     Ok(WrapperMintParserPlanV1 {
         token_program: identity.deployment.token_2022_program,
         address: addresses.mint,
-        exact_data_len: crate::runtime_contract::WRAPPER_MINT_ACCOUNT_BYTES as u16,
+        exact_data_len: u16::try_from(crate::runtime_contract::WRAPPER_MINT_ACCOUNT_BYTES)
+            .map_err(|_| Error::Arithmetic)?,
         decimals: 0,
         mint_authority: addresses.mint_authority,
         allowed_extensions: 0,
@@ -293,6 +310,57 @@ pub fn wrapper_token_parser_plan_v1(
         require_unfrozen: true,
         require_initialized: true,
     })
+}
+
+/// Decode one exact extension-free active wrapper mint from independently
+/// authenticated account metadata.
+pub fn decode_canonical_wrapper_mint_v1(
+    token_program: Key,
+    mint: Key,
+    mint_authority: Key,
+    data: &[u8],
+) -> Result<WrapperMintProjectionV1> {
+    let plan = WrapperMintParserPlanV1 {
+        token_program,
+        address: mint,
+        exact_data_len: crate::runtime_contract::WRAPPER_MINT_ACCOUNT_BYTES
+            .try_into()
+            .map_err(|_| Error::Arithmetic)?,
+        decimals: 0,
+        mint_authority,
+        allowed_extensions: 0,
+        require_no_freeze_authority: true,
+        require_initialized: true,
+    };
+    decode_mint_with_plan(plan, mint, data)
+        .map_err(|_| Error::Token2022Boundary)
+}
+
+/// Decode one exact initialized wrapper holder account. Only the
+/// zero-extension base layout or sole ImmutableOwner extension is admitted.
+pub fn decode_canonical_wrapper_token_v1(
+    token_program: Key,
+    mint: Key,
+    address: Key,
+    owner: Key,
+    data: &[u8],
+) -> Result<WrapperTokenProjectionV1> {
+    let token_plan = WrapperTokenParserPlanV1 {
+        token_program,
+        address,
+        mint,
+        owner,
+        base_data_len: TOKEN_2022_BASE_ACCOUNT_BYTES,
+        immutable_owner_data_len: TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES,
+        allowed_extensions: IMMUTABLE_OWNER_EXTENSION_MASK,
+        require_no_delegate: true,
+        require_no_close_authority: true,
+        require_non_native: true,
+        require_unfrozen: true,
+        require_initialized: true,
+    };
+    decode_token_with_plan(token_plan, address, data)
+        .map_err(|_| Error::Token2022Boundary)
 }
 
 /// Encode one staged Token-2022 operation into exact CPI bytes and metas.

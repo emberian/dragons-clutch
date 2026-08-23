@@ -32,7 +32,7 @@ pub const PROFILE_LABEL: &str =
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-structured-custody-lab/v1";
+    "dragons-clutch/capability-profile/non-production-structured-custody-lab/v2";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
@@ -82,8 +82,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x8b, 0x0b, 0x2a, 0x6e, 0x61, 0xdc, 0x7c, 0xa9, 0xf5, 0x31, 0xb8, 0x3b, 0xd5, 0x44, 0x66, 0xb4,
-    0x42, 0x7c, 0xf9, 0xde, 0x6d, 0xc6, 0x8c, 0xec, 0x93, 0x14, 0xdf, 0x4d, 0xad, 0xaf, 0xa4, 0x4e,
+    0x8e, 0xe1, 0x15, 0x63, 0xe9, 0xc5, 0x16, 0x30, 0x8e, 0xc9, 0xb6, 0xeb, 0xea, 0xcf, 0x2e, 0x26,
+    0xb2, 0xe0, 0x12, 0xc2, 0x76, 0x57, 0xce, 0x9b, 0x0c, 0x99, 0xe8, 0x6e, 0xc7, 0xe0, 0x58, 0xc5,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
@@ -227,9 +227,9 @@ pub const fn extension_intent_action_allocated(
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
 
-/// The Structured custody laboratory adds only General action 35 to the full
-/// Source-capable profile. Structured family actions remain disabled until a
-/// separately deployed wrapper owns their Token-2022 side.
+/// The Structured custody laboratory admits General action 35 plus the
+/// wrapper-signer-gated base half of Structured action 1. The separately
+/// deployed wrapper remains the sole outer owner of descriptor/mint creation.
 #[cfg(all(
     feature = "profile-full",
     feature = "non-production-structured-custody-lab",
@@ -241,6 +241,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 35),
+    (75, 1, 1),
     (77, 2, 1),
     (77, 2, 2),
     (77, 2, 3),
@@ -437,9 +438,9 @@ mod tests {
                         && family_version == 2
                         && matches!(local_action, 1 | 2 | 3 | 4);
                     let structured_custody_enabled = STRUCTURED_CUSTODY_LAB
-                        && family_tag == 74
                         && family_version == 1
-                        && local_action == 35;
+                        && ((family_tag == 74 && local_action == 35)
+                            || (family_tag == 75 && local_action == 1));
                     let expected_enabled = dealer_enabled
                         || general_enabled
                         || source_runtime_enabled
