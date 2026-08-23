@@ -8,6 +8,7 @@
 use crate::bus::Bus;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
+use std::fmt::Write;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -19,7 +20,8 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
 const SOURCE_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v1";
-const JOINED_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
+const JOINED_V2_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
+const JOINED_V3_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v3";
 const SOURCE_ONLY_MODE: &str = "source-only-v1";
 const JOINED_LIFECYCLE_MODE: &str = "joined-user-lifecycle-v1";
 const PROFILE: &str = "NON-PRODUCTION-non-production-real-pyth-lab";
@@ -44,7 +46,7 @@ const SOURCE_STEP_LABELS: [&str; 13] = [
     "seal-source-archive-v2",
     "categorical-resolve-cell-1",
 ];
-const JOINED_STEP_LABELS: [&str; 21] = [
+const JOINED_V2_STEP_LABELS: [&str; 21] = [
     "router-initialize",
     "router-init-and-write-encoded-vaa",
     "router-write-and-verify-encoded-vaa",
@@ -67,6 +69,66 @@ const JOINED_STEP_LABELS: [&str; 21] = [
     "joined-redeem-internal-outcome-3",
     "joined-withdraw-redeemed-collateral",
 ];
+const JOINED_V3_STEP_LABELS: [&str; 52] = [
+    "router-initialize",
+    "router-init-and-write-encoded-vaa",
+    "router-write-and-verify-encoded-vaa",
+    "receiver-initialize",
+    "correct-init-source-spec-v2",
+    "correct-init-source-archive-v2",
+    "wrong-feed-init-source-spec-v2",
+    "wrong-feed-init-source-archive-v2",
+    "wrong-config-post-update-plus-append-rollback",
+    "wrong-feed-post-update-plus-append-rollback",
+    "real-post-update-plus-clutch-append-atomic",
+    "seal-source-archive-v2",
+    "joined-fund-second-owner-account-creation",
+    "joined-price-grid-artifact-begin",
+    "joined-price-grid-artifact-write-0",
+    "joined-price-grid-artifact-write-1",
+    "joined-price-grid-artifact-write-2",
+    "joined-price-grid-artifact-write-3",
+    "joined-price-grid-artifact-seal",
+    "joined-create-market",
+    "joined-endow-buyer-collateral",
+    "joined-endow-seller-collateral",
+    "joined-seller-split-complete-sets",
+    "joined-general-policy-artifact-begin",
+    "joined-general-policy-artifact-write-0",
+    "joined-general-policy-artifact-seal",
+    "joined-general-init-epoch",
+    "joined-general-init-order-page",
+    "joined-general-place-funded-buy",
+    "joined-general-place-funded-sell",
+    "joined-general-freeze-epoch",
+    "joined-general-submit-candidate",
+    "joined-general-write-candidate-fills",
+    "joined-general-write-candidate-slices",
+    "joined-general-seal-candidate",
+    "joined-general-create-clear-work",
+    "joined-general-verify-pass-one",
+    "joined-general-verify-slices",
+    "joined-general-verify-pass-two",
+    "joined-general-complete-clear-work",
+    "joined-general-finalize-selection",
+    "joined-general-freeze-entitlement",
+    "joined-general-entitle-direct-slice",
+    "joined-general-settle-direct-slice",
+    "categorical-resolve-cell-1",
+    "joined-buyer-redeem-winning-eggs",
+    "joined-seller-redeem-outcome-0",
+    "joined-seller-redeem-outcome-1",
+    "joined-seller-redeem-outcome-2",
+    "joined-seller-redeem-outcome-3",
+    "joined-buyer-withdraw-redeemed-collateral",
+    "joined-seller-withdraw-redeemed-collateral",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum JoinedSchema {
+    V2,
+    V3,
+}
 
 pub struct Options {
     pub port: u16,
@@ -145,7 +207,7 @@ fn lowercase_hex(text: &str, bytes: usize, role: &str) -> Result<String> {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
-        return Err(format!("{role} is not lowercase {}-byte hex", bytes).into());
+        return Err(format!("{role} is not lowercase {bytes}-byte hex").into());
     }
     Ok(text.to_string())
 }
@@ -170,6 +232,80 @@ fn canonical_unsigned_decimal<'a>(value: &'a Map<String, Value>, field: &str) ->
         .ok_or_else(|| format!("{field} is not a canonical unsigned decimal string").into())
 }
 
+fn exact_keys(value: &Map<String, Value>, expected: &[&str], role: &str) -> Result<()> {
+    let actual = value.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(format!("{role} has unknown or missing fields").into());
+    }
+    Ok(())
+}
+
+fn fixed_hash(value: &Value, role: &str) -> Result<String> {
+    let bytes = value
+        .as_array()
+        .ok_or_else(|| format!("{role} is not a byte array"))?;
+    if bytes.len() != 32 {
+        return Err(format!("{role} must contain exactly 32 bytes").into());
+    }
+    let mut out = String::with_capacity(64);
+    for (index, byte) in bytes.iter().enumerate() {
+        let byte = byte
+            .as_u64()
+            .ok_or_else(|| format!("{role}[{index}] is not a byte"))?;
+        let byte = u8::try_from(byte).map_err(|_| format!("{role}[{index}] is not a byte"))?;
+        write!(&mut out, "{byte:02x}")?;
+    }
+    Ok(out)
+}
+
+fn exact_unsigned_vector(value: &Value, expected: &[u64], role: &str) -> Result<Vec<Value>> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("{role} is not an array"))?;
+    if values.len() != expected.len() {
+        return Err(format!("{role} must contain exactly {} values", expected.len()).into());
+    }
+    values
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .map(|(index, (value, expected))| {
+            let actual = value
+                .as_u64()
+                .ok_or_else(|| format!("{role}[{index}] is not an unsigned integer"))?;
+            if actual != *expected {
+                return Err(format!("{role}[{index}] is {actual}, expected {expected}").into());
+            }
+            Ok(json!(decimal(actual)))
+        })
+        .collect()
+}
+
+fn exact_strings(value: &Value, expected: &[&str], role: &str) -> Result<Vec<Value>> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| format!("{role} is not an array"))?;
+    if values.len() != expected.len() {
+        return Err(format!("{role} must contain exactly {} values", expected.len()).into());
+    }
+    values
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .map(|(index, (value, expected))| {
+            let actual = value
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| format!("{role}[{index}] is not a nonempty string"))?;
+            if actual != *expected {
+                return Err(format!("{role}[{index}] differs from its bound identity").into());
+            }
+            Ok(json!(actual))
+        })
+        .collect()
+}
+
 fn loopback_endpoint(value: &Value, field: &str) -> Result<String> {
     let text = string(value, field)?;
     let address: SocketAddr = text
@@ -190,9 +326,10 @@ fn feed_id(result: &Value) -> Result<String> {
     for byte in bytes {
         let value = byte
             .as_u64()
-            .filter(|value| *value <= u64::from(u8::MAX))
             .ok_or("provider_feed_id contains a non-byte value")?;
-        out.push_str(&format!("{value:02x}"));
+        let value =
+            u8::try_from(value).map_err(|_| "provider_feed_id contains a non-byte value")?;
+        write!(&mut out, "{value:02x}")?;
     }
     Ok(out)
 }
@@ -339,6 +476,33 @@ fn signature_for<'a>(steps: &'a [Value], label: &str) -> Result<&'a str> {
         .ok_or_else(|| format!("no signature retained for {label}").into())
 }
 
+fn signature_sequence(
+    value: &Value,
+    field: &str,
+    steps: &[Value],
+    labels: &[&str],
+) -> Result<Vec<Value>> {
+    let signatures = array(value, field)?;
+    if signatures.len() != labels.len() {
+        return Err(format!("{field} must contain exactly {} signed steps", labels.len()).into());
+    }
+    signatures
+        .iter()
+        .zip(labels)
+        .enumerate()
+        .map(|(index, (signature, label))| {
+            let signature = signature
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| format!("{field}[{index}] is not a nonempty signature"))?;
+            if signature != signature_for(steps, label)? {
+                return Err(format!("{field}[{index}] differs from signed step {label}").into());
+            }
+            Ok(json!(signature))
+        })
+        .collect()
+}
+
 fn all_exact_decimal(values: &[Value], expected: &str, role: &str) -> Result<Vec<Value>> {
     if values.len() != 4 {
         return Err(format!("{role} must contain exactly four outcomes").into());
@@ -358,7 +522,8 @@ fn all_exact_decimal(values: &[Value], expected: &str, role: &str) -> Result<Vec
         .collect()
 }
 
-fn joined_lifecycle(manifest: &Value, result: &Value, steps: &[Value]) -> Result<Value> {
+#[allow(clippy::too_many_lines)]
+fn joined_lifecycle_v2(manifest: &Value, result: &Value, steps: &[Value]) -> Result<Value> {
     let correct = object(manifest, "correct")?;
     if correct
         .get("market_genesis_assisted")
@@ -520,6 +685,523 @@ fn joined_lifecycle(manifest: &Value, result: &Value, steps: &[Value]) -> Result
     }))
 }
 
+#[allow(clippy::too_many_lines)]
+fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Result<Value> {
+    let correct = object(manifest, "correct")?;
+    if boolean(&Value::Object(correct.clone()), "market_genesis_assisted")? {
+        return Err("joined-v3 market is marked genesis-assisted".into());
+    }
+    let payer = string(manifest, "payer")?;
+    let second_owner = correct
+        .get("second_owner")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .ok_or("correct.second_owner is absent")?;
+    let buyer_token = correct
+        .get("user_collateral_token")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .ok_or("correct.user_collateral_token is absent")?;
+    let seller_token = correct
+        .get("second_owner_collateral_token")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .ok_or("correct.second_owner_collateral_token is absent")?;
+
+    let lifecycle_value = result
+        .get("lifecycle")
+        .ok_or("result.lifecycle is absent")?;
+    let lifecycle = lifecycle_value
+        .as_object()
+        .ok_or("result.lifecycle is not an object")?;
+    exact_keys(
+        lifecycle,
+        &[
+            "market_genesis_assisted",
+            "market",
+            "ephemeral_users",
+            "user_collateral_tokens",
+            "collateral_atoms",
+            "create_market_signature",
+            "buyer_endow_signature",
+            "seller_endow_signature",
+            "split_signature",
+            "redeem_internal",
+            "buyer_withdraw_signature",
+            "seller_withdraw_signature",
+            "terminal",
+            "trade",
+        ],
+        "joined-v3 lifecycle",
+    )?;
+    if boolean(lifecycle_value, "market_genesis_assisted")? {
+        return Err("joined-v3 lifecycle is marked genesis-assisted".into());
+    }
+    let market = string(lifecycle_value, "market")?;
+    if correct.get("market").and_then(Value::as_str) != Some(market) {
+        return Err("joined-v3 lifecycle market differs from the prepared manifest".into());
+    }
+    let users = exact_strings(
+        lifecycle
+            .get("ephemeral_users")
+            .ok_or("ephemeral_users is absent")?,
+        &[payer, second_owner],
+        "ephemeral_users",
+    )?;
+    let tokens = exact_strings(
+        lifecycle
+            .get("user_collateral_tokens")
+            .ok_or("user_collateral_tokens is absent")?,
+        &[buyer_token, seller_token],
+        "user_collateral_tokens",
+    )?;
+    if canonical_unsigned_decimal(lifecycle, "collateral_atoms")? != "128" {
+        return Err("joined-v3 collateral quantity is not the exact 128 atoms".into());
+    }
+
+    for (field, label) in [
+        ("create_market_signature", "joined-create-market"),
+        ("buyer_endow_signature", "joined-endow-buyer-collateral"),
+        ("seller_endow_signature", "joined-endow-seller-collateral"),
+        ("split_signature", "joined-seller-split-complete-sets"),
+        (
+            "buyer_withdraw_signature",
+            "joined-buyer-withdraw-redeemed-collateral",
+        ),
+        (
+            "seller_withdraw_signature",
+            "joined-seller-withdraw-redeemed-collateral",
+        ),
+    ] {
+        if string(lifecycle_value, field)? != signature_for(steps, label)? {
+            return Err(format!("joined-v3 lifecycle {field} differs from {label}").into());
+        }
+    }
+
+    let expected_redeem = [
+        (payer, 1_u64, "16", "16", "joined-buyer-redeem-winning-eggs"),
+        (second_owner, 0, "64", "0", "joined-seller-redeem-outcome-0"),
+        (
+            second_owner,
+            1,
+            "48",
+            "48",
+            "joined-seller-redeem-outcome-1",
+        ),
+        (second_owner, 2, "64", "0", "joined-seller-redeem-outcome-2"),
+        (second_owner, 3, "64", "0", "joined-seller-redeem-outcome-3"),
+    ];
+    let redeem = array(lifecycle_value, "redeem_internal")?;
+    if redeem.len() != expected_redeem.len() {
+        return Err("joined-v3 lifecycle must retain exactly five redemption rows".into());
+    }
+    let mut projected_redeem = Vec::with_capacity(expected_redeem.len());
+    for (index, (row, (owner, outcome, quantity, payout, label))) in
+        redeem.iter().zip(expected_redeem).enumerate()
+    {
+        let record = row
+            .as_object()
+            .ok_or_else(|| format!("redemption row {index} is not an object"))?;
+        exact_keys(
+            record,
+            &["owner", "outcome", "quantity", "payout_atoms", "signature"],
+            &format!("redemption row {index}"),
+        )?;
+        if string(row, "owner")? != owner
+            || unsigned(row, "outcome")? != outcome
+            || canonical_unsigned_decimal(record, "quantity")? != quantity
+            || canonical_unsigned_decimal(record, "payout_atoms")? != payout
+            || string(row, "signature")? != signature_for(steps, label)?
+        {
+            return Err(format!("redemption row {index} differs from exact signed {label}").into());
+        }
+        projected_redeem.push(json!({
+            "owner": owner,
+            "outcome": decimal(outcome),
+            "quantity": quantity,
+            "payout_atoms": payout,
+            "signature": string(row, "signature")?,
+        }));
+    }
+
+    let terminal_value = lifecycle
+        .get("terminal")
+        .ok_or("lifecycle.terminal is absent")?;
+    let terminal = terminal_value
+        .as_object()
+        .ok_or("lifecycle.terminal is not an object")?;
+    exact_keys(
+        terminal,
+        &[
+            "buyer_position_cash_atoms",
+            "buyer_position_internal",
+            "seller_position_cash_atoms",
+            "seller_position_internal",
+            "supply_internal",
+            "hoard_collateral_atoms",
+            "hoard_token_atoms",
+            "buyer_token_atoms",
+            "seller_token_atoms",
+        ],
+        "joined-v3 terminal",
+    )?;
+    for (field, expected) in [
+        ("buyer_position_cash_atoms", "0"),
+        ("seller_position_cash_atoms", "0"),
+        ("hoard_collateral_atoms", "0"),
+        ("hoard_token_atoms", "0"),
+        ("buyer_token_atoms", "76"),
+        ("seller_token_atoms", "52"),
+    ] {
+        if canonical_unsigned_decimal(terminal, field)? != expected {
+            return Err(format!("joined-v3 terminal {field} is not {expected}").into());
+        }
+    }
+    let zero_outcomes = ["0", "0", "0", "0"];
+    let buyer_terminal = exact_strings(
+        terminal
+            .get("buyer_position_internal")
+            .ok_or("buyer_position_internal is absent")?,
+        &zero_outcomes,
+        "buyer_position_internal",
+    )?;
+    let seller_terminal = exact_strings(
+        terminal
+            .get("seller_position_internal")
+            .ok_or("seller_position_internal is absent")?,
+        &zero_outcomes,
+        "seller_position_internal",
+    )?;
+    let supply_terminal = exact_strings(
+        terminal
+            .get("supply_internal")
+            .ok_or("supply_internal is absent")?,
+        &zero_outcomes,
+        "supply_internal",
+    )?;
+
+    let trade_value = lifecycle.get("trade").ok_or("lifecycle.trade is absent")?;
+    let trade = trade_value
+        .as_object()
+        .ok_or("lifecycle.trade is not an object")?;
+    exact_keys(
+        trade,
+        &[
+            "status",
+            "grid_genesis_assisted",
+            "epoch_genesis_assisted",
+            "order_genesis_assisted",
+            "candidate_genesis_assisted",
+            "price_grid",
+            "price_grid_digest",
+            "grid_upload_signatures",
+            "policy_upload_signatures",
+            "second_owner_account_creation_funding",
+            "epoch",
+            "epoch_id",
+            "init_epoch_signature",
+            "freeze_epoch_signature",
+            "owners",
+            "orders",
+            "candidate",
+            "prices",
+            "fills",
+            "witness_slices",
+            "submit_signature",
+            "complete_verification_signature",
+            "selection_signature",
+            "freeze_entitlement_signature",
+            "entitle_signature",
+            "settlement_signature",
+            "post_settlement",
+        ],
+        "joined-v3 trade",
+    )?;
+    if string(trade_value, "status")? != "settled" {
+        return Err("joined-v3 trade is not exactly settled".into());
+    }
+    for field in [
+        "grid_genesis_assisted",
+        "epoch_genesis_assisted",
+        "order_genesis_assisted",
+        "candidate_genesis_assisted",
+    ] {
+        if boolean(trade_value, field)? {
+            return Err(format!("joined-v3 {field} is true").into());
+        }
+    }
+
+    let grid_signatures = signature_sequence(
+        trade_value,
+        "grid_upload_signatures",
+        steps,
+        &[
+            "joined-price-grid-artifact-begin",
+            "joined-price-grid-artifact-write-0",
+            "joined-price-grid-artifact-write-1",
+            "joined-price-grid-artifact-write-2",
+            "joined-price-grid-artifact-write-3",
+            "joined-price-grid-artifact-seal",
+        ],
+    )?;
+    let policy_signatures = signature_sequence(
+        trade_value,
+        "policy_upload_signatures",
+        steps,
+        &[
+            "joined-general-policy-artifact-begin",
+            "joined-general-policy-artifact-write-0",
+            "joined-general-policy-artifact-seal",
+        ],
+    )?;
+
+    let funding_value = trade
+        .get("second_owner_account_creation_funding")
+        .ok_or("second-owner funding is absent")?;
+    let funding = funding_value
+        .as_object()
+        .ok_or("second-owner funding is not an object")?;
+    exact_keys(
+        funding,
+        &["lamports", "signature", "genesis_assisted"],
+        "second-owner funding",
+    )?;
+    let funding_lamports = canonical_unsigned_decimal(funding, "lamports")?;
+    if funding_lamports == "0" || boolean(funding_value, "genesis_assisted")? {
+        return Err("second-owner funding is zero or genesis-assisted".into());
+    }
+    if string(funding_value, "signature")?
+        != signature_for(steps, "joined-fund-second-owner-account-creation")?
+    {
+        return Err("second-owner funding signature differs from its signed step".into());
+    }
+
+    let trade_owners = exact_strings(
+        trade.get("owners").ok_or("trade owners are absent")?,
+        &[payer, second_owner],
+        "trade owners",
+    )?;
+    let orders_value = trade.get("orders").ok_or("trade orders are absent")?;
+    let orders = orders_value
+        .as_object()
+        .ok_or("trade orders is not an object")?;
+    exact_keys(
+        orders,
+        &["buyer", "seller", "buyer_signature", "seller_signature"],
+        "trade orders",
+    )?;
+    for (role, side, limit) in [("buyer", "buy", "7500"), ("seller", "sell", "2500")] {
+        let order_record = orders.get(role).ok_or("trade order is absent")?;
+        let order = order_record
+            .as_object()
+            .ok_or("trade order is not an object")?;
+        exact_keys(
+            order,
+            &["outcome", "side", "quantity", "limit"],
+            &format!("{role} order"),
+        )?;
+        if unsigned(order_record, "outcome")? != 1
+            || string(order_record, "side")? != side
+            || canonical_unsigned_decimal(order, "quantity")? != "16"
+            || canonical_unsigned_decimal(order, "limit")? != limit
+        {
+            return Err(format!("{role} order differs from the exact joined book").into());
+        }
+    }
+    for (field, label) in [
+        ("buyer_signature", "joined-general-place-funded-buy"),
+        ("seller_signature", "joined-general-place-funded-sell"),
+    ] {
+        if string(orders_value, field)? != signature_for(steps, label)? {
+            return Err(format!("orders.{field} differs from {label}").into());
+        }
+    }
+
+    for (field, label) in [
+        ("init_epoch_signature", "joined-general-init-epoch"),
+        ("freeze_epoch_signature", "joined-general-freeze-epoch"),
+        ("submit_signature", "joined-general-submit-candidate"),
+        (
+            "complete_verification_signature",
+            "joined-general-complete-clear-work",
+        ),
+        ("selection_signature", "joined-general-finalize-selection"),
+        (
+            "freeze_entitlement_signature",
+            "joined-general-freeze-entitlement",
+        ),
+        ("entitle_signature", "joined-general-entitle-direct-slice"),
+        ("settlement_signature", "joined-general-settle-direct-slice"),
+    ] {
+        if string(trade_value, field)? != signature_for(steps, label)? {
+            return Err(format!("trade.{field} differs from {label}").into());
+        }
+    }
+
+    let expected_prices = [
+        2_500, 2_500, 2_500, 2_500, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    let prices = exact_unsigned_vector(
+        trade.get("prices").ok_or("candidate prices are absent")?,
+        &expected_prices,
+        "candidate prices",
+    )?;
+    let fills = exact_unsigned_vector(
+        trade.get("fills").ok_or("candidate fills are absent")?,
+        &[16, 16],
+        "candidate fills",
+    )?;
+    if unsigned(trade_value, "witness_slices")? != 1 {
+        return Err("joined-v3 witness slice count is not exactly one".into());
+    }
+
+    let post_value = trade
+        .get("post_settlement")
+        .ok_or("post_settlement is absent")?;
+    let post = post_value
+        .as_object()
+        .ok_or("post_settlement is not an object")?;
+    exact_keys(
+        post,
+        &[
+            "buyer_cash",
+            "buyer_internal",
+            "seller_cash",
+            "seller_internal",
+            "locked_collateral",
+            "pooled_custody",
+        ],
+        "post_settlement",
+    )?;
+    for (field, expected) in [
+        ("buyer_cash", "60"),
+        ("seller_cash", "4"),
+        ("locked_collateral", "64"),
+        ("pooled_custody", "128"),
+    ] {
+        if canonical_unsigned_decimal(post, field)? != expected {
+            return Err(format!("post_settlement.{field} is not {expected}").into());
+        }
+    }
+    let buyer_post = exact_strings(
+        post.get("buyer_internal")
+            .ok_or("post-settlement buyer_internal is absent")?,
+        &["0", "16", "0", "0"],
+        "post-settlement buyer_internal",
+    )?;
+    let seller_post = exact_strings(
+        post.get("seller_internal")
+            .ok_or("post-settlement seller_internal is absent")?,
+        &["64", "48", "64", "64"],
+        "post-settlement seller_internal",
+    )?;
+
+    let price_grid = string(trade_value, "price_grid")?;
+    let epoch = string(trade_value, "epoch")?;
+    let unique_addresses = [
+        market,
+        payer,
+        second_owner,
+        buyer_token,
+        seller_token,
+        price_grid,
+        epoch,
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    if unique_addresses.len() != 7 {
+        return Err("joined-v3 projected identities alias".into());
+    }
+
+    let projected_terminal = json!({
+        "buyer_position_cash_atoms": "0",
+        "buyer_position_internal": buyer_terminal,
+        "seller_position_cash_atoms": "0",
+        "seller_position_internal": seller_terminal,
+        "supply_internal": supply_terminal,
+        "hoard_collateral_atoms": "0",
+        "hoard_token_atoms": "0",
+        "buyer_token_atoms": "76",
+        "seller_token_atoms": "52",
+    });
+    let projected_funding = json!({
+        "lamports": funding_lamports,
+        "signature": string(funding_value, "signature")?,
+        "genesis_assisted": false,
+    });
+    let projected_orders = json!({
+        "buyer": {"outcome": "1", "side": "buy", "quantity": "16", "limit": "7500"},
+        "seller": {"outcome": "1", "side": "sell", "quantity": "16", "limit": "2500"},
+        "buyer_signature": string(orders_value, "buyer_signature")?,
+        "seller_signature": string(orders_value, "seller_signature")?,
+    });
+    let projected_post = json!({
+        "buyer_cash": "60",
+        "buyer_internal": buyer_post,
+        "seller_cash": "4",
+        "seller_internal": seller_post,
+        "locked_collateral": "64",
+        "pooled_custody": "128",
+    });
+    let projected_trade = json!({
+        "status": "settled",
+        "grid_genesis_assisted": false,
+        "epoch_genesis_assisted": false,
+        "order_genesis_assisted": false,
+        "candidate_genesis_assisted": false,
+        "price_grid": price_grid,
+        "price_grid_digest": fixed_hash(
+            trade.get("price_grid_digest").ok_or("price_grid_digest is absent")?,
+            "price_grid_digest"
+        )?,
+        "grid_upload_signatures": grid_signatures,
+        "policy_upload_signatures": policy_signatures,
+        "second_owner_account_creation_funding": projected_funding,
+        "epoch": epoch,
+        "epoch_id": fixed_hash(
+            trade.get("epoch_id").ok_or("epoch_id is absent")?, "epoch_id"
+        )?,
+        "init_epoch_signature": string(trade_value, "init_epoch_signature")?,
+        "freeze_epoch_signature": string(trade_value, "freeze_epoch_signature")?,
+        "owners": trade_owners,
+        "orders": projected_orders,
+        "candidate": fixed_hash(
+            trade.get("candidate").ok_or("candidate is absent")?, "candidate"
+        )?,
+        "prices": prices,
+        "fills": fills,
+        "witness_slices": "1",
+        "submit_signature": string(trade_value, "submit_signature")?,
+        "complete_verification_signature": string(
+            trade_value, "complete_verification_signature"
+        )?,
+        "selection_signature": string(trade_value, "selection_signature")?,
+        "freeze_entitlement_signature": string(
+            trade_value, "freeze_entitlement_signature"
+        )?,
+        "entitle_signature": string(trade_value, "entitle_signature")?,
+        "settlement_signature": string(trade_value, "settlement_signature")?,
+        "post_settlement": projected_post,
+    });
+    Ok(json!({
+        "market_genesis_assisted": false,
+        "market": market,
+        "ephemeral_users": users,
+        "user_collateral_tokens": tokens,
+        "collateral_atoms": "128",
+        "create_market_signature": string(lifecycle_value, "create_market_signature")?,
+        "buyer_endow_signature": string(lifecycle_value, "buyer_endow_signature")?,
+        "seller_endow_signature": string(lifecycle_value, "seller_endow_signature")?,
+        "split_signature": string(lifecycle_value, "split_signature")?,
+        "redeem_internal": projected_redeem,
+        "buyer_withdraw_signature": string(lifecycle_value, "buyer_withdraw_signature")?,
+        "seller_withdraw_signature": string(lifecycle_value, "seller_withdraw_signature")?,
+        "terminal": projected_terminal,
+        "trade": projected_trade,
+    }))
+}
+
+#[allow(clippy::too_many_lines)]
 fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
     exact_claim(manifest, "campaign.json")?;
     exact_claim(result, "result.json")?;
@@ -545,10 +1227,24 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
     }
 
     let campaign_mode = campaign_mode(manifest, result)?;
-    let (schema, expected_labels): (&str, &[&str]) = if campaign_mode == JOINED_LIFECYCLE_MODE {
-        (JOINED_SCHEMA, &JOINED_STEP_LABELS)
+    let joined_schema = if campaign_mode == JOINED_LIFECYCLE_MODE {
+        match array(result, "steps")?.len() {
+            count if count == JOINED_V2_STEP_LABELS.len() => Some(JoinedSchema::V2),
+            count if count == JOINED_V3_STEP_LABELS.len() => Some(JoinedSchema::V3),
+            count => {
+                return Err(format!(
+                    "joined transcript has {count} steps, expected exact v2 or v3 count"
+                )
+                .into())
+            }
+        }
     } else {
-        (SOURCE_SCHEMA, &SOURCE_STEP_LABELS)
+        None
+    };
+    let (schema, expected_labels): (&str, &[&str]) = match joined_schema {
+        Some(JoinedSchema::V2) => (JOINED_V2_SCHEMA, &JOINED_V2_STEP_LABELS),
+        Some(JoinedSchema::V3) => (JOINED_V3_SCHEMA, &JOINED_V3_STEP_LABELS),
+        None => (SOURCE_SCHEMA, &SOURCE_STEP_LABELS),
     };
     let steps = steps(result, expected_labels)?;
     for (field, label) in [
@@ -571,18 +1267,20 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
         return Err("source interval lower exceeds upper".into());
     }
 
-    let lifecycle = if campaign_mode == JOINED_LIFECYCLE_MODE {
-        joined_lifecycle(manifest, result, &steps)?
-    } else {
-        if result
-            .get("lifecycle")
-            .is_some_and(|value| !value.is_null())
-        {
-            return Err(
-                "source-only transcript unexpectedly carries a lifecycle projection".into(),
-            );
+    let lifecycle = match joined_schema {
+        Some(JoinedSchema::V2) => joined_lifecycle_v2(manifest, result, &steps)?,
+        Some(JoinedSchema::V3) => joined_lifecycle_v3(manifest, result, &steps)?,
+        None => {
+            if result
+                .get("lifecycle")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(
+                    "source-only transcript unexpectedly carries a lifecycle projection".into(),
+                );
+            }
+            Value::Null
         }
-        Value::Null
     };
 
     let source_profile = object(manifest, "source_profile_snapshot")?;
@@ -731,13 +1429,13 @@ pub fn serve(options: Options) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_view, CLAIM, JOINED_LIFECYCLE_MODE, JOINED_SCHEMA, JOINED_STEP_LABELS, SOURCE_SCHEMA,
-        SOURCE_STEP_LABELS,
+        build_view, CLAIM, JOINED_LIFECYCLE_MODE, JOINED_V2_SCHEMA, JOINED_V2_STEP_LABELS,
+        JOINED_V3_SCHEMA, JOINED_V3_STEP_LABELS, SOURCE_SCHEMA, SOURCE_STEP_LABELS,
     };
     use serde_json::{json, Value};
 
     fn hash(byte: char) -> String {
-        std::iter::repeat(byte).take(64).collect()
+        std::iter::repeat_n(byte, 64).collect()
     }
 
     fn fixtures() -> (Value, Value, Value) {
@@ -780,8 +1478,8 @@ mod tests {
             "network": "127.0.0.1 loopback only",
             "observation": "synthetic deterministic local guardian quorum; not devnet price evidence",
             "value": "none",
-            "upstream_pyth_crosschain_commit": std::iter::repeat('c').take(40).collect::<String>(),
-            "dragons_clutch_repository_head": std::iter::repeat('d').take(40).collect::<String>(),
+            "upstream_pyth_crosschain_commit": "c".repeat(40),
+            "dragons_clutch_repository_head": "d".repeat(40),
             "source_profile_snapshot": {"sha256": hash('e')},
             "validator_build_provenance": {"selected_build_record_sha256": hash('f')},
             "warp_slot": 460_336_312,
@@ -827,7 +1525,7 @@ mod tests {
 
     fn joined_fixtures() -> (Value, Value, Value) {
         let (mut manifest, mut result, probe) = fixtures();
-        let steps = JOINED_STEP_LABELS
+        let steps = JOINED_V2_STEP_LABELS
             .iter()
             .enumerate()
             .map(|(index, label)| {
@@ -892,6 +1590,129 @@ mod tests {
         (manifest, result, probe)
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn joined_v3_fixtures() -> (Value, Value, Value) {
+        let (mut manifest, mut result, probe) = fixtures();
+        let signature = |index: usize| format!("joined-v3-signature-{index}");
+        let steps = JOINED_V3_STEP_LABELS
+            .iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let refused = label.contains("-rollback");
+                json!({
+                    "label": label,
+                    "signature": signature(index),
+                    "slot": 460_336_312_u64 + u64::try_from(index).unwrap(),
+                    "compute_units_consumed": 300_u64 + u64::try_from(index).unwrap(),
+                    "fee_lamports": 5000,
+                    "signed_wire_sha256": hash('b'),
+                    "program_order": ["ComputeBudget111", "Program111"],
+                    "error": if refused {
+                        json!({"InstructionError": [2, {"Custom": 122}]})
+                    } else {
+                        Value::Null
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        manifest["campaign_mode"] = json!(JOINED_LIFECYCLE_MODE);
+        manifest["payer"] = json!("buyer111");
+        manifest["correct"] = json!({
+            "market": "market111",
+            "market_genesis_assisted": false,
+            "user_collateral_token": "buyer-token111",
+            "second_owner": "seller111",
+            "second_owner_collateral_token": "seller-token111",
+        });
+        result["campaign_mode"] = json!(JOINED_LIFECYCLE_MODE);
+        result["joined_post_append_signature"] = json!(signature(10));
+        result["seal_signature"] = json!(signature(11));
+        result["resolve_signature"] = json!(signature(44));
+        let terminal = json!({
+            "buyer_position_cash_atoms": "0",
+            "buyer_position_internal": ["0", "0", "0", "0"],
+            "seller_position_cash_atoms": "0",
+            "seller_position_internal": ["0", "0", "0", "0"],
+            "supply_internal": ["0", "0", "0", "0"],
+            "hoard_collateral_atoms": "0",
+            "hoard_token_atoms": "0",
+            "buyer_token_atoms": "76",
+            "seller_token_atoms": "52",
+        });
+        let second_owner_funding = json!({
+            "lamports": "1234560",
+            "signature": signature(12),
+            "genesis_assisted": false,
+        });
+        let orders = json!({
+            "buyer": {"outcome": 1, "side": "buy", "quantity": "16", "limit": "7500"},
+            "seller": {"outcome": 1, "side": "sell", "quantity": "16", "limit": "2500"},
+            "buyer_signature": signature(28),
+            "seller_signature": signature(29),
+        });
+        let post_settlement = json!({
+            "buyer_cash": "60",
+            "buyer_internal": ["0", "16", "0", "0"],
+            "seller_cash": "4",
+            "seller_internal": ["64", "48", "64", "64"],
+            "locked_collateral": "64",
+            "pooled_custody": "128",
+        });
+        let trade = json!({
+            "status": "settled",
+            "grid_genesis_assisted": false,
+            "epoch_genesis_assisted": false,
+            "order_genesis_assisted": false,
+            "candidate_genesis_assisted": false,
+            "price_grid": "price-grid111",
+            "price_grid_digest": vec![7_u8; 32],
+            "grid_upload_signatures": (13..=18).map(&signature).collect::<Vec<_>>(),
+            "policy_upload_signatures": (23..=25).map(&signature).collect::<Vec<_>>(),
+            "second_owner_account_creation_funding": second_owner_funding,
+            "epoch": "epoch111",
+            "epoch_id": vec![8_u8; 32],
+            "init_epoch_signature": signature(26),
+            "freeze_epoch_signature": signature(30),
+            "owners": ["buyer111", "seller111"],
+            "orders": orders,
+            "candidate": vec![9_u8; 32],
+            "prices": [2500, 2500, 2500, 2500, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "fills": [16, 16],
+            "witness_slices": 1,
+            "submit_signature": signature(31),
+            "complete_verification_signature": signature(39),
+            "selection_signature": signature(40),
+            "freeze_entitlement_signature": signature(41),
+            "entitle_signature": signature(42),
+            "settlement_signature": signature(43),
+            "post_settlement": post_settlement,
+        });
+        result["lifecycle"] = json!({
+            "market_genesis_assisted": false,
+            "market": "market111",
+            "ephemeral_users": ["buyer111", "seller111"],
+            "user_collateral_tokens": ["buyer-token111", "seller-token111"],
+            "collateral_atoms": "128",
+            "create_market_signature": signature(19),
+            "buyer_endow_signature": signature(20),
+            "seller_endow_signature": signature(21),
+            "split_signature": signature(22),
+            "redeem_internal": [
+                {"owner": "buyer111", "outcome": 1, "quantity": "16", "payout_atoms": "16", "signature": signature(45)},
+                {"owner": "seller111", "outcome": 0, "quantity": "64", "payout_atoms": "0", "signature": signature(46)},
+                {"owner": "seller111", "outcome": 1, "quantity": "48", "payout_atoms": "48", "signature": signature(47)},
+                {"owner": "seller111", "outcome": 2, "quantity": "64", "payout_atoms": "0", "signature": signature(48)},
+                {"owner": "seller111", "outcome": 3, "quantity": "64", "payout_atoms": "0", "signature": signature(49)},
+            ],
+            "buyer_withdraw_signature": signature(50),
+            "seller_withdraw_signature": signature(51),
+            "terminal": terminal,
+            "trade": trade,
+        });
+        result["steps"] = json!(steps);
+        (manifest, result, probe)
+    }
+
     #[test]
     fn public_transcripts_become_exact_decimal_display_events() {
         let (manifest, result, probe) = fixtures();
@@ -907,7 +1728,7 @@ mod tests {
     fn joined_transcript_projects_signed_lifecycle_and_blocker() {
         let (manifest, result, probe) = joined_fixtures();
         let view = build_view(&manifest, &result, &probe).unwrap();
-        assert_eq!(view.campaign["schema"], JOINED_SCHEMA);
+        assert_eq!(view.campaign["schema"], JOINED_V2_SCHEMA);
         assert_eq!(view.campaign["campaign_mode"], JOINED_LIFECYCLE_MODE);
         assert_eq!(view.campaign["steps"].as_array().unwrap().len(), 21);
         assert_eq!(view.campaign["lifecycle"]["collateral_atoms"], "64");
@@ -915,6 +1736,52 @@ mod tests {
             view.campaign["lifecycle"]["trade"]["reason_code"],
             "missing-sealed-price-grid-and-epoch-plane"
         );
+    }
+
+    #[test]
+    fn joined_v3_projects_exact_settled_trade_and_two_owner_terminal_state() {
+        let (manifest, result, probe) = joined_v3_fixtures();
+        let view = build_view(&manifest, &result, &probe).unwrap();
+        assert_eq!(view.campaign["schema"], JOINED_V3_SCHEMA);
+        assert_eq!(view.campaign["steps"].as_array().unwrap().len(), 52);
+        assert_eq!(view.campaign["lifecycle"]["trade"]["status"], "settled");
+        assert_eq!(
+            view.campaign["lifecycle"]["trade"]["grid_upload_signatures"]
+                .as_array()
+                .unwrap()
+                .len(),
+            6
+        );
+        assert_eq!(
+            view.campaign["lifecycle"]["terminal"]["buyer_token_atoms"],
+            "76"
+        );
+        assert_eq!(
+            view.campaign["lifecycle"]["terminal"]["seller_token_atoms"],
+            "52"
+        );
+    }
+
+    #[test]
+    fn joined_v3_refuses_a_substituted_candidate_or_terminal_atom() {
+        let (manifest, mut result, probe) = joined_v3_fixtures();
+        result["lifecycle"]["trade"]["prices"][1] = json!(2501);
+        assert!(build_view(&manifest, &result, &probe).is_err());
+
+        let (manifest, mut result, probe) = joined_v3_fixtures();
+        result["lifecycle"]["terminal"]["seller_token_atoms"] = json!("51");
+        assert!(build_view(&manifest, &result, &probe).is_err());
+    }
+
+    #[test]
+    fn joined_v3_refuses_unknown_fields_and_signed_step_reordering() {
+        let (manifest, mut result, probe) = joined_v3_fixtures();
+        result["lifecycle"]["trade"]["mock_source"] = json!(true);
+        assert!(build_view(&manifest, &result, &probe).is_err());
+
+        let (manifest, mut result, probe) = joined_v3_fixtures();
+        result["steps"].as_array_mut().unwrap().swap(39, 40);
+        assert!(build_view(&manifest, &result, &probe).is_err());
     }
 
     #[test]

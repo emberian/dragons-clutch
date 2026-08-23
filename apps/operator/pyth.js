@@ -8,7 +8,8 @@ import { digest, el, fields, numeric, row } from "./dom.js";
 import { chip } from "./evidence.js";
 
 const SOURCE_SCHEMA = "dragons-clutch/operator/local-real-pyth-transcript/v1";
-const JOINED_SCHEMA = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
+const JOINED_V2_SCHEMA = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
+const JOINED_V3_SCHEMA = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v3";
 const SOURCE_ONLY_MODE = "source-only-v1";
 const JOINED_LIFECYCLE_MODE = "joined-user-lifecycle-v1";
 const TRADE_BLOCKER = "missing-sealed-price-grid-and-epoch-plane";
@@ -53,7 +54,7 @@ const valid = (campaign) => Boolean(
   && (
     (campaign.schema === SOURCE_SCHEMA && campaign.campaign_mode === SOURCE_ONLY_MODE)
     || (
-      campaign.schema === JOINED_SCHEMA
+      (campaign.schema === JOINED_V2_SCHEMA || campaign.schema === JOINED_V3_SCHEMA)
       && campaign.campaign_mode === JOINED_LIFECYCLE_MODE
       && campaign.lifecycle
       && typeof campaign.lifecycle === "object"
@@ -206,7 +207,7 @@ const rollbackCard = (campaign) => {
   return card;
 };
 
-const lifecycleCard = (campaign) => {
+const lifecycleCardV2 = (campaign) => {
   const lifecycle = campaign.lifecycle;
   if (!lifecycle) return null;
   const terminal = lifecycle.terminal;
@@ -276,6 +277,170 @@ const lifecycleCard = (campaign) => {
     )
   );
   return card;
+};
+
+const lifecycleCardV3 = (campaign) => {
+  const lifecycle = campaign.lifecycle;
+  const terminal = lifecycle.terminal;
+  const trade = lifecycle.trade;
+  const funding = trade.second_owner_account_creation_funding;
+  const orders = trade.orders;
+  const post = trade.post_settlement;
+  const card = el("section", "card");
+  const heading = el("div", "card-heading");
+  heading.append(el("h2", null, "Signed two-owner lifecycle and settled trade"), chip("SBF_EXECUTED"));
+  card.append(
+    heading,
+    row(
+      "callout callout-warn",
+      el("strong", null, "NON-PRODUCTION · LOCAL ONLY"),
+      el("span", null, "Two ephemeral local signers and a synthetic source; no wallet, browser transaction building, or value.")
+    ),
+    row(
+      "callout callout-ok",
+      el("strong", null, "TRADE SETTLED / NOT SUBSTITUTED"),
+      el("span", null, "The exact retained relation admitted the best valid submitted candidate; this is not a claim of optimal clearing.")
+    ),
+    fields("", [
+      ["Campaign mode", campaign.campaign_mode],
+      ["Market genesis-assisted", lifecycle.market_genesis_assisted ? "yes" : "no — signed CreateMarket"],
+      ["Market", digest(lifecycle.market)],
+      ["Buyer", digest(lifecycle.ephemeral_users[0])],
+      ["Seller", digest(lifecycle.ephemeral_users[1])],
+      ["Buyer collateral token", digest(lifecycle.user_collateral_tokens[0])],
+      ["Seller collateral token", digest(lifecycle.user_collateral_tokens[1])],
+      ["Exact combined collateral atoms", numeric(lifecycle.collateral_atoms)],
+      ["CreateMarket signature", digest(lifecycle.create_market_signature)],
+      ["Buyer Endow signature", digest(lifecycle.buyer_endow_signature)],
+      ["Seller Endow signature", digest(lifecycle.seller_endow_signature)],
+      ["Seller Split signature", digest(lifecycle.split_signature)],
+      ["Buyer WithdrawCash signature", digest(lifecycle.buyer_withdraw_signature)],
+      ["Seller WithdrawCash signature", digest(lifecycle.seller_withdraw_signature)]
+    ]),
+    el("h3", null, "Signed artifact, epoch, and candidate plane"),
+    fields("", [
+      ["PriceGrid", digest(trade.price_grid)],
+      ["PriceGrid digest", digest(trade.price_grid_digest)],
+      ["PriceGrid upload signatures", numeric(String(trade.grid_upload_signatures.length))],
+      ["General policy upload signatures", numeric(String(trade.policy_upload_signatures.length))],
+      ["Grid genesis-assisted", trade.grid_genesis_assisted ? "yes" : "no"],
+      ["Epoch genesis-assisted", trade.epoch_genesis_assisted ? "yes" : "no"],
+      ["Order genesis-assisted", trade.order_genesis_assisted ? "yes" : "no"],
+      ["Candidate genesis-assisted", trade.candidate_genesis_assisted ? "yes" : "no"],
+      ["Second-owner creation funding lamports", numeric(funding.lamports)],
+      ["Second-owner funding signature", digest(funding.signature)],
+      ["Second-owner funding genesis-assisted", funding.genesis_assisted ? "yes" : "no"],
+      ["Epoch", digest(trade.epoch)],
+      ["Epoch id", digest(trade.epoch_id)],
+      ["InitEpoch signature", digest(trade.init_epoch_signature)],
+      ["FreezeEpoch signature", digest(trade.freeze_epoch_signature)],
+      ["Candidate", digest(trade.candidate)],
+      ["Exact simplex prices", trade.prices.map(numeric).join(" · ")],
+      ["Exact fills", trade.fills.map(numeric).join(" · ")],
+      ["Witness slices", numeric(trade.witness_slices)],
+      ["SubmitCandidate signature", digest(trade.submit_signature)],
+      ["CompleteClearWork signature", digest(trade.complete_verification_signature)],
+      ["FinalizeSelection signature", digest(trade.selection_signature)],
+      ["FreezeEntitlement signature", digest(trade.freeze_entitlement_signature)],
+      ["Entitle signature", digest(trade.entitle_signature)],
+      ["Settle signature", digest(trade.settlement_signature)]
+    ]),
+    el("h3", null, "Exact funded book")
+  );
+
+  const orderTable = el("table", "provider-table");
+  const orderHead = el("thead");
+  const orderHeadRow = el("tr");
+  ["owner", "side", "outcome", "quantity", "limit", "signature"].forEach((label) => {
+    const cell = el("th", null, label);
+    cell.scope = "col";
+    orderHeadRow.append(cell);
+  });
+  orderHead.append(orderHeadRow);
+  const orderBody = el("tbody");
+  [
+    [trade.owners[0], orders.buyer, orders.buyer_signature],
+    [trade.owners[1], orders.seller, orders.seller_signature]
+  ].forEach(([owner, order, signatureValue]) => {
+    const line = el("tr");
+    const ownerCell = el("td");
+    const signatureCell = el("td");
+    ownerCell.append(digest(owner));
+    signatureCell.append(digest(signatureValue));
+    line.append(
+      ownerCell,
+      el("td", null, order.side),
+      el("td", null, numeric(order.outcome)),
+      el("td", null, numeric(order.quantity)),
+      el("td", null, numeric(order.limit)),
+      signatureCell
+    );
+    orderBody.append(line);
+  });
+  orderTable.append(orderHead, orderBody);
+  card.append(
+    orderTable,
+    el("h3", null, "Post-settlement state"),
+    fields("", [
+      ["Buyer cash", numeric(post.buyer_cash)],
+      ["Buyer internal outcomes", post.buyer_internal.map(numeric).join(" · ")],
+      ["Seller cash", numeric(post.seller_cash)],
+      ["Seller internal outcomes", post.seller_internal.map(numeric).join(" · ")],
+      ["Locked collateral", numeric(post.locked_collateral)],
+      ["Pooled custody", numeric(post.pooled_custody)]
+    ]),
+    el("h3", null, "Owner-bound RedeemInternal rows")
+  );
+
+  const redemptionTable = el("table", "provider-table");
+  const redemptionHead = el("thead");
+  const redemptionHeadRow = el("tr");
+  ["owner", "outcome", "quantity", "payout atoms", "signature"].forEach((label) => {
+    const cell = el("th", null, label);
+    cell.scope = "col";
+    redemptionHeadRow.append(cell);
+  });
+  redemptionHead.append(redemptionHeadRow);
+  const redemptionBody = el("tbody");
+  lifecycle.redeem_internal.forEach((redeem) => {
+    const line = el("tr");
+    const owner = el("td");
+    const signature = el("td");
+    owner.append(digest(redeem.owner));
+    signature.append(digest(redeem.signature));
+    line.append(
+      owner,
+      el("td", null, numeric(redeem.outcome)),
+      el("td", null, numeric(redeem.quantity)),
+      el("td", null, numeric(redeem.payout_atoms)),
+      signature
+    );
+    redemptionBody.append(line);
+  });
+  redemptionTable.append(redemptionHead, redemptionBody);
+  card.append(
+    redemptionTable,
+    el("h3", null, "Terminal exact two-owner conservation"),
+    fields("", [
+      ["Buyer position cash atoms", numeric(terminal.buyer_position_cash_atoms)],
+      ["Buyer position internal outcomes", terminal.buyer_position_internal.map(numeric).join(" · ")],
+      ["Seller position cash atoms", numeric(terminal.seller_position_cash_atoms)],
+      ["Seller position internal outcomes", terminal.seller_position_internal.map(numeric).join(" · ")],
+      ["Supply internal outcomes", terminal.supply_internal.map(numeric).join(" · ")],
+      ["Hoard collateral obligation atoms", numeric(terminal.hoard_collateral_atoms)],
+      ["Hoard token atoms", numeric(terminal.hoard_token_atoms)],
+      ["Buyer token atoms returned", numeric(terminal.buyer_token_atoms)],
+      ["Seller token atoms returned", numeric(terminal.seller_token_atoms)]
+    ])
+  );
+  return card;
+};
+
+const lifecycleCard = (campaign) => {
+  if (!campaign.lifecycle) return null;
+  return campaign.schema === JOINED_V3_SCHEMA
+    ? lifecycleCardV3(campaign)
+    : lifecycleCardV2(campaign);
 };
 
 const transactionCard = (campaign) => {

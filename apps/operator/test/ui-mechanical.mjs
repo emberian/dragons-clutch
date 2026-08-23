@@ -54,8 +54,14 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
     "NO VALUE",
     "not devnet price evidence",
     "joined-user-lifecycle-v1",
+    "local-real-pyth-joined-lifecycle/v2",
+    "local-real-pyth-joined-lifecycle/v3",
     "TRADE BLOCKED / NOT SUBSTITUTED",
     "missing-sealed-price-grid-and-epoch-plane",
+    "TRADE SETTLED / NOT SUBSTITUTED",
+    "best valid submitted candidate",
+    "not a claim of optimal clearing",
+    "Terminal exact two-owner conservation",
   ]) {
     assert.match(pyth, new RegExp(phrase));
   }

@@ -43,11 +43,16 @@ CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
   --transcript docs/reviews/evidence/local-real-pyth-signed-rpc-2026-08-22
-# retained joined lifecycle: the same read-only surface, with 21 signed steps
+# retained historical joined-v2 lifecycle: exact 21-step blocker history
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
   --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22
+# current joined-v3 lifecycle: point at a freshly retained 52-step transcript
+CARGO_NET_OFFLINE=true cargo run --offline \
+  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
+  serve --mode pyth-local \
+  --transcript /absolute/path/to/current-joined-v3-transcript
 # then open 127.0.0.1:9130 in a browser
 ```
 
@@ -110,16 +115,22 @@ the same way a browser does.
 | screen | what it reads |
 | --- | --- |
 | **Campaign** | exact captured receiver/router Program and ProgramData identities; campaign, validator, ELF, source-profile, VAA, and update hashes; loopback listener evidence; synthetic source value and conservative interval; both atomic rollback negatives; seal and categorical resolution; all signed transactions in retained order with signature, signed-wire hash, slot, compute units, fee, top-level program order, and exact error |
-| **Signed user lifecycle** | in `joined-user-lifecycle-v1`: explicit non-genesis market creation; ephemeral user and collateral identities; exact `CreateMarket`, `Endow`, `Split`, four `RedeemInternal`, and `WithdrawCash` signatures; final zero position/supply/Hoard obligations and the exact 64 atoms returned; trading marked **BLOCKED / NOT SUBSTITUTED** at `missing-sealed-price-grid-and-epoch-plane` |
+| **Historical signed user lifecycle (joined-v2)** | preserves the exact retained 21-step history: explicit non-genesis market creation; one ephemeral user and collateral identity; exact `CreateMarket`, `Endow`, `Split`, four `RedeemInternal`, and `WithdrawCash` signatures; final zero position/supply/Hoard obligations and the exact 64 atoms returned; trading remains **BLOCKED / NOT SUBSTITUTED** at `missing-sealed-price-grid-and-epoch-plane` |
+| **Current signed trade lifecycle (joined-v3)** | requires exactly 52 signed steps and two distinct owner/token identities; signed PriceGrid and allocation-policy uploads; non-genesis market, epoch, orders, and candidate; an exact funded buy/sell book; one-witness candidate verification, selection, entitlement, and settlement; real receiver/router source, resolution, five owner-bound redemptions, two withdrawals, and terminal zero liabilities with all 128 collateral atoms returned. The screen says **TRADE SETTLED / NOT SUBSTITUTED** and “best valid submitted candidate,” never “optimal clearing.” |
 
 All integers cross the daemon/browser boundary as decimal strings. The daemon
 refuses the presentation unless the three inputs carry the exact boundary,
-provider role set, mode-specific thirteen- or twenty-one-step order,
+provider role set, mode-specific thirteen-, twenty-one-, or fifty-two-step order,
 instruction-2 `SourceAdmissionFailed` rollback errors, matching terminal
-signatures, closed rollback checks, seal, and payout cell 1. Joined mode also
+signatures, closed rollback checks, seal, and payout cell 1. Joined-v2 also
 requires exact four-outcome redemption arithmetic, terminal conservation, and
-the named un-substituted trading blocker. The static page remains an untrusted
-projection of that retained evidence.
+the named un-substituted trading blocker. Joined-v3 instead requires the exact
+two-owner identities, funding, signed artifact sequences, orders, candidate
+prices/fills, settlement state, five owner-bound redemptions, two withdrawals,
+and terminal conservation emitted by the current campaign. Unknown or missing
+joined-v3 lifecycle, trade, funding, order, settlement, terminal, and redemption
+fields are refused. The static page remains an untrusted projection of that
+retained evidence; it neither discovers nor attests onchain state independently.
 
 ### Watch mode
 
@@ -246,8 +257,9 @@ rather than written as a URL literal, so the grep needs no exception.
 
 ## Not built
 
-Multi-page epochs — a trade session opens one order page, so the book holds
+In **Trade mode**, multi-page epochs are not built — a trade session opens one order page, so the book holds
 `MAX_ORDERS_PER_PAGE` orders and the ticket says so rather than letting the
-bank refuse the seventeenth. Resolution and redemption: the Friday clutch never
+bank refuse the seventeenth. Resolution and redemption are also not built into
+the interactive Friday clutch: it never
 resolves, so the Ticket's weight preview is a MODEL-ONLY reading of what a
 terminal statistic would carry, not a payout the bank has made.
