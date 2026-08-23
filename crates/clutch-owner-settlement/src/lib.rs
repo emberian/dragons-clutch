@@ -294,53 +294,16 @@ impl OwnerSettlementAccumulatorV1 {
         {
             return Err(Error::Incomplete);
         }
-        if position_reserved_cash_atoms < self.expectation.reserved_cash_atoms
-            || position_cash_atoms < self.expectation.reserved_cash_atoms
-        {
-            return Err(Error::InsufficientCash);
-        }
-        let debit_atoms = owner_debit_atoms(
-            self.expectation.expected_buy_price_units,
-            self.expectation.price_scale,
-            self.expectation.selected_fee_atoms,
+        let disposition = project_owner_disposition_v1(
+            &self.expectation,
+            position_cash_atoms,
+            position_reserved_cash_atoms,
         )?;
-        let credit_atoms = owner_credit_atoms(
-            self.expectation.expected_sell_price_units,
-            self.expectation.price_scale,
-        )?;
-        let residue_price_units = owner_rounding_residue_price_units(
-            self.expectation.expected_buy_price_units,
-            self.expectation.expected_sell_price_units,
-            self.expectation.price_scale,
-        )?;
-        let next_cash = position_cash_atoms
-            .checked_sub(debit_atoms)
-            .and_then(|value| value.checked_add(credit_atoms))
-            .ok_or(Error::ArithmeticUnderflow)?;
-        let next_reserved = position_reserved_cash_atoms
-            .checked_sub(self.expectation.reserved_cash_atoms)
-            .ok_or(Error::ArithmeticUnderflow)?;
-        if next_reserved > next_cash {
-            return Err(Error::InvariantViolation);
-        }
-        let released_cash_atoms = self
-            .expectation
-            .reserved_cash_atoms
-            .checked_sub(debit_atoms)
-            .ok_or(Error::InsufficientCash)?;
         let mut next = *self;
         next.state = 1;
         next.validate()?;
         *self = next;
-        Ok(OwnerSettlementDispositionV1 {
-            debit_atoms,
-            credit_atoms,
-            selected_fee_atoms: self.expectation.selected_fee_atoms,
-            released_cash_atoms,
-            residue_price_units,
-            position_cash_atoms: next_cash,
-            position_reserved_cash_atoms: next_reserved,
-        })
+        Ok(disposition)
     }
 
     /// Mark a finalized, fully consumed owner row as a permanent tombstone.
@@ -522,6 +485,62 @@ pub struct OwnerSettlementDispositionV1 {
     pub position_reserved_cash_atoms: Amount,
 }
 
+/// Project the exact terminal disposition from one authenticated owner row
+/// and its current Position cash fields without mutating an accumulator.
+///
+/// This is the client/indexer twin of [`OwnerSettlementAccumulatorV1::finalize`].
+/// It does not prove receipt completion; a runtime must still authenticate and
+/// consume every expected fragment before applying the returned disposition.
+pub fn project_owner_disposition_v1(
+    expectation: &OwnerSettlementExpectationV1,
+    position_cash_atoms: Amount,
+    position_reserved_cash_atoms: Amount,
+) -> Result<OwnerSettlementDispositionV1> {
+    expectation.validate()?;
+    if position_reserved_cash_atoms < expectation.reserved_cash_atoms
+        || position_cash_atoms < expectation.reserved_cash_atoms
+    {
+        return Err(Error::InsufficientCash);
+    }
+    let debit_atoms = owner_debit_atoms(
+        expectation.expected_buy_price_units,
+        expectation.price_scale,
+        expectation.selected_fee_atoms,
+    )?;
+    let credit_atoms = owner_credit_atoms(
+        expectation.expected_sell_price_units,
+        expectation.price_scale,
+    )?;
+    let residue_price_units = owner_rounding_residue_price_units(
+        expectation.expected_buy_price_units,
+        expectation.expected_sell_price_units,
+        expectation.price_scale,
+    )?;
+    let next_cash = position_cash_atoms
+        .checked_sub(debit_atoms)
+        .and_then(|value| value.checked_add(credit_atoms))
+        .ok_or(Error::ArithmeticUnderflow)?;
+    let next_reserved = position_reserved_cash_atoms
+        .checked_sub(expectation.reserved_cash_atoms)
+        .ok_or(Error::ArithmeticUnderflow)?;
+    if next_reserved > next_cash {
+        return Err(Error::InvariantViolation);
+    }
+    let released_cash_atoms = expectation
+        .reserved_cash_atoms
+        .checked_sub(debit_atoms)
+        .ok_or(Error::InsufficientCash)?;
+    Ok(OwnerSettlementDispositionV1 {
+        debit_atoms,
+        credit_atoms,
+        selected_fee_atoms: expectation.selected_fee_atoms,
+        released_cash_atoms,
+        residue_price_units,
+        position_cash_atoms: next_cash,
+        position_reserved_cash_atoms: next_reserved,
+    })
+}
+
 /// Payer-side aggregate conversion, including a selected whole-atom fee.
 pub fn owner_debit_atoms(
     buy_price_units: u128,
@@ -604,9 +623,7 @@ fn put<const N: usize>(output: &mut [u8; N], cursor: &mut usize, bytes: &[u8]) -
 }
 
 fn take<'a>(input: &'a [u8], cursor: &mut usize, width: usize) -> Result<&'a [u8]> {
-    let end = cursor
-        .checked_add(width)
-        .ok_or(Error::ArithmeticOverflow)?;
+    let end = cursor.checked_add(width).ok_or(Error::ArithmeticOverflow)?;
     let value = input.get(*cursor..end).ok_or(Error::InvalidExpectation)?;
     *cursor = end;
     Ok(value)

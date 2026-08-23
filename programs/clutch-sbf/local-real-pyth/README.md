@@ -23,6 +23,16 @@ archive, and resolves the categorical market.
 It is not a devnet price, a provider-availability test, a production source
 release, current deployment evidence, or a wallet client.
 
+With the lightweight `builder` feature, the same real-source Market/Epoch plane
+also exposes daemon-only unsigned transaction construction and a shared General
+V2 owner-settlement projection. The latter admits only its exact Market, Epoch,
+and price scale, aggregates several filled orders under canonical
+lexicographically sorted owners, requires an explicit fee row even when zero,
+and retains selected owner count, buy/sell price units, fees, rounding pot, and
+receipt-end count. Its 288-byte open owner bodies and prospective disposition
+fields are construction results: the current General V1 campaign neither
+creates those accounts nor claims their receipt authentication or execution.
+
 Run from the repository root:
 
 ```sh

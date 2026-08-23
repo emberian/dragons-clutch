@@ -184,6 +184,7 @@ name = "clutch-client-contract"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
+ "clutch-owner-settlement",
  "clutch-solana-layout",
 ]
 
@@ -202,6 +203,7 @@ dependencies = [
  "bincode",
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-client-contract",
  "clutch-kernel",
  "clutch-sbf",
  "clutch-sbf-svm-tests",
@@ -211,6 +213,10 @@ dependencies = [
  "solana-instruction",
  "solana-transaction",
 ]
+
+[[package]]
+name = "clutch-owner-settlement"
+version = "0.1.0"
 
 [[package]]
 name = "clutch-sbf"

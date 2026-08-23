@@ -1,11 +1,18 @@
-//! Typed, unsigned transaction construction for a daemon-owned local session.
+//! Typed, unsigned transaction and chain-derived projection construction for a
+//! daemon-owned local session.
 //!
 //! This module never reads a key and never submits. It builds the exact legacy
 //! transaction bytes for the real-Pyth SourceV2-aware laboratory plane. The
 //! daemon owns blockhash replacement, signer-role resolution, and signing as
-//! separate steps. Submission and confirmation are not exposed by this seam.
+//! separate steps. The General V2 owner projection is identity-bound to the
+//! same real-source Market/Epoch, but remains construction-only. Submission,
+//! confirmation, and General V2 account creation are not exposed by this seam.
 
 use crate::plane::{self, ArtifactUpload, GeneralPlane, LabPlane, MarketPrestate};
+use clutch_client_contract::owner_settlement::{
+    project_owner_settlement_v1, OwnerSettlementProjectionPlanV1, OwnerSettlementProjectionRefusal,
+    OwnerSettlementProjectionV1,
+};
 use clutch_solana_layout::artifact::ARTIFACT_CHUNK_BYTES;
 use clutch_svm_fixture::{compute_unit_limit_data, COMPUTE_BUDGET};
 use solana_address::Address;
@@ -15,6 +22,25 @@ use solana_transaction::Transaction;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub const PLAN_SCHEMA: &str = "dragons-clutch/operator/local-real-transaction-plan/v1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerSettlementPlanError {
+    ContextMismatch,
+    Projection(OwnerSettlementProjectionRefusal),
+}
+
+impl core::fmt::Display for OwnerSettlementPlanError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::ContextMismatch => {
+                "owner settlement projection does not belong to this local session"
+            }
+            Self::Projection(_) => "owner settlement projection was refused",
+        })
+    }
+}
+
+impl std::error::Error for OwnerSettlementPlanError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SignerRole {
@@ -98,6 +124,26 @@ impl LocalTradingBuilder {
 
     pub fn source_archive_address(&self) -> Address {
         self.lab.plane.source_archive.address
+    }
+
+    /// Admit an authenticated General V2 projection only when its semantic
+    /// Market, Epoch, and exact price scale belong to this real-source session.
+    ///
+    /// The result contains canonical 288-byte open owner bodies and prospective
+    /// terminal dispositions. It does not construct a General V2 account
+    /// instruction, submit a transaction, or imply that the current General V1
+    /// runtime has created or settled those rows.
+    pub fn project_owner_settlement(
+        &self,
+        projection: &OwnerSettlementProjectionV1<'_>,
+    ) -> std::result::Result<OwnerSettlementProjectionPlanV1, OwnerSettlementPlanError> {
+        if projection.market != self.lab.plane.market_id.bytes()
+            || projection.epoch != self.general.epoch_id.bytes()
+            || projection.price_scale != self.lab.grid_value.price_scale
+        {
+            return Err(OwnerSettlementPlanError::ContextMismatch);
+        }
+        project_owner_settlement_v1(projection).map_err(OwnerSettlementPlanError::Projection)
     }
 
     fn transaction(
@@ -292,12 +338,45 @@ impl LocalTradingBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_client_contract::owner_settlement::{
+        CandidateSettlementTotalsV1, ChainOwnerPositionV1, SelectedOwnerFeeV1, SettlementSideV1,
+        VerifiedSettlementOrderV1, MAX_ORDERS,
+    };
 
     fn actors() -> (Address, Address) {
         (
             Address::new_from_array([0x31; 32]),
             Address::new_from_array([0x32; 32]),
         )
+    }
+
+    fn settlement_projection<'a>(
+        builder: &LocalTradingBuilder,
+        orders: &'a [VerifiedSettlementOrderV1; MAX_ORDERS],
+        fees: &'a [SelectedOwnerFeeV1; MAX_ORDERS],
+        positions: &'a [ChainOwnerPositionV1; MAX_ORDERS],
+    ) -> OwnerSettlementProjectionV1<'a> {
+        OwnerSettlementProjectionV1 {
+            market: builder.lab.plane.market_id.bytes(),
+            epoch: builder.general.epoch_id.bytes(),
+            candidate: [0x55; 32],
+            owner_order_set_digest: [0x56; 32],
+            price_scale: builder.lab.grid_value.price_scale,
+            orders,
+            order_len: 3,
+            fees,
+            fee_len: 2,
+            expected: CandidateSettlementTotalsV1 {
+                owner_count: 2,
+                buy_price_units: 25_000,
+                sell_price_units: 25_000,
+                selected_fee_atoms: 0,
+                rounding_pot_price_units: 10_000,
+                owner_slice_end_count: 4,
+            },
+            positions,
+            position_len: 2,
+        }
     }
 
     #[test]
@@ -332,5 +411,78 @@ mod tests {
         assert!(LocalTradingBuilder::campaign(payer, second_owner, 12, 10).is_err());
         assert!(LocalTradingBuilder::campaign(payer, second_owner, 10, 10).is_err());
         assert!(LocalTradingBuilder::campaign(payer, second_owner, 0, 33).is_err());
+    }
+
+    #[test]
+    fn owner_projection_aggregates_orders_and_refuses_foreign_context() {
+        let (payer, second_owner) = actors();
+        let builder = LocalTradingBuilder::campaign(payer, second_owner, 10, 12).unwrap();
+        let buyer = [0x40; 32];
+        let seller = [0x20; 32];
+        let mut orders = [VerifiedSettlementOrderV1 {
+            owner: [0; 32],
+            order_index: 0,
+            side: SettlementSideV1::Buy,
+            consideration_price_units: 0,
+            slice_count: 0,
+            reserved_cash_atoms: 0,
+        }; MAX_ORDERS];
+        orders[0] = VerifiedSettlementOrderV1 {
+            owner: buyer,
+            order_index: 0,
+            side: SettlementSideV1::Buy,
+            consideration_price_units: 12_500,
+            slice_count: 1,
+            reserved_cash_atoms: 2,
+        };
+        orders[1] = VerifiedSettlementOrderV1 {
+            owner: seller,
+            order_index: 2,
+            side: SettlementSideV1::Sell,
+            consideration_price_units: 25_000,
+            slice_count: 2,
+            reserved_cash_atoms: 0,
+        };
+        orders[2] = VerifiedSettlementOrderV1 {
+            owner: buyer,
+            order_index: 1,
+            side: SettlementSideV1::Buy,
+            consideration_price_units: 12_500,
+            slice_count: 1,
+            reserved_cash_atoms: 2,
+        };
+        let mut fees = [SelectedOwnerFeeV1::EMPTY; MAX_ORDERS];
+        fees[0] = SelectedOwnerFeeV1 {
+            owner: buyer,
+            fee_atoms: 0,
+        };
+        fees[1] = SelectedOwnerFeeV1 {
+            owner: seller,
+            fee_atoms: 0,
+        };
+        let mut positions = [ChainOwnerPositionV1::EMPTY; MAX_ORDERS];
+        positions[0] = ChainOwnerPositionV1 {
+            owner: buyer,
+            cash_atoms: 10,
+            reserved_cash_atoms: 4,
+        };
+        positions[1] = ChainOwnerPositionV1 {
+            owner: seller,
+            cash_atoms: 0,
+            reserved_cash_atoms: 0,
+        };
+
+        let projection = settlement_projection(&builder, &orders, &fees, &positions);
+        let plan = builder.project_owner_settlement(&projection).unwrap();
+        assert_eq!(plan.owner_count(), 2);
+        assert_eq!(plan.rows().len(), 2);
+        assert!(plan.rows()[0].expectation().owner < plan.rows()[1].expectation().owner);
+
+        let mut foreign = projection;
+        foreign.market = [0x77; 32];
+        assert_eq!(
+            builder.project_owner_settlement(&foreign),
+            Err(OwnerSettlementPlanError::ContextMismatch)
+        );
     }
 }

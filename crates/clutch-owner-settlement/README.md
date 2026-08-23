@@ -17,6 +17,9 @@ and consume every receipt/root count before closing the epoch.
 The semantic body is exactly 288 bytes. Its outer General V2 account
 tag/version remains centrally owned and unallocated in this isolated lane, so
 the codec cannot accidentally make the runtime capability live by itself.
+The shared pure disposition projector applies the same terminal arithmetic as
+accumulator finalization for client construction and indexing, but cannot stand
+in for runtime receipt authentication or the accumulator's completion state.
 
 The fixed-capacity builder recomputes those rows from the complete authenticated
 filled-order set plus one explicit fee row per participating owner. It refuses
