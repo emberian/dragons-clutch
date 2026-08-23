@@ -5,9 +5,13 @@
 //! or debits a zero-data work reserve. Every work/rent movement is planned by
 //! the separately persisted liveness Recovery compartment.
 
+use clutch_evidence_recovery::RecoveryPhase;
 use clutch_failure_policy_runtime::external_v2::{
     FailureExternalAdmissionReceiptV2, FailureExternalTransitionPlanV2,
     FailureRecoveryTerminalReceiptV2, FailureRuntimeExternalV2, FAILURE_RUNTIME_EXTERNAL_V2_BYTES,
+};
+use clutch_failure_policy_runtime::retirement_v1::{
+    FailureRetirementPrerequisiteV1, FailureRootCloseAuthorizationV1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     plan_runtime_transition_v1, RuntimeAtomicTransitionV1, RuntimePersistedAccountViewV1,
@@ -58,6 +62,9 @@ pub enum ExternalAdapterErrorV2 {
     WrongTransitionKind,
     /// Root rent is no longer present.
     RootRentUnderfunded,
+    /// A retirement prerequisite or occurrence-liability authorization did
+    /// not describe this exact resolved root.
+    RetirementMismatch,
 }
 
 impl From<clutch_failure_policy_runtime::Error> for ExternalAdapterErrorV2 {
@@ -387,6 +394,92 @@ pub fn project_external_recovery_close_v2(
     Ok(ExternalRecoveryCloseV2 {
         preserved_root: root.root,
         liveness,
+    })
+}
+
+/// Exact a0 root disposition after every independently owned retirement fact
+/// has been joined. The permanent a3 replay account is deliberately absent
+/// from these movements and must be sealed, not closed, by the SBF adapter in
+/// the same atomic instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExternalRootCloseV2 {
+    /// Exact resolved a0 semantic root consumed by the close.
+    pub root: AccountId,
+    /// Complete typed occurrence-liability authorization.
+    pub authorization_id: [u8; 32],
+    /// Exact Product occurrence-liability terminal receipt joined by the
+    /// authorization.
+    pub retirement_root_id: [u8; 32],
+    /// Exact pre-funded permanent a3 account which must be terminalized.
+    pub replay_account: AccountId,
+    /// Exact generation-bound replay expectation sealed by the close.
+    pub replay_join_id: [u8; 32],
+    /// Exact authenticated Source release account retained outside Failure.
+    pub source_release_account: AccountId,
+    /// Complete Source release owner/PDA/body receipt sealed into a3.
+    pub source_release_receipt_id: [u8; 32],
+    /// Immutable a0 rent payer receiving only recorded rent principal.
+    pub rent_refund_recipient: AccountId,
+    /// Exact a0 rent principal, never donation or liveness capital.
+    pub rent_refund_lamports: u64,
+    /// Immutable neutral sink receiving every unsolicited a0 lamport.
+    pub donation_neutral_sink: AccountId,
+    /// Exact a0 surplus over recorded rent principal.
+    pub donation_neutral_lamports: u64,
+    /// Complete a0 balance consumed by the two exact movements.
+    pub expected_root_pre_balance: u64,
+}
+
+/// Project the exact a0 close disposition behind the unforgeable whole-market
+/// terminal authorization.
+///
+/// This projector intentionally cannot mint that authorization. Until the
+/// Product occurrence liability owner supplies it, the Recovery router must
+/// leave `CloseFailureRoot` disabled. The separately pre-funded a3 account is
+/// preserved permanently and receives no refund.
+pub fn project_external_root_close_v2(
+    root: AuthenticatedExternalRootV2,
+    prerequisite: FailureRetirementPrerequisiteV1,
+    authorization: FailureRootCloseAuthorizationV1,
+) -> ExternalResultV2<ExternalRootCloseV2> {
+    root.runtime.check()?;
+    let binding = root.runtime.binding();
+    let runtime_state_commitment = root.runtime.state_commitment()?;
+    if root.runtime.phase() != RecoveryPhase::Resolved
+        || prerequisite.binding_id() != root.runtime.binding_id()
+        || prerequisite.market_instance_id() != binding.market_instance_id()
+        || prerequisite.semantic_state_id() != root.runtime.semantic_state_id().bytes()
+        || prerequisite.generation() != binding.generation()
+        || prerequisite.transition_nonce() != root.runtime.transition_nonce()
+        || prerequisite.runtime_state_commitment() != runtime_state_commitment
+        || prerequisite.source_release_manifest_id()
+            != root.runtime.source_release_manifest_id().bytes()
+        || prerequisite.source_release_authentication_id()
+            != root.runtime.source_release_authentication_id().bytes()
+        || authorization.prerequisite_id() != prerequisite.id()
+        || authorization.market_instance_id() != binding.market_instance_id()
+        || authorization.generation() != binding.generation()
+        || authorization.replay_join_id() != prerequisite.replay_join_id()
+    {
+        return Err(ExternalAdapterErrorV2::RetirementMismatch);
+    }
+    let donation_neutral_lamports = root
+        .lamports
+        .checked_sub(root.root_rent_principal_lamports)
+        .ok_or(ExternalAdapterErrorV2::RootRentUnderfunded)?;
+    Ok(ExternalRootCloseV2 {
+        root: root.root,
+        authorization_id: authorization.id().bytes(),
+        retirement_root_id: authorization.product_occurrence_terminal_receipt_id(),
+        replay_account: AccountId::from_bytes(prerequisite.replay_account_id()),
+        replay_join_id: prerequisite.replay_join_id().bytes(),
+        source_release_account: AccountId::from_bytes(prerequisite.source_release_account_id()),
+        source_release_receipt_id: prerequisite.source_release_authentication_id(),
+        rent_refund_recipient: root.root_rent_payer,
+        rent_refund_lamports: root.root_rent_principal_lamports,
+        donation_neutral_sink: root.neutral_sink,
+        donation_neutral_lamports,
+        expected_root_pre_balance: root.lamports,
     })
 }
 

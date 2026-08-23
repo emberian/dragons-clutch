@@ -587,12 +587,12 @@ impl FailureRuntimeExternalV2 {
     }
 
     /// Exact immutable Source release manifest admitted with this occurrence.
-    pub(crate) const fn source_release_manifest_id(self) -> SourceContentId {
+    pub const fn source_release_manifest_id(self) -> SourceContentId {
         self.source_release_manifest_id
     }
 
     /// Complete Source owner/PDA/body authentication admitted at activation.
-    pub(crate) const fn source_release_authentication_id(self) -> SourceContentId {
+    pub const fn source_release_authentication_id(self) -> SourceContentId {
         self.source_release_authentication_id
     }
 
