@@ -86,7 +86,6 @@ use {
         account_len,
         artifact::{ArtifactKind, ARTIFACT_CHUNK_BYTES},
         canonical_market_id, canonical_realm_id,
-        collateral::ParentProfile,
         native_resolution::{
             NativeResolutionAccount, NATIVE_RESOLUTION_LEN, RESOLUTION_MODE_DERIVED_POINT,
         },
@@ -96,8 +95,8 @@ use {
     },
     clutch_solana_reference::{KernelAccount, ReplayAccount, KERNEL_ACCOUNT_LEN},
     clutch_svm_fixture::{
-        compute_unit_limit_data, fixture_policy, fixture_terms, layout_request, COMPUTE_BUDGET,
-        PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM, TOKEN_2022,
+        compute_unit_limit_data, fixture_policy, fixture_policy_identity, fixture_terms,
+        layout_request, COMPUTE_BUDGET, PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM, TOKEN_2022,
     },
     solana_account::{Account, AccountSharedData},
     solana_address::Address,
@@ -629,6 +628,7 @@ impl Founding {
             AccountMeta::new_readonly(RENT_SYSVAR, false),
             AccountMeta::new_readonly(self.hoard_authority, false),
             AccountMeta::new(self.hoard_token, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
         ];
         metas.extend(
             self.outcome_mints
@@ -968,6 +968,8 @@ impl Founding {
             AccountMeta::new_readonly(self.hoard_authority, false),
             AccountMeta::new(self.hoard_token, false),
             AccountMeta::new(source, false),
+            AccountMeta::new_readonly(self.realm, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
         ];
         metas.extend(self.outcome_mints.iter().enumerate().map(|(index, mint)| {
             if index == 0 {
@@ -1150,16 +1152,13 @@ async fn prepare_founding(
     end_bucket: u64,
 ) -> Founding {
     let policy_value = fixture_policy(collateral_mint.to_bytes());
-    let policy_digest = policy_value.digest().unwrap();
-    let profile_id = ParentProfile::from_policy(&policy_value)
-        .and_then(|parent| parent.identity())
-        .unwrap();
+    let (policy_digest, release_id, profile_id) = fixture_policy_identity(policy_value);
     let policy = upload(
         bank,
         ArtifactKind::CollateralPolicy,
         profile_id,
         policy_digest,
-        &policy_value.canonical_bytes().unwrap(),
+        &policy_value.encode().unwrap(),
     )
     .await;
 
@@ -1178,7 +1177,7 @@ async fn prepare_founding(
                         profile: profile_id,
                         realm_nonce: REALM_NONCE,
                         max_outcomes: MAX_OUTCOMES as u8,
-                        profile_version: 1,
+                        profile_version: 2,
                     },
                 ),
                 vec![
@@ -1202,11 +1201,11 @@ async fn prepare_founding(
                 PROGRAM_ID,
                 &layout_request(
                     0,
-                    Intent::InitProfile {
+                    Intent::InitProfileV2 {
                         realm: realm_id,
-                        collateral_policy_digest: policy_digest,
-                        subfield_schema_version: policy_value.schema_version,
-                        profile_version: 1,
+                        collateral_policy_id: policy_digest,
+                        adapter_release_id: release_id,
+                        profile_version: 2,
                     },
                 ),
                 vec![

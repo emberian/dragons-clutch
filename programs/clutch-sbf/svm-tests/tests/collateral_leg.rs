@@ -727,7 +727,9 @@ impl Scenario {
         let addresses = self.plane.create_market_addresses(self.actor.pubkey());
         let mut metas = vec![AccountMeta::new(addresses[0], true)];
         for (index, address) in addresses.iter().enumerate().skip(1) {
-            let writable = matches!(index, 4..=10) || index >= market_init::IX_HOARD_TOKEN;
+            let writable = matches!(index, 4..=10)
+                || index == market_init::IX_HOARD_TOKEN
+                || index >= market_init::IX_OUTCOME_MINT_BASE;
             metas.push(if writable {
                 AccountMeta::new(*address, false)
             } else {

@@ -21,9 +21,10 @@
 use super::direct_selection_v3::DirectBatchPolicyV3;
 use super::direct_selection_v3::DIRECT_BATCH_POLICY_V3_BYTES;
 use super::{
-    account_len, collateral, is_zero, CodecError, Hash32, PriceGridAccount, Result, TermsAccount,
-    HASH_BYTES,
+    account_len, canonical_profile_v2_id, is_zero, CodecError, Hash32, PriceGridAccount, Result,
+    TermsAccount, HASH_BYTES,
 };
+use clutch_collateral_adapter_v2::{CollateralPolicyV2, COLLATERAL_POLICY_V2_BYTES};
 #[cfg(all(
     feature = "non-production-product-series-lab",
     not(target_os = "solana")
@@ -190,7 +191,7 @@ impl ArtifactKind {
     /// Exact canonical body length for this kind.
     pub const fn exact_len(self) -> usize {
         match self {
-            Self::CollateralPolicy => collateral::COLLATERAL_POLICY_BYTES,
+            Self::CollateralPolicy => COLLATERAL_POLICY_V2_BYTES,
             Self::PriceGrid => account_len::PRICE_GRID,
             Self::Terms => account_len::TERMS,
             Self::BatchPolicy => BATCH_POLICY_BYTES,
@@ -510,11 +511,14 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
     }
     match binding.kind {
         ArtifactKind::CollateralPolicy => {
-            let policy = collateral::CollateralPolicy::decode(body)?;
-            let digest = policy.digest()?;
-            let parent =
-                collateral::ParentProfile::from_policy_digest(digest, policy.schema_version)?;
-            if digest != binding.digest || parent.identity()? != binding.context {
+            let policy =
+                CollateralPolicyV2::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            let policy_id = policy.id().map_err(|_| CodecError::MismatchedBinding)?;
+            let policy_id = Hash32::from_bytes(policy_id.bytes());
+            let release_id = Hash32::from_bytes(policy.adapter_release.bytes());
+            if policy_id != binding.digest
+                || canonical_profile_v2_id(policy_id, release_id)? != binding.context
+            {
                 return Err(CodecError::MismatchedBinding);
             }
             Ok(0)

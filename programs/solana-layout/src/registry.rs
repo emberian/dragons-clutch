@@ -105,6 +105,10 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
 pub const REPLAY_SUCCESSOR_ACCOUNT_VERSION: u8 = 1;
+/// Canonical purpose-owned Replay V3 envelope discriminator.
+pub const PURPOSE_REPLAY_V3_ACCOUNT_TAG: u8 = REPLAY_SUCCESSOR_ACCOUNT_TAG;
+/// Canonical purpose-owned Replay envelope version paired with Position V3.
+pub const PURPOSE_REPLAY_V3_ACCOUNT_VERSION: u8 = 3;
 /// Counted-retirement Market wrapper discriminator.
 pub const RETIREMENT_V2_MARKET_ACCOUNT_TAG: u8 = 3;
 /// Counted-retirement Market wrapper version.
@@ -245,8 +249,7 @@ pub const DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG: u8 = 0x93;
 /// Immutable Dealer liveness-schedule account version.
 pub const DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer liveness-schedule account bytes.
-pub const DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 372;
+pub const DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 372;
 /// Authoritative Dealer State V2 account discriminator.
 pub const DEALER_STATE_V2_ACCOUNT_TAG: u8 = 0x94;
 /// Authoritative Dealer State V2 account version.
@@ -284,8 +287,7 @@ pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG: u8 = 0x9b;
 /// Dealer Epoch-binding V2 account version.
 pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer Epoch-binding V2 account bytes.
-pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 772;
+pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 772;
 /// Page-scoped Dealer terminal-allocation discriminator.
 pub const DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG: u8 = 0x9c;
 /// Dealer terminal-allocation account version.
@@ -298,22 +300,19 @@ pub const DEALER_CLAIM_WORK_ACCOUNT_TAG: u8 = 0x9d;
 /// Dealer terminal ClaimWork account version.
 pub const DEALER_CLAIM_WORK_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer terminal ClaimWork account bytes.
-pub const DEALER_CLAIM_WORK_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_140;
+pub const DEALER_CLAIM_WORK_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_140;
 /// Permanent Dealer root-tombstone V2 discriminator.
 pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG: u8 = 0x9e;
 /// Dealer root-tombstone V2 account version.
 pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact current Dealer root-tombstone V2 account bytes.
-pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 468;
+pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 468;
 /// Owner-scoped Dealer exit-ticket discriminator.
 pub const DEALER_EXIT_TICKET_ACCOUNT_TAG: u8 = 0x9f;
 /// Dealer exit-ticket account version.
 pub const DEALER_EXIT_TICKET_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer exit-ticket account bytes.
-pub const DEALER_EXIT_TICKET_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 356;
+pub const DEALER_EXIT_TICKET_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 356;
 /// Single-custody failure semantic root account discriminator.
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG: u8 = 0xa0;
 /// Single-custody failure semantic root account version.
@@ -347,12 +346,9 @@ const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == 8);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == 5);
-const _: () = assert!(
-    GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG
-);
-const _: () = assert!(
-    GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == super::order_page_v5::ORDER_PAGE_V5_VERSION
-);
+const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG);
+const _: () =
+    assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == super::order_page_v5::ORDER_PAGE_V5_VERSION);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG == 0x93);
 const _: () = assert!(DEALER_STATE_V2_ACCOUNT_TAG == 0x94);
@@ -673,6 +669,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "replay-successor-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PURPOSE_REPLAY_V3_ACCOUNT_TAG,
+            version: PURPOSE_REPLAY_V3_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "purpose-owned-replay-v3-envelope",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1772,7 +1777,7 @@ pub const fn decode_extension_action(
                 Some(action) => Ok(ExtensionAction::StructuredClaim(action)),
                 None => Err(RegistryError::UnknownLocalAction),
             }
-        },
+        }
         Some(ExtensionFamily::Dealer) => match DealerPolicyAction::from_tag(local_action) {
             Some(action) => Ok(ExtensionAction::DealerPolicy(action)),
             None => match DealerFacilityAction::from_tag(local_action) {
@@ -1984,6 +1989,10 @@ mod tests {
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,
                 REPLAY_SUCCESSOR_ACCOUNT_VERSION,
+            ),
+            (
+                PURPOSE_REPLAY_V3_ACCOUNT_TAG,
+                PURPOSE_REPLAY_V3_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_TAG,

@@ -7,15 +7,16 @@
 //! rehydration restart, not a validator-ledger replay claim.
 
 use {
+    clutch_collateral_adapter_v2::COLLATERAL_POLICY_V2_BYTES,
     clutch_sbf::{error::ClutchError, seeds},
     clutch_solana_layout::{
         account_len,
         artifact::{decode_stage, ArtifactKind, ARTIFACT_CHUNK_BYTES, ARTIFACT_STAGE_HEADER_BYTES},
-        collateral::{self, ParentProfile},
         Hash32, Intent, PriceGridAccount, TermsAccount, MAX_GRID_TICKS,
     },
     clutch_svm_fixture::{
-        fixture_policy, fixture_terms, layout_request, PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM,
+        fixture_policy, fixture_policy_identity, fixture_terms, layout_request, PROGRAM_ID,
+        RENT_SYSVAR, SYSTEM_PROGRAM,
     },
     solana_account::Account,
     solana_address::Address,
@@ -1006,12 +1007,9 @@ async fn every_admitted_artifact_kind_lands_as_its_exact_raw_codec() {
         .await;
 
     let policy = fixture_policy([0x91; 32]);
-    let policy_digest = policy.digest().expect("policy digest");
-    let profile = ParentProfile::from_policy(&policy)
-        .and_then(|parent| parent.identity())
-        .expect("parent Profile identity");
-    let policy_body = policy.canonical_bytes().expect("policy bytes");
-    assert_eq!(policy_body.len(), collateral::COLLATERAL_POLICY_BYTES);
+    let (policy_digest, _, profile) = fixture_policy_identity(policy);
+    let policy_body = policy.encode().expect("policy bytes");
+    assert_eq!(policy_body.len(), COLLATERAL_POLICY_V2_BYTES);
     let (policy_stage, policy_final) = upload_all(
         &mut context,
         &author,
@@ -1065,11 +1063,8 @@ async fn one_lamport_stage_and_final_prefunds_are_topped_up_by_exact_shortfalls(
     let author = uploader();
     let kind = ArtifactKind::CollateralPolicy;
     let policy = fixture_policy([0xa1; 32]);
-    let digest = policy.digest().expect("policy digest");
-    let profile = ParentProfile::from_policy(&policy)
-        .and_then(|parent| parent.identity())
-        .expect("profile identity");
-    let body = policy.canonical_bytes().expect("policy bytes");
+    let (digest, _, profile) = fixture_policy_identity(policy);
+    let body = policy.encode().expect("policy bytes");
     let (stage, _) = derive_stage(author.pubkey(), kind, profile, digest);
     let (final_account, _) = derive_final(kind, profile, digest);
     let stage_minimum = Rent::default()
@@ -1141,11 +1136,8 @@ async fn excess_prefunds_are_donations_and_never_squatting_authority() {
     let author = uploader();
     let kind = ArtifactKind::CollateralPolicy;
     let policy = fixture_policy([0xb1; 32]);
-    let digest = policy.digest().expect("policy digest");
-    let profile = ParentProfile::from_policy(&policy)
-        .and_then(|parent| parent.identity())
-        .expect("profile identity");
-    let body = policy.canonical_bytes().expect("policy bytes");
+    let (digest, _, profile) = fixture_policy_identity(policy);
+    let body = policy.encode().expect("policy bytes");
     let (stage, _) = derive_stage(author.pubkey(), kind, profile, digest);
     let (final_account, _) = derive_final(kind, profile, digest);
     let stage_donation = Rent::default()

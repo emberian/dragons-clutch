@@ -42,7 +42,6 @@ laboratory-fixtures = []
 # publish exact successor artifacts, including immutable funding-requirement
 # bodies, but deliberately cannot register a Series or create an occurrence.
 non-production-product-series-lab = [
-    "dep:clutch-collateral-adapter-v2",
     "clutch-solana-layout/non-production-product-series-lab",
 ]
 # Mutually exclusive deployable products. Each forwards the same identity to
@@ -91,7 +90,7 @@ clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-bspline = { path = "../../../crates/clutch-bspline" }
 clutch-bspline-accumulator = { path = "../../../crates/clutch-bspline-accumulator" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
-clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2", optional = true }
+clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }

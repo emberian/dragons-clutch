@@ -1346,6 +1346,38 @@ fn collateral_content_id(value: ContentId) -> CollateralId {
     CollateralId::from_bytes(value.bytes())
 }
 
+/// Authenticate Series' immutable Product projection against the canonical
+/// Realm/Profile V2 policy artifact and this ELF's closed release catalog.
+///
+/// This is the only Series constructor for [`BoundRealmCollateralV2`]; callers
+/// cannot supply catalog rows, deployment digests, or parser identities.
+pub fn authenticate_series_realm_collateral_v2(
+    program_id: &Pubkey,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+    realm_account: &AccountInfo<'_>,
+    profile_account: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Outcome<BoundRealmCollateralV2> {
+    let bound = crate::collateral_release::authenticate_realm_collateral_v2(
+        program_id,
+        realm_account,
+        profile_account,
+        policy_account,
+        token_program,
+    )?;
+    let realm = bound.realm();
+    let policy = bound.policy();
+    require(
+        realm.realm == collateral_content_id(artifacts.genesis.realm_id)
+            && realm.profile == collateral_content_id(artifacts.genesis.profile_id)
+            && policy.mint == collateral_content_id(artifacts.funding_terms.collateral_mint)
+            && policy.token_program == collateral_content_id(artifacts.funding_terms.token_program),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(bound)
+}
+
 fn require_collateral_program(
     account: &AccountInfo<'_>,
     bound: BoundRealmCollateralV2,

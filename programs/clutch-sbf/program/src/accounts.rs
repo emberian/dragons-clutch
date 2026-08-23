@@ -232,6 +232,10 @@ pub struct ProfileFacts {
     pub profile: Hash32,
     /// Realm namespace.
     pub realm: Hash32,
+    /// Exact CollateralPolicy V2 content identity.
+    pub collateral_policy_id: Hash32,
+    /// Exact compiled AdapterRelease V2 content identity.
+    pub adapter_release_id: Hash32,
     /// Profile version.
     pub version: u8,
 }
@@ -296,6 +300,8 @@ pub fn read_profile(data: &[u8]) -> Outcome<ProfileFacts> {
     Ok(ProfileFacts {
         profile: value.profile,
         realm: value.realm,
+        collateral_policy_id: value.collateral_policy_id,
+        adapter_release_id: value.adapter_release_id,
         version: value.version,
     })
 }

@@ -202,10 +202,13 @@ async fn start() -> (BanksClient, Keypair, Keypair, Keypair, OrderPlane) {
         seeds::SEED_EPOCH,
         &[&fixture.market_id.bytes(), &epoch_index_bytes],
     );
-    let policy = fixture
-        .policy
-        .digest()
-        .expect("the fixture policy has one immutable identity");
+    let policy = Hash32::from_bytes(
+        fixture
+            .policy
+            .id()
+            .expect("the fixture policy has one immutable identity")
+            .bytes(),
+    );
     let epoch = EpochAccount {
         epoch: epoch_id,
         market: fixture.market_id,
