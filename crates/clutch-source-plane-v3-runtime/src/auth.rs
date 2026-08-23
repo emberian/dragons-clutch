@@ -89,6 +89,34 @@ pub fn account_data_id(key: RuntimeKey, data: &[u8]) -> Result<ContentId> {
     Ok(ContentId::from_bytes(hasher.finalize().into()))
 }
 
+pub(crate) fn account_data_parts_id(
+    key: RuntimeKey,
+    total_len: usize,
+    first: &[u8],
+    second: &[u8],
+) -> Result<ContentId> {
+    key.validate()?;
+    if first
+        .len()
+        .checked_add(second.len())
+        .ok_or(Error::ArithmeticOverflow)?
+        != total_len
+    {
+        return Err(Error::InvalidCodec);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(ACCOUNT_DATA_DOMAIN);
+    hasher.update(key.bytes());
+    hasher.update(
+        u64::try_from(total_len)
+            .map_err(|_| Error::ArithmeticOverflow)?
+            .to_le_bytes(),
+    );
+    hasher.update(first);
+    hasher.update(second);
+    Ok(ContentId::from_bytes(hasher.finalize().into()))
+}
+
 /// Exact reviewed program/ProgramData release binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeploymentBindingV1 {

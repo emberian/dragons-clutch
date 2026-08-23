@@ -4,9 +4,9 @@ use clutch_source_plane_v3::{
     WindowSealV3, WindowSpecV3, WindowWorkV3, RAW_PAGE_BYTES, STATISTIC_RESULT_BYTES,
     WINDOW_SEAL_BYTES, WINDOW_WORK_BYTES,
 };
-use clutch_source_plane_v3_adapter::{decode_account, PdaRecipeV3};
-use clutch_terminal_identity_v1::Id as TerminalId;
+use clutch_source_plane_v3_adapter::PdaRecipeV3;
 
+use crate::account::{decode_runtime_account, RuntimeAccountHeaderV1};
 use crate::auth::{
     account_data_id, domain_id, live_id, AdapterInvocationV1, AuthenticatedSourceRouteV1,
     ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1,
@@ -27,6 +27,7 @@ const RESULT_ABSENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-statistic-re
 const OCCURRENCE_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-record/v1";
 const OCCURRENCE_JOIN_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-join/v1";
 const FAILURE_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/failure-policy-source-handoff/v1";
+const SUCCESS_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/successful-evaluation-source-handoff/v1";
 const OCCURRENCE_MAGIC: [u8; 8] = *b"DCSOCCV1";
 
 /// Exact Product/Series-owned occurrence record width.
@@ -40,6 +41,7 @@ pub struct AuthenticatedRawPageV1 {
     route_id: ContentId,
     account: RuntimeKey,
     account_data_id: ContentId,
+    header: RuntimeAccountHeaderV1,
     page: RawPageV3,
     authentication_id: ContentId,
 }
@@ -50,6 +52,8 @@ pub struct AuthenticatedWindowWorkV1 {
     route_id: ContentId,
     account: RuntimeKey,
     terminal_generation: u64,
+    header: RuntimeAccountHeaderV1,
+    account_data_id: ContentId,
     work: WindowWorkV3,
     authentication_id: ContentId,
 }
@@ -68,6 +72,16 @@ impl AuthenticatedWindowWorkV1 {
     /// Durable close/reopen generation.
     pub const fn terminal_generation(self) -> u64 {
         self.terminal_generation
+    }
+
+    /// Exact decoded runtime account header.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
+    }
+
+    /// Digest of complete before-account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
     }
 
     /// Complete canonical WindowWork body.
@@ -97,6 +111,11 @@ impl AuthenticatedRawPageV1 {
         self.account_data_id
     }
 
+    /// Exact decoded runtime account header.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
+    }
+
     /// Complete canonical raw page.
     pub const fn page(self) -> RawPageV3 {
         self.page
@@ -115,8 +134,7 @@ pub fn authenticate_raw_page_account(
     derived_pda: RuntimeDerivedPdaV1,
 ) -> Result<AuthenticatedRawPageV1> {
     require_immutable_adapter_account(route, account)?;
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, page) = decode_account::<RawPageV3>(account.data, neutral_sink)?;
+    let (header, page) = decode_runtime_account::<RawPageV3>(account.data, route.neutral_sink())?;
     page.validate()?;
     let recipe = PdaRecipeV3::raw_page(route.source_plane_contract_id(), page.id()?)?;
     derived_pda.validate_for(
@@ -136,6 +154,7 @@ pub fn authenticate_raw_page_account(
         route_id: route.route_id(),
         account: account.key,
         account_data_id,
+        header,
         page,
         authentication_id: domain_id(PAGE_AUTH_DOMAIN, &bytes),
     })
@@ -156,8 +175,8 @@ pub fn authenticate_window_work_account(
     validate_window_route(route, window)?;
     let lineage = authenticated_lineage.lineage();
     lineage.validate()?;
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, work) = decode_account::<WindowWorkV3>(account.data, neutral_sink)?;
+    let (header, work) =
+        decode_runtime_account::<WindowWorkV3>(account.data, route.neutral_sink())?;
     work.validate_against(window)?;
     let recipe = PdaRecipeV3::window_work(window.id()?)?;
     derived_pda.validate_for(
@@ -171,7 +190,7 @@ pub fn authenticate_window_work_account(
         || lineage.semantic_binding_id != window.id()?
         || !lineage.is_open
         || lineage.active_account != account.key
-        || lineage.latest_generation != header.terminal.generation
+        || lineage.latest_generation != header.generation
         || lineage.source_work_schedule_id != route.source_work_schedule_id()
         || lineage.neutral_sink != route.neutral_sink()
     {
@@ -186,7 +205,7 @@ pub fn authenticate_window_work_account(
     bytes[96..128].copy_from_slice(&account_data_id.bytes());
     bytes[128..160].copy_from_slice(&state_id.bytes());
     bytes[160..192].copy_from_slice(&lineage.lineage_account.bytes());
-    bytes[192..200].copy_from_slice(&header.terminal.generation.to_le_bytes());
+    bytes[192..200].copy_from_slice(&header.generation.to_le_bytes());
     bytes[200] = header.bump;
     let authentication_id = domain_id(WORK_AUTH_DOMAIN, &bytes);
     if lineage.last_opened_state_id != account_data_id {
@@ -195,7 +214,9 @@ pub fn authenticate_window_work_account(
     Ok(AuthenticatedWindowWorkV1 {
         route_id: route.route_id(),
         account: account.key,
-        terminal_generation: header.terminal.generation,
+        terminal_generation: header.generation,
+        header,
+        account_data_id,
         work,
         authentication_id,
     })
@@ -279,6 +300,7 @@ pub struct AuthenticatedWindowEvidenceV1 {
 pub struct AuthenticatedWindowSealAccountV1 {
     account: RuntimeKey,
     account_data_id: ContentId,
+    header: RuntimeAccountHeaderV1,
     seal: WindowSealV3,
     authentication_id: ContentId,
 }
@@ -292,6 +314,11 @@ impl AuthenticatedWindowSealAccountV1 {
     /// Digest of complete account bytes.
     pub const fn account_data_id(self) -> ContentId {
         self.account_data_id
+    }
+
+    /// Exact decoded runtime account header.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
     }
 
     /// Canonical WindowSeal body.
@@ -850,6 +877,134 @@ pub enum SourceFailureKindV1 {
     SourceEvaluationRefused = 2,
 }
 
+/// Exact successful source evaluation offered to a downstream relation policy.
+///
+/// This receipt proves only source-owned facts. It deliberately contains no
+/// relation-refusal class, relation-policy identity, payout choice, or recovery
+/// transition. Those remain owned by the failure/relation runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SuccessfulEvaluationHandoffV1 {
+    failure_policy_binding_id: ContentId,
+    occurrence: OccurrenceSourceReceiptV1,
+    window_evidence_id: ContentId,
+    evaluation_id: ContentId,
+    result: StatisticResultV3,
+    clock_policy_id: ContentId,
+    clock: ClockSnapshotV1,
+    handoff_id: ContentId,
+}
+
+impl SuccessfulEvaluationHandoffV1 {
+    /// Bind one successful authenticated evaluation at or after immutable maturity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn at_maturity(
+        failure_policy_binding_id: ContentId,
+        occurrence: OccurrenceSourceReceiptV1,
+        clock_policy: &ClockPolicyV1,
+        clock: ClockSnapshotV1,
+        window: &WindowSpecV3,
+        evidence: AuthenticatedWindowEvidenceV1,
+        evaluation: AuthenticatedEvaluationV1,
+    ) -> Result<Self> {
+        live_id(failure_policy_binding_id)?;
+        let clock_policy_id = clock_policy.id()?;
+        let window_id = window.id()?;
+        let result = evaluation.result();
+        let result_id = result.id()?;
+        if result.status() != StatisticResultStatusV3::Success
+            || result.refusal_code() != 0
+            || occurrence.window_id() != window_id
+            || occurrence.window_id() != evidence.window_id()
+            || occurrence.route_id() != evidence.route_id()
+            || occurrence.statistic_key_id() != evaluation.statistic_key_id()
+            || occurrence.source_spec_id() != window.source_spec_id
+            || occurrence.source_spec_id() != evidence.source_spec_id()
+            || occurrence.source_plane_contract_id() != window.source_plane_program_id
+            || occurrence.source_plane_contract_id() != evidence.source_plane_contract_id()
+            || occurrence.repair_generation() != window.repair_generation
+            || occurrence.repair_generation() != evidence.repair_generation()
+            || occurrence.clock_policy_id() != clock_policy_id
+            || evaluation.window_evidence_id() != evidence.id()
+            || result.statistic_key_id() != occurrence.statistic_key_id()
+            || result.window_seal_id() != evidence.seal().id()?
+            || clock.unix_timestamp
+                < clock_policy.bucket_timestamp(window.maturity_bucket_exclusive)?
+        {
+            return Err(Error::InvalidFailureHandoff);
+        }
+        let mut bytes = [0; 240];
+        bytes[..32].copy_from_slice(&failure_policy_binding_id.bytes());
+        bytes[32..64].copy_from_slice(&occurrence.id().bytes());
+        bytes[64..96].copy_from_slice(&evidence.id().bytes());
+        bytes[96..128].copy_from_slice(&evaluation.id().bytes());
+        bytes[128..160].copy_from_slice(&result_id.bytes());
+        bytes[160..192].copy_from_slice(&window_id.bytes());
+        bytes[192..224].copy_from_slice(&clock_policy_id.bytes());
+        bytes[224..232].copy_from_slice(&clock.slot.to_le_bytes());
+        bytes[232..240].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+        Ok(Self {
+            failure_policy_binding_id,
+            occurrence,
+            window_evidence_id: evidence.id(),
+            evaluation_id: evaluation.id(),
+            result,
+            clock_policy_id,
+            clock,
+            handoff_id: domain_id(SUCCESS_HANDOFF_DOMAIN, &bytes),
+        })
+    }
+
+    /// Exact FailurePolicyBindingV1 identity this source fact may be offered to.
+    pub const fn failure_policy_binding_id(self) -> ContentId {
+        self.failure_policy_binding_id
+    }
+
+    /// Product/Series occurrence provenance fixed before evaluation.
+    pub const fn occurrence(self) -> OccurrenceSourceReceiptV1 {
+        self.occurrence
+    }
+
+    /// Exact authenticated final Window evidence.
+    pub const fn window_evidence_id(self) -> ContentId {
+        self.window_evidence_id
+    }
+
+    /// Exact reviewed evaluator invocation/result authentication receipt.
+    pub const fn evaluation_id(self) -> ContentId {
+        self.evaluation_id
+    }
+
+    /// Canonical successful StatisticResult; its constructor provenance is this receipt.
+    pub const fn result(self) -> StatisticResultV3 {
+        self.result
+    }
+
+    /// Content identity of the successful StatisticResult.
+    pub fn statistic_result_id(self) -> Result<ContentId> {
+        self.result.id().map_err(Into::into)
+    }
+
+    /// Exact primary or repair Window identity evaluated.
+    pub const fn window_id(self) -> ContentId {
+        self.occurrence.window_id()
+    }
+
+    /// Frozen Clock policy used to interpret maturity.
+    pub const fn clock_policy_id(self) -> ContentId {
+        self.clock_policy_id
+    }
+
+    /// Adapter-supplied maturity Clock snapshot committed by this receipt.
+    pub const fn clock(self) -> ClockSnapshotV1 {
+        self.clock
+    }
+
+    /// Complete source-only handoff identity.
+    pub const fn id(self) -> ContentId {
+        self.handoff_id
+    }
+}
+
 /// Exact source half of a failure-policy binding; it never selects a payout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailurePolicySourceHandoffV1 {
@@ -912,11 +1067,16 @@ impl FailurePolicySourceHandoffV1 {
         if result.status() != StatisticResultStatusV3::Refused
             || result.refusal_code() == 0
             || occurrence.window_id() != evidence.window_id()
+            || occurrence.route_id() != evidence.route_id()
             || occurrence.statistic_key_id() != evaluation.statistic_key_id()
             || occurrence.source_spec_id() != evidence.source_spec_id()
+            || occurrence.source_plane_contract_id() != evidence.source_plane_contract_id()
             || occurrence.repair_generation() != evidence.repair_generation()
             || occurrence.window_id() != window.id()?
             || occurrence.clock_policy_id() != clock_policy.id()?
+            || evaluation.window_evidence_id() != evidence.id()
+            || result.statistic_key_id() != occurrence.statistic_key_id()
+            || result.window_seal_id() != evidence.seal().id()?
             || clock.unix_timestamp
                 < clock_policy.bucket_timestamp(window.maturity_bucket_exclusive)?
         {
@@ -1024,8 +1184,8 @@ pub fn authenticate_window_seal_account(
 ) -> Result<AuthenticatedWindowSealAccountV1> {
     require_immutable_adapter_account(route, account)?;
     validate_window_route(route, window)?;
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, seal) = decode_account::<WindowSealV3>(account.data, neutral_sink)?;
+    let (header, seal) =
+        decode_runtime_account::<WindowSealV3>(account.data, route.neutral_sink())?;
     seal.validate_against(window)?;
     let recipe = PdaRecipeV3::window_seal(window.id()?)?;
     derived_pda.validate_for(
@@ -1044,6 +1204,7 @@ pub fn authenticate_window_seal_account(
     Ok(AuthenticatedWindowSealAccountV1 {
         account: account.key,
         account_data_id,
+        header,
         seal,
         authentication_id: domain_id(SEAL_ACCOUNT_AUTH_DOMAIN, &bytes),
     })

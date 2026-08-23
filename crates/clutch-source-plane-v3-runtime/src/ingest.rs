@@ -2,9 +2,9 @@ use clutch_source_plane_v3::{
     ContentId, FixedCodec, OpenRawPageV3, RawPageV3, SourceHeadV3, MAX_RAW_PAGE_RECORDS,
     OPEN_RAW_PAGE_BYTES,
 };
-use clutch_source_plane_v3_adapter::{decode_account, PdaRecipeV3};
-use clutch_terminal_identity_v1::Id as TerminalId;
+use clutch_source_plane_v3_adapter::PdaRecipeV3;
 
+use crate::account::{decode_runtime_account, RuntimeAccountHeaderV1};
 use crate::auth::{
     account_data_id, domain_id, AuthenticatedBoundaryV1, AuthenticatedSourceRouteV1,
     RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
@@ -196,6 +196,8 @@ pub struct AuthenticatedSourceHeadV1 {
     route_id: ContentId,
     account: RuntimeKey,
     terminal_generation: u64,
+    header: RuntimeAccountHeaderV1,
+    account_data_id: ContentId,
     head: SourceHeadV3,
     authentication_id: ContentId,
 }
@@ -216,6 +218,16 @@ impl AuthenticatedSourceHeadV1 {
         self.terminal_generation
     }
 
+    /// Exact decoded runtime account header.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
+    }
+
+    /// Digest of complete before-account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
     /// Complete canonical SourceHead body.
     pub const fn head(self) -> SourceHeadV3 {
         self.head
@@ -233,6 +245,8 @@ pub struct AuthenticatedOpenRawPageV1 {
     route_id: ContentId,
     account: RuntimeKey,
     terminal_generation: u64,
+    header: RuntimeAccountHeaderV1,
+    account_data_id: ContentId,
     open: OpenRawPageV3,
     authentication_id: ContentId,
 }
@@ -251,6 +265,16 @@ impl AuthenticatedOpenRawPageV1 {
     /// Durable terminal/reopen generation.
     pub const fn terminal_generation(self) -> u64 {
         self.terminal_generation
+    }
+
+    /// Exact decoded runtime account header.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
+    }
+
+    /// Digest of complete before-account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
     }
 
     /// Complete canonical OpenRawPage body.
@@ -272,8 +296,8 @@ pub fn authenticate_source_head_account(
     authenticated_lineage: AuthenticatedReopenLineageV1,
 ) -> Result<AuthenticatedSourceHeadV1> {
     require_mutable_adapter_account(route, account)?;
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, head) = decode_account::<SourceHeadV3>(account.data, neutral_sink)?;
+    let (header, head) =
+        decode_runtime_account::<SourceHeadV3>(account.data, route.neutral_sink())?;
     head.validate()?;
     if head.source_spec_id != route.source_spec_id() {
         return Err(Error::MismatchedBinding);
@@ -292,7 +316,7 @@ pub fn authenticate_source_head_account(
         LineageFamilyV1::SourceHead,
         recipe_id,
         account.key,
-        header.terminal.generation,
+        header.generation,
         account_data_id,
     )?;
     let mut bytes = [0; 144];
@@ -300,12 +324,14 @@ pub fn authenticate_source_head_account(
     bytes[32..64].copy_from_slice(&account.key.bytes());
     bytes[64..96].copy_from_slice(&account_data_id.bytes());
     bytes[96..128].copy_from_slice(&head.snapshot_id()?.bytes());
-    bytes[128..136].copy_from_slice(&header.terminal.generation.to_le_bytes());
+    bytes[128..136].copy_from_slice(&header.generation.to_le_bytes());
     bytes[136] = header.bump;
     Ok(AuthenticatedSourceHeadV1 {
         route_id: route.route_id(),
         account: account.key,
-        terminal_generation: header.terminal.generation,
+        terminal_generation: header.generation,
+        header,
+        account_data_id,
         head,
         authentication_id: domain_id(HEAD_AUTH_DOMAIN, &bytes),
     })
@@ -323,8 +349,8 @@ pub fn authenticate_open_raw_page_account(
     if head.route_id() != route.route_id() {
         return Err(Error::MismatchedBinding);
     }
-    let neutral_sink = TerminalId::from_bytes(route.neutral_sink().bytes());
-    let (header, open) = decode_account::<OpenRawPageV3>(account.data, neutral_sink)?;
+    let (header, open) =
+        decode_runtime_account::<OpenRawPageV3>(account.data, route.neutral_sink())?;
     open.validate_against_head(&head.head())?;
     let recipe = PdaRecipeV3::open_raw_page(
         route.source_plane_contract_id(),
@@ -341,7 +367,7 @@ pub fn authenticate_open_raw_page_account(
         LineageFamilyV1::OpenRawPage,
         recipe_id,
         account.key,
-        header.terminal.generation,
+        header.generation,
         account_data_id,
     )?;
     let open_state_id = open_state_id(&open)?;
@@ -351,12 +377,14 @@ pub fn authenticate_open_raw_page_account(
     bytes[64..96].copy_from_slice(&account.key.bytes());
     bytes[96..128].copy_from_slice(&account_data_id.bytes());
     bytes[128..160].copy_from_slice(&open_state_id.bytes());
-    bytes[160..168].copy_from_slice(&header.terminal.generation.to_le_bytes());
+    bytes[160..168].copy_from_slice(&header.generation.to_le_bytes());
     bytes[168] = header.bump;
     Ok(AuthenticatedOpenRawPageV1 {
         route_id: route.route_id(),
         account: account.key,
-        terminal_generation: header.terminal.generation,
+        terminal_generation: header.generation,
+        header,
+        account_data_id,
         open,
         authentication_id: domain_id(OPEN_AUTH_DOMAIN, &bytes),
     })
