@@ -1527,10 +1527,11 @@ fn disabled_adapter_refuses_before_payload_or_account_inspection() {
 #[test]
 fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
     let bearer = fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerExact);
-    assert_eq!(bearer.account_count, 20);
+    assert_eq!(bearer.account_count, 21);
     assert_eq!(bearer.writable_mask, 0x95300);
     assert_eq!(bearer.writable_mask & (1 << 18), 0);
     assert_ne!(bearer.writable_mask & (1 << 19), 0);
+    assert_eq!(bearer.writable_mask & (1 << 20), 0);
     assert_eq!(bearer.signer_mask, 1);
     assert!(bearer.outcome_mint_suffix);
     assert_eq!(bearer.post_mint_accounts, 0);
@@ -1548,9 +1549,10 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
 
     let bearer_credit =
         fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerCredit);
-    assert_eq!(bearer_credit.account_count, 20);
+    assert_eq!(bearer_credit.account_count, 21);
     assert_eq!(bearer_credit.writable_mask & (1 << 18), 0);
     assert_ne!(bearer_credit.writable_mask & (1 << 19), 0);
+    assert_eq!(bearer_credit.writable_mask & (1 << 20), 0);
     assert_eq!(bearer_credit.signer_mask, 1);
     assert!(bearer_credit.outcome_mint_suffix);
     assert_eq!(bearer_credit.post_mint_accounts, 4);
@@ -1562,10 +1564,11 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
     assert_eq!(transfer.account_count, 21);
     assert_eq!(transfer.signer_mask, 0b11);
     assert!(transfer.credit_creation_suffix);
-    assert_eq!(transfer.external_payout_extra_accounts, 2);
+    assert_eq!(transfer.external_payout_extra_accounts, 3);
     assert_ne!(transfer.writable_mask, transfer.external_writable_mask);
     assert_eq!(transfer.external_writable_mask & (1 << 16), 0);
     assert_ne!(transfer.external_writable_mask & (1 << 19), 0);
+    assert_eq!(transfer.external_writable_mask & (1 << 20), 0);
 
     let close =
         fractional_account_contract_v1(FractionalRedemptionActionV1::CloseZeroCredit);

@@ -103,39 +103,189 @@ pub const LOCAL_REAL_LEGACY_SPL_RELEASE_V2: AdapterReleaseV2 = AdapterReleaseV2:
     COLLATERAL_LEGACY_SPL_PARSER_CPI_CODE_ID_V2,
 );
 
+#[cfg(all(
+    feature = "laboratory-fixtures",
+    feature = "observed-positive-collateral-release-manifest"
+))]
+compile_error!(
+    "laboratory synthesized collateral and observed-positive release manifests are distinct ELFs"
+);
+
+/// Checked release-manifest row selected by this exact program build.
+///
+/// Observed-positive rows pin every mutable loader coordinate in addition to
+/// the immutable ELF identity already owned by [`AdapterReleaseV2`]. The
+/// synthesized local row deliberately leaves ProgramData zero because the
+/// exact linked account is authenticated from the local genesis Program body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CompiledCollateralReleaseManifestV2 {
+    release: AdapterReleaseV2,
+    locus: CollateralDeploymentLocusV2,
+    expected_programdata_account: Id,
+    expected_deployment_slot: u64,
+    expected_upgrade_authority: CollateralUpgradeAuthorityV2,
+}
+
+impl CompiledCollateralReleaseManifestV2 {
+    /// Construct one checked positive-slot row in a repository-owned release
+    /// manifest. Runtime validation still rejects zero identities/slot and any
+    /// mismatch against the linked loader accounts.
+    pub(crate) const fn observed_positive(
+        release: AdapterReleaseV2,
+        programdata_account: Id,
+        deployment_slot: u64,
+        upgrade_authority: CollateralUpgradeAuthorityV2,
+    ) -> Self {
+        Self {
+            release,
+            locus: CollateralDeploymentLocusV2::ObservedPositive,
+            expected_programdata_account: programdata_account,
+            expected_deployment_slot: deployment_slot,
+            expected_upgrade_authority: upgrade_authority,
+        }
+    }
+}
+
 #[cfg(feature = "laboratory-fixtures")]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 2] = [
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
     LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
 ];
-#[cfg(not(feature = "laboratory-fixtures"))]
+
+#[cfg(feature = "laboratory-fixtures")]
+static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManifestV2; 2] = [
+    CompiledCollateralReleaseManifestV2 {
+        release: LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+        locus: CollateralDeploymentLocusV2::SynthesizedGenesisZero,
+        expected_programdata_account: Id::ZERO,
+        expected_deployment_slot: 0,
+        expected_upgrade_authority: CollateralUpgradeAuthorityV2::SynthesizedDefault,
+    },
+    CompiledCollateralReleaseManifestV2 {
+        release: LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
+        locus: CollateralDeploymentLocusV2::SynthesizedGenesisZero,
+        expected_programdata_account: Id::ZERO,
+        expected_deployment_slot: 0,
+        expected_upgrade_authority: CollateralUpgradeAuthorityV2::SynthesizedDefault,
+    },
+];
+
+#[cfg(all(
+    not(feature = "laboratory-fixtures"),
+    not(feature = "observed-positive-collateral-release-manifest")
+))]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 0] = [];
+
+#[cfg(all(
+    not(feature = "laboratory-fixtures"),
+    not(feature = "observed-positive-collateral-release-manifest")
+))]
+static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManifestV2; 0] = [];
+
+#[cfg(feature = "observed-positive-collateral-release-manifest")]
+fn compiled_collateral_releases_v2() -> &'static [AdapterReleaseV2] {
+    &crate::observed_collateral_release_manifest_v2::OBSERVED_COLLATERAL_RELEASES_V2
+}
+
+#[cfg(not(feature = "observed-positive-collateral-release-manifest"))]
+fn compiled_collateral_releases_v2() -> &'static [AdapterReleaseV2] {
+    &COMPILED_COLLATERAL_RELEASES_V2
+}
+
+#[cfg(feature = "observed-positive-collateral-release-manifest")]
+fn compiled_collateral_release_manifests_v2(
+) -> &'static [CompiledCollateralReleaseManifestV2] {
+    &crate::observed_collateral_release_manifest_v2::OBSERVED_COLLATERAL_RELEASE_MANIFESTS_V2
+}
+
+#[cfg(not(feature = "observed-positive-collateral-release-manifest"))]
+fn compiled_collateral_release_manifests_v2(
+) -> &'static [CompiledCollateralReleaseManifestV2] {
+    &COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2
+}
 
 const _: () = assert!(ADAPTER_RELEASE_V2_BYTES == 192);
 
 /// Return the closed release catalog compiled into this program.
 ///
 /// The local-real laboratory ELF has binary-pinned Token-2022 and legacy SPL
-/// rows. Default and public-cluster artifacts deliberately have no rows and
-/// therefore deny collateral admission until separately reviewed deployment
-/// manifests are compiled into that exact ELF.
+/// rows. Default artifacts have no rows. A public/devnet artifact can select
+/// only the separately reviewed observed-positive manifest compiled into that
+/// exact ELF; the checked repository manifest is currently empty.
 pub fn compiled_collateral_catalog_v2() -> Outcome<AdapterCatalogV2> {
-    AdapterCatalogV2::new(&COMPILED_COLLATERAL_RELEASES_V2)
+    validate_compiled_collateral_release_manifest_v2(
+        compiled_collateral_releases_v2(),
+        compiled_collateral_release_manifests_v2(),
+    )?;
+    AdapterCatalogV2::new(compiled_collateral_releases_v2())
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
-fn compiled_collateral_deployment_locus_v2(
+fn validate_compiled_collateral_release_manifest_v2(
+    releases: &[AdapterReleaseV2],
+    manifests: &[CompiledCollateralReleaseManifestV2],
+) -> Outcome<()> {
+    require(
+        releases.len() == manifests.len(),
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    for release in releases {
+        let mut found = false;
+        for manifest in manifests {
+            if manifest.release == *release {
+                require(!found, ClutchError::AuthorizationUnavailable)?;
+                found = true;
+            }
+        }
+        require(found, ClutchError::AuthorizationUnavailable)?;
+    }
+    for manifest in manifests {
+        require(
+            releases.iter().any(|release| *release == manifest.release)
+                && match manifest.locus {
+                    CollateralDeploymentLocusV2::SynthesizedGenesisZero => {
+                        manifest.expected_programdata_account.is_zero()
+                            && manifest.expected_deployment_slot == 0
+                            && manifest.expected_upgrade_authority
+                                == CollateralUpgradeAuthorityV2::SynthesizedDefault
+                    }
+                    CollateralDeploymentLocusV2::ObservedPositive => {
+                        !manifest.expected_programdata_account.is_zero()
+                            && manifest.expected_deployment_slot != 0
+                            && match manifest.expected_upgrade_authority {
+                                CollateralUpgradeAuthorityV2::Immutable => true,
+                                CollateralUpgradeAuthorityV2::Present(authority) => {
+                                    !authority.is_zero()
+                                }
+                                CollateralUpgradeAuthorityV2::SynthesizedDefault => false,
+                            }
+                    }
+                },
+            ClutchError::AuthorizationUnavailable,
+        )?;
+    }
+    Ok(())
+}
+
+fn compiled_collateral_release_manifest_v2(
     release: AdapterReleaseV2,
-) -> Outcome<CollateralDeploymentLocusV2> {
-    #[cfg(feature = "laboratory-fixtures")]
-    {
-        if release == LOCAL_REAL_TOKEN_2022_RELEASE_V2
-            || release == LOCAL_REAL_LEGACY_SPL_RELEASE_V2
-        {
-            return Ok(CollateralDeploymentLocusV2::SynthesizedGenesisZero);
+) -> Outcome<CompiledCollateralReleaseManifestV2> {
+    validate_compiled_collateral_release_manifest_v2(
+        compiled_collateral_releases_v2(),
+        compiled_collateral_release_manifests_v2(),
+    )?;
+    let manifests = compiled_collateral_release_manifests_v2();
+    require(
+        compiled_collateral_releases_v2()
+            .iter()
+            .any(|row| *row == release),
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    for manifest in manifests {
+        if manifest.release == release {
+            return Ok(*manifest);
         }
     }
-    let _ = release;
     Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
@@ -200,24 +350,25 @@ pub(crate) fn authenticate_collateral_release_deployment_v2(
     token_program: &AccountInfo<'_>,
     token_programdata: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedCollateralReleaseDeploymentV2> {
-    let locus = compiled_collateral_deployment_locus_v2(release)?;
-    authenticate_collateral_release_deployment_at_locus_v2(
+    let manifest = compiled_collateral_release_manifest_v2(release)?;
+    authenticate_collateral_release_deployment_at_manifest_v2(
         release,
-        locus,
+        manifest,
         token_program,
         token_programdata,
     )
 }
 
-fn authenticate_collateral_release_deployment_at_locus_v2(
+fn authenticate_collateral_release_deployment_at_manifest_v2(
     release: AdapterReleaseV2,
-    locus: CollateralDeploymentLocusV2,
+    manifest: CompiledCollateralReleaseManifestV2,
     token_program: &AccountInfo<'_>,
     token_programdata: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedCollateralReleaseDeploymentV2> {
     release
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require(manifest.release == release, ClutchError::AuthorizationUnavailable)?;
     require(
         token_program.key != token_programdata.key
             && token_program.key.to_bytes() == release.token_program.bytes()
@@ -251,7 +402,7 @@ fn authenticate_collateral_release_deployment_at_locus_v2(
         token_programdata.executable,
         &programdata_data,
     );
-    let (deployment_slot, upgrade_authority) = match locus {
+    let (deployment_slot, upgrade_authority) = match manifest.locus {
         CollateralDeploymentLocusV2::SynthesizedGenesisZero => {
             let loader = decode_synthesized_genesis_loader_pair_v1(program_view, programdata_view)
                 .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
@@ -275,6 +426,13 @@ fn authenticate_collateral_release_deployment_at_locus_v2(
                     CollateralUpgradeAuthorityV2::Present(Id::from_bytes(authority))
                 }
             };
+            require(
+                loader.state.linked_programdata
+                    == manifest.expected_programdata_account.bytes()
+                    && loader.state.deployment_slot == manifest.expected_deployment_slot
+                    && authority == manifest.expected_upgrade_authority,
+                ClutchError::AuthorizationUnavailable,
+            )?;
             (loader.state.deployment_slot, authority)
         }
     };
@@ -293,7 +451,7 @@ fn authenticate_collateral_release_deployment_at_locus_v2(
         CollateralUpgradeAuthorityV2::Immutable => (0u8, [0u8; 32]),
         CollateralUpgradeAuthorityV2::Present(authority) => (1u8, authority.bytes()),
     };
-    let locus_byte = [locus.wire()];
+    let locus_byte = [manifest.locus.wire()];
     let authority_tag = [authority_tag];
     let receipt_id = Id::from_bytes(
         solana_sha256_hasher::hashv(&[
@@ -317,7 +475,7 @@ fn authenticate_collateral_release_deployment_at_locus_v2(
         release_id,
         programdata_account: Id::from_bytes(token_programdata.key.to_bytes()),
         deployment_slot,
-        locus,
+        locus: manifest.locus,
         upgrade_authority,
         receipt_id,
     })
@@ -559,6 +717,27 @@ mod deployment_release_tests {
         )
     }
 
+    fn manifest(
+        release: AdapterReleaseV2,
+        locus: CollateralDeploymentLocusV2,
+        slot: u64,
+        authority: CollateralUpgradeAuthorityV2,
+    ) -> CompiledCollateralReleaseManifestV2 {
+        CompiledCollateralReleaseManifestV2 {
+            release,
+            locus,
+            expected_programdata_account: if locus
+                == CollateralDeploymentLocusV2::ObservedPositive
+            {
+                Id::from_bytes([41; 32])
+            } else {
+                Id::ZERO
+            },
+            expected_deployment_slot: slot,
+            expected_upgrade_authority: authority,
+        }
+    }
+
     #[test]
     fn both_token_families_accept_only_the_exact_synthesized_genesis_locus() {
         for token_2022 in [false, true] {
@@ -566,9 +745,14 @@ mod deployment_release_tests {
             let (mut program, mut programdata) = cells(release, 0, Some([0; 32]), ELF);
             let program_info = program.info();
             let programdata_info = programdata.info();
-            let accepted = authenticate_collateral_release_deployment_at_locus_v2(
+            let accepted = authenticate_collateral_release_deployment_at_manifest_v2(
                 release,
-                CollateralDeploymentLocusV2::SynthesizedGenesisZero,
+                manifest(
+                    release,
+                    CollateralDeploymentLocusV2::SynthesizedGenesisZero,
+                    0,
+                    CollateralUpgradeAuthorityV2::SynthesizedDefault,
+                ),
                 &program_info,
                 &programdata_info,
             )
@@ -595,9 +779,20 @@ mod deployment_release_tests {
             let (mut program, mut programdata) = cells(release, 17, authority, ELF);
             let program_info = program.info();
             let programdata_info = programdata.info();
-            let accepted = authenticate_collateral_release_deployment_at_locus_v2(
+            let expected_authority = match authority {
+                None => CollateralUpgradeAuthorityV2::Immutable,
+                Some(authority) => {
+                    CollateralUpgradeAuthorityV2::Present(Id::from_bytes(authority))
+                }
+            };
+            let accepted = authenticate_collateral_release_deployment_at_manifest_v2(
                 release,
-                CollateralDeploymentLocusV2::ObservedPositive,
+                manifest(
+                    release,
+                    CollateralDeploymentLocusV2::ObservedPositive,
+                    17,
+                    expected_authority,
+                ),
                 &program_info,
                 &programdata_info,
             )
@@ -617,15 +812,100 @@ mod deployment_release_tests {
     }
 
     #[test]
+    fn observed_manifest_refuses_stale_slot_authority_and_programdata() {
+        let release = release(true);
+        let (mut program, mut programdata) = cells(release, 17, Some([73; 32]), ELF);
+        let program_info = program.info();
+        let programdata_info = programdata.info();
+        for hostile in [
+            CompiledCollateralReleaseManifestV2::observed_positive(
+                release,
+                Id::from_bytes([41; 32]),
+                18,
+                CollateralUpgradeAuthorityV2::Present(Id::from_bytes([73; 32])),
+            ),
+            CompiledCollateralReleaseManifestV2::observed_positive(
+                release,
+                Id::from_bytes([41; 32]),
+                17,
+                CollateralUpgradeAuthorityV2::Immutable,
+            ),
+            CompiledCollateralReleaseManifestV2::observed_positive(
+                release,
+                Id::from_bytes([42; 32]),
+                17,
+                CollateralUpgradeAuthorityV2::Present(Id::from_bytes([73; 32])),
+            ),
+        ] {
+            assert!(authenticate_collateral_release_deployment_at_manifest_v2(
+                release,
+                hostile,
+                &program_info,
+                &programdata_info,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn compiled_manifest_refuses_duplicate_missing_and_wrong_locus_rows() {
+        let token_2022 = release(true);
+        let legacy = release(false);
+        let token_2022_manifest = manifest(
+            token_2022,
+            CollateralDeploymentLocusV2::ObservedPositive,
+            17,
+            CollateralUpgradeAuthorityV2::Immutable,
+        );
+        let legacy_manifest = manifest(
+            legacy,
+            CollateralDeploymentLocusV2::ObservedPositive,
+            17,
+            CollateralUpgradeAuthorityV2::Immutable,
+        );
+        assert!(validate_compiled_collateral_release_manifest_v2(
+            &[token_2022, legacy],
+            &[token_2022_manifest, legacy_manifest],
+        )
+        .is_ok());
+        assert!(validate_compiled_collateral_release_manifest_v2(
+            &[token_2022, legacy],
+            &[token_2022_manifest, token_2022_manifest],
+        )
+        .is_err());
+        assert!(validate_compiled_collateral_release_manifest_v2(
+            &[token_2022],
+            &[],
+        )
+        .is_err());
+        assert!(validate_compiled_collateral_release_manifest_v2(
+            &[token_2022],
+            &[CompiledCollateralReleaseManifestV2 {
+                release: token_2022,
+                locus: CollateralDeploymentLocusV2::ObservedPositive,
+                expected_programdata_account: Id::ZERO,
+                expected_deployment_slot: 17,
+                expected_upgrade_authority: CollateralUpgradeAuthorityV2::Immutable,
+            }],
+        )
+        .is_err());
+    }
+
+    #[test]
     fn wrong_locus_bytes_and_programdata_substitution_refuse() {
         let release = release(true);
 
         let (mut program, mut wrong_synth_authority) = cells(release, 0, None, ELF);
         let program_info = program.info();
         let wrong_synth_authority_info = wrong_synth_authority.info();
-        assert!(authenticate_collateral_release_deployment_at_locus_v2(
+        assert!(authenticate_collateral_release_deployment_at_manifest_v2(
             release,
-            CollateralDeploymentLocusV2::SynthesizedGenesisZero,
+            manifest(
+                release,
+                CollateralDeploymentLocusV2::SynthesizedGenesisZero,
+                0,
+                CollateralUpgradeAuthorityV2::SynthesizedDefault,
+            ),
             &program_info,
             &wrong_synth_authority_info,
         )
@@ -634,9 +914,14 @@ mod deployment_release_tests {
         let (mut program, mut zero_observed) = cells(release, 0, Some([73; 32]), ELF);
         let program_info = program.info();
         let zero_observed_info = zero_observed.info();
-        assert!(authenticate_collateral_release_deployment_at_locus_v2(
+        assert!(authenticate_collateral_release_deployment_at_manifest_v2(
             release,
-            CollateralDeploymentLocusV2::ObservedPositive,
+            manifest(
+                release,
+                CollateralDeploymentLocusV2::ObservedPositive,
+                17,
+                CollateralUpgradeAuthorityV2::Present(Id::from_bytes([73; 32])),
+            ),
             &program_info,
             &zero_observed_info,
         )
@@ -645,9 +930,14 @@ mod deployment_release_tests {
         let (mut program, mut wrong_bytes) = cells(release, 17, None, b"different-elf");
         let program_info = program.info();
         let wrong_bytes_info = wrong_bytes.info();
-        assert!(authenticate_collateral_release_deployment_at_locus_v2(
+        assert!(authenticate_collateral_release_deployment_at_manifest_v2(
             release,
-            CollateralDeploymentLocusV2::ObservedPositive,
+            manifest(
+                release,
+                CollateralDeploymentLocusV2::ObservedPositive,
+                17,
+                CollateralUpgradeAuthorityV2::Immutable,
+            ),
             &program_info,
             &wrong_bytes_info,
         )
@@ -657,9 +947,14 @@ mod deployment_release_tests {
         substituted.key = Pubkey::new_from_array([42; 32]);
         let program_info = program.info();
         let substituted_info = substituted.info();
-        assert!(authenticate_collateral_release_deployment_at_locus_v2(
+        assert!(authenticate_collateral_release_deployment_at_manifest_v2(
             release,
-            CollateralDeploymentLocusV2::ObservedPositive,
+            manifest(
+                release,
+                CollateralDeploymentLocusV2::ObservedPositive,
+                17,
+                CollateralUpgradeAuthorityV2::Immutable,
+            ),
             &program_info,
             &substituted_info,
         )

@@ -23,7 +23,7 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_value_authority_v2, authenticate_general_position_replay_v1,
+    authenticate_general_market_value_authority_v2, authenticate_general_position_replay_v2,
     validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
 
@@ -92,11 +92,11 @@ pub fn process_complete_set_v3(
     )?;
     let liabilities = value_authority.liabilities;
     require(
-        liabilities.market_binding.market_instance_v2_id.bytes() == market_instance_id.bytes()
+        liabilities.market_binding.base().market_instance_v2_id.bytes() == market_instance_id.bytes()
             && accounts[ix::HOARD_TOKEN].key.to_bytes() == liabilities.hoard.token_account.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let position = authenticate_general_position_replay_v1(
+    let position = authenticate_general_position_replay_v2(
         program_id,
         liabilities.bound,
         &accounts[ix::MARKET_BINDING],

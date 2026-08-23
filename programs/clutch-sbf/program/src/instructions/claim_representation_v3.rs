@@ -27,7 +27,7 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_general_position_replay_v1,
+    authenticate_general_market_liabilities_v2, authenticate_general_position_replay_v2,
     validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
 
@@ -154,7 +154,7 @@ pub fn process_claim_representation_v3(
         ClutchError::UnauthorizedActor,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let liabilities = authenticate_general_market_liabilities_v2(
         program_id,
         &accounts[ix::REALM],
         &accounts[ix::PROFILE],
@@ -169,13 +169,13 @@ pub fn process_claim_representation_v3(
         true,
     )?;
     require(
-        liabilities.market_binding.market_instance_v2_id.bytes()
+        liabilities.market_binding.base().market_instance_v2_id.bytes()
             == request.market_instance_id.bytes()
-            && liabilities.market_binding.outcome_count == observed_outcome_count
-            && request.outcome < liabilities.market_binding.outcome_count,
+            && liabilities.market_binding.base().outcome_count == observed_outcome_count
+            && request.outcome < liabilities.market_binding.base().outcome_count,
         ClutchError::MismatchedState,
     )?;
-    let position = authenticate_general_position_replay_v1(
+    let position = authenticate_general_position_replay_v2(
         program_id,
         liabilities.bound,
         &accounts[ix::MARKET_BINDING],
@@ -194,7 +194,7 @@ pub fn process_claim_representation_v3(
         program_id,
         accounts,
         request.market_instance_id.bytes(),
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         request.outcome,
     )?;
     let token_before = token_observation(accounts, request.outcome)?;
@@ -267,7 +267,7 @@ pub fn process_claim_representation_v3(
         program_id,
         accounts,
         request.market_instance_id.bytes(),
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         request.outcome,
     )?;
     let token_after = token_observation(accounts, request.outcome)?;

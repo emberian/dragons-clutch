@@ -291,9 +291,9 @@ pub fn process_external_redemption_v3(
     let liabilities = value_authority.liabilities;
     require(
         request.market_instance_id.bytes()
-            == liabilities.market_binding.market_instance_v2_id.bytes()
-            && liabilities.market_binding.outcome_count == observed_outcome_count
-            && request.outcome < liabilities.market_binding.outcome_count
+            == liabilities.market_binding.base().market_instance_v2_id.bytes()
+            && liabilities.market_binding.base().outcome_count == observed_outcome_count
+            && request.outcome < liabilities.market_binding.base().outcome_count
             && accounts[ix::COLLATERAL_MINT].key.to_bytes()
                 == liabilities.bound.policy().mint.bytes()
             && accounts[ix::HOARD_TOKEN].key.to_bytes() == liabilities.hoard.token_account.bytes()
@@ -323,7 +323,7 @@ pub fn process_external_redemption_v3(
         program_id,
         accounts,
         request.market_instance_id.bytes(),
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         request.outcome,
     )?;
     let token_before = bearer_observation(accounts, request.outcome)?;
@@ -364,7 +364,7 @@ pub fn process_external_redemption_v3(
         program_id,
         accounts,
         request.market_instance_id.bytes(),
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         request.outcome,
     )?;
     let token_after = bearer_observation(accounts, request.outcome)?;
