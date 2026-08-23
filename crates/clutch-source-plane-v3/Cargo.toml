@@ -1,0 +1,19 @@
+[package]
+name = "clutch-source-plane-v3"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Allocation-free SourcePlane V3 and recurring product compiler core"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+sha2 = { version = "0.10.9", default-features = false }
+
+[dev-dependencies]
+serde_json = "1.0"

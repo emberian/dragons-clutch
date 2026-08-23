@@ -1,0 +1,110 @@
+{
+  "schema": "dragons-clutch/source-plane-v3-vectors/1",
+  "hash": "sha256(domain || canonical_body)",
+  "domains": {
+    "source_plane_program": "dragons-clutch/source-plane-program/v3",
+    "raw_page": "dragons-clutch/raw-page/v3",
+    "window": "dragons-clutch/window/v3",
+    "window_seal": "dragons-clutch/window-seal/v3",
+    "summary_program": "dragons-clutch/summary-program/v3",
+    "statistic_key": "dragons-clutch/statistic-key/v3",
+    "statistic_result": "dragons-clutch/statistic-result-content/v3",
+    "template": "dragons-clutch/product-template/v3",
+    "series": "dragons-clutch/series-plan/v3",
+    "instance": "dragons-clutch/instance/v3"
+  },
+  "vectors": {
+    "source_plane_program": {
+      "decoded": {
+        "release_id_byte": 1,
+        "source_plane_version": 3,
+        "raw_page_codec_version": 1,
+        "window_codec_version": 1,
+        "statistic_result_codec_version": 1,
+        "capabilities": 15
+      },
+      "body_hex": "4443535056330000010101010101010101010101010101010101010101010101010101010101010103000100010001000f000000000000000000000000000000",
+      "id": "d36ff1c749aded05c884dd30d7dee719ad086e884e2d8e79d4084722d46f0310"
+    },
+    "template": {
+      "decoded": {
+        "source_spec_id_byte": 2,
+        "compiler_version": 1,
+        "statistic": 1,
+        "coverage_policy": 1,
+        "failure_policy": 1,
+        "repair_policy": 1,
+        "window_span": 4,
+        "maturity_grace": 2,
+        "repair_generation": 0
+      },
+      "body_hex": "4443544d504c5633d36ff1c749aded05c884dd30d7dee719ad086e884e2d8e79d4084722d46f03100202020202020202020202020202020202020202020202020202020202020202a11cf659d768d4fbca8d48e6a6edfc10fa802328a75803d5703d7c80fdc4924d0404040404040404040404040404040404040404040404040404040404040404223e9bd9fda8a39489a5a47da278c6025a3fe8d3f14ac7a6830194d45864b60b0505050505050505050505050505050505050505050505050505050505050505010001000100000001000000010000000400000000000000020000000000000000000000000000000000000000000000",
+      "id": "83115d4d18bb0b19d6fee05b8962aa3792db55d4a12be17737cd37ac45a0b179"
+    },
+    "series": {
+      "decoded": {
+        "first_start": 100,
+        "stride": 10,
+        "count": 3,
+        "creation_lead": 5,
+        "market_collateral_cap": 200
+      },
+      "id": "d7bfd3e9aa7a83ed98ff55531afc19aa755d7aba329d52291d871170bc7f70b2"
+    },
+    "window": {
+      "decoded": {
+        "start": 100,
+        "end": 104,
+        "maturity": 106,
+        "repair_generation": 0,
+        "coverage_policy": 1
+      },
+      "body_hex": "444357494e5633000202020202020202020202020202020202020202020202020202020202020202d36ff1c749aded05c884dd30d7dee719ad086e884e2d8e79d4084722d46f0310640000000000000068000000000000006a00000000000000000000000000000001000000000000000000000000000000",
+      "id": "7ff0231a6bde8435a6b9e01a8c97f27e399aa9b2e8475aee87d0788f29549945"
+    },
+    "page": {
+      "id": "26a639421a4e47891cf7bea92b334068ee3d0174aa6cc07912e61fa115243927"
+    },
+    "window_seal": {
+      "id": "f2b1a3d9210ecfbc238c09031ee0c732ad11f03d96a7f5a6d82cc23fe7fbfaa2"
+    },
+    "statistic_key": {
+      "decoded": {
+        "statistic": 1
+      },
+      "body_hex": "444353544b4559337ff0231a6bde8435a6b9e01a8c97f27e399aa9b2e8475aee87d0788f29549945a11cf659d768d4fbca8d48e6a6edfc10fa802328a75803d5703d7c80fdc4924d0100000000000000",
+      "id": "3617caca2f8ca7f6dcebd75e1178ef401b634535e744df78172d37f03757f992"
+    },
+    "statistic_result": {
+      "decoded": {
+        "status": 1,
+        "terminal_low": 90,
+        "terminal_high": 120
+      },
+      "id": "aa088f0379f4e2bfb858c409d0bc123b6ea8112b89ba04d1b72d7ca7af5f96b8"
+    },
+    "instance": {
+      "decoded": {
+        "start": 100,
+        "market_collateral_cap": 200
+      },
+      "body_hex": "4443494e5354563383115d4d18bb0b19d6fee05b8962aa3792db55d4a12be17737cd37ac45a0b1790707070707070707070707070707070707070707070707070707070707070707080808080808080808080808080808080808080808080808080808080808080809090909090909090909090909090909090909090909090909090909090909090a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0ad890ae7be3d7d0d1e80c164d89df786fda02bcff793aef931a9ebfcb101699d3411e85df562ff8a68ad2179491217456a218918c5f62a5c57788e6fdf78f31366400000000000000c800000000000000",
+      "id": "9581162669a57d91ae9be7dd15b91e990291f666e3ea7557115587b96e919c4c"
+    }
+  },
+  "hostile_mutations": [
+    { "artifact": "source_plane_program", "offset": 40, "mutation": "version 3 to 4", "refusal": "BadVersion" },
+    { "artifact": "source_plane_program", "offset": 52, "mutation": "reserved byte nonzero", "refusal": "NonCanonicalReserved" },
+    { "artifact": "raw_page", "offset": 104, "mutation": "ordinary observation to unauthenticated gap", "refusal": "UnsupportedPolicy" },
+    { "artifact": "statistic_result", "offset": 74, "mutation": "unknown status", "refusal": "InvalidParameter" },
+    { "artifact": "statistic_result", "offset": 76, "mutation": "success plus nonzero refusal", "refusal": "InvalidParameter" }
+  ],
+  "drawdown_ppm": [
+    { "points": [100, 80], "result": 200000 },
+    { "points": [3, 2], "result": 333334 },
+    { "points": [1, 0], "result": 1000000 },
+    { "points": [1000000, 999999], "result": 1 },
+    { "points": [100, 120, 90, 110, 70], "result": 416667 },
+    { "intervals": [[99, 101], [79, 81]], "result_interval": [181819, 217822] }
+  ]
+}
