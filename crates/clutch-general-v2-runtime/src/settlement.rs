@@ -35,10 +35,10 @@ use clutch_general_v2_contract::{
     ConsumeVirtualSplitReceiptEggsPayloadV1, DeletableRentOwnerV1, EconomicDomainV2AccountV1,
     FinalPotV1AccountV1, GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1,
     GeneralReservationSeedTupleV3, GeneralReservationSeedTupleV9, Id32, MarketBindingV1,
-    OwnerSettlementSeedTupleV4,
+    OwnerSettlementSeedTupleV4, ReleaseUnfilledReservationPayloadV1,
     SettlementCashPotV1AccountV1, SettlementReceiptSeedTupleV3,
     SettlementReceiptSeedTupleV4, SettlementRootChildStateV1, SettlementRootPhaseV1,
-    SettlementRootV1AccountV1,
+    SettlementRootV1AccountV1, SETTLEMENT_ROOT_ACCOUNT_BYTES,
     MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{
@@ -114,6 +114,12 @@ use crate::{
 pub const OWNER_ORDER_SET_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/owner-order-set/v1\0";
 /// Immutable V5 owner/order membership digest with no mutable account IDs.
 pub const OWNER_ORDER_SET_DIGEST_DOMAIN_V2: &[u8] = b"dragons-clutch/owner-order-set/v2\0";
+/// Stable action-41 identity for one selected zero-fill Reservation release.
+pub const UNFILLED_RESERVATION_RELEASE_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-v2/unfilled-reservation-release-transition/v1\0";
+/// Exact action-41 atomic poststate evidence committed into GEN1 Replay.
+pub const UNFILLED_RESERVATION_RELEASE_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-v2/unfilled-reservation-release-evidence/v1\0";
 /// Maximum encoded settlement-tail width.
 pub const MAX_SETTLEMENT_TAIL_BYTES_V1: usize = MAX_SLICES * SETTLEMENT_SLICE_BYTES;
 /// Maximum real receipt ends: two for every direct slice.
@@ -5569,6 +5575,725 @@ pub fn derive_root_owner_basis_v4(
         .ok_or(SettlementAdapterErrorV1::BindingMismatch)
 }
 
+/// Exact hostile balances needed to close one rent-owned Reservation V9.
+///
+/// Recipient identities are deliberately absent: the persisted Reservation
+/// rent owner and the traversal's authenticated MarketBinding own them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UnfilledReservationRentBalancesV1 {
+    /// Lamports currently held by the Reservation account being deleted.
+    pub reservation_lamports: u64,
+    /// Current lamports of the persisted refundable-principal payer.
+    pub payer_lamports: u64,
+    /// Current lamports of the immutable MarketBinding neutral sink.
+    pub neutral_sink_lamports: u64,
+}
+
+/// Complete pure inputs for action 41.
+///
+/// The outer adapter must rederive `traversal` from the authenticated retained
+/// Feed and complete frozen V5 page set, and authenticate every supplied
+/// account owner/PDA/meta before treating the returned plan as executable.
+#[derive(Clone, Copy, Debug)]
+pub struct ReleaseUnfilledReservationInputV1<'a> {
+    /// Strict `epoch || settlement_root` selector.
+    pub payload: ReleaseUnfilledReservationPayloadV1,
+    /// Exact counted SettlementRoot account identity.
+    pub settlement_root_account: Id32,
+    /// Structurally decoded writable SettlementRoot prestate.
+    pub settlement_root: &'a SettlementRootV1AccountV1,
+    /// Private exhaustive selected Feed/V5-page traversal.
+    pub traversal: &'a SettlementTraversalProjectionV4,
+    /// Exact frozen V5 page account containing the selected zero-fill order.
+    pub order_page_account: Id32,
+    /// Exact hostile frozen V5 page body.
+    pub order_page_body: &'a [u8],
+    /// Canonical rent-owned Reservation V9 PDA.
+    pub reservation_account: Id32,
+    /// Exact hostile 666-byte active Reservation V9 body.
+    pub reservation_body: &'a [u8],
+    /// Exact observed Reservation/payer/sink balances.
+    pub rent_balances: UnfilledReservationRentBalancesV1,
+    /// Canonical writable Position V3 account and exact body.
+    pub position: PositionAccountInputV3<'a>,
+    /// Purpose-owned General Replay V3 account.
+    pub replay_account: Id32,
+    /// Canonical Replay PDA bump.
+    pub replay_bump: u8,
+    /// Exact ordinal required by the hostile Replay prestate.
+    pub replay_next_sequence: u64,
+    /// Exact hostile purpose Replay V3 body before action 41.
+    pub replay_body: &'a [u8],
+}
+
+/// Exact V9 terminal release and deletion facts inside action 41.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UnfilledReservationClosePlanV9 {
+    account: Id32,
+    semantic_id: Id32,
+    seed: GeneralReservationSeedTupleV9,
+    prestate_data_id: Id32,
+    terminal_data_id: Id32,
+    terminal_body: [u8; RESERVATION_ACCOUNT_BYTES_V9],
+    release_generation: u64,
+    released_reserved_cash_atoms: u64,
+    released_internal: [u64; MAX_OUTCOMES],
+    balance_before: u64,
+    balance_after: u64,
+    payer: Id32,
+    payer_refund_lamports: u64,
+    payer_balance_after: u64,
+    neutral_sink: Id32,
+    neutral_sink_credit_lamports: u64,
+    neutral_sink_balance_after: u64,
+}
+
+impl UnfilledReservationClosePlanV9 {
+    /// Canonical Reservation V9 PDA to delete.
+    pub const fn account(&self) -> Id32 {
+        self.account
+    }
+
+    /// Fresh V9 semantic identity retained by the deleted account.
+    pub const fn semantic_id(&self) -> Id32 {
+        self.semantic_id
+    }
+
+    /// Contract-owned V9 PDA seed tuple.
+    pub const fn seed(&self) -> GeneralReservationSeedTupleV9 {
+        self.seed
+    }
+
+    /// Exact active V9 prestate data ID.
+    pub const fn prestate_data_id(&self) -> Id32 {
+        self.prestate_data_id
+    }
+
+    /// Exact released V9 terminal data ID committed before deletion.
+    pub const fn terminal_data_id(&self) -> Id32 {
+        self.terminal_data_id
+    }
+
+    /// Canonical released V9 body staged in the same rollback domain as close.
+    pub const fn terminal_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES_V9] {
+        &self.terminal_body
+    }
+
+    /// Sole canonical terminal generation: checked `order_generation + 1`.
+    pub const fn release_generation(&self) -> u64 {
+        self.release_generation
+    }
+
+    /// Reserved Position cash returned by deleting the zero-fill Reservation.
+    pub const fn released_reserved_cash_atoms(&self) -> u64 {
+        self.released_reserved_cash_atoms
+    }
+
+    /// Position-owned native Eggs returned by deleting the Reservation.
+    pub const fn released_internal(&self) -> [u64; MAX_OUTCOMES] {
+        self.released_internal
+    }
+
+    /// Exact observed Reservation lamports before deletion.
+    pub const fn balance_before(&self) -> u64 {
+        self.balance_before
+    }
+
+    /// Reservation lamports after deletion, always zero.
+    pub const fn balance_after(&self) -> u64 {
+        self.balance_after
+    }
+
+    /// Persisted rent-principal payer.
+    pub const fn payer(&self) -> Id32 {
+        self.payer
+    }
+
+    /// Exact persisted principal refunded to `payer`.
+    pub const fn payer_refund_lamports(&self) -> u64 {
+        self.payer_refund_lamports
+    }
+
+    /// Payer balance after the exact refund.
+    pub const fn payer_balance_after(&self) -> u64 {
+        self.payer_balance_after
+    }
+
+    /// Immutable MarketBinding neutral sink.
+    pub const fn neutral_sink(&self) -> Id32 {
+        self.neutral_sink
+    }
+
+    /// Hostile prefund plus unsolicited surplus routed to the neutral sink.
+    pub const fn neutral_sink_credit_lamports(&self) -> u64 {
+        self.neutral_sink_credit_lamports
+    }
+
+    /// Neutral-sink balance after the exact credit.
+    pub const fn neutral_sink_balance_after(&self) -> u64 {
+        self.neutral_sink_balance_after
+    }
+}
+
+/// One indivisible action-41 root/Reservation/Position/Replay/rent bundle.
+///
+/// No field is an execution capability by itself. The live adapter must
+/// reconstruct this plan from authenticated account bytes immediately before
+/// atomically applying every returned poststate and deleting the Reservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReleaseUnfilledReservationPlanV1 {
+    settlement_root_account: Id32,
+    settlement_root_poststate: SettlementRootV1AccountV1,
+    retained_feed_account: Id32,
+    order_page_account: Id32,
+    order_page_index: u16,
+    order_slot_index: u8,
+    order_index: u8,
+    position_generation: u64,
+    transition_id: Id32,
+    transition_evidence_id: Id32,
+    reservation: UnfilledReservationClosePlanV9,
+    position_account: Id32,
+    position_prestate_semantic_id: Id32,
+    position_poststate_semantic_id: Id32,
+    position_poststate_body: [u8; POSITION_V3_BYTES],
+    position: PositionSettlementPoststateV3,
+    replay: GeneralReplayTransitionPlanV1,
+}
+
+impl ReleaseUnfilledReservationPlanV1 {
+    /// Counted SettlementRoot account advanced once.
+    pub const fn settlement_root_account(&self) -> Id32 {
+        self.settlement_root_account
+    }
+
+    /// Exact root successor, potentially entering `Settling` on the last gap.
+    pub const fn settlement_root_poststate(&self) -> &SettlementRootV1AccountV1 {
+        &self.settlement_root_poststate
+    }
+
+    /// Exact retained sealed Feed account behind the zero-fill proof.
+    pub const fn retained_feed_account(&self) -> Id32 {
+        self.retained_feed_account
+    }
+
+    /// Exact frozen V5 page account.
+    pub const fn order_page_account(&self) -> Id32 {
+        self.order_page_account
+    }
+
+    /// Canonical page index.
+    pub const fn order_page_index(&self) -> u16 {
+        self.order_page_index
+    }
+
+    /// Canonical sparse slot index within the page.
+    pub const fn order_slot_index(&self) -> u8 {
+        self.order_slot_index
+    }
+
+    /// Dense order index inside the retained Feed/order projection.
+    pub const fn order_index(&self) -> u8 {
+        self.order_index
+    }
+
+    /// Immutable Position generation frozen by OrderPage V5.
+    pub const fn position_generation(&self) -> u64 {
+        self.position_generation
+    }
+
+    /// Stable action-41 identity derived without caller data.
+    pub const fn transition_id(&self) -> Id32 {
+        self.transition_id
+    }
+
+    /// Exact atomic-bundle digest committed into GEN1 Replay.
+    pub const fn transition_evidence_id(&self) -> Id32 {
+        self.transition_evidence_id
+    }
+
+    /// Exact terminal release, rent split, and Reservation deletion facts.
+    pub const fn reservation(&self) -> &UnfilledReservationClosePlanV9 {
+        &self.reservation
+    }
+
+    /// Canonical Position V3 PDA to write.
+    pub const fn position_account(&self) -> Id32 {
+        self.position_account
+    }
+
+    /// Exact Position semantic ID before release.
+    pub const fn position_prestate_semantic_id(&self) -> Id32 {
+        self.position_prestate_semantic_id
+    }
+
+    /// Exact Position semantic ID after cash/Egg return and child decrement.
+    pub const fn position_poststate_semantic_id(&self) -> Id32 {
+        self.position_poststate_semantic_id
+    }
+
+    /// Exact canonical Position V3 successor body.
+    pub const fn position_poststate_body(&self) -> &[u8; POSITION_V3_BYTES] {
+        &self.position_poststate_body
+    }
+
+    /// Typed Position successor joined to Replay.
+    pub const fn position(&self) -> PositionSettlementPoststateV3 {
+        self.position
+    }
+
+    /// Exact purpose-owned GEN1 Replay successor.
+    pub const fn replay(&self) -> &GeneralReplayTransitionPlanV1 {
+        &self.replay
+    }
+}
+
+/// Prepare one selected zero-fill Reservation release and co-close.
+///
+/// The exhaustive traversal, rather than any caller flag or order index,
+/// proves that the order has no settlement end. The Position value return,
+/// authoritative child decrement, root count, Replay successor, terminal V9
+/// transcript, principal refund, neutral donation, and account deletion are
+/// returned as one bundle with one evidence digest.
+pub fn prepare_release_unfilled_reservation_v1(
+    input: ReleaseUnfilledReservationInputV1<'_>,
+) -> Result<ReleaseUnfilledReservationPlanV1, SettlementAdapterErrorV1> {
+    require_root_traversal_binding_v4(
+        input.settlement_root_account,
+        input.settlement_root,
+        input.traversal,
+    )?;
+    if input.payload.epoch != input.settlement_root.epoch()
+        || input.payload.settlement_root != input.settlement_root_account
+        || input.settlement_root.phase() != SettlementRootPhaseV1::Materializing
+        || input.order_page_account.is_zero()
+        || input.reservation_account.is_zero()
+        || input.position.account.is_zero()
+        || input.replay_account.is_zero()
+        || input.order_page_account == input.settlement_root_account
+        || input.order_page_account == input.traversal.selected_feed_account
+        || input.reservation_account == input.settlement_root_account
+        || input.reservation_account == input.traversal.selected_feed_account
+        || input.reservation_account == input.order_page_account
+        || input.reservation_account == input.position.account
+        || input.reservation_account == input.replay_account
+        || input.position.account == input.replay_account
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+
+    let page = verify_page_v5(input.order_page_body)?;
+    let base = input.traversal.order_projection.base();
+    let feed = input.traversal.feed;
+    if page.market.bytes() != feed.market.bytes()
+        || page.epoch.bytes() != feed.epoch.bytes()
+        || page.order_set.bytes() != feed.order_set.bytes()
+        || page.frozen != 1
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+
+    let reservation_v9 = ReservationAccountV9::decode(input.reservation_body)?;
+    let reservation = reservation_v9.body();
+    let reservation_semantic_id = Id32::new(reservation.reservation.bytes())?;
+    let mut order_index = None;
+    let mut dense = 0u8;
+    while dense < feed.order_count {
+        let frozen = base
+            .order_membership(dense)
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        let position_generation = input
+            .traversal
+            .order_projection
+            .position_generation(dense)
+            .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
+        let expected_reservation = canonical_reservation_id_v9(
+            LayoutHash32(feed.market.bytes()),
+            LayoutHash32(feed.epoch.bytes()),
+            LayoutHash32(frozen.owner().bytes()),
+            position_generation,
+            LayoutHash32(frozen.order_id().bytes()),
+        );
+        if expected_reservation.bytes() == reservation.reservation.bytes() {
+            if order_index.is_some() {
+                return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+            }
+            order_index = Some(dense);
+        }
+        dense = dense
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    let order_index = order_index.ok_or(SettlementAdapterErrorV1::ReservationSetMismatch)?;
+    if input.traversal.settlement_membership(order_index).is_some()
+        || input.traversal.first_slice(order_index).is_some()
+    {
+        return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+    }
+    let frozen = base
+        .order_membership(order_index)
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let expected_page_account = input
+        .traversal
+        .order_projection
+        .order_page_account(order_index)
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let expected_page_index = input
+        .traversal
+        .order_projection
+        .order_page_index(order_index)
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let expected_position_generation = input
+        .traversal
+        .order_projection
+        .position_generation(order_index)
+        .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
+    if input.order_page_account != expected_page_account || page.page_index != expected_page_index {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+
+    let mut verified_slot = None;
+    let mut cursor = OrderSlotCursorV5::new(input.order_page_body)?;
+    while let Some(step) = cursor.next_slot() {
+        let candidate = step?;
+        if candidate.slot.order_id().bytes() == frozen.order_id().bytes() {
+            if verified_slot.is_some() {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            verified_slot = Some(candidate);
+        }
+    }
+    let verified_slot = verified_slot.ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    if verified_slot.slot != *frozen.slot()
+        || verified_slot.position_generation != expected_position_generation
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+
+    let expected_side = match base.book().orders[usize::from(order_index)].side {
+        Side::Buy => 0,
+        Side::Sell => 1,
+    };
+    let expected_kind = match verified_slot.slot {
+        OrderSlot::Single(_) => 1,
+        OrderSlot::Portfolio(_) => 2,
+        OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+            return Err(SettlementAdapterErrorV1::BindingMismatch)
+        }
+    };
+    let reservation_plan = ReservationPlan::for_order(
+        &verified_slot.slot,
+        feed.outcome_count,
+        feed.price_scale,
+        reservation.max_fee_atoms,
+    )?;
+    if reservation.market.bytes() != feed.market.bytes()
+        || reservation.epoch.bytes() != feed.epoch.bytes()
+        || reservation.owner.bytes() != frozen.owner().bytes()
+        || reservation.order_id.bytes() != frozen.order_id().bytes()
+        || reservation.position_generation != expected_position_generation
+        || reservation.order_generation != frozen.generation()
+        || reservation.page_index != expected_page_index
+        || reservation.price_grid.bytes() != base.price_grid_id().bytes()
+        || reservation.terms.bytes() != input.traversal.terms.bytes()
+        || reservation.policy.bytes() != input.traversal.reservation_policy.bytes()
+        || reservation.outcome_count != feed.outcome_count
+        || reservation.side != expected_side
+        || reservation.order_kind != expected_kind
+        || reservation.state != RESERVATION_STATE_ACTIVE
+        || reservation.entitled_units != 0
+        || reservation.consumed_units != 0
+        || reservation.paid_units != 0
+        || reservation.release_generation != 0
+        || reservation.initial_cash_atoms != reservation_plan.cash_atoms
+        || reservation.max_fee_atoms != reservation_plan.max_fee_atoms
+        || reservation.initial_internal != reservation_plan.internal
+        || reservation.remaining_cash_atoms != reservation.initial_cash_atoms
+        || reservation.remaining_internal != reservation.initial_internal
+        || reservation.fee_debited_atoms != 0
+        || reservation.fee_carry_numerator != 0
+    {
+        return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+    }
+
+    let neutral_sink = base.market_binding().neutral_sink;
+    let rent = reservation_v9.rent();
+    let payer = Id32::new(rent.payer.bytes())?;
+    let required_balance = rent
+        .refundable_principal
+        .checked_add(rent.donation_floor)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if payer == neutral_sink
+        || input.reservation_account == payer
+        || input.reservation_account == neutral_sink
+        || input.rent_balances.reservation_lamports < required_balance
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let neutral_sink_credit_lamports = input
+        .rent_balances
+        .reservation_lamports
+        .checked_sub(rent.refundable_principal)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let payer_balance_after = input
+        .rent_balances
+        .payer_lamports
+        .checked_add(rent.refundable_principal)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let neutral_sink_balance_after = input
+        .rent_balances
+        .neutral_sink_lamports
+        .checked_add(neutral_sink_credit_lamports)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+
+    let position_body = PositionAccountV3::decode(input.position.encoded_body)?;
+    project_canonical_general_settlement_position_v3(
+        position_body,
+        frozen.owner(),
+        expected_position_generation,
+        input.settlement_root.market(),
+        input.traversal.position_market_binding,
+    )?;
+    let position_prestate_semantic_id =
+        Id32::new(position_body.semantic_id(&PositionBodySha256V3)?.bytes())?;
+    let position = AuthenticatedPositionV3 {
+        account: input.position.account.bytes(),
+        general_market_runtime: input.settlement_root.market().bytes(),
+        semantic: position_body,
+        semantic_id: position_prestate_semantic_id.bytes(),
+        account_authenticated: true,
+        semantic_id_authenticated: true,
+        market_binding_authenticated: true,
+        writable: true,
+    };
+    position.validate_writable()?;
+    let position_poststate = position.release_reservation_poststate(
+        reservation.remaining_cash_atoms,
+        reservation.remaining_internal,
+    )?;
+    let position_poststate_semantic_id = Id32::new(
+        position_poststate
+            .semantic
+            .semantic_id(&PositionBodySha256V3)?
+            .bytes(),
+    )?;
+    let position_poststate_body = position_poststate.semantic.encode()?;
+
+    let release_generation = reservation
+        .order_generation
+        .checked_add(1)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let released_reservation = reservation_v9.released(release_generation)?;
+    let reservation_prestate_data_id = Id32::new(reservation_v9.data_id()?.bytes())?;
+    let reservation_terminal_data_id = Id32::new(released_reservation.data_id()?.bytes())?;
+    let mut reservation_terminal_body = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
+    released_reservation.encode(&mut reservation_terminal_body)?;
+    let reservation_seed = GeneralReservationSeedTupleV9::new(reservation_semantic_id)?;
+    let settlement_root_poststate = input.settlement_root.release_unfilled_reservation()?;
+
+    let transition_id = derive_unfilled_reservation_release_transition_id_v1(
+        input.settlement_root_account,
+        input.settlement_root.settlement_candidate_id(),
+        input.reservation_account,
+        reservation_semantic_id,
+        frozen.owner(),
+        frozen.order_id(),
+        order_index,
+        expected_page_index,
+        verified_slot.slot_index,
+        expected_position_generation,
+        reservation.order_generation,
+        release_generation,
+    )?;
+    let mut root_prestate_body = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
+    let mut root_poststate_body = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
+    input.settlement_root.encode(&mut root_prestate_body)?;
+    settlement_root_poststate.encode(&mut root_poststate_body)?;
+    let transition_evidence_id = derive_unfilled_reservation_release_evidence_id_v1(
+        transition_id,
+        input.settlement_root_account,
+        &root_prestate_body,
+        &root_poststate_body,
+        input.traversal.selected_feed_account,
+        input.order_page_account,
+        input.reservation_account,
+        reservation_prestate_data_id,
+        reservation_terminal_data_id,
+        input.position.account,
+        position_prestate_semantic_id,
+        position_poststate_semantic_id,
+        input.replay_account,
+        input.replay_next_sequence,
+        payer,
+        rent.refundable_principal,
+        input.rent_balances.payer_lamports,
+        payer_balance_after,
+        neutral_sink,
+        neutral_sink_credit_lamports,
+        input.rent_balances.neutral_sink_lamports,
+        neutral_sink_balance_after,
+        input.rent_balances.reservation_lamports,
+    )?;
+
+    let replay_prestate = project_general_position_replay_prestate_v1(
+        input.replay_account,
+        input.replay_bump,
+        input.replay_next_sequence,
+        input.replay_body,
+        position,
+        &PositionBodySha256V3,
+    )?;
+    let replay = project_general_replay_transition_v1(
+        replay_prestate,
+        position_poststate,
+        GeneralReplayTransitionKindV1::ReleaseUnfilledReservation,
+        transition_id,
+        transition_evidence_id,
+        &PositionBodySha256V3,
+    )?;
+    if replay.position_prestate_semantic_id() != position_prestate_semantic_id
+        || replay.position_poststate_semantic_id() != position_poststate_semantic_id
+        || replay.transition_id() != transition_id
+        || replay.transition_evidence_id() != transition_evidence_id
+        || replay.kind() != GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+
+    Ok(ReleaseUnfilledReservationPlanV1 {
+        settlement_root_account: input.settlement_root_account,
+        settlement_root_poststate,
+        retained_feed_account: input.traversal.selected_feed_account,
+        order_page_account: input.order_page_account,
+        order_page_index: expected_page_index,
+        order_slot_index: verified_slot.slot_index,
+        order_index,
+        position_generation: expected_position_generation,
+        transition_id,
+        transition_evidence_id,
+        reservation: UnfilledReservationClosePlanV9 {
+            account: input.reservation_account,
+            semantic_id: reservation_semantic_id,
+            seed: reservation_seed,
+            prestate_data_id: reservation_prestate_data_id,
+            terminal_data_id: reservation_terminal_data_id,
+            terminal_body: reservation_terminal_body,
+            release_generation,
+            released_reserved_cash_atoms: reservation.remaining_cash_atoms,
+            released_internal: reservation.remaining_internal,
+            balance_before: input.rent_balances.reservation_lamports,
+            balance_after: 0,
+            payer,
+            payer_refund_lamports: rent.refundable_principal,
+            payer_balance_after,
+            neutral_sink,
+            neutral_sink_credit_lamports,
+            neutral_sink_balance_after,
+        },
+        position_account: input.position.account,
+        position_prestate_semantic_id,
+        position_poststate_semantic_id,
+        position_poststate_body,
+        position: position_poststate,
+        replay,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_unfilled_reservation_release_transition_id_v1(
+    settlement_root_account: Id32,
+    candidate: Id32,
+    reservation_account: Id32,
+    reservation_semantic_id: Id32,
+    owner: Id32,
+    order_id: Id32,
+    order_index: u8,
+    page_index: u16,
+    slot_index: u8,
+    position_generation: u64,
+    order_generation: u64,
+    release_generation: u64,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    if release_generation
+        != order_generation
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut hash = Sha256::new();
+    hash.update(UNFILLED_RESERVATION_RELEASE_TRANSITION_DOMAIN_V1);
+    hash.update(settlement_root_account.bytes());
+    hash.update(candidate.bytes());
+    hash.update(reservation_account.bytes());
+    hash.update(reservation_semantic_id.bytes());
+    hash.update(owner.bytes());
+    hash.update(order_id.bytes());
+    hash.update([order_index]);
+    hash.update(page_index.to_le_bytes());
+    hash.update([slot_index]);
+    hash.update(position_generation.to_le_bytes());
+    hash.update(order_generation.to_le_bytes());
+    hash.update(release_generation.to_le_bytes());
+    let digest: [u8; 32] = hash.finalize().into();
+    Ok(Id32::new(digest)?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_unfilled_reservation_release_evidence_id_v1(
+    transition_id: Id32,
+    settlement_root_account: Id32,
+    root_prestate_body: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES],
+    root_poststate_body: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES],
+    retained_feed_account: Id32,
+    order_page_account: Id32,
+    reservation_account: Id32,
+    reservation_prestate_data_id: Id32,
+    reservation_terminal_data_id: Id32,
+    position_account: Id32,
+    position_prestate_semantic_id: Id32,
+    position_poststate_semantic_id: Id32,
+    replay_account: Id32,
+    replay_next_sequence: u64,
+    payer: Id32,
+    payer_refund_lamports: u64,
+    payer_balance_before: u64,
+    payer_balance_after: u64,
+    neutral_sink: Id32,
+    neutral_sink_credit_lamports: u64,
+    neutral_sink_balance_before: u64,
+    neutral_sink_balance_after: u64,
+    reservation_balance_before: u64,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    let mut hash = Sha256::new();
+    hash.update(UNFILLED_RESERVATION_RELEASE_EVIDENCE_DOMAIN_V1);
+    hash.update(transition_id.bytes());
+    hash.update(settlement_root_account.bytes());
+    hash.update(root_prestate_body);
+    hash.update(root_poststate_body);
+    hash.update(retained_feed_account.bytes());
+    hash.update(order_page_account.bytes());
+    hash.update(reservation_account.bytes());
+    hash.update(reservation_prestate_data_id.bytes());
+    hash.update(reservation_terminal_data_id.bytes());
+    hash.update(position_account.bytes());
+    hash.update(position_prestate_semantic_id.bytes());
+    hash.update(position_poststate_semantic_id.bytes());
+    hash.update(replay_account.bytes());
+    hash.update(replay_next_sequence.to_le_bytes());
+    hash.update(payer.bytes());
+    hash.update(payer_refund_lamports.to_le_bytes());
+    hash.update(payer_balance_before.to_le_bytes());
+    hash.update(payer_balance_after.to_le_bytes());
+    hash.update(neutral_sink.bytes());
+    hash.update(neutral_sink_credit_lamports.to_le_bytes());
+    hash.update(neutral_sink_balance_before.to_le_bytes());
+    hash.update(neutral_sink_balance_after.to_le_bytes());
+    hash.update(reservation_balance_before.to_le_bytes());
+    let digest: [u8; 32] = hash.finalize().into();
+    Ok(Id32::new(digest)?)
+}
+
 fn require_root_traversal_binding_v4(
     settlement_root_account: Id32,
     settlement_root: &SettlementRootV1AccountV1,
@@ -9294,5 +10019,98 @@ mod scalable_receipt_end_tests {
             stage_virtual_merge_inventory_v4(final_pot, supply, hoard, 1, 4),
             Err(SettlementAdapterErrorV1::BindingMismatch)
         );
+    }
+
+    #[test]
+    fn action41_transition_identity_owns_the_terminal_generation() {
+        let canonical = derive_unfilled_reservation_release_transition_id_v1(
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+        )
+        .unwrap();
+        assert!(!canonical.is_zero());
+        assert_eq!(
+            derive_unfilled_reservation_release_transition_id_v1(
+                id(1),
+                id(2),
+                id(3),
+                id(4),
+                id(5),
+                id(6),
+                7,
+                8,
+                9,
+                10,
+                11,
+                13,
+            ),
+            Err(SettlementAdapterErrorV1::BindingMismatch)
+        );
+        assert_eq!(
+            derive_unfilled_reservation_release_transition_id_v1(
+                id(1),
+                id(2),
+                id(3),
+                id(4),
+                id(5),
+                id(6),
+                7,
+                8,
+                9,
+                10,
+                u64::MAX,
+                0,
+            ),
+            Err(SettlementAdapterErrorV1::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn action41_evidence_commits_root_and_exact_rent_poststates() {
+        let mut root_pre = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
+        let mut root_post = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
+        root_pre[0] = 1;
+        root_post[0] = 2;
+        let derive = |post: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES], payer_after| {
+            derive_unfilled_reservation_release_evidence_id_v1(
+                id(1),
+                id(2),
+                &root_pre,
+                post,
+                id(3),
+                id(4),
+                id(5),
+                id(6),
+                id(7),
+                id(8),
+                id(9),
+                id(10),
+                id(11),
+                12,
+                id(13),
+                14,
+                15,
+                payer_after,
+                id(16),
+                17,
+                18,
+                35,
+                31,
+            )
+            .unwrap()
+        };
+        let canonical = derive(&root_post, 29);
+        assert_ne!(canonical, derive(&root_pre, 29));
+        assert_ne!(canonical, derive(&root_post, 30));
     }
 }
