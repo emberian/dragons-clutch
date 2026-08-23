@@ -26,7 +26,7 @@ pub const FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1: usize = 464;
 pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1: usize =
     FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1;
 /// Exact permanent failure replay-tombstone width.
-pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1: usize = 192;
+pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1: usize = 256;
 
 /// Fields common to every Recovery action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -255,6 +255,14 @@ pub struct FailureReplayTombstoneV1 {
     pub stored_bump: u8,
     /// Exact nonrefundable present rent used to create the permanent record.
     pub permanent_rent_lamports: u64,
+    /// Lamports already present before the admitted rent debit. They remain a
+    /// permanent donation and cannot be reclassified as rent principal.
+    pub prior_donation_lamports: u64,
+    /// Exact signer which supplied the permanent-rent principal.
+    pub permanent_rent_funder: [u8; HASH_BYTES],
+    /// Typed terminal-funding admission receipt whose semantic owner must
+    /// exclude Recovery work, Hoard, collateral, and future-fee principal.
+    pub funding_admission_receipt_id: [u8; HASH_BYTES],
     /// Immutable failure-policy binding.
     pub binding_id: [u8; HASH_BYTES],
     /// Full-width MarketInstanceV2 identity.
@@ -273,6 +281,8 @@ impl FailureReplayTombstoneV1 {
     /// Validate nonzero terminal identities and present permanent rent.
     pub fn validate(&self) -> Result<()> {
         for id in [
+            self.permanent_rent_funder,
+            self.funding_admission_receipt_id,
             self.binding_id,
             self.market_instance_v2_id,
             self.failure_terminal_join_id,
@@ -296,12 +306,15 @@ impl FailureReplayTombstoneV1 {
         output[1] = registry::FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION;
         output[2] = self.stored_bump;
         output[4..12].copy_from_slice(&self.permanent_rent_lamports.to_le_bytes());
-        output[12..44].copy_from_slice(&self.binding_id);
-        output[44..76].copy_from_slice(&self.market_instance_v2_id);
-        output[76..84].copy_from_slice(&self.generation.to_le_bytes());
-        output[84..116].copy_from_slice(&self.failure_terminal_join_id);
-        output[116..148].copy_from_slice(&self.retirement_root_id);
-        output[148..180].copy_from_slice(&self.source_release_receipt_id);
+        output[12..20].copy_from_slice(&self.prior_donation_lamports.to_le_bytes());
+        output[20..52].copy_from_slice(&self.permanent_rent_funder);
+        output[52..84].copy_from_slice(&self.funding_admission_receipt_id);
+        output[84..116].copy_from_slice(&self.binding_id);
+        output[116..148].copy_from_slice(&self.market_instance_v2_id);
+        output[148..156].copy_from_slice(&self.generation.to_le_bytes());
+        output[156..188].copy_from_slice(&self.failure_terminal_join_id);
+        output[188..220].copy_from_slice(&self.retirement_root_id);
+        output[220..252].copy_from_slice(&self.source_release_receipt_id);
         Ok(())
     }
 
@@ -315,16 +328,19 @@ impl FailureReplayTombstoneV1 {
             return Err(CodecError::WrongVersion);
         }
         require_reserved(&input[3..4])?;
-        require_reserved(&input[180..])?;
+        require_reserved(&input[252..])?;
         let value = Self {
             stored_bump: input[2],
             permanent_rent_lamports: u64_at(input, 4),
-            binding_id: id_at(input, 12),
-            market_instance_v2_id: id_at(input, 44),
-            generation: u64_at(input, 76),
-            failure_terminal_join_id: id_at(input, 84),
-            retirement_root_id: id_at(input, 116),
-            source_release_receipt_id: id_at(input, 148),
+            prior_donation_lamports: u64_at(input, 12),
+            permanent_rent_funder: id_at(input, 20),
+            funding_admission_receipt_id: id_at(input, 52),
+            binding_id: id_at(input, 84),
+            market_instance_v2_id: id_at(input, 116),
+            generation: u64_at(input, 148),
+            failure_terminal_join_id: id_at(input, 156),
+            retirement_root_id: id_at(input, 188),
+            source_release_receipt_id: id_at(input, 220),
         };
         value.validate()?;
         Ok(value)
@@ -400,6 +416,7 @@ pub const INITIALIZE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
     meta(RecoveryAccountRoleV1::RecoveryCompartment, false, false),
+    meta(RecoveryAccountRoleV1::NeutralSink, false, false),
     meta(RecoveryAccountRoleV1::SeriesRegistry, false, false),
     meta(RecoveryAccountRoleV1::SeriesFunding, false, false),
     meta(RecoveryAccountRoleV1::RegistryRelease, false, false),

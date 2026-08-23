@@ -645,6 +645,11 @@ impl FailureRuntimeExternalV2 {
         self.recovery.transition_nonce()
     }
 
+    /// Exact repair attempt index the next schedule/work transition targets.
+    pub const fn next_attempt_index(self) -> u8 {
+        self.recovery.next_attempt_index()
+    }
+
     /// First recorded maturity trigger.
     pub const fn trigger(self) -> Option<FailureTriggerV1> {
         self.trigger
