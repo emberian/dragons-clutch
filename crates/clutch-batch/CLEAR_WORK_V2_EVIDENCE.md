@@ -1,0 +1,120 @@
+# ClearWork V2 kernel evidence
+
+This note records evidence for the production-bound active-width primitives in
+`relation_v1_stream_v2`. It is not SBF compute-unit evidence and does not claim
+that a V2 Solana account route exists. Dispatcher, handler, layout-profile, and
+deployment integration remain separate work.
+
+## Ownership boundary
+
+The intended runtime path is a borrowed `ClearWorkViewV2` or
+`ClearWorkViewMutV2` over exact-width account bytes. It performs no allocation
+and never constructs `ClearWorkV1`. Active matrices use authenticated frozen
+widths on every index calculation.
+
+The V1 bridge is deliberately different. Migration and differential testing
+may call `project_clear_work_v1_wire_into_v2` or
+`expand_clear_work_v2_into_v1_wire`, but the caller must supply the 47,846-byte
+V1 wire image/scratch. That cost is visible in the function signature and is
+not a runtime V2 allocation hidden inside the kernel.
+
+V2 preserves the three relation-owned folds byte-for-byte. The persisted
+sealed-fold comparator does not replace the layout-owned candidate/order-set,
+page continuation, or consumed-fold checks, and `DigestFoldV1` remains a
+deterministic consistency device rather than a cryptographic commitment.
+
+## Frozen geometry
+
+The exact body formula is:
+
+```text
+678 + 73*N + 68*U + 336*O + 16*N*O + 16*U*O
+```
+
+where `O` is active outcomes, `N` is frozen live orders, and `U` is frozen
+distinct owners. Representative body sizes are:
+
+| `(O,N,U)` | V2 body bytes | V1 body bytes |
+|---|---:|---:|
+| `(2,0,0)` | 1,350 | 47,846 |
+| `(2,1,1)` | 1,555 | 47,846 |
+| `(2,4,3)` | 2,070 | 47,846 |
+| `(4,16,8)` | 5,270 | 47,846 |
+| `(8,32,16)` | 12,934 | 47,846 |
+| `(16,64,64)` | 47,846 | 47,846 |
+
+The eight canonical regions are contiguous and exhaustive. Tests pin every
+boundary and the maximum-width identity with V1.
+
+## Host release stack and text probe
+
+The probe used detached source commit `1f8f521`, rustc
+`1.98.0-nightly (91fe22da8 2026-06-21)`, target
+`x86_64-unknown-linux-gnu`, release optimization, and
+`RUSTFLAGS=-Zemit-stack-sizes`. The resulting rlib SHA-256 was:
+
+```text
+494163d2f97a8f09a275924b43b0c216d83e4d20ae0e070dc5182b1d87c5be59
+```
+
+`llvm-readobj --stack-sizes` reported these representative compiler frames:
+
+| Function | Host frame bytes |
+|---|---:|
+| `validate_clear_work_v2` | 264 |
+| V1-to-V2 projection bridge | 168 |
+| V2-to-V1 expansion worker | 136 |
+| region slicing | 136 |
+| sealed-fold comparison | 72 |
+| immutable/mutable view open | 56 each |
+| native idle initialization | 40 |
+| matrix read/write | 40 |
+| owner-unit read/write | 8 |
+
+On the host 64-bit ABI, each borrowed view is exactly 32 bytes. The frozen test
+asserts both immutable and mutable view sizes. Direct symbols attributed to the
+whole V2 module total 12,113 bytes of release x86-64 text. This is a direct
+symbol lower bound, not a promised ELF delta: inlining, shared V1 policy/idle
+callees, LTO, and the target backend change final ownership.
+
+These measurements establish the absence of a fixed 48 KiB native view or a
+4,096-byte-class host frame. They do not predict SBF frames or CU. The V2 route
+must be measured again with the pinned SBF toolchain after adapter integration.
+
+## Test evidence
+
+The focused corpus covers 37 exact V1 lifecycle snapshots: idle, begin, every
+push and pass boundary for two- and three-pass policies, early relation
+refusal, poisoned resume, claims-disabled mode, the empty frozen set, and every
+explicit-slice cursor boundary. Its frozen compact fingerprint is
+`0x7d85446a0e51325a`.
+
+Additional gates:
+
+- flip every byte of a completed compact image; validation remains total, and
+  every accepted image is closed under V2 -> V1 decode/re-encode -> V2;
+- refuse short and extended bodies, wrong active-width bindings, noncanonical
+  booleans/selectors/slots/masks, and representative omitted V1 padding;
+- compare direct native idle initialization byte-for-byte with projected V1
+  idle;
+- bounds-check first/last and one-past-end matrix and ledger accesses;
+- run all 119 `clutch-batch` tests and Clippy with warnings denied.
+
+Commands:
+
+```text
+cargo test --manifest-path crates/clutch-batch/Cargo.toml
+cargo clippy --manifest-path crates/clutch-batch/Cargo.toml --lib -- -D warnings
+RUSTFLAGS='-Zemit-stack-sizes' cargo build \
+  --manifest-path crates/clutch-batch/Cargo.toml \
+  --lib --release --target x86_64-unknown-linux-gnu
+```
+
+## Remaining promotion boundary
+
+This lane lands the codec, total hostile-input validator, canonical idle
+writer, migration bridge, resume-seal primitive, and direct active
+matrix/ledger storage. It does not yet port the complete relation feed engine
+onto the byte view. That port should keep structural selectors and lifecycle
+mutation private, use the typed numeric accessors, and prove verdict identity
+against the same 37-state corpus before any V2 SBF route is enabled.

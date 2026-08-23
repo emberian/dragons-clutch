@@ -409,7 +409,7 @@ fn native_region_primitives_are_bounded_and_do_not_expand() {
         Ok(95)
     );
 
-    assert!(core::mem::size_of::<ClearWorkViewV2<'_>>() <= 64);
-    assert!(core::mem::size_of::<ClearWorkViewMutV2<'_>>() <= 64);
+    assert_eq!(core::mem::size_of::<ClearWorkViewV2<'_>>(), 32);
+    assert_eq!(core::mem::size_of::<ClearWorkViewMutV2<'_>>(), 32);
     assert!(core::mem::size_of::<ClearWorkViewV2<'_>>() * 20 < body.len());
 }
