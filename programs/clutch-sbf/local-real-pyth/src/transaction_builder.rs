@@ -6,7 +6,10 @@
 //! of independently owned actions into an atomic unsigned transaction. It has
 //! no keypair, blockhash, RPC, signing, or submission dependency.
 
-use clutch_solana_layout::registry::{ExtensionFamily, MAX_EXTENSION_PAYLOAD_BYTES};
+use clutch_solana_layout::registry::{
+    AllocationStatus, ExtensionAction, ExtensionEnvelope, ExtensionFamily, RegistryError,
+    EXTENSION_ENVELOPE_BYTES, MAX_EXTENSION_PAYLOAD_BYTES,
+};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_transaction::Transaction;
@@ -16,7 +19,7 @@ pub type Result<T> = std::result::Result<T, ConstructionError>;
 
 /// Construction artifact schema. This is not a release or execution receipt.
 pub const CONSTRUCTION_PLAN_SCHEMA: &str =
-    "dragons-clutch/operator/unsigned-protocol-transaction/v2";
+    "dragons-clutch/operator/unsigned-protocol-transaction/v3";
 /// SourcePlane V3 adapter intent magic owned by that adapter's codec.
 pub const SOURCE_PLANE_V3_INTENT_MAGIC: [u8; 8] = *b"DCSP3INT";
 /// Runtime liveness intent magic owned by the liveness adapter codec.
@@ -36,6 +39,7 @@ pub enum ConstructionError {
     WrongWirePrefix,
     WrongWireLength,
     PayloadTooLong,
+    UnallocatedRegistryCoordinate,
     MissingExactEquation,
     UnbalancedExactEquation,
     EmptyBundle,
@@ -58,6 +62,9 @@ impl core::fmt::Display for ConstructionError {
             Self::WrongWirePrefix => "instruction bytes do not match their owned wire contract",
             Self::WrongWireLength => "instruction bytes do not have the exact owned width",
             Self::PayloadTooLong => "successor payload exceeds the central intent ceiling",
+            Self::UnallocatedRegistryCoordinate => {
+                "successor coordinate is not allocated by the central registry"
+            }
             Self::MissingExactEquation => "instruction omits exact-integer accounting",
             Self::UnbalancedExactEquation => "exact-integer accounting equation is unbalanced",
             Self::EmptyBundle => "atomic transaction bundle is empty",
@@ -96,6 +103,19 @@ pub enum RuntimeAdmission {
     /// Dispatcher capability is known to be disabled. Bytes are useful only
     /// for integration work and must not be represented as executable.
     ReservedDisabled,
+}
+
+/// Central-registry provenance for a main-program successor envelope.
+///
+/// `central_action` distinguishes a centrally allocated local action from a
+/// family whose semantic owner still owns an unallocated local-action codec.
+/// Family allocation and runtime admission remain deliberately separate facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SuccessorRegistryBinding {
+    pub family: ExtensionFamily,
+    pub local_action: u8,
+    pub family_status: AllocationStatus,
+    pub central_action: Option<ExtensionAction>,
 }
 
 /// The semantic package and reviewed digest that owned instruction bytes.
@@ -192,10 +212,7 @@ pub enum OwnedWireContract {
     LivenessRuntimeV1 { exact_bytes: usize },
     /// Main-program successor envelope. The central registry owns family tag
     /// and version; the named semantic package owns action and payload bytes.
-    MainSuccessor {
-        family: ExtensionFamily,
-        local_action: u8,
-    },
+    MainSuccessor { binding: SuccessorRegistryBinding },
 }
 
 /// One semantic-owner-produced instruction ready for outer construction.
@@ -208,6 +225,7 @@ pub struct OwnedInstructionDraft {
     pub accounts: Vec<AccountMeta>,
     pub required_signers: Vec<Address>,
     pub equations: Vec<ExactEquation>,
+    pub registry_binding: Option<SuccessorRegistryBinding>,
     pub runtime_admission: RuntimeAdmission,
     wire: OwnedWireContract,
     data: Vec<u8>,
@@ -235,6 +253,7 @@ impl OwnedInstructionDraft {
             equations,
             OwnedWireContract::SourcePlaneV3 { exact_bytes },
             data,
+            None,
         )
     }
 
@@ -259,14 +278,54 @@ impl OwnedInstructionDraft {
             equations,
             OwnedWireContract::LivenessRuntimeV1 { exact_bytes },
             data,
+            None,
         )
     }
 
-    /// Assemble a production-inert central-family envelope around bytes from
-    /// their semantic owner. `family` and `local_action` describe proposed
-    /// wire identity only: this method deliberately does not infer central
-    /// registry allocation, dispatcher support, or release admission.
-    pub fn reserved_successor(
+    /// Assemble a production-inert, centrally allocated successor envelope
+    /// around bytes from their semantic owner. The typed registry action owns
+    /// the coordinate; its ledger status does not imply dispatcher or checked
+    /// release admission.
+    pub fn allocated_successor(
+        flow: ProtocolFlow,
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        action: ExtensionAction,
+        payload: &[u8],
+    ) -> Result<Self> {
+        let family = action.family();
+        let binding = registry_binding(family, action.local_tag(), Some(action))?;
+        let envelope = ExtensionEnvelope {
+            family,
+            action,
+            payload,
+        };
+        let mut data = vec![0; EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = envelope.encode(&mut data).map_err(map_registry_error)?;
+        data.truncate(exact);
+        Self::owned_bytes(
+            flow,
+            action_name,
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            OwnedWireContract::MainSuccessor { binding },
+            data,
+            Some(binding),
+        )
+    }
+
+    /// Assemble a production-inert structured-claim successor whose local
+    /// action codec remains owned outside the central action registry. General
+    /// V2 and Source/Series callers must use
+    /// [`Self::allocated_successor`].
+    pub fn semantic_reserved_successor(
         flow: ProtocolFlow,
         action_name: impl Into<String>,
         semantic_owner: SemanticOwner,
@@ -278,10 +337,18 @@ impl OwnedInstructionDraft {
         local_action: u8,
         payload: &[u8],
     ) -> Result<Self> {
-        if payload.len() > MAX_EXTENSION_PAYLOAD_BYTES {
-            return Err(ConstructionError::PayloadTooLong);
+        if family != ExtensionFamily::StructuredClaim {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
         }
-        let mut data = Vec::with_capacity(3 + payload.len());
+        if local_action == 0 || payload.len() > MAX_EXTENSION_PAYLOAD_BYTES {
+            return Err(if local_action == 0 {
+                ConstructionError::UnallocatedRegistryCoordinate
+            } else {
+                ConstructionError::PayloadTooLong
+            });
+        }
+        let binding = registry_binding(family, local_action, None)?;
+        let mut data = Vec::with_capacity(EXTENSION_ENVELOPE_BYTES + payload.len());
         data.push(family.tag());
         data.push(family.version());
         data.push(local_action);
@@ -294,11 +361,9 @@ impl OwnedInstructionDraft {
             accounts,
             required_signers,
             equations,
-            OwnedWireContract::MainSuccessor {
-                family,
-                local_action,
-            },
+            OwnedWireContract::MainSuccessor { binding },
             data,
+            Some(binding),
         )
     }
 
@@ -313,6 +378,7 @@ impl OwnedInstructionDraft {
         equations: Vec<ExactEquation>,
         wire: OwnedWireContract,
         data: Vec<u8>,
+        registry_binding: Option<SuccessorRegistryBinding>,
     ) -> Result<Self> {
         let value = Self {
             flow,
@@ -322,6 +388,7 @@ impl OwnedInstructionDraft {
             accounts,
             required_signers,
             equations,
+            registry_binding,
             runtime_admission: RuntimeAdmission::ReservedDisabled,
             wire,
             data,
@@ -364,6 +431,9 @@ impl OwnedInstructionDraft {
         }
         match self.wire {
             OwnedWireContract::SourcePlaneV3 { exact_bytes } => {
+                if self.registry_binding.is_some() {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
                 if self.flow != ProtocolFlow::SourcePlaneV3 {
                     return Err(ConstructionError::WrongFlow);
                 }
@@ -375,6 +445,9 @@ impl OwnedInstructionDraft {
                 }
             }
             OwnedWireContract::LivenessRuntimeV1 { exact_bytes } => {
+                if self.registry_binding.is_some() {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
                 if self.flow != ProtocolFlow::Liveness {
                     return Err(ConstructionError::WrongFlow);
                 }
@@ -385,10 +458,9 @@ impl OwnedInstructionDraft {
                     return Err(ConstructionError::WrongWirePrefix);
                 }
             }
-            OwnedWireContract::MainSuccessor {
-                family,
-                local_action,
-            } => {
+            OwnedWireContract::MainSuccessor { binding } => {
+                let family = binding.family;
+                let local_action = binding.local_action;
                 if local_action == 0
                     || self.data.len() < 3
                     || self.data[0] != family.tag()
@@ -396,6 +468,21 @@ impl OwnedInstructionDraft {
                     || self.data[2] != local_action
                 {
                     return Err(ConstructionError::WrongWirePrefix);
+                }
+                if self.registry_binding != Some(binding)
+                    || family.allocation_status() != Some(binding.family_status)
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                if let Some(action) = binding.central_action {
+                    if action.family() != family || action.local_tag() != local_action {
+                        return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                    }
+                } else if matches!(
+                    family,
+                    ExtensionFamily::GeneralV2 | ExtensionFamily::SourceSeries
+                ) {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
                 }
                 let family_matches = match self.flow {
                     ProtocolFlow::GeneralV2Candidate
@@ -455,6 +542,7 @@ pub struct UnsignedProtocolTransaction {
     pub flows: Vec<ProtocolFlow>,
     pub actions: Vec<String>,
     pub semantic_owners: Vec<SemanticOwner>,
+    pub registry_bindings: Vec<Option<SuccessorRegistryBinding>>,
     pub runtime_admissions: Vec<RuntimeAdmission>,
     pub required_signers: Vec<Address>,
     pub exact_equations: Vec<ExactEquation>,
@@ -539,6 +627,7 @@ impl ProtocolTransactionBuilder {
         let mut flows = Vec::new();
         let mut actions = Vec::with_capacity(drafts.len());
         let mut semantic_owners = Vec::with_capacity(drafts.len());
+        let mut registry_bindings = Vec::with_capacity(drafts.len());
         let mut runtime_admissions = Vec::with_capacity(drafts.len());
         let mut required_signers = BTreeSet::from([self.payer]);
         let mut exact_equations = Vec::new();
@@ -566,6 +655,7 @@ impl ProtocolTransactionBuilder {
             }
             actions.push(draft.action_name.clone());
             semantic_owners.push(draft.semantic_owner.clone());
+            registry_bindings.push(draft.registry_binding);
             runtime_admissions.push(draft.runtime_admission);
             exact_equations.extend(draft.equations.iter().cloned());
             instructions.push(draft.instruction());
@@ -582,6 +672,7 @@ impl ProtocolTransactionBuilder {
             flows,
             actions,
             semantic_owners,
+            registry_bindings,
             runtime_admissions,
             required_signers: required_signers.into_iter().collect(),
             exact_equations,
@@ -669,9 +760,36 @@ fn require_nonempty_flow(expected: ProtocolFlow, drafts: &[OwnedInstructionDraft
     Ok(())
 }
 
+fn registry_binding(
+    family: ExtensionFamily,
+    local_action: u8,
+    central_action: Option<ExtensionAction>,
+) -> Result<SuccessorRegistryBinding> {
+    let family_status = family
+        .allocation_status()
+        .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?;
+    Ok(SuccessorRegistryBinding {
+        family,
+        local_action,
+        family_status,
+        central_action,
+    })
+}
+
+const fn map_registry_error(error: RegistryError) -> ConstructionError {
+    match error {
+        RegistryError::TooLong => ConstructionError::PayloadTooLong,
+        RegistryError::Truncated
+        | RegistryError::UnknownFamilyVersion
+        | RegistryError::UnknownLocalAction
+        | RegistryError::OutputTooSmall => ConstructionError::UnallocatedRegistryCoordinate,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_solana_layout::registry::GeneralV2Action;
 
     fn owner() -> SemanticOwner {
         SemanticOwner {
@@ -685,7 +803,7 @@ mod tests {
     fn structured_claim_envelope_is_built_without_signing_or_submission() {
         let payer = Address::new_from_array([1; 32]);
         let program = Address::new_from_array([2; 32]);
-        let draft = OwnedInstructionDraft::reserved_successor(
+        let draft = OwnedInstructionDraft::semantic_reserved_successor(
             ProtocolFlow::StructuredClaim,
             "wrap-full",
             owner(),
@@ -730,8 +848,8 @@ mod tests {
             left: 5,
             right: 5,
         };
-        let reserved_successor = |flow, action| {
-            OwnedInstructionDraft::reserved_successor(
+        let allocated_successor = |flow, action| {
+            OwnedInstructionDraft::allocated_successor(
                 flow,
                 "general-action",
                 owner(),
@@ -739,7 +857,6 @@ mod tests {
                 vec![AccountMeta::new_readonly(payer, true)],
                 vec![payer],
                 vec![equation()],
-                ExtensionFamily::GeneralV2,
                 action,
                 &[8; 32],
             )
@@ -758,13 +875,19 @@ mod tests {
             liveness_data,
         )
         .unwrap();
-        // This intentionally unallocated value proves construction does not
-        // pretend that a proposed envelope is admitted by the registry.
-        const RESERVED_TEST_ACTION: u8 = u8::MAX;
         let drafts = [
-            reserved_successor(ProtocolFlow::GeneralV2Settlement, RESERVED_TEST_ACTION),
-            reserved_successor(ProtocolFlow::GeneralV2Fees, RESERVED_TEST_ACTION),
-            reserved_successor(ProtocolFlow::DirectEggSettlement, RESERVED_TEST_ACTION),
+            allocated_successor(
+                ProtocolFlow::GeneralV2Settlement,
+                ExtensionAction::GeneralV2(GeneralV2Action::FinalizeOwnerSettlement),
+            ),
+            allocated_successor(
+                ProtocolFlow::GeneralV2Fees,
+                ExtensionAction::GeneralV2(GeneralV2Action::AccountReceiptEnd),
+            ),
+            allocated_successor(
+                ProtocolFlow::DirectEggSettlement,
+                ExtensionAction::GeneralV2(GeneralV2Action::ConsumeDirectReceiptEggs),
+            ),
             liveness,
         ];
         let builder = ProtocolTransactionBuilder::new(
