@@ -1,13 +1,14 @@
-//! Unreachable-until-enabled SourcePlane V3 mutation handlers.
+//! SourcePlane V3 mutation handlers entered only by exact capability tuples.
 //!
-//! The central SourceSeries 77/v2 coordinates are allocated, but the product
-//! capability table remains empty for actions 1 through 12. This module owns
-//! their complete inner execution: all semantic outputs are planned before a
-//! write, predictable accounts are prefund-safe, mutable postimages advance
-//! their durable lineage in the same instruction, immutable accounts retain
-//! an explicit payer/donation rent partition, and every paid transition emits
-//! the exact Source receipt plus liveness intent. The dispatcher cannot enter
-//! these handlers until the separate capability gate is changed.
+//! The central SourceSeries 77/v2 coordinates are allocated; action 1 release
+//! registration and actions 2/3 SourceHead/OpenRawPage creation are live in
+//! full profiles. This module owns their complete inner execution: semantic outputs are
+//! checked before instruction success, predictable accounts are prefund-safe,
+//! mutable postimages advance their durable lineage in the same rollback
+//! domain, immutable accounts retain an explicit payer/donation rent partition,
+//! and every paid transition emits the exact Source receipt plus liveness
+//! intent. The dispatcher cannot enter any remaining handler until its
+//! separate capability tuple is admitted.
 
 use std::vec;
 use std::vec::Vec;
@@ -29,19 +30,18 @@ use clutch_source_plane_v3_runtime::{
     initialize_source_head, open_lineage_generation, plan_runtime_account_close_from_header,
     plan_source_account_creation, AccountCloseFundingV1, AccountCreationFundingV1,
     AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedEvaluationV1,
-    AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1,
-    AuthenticatedReopenLineageV1, AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
-    AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
-    AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
-    AuthenticatedWindowEvidenceV1, AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1,
-    ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1,
-    IngestBatchOutputV1, LineageFamilyV1,
+    AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1, AuthenticatedReopenLineageV1,
+    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceRouteV1,
+    AuthenticatedSourceWorkReceiptV1, AuthenticatedStatisticResultAbsenceV1,
+    AuthenticatedStatisticResultAccountV1, AuthenticatedWindowEvidenceV1,
+    AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1, ClockSnapshotV1,
+    EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, IngestBatchOutputV1, LineageFamilyV1,
     RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1, RuntimeAccountHeaderV1,
     RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1, SourceReleaseManifestV1,
     SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1, SourceWorkAuthorizationV1,
     SourceWorkKindV1, SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1,
-    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, RUNTIME_ACCOUNT_HEADER_BYTES,
-    REOPEN_LINEAGE_BYTES,
+    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, REOPEN_LINEAGE_BYTES,
+    RUNTIME_ACCOUNT_HEADER_BYTES,
 };
 use solana_account_info::AccountInfo;
 use solana_instruction::Instruction;
@@ -53,12 +53,12 @@ use crate::instructions::genesis::{
     create_pda_account, read_rent, require_creatable, require_system_program, RentParameters,
     SYSTEM_PROGRAM_ID,
 };
+use crate::seeds;
 use crate::source_plane_v3::{
     derive_runtime_pda, invoke_parser_boundary, invoke_statistic_evaluator,
     project_liveness_receipt, project_liveness_terminal_intent, project_liveness_work_intent,
     runtime_key, SourceV3SbfError,
 };
-use crate::seeds;
 use clutch_solana_layout::artifact::ArtifactKind;
 
 /// Complete open-account postimage committed with one lineage postimage.
@@ -176,8 +176,7 @@ pub fn apply_source_work_liveness(
             && policy_account.key != keeper.key
             && policy_account.key != payer_refund.key
             && compartment_account.key != keeper.key
-            && compartment_account.key != payer_refund.key
-            && keeper.key != payer_refund.key,
+            && compartment_account.key != payer_refund.key,
         ClutchError::AccountAlias,
     )?;
     expect_pda(
@@ -259,14 +258,26 @@ pub fn apply_source_work_liveness(
                     .ok_or(ClutchError::Arithmetic)?,
         ClutchError::MismatchedState,
     )?;
+    let coalesced_recipient = keeper.key == payer_refund.key;
     let keeper_after = keeper
         .lamports()
         .checked_add(keeper_lamports)
+        .and_then(|balance| {
+            if coalesced_recipient {
+                balance.checked_add(payer_lamports)
+            } else {
+                Some(balance)
+            }
+        })
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let payer_after = payer_refund
-        .lamports()
-        .checked_add(payer_lamports)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let payer_after = if coalesced_recipient {
+        keeper_after
+    } else {
+        payer_refund
+            .lamports()
+            .checked_add(payer_lamports)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+    };
     {
         let mut data = compartment_account
             .try_borrow_mut_data()
@@ -281,15 +292,22 @@ pub fn apply_source_work_liveness(
         let mut compartment_lamports = compartment_account
             .try_borrow_mut_lamports()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let mut keeper_balance = keeper
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let mut payer_balance = payer_refund
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
         **compartment_lamports = balance_after;
-        **keeper_balance = keeper_after;
-        **payer_balance = payer_after;
+        if coalesced_recipient {
+            let mut recipient_balance = keeper
+                .try_borrow_mut_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            **recipient_balance = keeper_after;
+        } else {
+            let mut keeper_balance = keeper
+                .try_borrow_mut_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            let mut payer_balance = payer_refund
+                .try_borrow_mut_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            **keeper_balance = keeper_after;
+            **payer_balance = payer_after;
+        }
     }
     Ok(transition)
 }
@@ -711,9 +729,7 @@ pub fn register_release_from_artifact(
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<ImmutableAccountFundingV1> {
-    expected_manifest_id
-        .validate()
-        .map_err(source_core)?;
+    expected_manifest_id.validate().map_err(source_core)?;
     require(
         artifact_account.owner == program_id
             && !artifact_account.is_signer
@@ -743,9 +759,7 @@ pub fn register_release_from_artifact(
     let expected_bytes = manifest.encode().map_err(source_runtime)?;
     drop(artifact_data);
 
-    if release_account.owner == program_id
-        && release_account.data_len() == expected_bytes.len()
-    {
+    if release_account.owner == program_id && release_account.data_len() == expected_bytes.len() {
         require(
             release_account.is_writable
                 && !release_account.is_signer
@@ -1455,10 +1469,7 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
 ) -> Outcome<OpenRuntimeAccountResultV1> {
     require_creation_roles(program_id, payer, target, system_program)?;
     require_creation_roles(program_id, payer, lineage_account, system_program)?;
-    require(
-        target.key != lineage_account.key,
-        ClutchError::AccountAlias,
-    )?;
+    require(target.key != lineage_account.key, ClutchError::AccountAlias)?;
     let target_derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
     require(
         target_derived.address == runtime_key(target.key),
@@ -1474,8 +1485,7 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
     )
     .map_err(source_runtime)?;
     let lineage_recipe = PdaRecipeV3::reopen_lineage(lineage_recipe_id).map_err(source_pda)?;
-    let lineage_derived =
-        derive_runtime_pda(program_id, &lineage_recipe).map_err(Refusal::from)?;
+    let lineage_derived = derive_runtime_pda(program_id, &lineage_recipe).map_err(Refusal::from)?;
     require(
         lineage_derived.address == runtime_key(lineage_account.key),
         ClutchError::WrongPda,
@@ -1539,10 +1549,10 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
     let mut target_postimage = vec![0_u8; target_space];
     encode_runtime_account(header, body, route.neutral_sink(), &mut target_postimage)
         .map_err(source_runtime)?;
-    let target_data_id = account_data_id(runtime_key(target.key), &target_postimage)
-        .map_err(source_runtime)?;
-    let lineage_after = open_lineage_generation(lineage, reopen, target_data_id)
-        .map_err(source_runtime)?;
+    let target_data_id =
+        account_data_id(runtime_key(target.key), &target_postimage).map_err(source_runtime)?;
+    let lineage_after =
+        open_lineage_generation(lineage, reopen, target_data_id).map_err(source_runtime)?;
     let lineage_postimage = lineage_after.encode().map_err(source_runtime)?;
     let lineage_minimum = rent.minimum_balance(REOPEN_LINEAGE_BYTES)?;
     let lineage_before = lineage_account.lamports();
