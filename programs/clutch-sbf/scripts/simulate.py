@@ -71,19 +71,19 @@ def source_campaign_declaration(plan: dict) -> str:
         raise SystemExit("plan has no Endow source campaign case") from error
 
     source_mode = plan.get("source_mode")
-    if source_mode == "default-empty-registry":
+    if source_mode == "default-production-inert":
         if (
             endow.get("kind") != "refuse"
             or endow.get("expect_code") != 0x0079
             or "compare" in endow
         ):
             raise SystemExit(
-                "default empty-registry plan must declare Endow as a pre-write "
+                "default production-inert plan must declare Endow as a pre-write "
                 "Custom(0x0079) refusal"
             )
         if plan.get("lifecycle") is not None:
             raise SystemExit(
-                "default empty-registry plan must not carry a mock-success lifecycle"
+                "default production-inert plan must not carry a mock-success lifecycle"
             )
         return "source_campaign default-endow=REFUSE Custom(0x0079); lifecycle=NOT_DECLARED"
 

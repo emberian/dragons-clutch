@@ -18,7 +18,8 @@
 # The plan is explicitly genesis-assisted (frozen Realm artifacts and the
 # mock SourceSpec) and its funded reservations depend on the one deterministic
 # laboratory release compiled by `non-production-mock-source`.  The default
-# empty-registry ELF refuses Endow with 0x0079 and must never be credited
+# production-inert ELF refuses this unregistered V1 Endow with 0x0079 and must
+# never be credited
 # with this success.  This walk proves the general clearing plane end to end
 # on a committing bank: policy artifact stage/seal, InitEpoch + window, funded
 # single and portfolio placements from distinct signing owners, a cancel

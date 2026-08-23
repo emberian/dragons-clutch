@@ -9,9 +9,9 @@
 # The ELF is staged into `tests/fixtures/` and is deliberately NOT committed: a
 # checked-in binary is a second copy of the program that goes stale silently.
 #
-# Default usage builds the production-shaped empty-registry ELF. Successful
-# source/value scenarios require the explicit, differently compiled laboratory
-# profile:
+# Default usage builds the production-inert ELF: it contains one unreachable
+# off-curve fixture release and no production release. V1 mock source/value
+# scenarios require the explicit, differently compiled laboratory profile:
 #   ./run_svm_tests.sh --non-production-mock-source [test filters ...]
 # The deployed-Pyth local campaign is a separate, explicit test-only ELF:
 #   ./run_svm_tests.sh --non-production-real-pyth-lab real_pyth_router_verifies_then_post_update
@@ -19,7 +19,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 program="$(cd "$here/.." && pwd)"
 
-profile="default-empty-registry"
+profile="default-production-inert"
 build_features=()
 test_features=()
 if [ "${1:-}" = "--non-production-mock-source" ]; then

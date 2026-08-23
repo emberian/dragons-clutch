@@ -675,7 +675,8 @@ function. The frames that remain in its output are the pre-existing
 research/reference-crate debt already present in the sealed-main baseline ELF.
 
 The full svm suite is green on the branch under **both** ELF profiles, run
-with `--no-fail-fast` after rebasing onto main: `default-empty-registry`
+with `--no-fail-fast` after rebasing onto main: the historical output label
+`default-empty-registry` (now `default-production-inert`)
 **78 passed / 0 failed** and `non-production-mock-source` **85 passed / 0
 failed** — main's own 75 and 82 plus this lane's three V3 scenarios. Reaching that required one inherited repair,
 recorded here because it was mis-attributed once: the branch's merge-base

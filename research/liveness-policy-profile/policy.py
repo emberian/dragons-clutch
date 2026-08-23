@@ -1024,7 +1024,7 @@ def derive_current_tree_fold4(
     )
     require_equal(
         identity["source_profile"],
-        "default-empty-registry",
+        "default-production-inert",
         "current-tree source profile",
     )
     require_equal(

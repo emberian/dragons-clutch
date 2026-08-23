@@ -2,7 +2,7 @@
 # Acceptance dry run for the devnet paces driver.
 #
 # Rehearses the exact devnet campaign against a blank local test validator:
-# both ELFs (default empty-registry and NON-PRODUCTION mock-source) are loaded
+# both ELFs (default production-inert and NON-PRODUCTION mock-source) are loaded
 # at fresh program ids on ONE validator, with NO genesis-injected Clutch or
 # provider accounts — the same blank public cluster shape devnet presents.
 # Runs the `default` and `mock` profiles green, then a negative control
@@ -86,7 +86,7 @@ echo "default_program_id=$default_id"
 echo "mock_program_id=$mock_id"
 
 echo
-echo "== SBF ELFs (default empty-registry, NON-PRODUCTION mock-source) =="
+echo "== SBF ELFs (default production-inert, NON-PRODUCTION mock-source) =="
 CARGO_NET_OFFLINE=true "$build_sbf" \
   --manifest-path "$root/program/Cargo.toml" --sbf-out-dir "$elves/default" \
   >"$log/build-default.log" 2>&1 || {

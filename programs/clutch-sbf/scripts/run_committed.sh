@@ -12,7 +12,7 @@
 #
 # The plan is explicitly genesis-assisted and its successful Endow depends on
 # the one deterministic laboratory release compiled by
-# `non-production-mock-source`. The default empty-registry ELF is exercised by
+# `non-production-mock-source`. The default production-inert ELF is exercised by
 # separate fail-closed gates and must never be credited with this success. Its
 # terminal WithdrawCash steps
 # drain both owners' free cash and the pooled Hoard, but it still does not prove

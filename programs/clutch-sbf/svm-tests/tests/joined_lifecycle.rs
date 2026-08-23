@@ -5,7 +5,7 @@
 //! Clutch-owned account at genesis**. The same walk runs under both ELF
 //! profiles, mirroring `scripts/run_bringup.sh`'s campaign split:
 //!
-//! * Under the **default empty-registry ELF** the public prefix executes —
+//! * Under the **default production-inert ELF** the public prefix executes —
 //!   real Token-2022 collateral mint, sealed policy/grid/Terms artifacts
 //!   (degree-d smooth Terms), Realm, Profile, and `CreateMarket` allocating
 //!   the 319-byte native v3 resolution record — and the walk then *asserts*
@@ -1864,7 +1864,7 @@ async fn funded_segment(scenario: &mut Scenario, degree: u8) {
     );
 }
 
-/// The default empty-registry ELF's asserted value boundary. The public
+/// The default production-inert ELF's asserted unregistered-V1 value boundary. The public
 /// prefix is identical; the walk then proves the boundary is the closed
 /// source-release registry and nothing else.
 async fn default_refusal_segment(scenario: &mut Scenario, degree: u8) {
@@ -1953,7 +1953,7 @@ async fn default_refusal_segment(scenario: &mut Scenario, degree: u8) {
     assert_eq!(scenario.token_amount(scenario.actor_collateral).await, SETS);
 
     println!(
-        "default-empty-registry joined d{degree}: CreateMarket {create_units} CU; \
+        "default-production-inert joined d{degree}: CreateMarket {create_units} CU; \
          public InitSourceSpec REFUSE Custom(0x0079); \
          Endow(no spec) REFUSE WrongProgramOwner; \
          Endow(injected canonical spec) REFUSE Custom(0x0079), watched bytes identical"

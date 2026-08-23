@@ -1358,13 +1358,13 @@ def build_gates() -> list[dict[str, Any]]:
                     "mode": "exact",
                     "exit": 0,
                     "required_output_patterns": [
-                        r"^source_profile=default-empty-registry$",
+                        r"^source_profile=default-production-inert$",
                         r"^test default_elf_refuses_endow_without_a_registered_source_release \.\.\. ok$",
                     ],
                 },
                 "key_patterns": [
-                    r"^== SVM profile: default-empty-registry ==$",
-                    r"^source_profile=default-empty-registry$",
+                    r"^== SVM profile: default-production-inert ==$",
+                    r"^source_profile=default-production-inert$",
                     # `run_svm_tests.sh` prints the staged ELF identity as
                     # `elf_sha256=`/`elf_bytes=` lines, exactly as the mock gate
                     # below captures them. The former `<hex>  ...clutch_sbf.so`

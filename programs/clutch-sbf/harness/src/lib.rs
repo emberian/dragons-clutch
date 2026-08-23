@@ -6047,7 +6047,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         "walk-02-endow",
         "endow the founding position",
         "2 (in part)",
-        "Endow is a real deposit: the owner signs, the exact registered SourceSpec binds immutable Terms, Token-2022 debits the owner and credits pooled Hoard custody, cash is credited only after both deltas match, and replay advances atomically. This success belongs only to the explicitly different non-production-mock-source ELF; the default empty-registry ELF refuses before either owner-plane construction or Token-2022.",
+        "Endow is a real deposit: the owner signs, the exact registered SourceSpec binds immutable Terms, Token-2022 debits the owner and credits pooled Hoard custody, cash is credited only after both deltas match, and replay advances atomically. This success belongs only to the explicitly different non-production-mock-source ELF; the default production-inert ELF refuses this unregistered V1 spec before either owner-plane construction or Token-2022.",
     ));
 
     /* 3. Split. */
@@ -6388,7 +6388,7 @@ fn build_lifecycle(f: &Fixture) -> Lifecycle {
         WalkSkip {
             project_item: "2 (in part)",
             title: "prepay all mandatory work",
-            reason: "PARTLY DRIVEN, at step 2, and the residue is exact. The walk's opening cash is no longer a number this harness wrote into a genesis account: the explicitly non-production mock-source `Endow` debits the owner and credits pooled Token-2022 custody by the exact same amount before it commits cash and replay. What remains unproved is the other half of item 2: no authority presented at Endow demonstrates prepaid source/archive construction, future observation work, or resolution work through the terminal path. The default empty-registry ELF therefore refuses even the collateral half, while this mock walk is evidence only for the wired value leg and compiled mock parser release."
+            reason: "PARTLY DRIVEN, at step 2, and the residue is exact. The walk's opening cash is no longer a number this harness wrote into a genesis account: the explicitly non-production mock-source `Endow` debits the owner and credits pooled Token-2022 custody by the exact same amount before it commits cash and replay. What remains unproved is the other half of item 2: no authority presented at Endow demonstrates prepaid source/archive construction, future observation work, or resolution work through the terminal path. The default production-inert ELF therefore refuses this unregistered V1 collateral path, while this mock walk is evidence only for the wired value leg and compiled mock parser release."
                 .to_string(),
         },
         WalkSkip {
@@ -11554,7 +11554,7 @@ pub fn run_cli() {
     plan.cases = build_cases(&f);
     let source_mode = if default_source_refusal {
         expect_default_source_refusals(&mut plan.cases);
-        "default-empty-registry"
+        "default-production-inert"
     } else {
         "non-production-mock-source"
     };
@@ -11667,7 +11667,7 @@ pub fn run_cli() {
             println!("  skip item {:<12} {}", skip.project_item, skip.title);
         }
     } else {
-        println!("lifecycle    not declared for the default empty-registry campaign");
+        println!("lifecycle    not declared for the default production-inert campaign");
     }
 }
 

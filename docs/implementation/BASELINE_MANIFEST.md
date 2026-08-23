@@ -236,8 +236,8 @@ The four runtime gates have intentionally different coverage:
   semantic refusal and one measured two-instruction compute-ceiling STOP; both
   leave all watched state unchanged. It reloads 18 watched accounts and reruns after a
   terminal-byte corruption that must go red. Its successful Endow is evidence
-  only for that compiled laboratory release; the default empty-registry ELF
-  still refuses `0x79`. Its 12 program-owned prerequisites are genesis-injected;
+  only for that compiled laboratory release; the default production-inert ELF
+  still refuses this unregistered V1 spec with `0x79`. Its 12 program-owned prerequisites are genesis-injected;
   it is not blank-bank source ingestion, production-provider, deployment,
   devnet, or mainnet evidence.
 

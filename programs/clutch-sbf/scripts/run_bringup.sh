@@ -28,9 +28,9 @@ dynamic_port_range="${CLUTCH_DYNAMIC_PORT_RANGE:-18001-18099}"
 url="http://127.0.0.1:${rpc_port}"
 
 rm -rf "$work"
-default_plan="$work/plan-default-empty-registry"
+default_plan="$work/plan-default-production-inert"
 mock_plan="$work/plan-non-production-mock-source"
-default_log="$work/logs/default-empty-registry"
+default_log="$work/logs/default-production-inert"
 mock_log="$work/logs/non-production-mock-source"
 mkdir -p "$default_plan" "$mock_plan" "$default_log" "$mock_log"
 
@@ -181,7 +181,7 @@ python3 - "$default_plan/plan.json" "$mock_plan/plan.json" <<'CHECK'
 import json, sys
 default = json.load(open(sys.argv[1]))
 mock = json.load(open(sys.argv[2]))
-assert default["source_mode"] == "default-empty-registry"
+assert default["source_mode"] == "default-production-inert"
 assert mock["source_mode"] == "non-production-mock-source"
 default_endow = next(case for case in default["cases"] if case["name"] == "endow")
 mock_endow = next(case for case in mock["cases"] if case["name"] == "endow")
@@ -362,12 +362,12 @@ MUTATE
   validator_pid=""
 }
 
-run_profile "default-empty-registry" "$default_plan" "$default_log" "$default_elf" "no"
+run_profile "default-production-inert" "$default_plan" "$default_log" "$default_elf" "no"
 run_profile "non-production-mock-source" "$mock_plan" "$mock_log" "$mock_elf" "yes"
 
 cat_manifest="$work/elf-profiles.txt"
 printf '%s\n' \
-  "default_profile=default-empty-registry" \
+  "default_profile=default-production-inert" \
   "default_elf_sha256=${default_hashes[0]}" \
   "default_endow=REFUSE_0x0079" \
   "mock_profile=NON-PRODUCTION-non-production-mock-source" \

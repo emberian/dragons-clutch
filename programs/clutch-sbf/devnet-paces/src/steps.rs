@@ -13,7 +13,7 @@ use clutch_solana_layout::{account_len, artifact::ARTIFACT_CHUNK_BYTES};
 /// Which deployed ELF the campaign expects at `--program-id`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Profile {
-    /// The sealed default empty-registry ELF: the fail-closed campaign.
+    /// The sealed default production-inert ELF: the unregistered-spec refusal campaign.
     Default,
     /// The explicitly NON-PRODUCTION mock-source ELF.
     Mock,

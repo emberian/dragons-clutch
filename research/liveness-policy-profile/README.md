@@ -521,8 +521,9 @@ exactly what the batch rows exist to measure. The sealed row therefore remains
 `STOP_UNMEASURED_COMPOSED_FOLD4_TRANSACTION_CU` and carries no quote.
 
 A separate **`UNSEALED_CURRENT_TREE`** campaign closes the measurement question
-without changing that sealed identity. Against default-empty-registry ELF
-`a6381fbe…` and source-closure digest `2012201b…`, the 32-record `[6,2]` plan
+without changing that sealed identity. Against the production-inert ELF then
+labeled `default-empty-registry`, `a6381fbe…`, with source-closure digest
+`2012201b…`, the 32-record `[6,2]` plan
 measured 514,332 CU / 1,228 bytes and 171,765 CU / 704 bytes. Both packets fit
 the 1,232-byte budget; the first is only four bytes below it. The same campaign
 measured Begin at 76,064 CU and Finalize at 152,730 CU, proved Work/Reserve/

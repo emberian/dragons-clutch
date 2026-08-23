@@ -69,7 +69,7 @@ const artifact = (state) => {
       el(
         "span",
         null,
-        "Built with --features non-production-mock-source. The default empty-registry ELF refuses Endow with 0x0079 and must never be credited with this walk."
+        "Built with --features non-production-mock-source. The default production-inert ELF refuses this unregistered V1 Endow with 0x0079 and must never be credited with this walk."
       )
     ),
     fields("", [
