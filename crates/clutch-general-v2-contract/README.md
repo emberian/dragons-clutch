@@ -178,7 +178,7 @@ be synchronized before activation.
 
 ## Action allocation and pure payload contracts
 
-General family `74/1` retains local action names `1..=37`. Strict allocation-free
+General family `74/1` retains local action names `1..=38`. Strict allocation-free
 payload decoders and pure poststate owners now exist for the identity-lab spine
 at actions 2, 6, 7, 8, 9, 10, 14, and 15, permissionless reverse-head cleanup
 at action 20, and the separately authenticated one-way solver-prize claim at
@@ -193,12 +193,22 @@ submission close it may terminalize only an unrevealed `Committed` node as
 lamport movement and does not infer revealed/Work expiry semantics.
 
 Actions 24 and 25 have strict disabled payload facts only. Action 24 is the
-96-byte selector `epoch || selected_candidate || owner`. Action 25 is the
-149-byte claimed fragment
-`epoch || selected_candidate || owner_settlement || receipt || slice_index ||
-order_index || side || consideration_price_units || completes_order`. Every
-fragment field is only an equality assertion against a future authenticated
-receipt and order-membership projection, never caller-created semantic truth.
+96-byte selector `epoch || selected_candidate || owner`. Action 25 is renamed
+`AccountReceiptEnd` with no compatibility alias and uses the 160-byte selector
+`epoch || selected_candidate || owner_settlement || receipt ||
+receipt_accounting_id`. Slice, order, side, price, and completion are owned
+solely by the authenticated receipt and selected-order projection, never by
+caller bytes. The accounting ID is persisted and replay-checked separately
+from every later Egg-delivery transition ID.
+
+Action 38 `FinalizeOwnerSettlement` has a strict disabled 192-byte selector
+`epoch || selected_candidate || owner_settlement || position ||
+settlement_cash_pot || owner_finalization_id`. It exists separately because a
+last receipt fragment may leave a credit-bearing owner waiting for earlier
+buyer or merge liquidity. Net owner debits are admitted into the pot first;
+credits refuse and retry without consuming replay or liveness when liquidity
+is absent. The accounting-complete row becomes finalized and records the
+distinct finalization identity only after the exact Position/cash-pot transfer.
 No success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per
 participating owner, checked candidate totals, and a canonically derived owner
@@ -209,9 +219,10 @@ rent ledger that owns payer principal, refund recipient, and donation sink.
 
 Action 26 is renamed `ConsumeDirectReceiptEggs` and has the exact disabled
 96-byte selector `epoch || receipt || settlement_transition_id`. The imported
-pure planner atomically stages both real receipt ends, both Positions, both
-Reservations, and both owner-row accounting bodies. It moves only internal
-native Eggs; cash conversion remains owner-terminal. The action stays disabled
+pure planner requires both real ends already accounting-latched, then
+atomically stages a distinct delivery latch, both Positions, and both
+Reservations while treating owner rows as read-only accounting evidence. It
+moves only internal native Eggs; cash conversion remains owner-terminal. The action stays disabled
 until the direct receipt can project an exact Settlement-compartment liveness
 receipt, call ordinal, quote ceiling, keeper payment, and payer refund.
 
@@ -221,7 +232,8 @@ selector `epoch || receipt || settlement_transition_id`. They are not aliases
 for action 26 or for each other. A future handler must bind one checked
 selected-candidate witness and transition ID across the virtual inventory
 budget, FinalPot, Hoard/aggregate supply, one real receipt end, Position,
-Reservation, owner row, and Settlement liveness mutation. No inventory-only
+Reservation, distinct delivery latch, and Settlement liveness mutation. The
+already-accounted owner row is authenticated but not rewritten. No inventory-only
 action is allocated, and neither route is executable yet.
 
 The capability-disabled fee envelopes at `0x82` through `0x86` add only an
@@ -236,7 +248,11 @@ and no fee-bearing value movement becomes executable from their reservation.
 
 The disabled `0x87/1` account wraps the exact 256-byte buyer-first cash-pot
 body. It segregates buyer consideration, selected fees, rounding price units,
-and terminal virtual-claim cash while owner rows are realized. Allocation
+and exactly one typed virtual-cash direction while owner rows are realized.
+`Split` retains terminal cash, `Merge` contributes opening proceeds, and
+`None` requires zero virtual cash; the exact conservation equation is buyer
+debit plus opening merge minus seller credit equals rounding plus terminal
+split. Allocation
 completion is not retirement authority: no action may close the pot or move
 value until the matching complete Egg/reservation transition and later
 FinalPot disposition owner are both authenticated.

@@ -716,8 +716,8 @@ pub enum GeneralV2Action {
     ClaimEpochUnused = 23,
     /// Freeze one settlement entitlement.
     FreezeEntitlement = 24,
-    /// Consume one entitled slice.
-    EntitleSlice = 25,
+    /// Account one authenticated receipt end without delivering Eggs.
+    AccountReceiptEnd = 25,
     /// Atomically consume both real ends of one direct Egg receipt.
     ConsumeDirectReceiptEggs = 26,
     /// Close one General V2 receipt.
@@ -742,13 +742,15 @@ pub enum GeneralV2Action {
     ConsumeVirtualSplitReceiptEggs = 36,
     /// Atomically consume a real sell end and merge complete-set inventory.
     ConsumeVirtualMergeReceiptEggs = 37,
+    /// Atomically realize one accounting-complete owner into the cash pot.
+    FinalizeOwnerSettlement = 38,
 }
 
 impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 37;
+    pub const LAST_TAG: u8 = 38;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -777,7 +779,7 @@ impl GeneralV2Action {
             Self::CloseCandidateIndexPage => 22,
             Self::ClaimEpochUnused => 23,
             Self::FreezeEntitlement => 24,
-            Self::EntitleSlice => 25,
+            Self::AccountReceiptEnd => 25,
             Self::ConsumeDirectReceiptEggs => 26,
             Self::CloseReceipt => 27,
             Self::CloseReservation => 28,
@@ -790,6 +792,7 @@ impl GeneralV2Action {
             Self::TransferPositionAssets => 35,
             Self::ConsumeVirtualSplitReceiptEggs => 36,
             Self::ConsumeVirtualMergeReceiptEggs => 37,
+            Self::FinalizeOwnerSettlement => 38,
         }
     }
 
@@ -820,7 +823,7 @@ impl GeneralV2Action {
             22 => Some(Self::CloseCandidateIndexPage),
             23 => Some(Self::ClaimEpochUnused),
             24 => Some(Self::FreezeEntitlement),
-            25 => Some(Self::EntitleSlice),
+            25 => Some(Self::AccountReceiptEnd),
             26 => Some(Self::ConsumeDirectReceiptEggs),
             27 => Some(Self::CloseReceipt),
             28 => Some(Self::CloseReservation),
@@ -833,6 +836,7 @@ impl GeneralV2Action {
             35 => Some(Self::TransferPositionAssets),
             36 => Some(Self::ConsumeVirtualSplitReceiptEggs),
             37 => Some(Self::ConsumeVirtualMergeReceiptEggs),
+            38 => Some(Self::FinalizeOwnerSettlement),
             _ => None,
         }
     }

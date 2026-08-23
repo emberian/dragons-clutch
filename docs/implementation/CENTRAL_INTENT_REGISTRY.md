@@ -40,7 +40,7 @@ family version creates a new namespace; it does not inherit capability.
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
 
-General V2 reserves local actions 1 through 37, in order:
+General V2 reserves local actions 1 through 38, in order:
 
 1. `CreateMarket`
 2. `InitEpoch`
@@ -66,7 +66,7 @@ General V2 reserves local actions 1 through 37, in order:
 22. `CloseCandidateIndexPage`
 23. `ClaimEpochUnused`
 24. `FreezeEntitlement`
-25. `EntitleSlice`
+25. `AccountReceiptEnd`
 26. `ConsumeDirectReceiptEggs`
 27. `CloseReceipt`
 28. `CloseReservation`
@@ -79,12 +79,13 @@ General V2 reserves local actions 1 through 37, in order:
 35. `TransferPositionAssets`
 36. `ConsumeVirtualSplitReceiptEggs`
 37. `ConsumeVirtualMergeReceiptEggs`
+38. `FinalizeOwnerSettlement`
 
 These registry names allocate local tags only; this document does not freeze
 payload bytes, account lists, account codecs, transition semantics, or runtime
 capabilities. Action-specific contracts may do so separately. In particular,
 the non-production identity slice named below freezes a strict subset, and
-actions 35 through 37 have canonical payload contracts while remaining
+actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
@@ -131,9 +132,9 @@ A later activation must change the following atomically:
 5. update this registry and its collision tests without changing legacy golden
    bytes or packet limits.
 
-General V2 local actions 1 through 37 are allocated numeric coordinates, not a
+General V2 local actions 1 through 38 are allocated numeric coordinates, not a
 blanket activation. Actions 2, 6, 7, 8, 9, 10, 14, 15, 20, 21, and 32 are
-confined to the named non-production profile. Actions 35 through 37 have
+confined to the named non-production profile. Actions 35 through 38 have
 frozen canonical payload contracts but remain `ReservedDisabled`. Every other
 General V2 action remains allocation-only. Unlisted future local-action proposals, and
 every proposed account shape, stay outside the central ledger until their

@@ -3,9 +3,8 @@
 //! Strict, allocation-free payload decoders for the empty-book identity lab.
 
 use crate::{
-    AuthenticatedOwnerFragmentV1, CodecError, Id32, Reader, SettlementCandidateKindV1,
-    SettlementSideV1, ID_BYTES, MAX_ORDERS_U8, MAX_OUTCOMES_U8, MAX_QUANTIZED_ATOMS_U8,
-    MAX_SLICES_U16, QUANTIZED_ATOM_BYTES, SETTLEMENT_SLICE_BYTES,
+    CodecError, Id32, Reader, SettlementCandidateKindV1, ID_BYTES, MAX_ORDERS_U8, MAX_OUTCOMES_U8,
+    MAX_QUANTIZED_ATOMS_U8, MAX_SLICES_U16, QUANTIZED_ATOM_BYTES, SETTLEMENT_SLICE_BYTES,
 };
 
 /// Largest General V2 action payload under the frozen 402-byte intent ceiling.
@@ -30,14 +29,16 @@ pub const CLEANUP_CANDIDATE_PAYLOAD_BYTES: usize = 96;
 pub const CLAIM_SOLVER_PAYLOAD_BYTES: usize = 32;
 /// Exact action-24 selector payload bytes.
 pub const FREEZE_ENTITLEMENT_PAYLOAD_BYTES: usize = 96;
-/// Exact action-25 claimed-fragment payload bytes.
-pub const ENTITLE_SLICE_PAYLOAD_BYTES: usize = 149;
+/// Exact action-25 accounting selector payload bytes.
+pub const ACCOUNT_RECEIPT_END_PAYLOAD_BYTES: usize = 160;
 /// Exact action-26 disabled direct-receipt selector bytes.
 pub const CONSUME_DIRECT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
 /// Exact action-36 disabled virtual-split receipt selector bytes.
 pub const CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
 /// Exact action-37 disabled virtual-merge receipt selector bytes.
 pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
+/// Exact action-38 disabled owner-finalization selector bytes.
+pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 192;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -523,13 +524,14 @@ impl FreezeEntitlementPayloadV1 {
     }
 }
 
-/// Action-25 `EntitleSlice` claimed receipt-fragment fields.
+/// Action-25 `AccountReceiptEnd` immutable accounting selector.
 ///
-/// Every field after the four identities is only an equality assertion against
-/// a future authenticated receipt and order-membership projection. Decoding
-/// this payload never turns caller bytes into settlement semantic truth.
+/// Slice, order, side, price, and completion facts are owned solely by the
+/// authenticated receipt and selected-order projection. The accounting ID is
+/// a replay identity for the owner-row mutation and must never be reused as a
+/// later Egg-delivery transition ID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EntitleSlicePayloadV1 {
+pub struct AccountReceiptEndPayloadV1 {
     /// Finalized parent Epoch PDA.
     pub epoch: Id32,
     /// Counted SelectedCandidate PDA.
@@ -538,52 +540,29 @@ pub struct EntitleSlicePayloadV1 {
     pub owner_settlement: Id32,
     /// Receipt PDA whose authenticated body must reproduce every claim below.
     pub receipt: Id32,
-    /// SelectedCandidate's exact next global slice index.
-    pub slice_index: u16,
-    /// Canonical selected order-set index, strictly below 64.
-    pub order_index: u8,
-    /// Claimed payer/payee side.
-    pub side: SettlementSideV1,
-    /// Claimed nonzero exact consideration in price units.
-    pub consideration_price_units: u128,
-    /// Claimed unique order-exhaustion bit.
-    pub completes_order: bool,
+    /// Opaque identity of this accounting-only receipt-end mutation.
+    pub receipt_accounting_id: Id32,
 }
 
-impl EntitleSlicePayloadV1 {
-    /// Decode exactly 149 hostile claimed-fragment bytes.
+impl AccountReceiptEndPayloadV1 {
+    /// Decode exactly 160 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
-        let mut reader = Reader::exact(input, ENTITLE_SLICE_PAYLOAD_BYTES)?;
-        let epoch = live_id(&mut reader)?;
-        let selected_candidate = live_id(&mut reader)?;
-        let owner_settlement = live_id(&mut reader)?;
-        let receipt = live_id(&mut reader)?;
-        let slice_index = reader.u16()?;
-        let order_index = reader.u8()?;
-        let side = match reader.u8()? {
-            0 => SettlementSideV1::Buy,
-            1 => SettlementSideV1::Sell,
-            _ => return Err(CodecError::InvalidState),
-        };
-        let consideration_price_units = reader.u128()?;
-        let completes_order = match reader.u8()? {
-            0 => false,
-            1 => true,
-            _ => return Err(CodecError::InvalidState),
+        let mut reader = Reader::exact(input, ACCOUNT_RECEIPT_END_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            selected_candidate: live_id(&mut reader)?,
+            owner_settlement: live_id(&mut reader)?,
+            receipt: live_id(&mut reader)?,
+            receipt_accounting_id: live_id(&mut reader)?,
         };
         reader.finish()?;
-        let value = Self {
-            epoch,
-            selected_candidate,
-            owner_settlement,
-            receipt,
-            slice_index,
-            order_index,
-            side,
-            consideration_price_units,
-            completes_order,
-        };
-        let identities = [epoch, selected_candidate, owner_settlement, receipt];
+        let identities = [
+            value.epoch,
+            value.selected_candidate,
+            value.owner_settlement,
+            value.receipt,
+            value.receipt_accounting_id,
+        ];
         let mut left = 0usize;
         while left < identities.len() {
             let mut right = left + 1;
@@ -595,23 +574,7 @@ impl EntitleSlicePayloadV1 {
             }
             left += 1;
         }
-        if order_index >= MAX_ORDERS_U8 || consideration_price_units == 0 {
-            return Err(CodecError::InvalidState);
-        }
         Ok(value)
-    }
-
-    /// Project the claimed upstream fragment after receipt equality checks.
-    ///
-    /// The return value remains caller-claimed until an adapter proves every
-    /// field equal to an authenticated receipt and selected-order membership.
-    pub const fn claimed_fragment(self) -> AuthenticatedOwnerFragmentV1 {
-        AuthenticatedOwnerFragmentV1 {
-            order_index: self.order_index,
-            side: self.side,
-            consideration_price_units: self.consideration_price_units,
-            completes_order: self.completes_order,
-        }
     }
 }
 
@@ -719,6 +682,64 @@ impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
     }
 }
 
+/// Action-38 `FinalizeOwnerSettlement` immutable selector.
+///
+/// The finalization identity is persisted only after the accounting-complete
+/// owner row, Position, and candidate cash pot have all reached the exact
+/// atomic poststate. It is distinct from receipt accounting and Egg-delivery
+/// transition identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalizeOwnerSettlementPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Counted SelectedCandidate PDA.
+    pub selected_candidate: Id32,
+    /// Accounting-complete OwnerSettlement PDA.
+    pub owner_settlement: Id32,
+    /// Canonical owner/Market/generation Position PDA.
+    pub position: Id32,
+    /// Candidate-wide directional settlement cash-pot PDA.
+    pub settlement_cash_pot: Id32,
+    /// Once-only owner Position/cash-pot realization identity.
+    pub owner_finalization_id: Id32,
+}
+
+impl FinalizeOwnerSettlementPayloadV1 {
+    /// Decode exactly 192 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            selected_candidate: live_id(&mut reader)?,
+            owner_settlement: live_id(&mut reader)?,
+            position: live_id(&mut reader)?,
+            settlement_cash_pot: live_id(&mut reader)?,
+            owner_finalization_id: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        let identities = [
+            value.epoch,
+            value.selected_candidate,
+            value.owner_settlement,
+            value.position,
+            value.settlement_cash_pot,
+            value.owner_finalization_id,
+        ];
+        let mut left = 0usize;
+        while left < identities.len() {
+            let mut right = left + 1;
+            while right < identities.len() {
+                if identities[left] == identities[right] {
+                    return Err(CodecError::MismatchedBinding);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        Ok(value)
+    }
+}
+
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -736,8 +757,10 @@ impl FinalizeSelectionPayloadV1 {
 pub enum OwnerSettlementPayloadV1 {
     /// Action 24 selector only; creation remains disabled.
     FreezeEntitlement(FreezeEntitlementPayloadV1),
-    /// Action 25 claimed receipt fragment only; mutation remains disabled.
-    EntitleSlice(EntitleSlicePayloadV1),
+    /// Action 25 accounting selector only; mutation remains disabled.
+    AccountReceiptEnd(AccountReceiptEndPayloadV1),
+    /// Action 38 owner-finalization selector only; mutation remains disabled.
+    FinalizeOwnerSettlement(FinalizeOwnerSettlementPayloadV1),
 }
 
 /// Strict payload fact for the disabled real-ended direct Egg action.
@@ -785,7 +808,7 @@ pub fn decode_virtual_settlement_payload_v1(
     }
 }
 
-/// Decode only actions 24 and 25 without adding them to the live-lab union.
+/// Decode actions 24, 25, and 38 without adding them to the live-lab union.
 pub fn decode_owner_settlement_payload_v1(
     local_action: u8,
     payload: &[u8],
@@ -794,8 +817,11 @@ pub fn decode_owner_settlement_payload_v1(
         24 => Ok(OwnerSettlementPayloadV1::FreezeEntitlement(
             FreezeEntitlementPayloadV1::decode(payload)?,
         )),
-        25 => Ok(OwnerSettlementPayloadV1::EntitleSlice(
-            EntitleSlicePayloadV1::decode(payload)?,
+        25 => Ok(OwnerSettlementPayloadV1::AccountReceiptEnd(
+            AccountReceiptEndPayloadV1::decode(payload)?,
+        )),
+        38 => Ok(OwnerSettlementPayloadV1::FinalizeOwnerSettlement(
+            FinalizeOwnerSettlementPayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }
@@ -973,6 +999,54 @@ mod tests {
         assert_eq!(
             decode_virtual_settlement_payload_v1(37, &selector),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn account_receipt_end_is_identity_only_and_strict() {
+        let mut selector = [0u8; ACCOUNT_RECEIPT_END_PAYLOAD_BYTES];
+        for (index, byte) in (1_u8..=5).enumerate() {
+            let start = index * ID_BYTES;
+            selector[start..start + ID_BYTES].copy_from_slice(&live(byte));
+        }
+        let decoded = AccountReceiptEndPayloadV1::decode(&selector).unwrap();
+        assert_eq!(decoded.receipt_accounting_id, Id32::new(live(5)).unwrap());
+        assert!(matches!(
+            decode_owner_settlement_payload_v1(25, &selector),
+            Ok(OwnerSettlementPayloadV1::AccountReceiptEnd(_))
+        ));
+        assert_eq!(
+            decode_owner_settlement_payload_v1(25, &selector[..159]),
+            Err(CodecError::WrongLength)
+        );
+        selector[4 * ID_BYTES..5 * ID_BYTES].copy_from_slice(&live(1));
+        assert_eq!(
+            decode_owner_settlement_payload_v1(25, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn owner_finalization_selector_binds_six_distinct_identities() {
+        let mut selector = [0u8; FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES];
+        for (index, byte) in (1_u8..=6).enumerate() {
+            let start = index * ID_BYTES;
+            selector[start..start + ID_BYTES].copy_from_slice(&live(byte));
+        }
+        let decoded = FinalizeOwnerSettlementPayloadV1::decode(&selector).unwrap();
+        assert_eq!(decoded.owner_finalization_id, Id32::new(live(6)).unwrap());
+        assert!(matches!(
+            decode_owner_settlement_payload_v1(38, &selector),
+            Ok(OwnerSettlementPayloadV1::FinalizeOwnerSettlement(_))
+        ));
+        assert_eq!(
+            decode_owner_settlement_payload_v1(38, &selector[..191]),
+            Err(CodecError::WrongLength)
+        );
+        selector[5 * ID_BYTES..6 * ID_BYTES].copy_from_slice(&live(3));
+        assert_eq!(
+            decode_owner_settlement_payload_v1(38, &selector),
+            Err(CodecError::MismatchedBinding)
         );
     }
 

@@ -24,7 +24,7 @@ vertical slices and must remain disabled until their own evidence gates pass.
 
 The General V2 extension family is centrally reserved at outer intent family
 tag 74 decimal (`0x4a`), family version 1. Its family-local actions are
-allocated at `1..=37`. Allocation does not authorize execution.
+allocated at `1..=38`. Allocation does not authorize execution.
 
 Every production SBF profile has an empty General V2 extension capability table.
 The existing `profile-general-source-v2-point` is the legacy General V1
@@ -302,7 +302,7 @@ count/record-width mismatch, and arithmetic overflow.
 
 These are frozen codec contracts. The live source handlers are exactly the
 capability set in section 7; payload facts for disabled actions 24 through 26
-and 36 through 37 do not create a success route.
+and 36 through 38 do not create a success route.
 
 | Local action | Exact payload |
 |---:|---|
@@ -317,11 +317,12 @@ and 36 through 37 do not create a success route.
 | 20 `CleanupCandidate` | `epoch[32] || node[32] || selected_candidate[32]` |
 | 21 `ClaimSolver` | `selected_candidate[32]` |
 | 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner[32]` |
-| 25 `EntitleSlice` (disabled claim) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || slice_index u16_le || order_index u8 || side u8 || consideration_price_units u128_le || completes_order u8` (149 bytes) |
+| 25 `AccountReceiptEnd` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || receipt_accounting_id[32]` (160 bytes) |
 | 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
 | 32 `CloseClearWork` | `epoch[32] || node[32]` |
 | 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
 | 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32] || owner_finalization_id[32]` (192 bytes) |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
 
@@ -690,7 +691,7 @@ All other General V2 actions remain disabled. In particular:
   work fits under the one-creation ceiling;
 - actions 12-13 are not needed by the bounded empty-book lab; generic streaming
   RelationV2 progress needs its own contract before activation;
-- actions 17-19, 22-31, and 33-37 remain disabled, including the remaining
+- actions 17-19, 22-31, and 33-38 remain disabled, including the remaining
   candidate terminal paths, entitlements, settlement, selected-artifact
   retirement, root retirement, and the reserved Position asset-transfer
   primitive.
@@ -701,6 +702,24 @@ no successful SBF transition. They cannot activate until an authenticated,
 complete filled-order projection, exactly one selected fee row per canonical
 owner, checked candidate totals, a canonically derived owner-order-set digest,
 and exact receipt, reservation, and SelectedCandidate joins exist.
+Action 25 is the accounting-only `AccountReceiptEnd`, not Egg delivery. Its
+persisted `receipt_accounting_id` is distinct from every later delivery
+transition identity. It adds the authenticated receipt end's price units to
+exactly one owner row; the receipt and selected-order projection, rather than
+caller bytes, own slice, order, side, price, and completion. Accounting and
+delivery therefore have independent, once-only latches.
+
+Action 38 `FinalizeOwnerSettlement` is separately reserved because the last
+receipt fragment cannot always realize an owner. It atomically joins an
+accounting-complete state-zero owner row, the same owner/Market/generation
+Position, the selected owner fee, and the directional candidate cash pot.
+Owner net debits are source-before-sink progress and always enter the pot;
+owner credits refuse without mutation when buyer or completed-merge liquidity
+is not yet present, and may be retried later without consuming replay or
+liveness funding. The owner row reaches state one and persists the distinct
+`owner_finalization_id` only after the exact Position-to-pot or pot-to-Position
+transfer succeeds. No Reservation DTO is copied into this transition: its
+terminal accounting is joined through the canonical row and Position facts.
 The 292-byte row outer stores no duplicate rent DTO. Its pre-fund-safe creation
 plan must atomically update the separate authenticated rent ledger that owns
 the payer principal, refund recipient, and donation sink.
@@ -716,7 +735,12 @@ accounts, so they cannot relax the zero-fee boundary or move Position value.
 
 The `0x87/1` cash-pot envelope is also capability-disabled. Its exact
 256-byte semantic body enforces buyer-first candidate-wide allocation and
-segregates consideration, fees, rounding price units, and virtual-claim cash.
+segregates consideration, fees, rounding price units, and exactly one typed
+virtual-cash direction. `Split` names terminal cash that funds complete-set
+creation; `Merge` names opening proceeds contributed before seller
+realization; `None` requires zero virtual cash. The terminal conservation
+equation is `buyer debit + opening merge - seller credit = rounding + terminal
+split`.
 Receipt-end accounting is not value movement. No settlement action may consume
 its plan until an authenticated matching complete Egg/reservation transition
 is in the same atomic write set, and allocation completion does not authorize
@@ -724,9 +748,11 @@ cash-pot, owner-row, or FinalPot retirement.
 
 Action 26 `ConsumeDirectReceiptEggs` is capability-disabled even though its
 96-byte selector and complete pure direct planner are frozen. The planner
-atomically stages one direct receipt, two Position poststates, two Reservation
-poststates, and two owner-row accounting bodies, moving only internal native
-Eggs. It does not convert cash. An SBF meta contract cannot freeze until the
+requires both real receipt ends already accounting-latched by action 25, then
+atomically stages the distinct delivery latch, two Position poststates, and
+two Reservation poststates while treating the owner rows as authenticated
+read-only accounting evidence. It moves only internal native Eggs and does not
+convert cash. An SBF meta contract cannot freeze until the
 receipt also authenticates the exact Settlement-compartment liveness receipt,
 call ordinal, quote ceiling, keeper payment, and payer refund; virtual
 split/merge receipts require distinct actions and contracts.
@@ -735,13 +761,20 @@ Actions 36 and 37 reserve those distinct virtual contracts. Both use a strict
 96-byte selector, but they decode into different types and cannot be routed
 through action 26 or through one another. Action 36 must atomically join the
 selected virtual-split authority, its complete-set split inventory mutation,
-and the associated real buy receipt/Position/Reservation/owner-row mutation.
+and the associated real buy receipt/Position/Reservation delivery while
+authenticating the already-accounted owner row without rewriting it.
 Action 37 must atomically join the selected virtual-merge authority, its real
-sell receipt/Position/Reservation/owner-row mutation, and the complete-set
-merge. Every layer must name the same Epoch, selected candidate, checked
+sell receipt/Position/Reservation delivery, and the complete-set merge while
+authenticating the already-accounted owner row without rewriting it. Every
+layer must name the same Epoch, selected candidate, checked
 relation witness, receipt, and settlement transition ID. The FinalPot, Hoard,
 aggregate claim ledger, inventory budget, receipt, Position, Reservation,
-owner row, and Settlement liveness compartment form one rollback boundary.
+delivery latch, and Settlement liveness compartment form one rollback
+boundary; the owner row/accounting latch is an immutable authorization join.
+The split route additionally requires every owner row finalized and the
+all-owner cash pot terminal with its exact split principal present. The merge
+route contributes its opening proceeds before credit-bearing owner
+finalizations may consume them.
 No separately callable inventory action is allocated. Exact ordered SBF metas
 remain an activation blocker until the receipt codec projects the complete
 selected witness and the liveness owner freezes the call ordinal, quote
