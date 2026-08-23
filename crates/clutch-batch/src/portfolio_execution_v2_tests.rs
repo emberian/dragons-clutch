@@ -1,13 +1,15 @@
 use super::portfolio_execution_v2::{
     authenticate_exact_portfolio_pair_v2, authenticate_selected_portfolio_order_v2,
-    portfolio_pair_receipt_semantic_id_v2, prepare_portfolio_pair_execution_v2,
+    portfolio_pair_transition_commitment_v2, prepare_portfolio_pair_execution_v2,
     AuthenticatedPortfolioPairV2, PortfolioAccountExpectationV2, PortfolioAccountRoleV2,
     PortfolioAdapterV2, PortfolioExecutionErrorV2, PortfolioPairExecutionInputV2,
     PortfolioPairPostSemanticIdsV2, PortfolioPositionPrestateV2,
     PortfolioReplayPrestateV2, PortfolioReservationLifecycleV2,
     PortfolioReservationPrestateV2, PortfolioSourceOrderKindV2,
-    PortfolioSelectionMembershipExpectationV2, PortfolioTransitionExpectationV2,
+    PortfolioSelectionMembershipExpectationV2, PortfolioSettlementReceiptV5Prestate,
+    PortfolioSettlementReceiptV5TransitionExpectationV2, PortfolioTransitionExpectationV2,
     PortfolioValuationBoundaryV2,
+    SettlementReceiptTransitionKindV2,
     SelectedPortfolioOrderRecordV2, PORTFOLIO_EXECUTION_VERSION_V2,
     PORTFOLIO_PAIR_RECEIPT_V2_BYTES, SELECTED_PORTFOLIO_ORDER_V2_BYTES,
 };
@@ -18,6 +20,7 @@ use super::relation_v2::{
     EMPTY_ECONOMIC_ORDER_V2, ECONOMIC_RELATION_VERSION_V2,
 };
 use super::{PartialPolicy, Side, MAX_ORDERS};
+use std::cell::Cell;
 
 fn id(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -52,6 +55,55 @@ impl PortfolioAdapterV2 for TestAdapter {
 
     fn authenticate_transition(&self, expected: &PortfolioTransitionExpectationV2) -> bool {
         self.reject_transition != Some(expected.role)
+    }
+
+    fn authenticate_settlement_receipt_v5_transition(
+        &self,
+        _expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
+    ) -> bool {
+        self.reject_transition != Some(PortfolioAccountRoleV2::SettlementReceipt)
+    }
+}
+
+struct CapturingAdapter {
+    commitment: Cell<[u8; 32]>,
+}
+
+impl PortfolioAdapterV2 for CapturingAdapter {
+    fn authenticate_account(&self, _expected: &PortfolioAccountExpectationV2) -> bool {
+        true
+    }
+
+    fn authenticate_selection_membership(
+        &self,
+        _expected: &PortfolioSelectionMembershipExpectationV2,
+        _relation_order: &EconomicOrderV2,
+        _candidate: &EconomicCandidateV2,
+    ) -> bool {
+        true
+    }
+
+    fn authenticate_transition(&self, _expected: &PortfolioTransitionExpectationV2) -> bool {
+        true
+    }
+
+    fn authenticate_settlement_receipt_v5_transition(
+        &self,
+        expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
+    ) -> bool {
+        if expected.prestate.transition_kind
+            != SettlementReceiptTransitionKindV2::PortfolioPairV2
+            || expected.prestate.transition_commitment != [0; 32]
+            || expected.prestate.accounted_end_mask != expected.prestate.expected_end_mask
+            || expected.prestate.delivered_end_mask != 0
+            || expected.post_transition_kind
+                != SettlementReceiptTransitionKindV2::PortfolioPairV2
+            || expected.transition_commitment == [0; 32]
+        {
+            return false;
+        }
+        self.commitment.set(expected.transition_commitment);
+        true
     }
 }
 
@@ -132,8 +184,9 @@ fn pair_fixture(quantity: u64) -> PairFixture {
         side: Side::Buy,
         order_index: 0,
         page_slot: 3,
+        traversal_index: 10,
         page_index: 9,
-        selection_generation: 12,
+        settlement_root_epoch_generation: 12,
         page_generation: 5,
         position_generation: 4,
         selected_fill_units: quantity,
@@ -141,13 +194,14 @@ fn pair_fixture(quantity: u64) -> PairFixture {
         epoch_semantics_digest: domain.epoch_semantics_digest,
         economic_candidate_digest: candidate_digest,
         order_set_digest: id(20),
-        selected_candidate_account_id: id(21),
-        selected_candidate_semantic_id: id(22),
+        settlement_root_account_id: id(21),
+        settlement_root_pre_semantic_id: id(22),
         settlement_candidate_id: id(23),
-        selected_feed_semantic_id: id(24),
-        settlement_witness_id: id(25),
-        order_page_account_id: id(26),
-        order_page_semantic_id: id(27),
+        retained_feed_account_id: id(24),
+        retained_feed_semantic_id: id(25),
+        settlement_witness_id: id(26),
+        order_page_account_id: id(27),
+        order_page_semantic_id: id(28),
         position_account_id: id(30),
         position_pre_semantic_id: id(31),
         order_id: buy.order_id,
@@ -180,6 +234,36 @@ fn pair_fixture(quantity: u64) -> PairFixture {
         candidate_digest,
         payoff,
     }
+}
+
+fn zero_consideration_fixture(quantity: u64) -> PairFixture {
+    let mut fixture = pair_fixture(quantity);
+    let mut coefficients = [0u64; MAX_OUTCOMES];
+    coefficients[1] = 1;
+    fixture.book.orders[0].coefficients = coefficients;
+    fixture.book.orders[1].coefficients = coefficients;
+    fixture.book.orders[0].limit_value_price_units_per_unit = 0;
+    fixture.book.orders[1].limit_value_price_units_per_unit = 0;
+    let mut prices = [0u64; MAX_OUTCOMES];
+    prices[0] = fixture.domain.price_scale;
+    fixture.price = PricePreconditionV2 {
+        policy_digest: fixture.domain.price_policy_digest,
+        semantic_price_digest: price_semantics_digest_v2(&fixture.domain, &prices).unwrap(),
+        prices,
+    };
+    let verified = verify_economic_candidate_v2(
+        &fixture.domain,
+        &fixture.book,
+        &fixture.price,
+        &fixture.candidate,
+    )
+    .unwrap();
+    fixture.candidate_digest = verified.economic_candidate_digest;
+    fixture.buyer_record.economic_candidate_digest = verified.economic_candidate_digest;
+    fixture.seller_record.economic_candidate_digest = verified.economic_candidate_digest;
+    fixture.payoff = [0; MAX_OUTCOMES];
+    fixture.payoff[1] = quantity;
+    fixture
 }
 
 fn authenticated_pair(fixture: &PairFixture) -> AuthenticatedPortfolioPairV2 {
@@ -217,10 +301,20 @@ fn authenticated_pair(fixture: &PairFixture) -> AuthenticatedPortfolioPairV2 {
 
 fn execution_input(fixture: &PairFixture) -> PortfolioPairExecutionInputV2 {
     PortfolioPairExecutionInputV2 {
-        receipt_ordinal: 11,
-        settlement_receipt_account_id: id(80),
-        settlement_receipt_semantic_id: id(81),
-        settlement_receipt_generation: 9,
+        settlement_receipt: PortfolioSettlementReceiptV5Prestate {
+            account_id: id(80),
+            pre_data_id: id(81),
+            slice_index: 10,
+            sequence: 11,
+            accounted_end_mask: 3,
+            delivered_end_mask: 0,
+            expected_end_mask: 3,
+            transition_kind: SettlementReceiptTransitionKindV2::PortfolioPairV2,
+            transition_commitment: [0; 32],
+            rent_owner_id: id(82),
+            rent_principal_lamports: 2_000_000,
+            rent_donation_floor_lamports: 17,
+        },
         buyer_reservation: PortfolioReservationPrestateV2 {
             account_id: id(40),
             semantic_id: id(41),
@@ -318,6 +412,47 @@ fn full_sixteen_outcome_pair_values_once_and_freezes_exact_effects() {
     assert_eq!(prepared.seller_position_after().cash_atoms(), 180);
     assert_eq!(prepared.seller_position_after().generation(), 8);
     assert_eq!(prepared.receipt().consideration_atoms(), 170);
+    assert_eq!(prepared.receipt().slice_index(), 10);
+    assert_eq!(prepared.receipt().sequence(), 11);
+}
+
+#[test]
+fn receipt_v5_sets_one_typed_commitment_in_the_authenticated_postimage() {
+    let fixture = pair_fixture(20);
+    let pair = authenticated_pair(&fixture);
+    let adapter = CapturingAdapter {
+        commitment: Cell::new([0; 32]),
+    };
+    let prepared = prepare_portfolio_pair_execution_v2(
+        &adapter,
+        id(200),
+        pair,
+        execution_input(&fixture),
+    )
+    .unwrap();
+    assert_eq!(adapter.commitment.get(), prepared.transition_commitment());
+}
+
+#[test]
+fn unchanged_position_endpoint_keeps_its_exact_semantic_identity() {
+    let fixture = zero_consideration_fixture(20);
+    let pair = authenticated_pair(&fixture);
+    assert_eq!(pair.consideration_atoms(), 0);
+    let mut input = execution_input(&fixture);
+    input.post_semantic_ids.seller_position = input.seller_position.semantic_id;
+    prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, input).unwrap();
+
+    let mut invented_post = input;
+    invented_post.post_semantic_ids.seller_position = id(63);
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(
+            &TestAdapter::ACCEPT,
+            id(200),
+            pair,
+            invented_post,
+        ),
+        Err(PortfolioExecutionErrorV2::PostSemanticMismatch)
+    );
 }
 
 #[test]
@@ -329,7 +464,7 @@ fn selected_membership_and_receipt_codecs_refuse_noncanonical_padding() {
         SelectedPortfolioOrderRecordV2::decode(&selected).unwrap(),
         fixture.buyer_record
     );
-    selected[14] = 1;
+    selected[18] = 1;
     assert_eq!(
         SelectedPortfolioOrderRecordV2::decode(&selected),
         Err(PortfolioExecutionErrorV2::NonCanonicalPadding)
@@ -347,8 +482,8 @@ fn selected_membership_and_receipt_codecs_refuse_noncanonical_padding() {
     prepared.receipt().encode_into(&mut receipt).unwrap();
     let decoded = super::portfolio_execution_v2::PortfolioPairReceiptV2::decode(&receipt).unwrap();
     assert_eq!(
-        portfolio_pair_receipt_semantic_id_v2(&decoded).unwrap(),
-        prepared.receipt_semantic_id()
+        portfolio_pair_transition_commitment_v2(&decoded).unwrap(),
+        prepared.transition_commitment()
     );
     receipt[11] = 1;
     assert_eq!(
@@ -468,6 +603,61 @@ fn reservation_funding_fee_and_claim_mutants_refuse_before_authority() {
 }
 
 #[test]
+fn receipt_v5_requires_pending_kind_accounting_and_zero_precommitment() {
+    let fixture = pair_fixture(20);
+    let pair = authenticated_pair(&fixture);
+    let base = execution_input(&fixture);
+
+    let mut sequence = base;
+    sequence.settlement_receipt.sequence += 1;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, sequence),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
+    );
+
+    let mut wrong_kind = base;
+    wrong_kind.settlement_receipt.transition_kind = SettlementReceiptTransitionKindV2::None;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, wrong_kind),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
+    );
+
+    let mut unaccounted = base;
+    unaccounted.settlement_receipt.accounted_end_mask = 0;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, unaccounted),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
+    );
+
+    let mut delivered = base;
+    delivered.settlement_receipt.delivered_end_mask = 3;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, delivered),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
+    );
+
+    let mut replay = base;
+    replay.settlement_receipt.transition_commitment = id(99);
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, replay),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
+    );
+
+    let mut wrong_traversal = base;
+    wrong_traversal.settlement_receipt.slice_index = 9;
+    wrong_traversal.settlement_receipt.sequence = 10;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(
+            &TestAdapter::ACCEPT,
+            id(200),
+            pair,
+            wrong_traversal,
+        ),
+        Err(PortfolioExecutionErrorV2::FeedTraversalMismatch)
+    );
+}
+
+#[test]
 fn adapter_refusal_cannot_be_repackaged_as_a_private_capability() {
     let fixture = pair_fixture(20);
     let rejecting_selection = TestAdapter {
@@ -505,6 +695,22 @@ fn adapter_refusal_cannot_be_repackaged_as_a_private_capability() {
             role: PortfolioAccountRoleV2::Replay,
         })
     );
+
+    let rejecting_receipt = TestAdapter {
+        reject_account: None,
+        reject_transition: Some(PortfolioAccountRoleV2::SettlementReceipt),
+    };
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(
+            &rejecting_receipt,
+            id(200),
+            pair,
+            execution_input(&fixture),
+        ),
+        Err(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
+            role: PortfolioAccountRoleV2::SettlementReceipt,
+        })
+    );
 }
 
 #[test]
@@ -531,7 +737,7 @@ fn replay_prestate_is_in_the_transition_and_receipt_identity() {
     )
     .unwrap();
     assert_ne!(first.receipt().transition_id(), second.receipt().transition_id());
-    assert_ne!(first.receipt_semantic_id(), second.receipt_semantic_id());
+    assert_ne!(first.transition_commitment(), second.transition_commitment());
 
     let mut overflow = execution_input(&fixture);
     overflow.buyer_replay.ordinal = u64::MAX;

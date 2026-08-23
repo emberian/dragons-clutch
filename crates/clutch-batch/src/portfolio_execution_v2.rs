@@ -2,7 +2,7 @@
 //!
 //! [`crate::relation_v2::EconomicOrderV2`] remains the sole coefficient owner.
 //! This module never persists or accepts another coefficient vector. It binds
-//! authenticated General page membership to an exact RelationV2 order index,
+//! authenticated General SettlementRoot/retained-Feed/page membership to an exact RelationV2 order index,
 //! then composes two private selection capabilities into one exclusive full
 //! pair. The pair is executable only when all sixteen coefficient cells are
 //! byte-for-byte equal, the selected fills consume both orders in full, and a
@@ -19,9 +19,11 @@
 //! `CONSUMED` postimages, both Position V3 bodies receive the exact cash/native
 //! Egg effects without changing their stable incarnation generations, both
 //! purpose Replay V3 accounts advance by one, and the canonical hash of one
-//! replay-sensitive vector receipt preimage is retained by the counted,
-//! rent-owned SettlementReceipt V5 postimage. A live adapter must apply every
-//! named postimage and CPI atomically or apply none of them.
+//! replay-sensitive vector receipt preimage is exposed as a typed commitment
+//! required from the counted 298-byte SettlementReceipt V5 successor. Its typed
+//! kind-1 prestate is pending with a zero commitment; delivery sets the nonzero
+//! commitment exactly once in the same transition. A live adapter must apply every named postimage and CPI
+//! atomically or apply none of them.
 
 use crate::relation_v1::MAX_OUTCOMES;
 use crate::relation_v2::{
@@ -33,15 +35,15 @@ use crate::{Side, MAX_ORDERS};
 /// Exact semantic version of this account-ready portfolio authority.
 pub const PORTFOLIO_EXECUTION_VERSION_V2: u8 = 2;
 /// Canonical bytes of one selected-order membership record.
-pub const SELECTED_PORTFOLIO_ORDER_V2_BYTES: usize = 536;
+pub const SELECTED_PORTFOLIO_ORDER_V2_BYTES: usize = 568;
 /// Canonical bytes of one exact-pair transition receipt preimage.
 pub const PORTFOLIO_PAIR_RECEIPT_V2_BYTES: usize = 680;
 
 const SELECTED_ORDER_MAGIC_V2: [u8; 8] = *b"DCPSEL2\0";
 const PAIR_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCPRCP2\0";
 const PAIR_TRANSITION_DOMAIN_V2: &[u8] = b"dragons-clutch/portfolio-pair-transition/v2\0";
-const PAIR_RECEIPT_SEMANTIC_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/portfolio-pair-receipt/v2\0";
+const PAIR_EFFECTS_TRANSITION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/portfolio-pair-effects/v2\0";
 
 const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_ORDERS == 64);
@@ -66,6 +68,17 @@ pub enum PortfolioValuationBoundaryV2 {
     ExactReceiptDivisionV1 = 1,
 }
 
+/// Typed optional transition commitment frozen in SettlementReceipt V5.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SettlementReceiptTransitionKindV2 {
+    /// No specialized transition. The 32-byte field must remain zero forever.
+    None = 0,
+    /// Exact portfolio pair. A zero commitment is the authenticated pending
+    /// prestate; a nonzero commitment is the immutable delivered poststate.
+    PortfolioPairV2 = 1,
+}
+
 /// Canonical selected-order membership projected from an authenticated page.
 ///
 /// This fixed-layout record deliberately omits coefficients, limits, expiry,
@@ -79,8 +92,10 @@ pub struct SelectedPortfolioOrderRecordV2 {
     pub side: Side,
     pub order_index: u8,
     pub page_slot: u8,
+    /// Exact retained-Feed traversal/slice index selecting this pair.
+    pub traversal_index: u16,
     pub page_index: u16,
-    pub selection_generation: u64,
+    pub settlement_root_epoch_generation: u64,
     pub page_generation: u64,
     pub position_generation: u64,
     pub selected_fill_units: u64,
@@ -88,10 +103,11 @@ pub struct SelectedPortfolioOrderRecordV2 {
     pub epoch_semantics_digest: PortfolioIdentityV2,
     pub economic_candidate_digest: PortfolioIdentityV2,
     pub order_set_digest: PortfolioIdentityV2,
-    pub selected_candidate_account_id: PortfolioIdentityV2,
-    pub selected_candidate_semantic_id: PortfolioIdentityV2,
+    pub settlement_root_account_id: PortfolioIdentityV2,
+    pub settlement_root_pre_semantic_id: PortfolioIdentityV2,
     pub settlement_candidate_id: PortfolioIdentityV2,
-    pub selected_feed_semantic_id: PortfolioIdentityV2,
+    pub retained_feed_account_id: PortfolioIdentityV2,
+    pub retained_feed_semantic_id: PortfolioIdentityV2,
     pub settlement_witness_id: PortfolioIdentityV2,
     pub order_page_account_id: PortfolioIdentityV2,
     pub order_page_semantic_id: PortfolioIdentityV2,
@@ -116,8 +132,9 @@ impl SelectedPortfolioOrderRecordV2 {
         output[11] = side_byte(self.side);
         output[12] = self.order_index;
         output[13] = self.page_slot;
+        output[14..16].copy_from_slice(&self.traversal_index.to_le_bytes());
         output[16..18].copy_from_slice(&self.page_index.to_le_bytes());
-        output[24..32].copy_from_slice(&self.selection_generation.to_le_bytes());
+        output[24..32].copy_from_slice(&self.settlement_root_epoch_generation.to_le_bytes());
         output[32..40].copy_from_slice(&self.page_generation.to_le_bytes());
         output[40..48].copy_from_slice(&self.position_generation.to_le_bytes());
         output[48..56].copy_from_slice(&self.selected_fill_units.to_le_bytes());
@@ -139,9 +156,7 @@ impl SelectedPortfolioOrderRecordV2 {
         {
             return Err(PortfolioExecutionErrorV2::InvalidCodec);
         }
-        if input[14..16].iter().any(|byte| *byte != 0)
-            || input[18..24].iter().any(|byte| *byte != 0)
-        {
+        if input[18..24].iter().any(|byte| *byte != 0) {
             return Err(PortfolioExecutionErrorV2::NonCanonicalPadding);
         }
         let source_kind = match input[10] {
@@ -169,8 +184,9 @@ impl SelectedPortfolioOrderRecordV2 {
             side,
             order_index: input[12],
             page_slot: input[13],
+            traversal_index: read_u16(input, 14)?,
             page_index: read_u16(input, 16)?,
-            selection_generation: read_u64(input, 24)?,
+            settlement_root_epoch_generation: read_u64(input, 24)?,
             page_generation: read_u64(input, 32)?,
             position_generation: read_u64(input, 40)?,
             selected_fill_units: read_u64(input, 48)?,
@@ -178,10 +194,11 @@ impl SelectedPortfolioOrderRecordV2 {
             epoch_semantics_digest: next_identity()?,
             economic_candidate_digest: next_identity()?,
             order_set_digest: next_identity()?,
-            selected_candidate_account_id: next_identity()?,
-            selected_candidate_semantic_id: next_identity()?,
+            settlement_root_account_id: next_identity()?,
+            settlement_root_pre_semantic_id: next_identity()?,
             settlement_candidate_id: next_identity()?,
-            selected_feed_semantic_id: next_identity()?,
+            retained_feed_account_id: next_identity()?,
+            retained_feed_semantic_id: next_identity()?,
             settlement_witness_id: next_identity()?,
             order_page_account_id: next_identity()?,
             order_page_semantic_id: next_identity()?,
@@ -197,16 +214,17 @@ impl SelectedPortfolioOrderRecordV2 {
         Ok(value)
     }
 
-    fn identities(&self) -> [&PortfolioIdentityV2; 15] {
+    fn identities(&self) -> [&PortfolioIdentityV2; 16] {
         [
             &self.market_semantics_digest,
             &self.epoch_semantics_digest,
             &self.economic_candidate_digest,
             &self.order_set_digest,
-            &self.selected_candidate_account_id,
-            &self.selected_candidate_semantic_id,
+            &self.settlement_root_account_id,
+            &self.settlement_root_pre_semantic_id,
             &self.settlement_candidate_id,
-            &self.selected_feed_semantic_id,
+            &self.retained_feed_account_id,
+            &self.retained_feed_semantic_id,
             &self.settlement_witness_id,
             &self.order_page_account_id,
             &self.order_page_semantic_id,
@@ -225,7 +243,7 @@ impl SelectedPortfolioOrderRecordV2 {
             return Err(PortfolioExecutionErrorV2::InvalidOutcomeCount);
         }
         if self.selected_fill_units == 0
-            || self.selection_generation == 0
+            || self.settlement_root_epoch_generation == 0
             || self.page_generation == 0
             || self.position_generation == 0
         {
@@ -239,8 +257,11 @@ impl SelectedPortfolioOrderRecordV2 {
             }
             index += 1;
         }
-        if self.selected_candidate_account_id == self.order_page_account_id
-            || self.selected_candidate_account_id == self.position_account_id
+        if self.settlement_root_account_id == self.retained_feed_account_id
+            || self.settlement_root_account_id == self.order_page_account_id
+            || self.settlement_root_account_id == self.position_account_id
+            || self.retained_feed_account_id == self.order_page_account_id
+            || self.retained_feed_account_id == self.position_account_id
             || self.order_page_account_id == self.position_account_id
         {
             return Err(PortfolioExecutionErrorV2::AliasedAccount);
@@ -253,12 +274,13 @@ impl SelectedPortfolioOrderRecordV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum PortfolioAccountRoleV2 {
-    SelectedCandidate = 1,
-    OrderPage = 2,
-    Position = 3,
-    Reservation = 4,
-    Replay = 5,
-    SettlementReceipt = 6,
+    SettlementRoot = 1,
+    RetainedFeed = 2,
+    OrderPage = 3,
+    Position = 4,
+    Reservation = 5,
+    Replay = 6,
+    SettlementReceipt = 7,
 }
 
 /// Exact account observation the outer adapter must authenticate.
@@ -268,7 +290,9 @@ pub struct PortfolioAccountExpectationV2 {
     pub account_id: PortfolioIdentityV2,
     pub owner_program_id: PortfolioIdentityV2,
     pub data_semantic_id: PortfolioIdentityV2,
-    pub generation: u64,
+    /// Incarnation generation when the account schema owns one; otherwise
+    /// `None`. Absence is not represented by a synthetic numeric value.
+    pub generation: Option<u64>,
     pub writable: bool,
     pub must_exist: bool,
 }
@@ -289,7 +313,7 @@ pub struct PortfolioTransitionExpectationV2 {
     pub account_id: PortfolioIdentityV2,
     pub pre_semantic_id: PortfolioIdentityV2,
     pub post_semantic_id: PortfolioIdentityV2,
-    pub stable_generation: u64,
+    pub stable_generation: Option<u64>,
     pub pre_replay_ordinal: u64,
     pub post_replay_ordinal: u64,
     pub cash_debit_atoms: u64,
@@ -298,9 +322,6 @@ pub struct PortfolioTransitionExpectationV2 {
     pub claim_debits: [u64; MAX_OUTCOMES],
     pub claim_credits: [u64; MAX_OUTCOMES],
     pub reservation_consumed: bool,
-    /// Nonzero only for SettlementReceipt V5: exact vector-receipt semantic
-    /// identity the canonical postimage must retain.
-    pub committed_receipt_semantic_id: PortfolioIdentityV2,
 }
 
 /// Private authenticated-adapter seam.
@@ -318,6 +339,13 @@ pub trait PortfolioAdapterV2 {
         candidate: &EconomicCandidateV2,
     ) -> bool;
     fn authenticate_transition(&self, expected: &PortfolioTransitionExpectationV2) -> bool;
+    /// Decode the exact V5 pre-data identity, reproduce canonical
+    /// `commit_portfolio_pair_delivery`, and authenticate the resulting
+    /// post-data identity and typed commitment.
+    fn authenticate_settlement_receipt_v5_transition(
+        &self,
+        expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
+    ) -> bool;
 }
 
 /// Capability proving selected page membership was joined to one RelationV2 row.
@@ -395,11 +423,20 @@ pub fn authenticate_selected_portfolio_order_v2<A: PortfolioAdapterV2>(
 
     let expectations = [
         PortfolioAccountExpectationV2 {
-            role: PortfolioAccountRoleV2::SelectedCandidate,
-            account_id: record.selected_candidate_account_id,
+            role: PortfolioAccountRoleV2::SettlementRoot,
+            account_id: record.settlement_root_account_id,
             owner_program_id,
-            data_semantic_id: record.selected_candidate_semantic_id,
-            generation: record.selection_generation,
+            data_semantic_id: record.settlement_root_pre_semantic_id,
+            generation: Some(record.settlement_root_epoch_generation),
+            writable: false,
+            must_exist: true,
+        },
+        PortfolioAccountExpectationV2 {
+            role: PortfolioAccountRoleV2::RetainedFeed,
+            account_id: record.retained_feed_account_id,
+            owner_program_id,
+            data_semantic_id: record.retained_feed_semantic_id,
+            generation: None,
             writable: false,
             must_exist: true,
         },
@@ -408,7 +445,7 @@ pub fn authenticate_selected_portfolio_order_v2<A: PortfolioAdapterV2>(
             account_id: record.order_page_account_id,
             owner_program_id,
             data_semantic_id: record.order_page_semantic_id,
-            generation: record.page_generation,
+            generation: Some(record.page_generation),
             writable: false,
             must_exist: true,
         },
@@ -417,7 +454,7 @@ pub fn authenticate_selected_portfolio_order_v2<A: PortfolioAdapterV2>(
             account_id: record.position_account_id,
             owner_program_id,
             data_semantic_id: record.position_pre_semantic_id,
-            generation: record.position_generation,
+            generation: Some(record.position_generation),
             writable: true,
             must_exist: true,
         },
@@ -649,15 +686,43 @@ pub struct PortfolioPairPostSemanticIdsV2 {
     pub settlement_receipt: PortfolioIdentityV2,
 }
 
+/// Exact authenticated SettlementReceipt V5 prestate needed by this action.
+///
+/// The persisted owner is the frozen 298-byte V5 layout: 217-byte V4 semantic
+/// body, `transition_kind:u8`, `transition_commitment:[u8;32]`, and 48-byte
+/// rent owner. The pair hash commits every transition field below and the V5
+/// pre-data identity, excluding only the circular V5 post-data identity and the
+/// commitment value being derived.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioSettlementReceiptV5Prestate {
+    pub account_id: PortfolioIdentityV2,
+    /// Exact current V5 account-data identity.
+    pub pre_data_id: PortfolioIdentityV2,
+    pub slice_index: u16,
+    pub sequence: u64,
+    pub accounted_end_mask: u8,
+    pub delivered_end_mask: u8,
+    pub expected_end_mask: u8,
+    pub transition_kind: SettlementReceiptTransitionKindV2,
+    pub transition_commitment: PortfolioIdentityV2,
+    pub rent_owner_id: PortfolioIdentityV2,
+    pub rent_principal_lamports: u64,
+    pub rent_donation_floor_lamports: u64,
+}
+
+/// Exact generationless Receipt V5 transition the General adapter must prove.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PortfolioSettlementReceiptV5TransitionExpectationV2 {
+    pub prestate: PortfolioSettlementReceiptV5Prestate,
+    pub post_data_id: PortfolioIdentityV2,
+    pub post_transition_kind: SettlementReceiptTransitionKindV2,
+    pub transition_commitment: PortfolioIdentityV2,
+}
+
 /// Complete hostile input for the atomic account transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioPairExecutionInputV2 {
-    pub receipt_ordinal: u64,
-    pub settlement_receipt_account_id: PortfolioIdentityV2,
-    /// Authenticated rent-owned SettlementReceipt V5 preimage/data identity.
-    pub settlement_receipt_semantic_id: PortfolioIdentityV2,
-    /// Stable account incarnation/generation, distinct from receipt ordinal.
-    pub settlement_receipt_generation: u64,
+    pub settlement_receipt: PortfolioSettlementReceiptV5Prestate,
     pub buyer_reservation: PortfolioReservationPrestateV2,
     pub seller_reservation: PortfolioReservationPrestateV2,
     pub buyer_position: PortfolioPositionPrestateV2,
@@ -734,15 +799,16 @@ impl PortfolioPairEffectsV2 {
 
 /// Canonical replay-sensitive receipt preimage.
 ///
-/// This 680-byte value is not another account or counted liability. Its
-/// semantic hash is retained by the authenticated SettlementReceipt V5
-/// postimage and by the returned private capability.
+/// This 680-byte value is not another account or counted liability. Its exact
+/// V5-domain transition commitment is retained by the authenticated
+/// SettlementReceipt V5 postimage and by the returned private capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioPairReceiptV2 {
     version: u8,
     outcome_count: u8,
     boundary: PortfolioValuationBoundaryV2,
-    receipt_ordinal: u64,
+    slice_index: u16,
+    sequence: u64,
     pair_units: u64,
     consideration_atoms: u64,
     unit_value_price_units: u128,
@@ -751,7 +817,7 @@ pub struct PortfolioPairReceiptV2 {
     market_semantics_digest: PortfolioIdentityV2,
     epoch_semantics_digest: PortfolioIdentityV2,
     economic_candidate_digest: PortfolioIdentityV2,
-    selected_candidate_account_id: PortfolioIdentityV2,
+    settlement_root_account_id: PortfolioIdentityV2,
     settlement_candidate_id: PortfolioIdentityV2,
     settlement_witness_id: PortfolioIdentityV2,
     price_semantics_digest: PortfolioIdentityV2,
@@ -760,14 +826,18 @@ pub struct PortfolioPairReceiptV2 {
     buyer_owner_id: PortfolioIdentityV2,
     seller_owner_id: PortfolioIdentityV2,
     settlement_receipt_account_id: PortfolioIdentityV2,
-    settlement_receipt_semantic_id: PortfolioIdentityV2,
-    selected_feed_semantic_id: PortfolioIdentityV2,
+    settlement_receipt_pre_data_id: PortfolioIdentityV2,
+    retained_feed_semantic_id: PortfolioIdentityV2,
     transition_id: PortfolioIdentityV2,
 }
 
 impl PortfolioPairReceiptV2 {
-    pub const fn receipt_ordinal(&self) -> u64 {
-        self.receipt_ordinal
+    pub const fn slice_index(&self) -> u16 {
+        self.slice_index
+    }
+
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
     }
 
     pub const fn consideration_atoms(&self) -> u64 {
@@ -793,7 +863,10 @@ impl PortfolioPairReceiptV2 {
         output[8] = self.version;
         output[9] = self.outcome_count;
         output[10] = self.boundary as u8;
-        output[16..24].copy_from_slice(&self.receipt_ordinal.to_le_bytes());
+        // Route byte 0 is the only admitted exact direct portfolio pair.
+        output[11] = 0;
+        output[12..14].copy_from_slice(&self.slice_index.to_le_bytes());
+        output[16..24].copy_from_slice(&self.sequence.to_le_bytes());
         output[24..32].copy_from_slice(&self.pair_units.to_le_bytes());
         output[32..40].copy_from_slice(&self.consideration_atoms.to_le_bytes());
         output[40..56].copy_from_slice(&self.unit_value_price_units.to_le_bytes());
@@ -825,7 +898,7 @@ impl PortfolioPairReceiptV2 {
         {
             return Err(PortfolioExecutionErrorV2::InvalidCodec);
         }
-        if input[11..16].iter().any(|byte| *byte != 0) {
+        if input[11] != 0 || input[14..16].iter().any(|byte| *byte != 0) {
             return Err(PortfolioExecutionErrorV2::NonCanonicalPadding);
         }
         let boundary = match input[10] {
@@ -856,7 +929,8 @@ impl PortfolioPairReceiptV2 {
             version: input[8],
             outcome_count: input[9],
             boundary,
-            receipt_ordinal: read_u64(input, 16)?,
+            slice_index: read_u16(input, 12)?,
+            sequence: read_u64(input, 16)?,
             pair_units: read_u64(input, 24)?,
             consideration_atoms: read_u64(input, 32)?,
             unit_value_price_units: read_u128(input, 40)?,
@@ -865,7 +939,7 @@ impl PortfolioPairReceiptV2 {
             market_semantics_digest: next_identity()?,
             epoch_semantics_digest: next_identity()?,
             economic_candidate_digest: next_identity()?,
-            selected_candidate_account_id: next_identity()?,
+            settlement_root_account_id: next_identity()?,
             settlement_candidate_id: next_identity()?,
             settlement_witness_id: next_identity()?,
             price_semantics_digest: next_identity()?,
@@ -874,8 +948,8 @@ impl PortfolioPairReceiptV2 {
             buyer_owner_id: next_identity()?,
             seller_owner_id: next_identity()?,
             settlement_receipt_account_id: next_identity()?,
-            settlement_receipt_semantic_id: next_identity()?,
-            selected_feed_semantic_id: next_identity()?,
+            settlement_receipt_pre_data_id: next_identity()?,
+            retained_feed_semantic_id: next_identity()?,
             transition_id: next_identity()?,
         };
         if cursor != PORTFOLIO_PAIR_RECEIPT_V2_BYTES {
@@ -890,7 +964,7 @@ impl PortfolioPairReceiptV2 {
             &self.market_semantics_digest,
             &self.epoch_semantics_digest,
             &self.economic_candidate_digest,
-            &self.selected_candidate_account_id,
+            &self.settlement_root_account_id,
             &self.settlement_candidate_id,
             &self.settlement_witness_id,
             &self.price_semantics_digest,
@@ -899,8 +973,8 @@ impl PortfolioPairReceiptV2 {
             &self.buyer_owner_id,
             &self.seller_owner_id,
             &self.settlement_receipt_account_id,
-            &self.settlement_receipt_semantic_id,
-            &self.selected_feed_semantic_id,
+            &self.settlement_receipt_pre_data_id,
+            &self.retained_feed_semantic_id,
             &self.transition_id,
         ]
     }
@@ -910,7 +984,7 @@ impl PortfolioPairReceiptV2 {
             return Err(PortfolioExecutionErrorV2::UnknownVersion);
         }
         if !(2..=MAX_OUTCOMES).contains(&usize::from(self.outcome_count))
-            || self.receipt_ordinal == 0
+            || self.sequence != u64::from(self.slice_index) + 1
             || self.pair_units == 0
         {
             return Err(PortfolioExecutionErrorV2::InvalidGenerationOrUnits);
@@ -938,7 +1012,7 @@ impl PortfolioPairReceiptV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedPortfolioPairExecutionV2 {
     receipt: PortfolioPairReceiptV2,
-    receipt_semantic_id: PortfolioIdentityV2,
+    transition_commitment: PortfolioIdentityV2,
     effects: PortfolioPairEffectsV2,
     buyer_position_after: PortfolioPositionPoststateV2,
     seller_position_after: PortfolioPositionPoststateV2,
@@ -950,8 +1024,8 @@ impl PreparedPortfolioPairExecutionV2 {
         &self.receipt
     }
 
-    pub const fn receipt_semantic_id(&self) -> PortfolioIdentityV2 {
-        self.receipt_semantic_id
+    pub const fn transition_commitment(&self) -> PortfolioIdentityV2 {
+        self.transition_commitment
     }
 
     pub const fn effects(&self) -> &PortfolioPairEffectsV2 {
@@ -978,13 +1052,12 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
     pair: AuthenticatedPortfolioPairV2,
     input: PortfolioPairExecutionInputV2,
 ) -> Result<PreparedPortfolioPairExecutionV2, PortfolioExecutionErrorV2> {
-    if is_zero_identity(&owner_program_id)
-        || input.receipt_ordinal == 0
-        || is_zero_identity(&input.settlement_receipt_account_id)
-        || is_zero_identity(&input.settlement_receipt_semantic_id)
-        || input.settlement_receipt_generation == 0
-    {
+    if is_zero_identity(&owner_program_id) {
         return Err(PortfolioExecutionErrorV2::ZeroIdentity);
+    }
+    validate_settlement_receipt_v5_prestate(&input.settlement_receipt)?;
+    if input.settlement_receipt.slice_index != pair.buyer.record.traversal_index {
+        return Err(PortfolioExecutionErrorV2::FeedTraversalMismatch);
     }
     validate_distinct_execution_accounts(&pair, &input)?;
     validate_reservation_prestate(&pair.buyer, &input.buyer_reservation, true, &pair.payoff)?;
@@ -994,7 +1067,6 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
     validate_replay_prestate(&input.buyer_replay)?;
     validate_replay_prestate(&input.seller_replay)?;
     validate_post_ids(&input)?;
-
     if input.buyer_reservation.remaining_cash_atoms < pair.consideration_atoms {
         return Err(PortfolioExecutionErrorV2::BuyerReservationUnderfunded);
     }
@@ -1044,6 +1116,16 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         native_eggs: input.seller_position.native_eggs,
         outstanding_reservations: input.seller_position.outstanding_reservations,
     };
+    validate_position_post_id(
+        &input.buyer_position,
+        &buyer_position_after,
+        input.post_semantic_ids.buyer_position,
+    )?;
+    validate_position_post_id(
+        &input.seller_position,
+        &seller_position_after,
+        input.post_semantic_ids.seller_position,
+    )?;
     let buyer_replay_post = input
         .buyer_replay
         .ordinal
@@ -1063,7 +1145,7 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         claim_credits: pair.payoff,
     };
 
-    let accounts = execution_account_expectations(&input, owner_program_id);
+    let accounts = execution_account_expectations(&pair, &input, owner_program_id);
     let mut account_index = 0usize;
     while account_index < accounts.len() {
         if !adapter.authenticate_account(&accounts[account_index]) {
@@ -1088,7 +1170,8 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         version: PORTFOLIO_EXECUTION_VERSION_V2,
         outcome_count: buyer_record.outcome_count,
         boundary: pair.boundary,
-        receipt_ordinal: input.receipt_ordinal,
+        slice_index: input.settlement_receipt.slice_index,
+        sequence: input.settlement_receipt.sequence,
         pair_units: pair.pair_units,
         consideration_atoms: pair.consideration_atoms,
         unit_value_price_units: pair.unit_value_price_units,
@@ -1097,7 +1180,7 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         market_semantics_digest: buyer_record.market_semantics_digest,
         epoch_semantics_digest: buyer_record.epoch_semantics_digest,
         economic_candidate_digest: buyer_record.economic_candidate_digest,
-        selected_candidate_account_id: buyer_record.selected_candidate_account_id,
+        settlement_root_account_id: buyer_record.settlement_root_account_id,
         settlement_candidate_id: buyer_record.settlement_candidate_id,
         settlement_witness_id: buyer_record.settlement_witness_id,
         price_semantics_digest: pair.price_semantics_digest,
@@ -1105,18 +1188,17 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         sell_order_id: seller_record.order_id,
         buyer_owner_id: buyer_record.owner_id,
         seller_owner_id: seller_record.owner_id,
-        settlement_receipt_account_id: input.settlement_receipt_account_id,
-        settlement_receipt_semantic_id: input.settlement_receipt_semantic_id,
-        selected_feed_semantic_id: buyer_record.selected_feed_semantic_id,
+        settlement_receipt_account_id: input.settlement_receipt.account_id,
+        settlement_receipt_pre_data_id: input.settlement_receipt.pre_data_id,
+        retained_feed_semantic_id: buyer_record.retained_feed_semantic_id,
         transition_id,
     };
-    let receipt_semantic_id = portfolio_pair_receipt_semantic_id_v2(&receipt)?;
+    let transition_commitment = portfolio_pair_transition_commitment_v2(&receipt)?;
     let transitions = execution_transition_expectations(
         &input,
         &effects,
         buyer_replay_post,
         seller_replay_post,
-        receipt_semantic_id,
     );
     let mut transition_index = 0usize;
     while transition_index < transitions.len() {
@@ -1127,9 +1209,20 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
         }
         transition_index += 1;
     }
+    let receipt_transition = PortfolioSettlementReceiptV5TransitionExpectationV2 {
+        prestate: input.settlement_receipt,
+        post_data_id: input.post_semantic_ids.settlement_receipt,
+        post_transition_kind: SettlementReceiptTransitionKindV2::PortfolioPairV2,
+        transition_commitment,
+    };
+    if !adapter.authenticate_settlement_receipt_v5_transition(&receipt_transition) {
+        return Err(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
+            role: PortfolioAccountRoleV2::SettlementReceipt,
+        });
+    }
     Ok(PreparedPortfolioPairExecutionV2 {
         receipt,
-        receipt_semantic_id,
+        transition_commitment,
         effects,
         buyer_position_after,
         seller_position_after,
@@ -1137,15 +1230,16 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
     })
 }
 
-/// Hash the exact canonical receipt body. Decoded receipt bytes alone do not
-/// provide the private execution capability.
-pub fn portfolio_pair_receipt_semantic_id_v2(
+/// Derive the exact General-owned Receipt V5 transition commitment from the
+/// canonical 680-byte preimage. Decoded bytes alone do not provide the private
+/// execution capability.
+pub fn portfolio_pair_transition_commitment_v2(
     receipt: &PortfolioPairReceiptV2,
 ) -> Result<PortfolioIdentityV2, PortfolioExecutionErrorV2> {
     let mut bytes = [0u8; PORTFOLIO_PAIR_RECEIPT_V2_BYTES];
     receipt.encode_into(&mut bytes)?;
     let mut hash = Sha256V2::new();
-    hash.update(PAIR_RECEIPT_SEMANTIC_DOMAIN_V2)
+    hash.update(PAIR_TRANSITION_DOMAIN_V2)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&bytes)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
@@ -1188,6 +1282,8 @@ pub enum PortfolioExecutionErrorV2 {
     PositionUnderfunded,
     ReplayMismatch,
     ReplayOverflow,
+    SettlementReceiptMismatch,
+    FeedTraversalMismatch,
     PostSemanticMismatch,
     ArithmeticOverflow,
 }
@@ -1206,12 +1302,14 @@ fn shared_selection(
         && left.epoch_semantics_digest == right.epoch_semantics_digest
         && left.economic_candidate_digest == right.economic_candidate_digest
         && left.order_set_digest == right.order_set_digest
-        && left.selected_candidate_account_id == right.selected_candidate_account_id
-        && left.selected_candidate_semantic_id == right.selected_candidate_semantic_id
+        && left.settlement_root_account_id == right.settlement_root_account_id
+        && left.settlement_root_pre_semantic_id == right.settlement_root_pre_semantic_id
         && left.settlement_candidate_id == right.settlement_candidate_id
-        && left.selected_feed_semantic_id == right.selected_feed_semantic_id
+        && left.retained_feed_account_id == right.retained_feed_account_id
+        && left.retained_feed_semantic_id == right.retained_feed_semantic_id
         && left.settlement_witness_id == right.settlement_witness_id
-        && left.selection_generation == right.selection_generation
+        && left.settlement_root_epoch_generation == right.settlement_root_epoch_generation
+        && left.traversal_index == right.traversal_index
         && left.outcome_count == right.outcome_count
 }
 
@@ -1288,6 +1386,25 @@ fn validate_replay_prestate(
     Ok(())
 }
 
+fn validate_settlement_receipt_v5_prestate(
+    receipt: &PortfolioSettlementReceiptV5Prestate,
+) -> Result<(), PortfolioExecutionErrorV2> {
+    if is_zero_identity(&receipt.account_id)
+        || is_zero_identity(&receipt.pre_data_id)
+        || is_zero_identity(&receipt.rent_owner_id)
+        || receipt.rent_principal_lamports == 0
+        || receipt.sequence != u64::from(receipt.slice_index) + 1
+        || receipt.accounted_end_mask != receipt.expected_end_mask
+        || receipt.delivered_end_mask != 0
+        || receipt.expected_end_mask != 3
+        || receipt.transition_kind != SettlementReceiptTransitionKindV2::PortfolioPairV2
+        || !is_zero_identity(&receipt.transition_commitment)
+    {
+        return Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch);
+    }
+    Ok(())
+}
+
 fn validate_post_ids(
     input: &PortfolioPairExecutionInputV2,
 ) -> Result<(), PortfolioExecutionErrorV2> {
@@ -1304,11 +1421,27 @@ fn validate_post_ids(
     if ids.iter().any(is_zero_identity)
         || post.buyer_reservation == input.buyer_reservation.semantic_id
         || post.seller_reservation == input.seller_reservation.semantic_id
-        || post.buyer_position == input.buyer_position.semantic_id
-        || post.seller_position == input.seller_position.semantic_id
         || post.buyer_replay == input.buyer_replay.semantic_id
         || post.seller_replay == input.seller_replay.semantic_id
-        || post.settlement_receipt == input.settlement_receipt_semantic_id
+        || post.settlement_receipt == input.settlement_receipt.pre_data_id
+    {
+        return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
+    }
+    Ok(())
+}
+
+fn validate_position_post_id(
+    pre: &PortfolioPositionPrestateV2,
+    post: &PortfolioPositionPoststateV2,
+    post_semantic_id: PortfolioIdentityV2,
+) -> Result<(), PortfolioExecutionErrorV2> {
+    let value_changed = pre.generation != post.generation
+        || pre.cash_atoms != post.cash_atoms
+        || pre.reserved_cash_atoms != post.reserved_cash_atoms
+        || pre.native_eggs != post.native_eggs
+        || pre.outstanding_reservations != post.outstanding_reservations;
+    if (value_changed && post_semantic_id == pre.semantic_id)
+        || (!value_changed && post_semantic_id != pre.semantic_id)
     {
         return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
     }
@@ -1320,7 +1453,8 @@ fn validate_distinct_execution_accounts(
     input: &PortfolioPairExecutionInputV2,
 ) -> Result<(), PortfolioExecutionErrorV2> {
     let accounts = [
-        pair.buyer.record.selected_candidate_account_id,
+        pair.buyer.record.settlement_root_account_id,
+        pair.buyer.record.retained_feed_account_id,
         pair.buyer.record.order_page_account_id,
         pair.seller.record.order_page_account_id,
         input.buyer_position.account_id,
@@ -1329,7 +1463,7 @@ fn validate_distinct_execution_accounts(
         input.seller_reservation.account_id,
         input.buyer_replay.account_id,
         input.seller_replay.account_id,
-        input.settlement_receipt_account_id,
+        input.settlement_receipt.account_id,
     ];
     let mut left = 0usize;
     while left < accounts.len() {
@@ -1340,7 +1474,7 @@ fn validate_distinct_execution_accounts(
         while right < accounts.len() {
             // Both selected orders may legitimately occupy the same frozen
             // OrderPage account. No other account alias is admissible.
-            let shared_order_page = left == 1 && right == 2;
+            let shared_order_page = left == 2 && right == 3;
             if accounts[left] == accounts[right] && !shared_order_page {
                 return Err(PortfolioExecutionErrorV2::AliasedAccount);
             }
@@ -1352,16 +1486,26 @@ fn validate_distinct_execution_accounts(
 }
 
 fn execution_account_expectations(
+    pair: &AuthenticatedPortfolioPairV2,
     input: &PortfolioPairExecutionInputV2,
     owner_program_id: PortfolioIdentityV2,
-) -> [PortfolioAccountExpectationV2; 7] {
+) -> [PortfolioAccountExpectationV2; 8] {
     [
+        account_expectation(
+            PortfolioAccountRoleV2::SettlementRoot,
+            pair.buyer.record.settlement_root_account_id,
+            owner_program_id,
+            pair.buyer.record.settlement_root_pre_semantic_id,
+            Some(pair.buyer.record.settlement_root_epoch_generation),
+            false,
+            true,
+        ),
         account_expectation(
             PortfolioAccountRoleV2::Reservation,
             input.buyer_reservation.account_id,
             owner_program_id,
             input.buyer_reservation.semantic_id,
-            input.buyer_reservation.generation,
+            Some(input.buyer_reservation.generation),
             true,
             true,
         ),
@@ -1370,7 +1514,7 @@ fn execution_account_expectations(
             input.seller_reservation.account_id,
             owner_program_id,
             input.seller_reservation.semantic_id,
-            input.seller_reservation.generation,
+            Some(input.seller_reservation.generation),
             true,
             true,
         ),
@@ -1379,7 +1523,7 @@ fn execution_account_expectations(
             input.buyer_position.account_id,
             owner_program_id,
             input.buyer_position.semantic_id,
-            input.buyer_position.generation,
+            Some(input.buyer_position.generation),
             true,
             true,
         ),
@@ -1388,7 +1532,7 @@ fn execution_account_expectations(
             input.seller_position.account_id,
             owner_program_id,
             input.seller_position.semantic_id,
-            input.seller_position.generation,
+            Some(input.seller_position.generation),
             true,
             true,
         ),
@@ -1397,7 +1541,7 @@ fn execution_account_expectations(
             input.buyer_replay.account_id,
             owner_program_id,
             input.buyer_replay.semantic_id,
-            input.buyer_replay.ordinal,
+            None,
             true,
             true,
         ),
@@ -1406,16 +1550,16 @@ fn execution_account_expectations(
             input.seller_replay.account_id,
             owner_program_id,
             input.seller_replay.semantic_id,
-            input.seller_replay.ordinal,
+            None,
             true,
             true,
         ),
         account_expectation(
             PortfolioAccountRoleV2::SettlementReceipt,
-            input.settlement_receipt_account_id,
+            input.settlement_receipt.account_id,
             owner_program_id,
-            input.settlement_receipt_semantic_id,
-            input.settlement_receipt_generation,
+            input.settlement_receipt.pre_data_id,
+            None,
             true,
             true,
         ),
@@ -1427,7 +1571,7 @@ fn account_expectation(
     account_id: PortfolioIdentityV2,
     owner_program_id: PortfolioIdentityV2,
     data_semantic_id: PortfolioIdentityV2,
-    generation: u64,
+    generation: Option<u64>,
     writable: bool,
     must_exist: bool,
 ) -> PortfolioAccountExpectationV2 {
@@ -1447,15 +1591,14 @@ fn execution_transition_expectations(
     effects: &PortfolioPairEffectsV2,
     buyer_replay_post: u64,
     seller_replay_post: u64,
-    receipt_semantic_id: PortfolioIdentityV2,
-) -> [PortfolioTransitionExpectationV2; 7] {
+) -> [PortfolioTransitionExpectationV2; 6] {
     [
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Reservation,
             account_id: input.buyer_reservation.account_id,
             pre_semantic_id: input.buyer_reservation.semantic_id,
             post_semantic_id: input.post_semantic_ids.buyer_reservation,
-            stable_generation: input.buyer_reservation.generation,
+            stable_generation: Some(input.buyer_reservation.generation),
             pre_replay_ordinal: 0,
             post_replay_ordinal: 0,
             cash_debit_atoms: input.buyer_reservation.remaining_cash_atoms,
@@ -1464,14 +1607,13 @@ fn execution_transition_expectations(
             claim_debits: [0; MAX_OUTCOMES],
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: true,
-            committed_receipt_semantic_id: [0; 32],
         },
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Reservation,
             account_id: input.seller_reservation.account_id,
             pre_semantic_id: input.seller_reservation.semantic_id,
             post_semantic_id: input.post_semantic_ids.seller_reservation,
-            stable_generation: input.seller_reservation.generation,
+            stable_generation: Some(input.seller_reservation.generation),
             pre_replay_ordinal: 0,
             post_replay_ordinal: 0,
             cash_debit_atoms: 0,
@@ -1480,14 +1622,13 @@ fn execution_transition_expectations(
             claim_debits: effects.claim_debits,
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: true,
-            committed_receipt_semantic_id: [0; 32],
         },
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Position,
             account_id: input.buyer_position.account_id,
             pre_semantic_id: input.buyer_position.semantic_id,
             post_semantic_id: input.post_semantic_ids.buyer_position,
-            stable_generation: input.buyer_position.generation,
+            stable_generation: Some(input.buyer_position.generation),
             pre_replay_ordinal: 0,
             post_replay_ordinal: 0,
             cash_debit_atoms: effects.buyer_cash_debit_atoms,
@@ -1496,14 +1637,13 @@ fn execution_transition_expectations(
             claim_debits: [0; MAX_OUTCOMES],
             claim_credits: effects.claim_credits,
             reservation_consumed: false,
-            committed_receipt_semantic_id: [0; 32],
         },
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Position,
             account_id: input.seller_position.account_id,
             pre_semantic_id: input.seller_position.semantic_id,
             post_semantic_id: input.post_semantic_ids.seller_position,
-            stable_generation: input.seller_position.generation,
+            stable_generation: Some(input.seller_position.generation),
             pre_replay_ordinal: 0,
             post_replay_ordinal: 0,
             cash_debit_atoms: 0,
@@ -1512,14 +1652,13 @@ fn execution_transition_expectations(
             claim_debits: [0; MAX_OUTCOMES],
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: false,
-            committed_receipt_semantic_id: [0; 32],
         },
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Replay,
             account_id: input.buyer_replay.account_id,
             pre_semantic_id: input.buyer_replay.semantic_id,
             post_semantic_id: input.post_semantic_ids.buyer_replay,
-            stable_generation: input.buyer_position.generation,
+            stable_generation: None,
             pre_replay_ordinal: input.buyer_replay.ordinal,
             post_replay_ordinal: buyer_replay_post,
             cash_debit_atoms: 0,
@@ -1528,14 +1667,13 @@ fn execution_transition_expectations(
             claim_debits: [0; MAX_OUTCOMES],
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: false,
-            committed_receipt_semantic_id: [0; 32],
         },
         PortfolioTransitionExpectationV2 {
             role: PortfolioAccountRoleV2::Replay,
             account_id: input.seller_replay.account_id,
             pre_semantic_id: input.seller_replay.semantic_id,
             post_semantic_id: input.post_semantic_ids.seller_replay,
-            stable_generation: input.seller_position.generation,
+            stable_generation: None,
             pre_replay_ordinal: input.seller_replay.ordinal,
             post_replay_ordinal: seller_replay_post,
             cash_debit_atoms: 0,
@@ -1544,23 +1682,6 @@ fn execution_transition_expectations(
             claim_debits: [0; MAX_OUTCOMES],
             claim_credits: [0; MAX_OUTCOMES],
             reservation_consumed: false,
-            committed_receipt_semantic_id: [0; 32],
-        },
-        PortfolioTransitionExpectationV2 {
-            role: PortfolioAccountRoleV2::SettlementReceipt,
-            account_id: input.settlement_receipt_account_id,
-            pre_semantic_id: input.settlement_receipt_semantic_id,
-            post_semantic_id: input.post_semantic_ids.settlement_receipt,
-            stable_generation: input.settlement_receipt_generation,
-            pre_replay_ordinal: input.receipt_ordinal,
-            post_replay_ordinal: input.receipt_ordinal,
-            cash_debit_atoms: 0,
-            cash_credit_atoms: 0,
-            reserved_cash_release_atoms: 0,
-            claim_debits: [0; MAX_OUTCOMES],
-            claim_credits: [0; MAX_OUTCOMES],
-            reservation_consumed: false,
-            committed_receipt_semantic_id: receipt_semantic_id,
         },
     ]
 }
@@ -1575,7 +1696,7 @@ fn portfolio_transition_id_v2(
     seller_replay_post: u64,
 ) -> Result<PortfolioIdentityV2, PortfolioExecutionErrorV2> {
     let mut hash = Sha256V2::new();
-    hash.update(PAIR_TRANSITION_DOMAIN_V2)
+    hash.update(PAIR_EFFECTS_TRANSITION_DOMAIN_V2)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&[PORTFOLIO_EXECUTION_VERSION_V2])
         .map_err(PortfolioExecutionErrorV2::Economic)?;
@@ -1588,12 +1709,37 @@ fn portfolio_transition_id_v2(
             .map_err(PortfolioExecutionErrorV2::Economic)?;
         record_index += 1;
     }
-    hash.update(&input.receipt_ordinal.to_le_bytes())
+    hash.update(&input.settlement_receipt.slice_index.to_le_bytes())
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt_account_id)
+    hash.update(&input.settlement_receipt.sequence.to_le_bytes())
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&input.settlement_receipt_semantic_id)
+    hash.update(&input.settlement_receipt.account_id)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&input.settlement_receipt.pre_data_id)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&[
+        input.settlement_receipt.accounted_end_mask,
+        input.settlement_receipt.delivered_end_mask,
+        input.settlement_receipt.expected_end_mask,
+        input.settlement_receipt.transition_kind as u8,
+        input.settlement_receipt.expected_end_mask,
+        input.settlement_receipt.expected_end_mask,
+        SettlementReceiptTransitionKindV2::PortfolioPairV2 as u8,
+    ])
+    .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&input.settlement_receipt.transition_commitment)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&input.settlement_receipt.rent_owner_id)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(&input.settlement_receipt.rent_principal_lamports.to_le_bytes())
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    hash.update(
+        &input
+            .settlement_receipt
+            .rent_donation_floor_lamports
+            .to_le_bytes(),
+    )
+    .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&pair.price_semantics_digest)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&[pair.boundary as u8])
