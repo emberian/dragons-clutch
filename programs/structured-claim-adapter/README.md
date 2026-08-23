@@ -87,8 +87,10 @@ layouts and metas for `InitializeMint2`, `MintToChecked`, `BurnChecked`, and
 
 Canonical wrap/unwind uses General V2 family `74/v1`, local action 35, with
 the canonical 298-byte payload owned by
-`clutch-structured-claim-runtime-contract`. `authority_id` is a SHA-256 digest
-over domain
+`clutch-structured-claim-runtime-contract`. The 314-byte CPI instruction is
+encoded by the base program's sole canonical `ExtensionRequest` codec with
+sequence zero; it is not a raw family/action prefix. `authority_id` is a
+SHA-256 digest over domain
 `dragons-clutch/authenticated-structured-custody-call/v1\0` and the exact
 1,352-byte authority-neutral projection. It binds action 35, the exact local
 wrapper action, descriptor/product/deployments, MarketBinding and Product

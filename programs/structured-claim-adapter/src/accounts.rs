@@ -164,14 +164,10 @@ impl AccountFrameV1<'_> {
         let requirements = requirements(action);
         if self.accounts.len() != requirements.len()
             || self.accounts.len() > MAX_ROUTE_ACCOUNTS
-            || [
-                programs.wrapper,
-                programs.base,
-                programs.token_2022,
-                programs.system,
-            ]
-            .iter()
-            .any(is_zero)
+            || [programs.wrapper, programs.base, programs.token_2022]
+                .iter()
+                .any(is_zero)
+            || (action == StructuredClaimActionV1::CreateDescriptor && is_zero(&programs.system))
         {
             return Err(Error::InvalidAccounts);
         }
@@ -288,6 +284,11 @@ impl AccountFrameV1<'_> {
         }
         if let Ok(holder) = self.get(AccountRoleV1::HolderToken) {
             if holder.owner != programs.token_2022 {
+                return Err(Error::InvalidAccounts);
+            }
+        }
+        if let Ok(capability) = self.get(AccountRoleV1::BaseCapability) {
+            if capability.owner != programs.base || capability.executable {
                 return Err(Error::InvalidAccounts);
             }
         }
