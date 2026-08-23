@@ -108,6 +108,132 @@ pub fn decode_dealer_account_body_v1<T: FixedCodec>(
     Ok((envelope, body))
 }
 
+/// Encode one exact pure Dealer body behind its strict global envelope.
+pub fn encode_dealer_account_body_v1<T: FixedCodec>(
+    output: &mut [u8],
+    tag: u8,
+    version: u8,
+    bump: u8,
+    body: &T,
+) -> Result<(), DealerRuntimeContractErrorV1> {
+    let expected = DEALER_ACCOUNT_ENVELOPE_BYTES_V1
+        .checked_add(T::ENCODED_LEN)
+        .ok_or(DealerRuntimeContractErrorV1::InvalidField)?;
+    if output.len() < expected {
+        return Err(DealerRuntimeContractErrorV1::Truncated);
+    }
+    if output.len() > expected {
+        return Err(DealerRuntimeContractErrorV1::TrailingBytes);
+    }
+    output[..DEALER_ACCOUNT_ENVELOPE_BYTES_V1]
+        .copy_from_slice(&[tag, version, bump, 0, 0, 0, 0, 0]);
+    body.encode_into(&mut output[DEALER_ACCOUNT_ENVELOPE_BYTES_V1..])
+        .map_err(|_| DealerRuntimeContractErrorV1::InvalidBody)
+}
+
+/// Persisted Dealer account lifetime and close authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerAccountLifetimeV1 {
+    /// Immutable content artifact; it has no mutable close route.
+    Immutable,
+    /// Authoritative live root that shrinks to a permanent tombstone.
+    RootToTombstone,
+    /// State-counted child with independently refundable rent.
+    CountedChild,
+    /// Singleton streamed work child with independently refundable rent.
+    CountedWork,
+    /// Permanent evidence body.
+    Permanent,
+}
+
+/// Central coordinate/size/lifetime contract consumed by future handlers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerPersistedAccountContractV1 {
+    /// Exact central account tag.
+    pub tag: u8,
+    /// Exact central account version.
+    pub version: u8,
+    /// Exact total bytes including the eight-byte envelope.
+    pub account_bytes: usize,
+    /// Semantic lifetime and close owner.
+    pub lifetime: DealerAccountLifetimeV1,
+}
+
+/// Resolve one exact reserved Dealer account coordinate.
+pub const fn persisted_account_contract_v1(
+    tag: u8,
+    version: u8,
+) -> Option<DealerPersistedAccountContractV1> {
+    use clutch_solana_layout::registry as registry;
+    let (expected_version, account_bytes, lifetime) = match tag {
+        registry::DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG => (
+            registry::DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
+            registry::DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::Immutable,
+        ),
+        registry::DEALER_STATE_V2_ACCOUNT_TAG => (
+            registry::DEALER_STATE_V2_ACCOUNT_VERSION,
+            registry::DEALER_STATE_V2_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::RootToTombstone,
+        ),
+        registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG => (
+            registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION,
+            registry::DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_LP_PAGE_V2_ACCOUNT_TAG => (
+            registry::DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+            registry::DEALER_LP_PAGE_V2_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_LEASE_V2_ACCOUNT_TAG => (
+            registry::DEALER_LEASE_V2_ACCOUNT_VERSION,
+            registry::DEALER_LEASE_V2_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG => (
+            registry::DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
+            registry::DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG => (
+            registry::DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION,
+            registry::DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG => (
+            registry::DEALER_TERMINAL_ALLOCATION_ACCOUNT_VERSION,
+            registry::DEALER_TERMINAL_ALLOCATION_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_CLAIM_WORK_ACCOUNT_TAG => (
+            registry::DEALER_CLAIM_WORK_ACCOUNT_VERSION,
+            registry::DEALER_CLAIM_WORK_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedWork,
+        ),
+        registry::DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG => (
+            registry::DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_VERSION,
+            registry::DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::Permanent,
+        ),
+        registry::DEALER_EXIT_TICKET_ACCOUNT_TAG => (
+            registry::DEALER_EXIT_TICKET_ACCOUNT_VERSION,
+            registry::DEALER_EXIT_TICKET_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        _ => return None,
+    };
+    if version != expected_version {
+        return None;
+    }
+    Some(DealerPersistedAccountContractV1 {
+        tag,
+        version,
+        account_bytes,
+        lifetime,
+    })
+}
+
 /// Frozen action-specific payload after the extension family/action envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerRuntimePayloadV1 {

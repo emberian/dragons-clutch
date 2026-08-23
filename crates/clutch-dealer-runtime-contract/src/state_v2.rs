@@ -247,6 +247,8 @@ impl DealerChildGraphFoldV2 {
                 | DealerChildKindV2::ExitTicket
                 | DealerChildKindV2::Lease
                 | DealerChildKindV2::SettlementPot
+                | DealerChildKindV2::TerminalAllocation
+                | DealerChildKindV2::ClaimWork
         );
         if child.counted_generation > self.generation
             || (generation_exact && child.counted_generation != self.generation)

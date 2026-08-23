@@ -554,7 +554,7 @@ pub fn validate_facility_initialization_v1(
 /// accounts and fee records remain owned by their respective runtimes; this
 /// root counts only the one rent-owned dependency artifact joining them.
 #[allow(clippy::too_many_arguments)]
-pub fn validate_facility_initialization_v2(
+pub(crate) fn validate_facility_initialization_v2(
     genesis: &DealerFacilityGenesisV1,
     binding: &FacilityPositionBindingV1,
     policy: &DealerPolicyV1,

@@ -519,7 +519,7 @@ impl FixedCodec for DealerClaimWorkV1 {
 
 /// Begin bounded terminal allocation after canonical Position resolution.
 #[allow(clippy::too_many_arguments)]
-pub fn begin_terminal_resolution_v1(
+pub(crate) fn begin_terminal_resolution_v1(
     policy: &DealerPolicyV1,
     binding: &FacilityPositionBindingV2,
     state: &DealerStateV2,
@@ -771,7 +771,7 @@ fn validate_terminal_page_binding_v1(
 
 /// Claim one immutable LP entry and advance the shared Position/Replay generation.
 #[allow(clippy::too_many_arguments)]
-pub fn claim_terminal_entry_v1(
+pub(crate) fn claim_terminal_entry_v1(
     policy: &DealerPolicyV1,
     binding: &FacilityPositionBindingV2,
     state: &DealerStateV2,

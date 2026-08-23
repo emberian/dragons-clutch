@@ -257,7 +257,7 @@ pub struct DealerActivationTransitionV2 {
 
 /// Activate a V2 facility only while its one counted funded dependency is live.
 #[allow(clippy::too_many_arguments)]
-pub fn activate_dealer_v2(
+pub(crate) fn activate_dealer_v2(
     genesis: &DealerFacilityGenesisV1,
     binding: &FacilityPositionBindingV1,
     policy: &DealerPolicyV1,
@@ -326,7 +326,7 @@ pub struct DealerUnwindTransitionV2 {
 
 /// Enter V2 UnwindOnly under an authenticated sponsor halt.
 #[allow(clippy::too_many_arguments)]
-pub fn sponsor_halt_dealer_v2(
+pub(crate) fn sponsor_halt_dealer_v2(
     genesis: &DealerFacilityGenesisV1,
     binding: &FacilityPositionBindingV1,
     policy: &DealerPolicyV1,
@@ -354,7 +354,7 @@ pub fn sponsor_halt_dealer_v2(
 
 /// Enter V2 UnwindOnly after exact queued-share quorum.
 #[allow(clippy::too_many_arguments)]
-pub fn enter_unwind_by_queue_v2(
+pub(crate) fn enter_unwind_by_queue_v2(
     genesis: &DealerFacilityGenesisV1,
     binding: &FacilityPositionBindingV1,
     policy: &DealerPolicyV1,
@@ -388,7 +388,7 @@ pub fn enter_unwind_by_queue_v2(
 
 /// Enter V2 UnwindOnly at or after the immutable close slot.
 #[allow(clippy::too_many_arguments)]
-pub fn timed_close_dealer_v2(
+pub(crate) fn timed_close_dealer_v2(
     genesis: &DealerFacilityGenesisV1,
     binding: &FacilityPositionBindingV1,
     policy: &DealerPolicyV1,
