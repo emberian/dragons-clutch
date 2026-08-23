@@ -1,0 +1,1074 @@
+{
+  "campaign_mode": "joined-user-lifecycle-v1",
+  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+  "clock": {
+    "epoch": 1065,
+    "epoch_start_timestamp": 1787465502,
+    "leader_schedule_epoch": 1066,
+    "slot": 460337426,
+    "unix_timestamp": 1787542730
+  },
+  "confidence": 6357,
+  "exponent": -8,
+  "genesis_hash": "Hi2mifydJYhedaYqjufcfiwBarA3RravnmGZEb8Pdupr",
+  "interval": {
+    "lower": "99980929",
+    "upper": "100019071"
+  },
+  "joined_post_append_signature": "pdsuMeiYdafaX7W6AhrtRiRwCgz6hAbdzDut8hL8PD7R9G5E8FvMRJpYAZHGa3EWYNbVtyMisik18reqMnm5STW",
+  "lifecycle": {
+    "buyer_endow_signature": "42PF5HLd7Nym6psoxhyi8foBBiz2vaWEraUnJiXSQKq5rULY84fKhyWA91syGQH5g4vsCayi5bcWnGgRSxdyBZy6",
+    "buyer_withdraw_signature": "66k74VmZbi4yqBhWUxxAQAsy49DVxQkMdGeFzRb526Cr8ZM7qvHskndt8eUhEfN4xzdwsEUPHdECZt9xANdgNbdf",
+    "collateral_atoms": "128",
+    "create_market_signature": "2h5FrJSeWxabW56moBk9LkrFAcW2VDvRuGeZHzdXKWrg4vwYb2fLuHoYMcnCi6WAtjsgXyKh3ucWCJ9wR1dBArMU",
+    "ephemeral_users": [
+      "5nQ7q1shDjucCGFmVTqfrh74nJwxec5TUvv8srhsP6D4",
+      "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok"
+    ],
+    "market": "EQ3qhWqPRypuRCvUYkbPFtB1eo6GY922D7VXArw86HYD",
+    "market_genesis_assisted": false,
+    "redeem_internal": [
+      {
+        "outcome": 1,
+        "owner": "5nQ7q1shDjucCGFmVTqfrh74nJwxec5TUvv8srhsP6D4",
+        "payout_atoms": "16",
+        "quantity": "16",
+        "signature": "35nifzkcwA1eiV7vY9Jp52urcg5E6MTHL45KMDdDHpVMzRKm2XqXxuzbP3BULAzBsimAs4VxubDTjz5K86YHdHEG"
+      },
+      {
+        "outcome": 0,
+        "owner": "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok",
+        "payout_atoms": "0",
+        "quantity": "64",
+        "signature": "3umBM9Xrk8QdrSmsSAnwmzgbZwfQXnoq8sUjjfZPy7bR2MzYh4g5RERMSMXrRtzuLm9N7NmNRaiaEPJnLR69PnEv"
+      },
+      {
+        "outcome": 1,
+        "owner": "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok",
+        "payout_atoms": "48",
+        "quantity": "48",
+        "signature": "2R54dwJD8BBQ4RbGBx5vvsvD1CYCU5R2EkU9WurfzN2PWGHgruHZoE46s9bi7YDUn2QTuy9CwNYp6GfA3Mr1kcN5"
+      },
+      {
+        "outcome": 2,
+        "owner": "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok",
+        "payout_atoms": "0",
+        "quantity": "64",
+        "signature": "32KMdTY3RFqS75kbies9WfngM4naiMbSgXogDmnLfg15vvAnE4UUZ4v43XAEyGzU73Z2hevuRTsCTMVboWHy1TjS"
+      },
+      {
+        "outcome": 3,
+        "owner": "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok",
+        "payout_atoms": "0",
+        "quantity": "64",
+        "signature": "3799B1QTExsLwMZqmsWcJhkh4A6f6AcYgtjEkG1w3Ewv7XNP2YcfYc4AjkUG2rGAznavMwj1bss6giYscf1zZ3UC"
+      }
+    ],
+    "seller_endow_signature": "2jZiMtBkbLzHXi4z5QK5Vi9eBjFGj24v17nAapr1vAthxzNappUuFZmixbnkDPUA2wyP5ndTrtbcxPLHo9ACF2D",
+    "seller_withdraw_signature": "66uYE3xK5Wby6KFMhx9a95cR28ykiQF1U7CvWNSr9rmTKLcaaeN4fGAQ3UnH9dgXWsrwFDLrnjH3kS6uawFUU8G5",
+    "split_signature": "YWK5884ronTrSEZN1iGaAF6YzUWgNM9v9RHpJAuDYFfMg7RxP62mb3ZWaCEUY2wRCh3an8xw2wd5RxgfWWbNLaS",
+    "terminal": {
+      "buyer_position_cash_atoms": "0",
+      "buyer_position_internal": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "buyer_token_atoms": "76",
+      "hoard_collateral_atoms": "0",
+      "hoard_token_atoms": "0",
+      "seller_position_cash_atoms": "0",
+      "seller_position_internal": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ],
+      "seller_token_atoms": "52",
+      "supply_internal": [
+        "0",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    "trade": {
+      "candidate": [
+        37,
+        209,
+        136,
+        73,
+        200,
+        159,
+        196,
+        3,
+        138,
+        97,
+        179,
+        88,
+        135,
+        124,
+        127,
+        133,
+        62,
+        26,
+        71,
+        107,
+        60,
+        135,
+        31,
+        193,
+        132,
+        57,
+        248,
+        176,
+        4,
+        224,
+        192,
+        161
+      ],
+      "candidate_genesis_assisted": false,
+      "complete_verification_signature": "4gt2rNuY6WqLntrJjrYa1qSwg8z6LjxH7Jy7TMBkCxee7vq6ZZ2DFsD1zWAcSpR5HNry67oNS3mZMwNq79mLF4SC",
+      "entitle_signature": "jYkzGiCrTvB3TqikrbvzvN6LXiwVtRgF2WanDA2V2n9kpkTMv4FbkVeFt71QsXPT6FkwdxJHdXHwj95WExxLGiV",
+      "epoch": "FWemZc3MkzZkwAeb3TiLmuY9mjxowiXRi1RCnNu5PVUQ",
+      "epoch_genesis_assisted": false,
+      "epoch_id": [
+        113,
+        102,
+        151,
+        48,
+        178,
+        8,
+        148,
+        165,
+        29,
+        59,
+        60,
+        35,
+        85,
+        116,
+        70,
+        215,
+        165,
+        199,
+        215,
+        150,
+        205,
+        10,
+        85,
+        97,
+        237,
+        244,
+        254,
+        146,
+        238,
+        53,
+        139,
+        77
+      ],
+      "fills": [
+        16,
+        16
+      ],
+      "freeze_entitlement_signature": "5dAsEWiepdfFWiUoCSpGsHjnFj1rNkTLGh487MZtQeSXwfG1NAKAjtwWVVqZFWLUwBy8dtn3nwKsDrmhKMETKXw9",
+      "freeze_epoch_signature": "5QzhnXRV7xHkeoEXchsq2bLyw6hXyVGEYjgMmmc37zuPhW9Jw532bdtZWCSncNHjCtcjNpgdJstiLSuCNEuVtcr3",
+      "grid_genesis_assisted": false,
+      "grid_upload_signatures": [
+        "47EEbUf2q2ncczK4qDNyrQnMKhw8S11CD2Z5WgpfGX5PoXyGvsZkSWWowrp6dbYAcKwGgo9JQHcsv47E8iUfjsZh",
+        "66Qi6FMxnRdhRABpqBfsKTvfzqmq9aB7x3FN9u2ZK16GccUSqjyKEZU2Sbcnfw8YHnG7711sVqHPvBLgf9yjcHCm",
+        "441TVjq4tkEeFXbeffD4XCpuPfe1YijJFGZ5HLdPRyTm9VEJQqFgHCMoHkEy2JstJYMAwAgff9DxsNn4sPcatHwf",
+        "5UYtsCdtXnnX7HkFj2iFcsveoXegxC5KhLXi4abxTBXXLDcKKPPX7aeJhrbGe23tz7wrrBKtPQcxQGZJsh8NaZax",
+        "Ks48GSKsWDwMGhBfxSvKSfPDnBnomp7RAbxf8E138nJzUXDxeXevsMVT4NYnvJH7Nr55s7wDR9RfKWpN9hD3SJU",
+        "4o3cqKDfkAZVmQV3KHPjwXCxawwUrVdmiXReUi5terriGpdJayDj95KUMK3vCcNbJCkfs4c4ocAfrfSkVktRqayH"
+      ],
+      "init_epoch_signature": "QnCjY1UKducs51nYqeWDvWtjYQW1aL5Pfegkexf9RCPHuUN2qLSKt2zRT2tKjbnHJmFmp1cSoo6VFZpVQ7aVDQj",
+      "order_genesis_assisted": false,
+      "orders": {
+        "buyer": {
+          "limit": "7500",
+          "outcome": 1,
+          "quantity": "16",
+          "side": "buy"
+        },
+        "buyer_signature": "uo8LxFv6kU9JnTJ5MGcZaauqWKRXkgRHLEnjuXREXVo7DZYoY6tg5cmppbLGV8YyWo7AabLPtcx2NUYDkoLhiB9",
+        "seller": {
+          "limit": "2500",
+          "outcome": 1,
+          "quantity": "16",
+          "side": "sell"
+        },
+        "seller_signature": "3ir7mQvSnTrodB1Vit93eBcxPEkGWWbi9XiKKZn2WJse45fqKFh4VRzP7KBueahd3ZGdBzKXtcUZ55Z8YxEbxz9R"
+      },
+      "owners": [
+        "5nQ7q1shDjucCGFmVTqfrh74nJwxec5TUvv8srhsP6D4",
+        "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok"
+      ],
+      "policy_upload_signatures": [
+        "3K1RwGYkfRCws1sgmVm4jE1sUHWP8SsErnA8XuWJqLkzEGaA2mhMnYzuj6YNhL9xDD4JhjL6zmqbUWePRmJw8Ngd",
+        "3TEorFpxEHMs6xupAmBsKp8Di8SMnsujQk7hpFEcBVcXrswKVgpmKd4BKhF6o4rMRp7tBX6vuMUyfA3yZA6tdUTp",
+        "3y1UZPxZXGQHEVrsfZYMRRbnPLu4tVPjLfBKYAnVok4fE52ax74syoxvAx6bxhqk527v13vYeDx9cDGihfMJmxz"
+      ],
+      "post_settlement": {
+        "buyer_cash": "60",
+        "buyer_internal": [
+          "0",
+          "16",
+          "0",
+          "0"
+        ],
+        "locked_collateral": "64",
+        "pooled_custody": "128",
+        "seller_cash": "4",
+        "seller_internal": [
+          "64",
+          "48",
+          "64",
+          "64"
+        ]
+      },
+      "price_grid": "9LBkSSCu9RD4oTMRD9rANfHd5aaaYGDvrHmDXiR378aa",
+      "price_grid_digest": [
+        182,
+        32,
+        125,
+        20,
+        7,
+        100,
+        136,
+        189,
+        72,
+        168,
+        249,
+        253,
+        70,
+        177,
+        126,
+        172,
+        163,
+        216,
+        129,
+        43,
+        128,
+        145,
+        155,
+        144,
+        231,
+        109,
+        216,
+        82,
+        94,
+        154,
+        241,
+        65
+      ],
+      "prices": [
+        2500,
+        2500,
+        2500,
+        2500,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "second_owner_account_creation_funding": {
+        "genesis_assisted": false,
+        "lamports": "9089760",
+        "signature": "22XzB9LEbd7iQYDdxzY3rTsMcdBYDc14H5XqSHc1YLhu9a2GP4qYjsLDe9wTZHwVNAnEGdVrDy6LfGjByQQs6GXR"
+      },
+      "selection_signature": "QMg6BYoTGs4Kc6AHhkBUWqQXJctkWa3k6LV7BboXRpyQdDiTVRM3WpZ6CCkTnsTBfBN8c9ytzCU4UoLWfUMJvSY",
+      "settlement_signature": "2aiMuoXw9LiFqht6Dnuc7KNMpqaeig2h3XqRozkkL6iq6EWiDDyo5orLnVoZbopWHnrJDhwBVbWTdBrkd8NdS85V",
+      "status": "settled",
+      "submit_signature": "33CKWpUge1rNbuf8aB5Mx3eow4wAyncUniNfHJ85jtSTVNnoA1n7xFTJiUsC7XQFJLTd1piPA573ehnomUfHcEw7",
+      "witness_slices": 1
+    },
+    "user_collateral_tokens": [
+      "A63pgDKDtgCznWzd4hFugDYfm8J1LNBQnvb8cwBS6iPD",
+      "3R6HqN12Xnd7mSkpqfzB5TceQRXD95aXyEMRCMCCa7UR"
+    ]
+  },
+  "network": "loopback validator only",
+  "price": 100000000,
+  "provider_feed_id": [
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42,
+    42
+  ],
+  "publish_time": 1787542200,
+  "resolve_signature": "2j8WVjRR76iFz45738yVJnuR9FdHdpnp6REeXgNVCJ4ach5PeMKGYgtAXkV5DgkTuVGgau1vvjf63tahzFWUfcs9",
+  "resolved_payout": 1,
+  "seal_signature": "5cvy3jyRK9zeDbpi16eU2NdQcvaH73WPczokofUxs4jVUjwxAdxEpMWV9ifucJZDBc3CixbQV8C2RdFBJteN1q3f",
+  "sealed": true,
+  "source_freshness": {
+    "append_age_seconds": 210,
+    "append_clock": {
+      "epoch": 1065,
+      "epoch_start_timestamp": 1787465502,
+      "leader_schedule_epoch": 1066,
+      "slot": 460336362,
+      "unix_timestamp": 1787542410
+    },
+    "final_age_seconds": 530,
+    "final_clock": {
+      "epoch": 1065,
+      "epoch_start_timestamp": 1787465502,
+      "leader_schedule_epoch": 1066,
+      "slot": 460337426,
+      "unix_timestamp": 1787542730
+    },
+    "scope": "freshness authenticated at adjacent PostUpdate plus AppendSourceArchiveV2; final lifecycle consumes the sealed archive"
+  },
+  "steps": [
+    {
+      "compute_units_consumed": 34183,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "router-initialize",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "2VkUsT5rKHJzj9ry4CpEV8dqDRdgLFfcmSiYb5dFLvLeRqo5HPXmoeZoKoYD8CAE3yP1iyHc7kvY2V2zDWwztoY2",
+      "signed_wire_sha256": "572ffd4d081e2f452574b583765436715a76ca52d6d1d4a391d880962180c12c",
+      "slot": 460336351
+    },
+    {
+      "compute_units_consumed": 3038,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "router-init-and-write-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "11111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "ALsHf879tMgJ11JpJTWC9tN3zhtD2UU1ZCqfyuB38LfSuN5RN5UUquTkY4HCZM8mWEaA5sk5ooLJmRUDcZUd7AS",
+      "signed_wire_sha256": "ce51adf58318b4d23508f8204ae3f16eb66b71fbbe0410a3ee3cb5d0f2547939",
+      "slot": 460336352
+    },
+    {
+      "compute_units_consumed": 336652,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "router-write-and-verify-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "4B4ZwWrcgxYoPcjBpGuCzj6gW5pv8WBeuT6xEVnQKvnNB8jbqRw43b3VFWsYu2wsbidBFfcJvWqvn2DkFHMzrNQf",
+      "signed_wire_sha256": "d8ff3c54fe4c999a116dfec15a542d4c995ce85a4a90a9c5dfe0be5c6b4714a2",
+      "slot": 460336353
+    },
+    {
+      "compute_units_consumed": 7931,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "receiver-initialize",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
+      ],
+      "signature": "5tGeAHjECjKqkAK8PjD7wUomkijRd7gKsH63SszuF2JkmmsUgDZivS4n5acgUQAmRWSEuvnhmbTuYbgzzr7UWzKy",
+      "signed_wire_sha256": "8a7961903e84fb20de1e9dcb1010680e7d8036a9976824a96366ef07e2604042",
+      "slot": 460336354
+    },
+    {
+      "compute_units_consumed": 30171,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "correct-init-source-spec-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "SQ9ij3S6MvjLNGmBg2cku4kyAFLaJkFeCvXDCUKrDoNJMrW2v3Hyi9oJgGBKoTFxPKHrTpXJPiZpE5qPkXfQ1M2",
+      "signed_wire_sha256": "237524eef182a1a00bf002335e7c05a291399247946e0f8a508f6415ccab74d9",
+      "slot": 460336355
+    },
+    {
+      "compute_units_consumed": 30945,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "correct-init-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "26UqkJz2W7RJfvmmsEvcp6ptgPHbuLN1VJBf56Dr9isgiT6i2LuQETS5oW67bCJ5ep3a5jiz1XbB1F4jduN1YyKc",
+      "signed_wire_sha256": "391c827b7d845eb1a6fda99960741fb998543c3e47d4dbba6d2cfd4855b71c03",
+      "slot": 460336356
+    },
+    {
+      "compute_units_consumed": 3038,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "wrong-feed-router-init-and-write-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "11111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "3ocDvaAppKS9x8znJ81VLX4yKe4V2fLiiwTLWPmNxinbwS3WNnXjUerHuUM2RVsku26NXF37EkQycJKpBRrisEUW",
+      "signed_wire_sha256": "2a3bb9282fe69ecad75fe5171fe9b08f70dc7fc2f1063d5301d5d7abb56b5175",
+      "slot": 460336357
+    },
+    {
+      "compute_units_consumed": 336652,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "wrong-feed-router-write-and-verify-encoded-vaa",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+      ],
+      "signature": "3SxFxScncwp2G6B9KktXm8RSg5sXGKbksq1vShfXFwre52Zz53Xde7FgTBGLSC3hcrJuTPe7vs5LjN12tb8dMhWU",
+      "signed_wire_sha256": "d1635500126a741851d4ba74348b2d5ea399df2bcb8329bf33e66d2323942cd4",
+      "slot": 460336358
+    },
+    {
+      "compute_units_consumed": 71523,
+      "error": {
+        "InstructionError": [
+          2,
+          {
+            "Custom": 122
+          }
+        ]
+      },
+      "fee_lamports": 10000,
+      "label": "wrong-config-post-update-plus-append-rollback",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "m2kWqTcJwhPQHdRkhryVhhMVhzXci14W8f58NU49FcUfnZjfxrUCt2kQqtFJYGzq5iLQzmzvo4ENWcGoshDroCj",
+      "signed_wire_sha256": "7435fb0a92937af2a31406a8280b0027b18b188d575539a7d2c6ff056bce9452",
+      "slot": 460336359
+    },
+    {
+      "compute_units_consumed": 72566,
+      "error": {
+        "InstructionError": [
+          2,
+          {
+            "Custom": 122
+          }
+        ]
+      },
+      "fee_lamports": 10000,
+      "label": "wrong-feed-post-update-plus-append-rollback",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "64F2hs3oABhAyPeRX5Wx55g5rx45pdhPsE3tUBTijuLswtWbfUE76aqLCFSKZC3KM3h6V5d3FbKD1wUDt7M7ry84",
+      "signed_wire_sha256": "40c5cfdf9225658192dde351506b9ba85cb1b9f4288f486f44d50331f8c59c03",
+      "slot": 460336361
+    },
+    {
+      "compute_units_consumed": 76105,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "real-post-update-plus-clutch-append-atomic",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "pdsuMeiYdafaX7W6AhrtRiRwCgz6hAbdzDut8hL8PD7R9G5E8FvMRJpYAZHGa3EWYNbVtyMisik18reqMnm5STW",
+      "signed_wire_sha256": "2fcf3e5d4da87d0a7682717d17cafe32c4b4682e3070f7e0105adc1e3cec7b6a",
+      "slot": 460336362
+    },
+    {
+      "compute_units_consumed": 68168,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "seal-source-archive-v2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5cvy3jyRK9zeDbpi16eU2NdQcvaH73WPczokofUxs4jVUjwxAdxEpMWV9ifucJZDBc3CixbQV8C2RdFBJteN1q3f",
+      "signed_wire_sha256": "b95744dda1613f7dd78ad67de6bcfa5948e1ddcb528b4276b983fbdb9c6e11ec",
+      "slot": 460336363
+    },
+    {
+      "compute_units_consumed": 150,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-fund-second-owner-account-creation",
+      "program_order": [
+        "11111111111111111111111111111111"
+      ],
+      "signature": "22XzB9LEbd7iQYDdxzY3rTsMcdBYDc14H5XqSHc1YLhu9a2GP4qYjsLDe9wTZHwVNAnEGdVrDy6LfGjByQQs6GXR",
+      "signed_wire_sha256": "48d5205790674296abd211f3dafb50703068d50b09f3950c003c555f0de2316a",
+      "slot": 460336364
+    },
+    {
+      "compute_units_consumed": 16053,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-price-grid-artifact-begin",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "47EEbUf2q2ncczK4qDNyrQnMKhw8S11CD2Z5WgpfGX5PoXyGvsZkSWWowrp6dbYAcKwGgo9JQHcsv47E8iUfjsZh",
+      "signed_wire_sha256": "9c4b5d4ed36ad928badbf7abb5977964d668dd3b62b7918a3892346f7733a41e",
+      "slot": 460336365
+    },
+    {
+      "compute_units_consumed": 14029,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-price-grid-artifact-write-0",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "66Qi6FMxnRdhRABpqBfsKTvfzqmq9aB7x3FN9u2ZK16GccUSqjyKEZU2Sbcnfw8YHnG7711sVqHPvBLgf9yjcHCm",
+      "signed_wire_sha256": "03a5ba7da5ed7cc9c0744ee27d3fda987d34971245203b89fb525a3d9e0c55e7",
+      "slot": 460336366
+    },
+    {
+      "compute_units_consumed": 11341,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-price-grid-artifact-write-1",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "441TVjq4tkEeFXbeffD4XCpuPfe1YijJFGZ5HLdPRyTm9VEJQqFgHCMoHkEy2JstJYMAwAgff9DxsNn4sPcatHwf",
+      "signed_wire_sha256": "4e432c65804694edd7e82cb714f1e410d4922417e53985bb5e907c7d16f6c375",
+      "slot": 460336367
+    },
+    {
+      "compute_units_consumed": 8653,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-price-grid-artifact-write-2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5UYtsCdtXnnX7HkFj2iFcsveoXegxC5KhLXi4abxTBXXLDcKKPPX7aeJhrbGe23tz7wrrBKtPQcxQGZJsh8NaZax",
+      "signed_wire_sha256": "f9c8ebef9de99167ce089fee11d4717ae09de56bea03b358301cd39b7c36ea4a",
+      "slot": 460336368
+    },
+    {
+      "compute_units_consumed": 8287,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-price-grid-artifact-write-3",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "Ks48GSKsWDwMGhBfxSvKSfPDnBnomp7RAbxf8E138nJzUXDxeXevsMVT4NYnvJH7Nr55s7wDR9RfKWpN9hD3SJU",
+      "signed_wire_sha256": "715930be2dd3217dc0a76d14c22d22d0149a5fa5c7d0d9357e7b0a997bfd58b4",
+      "slot": 460336369
+    },
+    {
+      "compute_units_consumed": 14923,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-price-grid-artifact-seal",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4o3cqKDfkAZVmQV3KHPjwXCxawwUrVdmiXReUi5terriGpdJayDj95KUMK3vCcNbJCkfs4c4ocAfrfSkVktRqayH",
+      "signed_wire_sha256": "da455e1ffa921ca4ca065be0400161dfef5ebf3c37d00ec86d1f9473a2221efd",
+      "slot": 460336370
+    },
+    {
+      "compute_units_consumed": 271443,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-create-market",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2h5FrJSeWxabW56moBk9LkrFAcW2VDvRuGeZHzdXKWrg4vwYb2fLuHoYMcnCi6WAtjsgXyKh3ucWCJ9wR1dBArMU",
+      "signed_wire_sha256": "c1669fd09367ee98ee1f7a0eef27302d170ec7f6cdc3fd9fef74942fcf96db8e",
+      "slot": 460336372
+    },
+    {
+      "compute_units_consumed": 70374,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-endow-buyer-collateral",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "42PF5HLd7Nym6psoxhyi8foBBiz2vaWEraUnJiXSQKq5rULY84fKhyWA91syGQH5g4vsCayi5bcWnGgRSxdyBZy6",
+      "signed_wire_sha256": "6de0604a9f6715f1646b675e05dfa0bcdb3c85e4513a761207333521f089790b",
+      "slot": 460336374
+    },
+    {
+      "compute_units_consumed": 83297,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-endow-seller-collateral",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2jZiMtBkbLzHXi4z5QK5Vi9eBjFGj24v17nAapr1vAthxzNappUuFZmixbnkDPUA2wyP5ndTrtbcxPLHo9ACF2D",
+      "signed_wire_sha256": "0bcad26d8827f03520e27a23af86263d347b8467fbea830bba459499b8d2d17d",
+      "slot": 460336375
+    },
+    {
+      "compute_units_consumed": 118504,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-seller-split-complete-sets",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "YWK5884ronTrSEZN1iGaAF6YzUWgNM9v9RHpJAuDYFfMg7RxP62mb3ZWaCEUY2wRCh3an8xw2wd5RxgfWWbNLaS",
+      "signed_wire_sha256": "7af90adba717267857891566ca6e9aeb26ceb8e0c6f6153f8e41aa542fafff9c",
+      "slot": 460336376
+    },
+    {
+      "compute_units_consumed": 13876,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-policy-artifact-begin",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3K1RwGYkfRCws1sgmVm4jE1sUHWP8SsErnA8XuWJqLkzEGaA2mhMnYzuj6YNhL9xDD4JhjL6zmqbUWePRmJw8Ngd",
+      "signed_wire_sha256": "d71d4d6cf1d2c80e608ad1246de99cfb1f13f5c9b6606feb18b891cf8bf031eb",
+      "slot": 460336377
+    },
+    {
+      "compute_units_consumed": 9838,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-policy-artifact-write-0",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3TEorFpxEHMs6xupAmBsKp8Di8SMnsujQk7hpFEcBVcXrswKVgpmKd4BKhF6o4rMRp7tBX6vuMUyfA3yZA6tdUTp",
+      "signed_wire_sha256": "c3d3d62b212746b059334b4ee4499655995eb1ef3c9452f43f62a3591a91a6dc",
+      "slot": 460336378
+    },
+    {
+      "compute_units_consumed": 15898,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-policy-artifact-seal",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3y1UZPxZXGQHEVrsfZYMRRbnPLu4tVPjLfBKYAnVok4fE52ax74syoxvAx6bxhqk527v13vYeDx9cDGihfMJmxz",
+      "signed_wire_sha256": "9557143f7ea60a3afd58da05a52d605102cba963c9e9e44c4200e70bc09c339e",
+      "slot": 460336379
+    },
+    {
+      "compute_units_consumed": 47288,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-init-epoch",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "QnCjY1UKducs51nYqeWDvWtjYQW1aL5Pfegkexf9RCPHuUN2qLSKt2zRT2tKjbnHJmFmp1cSoo6VFZpVQ7aVDQj",
+      "signed_wire_sha256": "086b1ee02d40a077b1731a4f6e74179f6216c8916bc24b2daaa5b74ec2834bf0",
+      "slot": 460336380
+    },
+    {
+      "compute_units_consumed": 224008,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-init-order-page",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5UT5exXKeMv8G51SokHM26kaHZ3eEHw8tgLJH74fZn78vdfYtXnDBJhxEhE9mXqB6ZVhFXvYabKhe4ehbRAoZ1Lu",
+      "signed_wire_sha256": "94ad6a47719f1663569055d62e18afd0b4f714fc3f6294851c1778037630645d",
+      "slot": 460336381
+    },
+    {
+      "compute_units_consumed": 189141,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-place-funded-buy",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "uo8LxFv6kU9JnTJ5MGcZaauqWKRXkgRHLEnjuXREXVo7DZYoY6tg5cmppbLGV8YyWo7AabLPtcx2NUYDkoLhiB9",
+      "signed_wire_sha256": "287b8991b67749bfae31ca30467ce63612dc9eeced06008e21f87064dfa3d92a",
+      "slot": 460336382
+    },
+    {
+      "compute_units_consumed": 188671,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-general-place-funded-sell",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3ir7mQvSnTrodB1Vit93eBcxPEkGWWbi9XiKKZn2WJse45fqKFh4VRzP7KBueahd3ZGdBzKXtcUZ55Z8YxEbxz9R",
+      "signed_wire_sha256": "d54841e5d50a817ae7b109b7419e13f072efa8d0ecbf8680618abedff855e690",
+      "slot": 460336383
+    },
+    {
+      "compute_units_consumed": 232131,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-freeze-epoch",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5QzhnXRV7xHkeoEXchsq2bLyw6hXyVGEYjgMmmc37zuPhW9Jw532bdtZWCSncNHjCtcjNpgdJstiLSuCNEuVtcr3",
+      "signed_wire_sha256": "46311470fc902fdf3a384f647328639bdbd27c62a4a3098fc4d0172adea91c86",
+      "slot": 460336412
+    },
+    {
+      "compute_units_consumed": 28265,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-submit-candidate",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "33CKWpUge1rNbuf8aB5Mx3eow4wAyncUniNfHJ85jtSTVNnoA1n7xFTJiUsC7XQFJLTd1piPA573ehnomUfHcEw7",
+      "signed_wire_sha256": "39bf3815ad727c721a799aa24aee35aec05cb6104c3ebaf7b1588d398aa28fe5",
+      "slot": 460336413
+    },
+    {
+      "compute_units_consumed": 6651,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-write-candidate-fills",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3CxezR9p4oPkk6VKWx57GYNsARFjmxEpU2LcZ8Wb1prGpT5BzpMigdAmAMW3uike57vmvDwvNKxwxwQ61YuSCw9U",
+      "signed_wire_sha256": "9c5ed7f485fa93fdd4096d948f30fc9be4a28c60c69d31f92c12b0ce16ebf584",
+      "slot": 460336414
+    },
+    {
+      "compute_units_consumed": 6849,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-write-candidate-slices",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5v474vVdVVgNaNedX8g4AX7jooRDmk7pZFE6NX1xuRBJHguHc3PmX9b3zzKLhg66bHkvfdCY8xkEWxPpPaVAMQds",
+      "signed_wire_sha256": "54f3c67b6fb9601300fa6e599e536c034769b8e2c7a0a15c48020e3cd23b5bfb",
+      "slot": 460336415
+    },
+    {
+      "compute_units_consumed": 38184,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-seal-candidate",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3wGnnQth15isivW4Fn1Q21gL68oxvuQm8QbmfvUabEGdbk65QSsDxcSR1hFD6jEAjQccKUTRjwzwv8zeYcxhbGBz",
+      "signed_wire_sha256": "534aad7a82d4cd0b72c2eac01c60caeaf9c91b55d940429377188186f8432af1",
+      "slot": 460336416
+    },
+    {
+      "compute_units_consumed": 78305,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-create-clear-work",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5a85e3F7wqt87oKiSdBN62N9yTCzpMYepy3WWmDpAMtqwEZ7D7ikyEMJ4Vyn37JQPzck1hCrB3Ejdv7D3wWiCV6A",
+      "signed_wire_sha256": "5261c3bd525762b6e78594fc875be87aa4ac154670ade5344473ed6951e1ccd8",
+      "slot": 460336417
+    },
+    {
+      "compute_units_consumed": 298459,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-verify-pass-one",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "7c15XxzKA2UiXLR476LKdRgF3LjHDiF5QeBAZHKRQgN3GwmKZ9siAfJRN7giEM1HAPZ2LAixfMj2XfoBmu73dyK",
+      "signed_wire_sha256": "4a9f3d22acd7c78a0b0e31d87bd4527047c526deb4bdbc323e02f3f45317ed5b",
+      "slot": 460336418
+    },
+    {
+      "compute_units_consumed": 159044,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-verify-slices",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "46wzm4dTY21rWNtxtHTcPURB3w9QNN2i7x6b1BxAkFpZyYXy8S9VobToTc5TDbFtz6gLqdhsFJaaqZ1teMLgeqWZ",
+      "signed_wire_sha256": "565ab5de2ce683b02818f45f0edb66048ed07e3e618b054f2f9d66fda9cf439c",
+      "slot": 460336419
+    },
+    {
+      "compute_units_consumed": 281901,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-verify-pass-two",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2xtsYkLa6yYH27hK7vY6aXgd16VZNNrvafnj2K2zCvJD2WET7bDzw9TtZercbd4MBw5eDARQFg8g5vZvkNateZrS",
+      "signed_wire_sha256": "8188c1b4374bc3788a6fb008492ce743037d0b8c91ca2b333fe8fc664ec287cc",
+      "slot": 460336420
+    },
+    {
+      "compute_units_consumed": 122253,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-complete-clear-work",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "4gt2rNuY6WqLntrJjrYa1qSwg8z6LjxH7Jy7TMBkCxee7vq6ZZ2DFsD1zWAcSpR5HNry67oNS3mZMwNq79mLF4SC",
+      "signed_wire_sha256": "a3355b01f9635f31349d63c421b9b71e38008f0314cbdfa5666242326994b6c7",
+      "slot": 460336421
+    },
+    {
+      "compute_units_consumed": 21158,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-finalize-selection",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "QMg6BYoTGs4Kc6AHhkBUWqQXJctkWa3k6LV7BboXRpyQdDiTVRM3WpZ6CCkTnsTBfBN8c9ytzCU4UoLWfUMJvSY",
+      "signed_wire_sha256": "bcd77fe8d465dc72ef9b30b35b57915dd1fd4ef8445f6d42e08a382cd3c3053b",
+      "slot": 460337413
+    },
+    {
+      "compute_units_consumed": 94112,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-freeze-entitlement",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "5dAsEWiepdfFWiUoCSpGsHjnFj1rNkTLGh487MZtQeSXwfG1NAKAjtwWVVqZFWLUwBy8dtn3nwKsDrmhKMETKXw9",
+      "signed_wire_sha256": "b0fa5c0a75f1084788ea93823f79f98e779c0d7ee53fc0e2f8ccd6dc01533fb9",
+      "slot": 460337414
+    },
+    {
+      "compute_units_consumed": 186793,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-entitle-direct-slice",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "jYkzGiCrTvB3TqikrbvzvN6LXiwVtRgF2WanDA2V2n9kpkTMv4FbkVeFt71QsXPT6FkwdxJHdXHwj95WExxLGiV",
+      "signed_wire_sha256": "05d6726d7513a4b522f1e070b2609d35efa78e2d9016e4af7c8b95f2fa63ef33",
+      "slot": 460337415
+    },
+    {
+      "compute_units_consumed": 44001,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-general-settle-direct-slice",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2aiMuoXw9LiFqht6Dnuc7KNMpqaeig2h3XqRozkkL6iq6EWiDDyo5orLnVoZbopWHnrJDhwBVbWTdBrkd8NdS85V",
+      "signed_wire_sha256": "0915e229621c4a2290740f628f2478b4b322037aa1e445d68ef31638cb865408",
+      "slot": 460337416
+    },
+    {
+      "compute_units_consumed": 167253,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "categorical-resolve-cell-1",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2j8WVjRR76iFz45738yVJnuR9FdHdpnp6REeXgNVCJ4ach5PeMKGYgtAXkV5DgkTuVGgau1vvjf63tahzFWUfcs9",
+      "signed_wire_sha256": "9abede91fb78e972bc23f3d7d0ec1a62f1de297465c23e1c0f8e855439d7bd19",
+      "slot": 460337417
+    },
+    {
+      "compute_units_consumed": 159131,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-buyer-redeem-winning-eggs",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "35nifzkcwA1eiV7vY9Jp52urcg5E6MTHL45KMDdDHpVMzRKm2XqXxuzbP3BULAzBsimAs4VxubDTjz5K86YHdHEG",
+      "signed_wire_sha256": "3787bfa00d7dca244f3f2092280693ec7839a848dd7c5ad0654950dbcbf7d079",
+      "slot": 460337418
+    },
+    {
+      "compute_units_consumed": 151632,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-seller-redeem-outcome-0",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3umBM9Xrk8QdrSmsSAnwmzgbZwfQXnoq8sUjjfZPy7bR2MzYh4g5RERMSMXrRtzuLm9N7NmNRaiaEPJnLR69PnEv",
+      "signed_wire_sha256": "7231f3d872ba7f446477b2454a43ce818562e7bccabcf0894b1e0cde5208dd38",
+      "slot": 460337420
+    },
+    {
+      "compute_units_consumed": 151632,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-seller-redeem-outcome-1",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "2R54dwJD8BBQ4RbGBx5vvsvD1CYCU5R2EkU9WurfzN2PWGHgruHZoE46s9bi7YDUn2QTuy9CwNYp6GfA3Mr1kcN5",
+      "signed_wire_sha256": "38715f7d43bcae07e7004f2604b25252fa10b04669f436b1ba540846eaec8117",
+      "slot": 460337422
+    },
+    {
+      "compute_units_consumed": 151632,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-seller-redeem-outcome-2",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "32KMdTY3RFqS75kbies9WfngM4naiMbSgXogDmnLfg15vvAnE4UUZ4v43XAEyGzU73Z2hevuRTsCTMVboWHy1TjS",
+      "signed_wire_sha256": "121e3b8e27c5f2e6a795d4479eb927b8fd67f79e6733e5067acfc24deb9d6198",
+      "slot": 460337423
+    },
+    {
+      "compute_units_consumed": 151632,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-seller-redeem-outcome-3",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "3799B1QTExsLwMZqmsWcJhkh4A6f6AcYgtjEkG1w3Ewv7XNP2YcfYc4AjkUG2rGAznavMwj1bss6giYscf1zZ3UC",
+      "signed_wire_sha256": "d1e30d7f43bbb4a04614e56482faf93edd67b64b382ba27e68c58e3e473c31d5",
+      "slot": 460337424
+    },
+    {
+      "compute_units_consumed": 55905,
+      "error": null,
+      "fee_lamports": 5000,
+      "label": "joined-buyer-withdraw-redeemed-collateral",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "66k74VmZbi4yqBhWUxxAQAsy49DVxQkMdGeFzRb526Cr8ZM7qvHskndt8eUhEfN4xzdwsEUPHdECZt9xANdgNbdf",
+      "signed_wire_sha256": "49f41b2a3983f807ff20fbf85c679b85ce717ea5277ef226e5cc1f32e1164bcc",
+      "slot": 460337425
+    },
+    {
+      "compute_units_consumed": 48406,
+      "error": null,
+      "fee_lamports": 10000,
+      "label": "joined-seller-withdraw-redeemed-collateral",
+      "program_order": [
+        "ComputeBudget111111111111111111111111111111",
+        "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT"
+      ],
+      "signature": "66uYE3xK5Wby6KFMhx9a95cR28ykiQF1U7CvWNSr9rmTKLcaaeN4fGAQ3UnH9dgXWsrwFDLrnjH3kS6uawFUU8G5",
+      "signed_wire_sha256": "9151e60d08e77dc032369d27df674ced0e4f05ea1a3389ce4ef80a9baa4e566d",
+      "slot": 460337426
+    }
+  ],
+  "transcript_schema": "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4",
+  "update_account": "FryXHCMDWKayqAHDfaP3dFAEsm6eZFdkZUH3uxSzL9BY",
+  "verified_vaa_account": "DWiNnhZZqfcYMWhLyB8hMBrRGxKkfeQTm9TDd5DvBavw",
+  "wrong_config_rollback": true,
+  "wrong_feed_rollback": true,
+  "wrong_feed_verified_vaa_account": "DXoN9wiWqaaBR2DZnjA6Gjeox3vMPF1RYJDukokr5Mtt"
+}

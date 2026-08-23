@@ -1,0 +1,234 @@
+{
+  "build_toolchain": {
+    "cargo_build_sbf": "cargo-build-sbf 4.0.0; platform-tools v1.53; SBF rustc 1.89.0",
+    "cargo_build_sbf_binary_sha256": "37c37d1a2ef0aa44065cde8c6ad07f0685bcef24699b4a9dd101372d7d4ef6e7",
+    "cargo_home": "private temporary campaign directory",
+    "dependency_source": "locked repository-local .cache vendor tree",
+    "host_cargo": "cargo 1.93.1 (083ac5135 2025-12-15)",
+    "host_cargo_lock_sha256": "1734d5b8834363f4dc9f72ce88a8ff86614a1b67df092b76ad5cae5ede4029ad",
+    "host_rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "host_toolchain_pin": "programs/clutch-sbf/local-real-pyth/rust-toolchain.toml: 1.93.1",
+    "network": "offline",
+    "sbf_cargo_lock_sha256": "ebe9451a7f6e72bd1e5747c21d44df152742e15f69cfdbda30e7415ed9dda0f0",
+    "wrappers_and_rustflags": "unset by runner"
+  },
+  "campaign_mode": "joined-user-lifecycle-v1",
+  "claim": "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+  "clock_probe_unix_timestamp": 1787542390,
+  "clutch_elf_sha256": "004de0ba81d3fe9c067a07c667248afc71d0c946735fa438f318f12d1b4c0343",
+  "correct": {
+    "archive": "8nkfHsFazfZaHnweZPuEVyLx9XESVGRMZ4PWP33Fd7LQ",
+    "feed_id_hex": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "market": "EQ3qhWqPRypuRCvUYkbPFtB1eo6GY922D7VXArw86HYD",
+    "market_genesis_assisted": false,
+    "second_owner": "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok",
+    "second_owner_collateral_token": "3R6HqN12Xnd7mSkpqfzB5TceQRXD95aXyEMRCMCCa7UR",
+    "source_spec": "8gUAKRMzAdcrJWLX5pxL79ibsHoqmkHChHcX81MraQmB",
+    "user_collateral_token": "A63pgDKDtgCznWzd4hFugDYfm8J1LNBQnvb8cwBS6iPD"
+  },
+  "dragons_clutch_repository_head": "4e83648479db33ca8f50798126141ab2fa262d8b",
+  "end_bucket_exclusive": 29792370,
+  "fixture_provenance": "programs/clutch-sbf/svm-tests/tests/fixtures/real-pyth-local/PROVENANCE.md",
+  "genesis_accounts": [
+    {
+      "address": "3R6HqN12Xnd7mSkpqfzB5TceQRXD95aXyEMRCMCCa7UR",
+      "data_len": 165,
+      "data_sha256": "065a66f498cac0b822598f56fcedb65a77a4d04e610a90a6e87b17338a1acbd0",
+      "executable": false,
+      "lamports": 2039280,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "role": "joined-second-owner-collateral-token"
+    },
+    {
+      "address": "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+      "data_len": 416909,
+      "data_sha256": "7122abc6b5e78d30bf88c869cb5d8783adaf897369d04eca827d3af8ffe18e5d",
+      "executable": false,
+      "lamports": 2902577520,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "receiver-programdata"
+    },
+    {
+      "address": "7MXhiSAY6EGKzCvhXrg3TeeXHdKTLrFbWK8y1F8vwb22",
+      "data_len": 100,
+      "data_sha256": "4a1feecde46e11bd70d1537f462db86dde9f7dd3354383432db0572eb448c3d1",
+      "executable": false,
+      "lamports": 1586880,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-1"
+    },
+    {
+      "address": "8JEvTXJ6sD5U4n1p7GEERYMPN9ijjs9ZM4ysJ3qhgyqM",
+      "data_len": 82,
+      "data_sha256": "20715077fac1ff5bb5f7d93ae938abf2c27fb944ae523fced603a11de3109223",
+      "executable": false,
+      "lamports": 1461600,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "role": "joined-collateral-mint"
+    },
+    {
+      "address": "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+      "data_len": 656005,
+      "data_sha256": "f26f4b53b0f980455886116f500fa74ba475e51b1acb7f486b18afa9d73d948f",
+      "executable": false,
+      "lamports": 4566685680,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "router-programdata"
+    },
+    {
+      "address": "A63pgDKDtgCznWzd4hFugDYfm8J1LNBQnvb8cwBS6iPD",
+      "data_len": 165,
+      "data_sha256": "2259d8d17fe9a2992ac9e2d76ff9439d5405d837fb7815d67528a8fec93928af",
+      "executable": false,
+      "lamports": 2039280,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "role": "joined-user-collateral-token"
+    },
+    {
+      "address": "AH6ribvMmUw5Dad3vB1SrWLsnXX42Fu5pBjXNfZa4Hyb",
+      "data_len": 1656,
+      "data_sha256": "b1024b24a80d2273f0b6d5fcdb4b73f54c26685fb61e968b278f6d9df6a82807",
+      "executable": false,
+      "lamports": 12416640,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-3"
+    },
+    {
+      "address": "ATeP3ACRnkaiXg244pfdjZ3oBETBHu7oE8JsADGsbe9y",
+      "data_len": 291,
+      "data_sha256": "ffe6010af329e42aa6f42951ac7844415afebfb8209c1fd44fb65ea1607abf6a",
+      "executable": false,
+      "lamports": 2916240,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-4"
+    },
+    {
+      "address": "DRu1E3NA7wDJfpSiqx8zpoFoBqdKJMAk1qorg8esAKme",
+      "data_len": 70,
+      "data_sha256": "f68330fcf6d75641943a4748fd00df4361ba5d7f3aaa19d4ce4869c477934381",
+      "executable": false,
+      "lamports": 1378080,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-0"
+    },
+    {
+      "address": "FfX15gP5Y2WiDocQBD9S4GwcARKEsT5pB5ogeWtXpWhR",
+      "data_len": 266,
+      "data_sha256": "48adca8dbff3003a14c98ddb9ffc133314b14dcc37adb71f31461fce44dc9328",
+      "executable": false,
+      "lamports": 2742240,
+      "owner": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "role": "correct-plane-2"
+    },
+    {
+      "address": "GrgnntFGvTUifYBRwSfNRcHHs9CwCehPBVFLTwyoRPNP",
+      "data_len": 2084757,
+      "data_sha256": "dfc408b2c3c0141eb7b1d69414886fd2732815247bb3b412aa7bc96386fe16fe",
+      "executable": false,
+      "lamports": 14510799600,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "clutch-programdata"
+    },
+    {
+      "address": "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+      "data_len": 36,
+      "data_sha256": "1ee590ae23d5ecbf775aba910f06a993dee8f77bfd7028790dbd349651c8034b",
+      "executable": true,
+      "lamports": 1141440,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "router-program"
+    },
+    {
+      "address": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+      "data_len": 36,
+      "data_sha256": "1c38b76b20c4d916d4fd5ade82df2ba626069b66e50be88bd704d9400b7f0212",
+      "executable": true,
+      "lamports": 1141440,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "clutch-program"
+    },
+    {
+      "address": "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+      "data_len": 36,
+      "data_sha256": "ef37dd1cee22d731902a8c04ed2e13136a2b8aa7068d9db3aff2ed1ec7b634e5",
+      "executable": true,
+      "lamports": 1141440,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "role": "receiver-program"
+    }
+  ],
+  "guardian_laboratory": {
+    "generation": "19 throwaway secp256k1 scalars with first byte 1..19 and remaining bytes zero",
+    "production_keys": false,
+    "selected_quorum_indices": "0..12 inclusive"
+  },
+  "merkle_price_update_sha256": "7cfe633326e1163ce00cd0a292204ffbd103f4290a76a80b492f8b6d8dd50d29",
+  "network": "127.0.0.1 loopback only",
+  "observation": "synthetic deterministic local guardian quorum; not devnet price evidence",
+  "payer": "5nQ7q1shDjucCGFmVTqfrh74nJwxec5TUvv8srhsP6D4",
+  "post_update_data_sha256": "d6378706466a23f86d1bddab1e4e47b98a08f7505c87f2122a6decbf3524b6ab",
+  "program_id": "pFKLue7yrMjQKyvJcg3yyR6b9MEm6H8nUt7zPc6tDCT",
+  "provider": [
+    {
+      "address": "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+      "complete_account_body_sha256": "ef37dd1cee22d731902a8c04ed2e13136a2b8aa7068d9db3aff2ed1ec7b634e5",
+      "executable": true,
+      "role": "receiver-program"
+    },
+    {
+      "address": "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+      "complete_account_body_sha256": "7122abc6b5e78d30bf88c869cb5d8783adaf897369d04eca827d3af8ffe18e5d",
+      "executable": false,
+      "role": "receiver-programdata"
+    },
+    {
+      "address": "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+      "complete_account_body_sha256": "1ee590ae23d5ecbf775aba910f06a993dee8f77bfd7028790dbd349651c8034b",
+      "executable": true,
+      "role": "router-program"
+    },
+    {
+      "address": "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+      "complete_account_body_sha256": "f26f4b53b0f980455886116f500fa74ba475e51b1acb7f486b18afa9d73d948f",
+      "executable": false,
+      "role": "router-programdata"
+    }
+  ],
+  "publish_time": 1787542200,
+  "publish_time_derivation": "floor((same-validator warped Clock - 180 seconds) / 60) * 60",
+  "second_owner": "67HnjfmmDjQV4DXjWzcAKVQvPpX8hKws4WYCehxyKok",
+  "source_admission_limits": {
+    "boundary_grace_seconds": 5,
+    "bucket_seconds": 60,
+    "confidence_multiplier": 3,
+    "max_confidence_atoms": "1000000000000",
+    "max_confidence_bps": 500,
+    "max_future_seconds": 15,
+    "max_staleness_seconds": 600,
+    "max_staleness_slots": 500
+  },
+  "source_profile_snapshot": {
+    "path": "programs/clutch-sbf/source-profiles/devnet-real-source-snapshot-2026-08-22.json",
+    "sha256": "6ca318cb783a1ec61b423533c49875039f3ecbdf46295cbac204396790df2cca"
+  },
+  "start_bucket": 29792369,
+  "transcript_schema": "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4",
+  "upstream_pyth_crosschain_commit": "f50a3faf9fc5a223a22889799b2f778900f186b3",
+  "vaa_sha256": "cfd439741dd949d9167cfbc98eb05f823fe0b5dfff64fc46198befab2ed30e35",
+  "validator_binary": "/Users/ember/dev/dragons-clutch/.cache/agave-loopback-validator/bin/solana-test-validator",
+  "validator_binary_sha256": "190f7c847af303957c771a38cab97142ab2e3ab6e5047dc53af2c4d4942bb7c8",
+  "validator_build_provenance": {
+    "patch_sha256": "a5ad8c2896137703c4718252605a9cfa5b7513d757c359a50d558822a8517e9b",
+    "pins_sha256": "fa66f22b557f4fdc9991be25750f9c7367e8e0c76f6f4591736f788047184f78",
+    "provenance_sha256": "67dea8e4769f9a68c7103977aaf30d325dc6dd18c6cdf185abf1e83f5230639f",
+    "selected_build_record_sha256": "edcaa76947388a1d2e18308e5d518b4642b2517876f35e9017786edaeca87102"
+  },
+  "value": "none",
+  "warp_slot": 460336312,
+  "wrong_feed": {
+    "feed_id_hex": "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+    "merkle_price_update_sha256": "5ac4055b943029864e72ff215de71bf1aad171ce755b18fe0063903be872f91b",
+    "post_update_data_sha256": "230c2867c12c3a2ba3c5b8e220a52c7dac698a73b8ada927292ae95fc22fec10",
+    "vaa_sha256": "e2414a18429cb7ee3d02771fdbe5bf7752f8eca32ec1ad35374eac81b136ad60"
+  }
+}
