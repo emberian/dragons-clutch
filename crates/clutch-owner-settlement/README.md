@@ -3,7 +3,7 @@
 This allocation-free contract removes the accidental equality between “one
 filled order” and “one participating owner.” General V2 freezes one row per
 owner with exact aggregate buy/sell price units, order masks, slice count,
-reserved cash, and any already-selected fee atoms. Receipt consumption adds
+and any already-selected fee atoms. Receipt consumption adds
 exact price units without rounding. Only terminal owner finalization converts
 the aggregate payer side with `ceil` and the aggregate payee side with `floor`,
 at the one named `TerminalOwnerFloor` boundary.
@@ -14,9 +14,29 @@ Egg movements remain receipt-exact. An SBF adapter must authenticate every
 receipt/order membership, reconcile reservation funding and Position bytes,
 and consume every receipt/root count before closing the epoch.
 
-The presence-explicit V2 semantic body remains exactly 288 bytes. Central
-coordinates `0x81/2` select it; `0x81/1` remains withdrawn and no decoder
-aliases the versions. V2 reuses one of V1's three trailing padding bytes as a
+The canonical Reservation-handoff V3 semantic body remains exactly 288 bytes.
+Central coordinates `0x81/3` select it; `0x81/1` and `0x81/2` are withdrawn and
+the hostile decoder requires the exact outer tag and version before accepting
+body bytes. V3 retains V2's explicit presence bitmap but replaces V2's
+immutable `reserved_cash_atoms` field at the same byte offset with mutable
+`buy_cash_handoff_atoms`, initialized to zero. Only the unique terminal buy end
+may add the exact authenticated Reservation cash handoff, and it does so in the
+same transition that completes the order bit. Nonterminal buy ends and all sell
+ends require an absent handoff, including when a terminal buy legitimately
+hands off zero cash.
+
+The row enters explicit `AccountingComplete` only when every exact receipt end,
+consideration total, and order mask is complete and the accumulated handoff can
+fund aggregate buyer `ceil` plus the selected fee. Finalization has no external
+cash summary or top-up: it removes that exact handoff from Position cash and
+reserved ownership, returns only the handoff excess to free Position cash,
+credits aggregate seller `floor`, and advances the buyer-first candidate pot.
+Fresh V3 receipt-prestate and finalized-row domains prevent V2 evidence from
+being reused as V3 transition evidence. All returned V3 plan fields are private
+and exposed only through typed getters.
+
+The historical presence-explicit V2 semantic body was exactly 288 bytes. V2
+reused one of V1's three trailing padding bytes as a
 canonical bitmap: expected buy, expected sell, consumed buy, consumed sell.
 The remaining two bytes must be zero. A set bit makes an exact zero value real;
 an unset bit requires the corresponding integer field to be zero. Unknown bits,
