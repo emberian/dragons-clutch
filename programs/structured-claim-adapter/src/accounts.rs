@@ -1,17 +1,27 @@
 //! Hostile Solana account metadata and canonical base/Token projections.
 
+use clutch_general_v2_contract::{GeneralReplayExtensionV1, GENERAL_REPLAY_EXTENSION_SCHEMA_V1};
 use clutch_kernel::{BasisMode, MarketState, Phase};
-use clutch_solana_layout::{
-    HoardAccount, MarketAccount, PositionAccount, SupplyLedgerAccount, TermsAccount,
+use clutch_retirement::{
+    project_general_position_v3, project_structured_claim_position_v3,
+    AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3, Identity32V1,
+    PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, PositionV3PdaSeeds,
+    ReplayV3Envelope, ReplayV3Lifecycle,
 };
-use clutch_solana_reference::ReplayAccount;
+use clutch_retirement_adapter::{
+    authenticate_position_v3_exact, authenticate_purpose_replay_v3_exact,
+    AccountAccessV2 as RetirementAccountAccessV2, AccountViewV2 as RetirementAccountViewV2,
+    CanonicalPdaV1,
+};
+use clutch_solana_layout::{HoardAccount, MarketAccount, SupplyLedgerAccount, TermsAccount};
 use clutch_structured_claim::MarketLedger;
 
 use crate::runtime_contract::{
     DescriptorBasisV1, PositionProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV1,
-    WrapperMintProjectionV1, WrapperTokenProjectionV1,
+    StructuredClaimReplayExtensionV1, WrapperMintProjectionV1, WrapperTokenProjectionV1,
+    STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1,
 };
-use crate::{is_zero, BoundDescriptorV1, Error, Key, Result};
+use crate::{is_zero, AdapterSha256V1, BoundDescriptorV1, Error, Key, Result};
 
 /// Maximum accounts accepted by any structured-claim route contract.
 pub const MAX_ROUTE_ACCOUNTS: usize = 21;
@@ -38,6 +48,8 @@ pub enum AccountRoleV1 {
     Mint,
     /// Wrapper mint-authority PDA.
     MintAuthority,
+    /// Wrapper vault-owner PDA used only as a typed CPI signer.
+    VaultAuthority,
     /// Base Position owned semantically by the vault-owner PDA.
     VaultPosition,
     /// Current-generation base Replay for the vault Position.
@@ -62,6 +74,26 @@ pub enum AccountRoleV1 {
     BaseCapability,
     /// Permanent base Position tombstone for descriptor retirement.
     VaultTombstone,
+    /// Immutable General V2 MarketBinding PDA used by action 35.
+    MarketBinding,
+    /// Source full-width Position V3 for action 35.
+    SourcePositionV3,
+    /// Source purpose-owned Replay V3 for action 35.
+    SourceReplayV3,
+    /// Destination full-width Position V3 for action 35.
+    DestinationPositionV3,
+    /// Destination purpose-owned Replay V3 for action 35.
+    DestinationReplayV3,
+    /// Wrapper ProgramData account selected by the descriptor.
+    WrapperProgramData,
+    /// Base ProgramData account selected by the descriptor.
+    BaseProgramData,
+    /// Token-2022 ProgramData account selected by the descriptor.
+    Token2022ProgramData,
+    /// Exact NativeClaimBasisV1 Product artifact.
+    NativeClaimBasisArtifact,
+    /// Exact MarketInstanceV2 preimage artifact.
+    MarketInstanceArtifact,
 }
 
 /// Borrowed Solana account metadata and bytes.
@@ -415,38 +447,30 @@ pub fn decode_owned_descriptor_v1(
 
 /// Base-owned Position/Replay PDA verifier.
 pub trait BasePositionPdaVerifierV1 {
-    /// Authenticate the canonical Position PDA from the base namespace.
-    fn verify_position(
-        &self,
-        program: Key,
-        address: Key,
-        market: Key,
-        owner: Key,
-        generation: u64,
-        stored_bump: u8,
-    ) -> bool;
+    /// Verify the canonical full-width Position V3 PDA seed tuple.
+    fn verify_position_v3(&self, program: Key, address: Key, seeds: PositionV3PdaSeeds) -> bool;
 
-    /// Authenticate the canonical current-generation Replay PDA.
-    fn verify_replay(
+    /// Verify the exact stable purpose-owned Replay V3 PDA.
+    fn verify_replay_v3(
         &self,
         program: Key,
         address: Key,
-        market: Key,
-        owner: Key,
-        generation: u64,
+        position_account: Key,
+        purpose: PositionPurposeV3,
+        purpose_binding_id: Key,
         stored_bump: u8,
     ) -> bool;
 }
 
 /// Authenticated base Position plus current-generation Replay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedBasePositionV1 {
+pub struct AuthenticatedBasePositionV3 {
     position_address: Key,
     replay_address: Key,
     projection: PositionProjectionV1,
 }
 
-impl AuthenticatedBasePositionV1 {
+impl AuthenticatedBasePositionV3 {
     /// Canonical semantic projection consumed by the runtime contract.
     pub const fn projection(&self) -> PositionProjectionV1 {
         self.projection
@@ -463,80 +487,264 @@ impl AuthenticatedBasePositionV1 {
     }
 }
 
-/// Decode and authenticate one base Position/Replay pair.
+/// Authenticate a General-purpose Position V3 and its exact `GEN1` Replay V3.
 #[allow(clippy::too_many_arguments)]
-pub fn authenticate_base_position_v1<P: BasePositionPdaVerifierV1>(
+pub fn authenticate_general_base_position_v3_v1<P: BasePositionPdaVerifierV1>(
     base_program: Key,
-    position_address: Key,
-    position_data: &[u8],
-    replay_address: Key,
-    replay_data: &[u8],
-    expected_market: Key,
+    position_account: &RawAccountV1<'_>,
+    replay_account: &RawAccountV1<'_>,
+    market: AdapterPositionMarketBindingV3,
+    market_binding_account: Key,
+    general_market_runtime: Key,
     expected_owner: Key,
-    expected_generation: u64,
-    outcome_count: u8,
+    expected_controller: Key,
     supply: &SupplyLedgerAccount,
     verifier: &P,
-) -> Result<AuthenticatedBasePositionV1> {
-    let position = PositionAccount::decode(position_data).map_err(|_| Error::InvalidAccountData)?;
-    let replay = ReplayAccount::decode(replay_data).map_err(|_| Error::InvalidAccountData)?;
-    if position.market.bytes() != expected_market
-        || position.owner.bytes() != expected_owner
-        || position.generation != expected_generation
-        || position.close_state != 0
-        || replay.market.bytes() != expected_market
-        || replay.owner.bytes() != expected_owner
-        || replay.position_generation != expected_generation
-        || replay.flags != 0
+) -> Result<AuthenticatedBasePositionV3> {
+    authenticate_position_v3_pair(
+        base_program,
+        position_account,
+        replay_account,
+        AccountRoleV1::UserPosition,
+        AccountRoleV1::UserReplay,
+        market,
+        PositionPurposeV3::General,
+        AdapterPositionPurposeBindingV3 {
+            owner: identity(expected_owner)?,
+            controller: identity(expected_controller)?,
+            purpose_binding_id: identity(market_binding_account)?,
+        },
+        PositionReplayExtensionExpectationV1::General {
+            market_runtime: general_market_runtime,
+        },
+        supply,
+        verifier,
+    )
+}
+
+/// Authenticate the descriptor vault Position V3 and its exact `SCV1` Replay V3.
+pub fn authenticate_structured_claim_base_position_v3_v1<P: BasePositionPdaVerifierV1>(
+    base_program: Key,
+    position_account: &RawAccountV1<'_>,
+    replay_account: &RawAccountV1<'_>,
+    market: AdapterPositionMarketBindingV3,
+    descriptor: &BoundDescriptorV1,
+    supply: &SupplyLedgerAccount,
+    verifier: &P,
+) -> Result<AuthenticatedBasePositionV3> {
+    let addresses = descriptor.addresses();
+    authenticate_position_v3_pair(
+        base_program,
+        position_account,
+        replay_account,
+        AccountRoleV1::VaultPosition,
+        AccountRoleV1::VaultReplay,
+        market,
+        PositionPurposeV3::StructuredClaim,
+        AdapterPositionPurposeBindingV3 {
+            owner: identity(addresses.vault_owner)?,
+            controller: identity(addresses.vault_owner)?,
+            purpose_binding_id: identity(descriptor.wrapper_product_id())?,
+        },
+        PositionReplayExtensionExpectationV1::StructuredClaim {
+            descriptor_account: addresses.descriptor,
+            wrapper_product_id: descriptor.wrapper_product_id(),
+            vault_authority: addresses.vault_owner,
+        },
+        supply,
+        verifier,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PositionReplayExtensionExpectationV1 {
+    General {
+        market_runtime: Key,
+    },
+    StructuredClaim {
+        descriptor_account: Key,
+        wrapper_product_id: Key,
+        vault_authority: Key,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_position_v3_pair<P: BasePositionPdaVerifierV1>(
+    base_program: Key,
+    position_account: &RawAccountV1<'_>,
+    replay_account: &RawAccountV1<'_>,
+    expected_position_role: AccountRoleV1,
+    expected_replay_role: AccountRoleV1,
+    market: AdapterPositionMarketBindingV3,
+    purpose: PositionPurposeV3,
+    binding: AdapterPositionPurposeBindingV3,
+    extension_expectation: PositionReplayExtensionExpectationV1,
+    supply: &SupplyLedgerAccount,
+    verifier: &P,
+) -> Result<AuthenticatedBasePositionV3> {
+    if is_zero(&base_program)
+        || position_account.role != expected_position_role
+        || replay_account.role != expected_replay_role
+        || position_account.key == replay_account.key
+        || position_account.owner != base_program
+        || replay_account.owner != base_program
+        || position_account.signer
+        || replay_account.signer
+        || !position_account.writable
+        || !replay_account.writable
+        || position_account.executable
+        || replay_account.executable
+    {
+        return Err(Error::InvalidAccounts);
+    }
+    let position =
+        PositionAccountV3::decode(position_account.data).map_err(|_| Error::InvalidAccountData)?;
+    if !verifier.verify_position_v3(base_program, position_account.key, position.pda_seeds()) {
+        return Err(Error::PdaMismatch);
+    }
+    let _authenticated_position = authenticate_position_v3_exact(
+        RetirementAccountViewV2 {
+            address: identity(position_account.key)?,
+            owner: identity(position_account.owner)?,
+            data: position_account.data,
+            is_writable: position_account.writable,
+            is_executable: position_account.executable,
+        },
+        identity(base_program)?,
+        CanonicalPdaV1::after_derivation(identity(position_account.key)?, position.stored_bump()),
+        RetirementAccountAccessV2::Writable,
+    )
+    .map_err(|_| Error::InvalidAccounts)?;
+    match purpose {
+        PositionPurposeV3::General => {
+            let _ = project_general_position_v3(position, market, binding)
+                .map_err(|_| Error::BaseClosureMismatch)?;
+        }
+        PositionPurposeV3::StructuredClaim => {
+            let _ = project_structured_claim_position_v3(position, market, binding)
+                .map_err(|_| Error::BaseClosureMismatch)?;
+        }
+        _ => return Err(Error::BaseClosureMismatch),
+    }
+    if position.lifecycle() != PositionLifecycleV3::Open
+        || position.replay_account().bytes() != replay_account.key
     {
         return Err(Error::BaseClosureMismatch);
     }
-    supply
-        .check_position_bound(&position)
-        .map_err(|_| Error::BaseClosureMismatch)?;
-    if !verifier.verify_position(
+
+    let replay_bump = *replay_account
+        .data
+        .get(4)
+        .ok_or(Error::InvalidAccountData)?;
+    if !verifier.verify_replay_v3(
         base_program,
-        position_address,
-        expected_market,
-        expected_owner,
-        expected_generation,
-        position.stored_bump,
-    ) || !verifier.verify_replay(
-        base_program,
-        replay_address,
-        expected_market,
-        expected_owner,
-        expected_generation,
-        replay.stored_bump,
+        replay_account.key,
+        position_account.key,
+        purpose,
+        binding.purpose_binding_id.bytes(),
+        replay_bump,
     ) {
         return Err(Error::PdaMismatch);
     }
-    let projection = PositionProjectionV1 {
-        market: expected_market,
-        owner: expected_owner,
-        generation: expected_generation,
-        replay_sequence: replay.sequence,
-        cash_atoms: position.cash_atoms,
-        reserved_cash_atoms: position.reserved_cash_atoms,
-        internal: position.internal,
-        closed: false,
-    };
-    let width = usize::from(outcome_count);
-    if !(2..=crate::runtime_contract::MAX_OUTCOMES).contains(&width) {
+    let authenticated_replay = authenticate_purpose_replay_v3_exact(
+        RetirementAccountViewV2 {
+            address: identity(replay_account.key)?,
+            owner: identity(replay_account.owner)?,
+            data: replay_account.data,
+            is_writable: replay_account.writable,
+            is_executable: replay_account.executable,
+        },
+        identity(base_program)?,
+        CanonicalPdaV1::after_derivation(identity(replay_account.key)?, replay_bump),
+        RetirementAccountAccessV2::Writable,
+    )
+    .map_err(|_| Error::InvalidAccounts)?;
+    let sha = AdapterSha256V1;
+    let replay = ReplayV3Envelope::decode(authenticated_replay.data(), &sha)
+        .map_err(|_| Error::InvalidAccountData)?;
+    let header = replay.header();
+    let position_semantic_id = position
+        .semantic_id(&sha)
+        .map_err(|_| Error::InvalidAccountData)?
+        .bytes();
+    if header.lifecycle() != ReplayV3Lifecycle::Live
+        || header.position_account().bytes() != position_account.key
+        || header.replay_account().bytes() != replay_account.key
+        || header.position_generation() != position.generation()
+        || header.purpose() != purpose
+        || header.purpose_binding_id().bytes() != binding.purpose_binding_id.bytes()
+    {
         return Err(Error::BaseClosureMismatch);
     }
-    let mut padding = width;
-    while padding < crate::runtime_contract::MAX_OUTCOMES {
-        if projection.internal[padding] != 0 {
+    match extension_expectation {
+        PositionReplayExtensionExpectationV1::General { market_runtime } => {
+            let extension = GeneralReplayExtensionV1::decode(replay.extension())
+                .map_err(|_| Error::InvalidAccountData)?;
+            if header.extension_schema().get() != GENERAL_REPLAY_EXTENSION_SCHEMA_V1
+                || extension.general_market_runtime().bytes() != market_runtime
+                || extension.current_position_semantic_id().bytes() != position_semantic_id
+            {
+                return Err(Error::BaseClosureMismatch);
+            }
+        }
+        PositionReplayExtensionExpectationV1::StructuredClaim {
+            descriptor_account,
+            wrapper_product_id,
+            vault_authority,
+        } => {
+            let extension = StructuredClaimReplayExtensionV1::decode(replay.extension())?;
+            if header.extension_schema().get() != STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1
+                || extension.descriptor_account != descriptor_account
+                || extension.wrapper_product_id != wrapper_product_id
+                || extension.vault_authority != vault_authority
+                || extension.current_position_semantic_id != position_semantic_id
+            {
+                return Err(Error::BaseClosureMismatch);
+            }
+        }
+    }
+    validate_position_supply_v3(position, market, supply)?;
+    Ok(AuthenticatedBasePositionV3 {
+        position_address: position_account.key,
+        replay_address: replay_account.key,
+        projection: PositionProjectionV1 {
+            market: position.market_instance_id().bytes(),
+            owner: position.owner().bytes(),
+            generation: position.generation(),
+            replay_sequence: header.next_sequence(),
+            cash_atoms: position.cash_atoms(),
+            reserved_cash_atoms: position.reserved_cash_atoms(),
+            internal: position.native_eggs(),
+            closed: false,
+        },
+    })
+}
+
+fn validate_position_supply_v3(
+    position: PositionAccountV3,
+    market: AdapterPositionMarketBindingV3,
+    supply: &SupplyLedgerAccount,
+) -> Result<()> {
+    supply.validate().map_err(|_| Error::BaseClosureMismatch)?;
+    if supply.market.bytes() != market.market_instance_id.bytes()
+        || supply.realm.bytes() != market.realm_id.bytes()
+        || supply.outcome_count != market.outcome_count
+    {
+        return Err(Error::BaseClosureMismatch);
+    }
+    let internal = position.native_eggs();
+    let mut index = 0_usize;
+    while index < usize::from(market.outcome_count) {
+        if internal[index] > supply.internal_supply[index] {
             return Err(Error::BaseClosureMismatch);
         }
-        padding += 1;
+        index += 1;
     }
-    Ok(AuthenticatedBasePositionV1 {
-        position_address,
-        replay_address,
-        projection,
-    })
+    Ok(())
+}
+
+fn identity(bytes: Key) -> Result<Identity32V1> {
+    Identity32V1::new(bytes).map_err(|_| Error::InvalidAccounts)
 }
 
 /// Target-specific Token-2022 parser boundary.
@@ -1038,7 +1246,7 @@ fn requirements(action: StructuredClaimActionV1) -> &'static [AccountAccessV1] {
     match action {
         StructuredClaimActionV1::CreateDescriptor => CREATE_REQUIREMENTS,
         StructuredClaimActionV1::CompactDonation => COMPACT_REQUIREMENTS,
-        StructuredClaimActionV1::Retire => RETIRE_REQUIREMENTS,
+        StructuredClaimActionV1::RetireDescriptor => RETIRE_REQUIREMENTS,
         StructuredClaimActionV1::WrapCanonical | StructuredClaimActionV1::UnwrapCanonical => {
             CANONICAL_REQUIREMENTS
         }
