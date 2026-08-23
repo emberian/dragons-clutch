@@ -30,18 +30,18 @@ use clutch_source_plane_v3_runtime::{
     initialize_source_head, open_lineage_generation, plan_runtime_account_close_from_header,
     plan_source_account_creation, AccountCloseFundingV1, AccountCreationFundingV1,
     AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedEvaluationV1,
-    AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1, AuthenticatedReopenLineageV1,
-    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceRouteV1,
-    AuthenticatedSourceWorkReceiptV1, AuthenticatedStatisticResultAbsenceV1,
-    AuthenticatedStatisticResultAccountV1, AuthenticatedWindowEvidenceV1,
-    AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1, ClockSnapshotV1,
-    EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, IngestBatchOutputV1, LineageFamilyV1,
-    RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1, RuntimeAccountHeaderV1,
-    RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1, SourceReleaseManifestV1,
-    SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1, SourceWorkAuthorizationV1,
-    SourceWorkKindV1, SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1,
-    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, REOPEN_LINEAGE_BYTES,
-    RUNTIME_ACCOUNT_HEADER_BYTES,
+    AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2,
+    AuthenticatedReopenLineageV1, AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
+    AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
+    AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
+    AuthenticatedWindowEvidenceV1, AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1,
+    ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, IngestBatchOutputV1,
+    LineageFamilyV1, RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1,
+    RuntimeAccountHeaderV1, RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1,
+    SourceReleaseManifestV2, SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
+    SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccessV1,
+    SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
+    REOPEN_LINEAGE_BYTES, RUNTIME_ACCOUNT_HEADER_BYTES,
 };
 use solana_account_info::AccountInfo;
 use solana_instruction::Instruction;
@@ -86,6 +86,15 @@ pub struct MutateRuntimeAccountResultV1 {
     pub account_data_after_id: ContentId,
     /// Durable lineage postimage written atomically.
     pub lineage_after: ReopenLineageV1,
+}
+
+/// Exact action-4 semantic result plus the committed account CAS receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistedIngestBoundaryBatchV1 {
+    /// Pure Source V3 ingest result.
+    pub semantic: IngestBatchOutputV1,
+    /// Exact OpenRawPage preimage/postimage and lineage mutation receipt.
+    pub mutation: MutateRuntimeAccountResultV1,
 }
 
 /// Complete close split and lineage tombstone postimage.
@@ -318,7 +327,7 @@ pub struct AtomicBoundaryIngestExecutionV1 {
     /// Exact parser-authenticated boundary consumed by the mutation.
     pub boundary: AuthenticatedBoundaryV1,
     /// Exact open-page mutation receipt.
-    pub ingest: IngestBatchOutputV1,
+    pub ingest: PersistedIngestBoundaryBatchV1,
     /// Persisted paid-work receipt and intent.
     pub work: SourceWorkExecutionV1,
     /// Applied Source-compartment debit/refund transition.
@@ -331,6 +340,7 @@ pub struct AtomicBoundaryIngestExecutionV1 {
 pub fn ingest_parser_boundary_atomic(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
+    receiver: AuthenticatedReceiverRouteV2,
     clock: AuthenticatedClockBucketV1,
     head: AuthenticatedSourceHeadV1,
     open: AuthenticatedOpenRawPageV1,
@@ -360,6 +370,7 @@ pub fn ingest_parser_boundary_atomic(
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     let boundary = invoke_parser_boundary(
         route,
+        receiver,
         clock,
         feed,
         expected_bucket,
@@ -383,7 +394,7 @@ pub fn ingest_parser_boundary_atomic(
         route,
         schedule,
         SourceWorkKindV1::AppendBoundaryBatch,
-        ingest.transition_receipt_id,
+        ingest.semantic.transition_receipt_id,
         receipt_account,
         call_ordinal,
         call_ceiling_lamports,
@@ -668,7 +679,7 @@ pub fn bind_terminal_execution(
 #[allow(clippy::too_many_arguments)]
 pub fn register_release(
     program_id: &Pubkey,
-    manifest: &SourceReleaseManifestV1,
+    manifest: &SourceReleaseManifestV2,
     payer: &AccountInfo<'_>,
     release_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
@@ -716,7 +727,7 @@ pub fn register_release(
 }
 
 /// Register action 1 from the sealed content-addressed artifact transport.
-/// The 1,008-byte manifest never appears in instruction data. Repeating the
+/// The 1,296-byte successor manifest never appears in instruction data. Repeating the
 /// same registration converges on the exact existing 0x8a account; any byte,
 /// owner, or PDA mismatch refuses.
 #[allow(clippy::too_many_arguments)]
@@ -743,7 +754,7 @@ pub fn register_release_from_artifact(
         artifact_account.key,
         seeds::product_artifact_pda(
             program_id,
-            ArtifactKind::SourceReleaseManifestV1.byte(),
+            ArtifactKind::SourceReleaseManifestV2.byte(),
             &expected_manifest_id.bytes(),
         ),
         None,
@@ -751,7 +762,7 @@ pub fn register_release_from_artifact(
     let artifact_data = artifact_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let manifest = SourceReleaseManifestV1::decode(&artifact_data).map_err(source_runtime)?;
+    let manifest = SourceReleaseManifestV2::decode(&artifact_data).map_err(source_runtime)?;
     require(
         manifest.id().map_err(source_runtime)? == expected_manifest_id,
         ClutchError::MismatchedState,
@@ -928,7 +939,7 @@ pub fn ingest_boundary_batch(
     open_account: &AccountInfo<'_>,
     open_lineage_account: &AccountInfo<'_>,
     open_lineage: AuthenticatedReopenLineageV1,
-) -> Outcome<IngestBatchOutputV1> {
+) -> Outcome<PersistedIngestBoundaryBatchV1> {
     let output = clutch_source_plane_v3_runtime::ingest_boundary_batch(
         route,
         head,
@@ -940,14 +951,17 @@ pub fn ingest_boundary_batch(
     let open_after = output
         .open_after
         .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
-    mutate_runtime_account(
+    let mutation = mutate_runtime_account(
         route,
         open_lineage,
         open_account,
         open_lineage_account,
         &open_after,
     )?;
-    Ok(output)
+    Ok(PersistedIngestBoundaryBatchV1 {
+        semantic: output,
+        mutation,
+    })
 }
 
 /// Initialize action 6: create one predictable WindowWork generation.

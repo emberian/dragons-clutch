@@ -1,11 +1,11 @@
 use clutch_source_plane_v3::{
     CompiledInstanceV3, ContentId, DrawdownSummaryV3, LiquidityEnvelopeV3, OpenRawPageV3,
-    PartitionViewV3, PayoutTableV3, ProductTemplateV3, RawPageV3, SeriesFundingV3, SeriesPlanV3,
-    SourceHeadV3, SourcePlaneProgramV3, StatisticKeyV3, StatisticResultV3, SummaryProgramV3,
-    WindowClosureReceiptV3, WindowSealV3, WindowSpecV3, WindowWorkV3, WorkEnvelopeV3,
-    DRAWDOWN_SUMMARY_BYTES, INSTANCE_DESCRIPTOR_BYTES, OPEN_RAW_PAGE_BYTES, RAW_PAGE_BYTES,
-    SERIES_FUNDING_BYTES, SERIES_PLAN_BYTES, SOURCE_HEAD_BYTES, STATISTIC_RESULT_BYTES,
-    WINDOW_SEAL_BYTES, WINDOW_WORK_BYTES,
+    PartitionViewV3, PayoutTableV3, ProductTemplateV3, RawPageV3, RawRecordV3, SeriesFundingV3,
+    SeriesPlanV3, SourceHeadV3, SourcePlaneProgramV3, StatisticKeyV3, StatisticResultV3,
+    SummaryProgramV3, WindowClosureReceiptV3, WindowSealV3, WindowSpecV3, WindowWorkV3,
+    WorkEnvelopeV3, DRAWDOWN_SUMMARY_BYTES, INSTANCE_DESCRIPTOR_BYTES, OPEN_RAW_PAGE_BYTES,
+    RAW_PAGE_BYTES, SERIES_FUNDING_BYTES, SERIES_PLAN_BYTES, SOURCE_HEAD_BYTES,
+    STATISTIC_RESULT_BYTES, WINDOW_SEAL_BYTES, WINDOW_WORK_BYTES,
 };
 use clutch_terminal_identity_v1::{Id, TerminalAccountV1};
 use sha2::{Digest, Sha256};
@@ -870,6 +870,56 @@ pub fn project_runtime_open_raw_page(
         prepaid_work_lamports: 0,
         liquidity_collateral: 0,
     })?;
+    plan.finish()
+}
+
+/// Recompute the action-4 mutation commitment from the exact authenticated
+/// boundary and promoted OpenRawPage preimage/postimage digests.
+#[allow(clippy::too_many_arguments)]
+pub fn project_runtime_append_boundary(
+    source_plane: &SourcePlaneProgramV3,
+    head: &SourceHeadV3,
+    open_before: &OpenRawPageV3,
+    open_after: &OpenRawPageV3,
+    record: RawRecordV3,
+    semantic_binding_id: ContentId,
+    runtime_account_data_before_id: ContentId,
+    runtime_account_data_after_id: ContentId,
+    generation: u64,
+    boundary_authentication_id: ContentId,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    head.validate()?;
+    open_before.validate_against_head(head)?;
+    open_after.validate_against_head(head)?;
+    let expected_after = open_before.append_observation(record)?;
+    if expected_after != *open_after
+        || semantic_binding_id.is_zero()
+        || runtime_account_data_before_id.is_zero()
+        || runtime_account_data_after_id.is_zero()
+        || runtime_account_data_before_id == runtime_account_data_after_id
+        || generation == 0
+        || boundary_authentication_id.is_zero()
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let before = AccountStateV3::new(
+        AccountFamilyV3::OpenRawPage,
+        semantic_binding_id,
+        runtime_account_data_before_id,
+        generation,
+    )?;
+    let after = AccountStateV3::new(
+        AccountFamilyV3::OpenRawPage,
+        semantic_binding_id,
+        runtime_account_data_after_id,
+        generation,
+    )?;
+    let mut plan = TransitionPlanV3::new(
+        TransitionActionV3::AppendBoundary,
+        boundary_authentication_id,
+    );
+    plan.push_mutation(StateMutationV3 { before, after })?;
     plan.finish()
 }
 

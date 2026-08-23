@@ -63,13 +63,12 @@ use clutch_source_plane_v3::{
     MAX_RAW_PAGE_RECORDS,
 };
 use clutch_source_plane_v3_runtime::{
-    decode_runtime_account, ReopenLineageV1, RuntimeKey, SourceReleaseManifestV1,
-    SourceWorkReceiptAccountV1,
-    OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
-    REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_TAG,
-    SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
-    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, STATISTIC_RESULT_ACCOUNT_TAG,
-    WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
+    decode_runtime_account, ReopenLineageV1, RuntimeKey, SourceReleaseManifestV2,
+    SourceWorkReceiptAccountV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
+    REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
+    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
+    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
+    STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
 };
 use clutch_structured_claim_runtime_contract::{
     DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
@@ -670,12 +669,12 @@ fn decode_source(
         Some(SOURCE_RELEASE_ACCOUNT_TAG)
             if data.get(1) == Some(&SOURCE_RELEASE_ACCOUNT_VERSION) =>
         {
-            let value = SourceReleaseManifestV1::decode(data)
+            let value = SourceReleaseManifestV2::decode(data)
                 .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
             let mut projection = runtime(
                 CanonicalAccountKind::SourceRelease,
                 None,
-                Some(value.source_spec_id.bytes()),
+                Some(value.base.source_spec_id.bytes()),
             );
             projection.secondary_binding = Some(
                 value

@@ -12,11 +12,14 @@
 //! crossing, freshness, and conservative integer normalization.
 
 const CONFIG_MAGIC: [u8; 8] = *b"DCSPYP01";
+const CONFIG_V2_MAGIC: [u8; 8] = *b"DCSPYP02";
 const REQUEST_MAGIC: [u8; 8] = *b"DCSPYR01";
 const VERSION: u16 = 1;
 
 /// Exact immutable parser-config account-body width.
 pub const PYTH_PARSER_CONFIG_BYTES: usize = 256;
+/// Exact successor config width including receiver release and Config pins.
+pub const PYTH_PARSER_CONFIG_V2_BYTES: usize = 512;
 /// Exact parser instruction-data width constructed by Clutch.
 pub const PYTH_PARSER_REQUEST_BYTES: usize = 24;
 
@@ -143,6 +146,127 @@ impl PythParserConfigV1 {
     }
 }
 
+/// Successor parser config pinning the receiver ProgramData release and its
+/// complete mutable Config bytes without reinterpreting version one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PythParserConfigV2 {
+    /// Complete historical v1 route body.
+    pub base: PythParserConfigV1,
+    /// Receiver ProgramData account linked by the receiver Program.
+    pub receiver_programdata: [u8; 32],
+    /// Digest of complete receiver Program account bytes.
+    pub receiver_program_account_data_id: [u8; 32],
+    /// Digest of complete receiver ProgramData bytes, including its ELF.
+    pub receiver_programdata_account_data_id: [u8; 32],
+    /// Exact upgradeable loader owning Program and ProgramData.
+    pub receiver_loader: [u8; 32],
+    /// Offset of the ProgramData key in the receiver Program account.
+    pub receiver_programdata_link_offset: u16,
+    /// Offset of the deployment slot in receiver ProgramData.
+    pub receiver_deployment_slot_offset: u16,
+    /// Exact receiver deployment slot.
+    pub receiver_deployment_slot: u64,
+    /// Exact receiver Config account.
+    pub receiver_config: [u8; 32],
+    /// Exact receiver Config owner; must equal the receiver Program.
+    pub receiver_config_owner: [u8; 32],
+    /// Digest of complete receiver Config account bytes.
+    pub receiver_config_data_id: [u8; 32],
+}
+
+impl PythParserConfigV2 {
+    /// Validate the complete parser and receiver release route.
+    pub fn validate(&self) -> Result<(), Error> {
+        self.base.validate()?;
+        for identity in [
+            self.receiver_programdata,
+            self.receiver_program_account_data_id,
+            self.receiver_programdata_account_data_id,
+            self.receiver_loader,
+            self.receiver_config,
+            self.receiver_config_owner,
+            self.receiver_config_data_id,
+        ] {
+            if identity == [0; 32] {
+                return Err(Error::ZeroIdentity);
+            }
+        }
+        if self.receiver_deployment_slot == 0 {
+            return Err(Error::InvalidBound);
+        }
+        if self.receiver_config_owner != self.base.receiver_program
+            || self.receiver_programdata == self.base.receiver_program
+            || self.receiver_loader == self.base.receiver_program
+            || self.receiver_loader == self.receiver_programdata
+            || self.receiver_config == self.base.receiver_program
+            || self.receiver_config == self.receiver_programdata
+            || self.receiver_config == self.base.feed_account
+            || usize::from(self.receiver_programdata_link_offset)
+                .checked_add(32)
+                .is_none()
+            || usize::from(self.receiver_deployment_slot_offset)
+                .checked_add(8)
+                .is_none()
+        {
+            return Err(Error::IdentityAlias);
+        }
+        Ok(())
+    }
+
+    /// Encode the exact successor parser Config body.
+    pub fn encode(&self) -> Result<[u8; PYTH_PARSER_CONFIG_V2_BYTES], Error> {
+        self.validate()?;
+        let mut out = [0_u8; PYTH_PARSER_CONFIG_V2_BYTES];
+        out[..8].copy_from_slice(&CONFIG_V2_MAGIC);
+        out[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        out[16..272].copy_from_slice(&self.base.encode()?);
+        out[272..304].copy_from_slice(&self.receiver_programdata);
+        out[304..336].copy_from_slice(&self.receiver_program_account_data_id);
+        out[336..368].copy_from_slice(&self.receiver_programdata_account_data_id);
+        out[368..400].copy_from_slice(&self.receiver_loader);
+        out[400..402].copy_from_slice(&self.receiver_programdata_link_offset.to_le_bytes());
+        out[402..404].copy_from_slice(&self.receiver_deployment_slot_offset.to_le_bytes());
+        out[408..416].copy_from_slice(&self.receiver_deployment_slot.to_le_bytes());
+        out[416..448].copy_from_slice(&self.receiver_config);
+        out[448..480].copy_from_slice(&self.receiver_config_owner);
+        out[480..512].copy_from_slice(&self.receiver_config_data_id);
+        Ok(out)
+    }
+
+    /// Decode exact successor bytes; v1 never auto-upgrades.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        if input.len() != PYTH_PARSER_CONFIG_V2_BYTES {
+            return Err(Error::WrongLength);
+        }
+        if input[..8] != CONFIG_V2_MAGIC {
+            return Err(Error::WrongMagic);
+        }
+        if u16_at(input, 8) != 2 {
+            return Err(Error::BadVersion);
+        }
+        if input[10..16].iter().any(|byte| *byte != 0)
+            || input[404..408].iter().any(|byte| *byte != 0)
+        {
+            return Err(Error::NonCanonicalPadding);
+        }
+        let value = Self {
+            base: PythParserConfigV1::decode(&input[16..272])?,
+            receiver_programdata: array_32(input, 272),
+            receiver_program_account_data_id: array_32(input, 304),
+            receiver_programdata_account_data_id: array_32(input, 336),
+            receiver_loader: array_32(input, 368),
+            receiver_programdata_link_offset: u16_at(input, 400),
+            receiver_deployment_slot_offset: u16_at(input, 402),
+            receiver_deployment_slot: u64_at(input, 408),
+            receiver_config: array_32(input, 416),
+            receiver_config_owner: array_32(input, 448),
+            receiver_config_data_id: array_32(input, 480),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
 /// State-derived request sent by Clutch to the reviewed parser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PythParserRequestV1 {
@@ -227,6 +351,22 @@ mod tests {
         }
     }
 
+    fn config_v2() -> PythParserConfigV2 {
+        PythParserConfigV2 {
+            base: config(),
+            receiver_programdata: [6; 32],
+            receiver_program_account_data_id: [7; 32],
+            receiver_programdata_account_data_id: [8; 32],
+            receiver_loader: [9; 32],
+            receiver_programdata_link_offset: 4,
+            receiver_deployment_slot_offset: 4,
+            receiver_deployment_slot: 100,
+            receiver_config: [10; 32],
+            receiver_config_owner: [3; 32],
+            receiver_config_data_id: [11; 32],
+        }
+    }
+
     #[test]
     fn config_round_trips_exactly() {
         let bytes = config().encode().unwrap();
@@ -270,5 +410,28 @@ mod tests {
             PythParserRequestV1::decode(&bytes),
             Err(Error::NonCanonicalPadding)
         );
+    }
+
+    #[test]
+    fn successor_config_round_trips_and_v1_never_auto_upgrades() {
+        let bytes = config_v2().encode().unwrap();
+        assert_eq!(PythParserConfigV2::decode(&bytes), Ok(config_v2()));
+        assert_eq!(
+            PythParserConfigV2::decode(&config().encode().unwrap()),
+            Err(Error::WrongLength)
+        );
+    }
+
+    #[test]
+    fn dirty_successor_padding_and_wrong_config_owner_refuse() {
+        let mut bytes = config_v2().encode().unwrap();
+        bytes[405] = 1;
+        assert_eq!(
+            PythParserConfigV2::decode(&bytes),
+            Err(Error::NonCanonicalPadding)
+        );
+        let mut value = config_v2();
+        value.receiver_config_owner = [12; 32];
+        assert_eq!(value.encode(), Err(Error::IdentityAlias));
     }
 }
