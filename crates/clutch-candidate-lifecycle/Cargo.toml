@@ -1,0 +1,13 @@
+[package]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Fixed-memory two-window candidate lifecycle kernel for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

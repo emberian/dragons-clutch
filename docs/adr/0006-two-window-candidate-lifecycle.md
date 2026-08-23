@@ -27,6 +27,51 @@ solver/keeper, or pretending future fees can capitalize current work.
 
 ## Decision
 
+### Second-cycle kernel refinement (2026-08-22)
+
+The independently buildable production-bound kernel in
+[`../../crates/clutch-candidate-lifecycle`](../../crates/clutch-candidate-lifecycle)
+and its exact boundary specification in
+[`../implementation/CANDIDATE_LIFECYCLE_V2_KERNEL.md`](../implementation/CANDIDATE_LIFECYCLE_V2_KERNEL.md)
+refine this proposed design as follows. These points are normative wherever
+older proposal prose below conflicts:
+
+- capacity is consumed and the candidate is canonically indexed at **Begin**,
+  not Seal, so staging children are also bounded and enumerable;
+- all four fixed index pages are epoch-sponsored, prepaid, and pre-created;
+  their close rewards and divisible rent principal have one owner;
+- Candidate status is `STAGING`, `SEALED`, `VERDICTED`,
+  `EXPIRED_STAGING`, or `EXPIRED_UNVERIFIED`; valid/refused is owned only by
+  the immutable Verdict, and selection is owned only by the Window;
+- the retained top stores candidate identities while Verdict accounts own
+  relation outcomes and generic rank keys; no loser is rewritten as
+  superseded;
+- a rank key has a policy-owned prefix and a final 32-byte complemented
+  candidate identity, which gives a locally checkable, injective total tie
+  break under descending lexicographic order;
+- Begin prepays bond, staging rent, and expiry/close cleanup. Seal performs one
+  exact top-up for verification rent and all declared progress plus completion
+  rewards;
+- bond, work, cleanup, solver prize, and rent are separate claim/close paths.
+  Candidate cleanup is last and marks a monotone closed bit in its index page;
+  pages close in reverse order only when every active bit is closed, and Epoch
+  root retirement remains a different semantic owner;
+- the refined index page has canonical identities plus a closed mask; it does
+  not use the earlier proposed prior/page folds. Selected-candidate cleanup also
+  requires adapter-authenticated settlement-terminal evidence;
+- account tags `1..8` in the standalone crate are kernel-local envelopes, not
+  globally reserved live-layout tags. Collision-free adapter mapping remains a
+  promotion blocker;
+- pure transitions take values by copy and return complete replacements so a
+  kernel refusal is error-atomic. The adapter must authenticate evidence, move
+  lamports, mirror Epoch finality, and commit all returned accounts atomically;
+- copy-resistant solver admission and reward-destination authorization remain
+  unresolved, as does quality/capacity denial of service. Fixed capacity bounds
+  resource use but does not establish candidate quality or front-run safety.
+
+This refinement is intentionally not wired into the live SBF dispatcher. It is
+not deployment or release evidence.
+
 Introduce a new general candidate lifecycle for **new epochs only**. It has two
 exclusive slot boundaries after the book freezes:
 
