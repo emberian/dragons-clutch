@@ -127,6 +127,10 @@ pub mod general_v2_receipt_v5;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_settlement_root;
+/// Staged action-39 producer; the route remains capability-disabled until
+/// action-24 materialization is reachable under the same profile.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_settlement_producer_v5;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;
