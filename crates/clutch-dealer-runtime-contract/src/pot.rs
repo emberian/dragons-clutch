@@ -38,7 +38,7 @@ pub enum SettlementPotPhaseV1 {
 }
 
 impl SettlementPotPhaseV1 {
-    fn decode(value: u8) -> Result<Self> {
+    pub(crate) fn decode(value: u8) -> Result<Self> {
         match value {
             0 => Ok(Self::Collecting),
             1 => Ok(Self::Delivering),

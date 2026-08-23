@@ -13,4 +13,5 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
+clutch-retirement = { path = "../clutch-retirement" }
 sha2 = { version = "=0.10.9", default-features = false }

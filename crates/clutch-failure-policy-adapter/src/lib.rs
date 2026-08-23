@@ -32,7 +32,7 @@ const INTENT_MAGIC: [u8; 8] = *b"DCFAILI1";
 const INTENT_SCHEMA: u16 = 1;
 
 /// Exact canonical durable failure-root width.
-pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_924;
+pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_940;
 /// Exact canonical failure intent width.
 pub const FAILURE_INTENT_V1_BYTES: usize = 344;
 
@@ -1023,10 +1023,11 @@ pub fn project_paid_resolution_transition(
 }
 
 /// Authenticate a terminal intent against the current resolved runtime and all
-/// separately authenticated terminal-owner receipts embedded in `terminal`.
+/// separately authenticated terminal-owner receipts and the immutable pending
+/// replay-account binding embedded in `terminal`.
 ///
 /// This emits no transfer and performs no state mutation. The terminal owner
-/// must consume the returned join under its own replay tombstone.
+/// must seal the returned join into that replay account atomically with close.
 pub fn authenticate_terminal_join_intent(
     accounts: AuthenticatedFailureAccountsV1,
     intent: FailureIntentV1,
@@ -1051,8 +1052,8 @@ pub fn authenticate_terminal_join_intent(
     Ok(terminal)
 }
 
-/// Exact durable-root close plan after the separately owned permanent replay
-/// tombstone and all other terminal facts have joined.
+/// Exact durable-root close plan after the pre-funded replay account and all
+/// other terminal facts have joined.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureRootClosePlanV1 {
     root_key: AccountId,

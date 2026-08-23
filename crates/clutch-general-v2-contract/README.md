@@ -22,7 +22,7 @@ The structural transition derives Position and Replay successor semantic IDs
 internally from exact canonical bodies. It commits the consumed ordinal,
 action-specific transition and evidence IDs, Position account, pre/post
 Position IDs, and generations. Action 25 evidence is the exact receipt
-prestate data ID. Action 38 uses the finalized V2 row data ID as its transition
+prestate data ID. Action 38 uses the finalized V3 row data ID as its transition
 ID and the authenticated deleted payer-allocation prestate data ID as evidence;
 structured exchange uses its exact dual-endpoint delta evidence. Action 25
 requires an unchanged Position. Direct/merge sellers
@@ -50,7 +50,8 @@ action plan from authenticated prestates before atomically writing both bodies.
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
 | withdrawn `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
-| disabled presence-explicit `OwnerSettlementV2AccountV1` envelope | `0x81/2` | 292 |
+| withdrawn presence-explicit `OwnerSettlementV2AccountV1` envelope | `0x81/2` | 292 |
+| canonical disabled `OwnerSettlementV3AccountV1` envelope | `0x81/3` | 292 |
 | disabled selected fee-record envelope | `0x82/1` | 340 |
 | disabled owner fee-carry envelope | `0x83/1` | 132 |
 | disabled temporary payer-allocation envelope | `0x84/1` | 2,684 |
@@ -64,11 +65,12 @@ as `ReservedDisabled`, records retirement's provisional
 tombstones at `0x75/1` and `0x76/1` plus its permanent Position tombstone at
 `0x75/2`, and proves its recorded rows internally
 disjoint. Dealer owns `0x7d/1` and `0x7e/1`; Source/Series owns `0x7f/1` and
-`0x80/1`. General does not reinterpret those coordinates. The `0x81/1`
-owner-settlement coordinate stays withdrawn; `0x81/2` is the sole future row
-and remains a reservation, not an executable capability. Their codecs and PDA
-domains never alias. A complete legacy-account inventory cross-check remains
-an activation gate.
+`0x80/1`. General does not reinterpret those coordinates. Owner-settlement
+versions `0x81/1` and `0x81/2` stay withdrawn; `0x81/3` is the sole future row
+and remains a reservation, not an executable capability. The strict V3 outer
+codec admits exactly 292 bytes and imports the authoritative 288-byte V3 body;
+the three codecs and PDA domains never alias. A complete legacy-account
+inventory cross-check remains an activation gate.
 The same coordinated block reserves the StructuredClaim descriptor at
 `0x88/1` and a fresh General FinalPot at `0x89/1`. The latter now has a strict
 332-byte outer codec around the canonical 328-byte combined FinalPot and
@@ -109,10 +111,10 @@ The first-spine tuples are exact ordered seeds:
 | ClearWork | `clear-work:v2`, AdmissionNode PDA |
 | SelectedCandidate | `selected-candidate:v1`, Epoch PDA, final `SettlementCandidateId` |
 | SettlementReceipt V3 | `general-receipt:v3`, Epoch PDA, final `SettlementCandidateId`, `slice_index_le` |
-| OwnerSettlement V2 | `owner-settlement:v2`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
+| OwnerSettlement V3 | `owner-settlement:v3`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
 | selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
 | owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
-| temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner |
+| temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner; immutable envelope-derived allocation snapshot until atomic action-38 close, never cash evidence |
 | temporary recipient allocation | `candidate-recipient-allocation:v1`, selected fee-record PDA |
 | treasury ledger | `fee-treasury-ledger:v1`, selected fee-record PDA |
 | settlement cash pot | `settlement-cash-pot:v1`, Epoch PDA, final `SettlementCandidateId` |
@@ -251,23 +253,13 @@ credits refuse and retry without consuming replay or liveness when liquidity
 is absent. The adapter derives the canonical finalized 288-byte row data ID;
 it is neither caller supplied nor copied into the row. The
 one-way row state and in-place fee finalization receipt own persistent replay.
-No live SBF success transition exists: creating the 288-byte semantic body requires the
+No success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per
 participating owner, checked candidate totals, and a canonically derived owner
 order-set digest. General V2 does not yet expose that complete projection.
 The 292-byte outer row stores only tag/version, that semantic body, bump, and
 zero flags. Its pre-fund-safe creation plan must atomically update the separate
 rent ledger that owns payer principal, refund recipient, and donation sink.
-
-The capability-disabled fee composer now rederives the V2 row/Position/pot
-realization, derives purpose Replay V3 in the same plan, uses the finalized row
-data ID as Replay transition identity, and uses the exact deleted `0x84` payer
-outer data ID as distinct Replay evidence. The existing `0x83/1` carry is
-reallocated in place to exact 500-byte `0x83/2`; payer principal and hostile
-prefunding remain separate refund/neutral-sink transfers. The SBF seam freezes
-strict PDA, outer-version, data-ID, byte-postimage, close, and lamport-delta
-checks, but exports no dispatch route until the authoritative rent ledger and
-exhaustive signed-envelope loader can mint the pure plan.
 
 Action 26 is renamed `ConsumeDirectReceiptEggs` and has the exact disabled
 64-byte selector `epoch || receipt`. The imported

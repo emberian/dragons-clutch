@@ -37,15 +37,17 @@ use clutch_source_plane_v3_runtime::{
 use sha2::{Digest, Sha256};
 
 use crate::{
+    relation_execution_v1::{ExecutedFailureRelationV1, FailureRelationDispositionV1},
     AcceptedResolutionId, Error, FailurePolicyBindingId, FailurePolicyBindingV1, FailureTriggerId,
-    FailureTriggerKindV1, FailureTriggerV1, RelationRefusalV1, Result,
+    FailureTriggerKindV1, FailureTriggerV1, Result,
 };
 
 const ADMISSION_DOMAIN: &[u8] = b"dragons-clutch/failure-external-admission/v2";
 const WORK_RECEIPT_DOMAIN: &[u8] = b"dragons-clutch/failure-recovery-work-receipt/v2";
 const ACCEPTED_RESOLUTION_DOMAIN: &[u8] = b"dragons-clutch/failure-accepted-resolution/v2";
+const RUNTIME_STATE_COMMITMENT_DOMAIN: &[u8] =
+    b"dragons-clutch/failure-runtime-state-commitment/v2";
 const RECOVERY_TERMINAL_DOMAIN: &[u8] = b"dragons-clutch/failure-recovery-terminal/v2";
-const FULL_TERMINAL_DOMAIN: &[u8] = b"dragons-clutch/failure-full-terminal/v2";
 const MAGIC: [u8; 8] = *b"DCFAILE2";
 const VERSION: u16 = 2;
 
@@ -71,7 +73,7 @@ macro_rules! typed_external_id {
 }
 
 /// Exact canonical width of one single-custody persisted failure runtime.
-pub const FAILURE_RUNTIME_EXTERNAL_V2_BYTES: usize = 2_032;
+pub const FAILURE_RUNTIME_EXTERNAL_V2_BYTES: usize = 2_048;
 
 typed_external_id!(
     FailureExternalAdmissionReceiptIdV2,
@@ -86,41 +88,9 @@ typed_external_id!(
     "Typed identity closing the external liveness Recovery compartment."
 );
 typed_external_id!(
-    FailureExternalTerminalJoinIdV2,
-    "Typed identity of the full retirement/source/replay terminal join."
+    FailureRuntimeStateCommitmentV2,
+    "Typed commitment to the complete canonical failure-runtime bytes."
 );
-
-/// Authenticated relation result over one source-owned success handoff.
-///
-/// The relation adapter constructs this only after executing the immutable
-/// relation program. This DTO never carries a payout and cannot replace the
-/// bound source handoff.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedRelationResultV2 {
-    /// Exact failure-policy binding.
-    pub binding_id: FailurePolicyBindingId,
-    /// Exact full-width occurrence.
-    pub market_instance_id: MarketInstanceV2Id,
-    /// Exact failure/recovery generation.
-    pub generation: u64,
-    /// Exact authenticated source success handoff.
-    pub source_success_handoff_id: SourceContentId,
-    /// Frozen relation policy implementation/content identity.
-    pub relation_policy_id: [u8; 32],
-    /// Nonzero authenticated relation record.
-    pub relation_record_id: [u8; 32],
-    /// Accepted relation or one closed deterministic refusal.
-    pub disposition: RelationDispositionV2,
-}
-
-/// Exhaustive relation disposition consumed by failure policy.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RelationDispositionV2 {
-    /// The frozen relation accepted the source result for normal resolution.
-    Accepted,
-    /// The frozen relation selected no value because evidence was unusable.
-    Refused(RelationRefusalV1),
-}
 
 /// Present-funding receipt consumed by Product/Series occurrence activation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -324,6 +294,7 @@ pub struct AcceptedResolutionV2 {
     source_success_handoff_id: SourceContentId,
     window_id: SourceContentId,
     relation_record_id: [u8; 32],
+    clock: RecoveryClock,
 }
 
 impl AcceptedResolutionV2 {
@@ -615,6 +586,16 @@ impl FailureRuntimeExternalV2 {
         self.binding_id
     }
 
+    /// Exact immutable Source release manifest admitted with this occurrence.
+    pub(crate) const fn source_release_manifest_id(self) -> SourceContentId {
+        self.source_release_manifest_id
+    }
+
+    /// Complete Source owner/PDA/body authentication admitted at activation.
+    pub(crate) const fn source_release_authentication_id(self) -> SourceContentId {
+        self.source_release_authentication_id
+    }
+
     /// Durable semantic state identity, not the liveness account.
     pub const fn semantic_state_id(self) -> RecoveryIdentity {
         self.recovery.state_id()
@@ -643,6 +624,11 @@ impl FailureRuntimeExternalV2 {
     /// Current semantic replay nonce.
     pub const fn transition_nonce(self) -> u64 {
         self.recovery.transition_nonce()
+    }
+
+    /// Exact repair attempt index the next schedule/work transition targets.
+    pub const fn next_attempt_index(self) -> u8 {
+        self.recovery.next_attempt_index()
     }
 
     /// First recorded maturity trigger.
@@ -679,10 +665,24 @@ impl FailureRuntimeExternalV2 {
     }
 
     /// Refuse new exposure after immutable maturity even before a crank.
-    pub fn check_new_exposure(&self, clock: RecoveryClock) -> Result<()> {
+    fn check_new_exposure(&self, clock: RecoveryClock) -> Result<()> {
         self.check()?;
         self.recovery.check_new_exposure(clock)?;
         Ok(())
+    }
+
+    /// Refuse new exposure from the admitted Source release's embedded Clock
+    /// policy and one authenticated Clock snapshot.
+    pub fn check_new_exposure_from_source_release(
+        &self,
+        source_release: AuthenticatedSourceReleaseV1,
+        clock: ClockSnapshotV1,
+    ) -> Result<()> {
+        self.authenticate_source_release(source_release)?;
+        self.check_new_exposure(recovery_clock_from_snapshot(
+            &source_release.clock_policy(),
+            clock,
+        )?)
     }
 
     /// Enter degraded recovery from an authenticated source failure fact.
@@ -712,18 +712,18 @@ impl FailureRuntimeExternalV2 {
     pub fn plan_trigger_relation_refusal(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
         source_release: AuthenticatedSourceReleaseV1,
     ) -> Result<FailureExternalTransitionPlanV2> {
         let clock = self.validate_success_handoff(success, source_release, true)?;
-        let refusal = match relation.disposition {
-            RelationDispositionV2::Refused(value) => value,
-            RelationDispositionV2::Accepted => return Err(Error::BindingMismatch),
+        let refusal = match relation.disposition() {
+            FailureRelationDispositionV1::Refused(value) => value,
+            FailureRelationDispositionV1::Accepted => return Err(Error::BindingMismatch),
         };
-        self.validate_relation(success, relation)?;
+        self.validate_relation(success, relation, source_release)?;
         let trigger = self.make_trigger(
             FailureTriggerKindV1::ResolutionRelationRefused,
-            success.id().bytes(),
+            relation.id().bytes(),
             refusal.code(),
             clock,
         )?;
@@ -733,13 +733,38 @@ impl FailureRuntimeExternalV2 {
 
     /// Advance expired recovery attempts; final expiry deterministically enters
     /// dormancy without moving externally owned funds.
-    pub fn plan_advance_schedule(
+    fn plan_advance_schedule(
         &self,
         clock: RecoveryClock,
     ) -> Result<FailureExternalTransitionPlanV2> {
         self.check()?;
         let recovery = self.recovery.plan_advance_schedule(clock)?;
         self.wrap_plan(recovery, None, None)
+    }
+
+    /// Authenticate the exact immutable Source release frozen at admission.
+    ///
+    /// This narrow boundary lets an account adapter prove that its physical
+    /// release account is the semantic runtime's release without projecting
+    /// the runtime's private release identities into a second DTO.
+    pub fn authenticate_source_release(
+        &self,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Result<()> {
+        self.check()?;
+        self.validate_source_release(source_release)
+    }
+
+    /// Advance the immutable recovery schedule from the admitted Source
+    /// release's embedded Clock policy and one authenticated Clock snapshot.
+    pub fn plan_advance_schedule_from_source_release(
+        &self,
+        source_release: AuthenticatedSourceReleaseV1,
+        clock: ClockSnapshotV1,
+    ) -> Result<FailureExternalTransitionPlanV2> {
+        self.authenticate_source_release(source_release)?;
+        let recovery_clock = recovery_clock_from_snapshot(&source_release.clock_policy(), clock)?;
+        self.plan_advance_schedule(recovery_clock)
     }
 
     /// Accept one exact successful repair evaluation as one progress unit and
@@ -770,12 +795,12 @@ impl FailureRuntimeExternalV2 {
     pub fn accept_resolution(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
         source_release: AuthenticatedSourceReleaseV1,
     ) -> Result<AcceptedResolutionV2> {
-        self.validate_success_handoff(success, source_release, false)?;
-        self.validate_relation(success, relation)?;
-        if relation.disposition != RelationDispositionV2::Accepted {
+        let clock = self.validate_success_handoff(success, source_release, false)?;
+        self.validate_relation(success, relation, source_release)?;
+        if relation.disposition() != FailureRelationDispositionV1::Accepted {
             return Err(Error::BindingMismatch);
         }
         let window_id = success.window_id();
@@ -786,26 +811,32 @@ impl FailureRuntimeExternalV2 {
         hasher.update(self.binding.generation.to_le_bytes());
         hasher.update(success.id().bytes());
         hasher.update(window_id.bytes());
-        hasher.update(relation.relation_policy_id);
-        hasher.update(relation.relation_record_id);
+        hasher.update(relation.relation_policy_id().bytes());
+        hasher.update(relation.record_id().bytes());
+        hasher.update(relation.id().bytes());
+        hasher.update(clock.slot.to_le_bytes());
+        hasher.update(clock.unix_timestamp.to_le_bytes());
+        hasher.update(clock.current_bucket.to_le_bytes());
         Ok(AcceptedResolutionV2 {
             id: AcceptedResolutionId::from_bytes(hasher.finalize().into()),
             source_success_handoff_id: success.id(),
             window_id,
-            relation_record_id: relation.relation_record_id,
+            relation_record_id: relation.record_id().bytes(),
+            clock,
         })
     }
 
     /// Resolve from accepted evidence without authorizing a work payment.
     pub fn plan_resolve_caller_funded(
         &self,
-        clock: RecoveryClock,
         accepted: AcceptedResolutionV2,
     ) -> Result<FailureExternalTransitionPlanV2> {
         self.validate_accepted_resolution(accepted)?;
         let evidence =
             EvidenceDecision::from_adapter(RecoveryIdentity::from_bytes(accepted.id.bytes()))?;
-        let recovery = self.recovery.plan_resolve_caller_funded(clock, evidence)?;
+        let recovery = self
+            .recovery
+            .plan_resolve_caller_funded(accepted.clock, evidence)?;
         self.wrap_plan(recovery, None, None)
     }
 
@@ -814,7 +845,7 @@ impl FailureRuntimeExternalV2 {
     pub fn plan_resolve_paid_repair(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
         source_release: AuthenticatedSourceReleaseV1,
         reward_recipient: RecoveryIdentity,
         scheduled_ceiling_lamports: u64,
@@ -1012,14 +1043,22 @@ impl FailureRuntimeExternalV2 {
     fn validate_relation(
         &self,
         success: SuccessfulEvaluationHandoffV1,
-        relation: AuthenticatedRelationResultV2,
+        relation: ExecutedFailureRelationV1,
+        source_release: AuthenticatedSourceReleaseV1,
     ) -> Result<()> {
-        if relation.binding_id != self.binding_id
-            || relation.market_instance_id != self.binding.market_instance_id
-            || relation.generation != self.binding.generation
-            || relation.source_success_handoff_id != success.id()
-            || relation.relation_policy_id != self.binding.relation_policy_id
-            || relation.relation_record_id.iter().all(|byte| *byte == 0)
+        if relation.binding_id() != self.binding_id
+            || relation.market_instance_id() != self.binding.market_instance_id
+            || relation.generation() != self.binding.generation
+            || relation.source_success_handoff_id() != success.id()
+            || relation.statistic_result_id() != success.statistic_result_id()?
+            || relation.statistic_result_authentication_id()
+                != success.result_account_authentication_id()
+            || relation.source_release_authentication_id() != source_release.id()
+            || relation.relation_policy_id().bytes() != self.binding.relation_policy_id
+            || relation.record_id().bytes().iter().all(|byte| *byte == 0)
+            || relation.id().bytes().iter().all(|byte| *byte == 0)
+            || relation.source_policy_handoff_authentication_id().is_zero()
+            || relation.source_work_receipt_authentication_id().is_zero()
         {
             return Err(Error::BindingMismatch);
         }
@@ -1259,6 +1298,20 @@ impl FailureRuntimeExternalV2 {
         Ok(())
     }
 
+    /// Commit every canonical semantic byte of the current runtime. This is
+    /// distinct from the stable recovery-state account identity and prevents
+    /// same-nonce sibling poststates from sharing a terminal receipt.
+    pub fn state_commitment(&self) -> Result<FailureRuntimeStateCommitmentV2> {
+        let mut bytes = [0u8; FAILURE_RUNTIME_EXTERNAL_V2_BYTES];
+        self.encode_into(&mut bytes)?;
+        let mut hasher = Sha256::new();
+        hasher.update(RUNTIME_STATE_COMMITMENT_DOMAIN);
+        hasher.update(bytes);
+        Ok(FailureRuntimeStateCommitmentV2::from_bytes(
+            hasher.finalize().into(),
+        ))
+    }
+
     /// Emit an authenticated terminal receipt for exactly the Recovery
     /// compartment. Resolution is success; exhausted recovery is failure.
     pub fn recovery_terminal_receipt(&self) -> Result<FailureRecoveryTerminalReceiptV2> {
@@ -1271,6 +1324,7 @@ impl FailureRuntimeExternalV2 {
             }
         };
         let funding = self.recovery.funding();
+        let runtime_state_commitment = self.state_commitment()?;
         let mut hasher = Sha256::new();
         hasher.update(RECOVERY_TERMINAL_DOMAIN);
         hasher.update(self.binding_id.bytes());
@@ -1283,6 +1337,7 @@ impl FailureRuntimeExternalV2 {
         hasher.update(funding.quote_schedule_id.bytes());
         hasher.update(self.binding.generation.to_le_bytes());
         hasher.update(self.transition_nonce().to_le_bytes());
+        hasher.update(runtime_state_commitment.bytes());
         hasher.update([disposition as u8]);
         Ok(FailureRecoveryTerminalReceiptV2 {
             id: FailureRecoveryTerminalReceiptIdV2::from_bytes(hasher.finalize().into()),
@@ -1296,6 +1351,7 @@ impl FailureRuntimeExternalV2 {
             quote_schedule_id: LivenessId::from_bytes(funding.quote_schedule_id.bytes()),
             generation: self.binding.generation,
             transition_nonce: self.transition_nonce(),
+            runtime_state_commitment,
             disposition,
         })
     }
@@ -1323,98 +1379,8 @@ pub struct FailureRecoveryTerminalReceiptV2 {
     quote_schedule_id: LivenessId,
     generation: u64,
     transition_nonce: u64,
+    runtime_state_commitment: FailureRuntimeStateCommitmentV2,
     disposition: FailureRecoveryTerminalDispositionV2,
-}
-
-/// Full terminal join owned separately from the Recovery funding close.
-///
-/// Dormancy cannot construct this join: the occurrence must first resolve,
-/// and the adapter must authenticate retirement, permanent replay tombstone,
-/// and final Source release facts for the same generation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FailureExternalTerminalJoinV2 {
-    id: FailureExternalTerminalJoinIdV2,
-    binding_id: FailurePolicyBindingId,
-    market_instance_id: MarketInstanceV2Id,
-    generation: u64,
-    retirement_root_id: [u8; 32],
-    replay_tombstone_id: [u8; 32],
-    source_release_receipt_id: [u8; 32],
-}
-
-impl FailureExternalTerminalJoinV2 {
-    /// Construct only after the adapter authenticates all three external facts.
-    pub fn from_adapter(
-        runtime: &FailureRuntimeExternalV2,
-        generation: u64,
-        retirement_root_id: [u8; 32],
-        replay_tombstone_id: [u8; 32],
-        source_release_receipt_id: [u8; 32],
-    ) -> Result<Self> {
-        runtime.check()?;
-        if runtime.phase() != RecoveryPhase::Resolved {
-            return Err(Error::WrongPhase);
-        }
-        if generation != runtime.binding.generation
-            || retirement_root_id.iter().all(|byte| *byte == 0)
-            || replay_tombstone_id.iter().all(|byte| *byte == 0)
-            || source_release_receipt_id.iter().all(|byte| *byte == 0)
-        {
-            return Err(Error::BindingMismatch);
-        }
-        let mut hasher = Sha256::new();
-        hasher.update(FULL_TERMINAL_DOMAIN);
-        hasher.update(runtime.binding_id.bytes());
-        hasher.update(runtime.binding.market_instance_id.bytes());
-        hasher.update(generation.to_le_bytes());
-        hasher.update(retirement_root_id);
-        hasher.update(replay_tombstone_id);
-        hasher.update(source_release_receipt_id);
-        Ok(Self {
-            id: FailureExternalTerminalJoinIdV2::from_bytes(hasher.finalize().into()),
-            binding_id: runtime.binding_id,
-            market_instance_id: runtime.binding.market_instance_id,
-            generation,
-            retirement_root_id,
-            replay_tombstone_id,
-            source_release_receipt_id,
-        })
-    }
-
-    /// Complete typed join identity.
-    pub const fn id(self) -> FailureExternalTerminalJoinIdV2 {
-        self.id
-    }
-
-    /// Immutable failure-policy binding.
-    pub const fn binding_id(self) -> FailurePolicyBindingId {
-        self.binding_id
-    }
-
-    /// Exact full-width occurrence.
-    pub const fn market_instance_id(self) -> MarketInstanceV2Id {
-        self.market_instance_id
-    }
-
-    /// Exact terminal generation.
-    pub const fn generation(self) -> u64 {
-        self.generation
-    }
-
-    /// Separately authenticated retirement root.
-    pub const fn retirement_root_id(self) -> [u8; 32] {
-        self.retirement_root_id
-    }
-
-    /// Permanent replay tombstone preserved after root closure.
-    pub const fn replay_tombstone_id(self) -> [u8; 32] {
-        self.replay_tombstone_id
-    }
-
-    /// Final Source release/lineage receipt.
-    pub const fn source_release_receipt_id(self) -> [u8; 32] {
-        self.source_release_receipt_id
-    }
 }
 
 impl FailureRecoveryTerminalReceiptV2 {
@@ -1426,6 +1392,11 @@ impl FailureRecoveryTerminalReceiptV2 {
     /// Exact semantic transition nonce at terminal classification.
     pub const fn transition_nonce(self) -> u64 {
         self.transition_nonce
+    }
+
+    /// Commitment to the complete canonical resolved or dormant runtime.
+    pub const fn runtime_state_commitment(self) -> FailureRuntimeStateCommitmentV2 {
+        self.runtime_state_commitment
     }
 
     /// Recovery-only terminal classification.

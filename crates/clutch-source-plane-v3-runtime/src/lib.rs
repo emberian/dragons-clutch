@@ -42,21 +42,22 @@ pub use auth::{
     SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_RELEASE_MANIFEST_BYTES,
 };
 pub use funding::{
-    authenticate_source_work_receipt_account, plan_source_account_close,
-    plan_source_account_creation, AccountCloseFundingV1, AccountCreationFundingV1,
-    AuthenticatedSourceWorkReceiptV1, RentExemptionQuoteV1, SourceAccountFundingLedgerV1,
-    SourceReceiptDispositionV1, SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
-    SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccountV1,
-    SourceWorkScheduleBindingV1, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
-    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
-    SOURCE_WORK_SCHEDULE_BYTES,
+    authenticate_source_work_receipt_account, plan_runtime_account_close_from_header,
+    plan_source_account_close, plan_source_account_creation, AccountCloseFundingV1,
+    AccountCreationFundingV1, AuthenticatedSourceWorkReceiptV1, RentExemptionQuoteV1,
+    SourceAccountFundingLedgerV1, SourceReceiptDispositionV1, SourceTerminalAuthorizationV1,
+    SourceTerminalOutcomeV1, SourceWorkAuthorizationV1, SourceWorkKindV1,
+    SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1,
+    SOURCE_WORK_RECEIPT_ACCOUNT_BYTES, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
+    SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, SOURCE_WORK_SCHEDULE_BYTES,
 };
 pub use ingest::{
     authenticate_open_raw_page_account, authenticate_source_generation_request,
     authenticate_source_head_account, ingest_boundary_batch, initialize_source_head,
-    AuthenticatedOpenRawPageV1, AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
-    BoundaryBatchV1, IngestBatchOutputV1, SealBatchModeV1, SourceGenerationRequestV1,
-    MAX_BOUNDARIES_PER_INGEST, SOURCE_GENERATION_REQUEST_BYTES,
+    seal_authenticated_open_page, AuthenticatedOpenRawPageV1, AuthenticatedSourceGenerationV1,
+    AuthenticatedSourceHeadV1, BoundaryBatchV1, IngestBatchOutputV1, SealBatchModeV1,
+    SealOpenPageOutputV1, SourceGenerationRequestV1, MAX_BOUNDARIES_PER_INGEST,
+    SOURCE_GENERATION_REQUEST_BYTES,
 };
 pub use lineage::{
     advance_lineage_state, authenticate_reopen_lineage_account, authorize_reopen,
@@ -75,7 +76,8 @@ pub use window::{
     AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1, EvaluationAuthorityV1,
     EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
     OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
-    SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD, SOURCE_OCCURRENCE_RECORD_BYTES,
+    SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD,
+    SOURCE_OCCURRENCE_RECORD_BYTES,
 };
 
 use clutch_source_plane_v3::Error as CoreError;
