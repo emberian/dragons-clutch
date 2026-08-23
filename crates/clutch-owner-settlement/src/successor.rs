@@ -277,6 +277,284 @@ impl OwnerSettlementExpectationV2 {
     }
 }
 
+/// Exact pre-fee owner expectation derived only from selected settlement rows.
+///
+/// Fields are private so fee code cannot invent side presence, consideration,
+/// order masks, or Reservation funding. The full materializer constructs a
+/// complete basis book from verified orders; the fee owner consumes one basis
+/// and returns [`SelectedOwnerFeeV1`], after which [`Self::with_selected_fee`]
+/// mints the final persisted expectation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementExpectationBasisV2 {
+    market: [u8; 32],
+    epoch: [u8; 32],
+    candidate: [u8; 32],
+    owner: [u8; 32],
+    owner_order_set_digest: [u8; 32],
+    price_scale: Amount,
+    expected_buy_order_mask: u64,
+    expected_sell_order_mask: u64,
+    expected_slice_count: u16,
+    expected_buy_price_units: PresentConsiderationV2,
+    expected_sell_price_units: PresentConsiderationV2,
+    reserved_cash_atoms: Amount,
+}
+
+impl OwnerSettlementExpectationBasisV2 {
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    pub const fn epoch(self) -> [u8; 32] {
+        self.epoch
+    }
+
+    pub const fn candidate(self) -> [u8; 32] {
+        self.candidate
+    }
+
+    pub const fn owner(self) -> [u8; 32] {
+        self.owner
+    }
+
+    pub const fn owner_order_set_digest(self) -> [u8; 32] {
+        self.owner_order_set_digest
+    }
+
+    pub const fn price_scale(self) -> Amount {
+        self.price_scale
+    }
+
+    pub const fn expected_buy_order_mask(self) -> u64 {
+        self.expected_buy_order_mask
+    }
+
+    pub const fn expected_sell_order_mask(self) -> u64 {
+        self.expected_sell_order_mask
+    }
+
+    pub const fn expected_slice_count(self) -> u16 {
+        self.expected_slice_count
+    }
+
+    pub const fn expected_buy_price_units(self) -> PresentConsiderationV2 {
+        self.expected_buy_price_units
+    }
+
+    pub const fn expected_sell_price_units(self) -> PresentConsiderationV2 {
+        self.expected_sell_price_units
+    }
+
+    pub const fn reserved_cash_atoms(self) -> Amount {
+        self.reserved_cash_atoms
+    }
+
+    /// Bind the fee owner's exact row and mint the final persisted expectation.
+    pub fn with_selected_fee(
+        self,
+        selected_fee: SelectedOwnerFeeV1,
+    ) -> Result<OwnerSettlementExpectationV2> {
+        if selected_fee.owner != self.owner {
+            return Err(Error::InvalidIdentity);
+        }
+        let expectation = OwnerSettlementExpectationV2 {
+            market: self.market,
+            epoch: self.epoch,
+            candidate: self.candidate,
+            owner: self.owner,
+            owner_order_set_digest: self.owner_order_set_digest,
+            price_scale: self.price_scale,
+            expected_buy_order_mask: self.expected_buy_order_mask,
+            expected_sell_order_mask: self.expected_sell_order_mask,
+            expected_slice_count: self.expected_slice_count,
+            expected_buy_price_units: self.expected_buy_price_units,
+            expected_sell_price_units: self.expected_sell_price_units,
+            selected_fee_atoms: selected_fee.fee_atoms,
+            reserved_cash_atoms: self.reserved_cash_atoms,
+        };
+        expectation.validate()?;
+        Ok(expectation)
+    }
+}
+
+/// Complete sorted pre-fee owner basis book for one selected candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementExpectationBasisBookV2 {
+    rows: [Option<OwnerSettlementExpectationBasisV2>; MAX_ORDERS],
+    owner_count: u16,
+}
+
+impl OwnerSettlementExpectationBasisBookV2 {
+    pub const fn owner_count(&self) -> u16 {
+        self.owner_count
+    }
+
+    pub fn row(&self, ordinal: u16) -> Option<OwnerSettlementExpectationBasisV2> {
+        if ordinal < self.owner_count {
+            self.rows[usize::from(ordinal)]
+        } else {
+            None
+        }
+    }
+
+    pub fn row_for_owner(&self, owner: [u8; 32]) -> Option<OwnerSettlementExpectationBasisV2> {
+        let mut index = 0usize;
+        while index < usize::from(self.owner_count) {
+            if let Some(row) = self.rows[index] {
+                if row.owner == owner {
+                    return Some(row);
+                }
+            }
+            index += 1;
+        }
+        None
+    }
+}
+
+/// Derive the exhaustive pre-fee owner basis from exact selected order rows.
+#[allow(clippy::too_many_arguments)]
+pub fn build_owner_settlement_expectation_basis_book_v2(
+    market: [u8; 32],
+    epoch: [u8; 32],
+    candidate: [u8; 32],
+    owner_order_set_digest: [u8; 32],
+    price_scale: Amount,
+    orders: &[VerifiedSettlementOrderV2; MAX_ORDERS],
+    order_len: u8,
+) -> Result<OwnerSettlementExpectationBasisBookV2> {
+    if market == [0; 32]
+        || epoch == [0; 32]
+        || candidate == [0; 32]
+        || owner_order_set_digest == [0; 32]
+        || price_scale == 0
+        || order_len == 0
+        || usize::from(order_len) > MAX_ORDERS
+    {
+        return Err(Error::InvalidExpectation);
+    }
+    let mut rows: [Option<OwnerSettlementExpectationBasisV2>; MAX_ORDERS] =
+        [None; MAX_ORDERS];
+    let mut owner_count = 0usize;
+    let mut seen_order_mask = 0u64;
+    let mut order_at = 0usize;
+    while order_at < usize::from(order_len) {
+        let order = orders[order_at];
+        order.consideration_price_units.validate()?;
+        if order.owner == [0; 32]
+            || !order.consideration_price_units.present
+            || order.slice_count == 0
+            || usize::from(order.order_index) >= MAX_ORDERS
+            || (order.side == SettlementSideV1::Sell && order.reserved_cash_atoms != 0)
+        {
+            return Err(Error::InvalidOrder);
+        }
+        let bit = order_bit(order.order_index)?;
+        if seen_order_mask & bit != 0 {
+            return Err(Error::InvalidOrder);
+        }
+        seen_order_mask |= bit;
+        let mut slot = 0usize;
+        while slot < owner_count {
+            if rows[slot].map(|row| row.owner) == Some(order.owner) {
+                break;
+            }
+            slot += 1;
+        }
+        if slot == owner_count {
+            if owner_count >= MAX_ORDERS {
+                return Err(Error::ArithmeticOverflow);
+            }
+            rows[slot] = Some(OwnerSettlementExpectationBasisV2 {
+                market,
+                epoch,
+                candidate,
+                owner: order.owner,
+                owner_order_set_digest,
+                price_scale,
+                expected_buy_order_mask: 0,
+                expected_sell_order_mask: 0,
+                expected_slice_count: 0,
+                expected_buy_price_units: PresentConsiderationV2::ABSENT,
+                expected_sell_price_units: PresentConsiderationV2::ABSENT,
+                reserved_cash_atoms: 0,
+            });
+            owner_count += 1;
+        }
+        let mut row = rows[slot].ok_or(Error::InvariantViolation)?;
+        row.expected_slice_count = row
+            .expected_slice_count
+            .checked_add(order.slice_count)
+            .ok_or(Error::ArithmeticOverflow)?;
+        match order.side {
+            SettlementSideV1::Buy => {
+                row.expected_buy_order_mask |= bit;
+                row.expected_buy_price_units.present = true;
+                row.expected_buy_price_units.value = row
+                    .expected_buy_price_units
+                    .value
+                    .checked_add(order.consideration_price_units.value)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                row.reserved_cash_atoms = row
+                    .reserved_cash_atoms
+                    .checked_add(order.reserved_cash_atoms)
+                    .ok_or(Error::ArithmeticOverflow)?;
+            }
+            SettlementSideV1::Sell => {
+                row.expected_sell_order_mask |= bit;
+                row.expected_sell_price_units.present = true;
+                row.expected_sell_price_units.value = row
+                    .expected_sell_price_units
+                    .value
+                    .checked_add(order.consideration_price_units.value)
+                    .ok_or(Error::ArithmeticOverflow)?;
+            }
+        }
+        rows[slot] = Some(row);
+        order_at += 1;
+    }
+    let mut at = 1usize;
+    while at < owner_count {
+        let value = rows[at].ok_or(Error::InvariantViolation)?;
+        let mut insert = at;
+        while insert > 0
+            && value.owner
+                < rows[insert - 1]
+                    .ok_or(Error::InvariantViolation)?
+                    .owner
+        {
+            rows[insert] = rows[insert - 1];
+            insert -= 1;
+        }
+        rows[insert] = Some(value);
+        at += 1;
+    }
+    let mut index = 0usize;
+    while index < owner_count {
+        let basis = rows[index].ok_or(Error::InvariantViolation)?;
+        OwnerSettlementExpectationV2 {
+            market: basis.market,
+            epoch: basis.epoch,
+            candidate: basis.candidate,
+            owner: basis.owner,
+            owner_order_set_digest: basis.owner_order_set_digest,
+            price_scale: basis.price_scale,
+            expected_buy_order_mask: basis.expected_buy_order_mask,
+            expected_sell_order_mask: basis.expected_sell_order_mask,
+            expected_slice_count: basis.expected_slice_count,
+            expected_buy_price_units: basis.expected_buy_price_units,
+            expected_sell_price_units: basis.expected_sell_price_units,
+            selected_fee_atoms: 0,
+            reserved_cash_atoms: basis.reserved_cash_atoms,
+        }
+        .validate()?;
+        index += 1;
+    }
+    Ok(OwnerSettlementExpectationBasisBookV2 {
+        rows,
+        owner_count: u16::try_from(owner_count).map_err(|_| Error::ArithmeticOverflow)?,
+    })
+}
+
 /// One exact authenticated receipt end for the V2 accumulator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
@@ -1846,3 +2124,86 @@ fn read_u128(input: &[u8], cursor: &mut usize) -> Result<u128> {
 
 const _: () = assert!(OWNER_SETTLEMENT_BODY_V2_BYTES == 288);
 const _: () = assert!(SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V2_BYTES == 344);
+
+#[cfg(test)]
+mod expectation_basis_tests {
+    use super::*;
+
+    #[test]
+    fn zero_price_buy_basis_binds_fee_only_after_selection() {
+        let mut orders = [VerifiedSettlementOrderV2 {
+            owner: [0; 32],
+            order_index: 0,
+            side: SettlementSideV1::Buy,
+            consideration_price_units: PresentConsiderationV2::ABSENT,
+            slice_count: 0,
+            reserved_cash_atoms: 0,
+        }; MAX_ORDERS];
+        orders[0] = VerifiedSettlementOrderV2 {
+            owner: [6; 32],
+            order_index: 4,
+            side: SettlementSideV1::Buy,
+            consideration_price_units: PresentConsiderationV2::new(0),
+            slice_count: 2,
+            reserved_cash_atoms: 5,
+        };
+        let book = build_owner_settlement_expectation_basis_book_v2(
+            [1; 32], [2; 32], [3; 32], [4; 32], 100, &orders, 1,
+        )
+        .unwrap();
+        let basis = book.row(0).unwrap();
+        assert_eq!(basis.owner(), [6; 32]);
+        assert_eq!(basis.expected_buy_price_units(), PresentConsiderationV2::new(0));
+        assert_eq!(basis.reserved_cash_atoms(), 5);
+        assert_eq!(
+            basis
+                .with_selected_fee(SelectedOwnerFeeV1 {
+                    owner: [6; 32],
+                    fee_atoms: 5,
+                })
+                .unwrap()
+                .selected_fee_atoms,
+            5
+        );
+        assert_eq!(
+            basis.with_selected_fee(SelectedOwnerFeeV1 {
+                owner: [6; 32],
+                fee_atoms: 6,
+            }),
+            Err(Error::InsufficientCash)
+        );
+    }
+
+    #[test]
+    fn selected_fee_cannot_be_rebound_to_another_owner() {
+        let mut orders = [VerifiedSettlementOrderV2 {
+            owner: [0; 32],
+            order_index: 0,
+            side: SettlementSideV1::Sell,
+            consideration_price_units: PresentConsiderationV2::ABSENT,
+            slice_count: 0,
+            reserved_cash_atoms: 0,
+        }; MAX_ORDERS];
+        orders[0] = VerifiedSettlementOrderV2 {
+            owner: [6; 32],
+            order_index: 4,
+            side: SettlementSideV1::Sell,
+            consideration_price_units: PresentConsiderationV2::new(0),
+            slice_count: 1,
+            reserved_cash_atoms: 0,
+        };
+        let basis = build_owner_settlement_expectation_basis_book_v2(
+            [1; 32], [2; 32], [3; 32], [4; 32], 100, &orders, 1,
+        )
+        .unwrap()
+        .row(0)
+        .unwrap();
+        assert_eq!(
+            basis.with_selected_fee(SelectedOwnerFeeV1 {
+                owner: [7; 32],
+                fee_atoms: 0,
+            }),
+            Err(Error::InvalidIdentity)
+        );
+    }
+}
