@@ -251,8 +251,8 @@ pub struct FailureIntervalConsensusReplayAccountV1 {
     pub interval_binding_id: [u8; HASH_BYTES],
     /// Immutable parent Failure policy binding.
     pub failure_policy_binding_id: [u8; HASH_BYTES],
-    /// Full-width V2 economic occurrence.
-    pub market_instance_v2_id: [u8; HASH_BYTES],
+    /// Exact Source-owned successful interval handoff.
+    pub source_success_handoff_id: [u8; HASH_BYTES],
     /// Closed mutable `0xab/v1` account, retained as history.
     pub work_account: [u8; HASH_BYTES],
     /// Initial Product work identity.
@@ -292,7 +292,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
         for id in [
             self.interval_binding_id,
             self.failure_policy_binding_id,
-            self.market_instance_v2_id,
+            self.source_success_handoff_id,
             self.work_account,
             self.initial_work_id,
             self.current_work_id,
@@ -329,7 +329,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
         let preserved_lamports = take_u64(input, &mut cursor);
         let interval_binding_id = take_id(input, &mut cursor);
         let failure_policy_binding_id = take_id(input, &mut cursor);
-        let market_instance_v2_id = take_id(input, &mut cursor);
+        let source_success_handoff_id = take_id(input, &mut cursor);
         let work_account = take_id(input, &mut cursor);
         let initial_work_id = take_id(input, &mut cursor);
         let current_work_id = take_id(input, &mut cursor);
@@ -350,7 +350,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
             preserved_lamports,
             interval_binding_id,
             failure_policy_binding_id,
-            market_instance_v2_id,
+            source_success_handoff_id,
             work_account,
             initial_work_id,
             current_work_id,
@@ -369,7 +369,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
         for id in [
             self.interval_binding_id,
             self.failure_policy_binding_id,
-            self.market_instance_v2_id,
+            self.source_success_handoff_id,
             self.work_account,
             self.initial_work_id,
             self.current_work_id,

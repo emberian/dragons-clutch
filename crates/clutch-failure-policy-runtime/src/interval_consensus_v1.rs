@@ -230,6 +230,87 @@ pub struct FailureIntervalConsensusStateV1 {
     close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1,
 }
 
+/// Untrusted complete semantic projection decoded from `0xab` plus `0xac`.
+///
+/// Public fields make account adaptation possible; this value is never
+/// authority. [`restore_failure_interval_consensus_state_v1`] requires a
+/// private adapter receipt that authenticated both account owner/PDA/bodies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureIntervalConsensusPersistedFactsV1 {
+    /// Current lifecycle phase.
+    pub phase: FailureIntervalConsensusPhaseV1,
+    /// Immutable interval lifecycle identity.
+    pub binding_id: FailureIntervalConsensusBindingIdV1,
+    /// Parent Failure policy binding.
+    pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Full-width V2 economic occurrence.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Exact Failure/liveness generation.
+    pub generation: u64,
+    /// Exact Source-owned successful interval handoff.
+    pub source_success_handoff_id: SourceContentId,
+    /// Immutable successful Source result owning the interval.
+    pub source_interval_id: SourceContentId,
+    /// Product-selected bounded interval profile.
+    pub interval_profile_id: QuantizedIntervalConsensusProfileV1Id,
+    /// Exact present-funding admission receipt.
+    pub funding_receipt_id: FailureIntervalConsensusFundingReceiptIdV1,
+    /// Canonical mutable work account.
+    pub work_account: FailureIntervalConsensusAccountIdV1,
+    /// Canonical permanent replay account.
+    pub replay_account: FailureIntervalConsensusAccountIdV1,
+    /// Immutable work-rent refund recipient.
+    pub rent_payer: FailureIntervalConsensusAccountIdV1,
+    /// Immutable donation sink.
+    pub neutral_sink: FailureIntervalConsensusAccountIdV1,
+    /// Exact refundable work rent principal.
+    pub work_rent_principal_lamports: u64,
+    /// Exact permanent replay rent principal.
+    pub replay_rent_principal_lamports: u64,
+    /// Last authenticated permanent replay balance.
+    pub replay_preserved_lamports: u64,
+    /// Canonical initial Product work identity.
+    pub initial_work_id: QuantizedIntervalConsensusWorkV1Id,
+    /// Canonical current Product work identity.
+    pub current_work_id: QuantizedIntervalConsensusWorkV1Id,
+    /// Current Product rolling transcript.
+    pub current_transcript: SourceContentId,
+    /// Exact coordinates already checked.
+    pub checked_coordinates: u64,
+    /// Exact inclusive interval coordinate count.
+    pub total_coordinates: u64,
+    /// Cumulative accepted semantic recovery progress.
+    pub accepted_recovery_progress_total: u64,
+    /// Monotone bounded-transition nonce.
+    pub transition_nonce: u64,
+    /// Last bounded transition identity, zero before first advance.
+    pub last_transition_receipt_id: FailureIntervalConsensusTransitionReceiptIdV1,
+    /// Last exact liveness work receipt, zero before first advance.
+    pub last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2,
+    /// Exhaustive Product certificate, zero before resolution.
+    pub certificate_id: QuantizedIntervalConsensusCertificateV1Id,
+    /// Failure resolution receipt, zero before resolution.
+    pub resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1,
+    /// Exact work close authorization, zero before close.
+    pub close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1,
+}
+
+/// Adapter-owned authority for restoring Failure interval state.
+///
+/// Implementors must be private types minted only after exact owner, PDA,
+/// complete `0xab`/`0xac` body, generation, and cross-account authentication.
+/// The default refuses so an empty implementation cannot restore state.
+pub trait AuthenticatedFailureIntervalConsensusStateV1 {
+    /// Authenticate the exact decoded facts and derived replay identity.
+    fn authenticate_interval_consensus_state(
+        &self,
+        _facts: FailureIntervalConsensusPersistedFactsV1,
+        _replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
 impl FailureIntervalConsensusStateV1 {
     /// Current lifecycle phase.
     pub const fn phase(&self) -> FailureIntervalConsensusPhaseV1 {
@@ -264,6 +345,40 @@ impl FailureIntervalConsensusStateV1 {
     /// Exact permanent replay account.
     pub const fn replay_account(&self) -> FailureIntervalConsensusAccountIdV1 {
         self.replay_account
+    }
+
+    /// Project complete semantic facts for exact account encoding.
+    pub const fn persisted_facts(&self) -> FailureIntervalConsensusPersistedFactsV1 {
+        FailureIntervalConsensusPersistedFactsV1 {
+            phase: self.phase,
+            binding_id: self.binding_id,
+            failure_policy_binding_id: self.failure_policy_binding_id,
+            market_instance_id: self.market_instance_id,
+            generation: self.generation,
+            source_success_handoff_id: self.source_success_handoff_id,
+            source_interval_id: self.source_interval_id,
+            interval_profile_id: self.interval_profile_id,
+            funding_receipt_id: self.funding_receipt_id,
+            work_account: self.work_account,
+            replay_account: self.replay_account,
+            rent_payer: self.rent_payer,
+            neutral_sink: self.neutral_sink,
+            work_rent_principal_lamports: self.work_rent_principal_lamports,
+            replay_rent_principal_lamports: self.replay_rent_principal_lamports,
+            replay_preserved_lamports: self.replay_preserved_lamports,
+            initial_work_id: self.initial_work_id,
+            current_work_id: self.current_work_id,
+            current_transcript: self.current_transcript,
+            checked_coordinates: self.checked_coordinates,
+            total_coordinates: self.total_coordinates,
+            accepted_recovery_progress_total: self.accepted_recovery_progress_total,
+            transition_nonce: self.transition_nonce,
+            last_transition_receipt_id: self.last_transition_receipt_id,
+            last_liveness_receipt_id: self.last_liveness_receipt_id,
+            certificate_id: self.certificate_id,
+            resolution_receipt_id: self.resolution_receipt_id,
+            close_authorization_id: self.close_authorization_id,
+        }
     }
 
     /// Commit one fresh plan and reject stale siblings.
@@ -337,6 +452,71 @@ impl FailureIntervalConsensusStateV1 {
         }
         Ok(())
     }
+}
+
+/// Restore private Failure state only through an authenticated `0xab`/`0xac`
+/// account join. Raw decoded projections cannot authorize a transition.
+pub fn restore_failure_interval_consensus_state_v1<
+    A: AuthenticatedFailureIntervalConsensusStateV1 + ?Sized,
+>(
+    authority: &A,
+    facts: FailureIntervalConsensusPersistedFactsV1,
+) -> Result<(
+    FailureIntervalConsensusStateV1,
+    FailureIntervalConsensusReplayV1,
+)> {
+    let state = state_from_persisted_facts(facts)?;
+    let replay = replay_from_state(state);
+    authority.authenticate_interval_consensus_state(facts, replay.id())?;
+    Ok((state, replay))
+}
+
+/// Derive the canonical replay identity from untrusted decoded facts without
+/// treating that identity as account authority.
+pub fn project_failure_interval_consensus_replay_id_v1(
+    facts: FailureIntervalConsensusPersistedFactsV1,
+) -> Result<FailureIntervalConsensusReplayReceiptIdV1> {
+    Ok(replay_from_state(state_from_persisted_facts(facts)?).id())
+}
+
+fn state_from_persisted_facts(
+    facts: FailureIntervalConsensusPersistedFactsV1,
+) -> Result<FailureIntervalConsensusStateV1> {
+    let state = FailureIntervalConsensusStateV1 {
+        phase: facts.phase,
+        binding_id: facts.binding_id,
+        failure_policy_binding_id: facts.failure_policy_binding_id,
+        market_instance_id: facts.market_instance_id,
+        generation: facts.generation,
+        source_success_handoff_id: facts.source_success_handoff_id,
+        source_interval_id: facts.source_interval_id,
+        interval_profile_id: facts.interval_profile_id,
+        funding_receipt_id: facts.funding_receipt_id,
+        work_account: facts.work_account,
+        replay_account: facts.replay_account,
+        rent_payer: facts.rent_payer,
+        neutral_sink: facts.neutral_sink,
+        work_rent_principal_lamports: facts.work_rent_principal_lamports,
+        replay_rent_principal_lamports: facts.replay_rent_principal_lamports,
+        replay_preserved_lamports: facts.replay_preserved_lamports,
+        initial_work_id: facts.initial_work_id,
+        current_work_id: facts.current_work_id,
+        current_transcript: facts.current_transcript,
+        checked_coordinates: facts.checked_coordinates,
+        total_coordinates: facts.total_coordinates,
+        accepted_recovery_progress_total: facts.accepted_recovery_progress_total,
+        transition_nonce: facts.transition_nonce,
+        last_transition_receipt_id: facts.last_transition_receipt_id,
+        last_liveness_receipt_id: facts.last_liveness_receipt_id,
+        certificate_id: facts.certificate_id,
+        resolution_receipt_id: facts.resolution_receipt_id,
+        close_authorization_id: facts.close_authorization_id,
+    };
+    state.check()?;
+    if state.persisted_facts() != facts {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(state)
 }
 
 /// Permanent replay-account semantic postimage.
@@ -526,10 +706,13 @@ pub fn plan_advance_failure_interval_consensus_v1(
         .checked_add(1)
         .ok_or(Error::BindingMismatch)?;
     let mut transition_hasher = Sha256::new();
+    let prior_replay_receipt_id = replay_from_state(*state).id();
     transition_hasher.update(TRANSITION_DOMAIN);
     transition_hasher.update(state.binding_id.bytes());
     transition_hasher.update(state.transition_nonce.to_le_bytes());
     transition_hasher.update(next_nonce.to_le_bytes());
+    transition_hasher.update(state.last_transition_receipt_id.bytes());
+    transition_hasher.update(prior_replay_receipt_id.bytes());
     transition_hasher.update(state.current_work_id.bytes());
     transition_hasher.update(next_work_id.bytes());
     transition_hasher.update(state.current_transcript.bytes());
@@ -869,6 +1052,11 @@ impl FailureIntervalConsensusStatePlanV1 {
     pub const fn resulting_phase(self) -> FailureIntervalConsensusPhaseV1 {
         self.after.phase
     }
+
+    /// Exact semantic poststate for account encoding in the same atomic batch.
+    pub const fn resulting_state(self) -> FailureIntervalConsensusStateV1 {
+        self.after
+    }
 }
 
 fn validate_funding_facts(
@@ -984,6 +1172,9 @@ fn replay_from_state(state: FailureIntervalConsensusStateV1) -> FailureIntervalC
     hasher.update(state.current_work_id.bytes());
     hasher.update(state.current_transcript.bytes());
     hasher.update(state.transition_nonce.to_le_bytes());
+    hasher.update(state.last_transition_receipt_id.bytes());
+    hasher.update(state.last_liveness_receipt_id.bytes());
+    hasher.update(replay_from_state(*state).id().bytes());
     hasher.update(state.last_transition_receipt_id.bytes());
     hasher.update(state.last_liveness_receipt_id.bytes());
     hasher.update(state.certificate_id.bytes());

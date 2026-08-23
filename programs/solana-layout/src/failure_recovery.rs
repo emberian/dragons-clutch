@@ -563,6 +563,7 @@ pub enum RecoveryAccountRoleV1 {
     NeutralSink,
     RetirementRoot,
     ReplayTombstone,
+    ProductOccurrenceRoot,
     IntervalConsensusWork,
     IntervalConsensusReplay,
     IntervalConsensusProfileArtifact,
@@ -748,9 +749,7 @@ const INTERVAL_PRODUCT_METAS_V1: &[RecoveryAccountMetaV1] = &[
 /// Exact ordered contract for creating ab work and permanent ac replay.
 pub const BEGIN_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
-    meta(RecoveryAccountRoleV1::MarketCoreLamportVault, true, false),
-    meta(RecoveryAccountRoleV1::SeriesFunding, false, false),
-    meta(RecoveryAccountRoleV1::FundingQuoteArtifact, false, false),
+    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, false, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
@@ -776,6 +775,7 @@ pub const BEGIN_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::StatisticKey, false, false),
     meta(RecoveryAccountRoleV1::SourceResult, false, false),
     meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
+    meta(RecoveryAccountRoleV1::RootRentPayer, false, false),
     meta(RecoveryAccountRoleV1::NeutralSink, false, false),
     meta(RecoveryAccountRoleV1::RentSysvar, false, false),
     meta(RecoveryAccountRoleV1::SystemProgram, false, false),
@@ -846,6 +846,7 @@ pub const RESOLVE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
 /// Exact ordered contract for closing only deletable ab work.
 pub const CLOSE_INTERVAL_CONSENSUS_WORK_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, false, false),
+    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
     meta(RecoveryAccountRoleV1::RootRentPayer, true, false),
