@@ -120,6 +120,8 @@ const SERIES_COLLATERAL_SOURCE_PRESTATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-source-prestate/v2\0";
 const SERIES_COLLATERAL_SOURCE_POSTSTATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-source-poststate/v2\0";
+const SERIES_LAMPORT_ACTIVATION_AUTHORITY_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-lamport-activation-authority/v2\0";
 
 /// Decode one exact Series action payload and enter its local account handler.
 ///
@@ -1412,6 +1414,136 @@ impl AuthenticatedSeriesFundingAuthorityV2 for AuthenticatedSeriesDonationAuthor
             return Err(clutch_product_series::Error::UnauthenticatedAuthority);
         }
         Ok(())
+    }
+
+    fn authenticate_close(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+}
+
+/// Private activation-only authority over the six exact lamport custody PDAs.
+///
+/// Principal is always a full payer debit derived from QuoteV4 times the
+/// finite instance count. Each vault's preexisting balance is retained as the
+/// matching unowned donation and never discounts that debit. All later
+/// FundingV2 authority methods refuse.
+#[derive(Debug)]
+struct AuthenticatedSeriesPhysicalActivationAuthorityV2 {
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: SeriesFundingTermsV2Id,
+    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+    funding_quote_id: clutch_product_series::SeriesFundingQuoteV4Id,
+    attachment_plan_id: clutch_product_series::SeriesAttachmentPlanV4Id,
+    principal: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    donations: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    lamport_vaults: [Pubkey; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    vault_lamports_before: [u64; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    vault_lamports_after: [u64; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    payer: Pubkey,
+    payer_lamports_before: u64,
+    payer_lamports_after: u64,
+    receipt_id: ContentId,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV2
+    for AuthenticatedSeriesPhysicalActivationAuthorityV2
+{
+    fn authenticate_activation(
+        &self,
+        series: &SeriesPlanV5,
+        funding_terms_id: SeriesFundingTermsV2Id,
+        compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+        quote: &SeriesFundingQuoteV4,
+        attachment: &SeriesAttachmentPlanV4,
+        principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    ) -> clutch_product_series::Result<()> {
+        if self.receipt_id.is_zero()
+            || series.id()? != self.series_plan_id
+            || funding_terms_id != self.funding_terms_id
+            || compiler_bundle_id != self.compiler_bundle_id
+            || quote.id()? != self.funding_quote_id
+            || attachment.id()? != self.attachment_plan_id
+            || *principal != self.principal
+            || *donations != self.donations
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        let mut total_principal_lamports = 0u64;
+        let mut index = 0usize;
+        while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+            if self.lamport_vaults[index] == Pubkey::new_from_array([0u8; 32])
+                || self.donations[index].lamports != self.vault_lamports_before[index]
+                || self.donations[index].collateral_atoms != 0
+                || self.vault_lamports_after[index]
+                    != self.vault_lamports_before[index]
+                        .checked_add(self.principal[index].lamports)
+                        .ok_or(clutch_product_series::Error::UnauthenticatedAuthority)?
+            {
+                return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+            }
+            total_principal_lamports = total_principal_lamports
+                .checked_add(self.principal[index].lamports)
+                .ok_or(clutch_product_series::Error::UnauthenticatedAuthority)?;
+            index += 1;
+        }
+        if self.payer == Pubkey::new_from_array([0u8; 32])
+            || self.payer_lamports_after
+                != self
+                    .payer_lamports_before
+                    .checked_sub(total_principal_lamports)
+                    .ok_or(clutch_product_series::Error::UnauthenticatedAuthority)?
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn current_bucket(&self, _series: &SeriesPlanV5) -> clutch_product_series::Result<u64> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_reservation(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _ordinal: u32,
+        _market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        _source_occurrence_id: SourceOccurrenceV1Id,
+        _series_market_link_id: ContentId,
+        _disposition: clutch_product_series::SeriesMarketDispositionV1,
+        _debits: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _reservation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_completion(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _completion_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_abort(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _abort_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_donation(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _component: SeriesFundingComponentV2,
+        _amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
     }
 
     fn authenticate_close(
@@ -4791,24 +4923,22 @@ fn activate_series_funding_with_collateral_v2<'a>(
 
 /// Complete current physical activation boundary for Product FundingV2.
 ///
-/// A caller supplies an independently authenticated authority for the six
-/// lamport compartments. This function then authenticates the live collateral
-/// deployment, creates and funds the five segregated vaults, consumes the
-/// resulting private postwrite into the unconstructible rent token, creates
-/// FundingV2, and consumes RegistryV2 replay in one instruction. The private
-/// collateral receipt cannot be returned, copied, or downgraded between these
-/// steps. Dispatch remains capability-disabled until Product supplies the
-/// six-compartment authority and exact account contract.
+/// The six lamport-vault prebalances are authenticated as donations and the
+/// exact QuoteV4-times-instance principal is fully debited from the Terms-bound
+/// payer. The function then authenticates the live collateral deployment,
+/// creates and funds the five segregated vaults, consumes the resulting
+/// private postwrite into the unconstructible rent token, creates FundingV2,
+/// and consumes RegistryV2 replay in one instruction. Neither physical
+/// authority can be returned, copied, or downgraded between these steps.
+/// Dispatch remains capability-disabled until its full account contract is
+/// frozen.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn deploy_and_activate_series_funding_v2<
-    'a,
-    A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized,
->(
+pub(crate) fn deploy_and_activate_series_funding_v2<'a>(
     program_id: &Pubkey,
-    authority: &A,
     registry_account: &AccountInfo<'a>,
     funding_account: &AccountInfo<'a>,
     payer: &AccountInfo<'a>,
+    lamport_vaults: &[AccountInfo<'a>],
     payer_token_account: &AccountInfo<'a>,
     payer_token_authority: &AccountInfo<'a>,
     neutral_lamport_sink: &AccountInfo<'a>,
@@ -4825,8 +4955,6 @@ pub(crate) fn deploy_and_activate_series_funding_v2<
     registry: AuthenticatedSeriesRegistryAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
-    principal: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
-    donations: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
 ) -> Outcome<(
     AuthenticatedSeriesRegistryAccountV2,
     AuthenticatedSeriesFundingAccountV2,
@@ -4841,15 +4969,64 @@ pub(crate) fn deploy_and_activate_series_funding_v2<
     )?;
     require(live_registry == registry, ClutchError::MismatchedState)?;
     require(!registry.activation_consumed(), ClutchError::Replay)?;
+    expect_pda(
+        funding_account.key,
+        seeds::series_funding_pda(program_id, &registry.value().series_plan_id.bytes()),
+        None,
+    )?;
+    require_creatable(funding_account)?;
+    require(
+        lamport_vaults.len() == SERIES_FUNDING_COMPONENT_COUNT_V2
+            && collateral_vaults.len() == SERIES_COLLATERAL_VAULT_COUNT_V2,
+        ClutchError::AccountCount,
+    )?;
+    let mut lamport_index = 0usize;
+    while lamport_index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        let mut collateral_index = 0usize;
+        while collateral_index < SERIES_COLLATERAL_VAULT_COUNT_V2 {
+            require(
+                lamport_vaults[lamport_index].key
+                    != collateral_vaults[collateral_index].key,
+                ClutchError::AccountAlias,
+            )?;
+            collateral_index += 1;
+        }
+        require(
+            lamport_vaults[lamport_index].key != registry_account.key
+                && lamport_vaults[lamport_index].key != funding_account.key
+                && lamport_vaults[lamport_index].key != neutral_lamport_sink.key
+                && lamport_vaults[lamport_index].key != payer_token_account.key
+                && lamport_vaults[lamport_index].key != payer_token_authority.key
+                && lamport_vaults[lamport_index].key != collateral_authority.key
+                && lamport_vaults[lamport_index].key != mint.key
+                && lamport_vaults[lamport_index].key != token_program.key
+                && lamport_vaults[lamport_index].key != token_programdata.key
+                && lamport_vaults[lamport_index].key != realm_account.key
+                && lamport_vaults[lamport_index].key != profile_account.key
+                && lamport_vaults[lamport_index].key != policy_account.key
+                && lamport_vaults[lamport_index].key != rent_sysvar.key
+                && lamport_vaults[lamport_index].key != system_program.key,
+            ClutchError::AccountAlias,
+        )?;
+        lamport_index += 1;
+    }
+    let lamport = fund_series_lamport_activation_v2(
+        program_id,
+        artifacts,
+        compiler_bundle,
+        payer,
+        system_program,
+        lamport_vaults,
+    )?;
     let preflight_state = SeriesFundingStateV2::activate(
-        authority,
+        &lamport.authority,
         &artifacts.series,
         registry.value().funding_terms_id,
         compiler_bundle.bundle_id(),
         &artifacts.quote,
         &artifacts.attachment,
-        principal,
-        donations,
+        lamport.principal,
+        lamport.donations,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     require(
@@ -4858,12 +5035,6 @@ pub(crate) fn deploy_and_activate_series_funding_v2<
             && preflight_state.compiler_bundle_id == registry.value().compiler_bundle_id,
         ClutchError::MismatchedState,
     )?;
-    expect_pda(
-        funding_account.key,
-        seeds::series_funding_pda(program_id, &preflight_state.series_plan_id.bytes()),
-        None,
-    )?;
-    require_creatable(funding_account)?;
     let collateral = deploy_series_collateral_activation_v2(
         program_id,
         registry,
@@ -4883,8 +5054,8 @@ pub(crate) fn deploy_and_activate_series_funding_v2<
         system_program,
         rent_sysvar,
         collateral_vaults,
-        principal,
-        donations,
+        lamport.principal,
+        lamport.donations,
     )?;
     activate_series_funding_with_collateral_v2(
         program_id,
@@ -4899,8 +5070,8 @@ pub(crate) fn deploy_and_activate_series_funding_v2<
         registry,
         artifacts,
         compiler_bundle,
-        principal,
-        donations,
+        lamport.principal,
+        lamport.donations,
     )
 }
 
@@ -6110,6 +6281,274 @@ fn require_lamport_vault_metadata_v2(
     Ok(())
 }
 
+struct PreparedSeriesLamportActivationV2 {
+    authority: AuthenticatedSeriesPhysicalActivationAuthorityV2,
+    principal: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    donations: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SeriesLamportVaultFundingPoststateV2 {
+    donation_lamports: u64,
+    vault_lamports_after: u64,
+}
+
+fn series_lamport_vault_funding_poststate_v2(
+    vault_lamports_before: u64,
+    principal_lamports: u64,
+) -> Outcome<SeriesLamportVaultFundingPoststateV2> {
+    Ok(SeriesLamportVaultFundingPoststateV2 {
+        donation_lamports: vault_lamports_before,
+        vault_lamports_after: add(vault_lamports_before, principal_lamports)?,
+    })
+}
+
+fn multiply_component_debit_v2(
+    value: ComponentDebitV1,
+    multiplier: u64,
+) -> Outcome<ComponentDebitV1> {
+    Ok(ComponentDebitV1 {
+        lamports: value
+            .lamports
+            .checked_mul(multiplier)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        collateral_atoms: value
+            .collateral_atoms
+            .checked_mul(multiplier)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+    })
+}
+
+fn series_funding_component_v2(index: usize) -> Outcome<SeriesFundingComponentV2> {
+    match index {
+        0 => Ok(SeriesFundingComponentV2::MarketCore),
+        1 => Ok(SeriesFundingComponentV2::SeriesAdmission),
+        2 => Ok(SeriesFundingComponentV2::RecoveryReserve),
+        3 => Ok(SeriesFundingComponentV2::SourceWork),
+        4 => Ok(SeriesFundingComponentV2::LiquidityFacility),
+        5 => Ok(SeriesFundingComponentV2::WrapperSet),
+        _ => Err(ClutchError::NonCanonical.into()),
+    }
+}
+
+fn derive_series_activation_principal_v2(
+    series: &SeriesPlanV5,
+    quote: &SeriesFundingQuoteV4,
+) -> Outcome<[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2]> {
+    series
+        .validate_shape()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    quote
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let multiplier = u64::from(series.instance_count);
+    let mut principal = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+    let mut index = 0usize;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        principal[index] = multiply_component_debit_v2(quote.components[index], multiplier)?;
+        index += 1;
+    }
+    Ok(principal)
+}
+
+fn flatten_series_lamport_vault_keys_v2(
+    values: &[Pubkey; SERIES_FUNDING_COMPONENT_COUNT_V2],
+) -> Outcome<[u8; 32 * SERIES_FUNDING_COMPONENT_COUNT_V2]> {
+    let mut encoded = [0u8; 32 * SERIES_FUNDING_COMPONENT_COUNT_V2];
+    let mut index = 0usize;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        let offset = index
+            .checked_mul(32)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let end = offset
+            .checked_add(32)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        encoded[offset..end].copy_from_slice(&values[index].to_bytes());
+        index += 1;
+    }
+    Ok(encoded)
+}
+
+fn flatten_series_lamport_balances_v2(
+    values: &[u64; SERIES_FUNDING_COMPONENT_COUNT_V2],
+) -> Outcome<[u8; 8 * SERIES_FUNDING_COMPONENT_COUNT_V2]> {
+    let mut encoded = [0u8; 8 * SERIES_FUNDING_COMPONENT_COUNT_V2];
+    let mut index = 0usize;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        let offset = index
+            .checked_mul(8)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let end = offset
+            .checked_add(8)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        encoded[offset..end].copy_from_slice(&values[index].to_le_bytes());
+        index += 1;
+    }
+    Ok(encoded)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fund_series_lamport_activation_v2<'a>(
+    program_id: &Pubkey,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    payer: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    vaults: &[AccountInfo<'a>],
+) -> Outcome<PreparedSeriesLamportActivationV2> {
+    require_signer(payer)?;
+    require(payer.is_writable, ClutchError::NotWritable)?;
+    require_system_program(system_program)?;
+    require(
+        vaults.len() == SERIES_FUNDING_COMPONENT_COUNT_V2,
+        ClutchError::AccountCount,
+    )?;
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terms_id = artifacts
+        .funding_terms
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_quote_id = artifacts
+        .quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let attachment_plan_id = artifacts
+        .attachment
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        artifacts.funding_terms.lamport_principal_refund.bytes() == payer.key.to_bytes()
+            && compiler_bundle.bundle().series_plan_id == series_plan_id
+            && compiler_bundle.bundle().funding_terms_id == funding_terms_id,
+        ClutchError::MismatchedState,
+    )?;
+    let principal = derive_series_activation_principal_v2(&artifacts.series, &artifacts.quote)?;
+    let mut donations = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+    let mut lamport_vaults =
+        [Pubkey::new_from_array([0u8; 32]); SERIES_FUNDING_COMPONENT_COUNT_V2];
+    let mut vault_lamports_before = [0u64; SERIES_FUNDING_COMPONENT_COUNT_V2];
+    let mut vault_lamports_after = [0u64; SERIES_FUNDING_COMPONENT_COUNT_V2];
+
+    let mut index = 0usize;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        let component = series_funding_component_v2(index)?;
+        require_lamport_vault_metadata_v2(
+            program_id,
+            series_plan_id,
+            component,
+            &vaults[index],
+        )?;
+        require(
+            vaults[index].key != payer.key && vaults[index].key != system_program.key,
+            ClutchError::AccountAlias,
+        )?;
+        let mut other = index + 1;
+        while other < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+            require(vaults[index].key != vaults[other].key, ClutchError::AccountAlias)?;
+            other += 1;
+        }
+        lamport_vaults[index] = *vaults[index].key;
+        vault_lamports_before[index] = vaults[index].lamports();
+        let expected = series_lamport_vault_funding_poststate_v2(
+            vault_lamports_before[index],
+            principal[index].lamports,
+        )?;
+        donations[index] = ComponentDebitV1 {
+            lamports: expected.donation_lamports,
+            collateral_atoms: 0,
+        };
+        index += 1;
+    }
+
+    let payer_lamports_before = payer.lamports();
+    let mut total_principal_lamports = 0u64;
+    index = 0;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        let amount = principal[index].lamports;
+        let payer_before_transfer = payer.lamports();
+        let vault_before_transfer = vaults[index].lamports();
+        let expected_payer_after = sub(payer_before_transfer, amount)?;
+        let expected_vault =
+            series_lamport_vault_funding_poststate_v2(vault_before_transfer, amount)?;
+        if amount != 0 {
+            let transfer = Instruction::new_with_bytes(
+                SYSTEM_PROGRAM_ID,
+                &transfer_data(amount),
+                vec![
+                    AccountMeta::new(*payer.key, true),
+                    AccountMeta::new(*vaults[index].key, false),
+                ],
+            );
+            invoke(
+                &transfer,
+                &[payer.clone(), vaults[index].clone(), system_program.clone()],
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+        }
+        require(
+            payer.lamports() == expected_payer_after
+                && vaults[index].lamports() == expected_vault.vault_lamports_after,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        vault_lamports_after[index] = expected_vault.vault_lamports_after;
+        total_principal_lamports = add(total_principal_lamports, amount)?;
+        index += 1;
+    }
+    let payer_lamports_after = payer.lamports();
+    require(
+        payer_lamports_after == sub(payer_lamports_before, total_principal_lamports)?,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+
+    let funding_commitment_id = series_collateral_funding_commitment_v2(&principal, &donations)?;
+    let vault_keys = flatten_series_lamport_vault_keys_v2(&lamport_vaults)?;
+    let vaults_before = flatten_series_lamport_balances_v2(&vault_lamports_before)?;
+    let vaults_after = flatten_series_lamport_balances_v2(&vault_lamports_after)?;
+    let receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_LAMPORT_ACTIVATION_AUTHORITY_DOMAIN_V2,
+            &series_plan_id.bytes(),
+            &funding_terms_id.bytes(),
+            &compiler_bundle.bundle_id().bytes(),
+            &funding_quote_id.bytes(),
+            &attachment_plan_id.bytes(),
+            payer.key.as_ref(),
+            system_program.key.as_ref(),
+            &payer_lamports_before.to_le_bytes(),
+            &payer_lamports_after.to_le_bytes(),
+            &funding_commitment_id.bytes(),
+            &vault_keys,
+            &vaults_before,
+            &vaults_after,
+        ])
+        .to_bytes(),
+    );
+    require(!receipt_id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(PreparedSeriesLamportActivationV2 {
+        authority: AuthenticatedSeriesPhysicalActivationAuthorityV2 {
+            series_plan_id,
+            funding_terms_id,
+            compiler_bundle_id: compiler_bundle.bundle_id(),
+            funding_quote_id,
+            attachment_plan_id,
+            principal,
+            donations,
+            lamport_vaults,
+            vault_lamports_before,
+            vault_lamports_after,
+            payer: *payer.key,
+            payer_lamports_before,
+            payer_lamports_after,
+            receipt_id,
+        },
+        principal,
+        donations,
+    })
+}
+
 /// Authenticate all five lamport custody PDAs and exact equality with the
 /// state-owned balance. A surplus must first be observed as donation; a
 /// shortfall always refuses.
@@ -6670,6 +7109,82 @@ mod collateral_activation_v2_adversarial_tests {
             release_selected_len,
             release_selected_len,
             principal + 1,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn one_lamport_funding_prefund_is_donation_not_rent_discount() {
+        let payer_before = 10_000u64;
+        let hostile_prefund = 1u64;
+        let neutral_before = 500u64;
+        let typed_rent_principal = 2_000u64;
+        let expected = series_program_account_funding_poststate_v2(
+            payer_before,
+            hostile_prefund,
+            neutral_before,
+            typed_rent_principal,
+        )
+        .unwrap();
+        assert_eq!(expected.payer_after, 8_000);
+        assert_eq!(expected.target_after, typed_rent_principal);
+        assert_eq!(expected.neutral_sink_after, 501);
+        assert_ne!(expected.payer_after, payer_before - (typed_rent_principal - hostile_prefund));
+    }
+
+    #[test]
+    fn lamport_vault_prefund_is_donation_and_full_principal_is_added() {
+        let expected = series_lamport_vault_funding_poststate_v2(1, 2_000).unwrap();
+        assert_eq!(expected.donation_lamports, 1);
+        assert_eq!(expected.vault_lamports_after, 2_001);
+        assert_ne!(expected.vault_lamports_after, 2_000);
+    }
+
+    #[test]
+    fn six_lamport_vault_order_is_exhaustive_and_canonical() {
+        let expected = [
+            SeriesFundingComponentV2::MarketCore,
+            SeriesFundingComponentV2::SeriesAdmission,
+            SeriesFundingComponentV2::RecoveryReserve,
+            SeriesFundingComponentV2::SourceWork,
+            SeriesFundingComponentV2::LiquidityFacility,
+            SeriesFundingComponentV2::WrapperSet,
+        ];
+        let mut index = 0usize;
+        while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+            assert_eq!(series_funding_component_v2(index).unwrap(), expected[index]);
+            index += 1;
+        }
+        assert!(series_funding_component_v2(SERIES_FUNDING_COMPONENT_COUNT_V2).is_err());
+    }
+
+    #[test]
+    fn activation_principal_multiplier_checks_both_exact_units() {
+        let unit = ComponentDebitV1 {
+            lamports: 7,
+            collateral_atoms: 11,
+        };
+        assert_eq!(
+            multiply_component_debit_v2(unit, 3).unwrap(),
+            ComponentDebitV1 {
+                lamports: 21,
+                collateral_atoms: 33,
+            }
+        );
+        assert!(multiply_component_debit_v2(
+            ComponentDebitV1 {
+                lamports: u64::MAX,
+                collateral_atoms: 1,
+            },
+            2,
+        )
+        .is_err());
+        assert!(multiply_component_debit_v2(
+            ComponentDebitV1 {
+                lamports: 1,
+                collateral_atoms: u64::MAX,
+            },
+            2,
         )
         .is_err());
     }
