@@ -1,11 +1,11 @@
 //! The fabricated pull identity is unreachable on any real cluster.
 //!
 //! `clutch_sbf::source_identity` claims something load-bearing: the laboratory
-//! release compiled into the **default** ELF admits no value anywhere, because
+//! release compiled into the explicit **mock-source** ELF admits no value
+//! anywhere, because
 //! every address it pins is program-derived and therefore has no private key.
-//! That claim is what makes registering it into the default artifact different
-//! in kind from the interim production entry `R2_PULL_PROMOTION_PLAN.md` §6
-//! forbids, so it should not rest on prose.
+//! Keeping that row exclusive to the mock-source ELF is the authority boundary;
+//! the off-curve claim itself still should not rest on prose.
 //!
 //! It cannot be checked inside the program crate. Off-chain program-address
 //! derivation needs the `curve25519` backend, and `programs/clutch-sbf`
@@ -17,7 +17,9 @@
 //! No bank is started: these are derivations over pinned constants.
 
 use clutch_sbf::loader_state::UPGRADEABLE_LOADER_ID;
-use clutch_sbf::source_identity::{fixture, mainnet, PullReleaseV2, REGISTERED_RELEASES};
+use clutch_sbf::source_identity::{fixture, mainnet, REGISTERED_RELEASES};
+#[cfg(feature = "non-production-mock-source")]
+use clutch_sbf::source_identity::PullReleaseV2;
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -89,8 +91,18 @@ fn fixture_addresses_are_program_derived_and_therefore_unreachable() {
     assert!(!config.is_on_curve());
 }
 
+#[cfg(not(any(
+    feature = "non-production-mock-source",
+    feature = "non-production-real-pyth-lab"
+)))]
 #[test]
-fn the_default_elf_registers_exactly_one_laboratory_release() {
+fn the_default_elf_registers_no_source_release() {
+    assert!(REGISTERED_RELEASES.is_empty());
+}
+
+#[cfg(feature = "non-production-mock-source")]
+#[test]
+fn the_mock_elf_registers_exactly_one_fixture_release() {
     assert_eq!(REGISTERED_RELEASES.len(), 1);
     let release: PullReleaseV2 = REGISTERED_RELEASES[0];
     assert_eq!(release, fixture::RELEASE);
@@ -103,6 +115,13 @@ fn the_default_elf_registers_exactly_one_laboratory_release() {
     );
     assert_eq!(release.receiver_program, fixture::RECEIVER_PROGRAM);
     assert_eq!(release.upgradeable_loader, UPGRADEABLE_LOADER_ID);
+}
+
+#[cfg(feature = "non-production-real-pyth-lab")]
+#[test]
+fn the_real_pyth_lab_does_not_inherit_fixture_authority() {
+    assert_eq!(REGISTERED_RELEASES.len(), 1);
+    assert_ne!(REGISTERED_RELEASES[0], fixture::RELEASE);
 }
 
 #[test]
