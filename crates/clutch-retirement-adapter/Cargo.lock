@@ -44,8 +44,30 @@ name = "clutch-candidate-lifecycle"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-collateral-adapter-v2"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "clutch-fee-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-owner-settlement",
+]
+
+[[package]]
 name = "clutch-general-v2-contract"
 version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-fee-runtime-contract",
+ "clutch-owner-settlement",
+]
 
 [[package]]
 name = "clutch-kernel"
@@ -53,6 +75,10 @@ version = "0.1.0"
 
 [[package]]
 name = "clutch-liveness"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-owner-settlement"
 version = "0.1.0"
 
 [[package]]
@@ -67,6 +93,7 @@ name = "clutch-retirement-adapter"
 version = "0.1.0"
 dependencies = [
  "clutch-batch-policy-identity",
+ "clutch-collateral-adapter-v2",
  "clutch-general-v2-contract",
  "clutch-retirement",
  "clutch-solana-layout",

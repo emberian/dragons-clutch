@@ -80,6 +80,10 @@ pub enum PdaFamilyV3 {
     DrawdownWork = 12,
     /// Immutable reviewed Source release manifest addressed by its content.
     SourceRelease = 13,
+    /// Immutable Source work/terminal receipt addressed by its exact receipt identity.
+    SourceWorkReceipt = 14,
+    /// Durable Source reopen lineage addressed by its semantic recipe identity.
+    ReopenLineage = 15,
 }
 
 /// Canonical fixed-capacity PDA seed recipe proposal.
@@ -99,6 +103,26 @@ impl PdaRecipeV3 {
             PdaFamilyV3::SourceRelease,
             b"dc-sp3-release",
             &release_id.bytes(),
+        )
+    }
+
+    /// Immutable Source work or terminal receipt content address.
+    pub fn source_work_receipt(receipt_id: ContentId) -> Result<Self> {
+        live(receipt_id)?;
+        Self::two(
+            PdaFamilyV3::SourceWorkReceipt,
+            b"dc-sp3-work-receipt",
+            &receipt_id.bytes(),
+        )
+    }
+
+    /// Durable Source reopen-lineage tombstone for one semantic coordinate.
+    pub fn reopen_lineage(lineage_recipe_id: ContentId) -> Result<Self> {
+        live(lineage_recipe_id)?;
+        Self::two(
+            PdaFamilyV3::ReopenLineage,
+            b"dc-sp3-lineage",
+            &lineage_recipe_id.bytes(),
         )
     }
 

@@ -25,6 +25,7 @@
 mod budget;
 mod codec;
 mod position_v3;
+mod replay_v3;
 mod transition;
 
 pub use budget::{
@@ -46,6 +47,12 @@ pub use position_v3::{
     PositionV3PdaSeeds, PositionV3Sha256Backend, SeriesPositionProjectionV3,
     StructuredClaimPositionProjectionV3, POSITION_TOMBSTONE_V3_SEMANTIC_DOMAIN,
     POSITION_V3_PDA_PREFIX, POSITION_V3_SEMANTIC_DOMAIN,
+};
+pub use replay_v3::{
+    ReplayV3Envelope, ReplayV3EnvelopeFields, ReplayV3EnvelopeHeader, ReplayV3ExtensionSchema,
+    ReplayV3HashBackend, ReplayV3Lifecycle, ReplayV3PdaSeeds, ReplayV3TerminalProjection,
+    PURPOSE_REPLAY_V3_EXTENSION_HASH_DOMAIN, PURPOSE_REPLAY_V3_PDA_PREFIX,
+    PURPOSE_REPLAY_V3_PREFIX_BYTES, PURPOSE_REPLAY_V3_SEMANTIC_DOMAIN,
 };
 pub use transition::{
     admit_deletable_rent, admit_initial_rent_split, admit_reopen_rent_split, close_epoch,
@@ -111,6 +118,13 @@ pub const POSITION_ACCOUNT_VERSION_V2: u8 = 2;
 /// The central registry reserves this coordinate with every runtime route
 /// disabled until its account adapter is integrated.
 pub const POSITION_ACCOUNT_VERSION_V3: u8 = 3;
+/// Canonical purpose-owned Replay account discriminator.
+///
+/// Version 1 remains the frozen ordinary Replay successor. Version 3 is the
+/// common full-width envelope paired with Position V3.
+pub const PURPOSE_REPLAY_ACCOUNT_TAG: u8 = 0x7a;
+/// Purpose-owned Replay envelope paired with Position V3.
+pub const PURPOSE_REPLAY_ACCOUNT_VERSION_V3: u8 = 3;
 /// Existing Epoch account discriminator.
 pub const EPOCH_ACCOUNT_TAG: u8 = 11;
 /// Counted general Epoch schema.

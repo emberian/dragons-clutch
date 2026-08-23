@@ -18,7 +18,7 @@ const INVOCATION_DOMAIN: &[u8] = b"dragons-clutch/runtime-invocation/v1";
 const BOUNDARY_DOMAIN: &[u8] = b"dragons-clutch/source-boundary-receipt/v1";
 const CLOCK_BUCKET_DOMAIN: &[u8] = b"dragons-clutch/authenticated-clock-bucket/v1";
 
-const SOURCE_RELEASE_MAGIC: [u8; 8] = *b"DCSREL01";
+const SOURCE_RELEASE_MAGIC: [u8; 8] = [0x8a, 1, b'D', b'C', b'S', b'R', b'L', b'1'];
 const CLOCK_POLICY_MAGIC: [u8; 8] = *b"DCCLOCK1";
 const SCHEMA_V1: u16 = 1;
 
@@ -26,6 +26,10 @@ const SCHEMA_V1: u16 = 1;
 pub const CLOCK_POLICY_BYTES: usize = 64;
 /// Exact canonical bytes in [`SourceReleaseManifestV1`].
 pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 1_008;
+/// Registered main-program Source release account discriminator.
+pub const SOURCE_RELEASE_ACCOUNT_TAG: u8 = SOURCE_RELEASE_MAGIC[0];
+/// Registered main-program Source release account version.
+pub const SOURCE_RELEASE_ACCOUNT_VERSION: u8 = SOURCE_RELEASE_MAGIC[1];
 
 /// A runtime account/program address, kept distinct from a content digest.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -726,6 +730,11 @@ impl AuthenticatedSourceRouteV1 {
     /// Reviewed parser program.
     pub const fn parser_program(self) -> RuntimeKey {
         self.manifest.parser.program
+    }
+
+    /// Immutable parser configuration account selected by the release.
+    pub const fn parser_config(self) -> RuntimeKey {
+        self.manifest.parser_config
     }
 
     /// Exact reviewed runtime adapter deployment identity.

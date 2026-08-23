@@ -77,6 +77,7 @@ the pinned layout dependency graph.
 | disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
 | disabled treasury-ledger envelope | `0x86/1` | 148 |
 | disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
+| disabled combined FinalPot/virtual-budget envelope | `0x89/1` | 332 |
 
 Here `O` is the active outcome count, `N` the active order count, `A` the
 active quantized-atom count, and `S` the active settlement-slice count. Feeds
@@ -103,12 +104,23 @@ second allocation authority; the eventual adapter must add an explicit parity
 gate against the central registry.
 
 The same central block reserves the StructuredClaim descriptor at `0x88/1`
-and a fresh General FinalPot at `0x89/1`. Neither reservation supplies a live
-route or a FinalPot codec/retirement authority in this lab. SourcePlane V3 owns
+and a fresh General FinalPot at `0x89/1`. The FinalPot now has a strict
+332-byte outer codec around the canonical 328-byte combined FinalPot and
+selected virtual-budget body, but neither reservation supplies a live route or
+FinalPot retirement authority in this lab. SourcePlane V3 owns
 the immediately following `0x8a/1` through `0x92/1` block; General does not
 reinterpret those release, head, lineage, raw-page, work, seal, statistic, or
 liveness-receipt coordinates. Dealer allocations begin only after that
 coordinated block is complete.
+
+The FinalPot body is exactly five 32-byte slots (Market, Epoch, final
+candidate, owner/order-set digest, and the optional virtual relation witness), cash principal,
+`internal[16]`, authorized/processed/sequence `u64`s, four one-byte
+outcome/phase/kind/state fields, and four zero bytes. Its outer decoder also
+requires typed adapter facts for the derived FinalPot PDA and bump, both
+program owners, the writable bit, and the exact decoded SelectedCandidate PDA.
+The stored Epoch, Market, final candidate, and non-`None` relation witness must
+equal that selected authority before create, mutation, or close.
 
 The first implementation checkpoint additionally froze and centrally reserved:
 
@@ -251,9 +263,10 @@ never authority.
 | temporary recipient allocation | `["candidate-recipient-allocation:v1", selected_fee_record_PDA]` |
 | treasury ledger | `["fee-treasury-ledger:v1", selected_fee_record_PDA]` |
 | settlement cash pot | `["settlement-cash-pot:v1", Epoch_PDA, settlement_candidate_id]` |
+| FinalPot | `["general-final-pot:v2", Epoch_PDA, settlement_candidate_id]` |
 
-The exported order-page, reservation, receipt, and final-pot prefixes do not
-freeze their suffix tuples. Those remain unallocated until their complete
+The exported order-page, reservation, and receipt prefixes do not freeze their
+suffix tuples. Those remain unallocated until their complete
 successor handler contracts exist. The OwnerSettlement tuple and account bytes
 are centrally reserved but runtime-disabled pending the complete authenticated
 order/fee projection described below.
@@ -322,10 +335,10 @@ and 36 through 38 do not create a success route.
 | 21 `ClaimSolver` | `selected_candidate[32]` |
 | 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner[32]` |
 | 25 `AccountReceiptEnd` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || receipt_accounting_id[32]` (160 bytes) |
-| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
 | 32 `CloseClearWork` | `epoch[32] || node[32]` |
-| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
-| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
+| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
 | 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32] || owner_finalization_id[32]` (192 bytes) |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
@@ -720,9 +733,12 @@ Position, the selected owner fee, and the directional candidate cash pot.
 Owner net debits are source-before-sink progress and always enter the pot;
 owner credits refuse without mutation when buyer or completed-merge liquidity
 is not yet present, and may be retried later without consuming replay or
-liveness funding. The owner row reaches state one and persists the distinct
-`owner_finalization_id` only after the exact Position-to-pot or pot-to-Position
-transfer succeeds. No Reservation DTO is copied into this transition: its
+liveness funding. The owner row reaches state one only after the exact
+Position-to-pot or pot-to-Position transfer succeeds. The request-scoped
+`owner_finalization_id` must equal the adapter-authenticated data ID of that
+canonical finalized 288-byte row; it is not copied into every row. The in-place
+fee finalization receipt and row state own persistent replay safety. No
+Reservation DTO is copied into this transition: its
 terminal accounting is joined through the canonical row and Position facts.
 The 292-byte row outer stores no duplicate rent DTO. Its pre-fund-safe creation
 plan must atomically update the separate authenticated rent ledger that owns
@@ -754,8 +770,8 @@ Action 26 `ConsumeDirectReceiptEggs` is capability-disabled even though its
 96-byte selector and complete pure direct planner are frozen. The planner
 requires both real receipt ends already accounting-latched by action 25, then
 atomically stages the distinct delivery latch, two Position poststates, and
-two Reservation poststates while treating the owner rows as authenticated
-read-only accounting evidence. It moves only internal native Eggs and does not
+two Reservation poststates while treating state-one owner rows as authenticated
+read-only finalization evidence. It moves only internal native Eggs and does not
 convert cash. An SBF meta contract cannot freeze until the
 receipt also authenticates the exact Settlement-compartment liveness receipt,
 call ordinal, quote ceiling, keeper payment, and payer refund; virtual
@@ -766,20 +782,23 @@ Actions 36 and 37 reserve those distinct virtual contracts. Both use a strict
 through action 26 or through one another. Action 36 must atomically join the
 selected virtual-split authority, its complete-set split inventory mutation,
 and the associated real buy receipt/Position/Reservation delivery while
-authenticating the already-accounted owner row without rewriting it.
+authenticating the finalized buyer row without rewriting it.
 Action 37 must atomically join the selected virtual-merge authority, its real
 sell receipt/Position/Reservation delivery, and the complete-set merge while
-authenticating the already-accounted owner row without rewriting it. Every
+authenticating the AccountingComplete state-zero seller row without rewriting
+it, because the resulting merge proceeds precede seller finalization. Every
 layer must name the same Epoch, selected candidate, checked
-relation witness, receipt, and settlement transition ID. The FinalPot, Hoard,
-aggregate claim ledger, inventory budget, receipt, Position, Reservation,
+relation witness, receipt, and delivery transition ID. The FinalPot, Hoard,
+aggregate claim ledger, embedded FinalPot inventory-budget cursors, receipt, Position, Reservation,
 delivery latch, and Settlement liveness compartment form one rollback
 boundary; the owner row/accounting latch is an immutable authorization join.
 The split route additionally requires every owner row finalized and the
 all-owner cash pot terminal with its exact split principal present. The merge
 route contributes its opening proceeds before credit-bearing owner
 finalizations may consume them.
-No separately callable inventory action is allocated. Exact ordered SBF metas
+No separately addressed budget account or callable inventory action is
+allocated; the selected budget and its cursors share the canonical 328-byte
+FinalPot body, lifetime, rent owner, and close authority. Exact ordered SBF metas
 remain an activation blocker until the receipt codec projects the complete
 selected witness and the liveness owner freezes the call ordinal, quote
 ceiling, keeper payment, payer refund, and unique receipt join.

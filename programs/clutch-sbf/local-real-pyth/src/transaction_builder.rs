@@ -82,6 +82,7 @@ impl std::error::Error for ConstructionError {}
 /// dispatcher has enabled a corresponding capability.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ProtocolFlow {
+    MarketEpochCreation,
     SourcePlaneV3,
     GeneralV2Candidate,
     GeneralV2Settlement,
@@ -90,6 +91,8 @@ pub enum ProtocolFlow {
     Liveness,
     ProductSeries,
     StructuredClaim,
+    KeeperSettlement,
+    RecoveryRetirement,
 }
 
 /// Runtime status carried into every construction artifact.
@@ -488,10 +491,15 @@ impl OwnedInstructionDraft {
                     ProtocolFlow::GeneralV2Candidate
                     | ProtocolFlow::GeneralV2Settlement
                     | ProtocolFlow::GeneralV2Fees
-                    | ProtocolFlow::DirectEggSettlement => family == ExtensionFamily::GeneralV2,
-                    ProtocolFlow::ProductSeries => family == ExtensionFamily::SourceSeries,
+                    | ProtocolFlow::DirectEggSettlement
+                    | ProtocolFlow::MarketEpochCreation
+                    | ProtocolFlow::KeeperSettlement
+                    | ProtocolFlow::RecoveryRetirement => family == ExtensionFamily::GeneralV2,
+                    ProtocolFlow::ProductSeries | ProtocolFlow::SourcePlaneV3 => {
+                        family == ExtensionFamily::SourceSeries
+                    }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
-                    ProtocolFlow::SourcePlaneV3 | ProtocolFlow::Liveness => false,
+                    ProtocolFlow::Liveness => false,
                 };
                 if !family_matches {
                     return Err(ConstructionError::WrongFlow);
@@ -747,6 +755,12 @@ impl ProtocolTransactionBuilder {
     #[must_use]
     pub const fn clutch_release_sha256(&self) -> [u8; 32] {
         self.clutch_release_sha256
+    }
+
+    /// Main program identity bound to every successor envelope.
+    #[must_use]
+    pub const fn clutch_program(&self) -> Address {
+        self.clutch_program
     }
 }
 

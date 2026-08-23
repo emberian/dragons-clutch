@@ -1,4 +1,5 @@
 use clutch_source_plane_v3::ContentId;
+use clutch_source_plane_v3_adapter::PdaRecipeV3;
 
 use crate::auth::{
     account_data_id, domain_id, live_id, AuthenticatedSourceRouteV1, RuntimeAccountViewV1,
@@ -6,7 +7,7 @@ use crate::auth::{
 };
 use crate::{Error, Result};
 
-const LINEAGE_MAGIC: [u8; 8] = *b"DCSLIN01";
+const LINEAGE_MAGIC: [u8; 8] = [0x8c, 1, b'D', b'C', b'S', b'L', b'N', b'1'];
 const LINEAGE_DOMAIN: &[u8] = b"dragons-clutch/source-reopen-lineage/v1";
 const REOPEN_AUTH_DOMAIN: &[u8] = b"dragons-clutch/source-reopen-authorization/v1";
 const LINEAGE_RECIPE_DOMAIN: &[u8] = b"dragons-clutch/source-lineage-pda-recipe/v1";
@@ -15,6 +16,10 @@ const SCHEMA_V1: u16 = 1;
 
 /// Exact canonical bytes in [`ReopenLineageV1`].
 pub const REOPEN_LINEAGE_BYTES: usize = 288;
+/// Registered main-program reopen-lineage account discriminator.
+pub const REOPEN_LINEAGE_ACCOUNT_TAG: u8 = LINEAGE_MAGIC[0];
+/// Registered main-program reopen-lineage account version.
+pub const REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = LINEAGE_MAGIC[1];
 
 /// Mutable SourcePlane account families that require durable close/reopen history.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,9 +273,10 @@ pub fn authenticate_reopen_lineage_account(
     {
         return Err(Error::InvalidLineage);
     }
+    let recipe = PdaRecipeV3::reopen_lineage(lineage.recipe_id()?)?;
     derived_pda.validate_for(
         route.adapter_program(),
-        lineage.recipe_id()?,
+        recipe.id()?,
         account.key,
         derived_pda.bump,
     )?;

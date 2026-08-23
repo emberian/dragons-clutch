@@ -248,8 +248,8 @@ impl AuthenticatedReservationV1 {
             || usize::from(self.outcome_count) > MAX_OUTCOMES
             || self.entitled_units == 0
             || self.entitled_consideration_price_units == 0
-            || self.accounted_units != self.consumed_units
             || self.consumed_units > self.entitled_units
+            || self.accounted_units > self.entitled_units
             || self.accounted_consideration_price_units
                 > self.entitled_consideration_price_units
             || !self.writable
@@ -258,15 +258,17 @@ impl AuthenticatedReservationV1 {
         {
             return Err(Error::InvalidAccount);
         }
-        let units_complete = self.consumed_units == self.entitled_units;
-        let value_complete = self.accounted_consideration_price_units
+        let delivery_complete = self.consumed_units == self.entitled_units;
+        let accounting_complete = self.accounted_units == self.entitled_units;
+        let accounting_value_complete = self.accounted_consideration_price_units
             == self.entitled_consideration_price_units;
-        if units_complete != value_complete {
+        if accounting_complete != accounting_value_complete {
             return Err(Error::InvariantViolation);
         }
+        let terminal = delivery_complete && accounting_complete;
         match self.state {
-            ReservationStateV1::Entitled if units_complete => return Err(Error::InvariantViolation),
-            ReservationStateV1::Consumed if !units_complete => {
+            ReservationStateV1::Entitled if terminal => return Err(Error::InvariantViolation),
+            ReservationStateV1::Consumed if !terminal => {
                 return Err(Error::InvariantViolation);
             }
             ReservationStateV1::Entitled | ReservationStateV1::Consumed => {}
@@ -276,9 +278,9 @@ impl AuthenticatedReservationV1 {
                 if self.initial_cash_atoms == 0
                     || self.initial_internal != [0; MAX_OUTCOMES]
                     || self.remaining_internal != [0; MAX_OUTCOMES]
-                    || (self.state == ReservationStateV1::Entitled
+                    || (!accounting_complete
                         && self.remaining_cash_atoms != self.initial_cash_atoms)
-                    || (self.state == ReservationStateV1::Consumed
+                    || (accounting_complete
                         && self.remaining_cash_atoms != 0)
                 {
                     return Err(Error::InvariantViolation);
@@ -313,8 +315,10 @@ impl AuthenticatedReservationV1 {
 pub struct AuthenticatedDirectSettlementReceiptV1 {
     /// Canonical receipt account.
     pub receipt: [u8; 32],
-    /// Complete transition identity authenticated by the future SBF adapter.
-    pub settlement_transition_id: [u8; 32],
+    /// Earlier price-accounting transition identity.
+    pub receipt_accounting_id: [u8; 32],
+    /// Complete Egg-delivery transition identity.
+    pub delivery_transition_id: [u8; 32],
     /// Market identity.
     pub market: [u8; 32],
     /// Counted Epoch identity.
@@ -341,17 +345,20 @@ pub struct AuthenticatedDirectSettlementReceiptV1 {
     pub sequence: u64,
     /// Quantity already settled on this one-shot receipt; direct requires zero.
     pub settled_quantity: Amount,
-    /// Independent buy/sell end latches before this transition.
-    pub consumed_end_mask: u8,
+    /// Price-accounting latches; delivery requires both already set.
+    pub accounted_end_mask: u8,
+    /// Independent Egg-delivery latches before this transition.
+    pub delivered_end_mask: u8,
     /// Direct receipts require both real ends and no virtual end.
     pub expected_end_mask: u8,
 }
 
 impl AuthenticatedDirectSettlementReceiptV1 {
-    fn validate(self, outcome_count: u8) -> Result<()> {
+    fn validate_common(self, outcome_count: u8) -> Result<()> {
         for key in [
             self.receipt,
-            self.settlement_transition_id,
+            self.receipt_accounting_id,
+            self.delivery_transition_id,
             self.market,
             self.epoch,
             self.candidate,
@@ -363,7 +370,8 @@ impl AuthenticatedDirectSettlementReceiptV1 {
                 return Err(Error::InvalidIdentity);
             }
         }
-        if self.buy_order_id == self.sell_order_id
+        if self.receipt_accounting_id == self.delivery_transition_id
+            || self.buy_order_id == self.sell_order_id
             || self.outcome >= outcome_count
             || self.quantity == 0
             || self.price == 0
@@ -371,16 +379,167 @@ impl AuthenticatedDirectSettlementReceiptV1 {
                 != u128::from(self.quantity) * u128::from(self.price)
             || self.sequence != u64::from(self.slice_index) + 1
             || self.settled_quantity != 0
-            || self.consumed_end_mask != 0
             || self.expected_end_mask != DIRECT_RECEIPT_EXPECTED_END_MASK_V1
+            || self.accounted_end_mask & !self.expected_end_mask != 0
+            || self.delivered_end_mask & !self.expected_end_mask != 0
         {
             return Err(Error::InvalidOrder);
         }
         Ok(())
     }
+
+    fn validate_for_accounting(self, outcome_count: u8) -> Result<()> {
+        self.validate_common(outcome_count)?;
+        if self.accounted_end_mask == self.expected_end_mask || self.delivered_end_mask != 0 {
+            return Err(Error::Terminal);
+        }
+        Ok(())
+    }
+
+    fn validate_for_delivery(self, outcome_count: u8) -> Result<()> {
+        self.validate_common(outcome_count)?;
+        if self.accounted_end_mask != self.expected_end_mask || self.delivered_end_mask != 0 {
+            return Err(Error::AuthorityUnavailable);
+        }
+        Ok(())
+    }
 }
 
-/// Complete authenticated prestate for one real-ended direct receipt.
+/// Complete authenticated prestate for one action-25 receipt end.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct DirectReceiptEndAccountingInputV1 {
+    /// Immutable direct receipt before this end's accounting latch is consumed.
+    pub receipt: AuthenticatedDirectSettlementReceiptV1,
+    /// Frozen membership for exactly one real end.
+    pub order: AuthenticatedOrderMembershipV1,
+    /// Position projection authenticating owner and generation.
+    pub position: AuthenticatedPositionV1,
+    /// Reservation accounting prestate for this end.
+    pub reservation: AuthenticatedReservationV1,
+    /// Owner-settlement row prestate for this end.
+    pub owner_row: AuthenticatedOwnerSettlementAccountV1,
+}
+
+/// Atomic one-end accounting poststate; it contains no Egg or cash movement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct DirectReceiptEndAccountingPlanV1 {
+    /// Exact action-25 accounting replay identity.
+    pub receipt_accounting_id: [u8; 32],
+    /// Later delivery identity committed by the same selected receipt.
+    pub delivery_transition_id: [u8; 32],
+    /// Receipt account to write.
+    pub receipt: [u8; 32],
+    /// Monotone price-accounting latch mask after this end.
+    pub receipt_accounted_end_mask: u8,
+    /// Delivery remains independently unconsumed.
+    pub receipt_delivered_end_mask: u8,
+    /// Reservation accounting poststate.
+    pub reservation: AuthenticatedReservationV1,
+    /// Owner-row accounting poststate.
+    pub owner_accounting: OwnerSettlementReceiptAccountingPlanV1,
+    /// Whether this order is now completely accounted.
+    pub accounting_complete: bool,
+    /// Buy-reservation cash handed to the aggregate owner row exactly once.
+    pub reserved_cash_handoff_atoms: Amount,
+}
+
+/// Stage one real end's exact price accounting without delivering Eggs.
+pub fn prepare_direct_receipt_end_accounting_v1(
+    input: DirectReceiptEndAccountingInputV1,
+) -> Result<DirectReceiptEndAccountingPlanV1> {
+    input.order.validate()?;
+    input.position.validate()?;
+    input.reservation.validate()?;
+    input
+        .receipt
+        .validate_for_accounting(input.position.outcome_count)?;
+    validate_order_binding(
+        input.receipt,
+        input.order,
+        input.position,
+        input.reservation,
+    )?;
+    validate_owner_row_binding(
+        input.receipt,
+        input.order,
+        input.position,
+        input.owner_row,
+        0,
+    )?;
+    let side_mask = match input.order.side {
+        SettlementSideV1::Buy => 1,
+        SettlementSideV1::Sell => 2,
+    };
+    if input.receipt.accounted_end_mask & side_mask != 0
+        || input.reservation.state != ReservationStateV1::Entitled
+        || input.order.order_id
+            != match input.order.side {
+                SettlementSideV1::Buy => input.receipt.buy_order_id,
+                SettlementSideV1::Sell => input.receipt.sell_order_id,
+            }
+        || (input.order.order_kind == OrderKindV1::Single
+            && input.order.single_outcome != input.receipt.outcome)
+        || (input.order.side == SettlementSideV1::Buy
+            && (input.reservation.remaining_internal != [0; MAX_OUTCOMES]
+                || input.position.reserved_cash_atoms
+                    < input.owner_row.accumulator.expectation.reserved_cash_atoms
+                || input.reservation.initial_cash_atoms
+                    > input.owner_row.accumulator.expectation.reserved_cash_atoms))
+        || (input.order.side == SettlementSideV1::Sell
+            && input.reservation.remaining_internal[usize::from(input.receipt.outcome)]
+                < input.receipt.quantity)
+        || aliases_accounting_accounts(
+            input.receipt.receipt,
+            input.position.position,
+            input.reservation.account,
+            input.owner_row.address,
+        )
+    {
+        return Err(Error::InvalidAccount);
+    }
+
+    let (mut reservation, completes) = advance_reservation_accounting(
+        input.reservation,
+        input.receipt.quantity,
+        input.receipt.consideration_price_units,
+    )?;
+    let handoff = if input.order.side == SettlementSideV1::Buy && completes {
+        let handoff = reservation.remaining_cash_atoms;
+        reservation.remaining_cash_atoms = 0;
+        handoff
+    } else {
+        0
+    };
+    reservation.validate()?;
+
+    let owner_accounting = prepare_account_receipt_end_v1(
+        input.owner_row,
+        accounting_receipt_end(input.receipt, input.order, completes),
+    )?;
+    if owner_accounting.receipt_accounting_id != input.receipt.receipt_accounting_id
+        || owner_accounting.receipt != input.receipt.receipt
+        || owner_accounting.receipt_accounted_end_mask
+            != input.receipt.accounted_end_mask | side_mask
+    {
+        return Err(Error::InvariantViolation);
+    }
+
+    Ok(DirectReceiptEndAccountingPlanV1 {
+        receipt_accounting_id: input.receipt.receipt_accounting_id,
+        delivery_transition_id: input.receipt.delivery_transition_id,
+        receipt: input.receipt.receipt,
+        receipt_accounted_end_mask: owner_accounting.receipt_accounted_end_mask,
+        receipt_delivered_end_mask: 0,
+        reservation,
+        owner_accounting,
+        accounting_complete: completes,
+        reserved_cash_handoff_atoms: handoff,
+    })
+}
+
+/// Complete authenticated prestate for one already-accounted direct receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct DirectEggSettlementInputV1 {
@@ -398,9 +557,9 @@ pub struct DirectEggSettlementInputV1 {
     pub buyer_reservation: AuthenticatedReservationV1,
     /// Sell Reservation prestate.
     pub seller_reservation: AuthenticatedReservationV1,
-    /// Buyer owner-settlement row prestate.
+    /// Buyer owner row, already finalized by action 38.
     pub buyer_owner_row: AuthenticatedOwnerSettlementAccountV1,
-    /// Seller owner-settlement row prestate.
+    /// Seller owner row, already finalized by action 38.
     pub seller_owner_row: AuthenticatedOwnerSettlementAccountV1,
 }
 
@@ -412,14 +571,10 @@ pub struct DirectEggTransferAuditV1 {
     pub outcome: u8,
     /// Exact Egg atoms moved to the buyer.
     pub quantity: Amount,
-    /// Exact scaled consideration recorded for each real end.
-    pub consideration_price_units: u128,
-    /// Whether the buyer order reached both cumulative totals.
+    /// Whether the buyer order reached its delivery total.
     pub buyer_completes: bool,
-    /// Whether the seller order reached both cumulative totals.
+    /// Whether the seller order reached its delivery total.
     pub seller_completes: bool,
-    /// Buyer cash envelope handed from a completed Reservation to its owner row.
-    pub buyer_reserved_cash_handoff_atoms: Amount,
     /// Unfilled seller portfolio remainder returned at completion.
     pub seller_returned_internal: [Amount; MAX_OUTCOMES],
 }
@@ -428,14 +583,16 @@ pub struct DirectEggTransferAuditV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct DirectEggSettlementPlanV1 {
-    /// Exact complete transition identity; adapter payload must match it.
-    pub settlement_transition_id: [u8; 32],
+    /// Exact action-26 delivery identity; adapter payload must match it.
+    pub delivery_transition_id: [u8; 32],
+    /// Accounting replay identity whose complete latch authorizes delivery.
+    pub receipt_accounting_id: [u8; 32],
     /// Receipt account to write.
     pub receipt: [u8; 32],
     /// Receipt quantity after the one-shot move.
     pub receipt_settled_quantity: Amount,
-    /// Both independently named real-end latches after the move.
-    pub receipt_consumed_end_mask: u8,
+    /// Both independently named delivery latches after the move.
+    pub receipt_delivered_end_mask: u8,
     /// Buyer Position poststate; generation and replay sequence are preserved.
     pub buyer_position: AuthenticatedPositionV1,
     /// Seller Position poststate; generation and replay sequence are preserved.
@@ -444,96 +601,67 @@ pub struct DirectEggSettlementPlanV1 {
     pub buyer_reservation: AuthenticatedReservationV1,
     /// Sell Reservation cumulative and terminal poststate.
     pub seller_reservation: AuthenticatedReservationV1,
-    /// Buyer owner-row accounting poststate.
-    pub buyer_owner_accounting: OwnerSettlementReceiptAccountingPlanV1,
-    /// Seller owner-row accounting poststate.
-    pub seller_owner_accounting: OwnerSettlementReceiptAccountingPlanV1,
     /// Exact movement and terminal-remainder audit fields.
     pub audit: DirectEggTransferAuditV1,
 }
 
-/// Stage a complete real-ended Egg/reservation/accounting transition.
+/// Deliver one already-accounted direct receipt atomically.
 ///
-/// This transition never converts or moves cash. It records exact price units
-/// in both owner rows while moving the native Egg from the seller Reservation
-/// to the buyer Position. A completing seller gets the entire unfilled vector
-/// back. A completing buyer Reservation hands its cash-envelope ownership to
-/// the already-frozen owner row while the Position's aggregate reserved-cash
-/// field remains unchanged for terminal owner-level realization.
+/// Both owner rows must already be in their one-way action-38 terminal state.
+/// This transition moves only native Eggs and delivery ledgers; receipt price
+/// accounting and cash realization cannot be replayed through this API.
 pub fn prepare_direct_egg_settlement_v1(
     input: DirectEggSettlementInputV1,
 ) -> Result<DirectEggSettlementPlanV1> {
-    input.buyer_order.validate()?;
-    input.seller_order.validate()?;
-    input.buyer_position.validate()?;
-    input.seller_position.validate()?;
-    input.buyer_reservation.validate()?;
-    input.seller_reservation.validate()?;
-    let count = input.buyer_position.outcome_count;
-    input.receipt.validate(count)?;
+    input
+        .receipt
+        .validate_for_delivery(input.buyer_position.outcome_count)?;
+    validate_direct_input_common(
+        input.receipt,
+        input.buyer_order,
+        input.seller_order,
+        input.buyer_position,
+        input.seller_position,
+        input.buyer_reservation,
+        input.seller_reservation,
+    )?;
+    validate_owner_row_binding(
+        input.receipt,
+        input.buyer_order,
+        input.buyer_position,
+        input.buyer_owner_row,
+        1,
+    )?;
+    validate_owner_row_binding(
+        input.receipt,
+        input.seller_order,
+        input.seller_position,
+        input.seller_owner_row,
+        1,
+    )?;
 
-    if input.seller_position.outcome_count != count
-        || input.buyer_order.outcome_count != count
-        || input.seller_order.outcome_count != count
-        || input.buyer_reservation.outcome_count != count
-        || input.seller_reservation.outcome_count != count
-        || input.buyer_order.side != SettlementSideV1::Buy
-        || input.seller_order.side != SettlementSideV1::Sell
-        || input.buyer_reservation.side != SettlementSideV1::Buy
-        || input.seller_reservation.side != SettlementSideV1::Sell
-        || input.buyer_reservation.state != ReservationStateV1::Entitled
-        || input.seller_reservation.state != ReservationStateV1::Entitled
-        || input.buyer_position.owner == input.seller_position.owner
-        || input.buyer_position.position == input.seller_position.position
-        || input.buyer_position.replay == input.seller_position.replay
-        || input.buyer_reservation.account == input.seller_reservation.account
-        || input.buyer_owner_row.address == input.seller_owner_row.address
-        || aliases_writable_account(&input)
+    if input.buyer_owner_row.address == input.seller_owner_row.address
+        || aliases_direct_accounts(
+            input.receipt.receipt,
+            input.buyer_position.position,
+            input.seller_position.position,
+            input.buyer_reservation.account,
+            input.seller_reservation.account,
+            input.buyer_owner_row.address,
+            input.seller_owner_row.address,
+        )
     {
         return Err(Error::InvalidAccount);
     }
 
-    validate_common_binding(
-        &input,
-        input.buyer_order,
-        input.buyer_position,
+    let (next_buy_reservation, buyer_completes) = advance_reservation_delivery(
         input.buyer_reservation,
+        input.receipt.quantity,
     )?;
-    validate_common_binding(
-        &input,
-        input.seller_order,
-        input.seller_position,
+    let (mut next_sell_reservation, seller_completes) = advance_reservation_delivery(
         input.seller_reservation,
+        input.receipt.quantity,
     )?;
-    if input.receipt.buy_order_id != input.buyer_order.order_id
-        || input.receipt.sell_order_id != input.seller_order.order_id
-        || (input.buyer_order.order_kind == OrderKindV1::Single
-            && input.buyer_order.single_outcome != input.receipt.outcome)
-        || (input.seller_order.order_kind == OrderKindV1::Single
-            && input.seller_order.single_outcome != input.receipt.outcome)
-        || input.buyer_reservation.remaining_internal != [0; MAX_OUTCOMES]
-        || input.seller_reservation.remaining_internal[usize::from(input.receipt.outcome)]
-            < input.receipt.quantity
-        || input.buyer_position.reserved_cash_atoms
-            < input.buyer_owner_row.accumulator.expectation.reserved_cash_atoms
-        || input.buyer_reservation.initial_cash_atoms
-            > input.buyer_owner_row.accumulator.expectation.reserved_cash_atoms
-    {
-        return Err(Error::InvariantViolation);
-    }
-
-    let (mut next_buy_reservation, buyer_completes) =
-        advance_reservation(
-            input.buyer_reservation,
-            input.receipt.quantity,
-            input.receipt.consideration_price_units,
-        )?;
-    let (mut next_sell_reservation, seller_completes) =
-        advance_reservation(
-            input.seller_reservation,
-            input.receipt.quantity,
-            input.receipt.consideration_price_units,
-        )?;
     let outcome = usize::from(input.receipt.outcome);
     next_sell_reservation.remaining_internal[outcome] = next_sell_reservation
         .remaining_internal[outcome]
@@ -557,66 +685,83 @@ pub fn prepare_direct_egg_settlement_v1(
             at += 1;
         }
     }
-    let buyer_cash_handoff = if buyer_completes {
-        let value = next_buy_reservation.remaining_cash_atoms;
-        next_buy_reservation.remaining_cash_atoms = 0;
-        value
-    } else {
-        0
-    };
     next_buy_reservation.validate()?;
     next_sell_reservation.validate()?;
     next_buyer_position.validate()?;
     next_seller_position.validate()?;
 
-    let buy_accounting = prepare_account_receipt_end_v1(
-        input.buyer_owner_row,
-        receipt_end(input.receipt, input.buyer_order, buyer_completes),
-    )?;
-    let sell_accounting = prepare_account_receipt_end_v1(
-        input.seller_owner_row,
-        receipt_end(input.receipt, input.seller_order, seller_completes),
-    )?;
-    if buy_accounting.settlement_transition_id != input.receipt.settlement_transition_id
-        || sell_accounting.settlement_transition_id != input.receipt.settlement_transition_id
-        || buy_accounting.receipt != input.receipt.receipt
-        || sell_accounting.receipt != input.receipt.receipt
-        || buy_accounting.receipt_consumed_end_mask != 1
-        || sell_accounting.receipt_consumed_end_mask != 2
-    {
-        return Err(Error::InvariantViolation);
-    }
-
     Ok(DirectEggSettlementPlanV1 {
-        settlement_transition_id: input.receipt.settlement_transition_id,
+        delivery_transition_id: input.receipt.delivery_transition_id,
+        receipt_accounting_id: input.receipt.receipt_accounting_id,
         receipt: input.receipt.receipt,
         receipt_settled_quantity: input.receipt.quantity,
-        receipt_consumed_end_mask: DIRECT_RECEIPT_EXPECTED_END_MASK_V1,
+        receipt_delivered_end_mask: DIRECT_RECEIPT_EXPECTED_END_MASK_V1,
         buyer_position: next_buyer_position,
         seller_position: next_seller_position,
         buyer_reservation: next_buy_reservation,
         seller_reservation: next_sell_reservation,
-        buyer_owner_accounting: buy_accounting,
-        seller_owner_accounting: sell_accounting,
         audit: DirectEggTransferAuditV1 {
             outcome: input.receipt.outcome,
             quantity: input.receipt.quantity,
-            consideration_price_units: input.receipt.consideration_price_units,
             buyer_completes,
             seller_completes,
-            buyer_reserved_cash_handoff_atoms: buyer_cash_handoff,
             seller_returned_internal: returned,
         },
     })
 }
 
-fn validate_common_binding(
-    input: &DirectEggSettlementInputV1,
+fn validate_direct_input_common(
+    receipt: AuthenticatedDirectSettlementReceiptV1,
+    buyer_order: AuthenticatedOrderMembershipV1,
+    seller_order: AuthenticatedOrderMembershipV1,
+    buyer_position: AuthenticatedPositionV1,
+    seller_position: AuthenticatedPositionV1,
+    buyer_reservation: AuthenticatedReservationV1,
+    seller_reservation: AuthenticatedReservationV1,
+) -> Result<()> {
+    buyer_order.validate()?;
+    seller_order.validate()?;
+    buyer_position.validate()?;
+    seller_position.validate()?;
+    buyer_reservation.validate()?;
+    seller_reservation.validate()?;
+    let count = buyer_position.outcome_count;
+    if seller_position.outcome_count != count
+        || buyer_order.outcome_count != count
+        || seller_order.outcome_count != count
+        || buyer_reservation.outcome_count != count
+        || seller_reservation.outcome_count != count
+        || buyer_order.side != SettlementSideV1::Buy
+        || seller_order.side != SettlementSideV1::Sell
+        || buyer_reservation.side != SettlementSideV1::Buy
+        || seller_reservation.side != SettlementSideV1::Sell
+        || buyer_reservation.state != ReservationStateV1::Entitled
+        || seller_reservation.state != ReservationStateV1::Entitled
+        || buyer_position.owner == seller_position.owner
+        || buyer_position.position == seller_position.position
+        || buyer_position.replay == seller_position.replay
+        || buyer_reservation.account == seller_reservation.account
+        || receipt.buy_order_id != buyer_order.order_id
+        || receipt.sell_order_id != seller_order.order_id
+        || (buyer_order.order_kind == OrderKindV1::Single
+            && buyer_order.single_outcome != receipt.outcome)
+        || (seller_order.order_kind == OrderKindV1::Single
+            && seller_order.single_outcome != receipt.outcome)
+        || buyer_reservation.remaining_internal != [0; MAX_OUTCOMES]
+        || seller_reservation.remaining_internal[usize::from(receipt.outcome)] < receipt.quantity
+    {
+        return Err(Error::InvariantViolation);
+    }
+    validate_order_binding(receipt, buyer_order, buyer_position, buyer_reservation)?;
+    validate_order_binding(receipt, seller_order, seller_position, seller_reservation)
+}
+
+fn validate_order_binding(
+    receipt: AuthenticatedDirectSettlementReceiptV1,
     order: AuthenticatedOrderMembershipV1,
     position: AuthenticatedPositionV1,
     reservation: AuthenticatedReservationV1,
 ) -> Result<()> {
-    let receipt = input.receipt;
     if order.market != receipt.market
         || order.epoch != receipt.epoch
         || order.candidate != receipt.candidate
@@ -642,15 +787,25 @@ fn validate_common_binding(
     {
         return Err(Error::AuthorityUnavailable);
     }
-    let owner_row = match order.side {
-        SettlementSideV1::Buy => input.buyer_owner_row,
-        SettlementSideV1::Sell => input.seller_owner_row,
-    };
+    Ok(())
+}
+
+fn validate_owner_row_binding(
+    receipt: AuthenticatedDirectSettlementReceiptV1,
+    order: AuthenticatedOrderMembershipV1,
+    position: AuthenticatedPositionV1,
+    owner_row: AuthenticatedOwnerSettlementAccountV1,
+    required_state: u8,
+) -> Result<()> {
+    owner_row.accumulator.validate()?;
     let expectation = owner_row.accumulator.expectation;
-    if expectation.market != receipt.market
+    if owner_row.address == [0; 32]
+        || owner_row.accumulator.state != required_state
+        || expectation.market != receipt.market
         || expectation.epoch != receipt.epoch
         || expectation.candidate != receipt.candidate
         || expectation.owner_order_set_digest != receipt.owner_order_set_digest
+        || expectation.owner != order.owner
         || expectation.owner != position.owner
     {
         return Err(Error::AuthorityUnavailable);
@@ -658,15 +813,23 @@ fn validate_common_binding(
     Ok(())
 }
 
-fn aliases_writable_account(input: &DirectEggSettlementInputV1) -> bool {
+fn aliases_direct_accounts(
+    receipt: [u8; 32],
+    buyer_position: [u8; 32],
+    seller_position: [u8; 32],
+    buyer_reservation: [u8; 32],
+    seller_reservation: [u8; 32],
+    buyer_owner_row: [u8; 32],
+    seller_owner_row: [u8; 32],
+) -> bool {
     let accounts = [
-        input.receipt.receipt,
-        input.buyer_position.position,
-        input.seller_position.position,
-        input.buyer_reservation.account,
-        input.seller_reservation.account,
-        input.buyer_owner_row.address,
-        input.seller_owner_row.address,
+        receipt,
+        buyer_position,
+        seller_position,
+        buyer_reservation,
+        seller_reservation,
+        buyer_owner_row,
+        seller_owner_row,
     ];
     let mut left = 0_usize;
     while left < accounts.len() {
@@ -682,16 +845,12 @@ fn aliases_writable_account(input: &DirectEggSettlementInputV1) -> bool {
     false
 }
 
-pub(crate) fn advance_reservation(
+pub(crate) fn advance_reservation_accounting(
     reservation: AuthenticatedReservationV1,
     quantity: Amount,
     consideration_price_units: u128,
 ) -> Result<(AuthenticatedReservationV1, bool)> {
     let mut next = reservation;
-    next.consumed_units = next
-        .consumed_units
-        .checked_add(quantity)
-        .ok_or(Error::ArithmeticOverflow)?;
     next.accounted_units = next
         .accounted_units
         .checked_add(quantity)
@@ -700,31 +859,50 @@ pub(crate) fn advance_reservation(
         .accounted_consideration_price_units
         .checked_add(consideration_price_units)
         .ok_or(Error::ArithmeticOverflow)?;
-    if next.consumed_units > next.entitled_units
+    if next.accounted_units > next.entitled_units
         || next.accounted_consideration_price_units > next.entitled_consideration_price_units
     {
         return Err(Error::TooManyFragments);
     }
-    let units_complete = next.consumed_units == next.entitled_units;
+    let units_complete = next.accounted_units == next.entitled_units;
     let value_complete = next.accounted_consideration_price_units
         == next.entitled_consideration_price_units;
     if units_complete != value_complete {
         return Err(Error::InvariantViolation);
     }
-    if units_complete {
+    if units_complete && next.consumed_units == next.entitled_units {
         next.state = ReservationStateV1::Consumed;
     }
     Ok((next, units_complete))
 }
 
-fn receipt_end(
+pub(crate) fn advance_reservation_delivery(
+    reservation: AuthenticatedReservationV1,
+    quantity: Amount,
+) -> Result<(AuthenticatedReservationV1, bool)> {
+    let mut next = reservation;
+    next.consumed_units = next
+        .consumed_units
+        .checked_add(quantity)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if next.consumed_units > next.accounted_units {
+        return Err(Error::AuthorityUnavailable);
+    }
+    let complete = next.consumed_units == next.entitled_units;
+    if complete && next.accounted_units == next.entitled_units {
+        next.state = ReservationStateV1::Consumed;
+    }
+    Ok((next, complete))
+}
+
+fn accounting_receipt_end(
     receipt: AuthenticatedDirectSettlementReceiptV1,
     order: AuthenticatedOrderMembershipV1,
     completes_order: bool,
 ) -> AuthenticatedSettlementReceiptEndV1 {
     AuthenticatedSettlementReceiptEndV1 {
         receipt: receipt.receipt,
-        settlement_transition_id: receipt.settlement_transition_id,
+        receipt_accounting_id: receipt.receipt_accounting_id,
         market: receipt.market,
         epoch: receipt.epoch,
         candidate: receipt.candidate,
@@ -736,7 +914,7 @@ fn receipt_end(
         completes_order,
         slice_index: receipt.slice_index,
         sequence: receipt.sequence,
-        consumed_end_mask: receipt.consumed_end_mask,
+        accounted_end_mask: receipt.accounted_end_mask,
         expected_end_mask: receipt.expected_end_mask,
     }
 }
