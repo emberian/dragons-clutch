@@ -11,13 +11,14 @@ use crate::loader_state::{decode_loader_pair_v1, LoaderAccountViewV1};
 use crate::seeds;
 use clutch_product_series::{
     CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3,
-    CompiledProductSeriesBundleV4, ContentId, EvidenceOnlyRecoveryPolicyV1, FixedCodec,
-    MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
-    ProductTemplateV4, RegistryCapabilityProfileV2, RegistryCapabilityProfileV3,
-    RegistryCapabilityProjectionV2, RegistryProgramReleaseV1, SeriesAttachmentPlanV1,
-    SeriesAttachmentPlanV2, SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesFundingQuoteV1,
-    SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4, SeriesFundingTermsV2,
-    SeriesPlanV5, SeriesPlanV5Id,
+    CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV5, ContentId,
+    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2,
+    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProfileV2,
+    RegistryCapabilityProfileV3, RegistryCapabilityProfileV4, RegistryCapabilityProjectionV2,
+    RegistryProgramReleaseV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
+    SeriesAttachmentPlanV1, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3, SeriesAttachmentPlanV4,
+    SeriesFundingQuoteV1, SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4,
+    SeriesFundingTermsV2, SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
@@ -72,6 +73,7 @@ product_artifact_type!(CompiledProductSeriesBundleV3, CompiledProductSeriesBundl
 product_artifact_type!(SeriesAttachmentPlanV3, SeriesAttachmentPlanV3);
 product_artifact_type!(SeriesFundingQuoteV4, SeriesFundingQuoteV4);
 product_artifact_type!(CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV4);
+product_artifact_type!(CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5);
 product_artifact_type!(SeriesAttachmentPlanV4, SeriesAttachmentPlanV4);
 
 impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
@@ -107,6 +109,22 @@ impl ProductArtifactTypeV1 for RegistryCapabilityProfileV3 {
 
 impl ProductArtifactTypeV1 for RegistryProgramReleaseV1 {
     const KIND: ArtifactKind = ArtifactKind::RegistryProgramReleaseV1;
+
+    fn semantic_id(&self) -> clutch_product_series::Result<ContentId> {
+        Ok(self.id()?.content_id())
+    }
+}
+
+impl ProductArtifactTypeV1 for RegistryCapabilityProfileV4 {
+    const KIND: ArtifactKind = ArtifactKind::RegistryCapabilityProfileV4;
+
+    fn semantic_id(&self) -> clutch_product_series::Result<ContentId> {
+        Ok(self.id()?.content_id())
+    }
+}
+
+impl ProductArtifactTypeV1 for RegistryProgramReleaseV2 {
+    const KIND: ArtifactKind = ArtifactKind::RegistryProgramReleaseV2;
 
     fn semantic_id(&self) -> clutch_product_series::Result<ContentId> {
         Ok(self.id()?.content_id())
@@ -573,6 +591,351 @@ pub fn authenticate_registry_capability_for_registration_v2(
         ClutchError::MismatchedState,
     )?;
     Ok(AuthenticatedRegistryCapabilityReleaseV2 {
+        program_account: *program_account.key,
+        programdata_account: *programdata_account.key,
+        release_artifact_account: authenticated.release_artifact_account,
+        profile_artifact_account: authenticated.profile_artifact_account,
+        release: authenticated.release,
+        profile: authenticated.profile,
+        projection: authenticated.projection,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedRegistryArtifactPairV3 {
+    release_artifact_account: Pubkey,
+    profile_artifact_account: Pubkey,
+    release: RegistryProgramReleaseV2,
+    profile: RegistryCapabilityProfileV4,
+    projection: RegistryCapabilityProjectionV2,
+}
+
+/// Loader-authenticated ReleaseV2/ProfileV4 authority used before registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedRegistryCapabilityReleaseV3 {
+    program_account: Pubkey,
+    programdata_account: Pubkey,
+    release_artifact_account: Pubkey,
+    profile_artifact_account: Pubkey,
+    release: RegistryProgramReleaseV2,
+    profile: RegistryCapabilityProfileV4,
+    projection: RegistryCapabilityProjectionV2,
+}
+
+impl AuthenticatedRegistryCapabilityReleaseV3 {
+    /// Current executable Program account.
+    pub const fn program_account(self) -> Pubkey {
+        self.program_account
+    }
+
+    /// Current linked ProgramData account.
+    pub const fn programdata_account(self) -> Pubkey {
+        self.programdata_account
+    }
+
+    /// Exact content-addressed Registry ReleaseV2 artifact account.
+    pub const fn release_artifact_account(self) -> Pubkey {
+        self.release_artifact_account
+    }
+
+    /// Exact content-addressed Capability ProfileV4 artifact account.
+    pub const fn profile_artifact_account(self) -> Pubkey {
+        self.profile_artifact_account
+    }
+
+    /// Complete loader-authenticated Registry ReleaseV2 body.
+    pub const fn release(self) -> RegistryProgramReleaseV2 {
+        self.release
+    }
+
+    /// Complete ReleaseV2-bound capability profile body.
+    pub const fn profile(self) -> RegistryCapabilityProfileV4 {
+        self.profile
+    }
+
+    /// Exact compiler/runtime projection derived from the ProfileV4 body.
+    pub const fn projection(self) -> RegistryCapabilityProjectionV2 {
+        self.projection
+    }
+
+    /// Loader-observable deployment-locus policy admitted by ReleaseV2.
+    pub const fn release_locus(self) -> RegistryReleaseLocusV2 {
+        self.release.locus
+    }
+
+    /// SHA-256 of the complete linked ProgramData account data.
+    pub const fn programdata_sha256(self) -> ContentId {
+        self.release.programdata_sha256
+    }
+}
+
+/// SeriesRegistry-bound ReleaseV2/ProfileV4 authority for value-bearing consumers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedRegistryCapabilityV3 {
+    series_registry_account: Pubkey,
+    series_plan_id: SeriesPlanV5Id,
+    program_account: Pubkey,
+    programdata_account: Pubkey,
+    release_artifact_account: Pubkey,
+    profile_artifact_account: Pubkey,
+    release: RegistryProgramReleaseV2,
+    profile: RegistryCapabilityProfileV4,
+    projection: RegistryCapabilityProjectionV2,
+}
+
+impl AuthenticatedRegistryCapabilityV3 {
+    /// Exact authenticated SeriesRegistry account owning both references.
+    pub const fn series_registry_account(self) -> Pubkey {
+        self.series_registry_account
+    }
+
+    /// Exact registered recurring Series.
+    pub const fn series_plan_id(self) -> SeriesPlanV5Id {
+        self.series_plan_id
+    }
+
+    /// Current executable Program account authenticated for this receipt.
+    pub const fn program_account(self) -> Pubkey {
+        self.program_account
+    }
+
+    /// Current linked ProgramData account authenticated for this receipt.
+    pub const fn programdata_account(self) -> Pubkey {
+        self.programdata_account
+    }
+
+    /// Exact content-addressed ReleaseV2 artifact account.
+    pub const fn release_artifact_account(self) -> Pubkey {
+        self.release_artifact_account
+    }
+
+    /// Exact content-addressed ProfileV4 artifact account.
+    pub const fn profile_artifact_account(self) -> Pubkey {
+        self.profile_artifact_account
+    }
+
+    /// Complete loader-authenticated Registry ReleaseV2 body.
+    pub const fn release(self) -> RegistryProgramReleaseV2 {
+        self.release
+    }
+
+    /// Complete ReleaseV2-bound capability profile body.
+    pub const fn profile(self) -> RegistryCapabilityProfileV4 {
+        self.profile
+    }
+
+    /// Recomputed ProfileV4 identity.
+    pub const fn capability_profile_id(self) -> ContentId {
+        self.projection.capability_profile_id
+    }
+
+    /// Authenticated Registry ReleaseV2 identity.
+    pub const fn registry_release_id(self) -> ContentId {
+        self.projection.registry_release_id
+    }
+
+    /// Exact compiler/runtime projection derived from ProfileV4.
+    pub const fn projection(self) -> RegistryCapabilityProjectionV2 {
+        self.projection
+    }
+
+    /// Loader-observable deployment-locus policy admitted by ReleaseV2.
+    pub const fn release_locus(self) -> RegistryReleaseLocusV2 {
+        self.release.locus
+    }
+
+    /// SHA-256 of the complete linked ProgramData account data.
+    pub const fn programdata_sha256(self) -> ContentId {
+        self.release.programdata_sha256
+    }
+
+    /// Exact semantic-owner identities admitted by ProfileV4.
+    pub const fn semantic_owners(self) -> clutch_product_series::CapabilitySemanticOwnersV2 {
+        self.profile.rules.semantic_owners
+    }
+
+    /// Exact immutable Realm/Profile collateral projection.
+    pub const fn realm_collateral(self) -> clutch_product_series::RealmCollateralProjectionV1 {
+        self.profile.rules.realm_collateral
+    }
+}
+
+fn authenticate_registry_artifact_pair_v3(
+    program_id: &Pubkey,
+    release_artifact: &AccountInfo<'_>,
+    profile_artifact: &AccountInfo<'_>,
+    expected_registry_release_id: ContentId,
+    expected_capability_profile_id: ContentId,
+) -> Outcome<AuthenticatedRegistryArtifactPairV3> {
+    require(
+        release_artifact.key != profile_artifact.key,
+        ClutchError::AccountAlias,
+    )?;
+    let authenticated_release = authenticate_product_artifact_v1::<RegistryProgramReleaseV2>(
+        program_id,
+        release_artifact,
+        expected_registry_release_id,
+    )?;
+    let authenticated_profile = authenticate_product_artifact_v1::<RegistryCapabilityProfileV4>(
+        program_id,
+        profile_artifact,
+        expected_capability_profile_id,
+    )?;
+    let release = *authenticated_release.value();
+    let profile = *authenticated_profile.value();
+    require(
+        profile.registry_release_id().content_id() == expected_registry_release_id
+            && release.capability_manifest_id.bytes() == capabilities::PROFILE_ID,
+        ClutchError::MismatchedState,
+    )?;
+    let projection = profile
+        .projection()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        projection.registry_release_id == expected_registry_release_id
+            && projection.capability_profile_id == expected_capability_profile_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedRegistryArtifactPairV3 {
+        release_artifact_account: authenticated_release.account(),
+        profile_artifact_account: authenticated_profile.account(),
+        release,
+        profile,
+        projection,
+    })
+}
+
+/// Authenticate current loader state and ReleaseV2/ProfileV4 against a SeriesRegistry.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_registry_capability_v3(
+    program_id: &Pubkey,
+    registry_refs: AuthenticatedSeriesRegistryCapabilityRefsV1,
+    program_account: &AccountInfo<'_>,
+    programdata_account: &AccountInfo<'_>,
+    release_artifact: &AccountInfo<'_>,
+    profile_artifact: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedRegistryCapabilityV3> {
+    let authenticated = authenticate_registry_capability_for_registration_v3(
+        program_id,
+        release_artifact,
+        profile_artifact,
+        registry_refs.registry_release_id,
+        registry_refs.capability_profile_id,
+        program_account,
+        programdata_account,
+    )?;
+    for account in [
+        authenticated.program_account,
+        authenticated.programdata_account,
+        authenticated.release_artifact_account,
+        authenticated.profile_artifact_account,
+    ] {
+        require(
+            account != registry_refs.series_registry_account,
+            ClutchError::AccountAlias,
+        )?;
+    }
+    Ok(AuthenticatedRegistryCapabilityV3 {
+        series_registry_account: registry_refs.series_registry_account,
+        series_plan_id: registry_refs.series_plan_id,
+        program_account: authenticated.program_account,
+        programdata_account: authenticated.programdata_account,
+        release_artifact_account: authenticated.release_artifact_account,
+        profile_artifact_account: authenticated.profile_artifact_account,
+        release: authenticated.release,
+        profile: authenticated.profile,
+        projection: authenticated.projection,
+    })
+}
+
+/// Strictly authenticate ReleaseV2/ProfileV4 before persisting Series references.
+///
+/// Success proves the current Program/ProgramData loader linkage, the exact
+/// complete ProgramData-data SHA-256, the decoded loader deployment slot, the
+/// disjoint zero/positive locus, compiled capability manifest, both immutable
+/// artifact accounts, and their exact content identities. Genesis and network
+/// identity are deliberately outside this receipt because the program cannot
+/// authenticate those facts.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_registry_capability_for_registration_v3(
+    program_id: &Pubkey,
+    release_artifact: &AccountInfo<'_>,
+    profile_artifact: &AccountInfo<'_>,
+    expected_registry_release_id: ContentId,
+    expected_capability_profile_id: ContentId,
+    program_account: &AccountInfo<'_>,
+    programdata_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedRegistryCapabilityReleaseV3> {
+    let authenticated = authenticate_registry_artifact_pair_v3(
+        program_id,
+        release_artifact,
+        profile_artifact,
+        expected_registry_release_id,
+        expected_capability_profile_id,
+    )?;
+    require(
+        program_account.key != programdata_account.key
+            && program_account.key != release_artifact.key
+            && program_account.key != profile_artifact.key
+            && programdata_account.key != release_artifact.key
+            && programdata_account.key != profile_artifact.key,
+        ClutchError::AccountAlias,
+    )?;
+    require(
+        program_account.key == program_id
+            && !program_account.is_signer
+            && !program_account.is_writable
+            && program_account.executable
+            && !programdata_account.is_signer
+            && !programdata_account.is_writable
+            && !programdata_account.executable,
+        ClutchError::MismatchedState,
+    )?;
+    let program_data = program_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let programdata_data = programdata_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let loader = decode_loader_pair_v1(
+        LoaderAccountViewV1::new(
+            program_account.key.to_bytes(),
+            program_account.owner.to_bytes(),
+            program_account.executable,
+            &program_data,
+        ),
+        LoaderAccountViewV1::new(
+            programdata_account.key.to_bytes(),
+            programdata_account.owner.to_bytes(),
+            programdata_account.executable,
+            &programdata_data,
+        ),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let release = authenticated.release;
+    let locus_matches_loader = matches!(
+        (release.locus, loader.state.deployment_slot),
+        (RegistryReleaseLocusV2::SynthesizedGenesisZero, 0)
+    ) || matches!(
+        (release.locus, loader.state.deployment_slot),
+        (RegistryReleaseLocusV2::ObservedPositive, slot) if slot != 0
+    );
+    require(
+        release.program.bytes() == program_id.to_bytes()
+            && release.programdata.bytes() == programdata_account.key.to_bytes()
+            && release.deployment_slot == loader.state.deployment_slot
+            && locus_matches_loader
+            && release.programdata_sha256.bytes()
+                == solana_sha256_hasher::hashv(&[&programdata_data]).to_bytes()
+            && release.capability_manifest_id.bytes() == capabilities::PROFILE_ID
+            && release
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .content_id()
+                == expected_registry_release_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedRegistryCapabilityReleaseV3 {
         program_account: *program_account.key,
         programdata_account: *programdata_account.key,
         release_artifact_account: authenticated.release_artifact_account,
