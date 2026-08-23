@@ -3503,7 +3503,7 @@ impl ClearWorkV3AccountV1 {
             },
             ClearWorkVerificationStateV1::Valid => {
                 if !matches!(self.phase, 2 | 3)
-                    || self.page_count == 0
+                    || (self.order_count != 0 && self.page_count == 0)
                     || self.page_cursor != self.page_count
                     || self.slot_cursor != 0
                     || self.order_cursor != self.order_count
@@ -3729,6 +3729,135 @@ pub fn decode_clear_work_v3_filled_legs(
         outcome += 1;
     }
     Ok(filled_legs)
+}
+
+/// Atomically encode one private runtime-owned RelationV2 order result into
+/// the existing V3 Work frame.
+///
+/// Accepted steps append exactly the row at the prestate dense cursor and
+/// replace both aggregate flow vectors. Checked refusal changes only the
+/// header disposition/reward facts, leaving every tail byte unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn replace_clear_work_v3_order_state(
+    account: &mut [u8],
+    pre: ClearWorkV3AccountV1,
+    post: ClearWorkV3AccountV1,
+    aggregate_buy_flow: [u64; MAX_OUTCOMES],
+    aggregate_sell_flow: [u64; MAX_OUTCOMES],
+    filled_legs: [u64; MAX_OUTCOMES],
+    accepted_order: bool,
+) -> Result<(), CodecError> {
+    if ClearWorkV3AccountV1::decode_account(account)? != pre {
+        return Err(CodecError::MismatchedBinding);
+    }
+    post.validate()?;
+    if post.epoch != pre.epoch
+        || post.node != pre.node
+        || post.market != pre.market
+        || post.order_set != pre.order_set
+        || post.feed != pre.feed
+        || post.candidate_bundle_digest != pre.candidate_bundle_digest
+        || post.settlement_candidate_id != pre.settlement_candidate_id
+        || post.base_relation_candidate_id != pre.base_relation_candidate_id
+        || post.relation_policy_id != pre.relation_policy_id
+        || post.economic_domain_digest != pre.economic_domain_digest
+        || post.native_claim_basis_id != pre.native_claim_basis_id
+        || post.candidate_price_digest != pre.candidate_price_digest
+        || post.price_measure_policy_v1_id != pre.price_measure_policy_v1_id
+        || post.score_policy_id != pre.score_policy_id
+        || post.price_body_digest != pre.price_body_digest
+        || post.epoch_generation != pre.epoch_generation
+        || post.rent != pre.rent
+        || post.slice_count != pre.slice_count
+        || post.outcome_count != pre.outcome_count
+        || post.order_count != pre.order_count
+        || post.candidate_kind != pre.candidate_kind
+        || post.price_witness_schema != pre.price_witness_schema
+        || post.quantized_semantics_version != pre.quantized_semantics_version
+        || post.stored_bump != pre.stored_bump
+        || post.flags != pre.flags
+        || pre.verification_state != ClearWorkVerificationStateV1::Pending
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let expected_cursor = pre
+        .order_cursor
+        .checked_add(u8::from(accepted_order))
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if accepted_order {
+        if pre.order_cursor >= pre.order_count
+            || post.order_cursor != expected_cursor
+            || post.previous_order_id.is_zero()
+        {
+            return Err(CodecError::InvalidState);
+        }
+    } else if post.order_cursor != pre.order_cursor
+        || post.previous_order_id != pre.previous_order_id
+        || post.verification_state != ClearWorkVerificationStateV1::Refused
+        || filled_legs.iter().any(|value| *value != 0)
+    {
+        return Err(CodecError::InvalidState);
+    }
+    let active = usize::from(pre.outcome_count);
+    if aggregate_buy_flow[active..]
+        .iter()
+        .chain(aggregate_sell_flow[active..].iter())
+        .chain(filled_legs[active..].iter())
+        .any(|value| *value != 0)
+    {
+        return Err(CodecError::NonCanonicalPadding);
+    }
+    let prior_flows = decode_clear_work_v3_relation_flows(account)?;
+    if !accepted_order
+        && (prior_flows.aggregate_buy_flow != aggregate_buy_flow
+            || prior_flows.aggregate_sell_flow != aggregate_sell_flow)
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let matrix_at = CLEAR_WORK_V3_HEADER_BYTES
+        .checked_add(
+            active
+                .checked_mul(16)
+                .ok_or(CodecError::ArithmeticOverflow)?,
+        )
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let row_at = matrix_at
+        .checked_add(
+            usize::from(pre.order_cursor)
+                .checked_mul(active)
+                .and_then(|value| value.checked_mul(8))
+                .ok_or(CodecError::ArithmeticOverflow)?,
+        )
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let row_end = row_at
+        .checked_add(
+            active
+                .checked_mul(8)
+                .ok_or(CodecError::ArithmeticOverflow)?,
+        )
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if row_end > account.len()
+        || (accepted_order && account[row_at..row_end].iter().any(|byte| *byte != 0))
+    {
+        return Err(CodecError::NonCanonicalPadding);
+    }
+    let mut encoded_header = [0u8; CLEAR_WORK_V3_HEADER_BYTES];
+    post.encode(&mut encoded_header)?;
+    if accepted_order {
+        let mut outcome = 0usize;
+        while outcome < active {
+            let flow_at = CLEAR_WORK_V3_HEADER_BYTES + (outcome * 16);
+            account[flow_at..flow_at + 8]
+                .copy_from_slice(&aggregate_buy_flow[outcome].to_le_bytes());
+            account[flow_at + 8..flow_at + 16]
+                .copy_from_slice(&aggregate_sell_flow[outcome].to_le_bytes());
+            let leg_at = row_at + (outcome * 8);
+            account[leg_at..leg_at + 8].copy_from_slice(&filled_legs[outcome].to_le_bytes());
+            outcome += 1;
+        }
+    }
+    account[..CLEAR_WORK_V3_HEADER_BYTES].copy_from_slice(&encoded_header);
+    Ok(())
 }
 
 fn validate_clear_work_v3_tail(

@@ -63,9 +63,11 @@ use sha2::{Digest, Sha256};
 
 mod builder;
 mod settlement;
+mod work;
 
 pub use builder::*;
 pub use settlement::*;
+pub use work::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuantizedBasisProjectionV1 {

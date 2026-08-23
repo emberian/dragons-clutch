@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Strict, allocation-free payload decoders for the empty-book identity lab.
+//! Strict, allocation-free payload decoders for the non-production General V2 lab.
 
 use crate::{
     CodecError, Id32, Reader, SettlementCandidateKindV1, ID_BYTES, MAX_ORDERS_U8, MAX_OUTCOMES_U8,
@@ -810,6 +810,8 @@ pub enum IdentityLabPayloadV1<'a> {
     SealCandidate(EpochNodePayloadV1),
     /// Action 10.
     InitClearWork(EpochNodePayloadV1),
+    /// Action 12.
+    AdvanceClearOrders(EpochNodePayloadV1),
     /// Action 14.
     CompleteCandidateVerification(EpochNodePayloadV1),
     /// Action 15.
@@ -849,6 +851,9 @@ pub fn decode_identity_lab_payload_v1(
             EpochNodePayloadV1::decode(payload)?,
         )),
         10 => Ok(IdentityLabPayloadV1::InitClearWork(
+            EpochNodePayloadV1::decode(payload)?,
+        )),
+        12 => Ok(IdentityLabPayloadV1::AdvanceClearOrders(
             EpochNodePayloadV1::decode(payload)?,
         )),
         14 => Ok(IdentityLabPayloadV1::CompleteCandidateVerification(
