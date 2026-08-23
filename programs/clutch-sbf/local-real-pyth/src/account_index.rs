@@ -72,6 +72,7 @@ use clutch_product_series::{
     CompiledProductSeriesBundleV5, EvidenceOnlyRecoveryPolicyV1,
     FixedCodec as ProductFixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, SeriesFundingTermsV2, SeriesPlanV5,
+    SeriesFundingPhaseV2,
 };
 use clutch_retirement::{
     PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, ReplayV3Envelope,
@@ -96,8 +97,8 @@ use clutch_solana_layout::failure_recovery::{
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, SeriesFundingAccountV1, SeriesMarketLinkAccountV1,
-    SeriesRegistryAccountV2, SERIES_REGISTRY_PDA_PREFIX_V1,
+    MarketLifecycleRootAccountV1, SeriesFundingAccountV2, SeriesMarketLinkAccountV1,
+    SeriesRegistryAccountV2, SERIES_FUNDING_PDA_PREFIX_V1, SERIES_REGISTRY_PDA_PREFIX_V1,
 };
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
@@ -199,7 +200,7 @@ pub enum CanonicalAccountKind {
     ProductMarketLifecycleRootV1,
     ProductSeriesMarketLinkV1,
     SeriesRegistryV2,
-    SeriesFunding,
+    SeriesFundingV2,
     ArtifactUploadStage,
     ArtifactRegistryProgramReleaseV2,
     ArtifactRegistryCapabilityProfileV4,
@@ -294,7 +295,7 @@ impl CanonicalAccountKind {
             Self::ProductMarketLifecycleRootV1 => "product-market-lifecycle-root-v1",
             Self::ProductSeriesMarketLinkV1 => "product-series-market-link-v1",
             Self::SeriesRegistryV2 => "series-registry-v2",
-            Self::SeriesFunding => "series-funding",
+            Self::SeriesFundingV2 => "series-funding-v2",
             Self::ArtifactUploadStage => "artifact-upload-stage-v1",
             Self::ArtifactRegistryProgramReleaseV2 => "artifact-registry-program-release-v2",
             Self::ArtifactRegistryCapabilityProfileV4 => {
@@ -494,6 +495,9 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
         }
         if release.families.contains(&CanonicalFamily::Series) {
             if let Some(projection) = decode_series_registry_account(account)? {
+                return Ok(projection);
+            }
+            if let Some(projection) = decode_series_funding_account(account)? {
                 return Ok(projection);
             }
         }
@@ -721,6 +725,55 @@ fn decode_series_registry_account(
     );
     projection.primary_binding = Some(value.series_plan_id.bytes());
     projection.secondary_binding = Some(value.compiler_bundle_id.bytes());
+    Ok(Some(projection))
+}
+
+fn decode_series_funding_account(
+    account: &ObservedRpcAccount,
+) -> Result<Option<CanonicalAccountProjection>> {
+    if !tag_version(
+        &account.data,
+        registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+        registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2,
+    ) {
+        return Ok(None);
+    }
+    let value = SeriesFundingAccountV2::decode(&account.data)
+        .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+    let (expected, bump) = Address::find_program_address(
+        &[
+            SERIES_FUNDING_PDA_PREFIX_V1,
+            &value.state.series_plan_id.bytes(),
+        ],
+        &account.owner,
+    );
+    if expected != account.address || bump != value.stored_bump {
+        return Err(AccountIndexError::CanonicalDecodeRefused);
+    }
+    let terminal = value.state.phase == SeriesFundingPhaseV2::Closed;
+    let mut projection = CanonicalAccountProjection::canonical(
+        CanonicalFamily::Series,
+        CanonicalAccountKind::SeriesFundingV2,
+    );
+    projection.generation = Some(value.state.transition_sequence);
+    projection.primary_binding = Some(value.state.series_plan_id.bytes());
+    projection.secondary_binding = Some(value.state.compiler_bundle_id.bytes());
+    projection.keeper_hint = Some(KeeperHint {
+        lane: Some(if terminal {
+            WorkflowLane::RecoveryRetirement
+        } else {
+            WorkflowLane::Creation
+        }),
+        position: WorkflowPosition {
+            phase: if terminal { 8 } else { 6 },
+            item: u64::from(value.state.next_ordinal),
+        },
+        action: if terminal {
+            "close-series-funding-v2"
+        } else {
+            "advance-series-occurrence-v2"
+        },
+    });
     Ok(Some(projection))
 }
 
@@ -1220,37 +1273,6 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(binding.generation);
         projection.primary_binding = Some(binding.market_instance_id.bytes());
         projection.secondary_binding = Some(binding.series_plan_id.bytes());
-        Ok(Some(projection))
-    } else if tag_version(
-        data,
-        registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
-        registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
-    ) {
-        let value = SeriesFundingAccountV1::decode(data)
-            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let terminal = value.state.next_ordinal == value.state.instance_count;
-        let mut projection = CanonicalAccountProjection::canonical(
-            CanonicalFamily::Series,
-            CanonicalAccountKind::SeriesFunding,
-        );
-        projection.generation = Some(1);
-        projection.primary_binding = Some(value.state.series_plan_id.bytes());
-        projection.keeper_hint = Some(KeeperHint {
-            lane: Some(if terminal {
-                WorkflowLane::RecoveryRetirement
-            } else {
-                WorkflowLane::Creation
-            }),
-            position: WorkflowPosition {
-                phase: if terminal { 8 } else { 6 },
-                item: u64::from(value.state.next_ordinal),
-            },
-            action: if terminal {
-                "close-series-funding"
-            } else {
-                "advance-series-occurrence"
-            },
-        });
         Ok(Some(projection))
     } else {
         Ok(None)

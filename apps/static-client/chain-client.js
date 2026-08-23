@@ -65,7 +65,7 @@
     "product-market-lifecycle-root-v1": kind("product", "product"),
     "product-series-market-link-v1": kind("series", "series"),
     "series-registry-v2": kind("series", "product"),
-    "series-funding": kind("series", "series"),
+    "series-funding-v2": kind("series", "series"),
     "artifact-upload-stage-v1": kind("series", "product"),
     "artifact-registry-program-release-v2": kind("series", "product"),
     "artifact-registry-capability-profile-v4": kind("series", "product"),
