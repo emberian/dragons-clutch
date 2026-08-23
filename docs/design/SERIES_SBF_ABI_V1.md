@@ -42,8 +42,8 @@ The global account ledger reserves:
 
 | tag/version | bytes | semantic owner |
 | --- | ---: | --- |
-| `0x7d/1` | 168 | immutable Series registration |
-| `0x7e/1` | 336 | mutable Series funding/lifecycle wrapper |
+| `0x7f/1` | 168 | immutable Series registration |
+| `0x80/1` | 376 | mutable Series funding/lifecycle wrapper |
 
 The 168-byte registration stores only SeriesPlanV5Id, FundingTermsV2Id,
 RegistryReleaseId, CapabilityProfileId, its exact payer-owned rent principal,
@@ -52,17 +52,20 @@ It does not persist `RegistryCapabilityProjectionV2`: the central release stays
 the single owner of selector mappings and every value-bearing consumer must
 reauthenticate and reconstruct the projection.
 
-The 336-byte funding account is exactly:
+The 376-byte funding account is exactly:
 
 ```text
-tag 0x7e | version 1 | bump | zero flags | rent principal LE u64
+tag 0x80 | version 1 | bump | zero flags | rent principal LE u64
+| five collateral-vault rent principals LE u64 in component order
 | SeriesFundingStateV1 (324)
 ```
 
 The wrappers add no phase, cursor, component amounts, or terminal ownership.
-Each stores the exact rent principal so a close can separate refundable payer
-principal from unsolicited account surplus even if runtime rent parameters
-later change. FundingTerms V2 remains the sole owner of the refund destination;
+Each stores the exact state-account rent principal, and the funding wrapper also
+stores the five exact collateral-vault rent principals, so closes can separate
+refundable payer principal from unsolicited account surplus even if runtime
+rent parameters later change. Predictable-address prefunding never discounts
+the payer. FundingTerms V2 remains the sole owner of the refund destination;
 surplus is donation residue for its neutral sink. All other facts remain owned
 by the pure state, quote, and FundingTerms V2.
 
@@ -150,6 +153,9 @@ need any missing semantic receipt:
 - derivation of the five expected lamport/collateral custody balances from the
   state-owned principal/donation fields;
 - exact authentication of five distinct zero-data System-owned lamport PDAs;
+- Realm-selected creation and hostile-byte admission of five legacy-SPL or
+  Token-2022-base collateral vaults, with prefund swept to neutral before the
+  payer supplies each separately persisted exact rent principal;
 - exact-delta payer funding and PDA-signed component disbursement/refund;
 - a private typed donation authority minted only from an observed positive
   lamport-vault surplus, which can authorize no other pure transition; and

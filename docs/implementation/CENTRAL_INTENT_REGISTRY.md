@@ -97,11 +97,13 @@ adapter can reconstruct `RegistryCapabilityProjectionV2` from an authenticated
 central release, and each value-bearing action stays disabled until its exact
 source, collateral, liveness, and failure receipts are authenticated.
 
-The Source/Series account namespace reserves `0x7d/1` for the immutable Series
-registration and `0x7e/1` for the mutable Series-funding wrapper. Their exact
-168-byte and 336-byte codecs are fixed, but their allocation status is
-reserved-disabled. The funding wrapper adds tag/version/bump/flags and exact
-refundable account-rent principal around the pure 324-byte
+Covered Dealer owns `0x7d/1` for its funded facility stage and `0x7e/1` for its
+immutable policy. The Source/Series account namespace therefore reserves the
+disjoint `0x7f/1` for the immutable Series registration and `0x80/1` for the
+mutable Series-funding wrapper. Their exact 168-byte and 376-byte codecs are
+fixed, but their allocation status is reserved-disabled. The funding wrapper
+adds tag/version/bump/flags, exact refundable account-rent principal, and five
+release-selected collateral-vault rent principals around the pure 324-byte
 `SeriesFundingStateV1`; it does not copy its cursor or component-balance facts.
 
 ## Decimal 74 is not hexadecimal `0x74`

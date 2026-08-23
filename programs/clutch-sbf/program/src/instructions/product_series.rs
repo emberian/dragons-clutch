@@ -16,9 +16,15 @@
 use crate::accounts::{expect_pda, require, require_count, require_signer, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
-    create_pda_account, require_system_program, transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
+    allocate_data, assign_data, create_pda_account, require_creatable, require_system_program,
+    transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
+use clutch_collateral_adapter_v2::{
+    admit_realm_collateral_account_v2, admit_realm_collateral_mint_v2, prepare_custody_creation_v2,
+    BoundRealmCollateralV2, CustodyBindingV2, CustodyCreationPlanV2, CustodyInitializationStepV2,
+    Id as CollateralId, RuntimeAccountViewV2, TokenAccountRoleV2,
+};
 use clutch_product_series::{
     AuthenticatedSeriesFundingAuthorityV1, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
@@ -409,6 +415,374 @@ pub fn accounted_custody_balances(
         index += 1;
     }
     Ok(value)
+}
+
+fn collateral_id(key: &Pubkey) -> CollateralId {
+    CollateralId::from_bytes(key.to_bytes())
+}
+
+fn require_collateral_program(
+    account: &AccountInfo<'_>,
+    bound: BoundRealmCollateralV2,
+) -> Outcome<()> {
+    require(
+        collateral_id(account.key) == bound.release().token_program,
+        ClutchError::WrongTokenProgram,
+    )?;
+    require(account.executable, ClutchError::WrongTokenProgram)?;
+    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!account.is_signer, ClutchError::MismatchedState)
+}
+
+fn require_series_collateral_authority(
+    program_id: &Pubkey,
+    series: SeriesPlanV5Id,
+    authority: &AccountInfo<'_>,
+) -> Outcome<()> {
+    expect_pda(
+        authority.key,
+        seeds::series_collateral_authority_pda(program_id, &series.bytes()),
+        None,
+    )?;
+    require(!authority.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!authority.is_signer, ClutchError::MismatchedState)?;
+    require(!authority.executable, ClutchError::ExecutableAccount)?;
+    require(authority.data_is_empty(), ClutchError::WrongDataLength)
+}
+
+fn series_collateral_binding(
+    program_id: &Pubkey,
+    bound: BoundRealmCollateralV2,
+    series: SeriesPlanV5Id,
+    component: SeriesFundingComponentV1,
+    vault: &AccountInfo<'_>,
+    authority: &AccountInfo<'_>,
+) -> Outcome<CustodyBindingV2> {
+    series
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_series_collateral_authority(program_id, series, authority)?;
+    expect_pda(
+        vault.key,
+        seeds::series_collateral_vault_pda(program_id, &series.bytes(), component as u8),
+        None,
+    )?;
+    require(vault.is_writable, ClutchError::NotWritable)?;
+    require(!vault.executable, ClutchError::ExecutableAccount)?;
+    let binding = CustodyBindingV2 {
+        account: collateral_id(vault.key),
+        owner_authority: collateral_id(authority.key),
+        semantic_owner: CollateralId::from_bytes(series.bytes()),
+        compartment: u16::from(component as u8) + 1,
+        owner_guard: bound.release().owner_guard,
+        owner_authority_is_program_derived: true,
+    };
+    binding
+        .validate(bound.release())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(binding)
+}
+
+fn runtime_account_view<'a>(account: &AccountInfo<'_>, data: &'a [u8]) -> RuntimeAccountViewV2<'a> {
+    RuntimeAccountViewV2 {
+        key: collateral_id(account.key),
+        owner_program: collateral_id(account.owner),
+        data,
+        is_signer: account.is_signer,
+        is_writable: account.is_writable,
+        executable: account.executable,
+    }
+}
+
+/// Authenticate the Realm-selected mint and all five release-selected Series
+/// collateral vaults against the exact state-owned balances.
+///
+/// `bound` must itself come from the separately authenticated
+/// Realm/Profile/policy/release/loader seam. This helper adds only AccountInfo,
+/// PDA, hostile token-byte, semantic-owner, compartment, and exact-balance
+/// authentication.
+pub fn authenticate_series_collateral_custody(
+    program_id: &Pubkey,
+    bound: BoundRealmCollateralV2,
+    series: SeriesPlanV5Id,
+    mint: &AccountInfo<'_>,
+    authority: &AccountInfo<'_>,
+    vaults: &[AccountInfo<'_>],
+    funding: &SeriesFundingAccountV1,
+    rent: &RentParameters,
+) -> Outcome<()> {
+    require(
+        vaults.len() == SERIES_CUSTODY_COUNT_V1,
+        ClutchError::AccountCount,
+    )?;
+    funding.validate()?;
+    require(
+        funding.state.series_plan_id == series,
+        ClutchError::MismatchedState,
+    )?;
+    let expected = accounted_custody_balances(&funding.state)?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_mint_v2(bound, runtime_account_view(mint, &mint_data))
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut index = 0usize;
+    while index < SERIES_CUSTODY_COUNT_V1 {
+        let component = component_from_index(index)?;
+        let binding = series_collateral_binding(
+            program_id,
+            bound,
+            series,
+            component,
+            &vaults[index],
+            authority,
+        )?;
+        let data = vaults[index]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observation = admit_realm_collateral_account_v2(
+            bound,
+            runtime_account_view(&vaults[index], &data),
+            TokenAccountRoleV2::SegregatedVault(binding),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let stored_rent = funding.collateral_vault_rent_principal_lamports[index];
+        let current_rent = rent.minimum_balance(vaults[index].data_len())?;
+        require(
+            observation.amount_atoms == expected.collateral_atoms[index]
+                && vaults[index].lamports() >= stored_rent
+                && vaults[index].lamports() >= current_rent,
+            ClutchError::MismatchedState,
+        )?;
+        index += 1;
+    }
+    Ok(())
+}
+
+fn require_custody_creation_plan(
+    plan: CustodyCreationPlanV2,
+    token_program: &AccountInfo<'_>,
+    vault: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    authority: &AccountInfo<'_>,
+) -> Outcome<()> {
+    require(
+        plan.token_program == collateral_id(token_program.key)
+            && plan.account == collateral_id(vault.key)
+            && plan.mint == collateral_id(mint.key)
+            && plan.owner_authority == collateral_id(authority.key),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        plan.step_count != 0 && usize::from(plan.step_count) <= plan.steps.len(),
+        ClutchError::MismatchedState,
+    )
+}
+
+fn invoke_custody_initialization<'a>(
+    plan: CustodyCreationPlanV2,
+    vault: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+) -> Outcome<()> {
+    let mut index = 0usize;
+    while index < usize::from(plan.step_count) {
+        match plan.steps[index] {
+            CustodyInitializationStepV2::None => return Err(ClutchError::MismatchedState.into()),
+            CustodyInitializationStepV2::InitializeImmutableOwner { account, data } => {
+                require(
+                    account == collateral_id(vault.key),
+                    ClutchError::MismatchedState,
+                )?;
+                let instruction = Instruction::new_with_bytes(
+                    *token_program.key,
+                    &data,
+                    vec![AccountMeta::new(*vault.key, false)],
+                );
+                invoke(&instruction, &[vault.clone(), token_program.clone()])
+                    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+            }
+            CustodyInitializationStepV2::InitializeAccount3 {
+                account,
+                mint: planned_mint,
+                owner_authority: _,
+                data,
+            } => {
+                require(
+                    account == collateral_id(vault.key) && planned_mint == collateral_id(mint.key),
+                    ClutchError::MismatchedState,
+                )?;
+                let instruction = Instruction::new_with_bytes(
+                    *token_program.key,
+                    &data,
+                    vec![
+                        AccountMeta::new(*vault.key, false),
+                        AccountMeta::new_readonly(*mint.key, false),
+                    ],
+                );
+                invoke(
+                    &instruction,
+                    &[vault.clone(), mint.clone(), token_program.clone()],
+                )
+                .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+            }
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+/// Create and admit one release-selected Series collateral vault while
+/// preserving exact payer ownership of its rent principal.
+///
+/// Any lamports sent to the predictable address before creation are first
+/// PDA-signed into the authenticated neutral sink. The payer then supplies the
+/// complete current rent principal; prefunding never becomes a discount or a
+/// refund claim. The returned principal must be persisted in the matching
+/// `SeriesFundingAccountV1` component slot before activation can commit.
+#[allow(clippy::too_many_arguments)]
+pub fn create_series_collateral_vault<'a>(
+    program_id: &Pubkey,
+    bound: BoundRealmCollateralV2,
+    series: SeriesPlanV5Id,
+    component: SeriesFundingComponentV1,
+    payer: &AccountInfo<'a>,
+    vault: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    neutral_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+) -> Outcome<u64> {
+    require_signer(payer)?;
+    require(payer.is_writable, ClutchError::NotWritable)?;
+    require(neutral_sink.is_writable, ClutchError::NotWritable)?;
+    require(!neutral_sink.executable, ClutchError::ExecutableAccount)?;
+    require_creatable(vault)?;
+    require_system_program(system_program)?;
+    require_collateral_program(token_program, bound)?;
+    let binding =
+        series_collateral_binding(program_id, bound, series, component, vault, authority)?;
+    let plan = prepare_custody_creation_v2(bound, binding)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_custody_creation_plan(plan, token_program, vault, mint, authority)?;
+    require(
+        payer.key != vault.key
+            && payer.key != neutral_sink.key
+            && vault.key != neutral_sink.key
+            && vault.key != mint.key
+            && vault.key != authority.key
+            && vault.key != token_program.key,
+        ClutchError::AccountAlias,
+    )?;
+
+    let component_seed = [component as u8];
+    let series_seed = series.bytes();
+    let (_, bump) = seeds::series_collateral_vault_pda(program_id, &series_seed, component as u8);
+    let bump_seed = [bump];
+    let signer_seeds: &[&[u8]] = &[
+        seeds::SEED_SERIES_COLLATERAL_VAULT_V1,
+        &series_seed,
+        &component_seed,
+        &bump_seed,
+    ];
+
+    let prefund = vault.lamports();
+    if prefund != 0 {
+        let sink_before = neutral_sink.lamports();
+        let sweep = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &transfer_data(prefund),
+            vec![
+                AccountMeta::new(*vault.key, true),
+                AccountMeta::new(*neutral_sink.key, false),
+            ],
+        );
+        invoke_signed(
+            &sweep,
+            &[vault.clone(), neutral_sink.clone(), system_program.clone()],
+            &[signer_seeds],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+        require(
+            vault.lamports() == 0 && neutral_sink.lamports() == add(sink_before, prefund)?,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+    }
+
+    let account_bytes = usize::from(plan.account_bytes);
+    let rent_principal_lamports = rent.minimum_balance(account_bytes)?;
+    require(rent_principal_lamports != 0, ClutchError::MismatchedState)?;
+    let payer_before = payer.lamports();
+    let fund = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &transfer_data(rent_principal_lamports),
+        vec![
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new(*vault.key, false),
+        ],
+    );
+    invoke(
+        &fund,
+        &[payer.clone(), vault.clone(), system_program.clone()],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    require(
+        payer.lamports() == sub(payer_before, rent_principal_lamports)?
+            && vault.lamports() == rent_principal_lamports,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(account_bytes),
+        vec![AccountMeta::new(*vault.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[vault.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(token_program.key),
+        vec![AccountMeta::new(*vault.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[vault.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    require(
+        vault.data_len() == account_bytes
+            && vault.owner == token_program.key
+            && vault.lamports() == rent_principal_lamports,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+
+    invoke_custody_initialization(plan, vault, mint, token_program)?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_mint_v2(bound, runtime_account_view(mint, &mint_data))
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let vault_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let observation = admit_realm_collateral_account_v2(
+        bound,
+        runtime_account_view(vault, &vault_data),
+        TokenAccountRoleV2::SegregatedVault(binding),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        observation.amount_atoms == 0 && vault.lamports() == rent_principal_lamports,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    Ok(rent_principal_lamports)
 }
 
 fn require_program_account(

@@ -38,6 +38,7 @@ laboratory-fixtures = []
 # publish exact successor artifacts, including immutable funding-requirement
 # bodies, but deliberately cannot register a Series or create an occurrence.
 non-production-product-series-lab = [
+    "dep:clutch-collateral-adapter-v2",
     "dep:clutch-product-series",
     "clutch-solana-layout/non-production-product-series-lab",
 ]
@@ -68,6 +69,10 @@ clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-bspline = { path = "../../../crates/clutch-bspline" }
 clutch-bspline-accumulator = { path = "../../../crates/clutch-bspline-accumulator" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
+clutch-collateral-adapter-v2 = {
+    path = "../../../crates/clutch-collateral-adapter-v2",
+    optional = true,
+}
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 # The liveness kernel's `TreasuryServiceLedger` — the B4b mid-epoch-close
 # grief rider as fixed-memory bookkeeping.  Already in the graph through

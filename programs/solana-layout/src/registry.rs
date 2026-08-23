@@ -87,12 +87,20 @@ pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
+/// Covered-dealer funded facility-stage account discriminator.
+pub const COVERED_DEALER_FACILITY_STAGE_ACCOUNT_TAG: u8 = 0x7d;
+/// Covered-dealer funded facility-stage account version.
+pub const COVERED_DEALER_FACILITY_STAGE_ACCOUNT_VERSION: u8 = 1;
+/// Covered-dealer immutable policy account discriminator.
+pub const COVERED_DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
+/// Covered-dealer immutable policy account version.
+pub const COVERED_DEALER_POLICY_ACCOUNT_VERSION: u8 = 1;
 /// Immutable registered-Series account discriminator.
-pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7d;
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
 /// Immutable registered-Series account version.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
 /// Mutable segregated Series-funding state account discriminator.
-pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x7e;
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 /// Mutable segregated Series-funding state account version.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
@@ -372,6 +380,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-selected-candidate-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: COVERED_DEALER_FACILITY_STAGE_ACCOUNT_TAG,
+            version: COVERED_DEALER_FACILITY_STAGE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "covered-dealer-facility-stage-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: COVERED_DEALER_POLICY_ACCOUNT_TAG,
+            version: COVERED_DEALER_POLICY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "covered-dealer-policy-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -957,6 +983,14 @@ mod tests {
             (
                 GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG,
                 GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION,
+            ),
+            (
+                COVERED_DEALER_FACILITY_STAGE_ACCOUNT_TAG,
+                COVERED_DEALER_FACILITY_STAGE_ACCOUNT_VERSION,
+            ),
+            (
+                COVERED_DEALER_POLICY_ACCOUNT_TAG,
+                COVERED_DEALER_POLICY_ACCOUNT_VERSION,
             ),
             (
                 SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,

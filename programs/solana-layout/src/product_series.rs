@@ -13,7 +13,8 @@
 
 use clutch_product_series::{
     ContentId, FixedCodec, MarketInstanceV2Id, SeriesFundingComponentV1, SeriesFundingStateV1,
-    SeriesFundingTermsV2Id, SeriesPlanV5Id, SourceOccurrenceV1Id, SERIES_FUNDING_STATE_BYTES,
+    SeriesFundingTermsV2Id, SeriesPlanV5Id, SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT,
+    SERIES_FUNDING_STATE_BYTES,
 };
 
 use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
@@ -21,7 +22,8 @@ use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
 /// Exact immutable registered-Series account width.
 pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
 /// Exact mutable Series-funding account width.
-pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize = 4 + 8 + SERIES_FUNDING_STATE_BYTES;
+pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize =
+    4 + 8 + (8 * SERIES_FUNDING_COMPONENT_COUNT) + SERIES_FUNDING_STATE_BYTES;
 
 /// Exact `RegisterSeries` payload width.
 pub const REGISTER_SERIES_PAYLOAD_BYTES_V1: usize = 4 * HASH_BYTES;
@@ -233,14 +235,17 @@ impl SeriesRegistryAccountV1 {
 ///
 /// The embedded [`SeriesFundingStateV1`] is the sole semantic owner of cursor,
 /// payer-principal, donation, and allocation-consumption facts. The wrapper
-/// adds global account discrimination, the canonical PDA bump, and exact
-/// refundable account-rent principal.
+/// adds global account discrimination, the canonical PDA bump, exact
+/// refundable state-account rent principal, and the five separately
+/// refundable release-selected collateral-vault rent principals.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesFundingAccountV1 {
     /// Exact pure funding/lifecycle state.
     pub state: SeriesFundingStateV1,
     /// Exact payer-owned rent principal locked at account creation.
     pub rent_principal_lamports: u64,
+    /// Exact payer-owned rent principal in each collateral component vault.
+    pub collateral_vault_rent_principal_lamports: [u64; SERIES_FUNDING_COMPONENT_COUNT],
     /// Canonical account PDA bump.
     pub stored_bump: u8,
     /// Reserved flags; must be zero.
@@ -251,7 +256,12 @@ impl SeriesFundingAccountV1 {
     /// Validate the complete pure state and account framing.
     pub fn validate(&self) -> Result<()> {
         self.state.validate().map_err(map_product_error)?;
-        if self.rent_principal_lamports == 0 {
+        if self.rent_principal_lamports == 0
+            || self
+                .collateral_vault_rent_principal_lamports
+                .iter()
+                .any(|principal| *principal == 0)
+        {
             return Err(CodecError::ZeroValue);
         }
         if self.flags != 0 {
@@ -274,8 +284,12 @@ impl SeriesFundingAccountV1 {
         out[2] = self.stored_bump;
         out[3] = self.flags;
         out[4..12].copy_from_slice(&self.rent_principal_lamports.to_le_bytes());
+        let mut at = 12;
+        for principal in self.collateral_vault_rent_principal_lamports {
+            put_u64(out, &mut at, principal);
+        }
         self.state
-            .encode_into(&mut out[12..])
+            .encode_into(&mut out[at..])
             .map_err(map_product_error)
     }
 
@@ -288,11 +302,17 @@ impl SeriesFundingAccountV1 {
         if input[1] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION {
             return Err(CodecError::WrongVersion);
         }
+        let mut at = 12;
+        let mut collateral_vault_rent_principal_lamports = [0; SERIES_FUNDING_COMPONENT_COUNT];
+        for principal in &mut collateral_vault_rent_principal_lamports {
+            *principal = take_u64(input, &mut at);
+        }
         let value = Self {
-            state: SeriesFundingStateV1::decode(&input[12..]).map_err(map_product_error)?,
+            state: SeriesFundingStateV1::decode(&input[at..]).map_err(map_product_error)?,
             rent_principal_lamports: u64::from_le_bytes(
                 input[4..12].try_into().map_err(|_| CodecError::Truncated)?,
             ),
+            collateral_vault_rent_principal_lamports,
             stored_bump: input[2],
             flags: input[3],
         };
