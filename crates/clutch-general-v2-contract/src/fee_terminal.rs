@@ -7,22 +7,33 @@
 //! action 38. The SBF adapter must authenticate those outer facts first and
 //! must commit every returned write and close in one instruction.
 
-use clutch_fee_runtime_contract::projection::AuthenticatedSelectedOwnerFeeV2;
-use clutch_fee_runtime_contract::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1};
+use clutch_batch_policy_identity::Identity32V1;
+use clutch_fee_runtime_contract::allocation::FeeEnvelopeV1;
+use clutch_fee_runtime_contract::intent::OwnerFeeTransitionIntentV1;
+use clutch_fee_runtime_contract::projection::{
+    authenticate_created_payer_allocation_snapshot_v1,
+    project_pre_row_owner_fee_v3, reauthenticate_persisted_payer_allocation_snapshot_v1,
+    AuthenticatedPayerAllocationSnapshotV1, AuthenticatedSelectedOwnerFeeV2,
+    AuthenticatedSelectedOwnerFeeV3,
+};
+use clutch_fee_runtime_contract::selected::{
+    OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
+};
+use clutch_fee_runtime_contract::MAX_FEE_ROWS_V1;
 use clutch_fee_runtime_contract::terminal::{
     AuthenticatedOwnerFeeFinalizationV1, GeneralFeeTerminalProjectionV1,
     OwnerFeeFinalizationBindingsV2, OwnerFeeFinalizationReceiptV1, OwnerFeeRentDispositionV2,
 };
 use clutch_owner_settlement::{
     prepare_realize_owner_cash_v2, OwnerCashRealizationPlanV2, OwnerFinalizedRowDataHashV2,
-    OwnerSettlementAccountProjectionV2, SettlementCashPotV1,
+    OwnerSettlementAccountProjectionV2, OwnerSettlementExpectationBasisV3, SettlementCashPotV1,
 };
 use clutch_retirement::{PositionV3Sha256Backend, ReplayV3HashBackend};
 
 use crate::{
-    CodecError, FinalizeOwnerSettlementPayloadV1, Id32, OwnerFeeFinalizationV2AccountV1,
-    GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
-    GeneralReplayTransitionPlanV1,
+    CodecError, FinalizeOwnerSettlementPayloadV1, GeneralPositionReplayPrestateV1,
+    GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1, Id32,
+    OwnerFeeFinalizationV2AccountV1, PayerAllocationV1AccountV1,
     OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_SEED_DOMAIN_V1,
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_BYTES,
     PAYER_ALLOCATION_SEED_DOMAIN_V1, RECIPIENT_ALLOCATION_SEED_DOMAIN_V1,
@@ -73,6 +84,103 @@ pub fn payer_allocation_account_data_id_v1<B: Sha256BackendV1>(
         return Err(CodecError::WrongLength);
     }
     Id32::new(backend.sha256(&[GENERAL_FEE_ACCOUNT_DATA_ID_DOMAIN_V1, bytes]))
+}
+
+/// Authenticate payer-snapshot creation from every signed fee envelope.
+///
+/// The resulting projection proves fee authorization/allocation only. It does
+/// not prove that collateral cash exists. The live adapter must authenticate
+/// program ownership and the canonical payer PDA before persisting `bytes`.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_created_payer_snapshot_v1<B: Sha256BackendV1>(
+    bytes: &[u8],
+    expected_bump: u8,
+    selected: &SelectedCompositeFeeV1,
+    transition: &OwnerFeeTransitionIntentV1,
+    carry: &OwnerFeeCarryV1,
+    assessment: &OwnerFeeAssessmentV1,
+    envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
+    envelope_len: u8,
+    backend: &B,
+) -> Result<AuthenticatedPayerAllocationSnapshotV1, CodecError> {
+    let account = PayerAllocationV1AccountV1::decode(bytes, assessment, envelopes)?;
+    if account.stored_bump != expected_bump || account.semantic.len() != envelope_len {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let data_id = payer_allocation_account_data_id_v1(bytes, backend)?;
+    authenticate_created_payer_allocation_snapshot_v1(
+        selected,
+        transition,
+        carry,
+        assessment,
+        &account.semantic,
+        envelopes,
+        envelope_len,
+        Identity32V1(data_id.bytes()),
+    )
+    .map_err(|_| CodecError::InvalidState)
+}
+
+/// Reauthenticate an immutable payer snapshot without rereading Reservations.
+///
+/// The live adapter must first authenticate program ownership, the canonical
+/// payer PDA, and immutability. Exact outer bytes supply the allocation
+/// evidence data ID; terminal carry supplies the selected owner fee. Neither
+/// this loader nor its result makes any claim about cash existence.
+pub fn reauthenticate_persisted_payer_snapshot_v1<B: Sha256BackendV1>(
+    bytes: &[u8],
+    expected_bump: u8,
+    selected: &SelectedCompositeFeeV1,
+    transition: &OwnerFeeTransitionIntentV1,
+    carry: &OwnerFeeCarryV1,
+    backend: &B,
+) -> Result<AuthenticatedPayerAllocationSnapshotV1, CodecError> {
+    let account = PayerAllocationV1AccountV1::decode_persisted(bytes)?;
+    if account.stored_bump != expected_bump {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let data_id = payer_allocation_account_data_id_v1(bytes, backend)?;
+    reauthenticate_persisted_payer_allocation_snapshot_v1(
+        selected,
+        transition,
+        carry,
+        &account.semantic,
+        Identity32V1(data_id.bytes()),
+    )
+    .map_err(|_| CodecError::InvalidState)
+}
+
+/// Project action 24's exact V3 owner fee without rereading Reservations.
+///
+/// The fresh owner-row PDA is equality-bound to the fee transition. The result
+/// exposes the exact payer outer complete-data ID as allocation evidence and
+/// carries no cash or Reservation assertion.
+#[allow(clippy::too_many_arguments)]
+pub fn reauthenticate_persisted_owner_fee_v3<B: Sha256BackendV1>(
+    bytes: &[u8],
+    expected_bump: u8,
+    selected: &SelectedCompositeFeeV1,
+    transition: &OwnerFeeTransitionIntentV1,
+    carry: &OwnerFeeCarryV1,
+    owner_settlement_account: Id32,
+    basis: OwnerSettlementExpectationBasisV3,
+    backend: &B,
+) -> Result<AuthenticatedSelectedOwnerFeeV3, CodecError> {
+    let snapshot = reauthenticate_persisted_payer_snapshot_v1(
+        bytes,
+        expected_bump,
+        selected,
+        transition,
+        carry,
+        backend,
+    )?;
+    project_pre_row_owner_fee_v3(
+        selected,
+        Identity32V1(owner_settlement_account.bytes()),
+        basis,
+        snapshot,
+    )
+    .map_err(|_| CodecError::InvalidState)
 }
 
 /// Hash the exact canonical SettlementCashPot semantic successor body.
