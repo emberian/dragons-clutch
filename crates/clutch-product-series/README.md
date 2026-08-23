@@ -293,6 +293,17 @@ identity bridge.
 | `SeriesFundingTermsV1` | 208: 16-byte header, Series ID `16..48`, lamport refund `48..80`, collateral refund token account `80..112`, neutral sink `112..144`, collateral mint `144..176`, token program `176..208` | `dragons-clutch/series-funding-terms/v1` |
 | `RegistryProgramReleaseV1` | 160: header `0..16`, Program/ProgramData/full-ProgramData SHA-256 `16..112`, deployment slot `112..120`, compiled capability-manifest ID `120..152`, reserved `152..160`; the release ID is derived from the complete body | `dragons-clutch/registry-program-release/v1` |
 | `RegistryCapabilityProfileV2` | 800: header `0..16`, exact RegistryRelease ID `16..48`, selector mappings and hard limits `48..96`, fourteen semantic-owner IDs `96..544`, immutable Realm collateral `544..744`, exact SummaryProgram body `744..800`; the capability-profile ID is derived from the complete body and is not stored inside it | `dragons-clutch/registry-capability-profile/v2` |
+| `RegistryCapabilityProfileV3` | 816: fresh V3 header/domain, exact RegistryRelease ID, selector mappings and hard limits including interval width, coordinates-per-advance, and Recovery progress-per-call, fourteen semantic-owner IDs, immutable Realm collateral, exact SummaryProgram body | `dragons-clutch/registry-capability-profile/v3` |
+| `SeriesFundingQuoteV2` | 648: withdrawn historical body with a quote-local eight-row Recovery attempt table; decode/audit only | `dragons-clutch/series-funding-quote/v2` |
+| `SeriesFundingQuoteV3` | 584: withdrawn provisional body whose 45-slot foundation omitted ProductReplayAnchor; decode/audit only | `dragons-clutch/series-funding-quote/v3` |
+| `SeriesFundingQuoteV4` | 592: fresh V4 header/domain, three distinct Recovery policy/schedule identities, six exact component allocations, exhaustive 46-slot Market foundation schedule including ProductReplayAnchor at core index 13, timeout, and separately named Recovery rent principal | `dragons-clutch/series-funding-quote/v4` |
+| `SeriesAttachmentPlanV4` | 112: fresh V4 header/domain, typed QuoteV4 ID, LiquidityFacilityPlan ID, WrapperRecipeSet ID | `dragons-clutch/series-attachment-plan/v4` |
+| `CompiledProductSeriesBundleV4` | 528: fresh V4 header/domain and sixteen exact graph edges, including typed ProfileV3, QuoteV4, and AttachmentV4 identities | `dragons-clutch/compiled-product-series-bundle/v4` |
+
+Artifact kinds 43, 48, 49, and 50 retain their historical V2 lengths and
+codecs for decoding and audit, but are withdrawn from new registration. Current
+ProfileV3 remains current at kind 51. Provisional kinds 52–54 are also
+withdrawn; current QuoteV4, BundleV4, and AttachmentV4 use kinds 55–57.
 
 ## Pure compilation and funding
 

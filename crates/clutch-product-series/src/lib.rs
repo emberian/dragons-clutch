@@ -21,12 +21,16 @@ mod codec;
 mod compile;
 mod compiler_output;
 mod compiler_output_v2;
+mod compiler_output_v3;
+mod compiler_output_v4;
+mod compiler_output_v5;
 mod foundation_funding;
 mod funding;
 mod funding_state;
 mod interval_consensus;
 mod market_family_aggregator;
 mod market_lifecycle;
+mod market_replay;
 mod product_registry;
 mod registry;
 mod source_series;
@@ -57,13 +61,34 @@ pub use compiler_output_v2::{
     ProductSeriesBundleInputsV2, COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V2_DOMAIN,
 };
+pub use compiler_output_v3::{
+    assemble_compiled_product_series_bundle_v3, CompiledProductSeriesBundleV3,
+    ProductSeriesBundleInputsV3, COMPILED_PRODUCT_SERIES_BUNDLE_V3_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V3_DOMAIN,
+};
+pub use compiler_output_v4::{
+    assemble_compiled_product_series_bundle_v4, CompiledProductSeriesBundleV4,
+    ProductSeriesBundleInputsV4, COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V4_DOMAIN,
+};
+pub use compiler_output_v5::{
+    assemble_compiled_product_series_bundle_v5, CompiledProductSeriesBundleV5,
+    ProductSeriesBundleInputsV5, COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
+};
 pub use foundation_funding::{
-    MarketFoundationScheduleV1, SeriesAttachmentPlanV2, SeriesFundingComponentV2,
-    SeriesFundingQuoteV2, SeriesMarketDispositionV1, MARKET_FOUNDATION_CORE_SLOT_COUNT_V1,
-    MARKET_FOUNDATION_MAX_OUTCOMES_V1, MARKET_FOUNDATION_SLOT_COUNT_V1,
-    SERIES_ATTACHMENT_PLAN_BYTES_V2, SERIES_ATTACHMENT_PLAN_V2_DOMAIN,
-    SERIES_FUNDING_COMPONENT_COUNT_V2, SERIES_FUNDING_QUOTE_BYTES_V2,
-    SERIES_FUNDING_QUOTE_V2_DOMAIN,
+    MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
+    SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesFundingComponentV2, SeriesFundingQuoteV2,
+    SeriesFundingQuoteV3, SeriesFundingQuoteV4, SeriesMarketDispositionV1,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_CORE_SLOT_COUNT_V2,
+    MARKET_FOUNDATION_MAX_OUTCOMES_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V2,
+    MARKET_FOUNDATION_SCHEDULE_V2_DOMAIN, MARKET_FOUNDATION_SLOT_COUNT_V1,
+    MARKET_FOUNDATION_SLOT_COUNT_V2, SERIES_ATTACHMENT_PLAN_BYTES_V2,
+    SERIES_ATTACHMENT_PLAN_BYTES_V3, SERIES_ATTACHMENT_PLAN_BYTES_V4,
+    SERIES_ATTACHMENT_PLAN_V2_DOMAIN, SERIES_ATTACHMENT_PLAN_V3_DOMAIN,
+    SERIES_ATTACHMENT_PLAN_V4_DOMAIN, SERIES_FUNDING_COMPONENT_COUNT_V2,
+    SERIES_FUNDING_QUOTE_BYTES_V2, SERIES_FUNDING_QUOTE_BYTES_V3, SERIES_FUNDING_QUOTE_BYTES_V4,
+    SERIES_FUNDING_QUOTE_V2_DOMAIN, SERIES_FUNDING_QUOTE_V3_DOMAIN, SERIES_FUNDING_QUOTE_V4_DOMAIN,
 };
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
@@ -106,8 +131,8 @@ pub use market_family_aggregator::{
     MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
 };
 pub use market_lifecycle::{
-    MarketFoundationAccountGraphV1, MarketFoundationCapitalV1, MarketFoundationProgressV1,
-    MarketFoundationSlotV1, MarketFoundationStepProjectionV1, MarketFoundingAbortProjectionV1,
+    MarketFoundationAccountGraphV2, MarketFoundationCapitalV1, MarketFoundationProgressV1,
+    MarketFoundationSlotV2, MarketFoundationStepProjectionV2, MarketFoundingAbortProjectionV1,
     MarketInstanceTerminalProjectionV1, MarketLifecycleBindingV1, MarketLifecyclePhaseV1,
     MarketLifecycleRootV1, MarketResolutionActivationV1, MarketSharedCoreTerminalProjectionV1,
     MarketSharedCoreV1, SeriesLinkObligationAdmissionProjectionV1,
@@ -121,22 +146,31 @@ pub use market_lifecycle::{
     MARKET_RESOLUTION_ACTIVATION_DOMAIN_V1, MARKET_SHARED_CORE_COUNT_V1,
     SERIES_LINK_OBLIGATION_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_DOMAIN_V1,
 };
+pub use market_replay::{
+    MarketLifecycleReplayReceiptV1, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
+    MARKET_LIFECYCLE_REPLAY_RECEIPT_DOMAIN_V1,
+};
 pub use product_registry::{
-    RegistryCapabilityProfileV2, RegistryProgramReleaseV1, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
-    REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
-    REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
+    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProfileV4,
+    RegistryProgramReleaseV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
+    REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN,
+    REGISTRY_CAPABILITY_PROFILE_V3_BYTES, REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN,
+    REGISTRY_CAPABILITY_PROFILE_V4_BYTES, REGISTRY_CAPABILITY_PROFILE_V4_DOMAIN,
+    REGISTRY_PROGRAM_RELEASE_V1_BYTES, REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
+    REGISTRY_PROGRAM_RELEASE_V2_BYTES, REGISTRY_PROGRAM_RELEASE_V2_DOMAIN,
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
 };
 pub use source_series::{
-    compile_source_occurrence_v3, AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
+    compile_source_occurrence_v3, compile_source_occurrence_v4,
+    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
     SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use successor::{
-    compile_ordinal_v2, compile_ordinal_v3, project_component_debits_v2,
-    AdapterFulfillmentProjectionV2, CapabilitySemanticOwnersV2, CompiledOrdinalV2,
-    MarketGenesisProfileV2, MarketInstancePreimageV2, PriceMeasurePolicyV1,
+    compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, compile_ordinal_v5,
+    project_component_debits_v2, AdapterFulfillmentProjectionV2, CapabilitySemanticOwnersV2,
+    CompiledOrdinalV2, MarketGenesisProfileV2, MarketInstancePreimageV2, PriceMeasurePolicyV1,
     ProjectedComponentPresenceV2, RegistryCapabilityProjectionV2, SeriesFundingTermsV2,
     SeriesPlanV5, MARKET_GENESIS_PROFILE_V2_BYTES, MARKET_GENESIS_PROFILE_V2_DOMAIN,
     MARKET_INSTANCE_PREIMAGE_V2_BYTES, MARKET_INSTANCE_V2_DOMAIN, PRICE_MEASURE_POLICY_BYTES,
@@ -244,24 +278,64 @@ typed_id!(
     "Typed identity of one `CompiledProductSeriesBundleV2` compiler output."
 );
 typed_id!(
+    CompiledProductSeriesBundleV3Id,
+    "Typed identity of the withdrawn provisional `CompiledProductSeriesBundleV3`."
+);
+typed_id!(
+    CompiledProductSeriesBundleV4Id,
+    "Typed identity of one historical `CompiledProductSeriesBundleV4` compiler output."
+);
+typed_id!(
+    CompiledProductSeriesBundleV5Id,
+    "Typed identity of one current `CompiledProductSeriesBundleV5` compiler output."
+);
+typed_id!(
     SeriesFundingQuoteId,
     "Typed identity of one `SeriesFundingQuoteV1`."
 );
 typed_id!(
     SeriesFundingQuoteV2Id,
-    "Typed identity of one six-compartment `SeriesFundingQuoteV2`."
+    "Typed identity of the withdrawn six-compartment `SeriesFundingQuoteV2`."
+);
+typed_id!(
+    SeriesFundingQuoteV3Id,
+    "Typed identity of the withdrawn provisional `SeriesFundingQuoteV3`."
+);
+typed_id!(
+    SeriesAttachmentPlanV3Id,
+    "Typed identity of the withdrawn provisional `SeriesAttachmentPlanV3`."
+);
+typed_id!(
+    SeriesFundingQuoteV4Id,
+    "Typed identity of one current 46-slot `SeriesFundingQuoteV4`."
+);
+typed_id!(
+    SeriesAttachmentPlanV4Id,
+    "Typed identity of one current `SeriesAttachmentPlanV4`."
 );
 typed_id!(
     MarketFoundationScheduleV1Id,
     "Typed identity of one itemized shared-Market foundation schedule."
 );
 typed_id!(
+    MarketFoundationScheduleV2Id,
+    "Typed identity of one exhaustive 46-slot shared-Market foundation schedule."
+);
+typed_id!(
     MarketFoundationAccountGraphV1Id,
     "Typed identity of one canonical shared-Market foundation account graph."
 );
 typed_id!(
+    MarketFoundationAccountGraphV2Id,
+    "Typed identity of one canonical 46-slot shared-Market foundation account graph."
+);
+typed_id!(
     MarketLifecycleRootV1Id,
     "Typed semantic-state identity of one shared Market lifecycle root."
+);
+typed_id!(
+    MarketLifecycleReplayReceiptV1Id,
+    "Typed identity of one permanent `MarketLifecycleReplayReceiptV1`."
 );
 typed_id!(
     SeriesMarketLinkV1Id,
@@ -286,11 +360,23 @@ typed_id!(
 typed_id!(SeriesPlanV5Id, "Typed identity of one `SeriesPlanV5`.");
 typed_id!(
     RegistryProgramReleaseV1Id,
-    "Typed identity of one immutable `RegistryProgramReleaseV1`."
+    "Typed identity of one historical immutable `RegistryProgramReleaseV1`."
+);
+typed_id!(
+    RegistryProgramReleaseV2Id,
+    "Typed identity of one locus-explicit immutable `RegistryProgramReleaseV2`."
 );
 typed_id!(
     RegistryCapabilityProfileV2Id,
-    "Typed identity of one immutable `RegistryCapabilityProfileV2`."
+    "Typed identity of one withdrawn immutable `RegistryCapabilityProfileV2`."
+);
+typed_id!(
+    RegistryCapabilityProfileV3Id,
+    "Typed identity of one historical immutable `RegistryCapabilityProfileV3`."
+);
+typed_id!(
+    RegistryCapabilityProfileV4Id,
+    "Typed identity of one ReleaseV2-bound immutable `RegistryCapabilityProfileV4`."
 );
 typed_id!(
     SeriesFundingTermsV2Id,

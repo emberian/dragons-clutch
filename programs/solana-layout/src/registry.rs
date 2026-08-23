@@ -212,7 +212,14 @@ pub const DEALER_POLICY_ACCOUNT_BYTES: usize =
 /// Source/Series registry account discriminator.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
 /// Source/Series registry account version.
-pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current Source/Series registry account version retaining BundleV5.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical decoder coordinate retained for untrusted index clients only.
+/// Runtime authority must use [`SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2`].
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2")]
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 =
+    SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1;
 /// Source/Series present-funding account discriminator.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 /// Source/Series present-funding account version.
@@ -475,6 +482,10 @@ pub const DEALER_COVERED_TERMINAL_ACCOUNT_VERSION: u8 = 2;
 /// Exact attachment bytes including the Dealer global envelope.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
     DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 5_436;
+/// Permanent compact Product Market-lifecycle replay receipt discriminator.
+pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
+/// First Product Market-lifecycle replay receipt version.
+pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -482,6 +493,7 @@ pub const MAX_EXTENSION_PAYLOAD_BYTES: usize = MAX_INTENT_BYTES - EXTENSION_ENVE
 
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 74);
 const _: () = assert!(DEALER_COVERED_SELECTION_ACCOUNT_TAG == 0xae);
+const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb0);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -1023,10 +1035,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-registry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-registry-v1-account",
+        name: "source-series-registry-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1558,6 +1579,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-series-market-link-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+            version: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-market-lifecycle-replay-v1-account",
     },
 ];
 
@@ -2830,7 +2860,7 @@ mod tests {
             (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
             (
                 SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
             ),
             (
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
