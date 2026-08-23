@@ -15,6 +15,10 @@ use clutch_product_series::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::market_interval_cell_v2::{
+    FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellStateIdV2,
+    FailureMarketIntervalCellV2,
+};
 use crate::market_interval_history_v2::{
     FailureMarketIntervalFundingReceiptV2, FailureMarketIntervalHistoryAppendReceiptV2,
     FailureMarketIntervalHistoryRootV2, FailureMarketIntervalHistoryStateIdV2,
@@ -24,6 +28,9 @@ use crate::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateIdV1, FailureMarketAdmissionStateV1,
     FailureMarketRecoveryFundingReceiptIdV1,
 };
+use crate::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use crate::market_replay_v2::FailureMarketReplayTerminalReceiptV2;
+use crate::retirement_v1::ClosedFailureRecoveryJoinIdV1;
 use crate::{Error, FailurePolicyBindingId, Result};
 
 const RUNTIME_ADMISSION_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-runtime-admission/v1";
@@ -32,6 +39,8 @@ const SESSION_BEGIN_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-b
 const SESSION_ADVANCE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-advance/v1";
 const SESSION_RESOLVE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-resolve/v1";
 const SESSION_CLOSE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-close/v1";
+const RECOVERY_CLOSE_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-recovery-close/v2";
+const FAMILY_TERMINAL_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-family-terminal/v2";
 const MAGIC_V1: [u8; 8] = *b"DCFMRUN1";
 const VERSION_V1: u16 = 1;
 const HEADER_BYTES_V1: usize = 16;
@@ -91,6 +100,248 @@ runtime_id!(
     FailureMarketSessionTransitionReceiptIdV1,
     "Typed identity of one authenticated subordinate session transition."
 );
+runtime_id!(
+    FailureMarketRecoveryCloseReceiptIdV2,
+    "Typed identity of the exact shared Recovery close admitted by the Market runtime."
+);
+runtime_id!(
+    FailureMarketFamilyAggregateReceiptIdV2,
+    "Typed identity of the Recovery-closed runtime and exact reusable interval pair."
+);
+runtime_id!(
+    FailureMarketFamilyTerminalReceiptIdV2,
+    "Typed identity of one exhaustive reusable-session Failure-family terminal receipt."
+);
+
+/// Only successful terminal disposition currently consumable by Product.
+///
+/// Exhausted or refused subordinate sessions remain appendable history, but
+/// they cannot terminalize the shared Market. Product must first authenticate
+/// one exact Resolution V5 activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FailureMarketFamilyTerminalDispositionV2 {
+    /// Product authenticated the exact final Resolution V5 postimage.
+    Resolved = 1,
+}
+
+impl FailureMarketFamilyTerminalDispositionV2 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Resolved => 1,
+        }
+    }
+}
+
+/// Complete expected close of the sole shared liveness Recovery custody.
+///
+/// Public construction is not authority. The SBF adapter must reconstruct
+/// these facts from the live runtime, exact Idle interval pair, Product's
+/// private Resolution activation, and the complete liveness close poststate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRecoveryCloseFactsV2 {
+    /// Complete runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Complete immutable admission identity.
+    pub admission_state_id: FailureMarketAdmissionStateIdV1,
+    /// Shared Failure policy.
+    pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Full-width economic Market.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Shared Failure/liveness generation.
+    pub generation: u64,
+    /// Mutable Market-scoped Failure runtime account.
+    pub runtime_account_id: FailureMarketAccountIdV1,
+    /// Canonical Idle reusable interval-cell postimage.
+    pub interval_cell_state_id: FailureMarketIntervalCellStateIdV2,
+    /// Complete unsealed append-only history prestate.
+    pub interval_history_state_id: FailureMarketIntervalHistoryStateIdV2,
+    /// Sole append-only history root.
+    pub interval_history_root: FailureMarketIntervalHistoryRootV2,
+    /// Number of subordinate terminal sessions folded into history.
+    pub completed_session_count: u64,
+    /// Exact aggregate paid-call count.
+    pub completed_work_calls: u64,
+    /// Exact aggregate keeper rewards.
+    pub exact_reward_lamports: u64,
+    /// Latest folded subordinate terminal receipt.
+    pub latest_interval_terminal_receipt_id: ProductContentId,
+    /// Product-private once-only Resolution V5 activation.
+    pub resolution_activation_receipt_id: ProductContentId,
+    /// Failure semantic owner's exact Recovery terminal receipt.
+    pub recovery_terminal_receipt_id: ProductContentId,
+    /// Liveness adapter's re-executed exact successful Recovery close.
+    pub closed_recovery_join_id: ClosedFailureRecoveryJoinIdV1,
+}
+
+/// Private authority over Product Resolution and the full liveness close.
+pub trait AuthenticatedFailureMarketRecoveryCloseV2 {
+    /// Authenticate every expected fact without lowering either owner to IDs.
+    fn authenticate_failure_market_recovery_close(
+        &self,
+        _expected: FailureMarketRecoveryCloseFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Private-field receipt for the successful shared Recovery close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRecoveryCloseReceiptV2 {
+    id: FailureMarketRecoveryCloseReceiptIdV2,
+    facts: FailureMarketRecoveryCloseFactsV2,
+}
+
+impl FailureMarketRecoveryCloseReceiptV2 {
+    /// Exact close receipt identity stored by the Market runtime.
+    pub const fn id(self) -> FailureMarketRecoveryCloseReceiptIdV2 {
+        self.id
+    }
+
+    /// Complete authenticated close facts.
+    pub const fn facts(self) -> FailureMarketRecoveryCloseFactsV2 {
+        self.facts
+    }
+}
+
+/// Complete expected pre-replay Failure-family aggregate projection.
+///
+/// The append-only history is still unsealed in this prestate. The caller
+/// must next seal this receipt into the permanent Failure replay. This
+/// intermediate receipt breaks the otherwise recursive final-receipt/replay
+/// identity dependency and is never directly consumable by Product.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketFamilyAggregateFactsV2 {
+    /// Successful Market terminal classification.
+    pub disposition: FailureMarketFamilyTerminalDispositionV2,
+    /// Complete runtime prestate after Recovery closed.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Complete immutable admission identity.
+    pub admission_state_id: FailureMarketAdmissionStateIdV1,
+    /// Shared Failure policy.
+    pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Full-width economic Market.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Shared Failure/liveness generation.
+    pub generation: u64,
+    /// Immutable Failure admission root.
+    pub admission_root_account_id: FailureMarketAccountIdV1,
+    /// Distinct mutable Market-scoped Failure runtime root.
+    pub runtime_root_account_id: FailureMarketAccountIdV1,
+    /// Canonical reusable interval cell.
+    pub interval_work_account_id: FailureMarketAccountIdV1,
+    /// Append-only interval history account.
+    pub interval_history_account_id: FailureMarketAccountIdV1,
+    /// Canonical Idle cell postimage.
+    pub interval_cell_state_id: FailureMarketIntervalCellStateIdV2,
+    /// Complete unsealed history prestate.
+    pub interval_history_state_id: FailureMarketIntervalHistoryStateIdV2,
+    /// Sole aggregate history root.
+    pub interval_history_root: FailureMarketIntervalHistoryRootV2,
+    /// Exact number of folded terminal sessions.
+    pub completed_session_count: u64,
+    /// Exact aggregate paid calls.
+    pub completed_work_calls: u64,
+    /// Exact aggregate keeper rewards.
+    pub exact_reward_lamports: u64,
+    /// Fresh shared Recovery close receipt retained by the runtime.
+    pub recovery_close_receipt_id: FailureMarketRecoveryCloseReceiptIdV2,
+    /// Product-private once-only Resolution V5 activation.
+    pub resolution_activation_receipt_id: ProductContentId,
+}
+
+/// Private authority over the exact Idle pair and Recovery-closed runtime.
+pub trait AuthenticatedFailureMarketFamilyAggregateV2 {
+    /// Authenticate the pre-replay aggregate without accepting caller IDs.
+    fn authenticate_failure_market_family_aggregate(
+        &self,
+        _expected: FailureMarketFamilyAggregateFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Private-field pre-replay aggregate receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketFamilyAggregateReceiptV2 {
+    id: FailureMarketFamilyAggregateReceiptIdV2,
+    facts: FailureMarketFamilyAggregateFactsV2,
+}
+
+impl FailureMarketFamilyAggregateReceiptV2 {
+    /// Exact aggregate identity consumed only by the permanent replay owner.
+    pub const fn id(self) -> FailureMarketFamilyAggregateReceiptIdV2 {
+        self.id
+    }
+
+    /// Complete authenticated aggregate facts.
+    pub const fn facts(self) -> FailureMarketFamilyAggregateFactsV2 {
+        self.facts
+    }
+}
+
+/// Complete final Failure-family terminal projection.
+///
+/// This is the sole receipt Product may consume. It joins the exact aggregate
+/// to the permanent replay owner's authenticated terminal postimage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketFamilyTerminalFactsV2 {
+    /// Successful Market terminal classification.
+    pub disposition: FailureMarketFamilyTerminalDispositionV2,
+    /// Intermediate exact family aggregate.
+    pub family_aggregate_receipt_id: FailureMarketFamilyAggregateReceiptIdV2,
+    /// Permanent shared-Market Failure replay account.
+    pub failure_replay_account_id: FailureMarketAccountIdV1,
+    /// Exact terminal postimage receipt minted by the replay owner.
+    pub failure_replay_terminal_receipt_id:
+        crate::market_replay_v2::FailureMarketReplayTerminalReceiptIdV2,
+    /// Complete runtime prestate after Recovery closed.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Complete immutable admission identity.
+    pub admission_state_id: FailureMarketAdmissionStateIdV1,
+    /// Shared Failure policy.
+    pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Full-width economic Market.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Shared Failure/liveness generation.
+    pub generation: u64,
+    /// Exact unsealed append-only history prestate.
+    pub interval_history_state_id: FailureMarketIntervalHistoryStateIdV2,
+    /// Sole append-only history root.
+    pub interval_history_root: FailureMarketIntervalHistoryRootV2,
+    /// Exact number of folded sessions.
+    pub completed_session_count: u64,
+}
+
+/// Private authority over the same-call aggregate and permanent replay seal.
+pub trait AuthenticatedFailureMarketFamilyTerminalV2 {
+    /// Authenticate exhaustive terminality without accepting caller IDs.
+    fn authenticate_failure_market_family_terminal(
+        &self,
+        _expected: FailureMarketFamilyTerminalFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Private-field exhaustive Failure-family receipt consumed by Product.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketFamilyTerminalReceiptV2 {
+    id: FailureMarketFamilyTerminalReceiptIdV2,
+    facts: FailureMarketFamilyTerminalFactsV2,
+}
+
+impl FailureMarketFamilyTerminalReceiptV2 {
+    /// Exact receipt identity consumed by Product and sealed into history.
+    pub const fn id(self) -> FailureMarketFamilyTerminalReceiptIdV2 {
+        self.id
+    }
+
+    /// Complete authenticated family terminal facts.
+    pub const fn facts(self) -> FailureMarketFamilyTerminalFactsV2 {
+        self.facts
+    }
+}
 /// Complete subordinate interval-session descriptor. This projection is not
 /// authority and never changes the shared runtime account identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -772,6 +1023,36 @@ impl FailureMarketSessionTransitionPlanV1 {
     }
 }
 
+/// One stale-checked shared-runtime terminal transition.
+///
+/// It never mutates a Product Series link: terminalization is Market-scoped
+/// and is admitted only while the reusable cell is canonically Idle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRuntimeTerminalPlanV2 {
+    before: FailureMarketRuntimeV1,
+    after: FailureMarketRuntimeV1,
+}
+
+impl FailureMarketRuntimeTerminalPlanV2 {
+    /// Complete resulting shared runtime.
+    pub const fn resulting_runtime(self) -> FailureMarketRuntimeV1 {
+        self.after
+    }
+}
+
+impl FailureMarketRuntimeV1 {
+    /// Commit one exact Recovery-close or family-terminal transition.
+    pub fn commit_terminal_plan(&mut self, plan: FailureMarketRuntimeTerminalPlanV2) -> Result<()> {
+        self.validate()?;
+        if *self != plan.before {
+            return Err(Error::StalePlan);
+        }
+        plan.after.validate()?;
+        *self = plan.after;
+        Ok(())
+    }
+}
+
 /// Plan one subordinate Series/Source session pin. A new session may begin
 /// after the prior interval is atomically archived and its cell reset, but never after shared
 /// Recovery or Failure-family terminalization.
@@ -1094,6 +1375,343 @@ pub fn plan_close_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     })
 }
 
+/// Close the sole shared Recovery custody after Product authenticated one
+/// exact Resolution V5 activation and every subordinate session write is
+/// durably folded into the Idle interval pair.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_close_failure_market_recovery_v2<
+    A: AuthenticatedFailureMarketRecoveryCloseV2 + ?Sized,
+>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    cell: FailureMarketIntervalCellV2,
+    history: FailureMarketIntervalHistoryV2,
+    resolution_activation_receipt_id: ProductContentId,
+    recovery_terminal_receipt_id: ProductContentId,
+    closed_recovery_join_id: ClosedFailureRecoveryJoinIdV1,
+) -> Result<(
+    FailureMarketRuntimeTerminalPlanV2,
+    FailureMarketRecoveryCloseReceiptV2,
+)> {
+    runtime.validate_against_admission(admission)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::IntervalArchived {
+        return Err(Error::WrongPhase);
+    }
+    let (interval_cell_state_id, interval_history_state_id) = validate_terminal_interval_pair(
+        runtime,
+        admission,
+        interval_funding,
+        quote,
+        cell,
+        history,
+    )?;
+    for id in [
+        resolution_activation_receipt_id.bytes(),
+        recovery_terminal_receipt_id.bytes(),
+        closed_recovery_join_id.bytes(),
+    ] {
+        require_live(id)?;
+    }
+    if resolution_activation_receipt_id == recovery_terminal_receipt_id
+        || resolution_activation_receipt_id.bytes() == closed_recovery_join_id.bytes()
+        || recovery_terminal_receipt_id.bytes() == closed_recovery_join_id.bytes()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let policy = admission.binding().facts();
+    let runtime_before = runtime.commitment()?;
+    let facts = FailureMarketRecoveryCloseFactsV2 {
+        runtime_before,
+        admission_state_id: admission.id()?,
+        failure_policy_binding_id: admission.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        runtime_account_id: runtime.runtime_account_id,
+        interval_cell_state_id,
+        interval_history_state_id,
+        interval_history_root: history.history_root(),
+        completed_session_count: history.completed_session_count(),
+        completed_work_calls: history.completed_work_calls(),
+        exact_reward_lamports: history.exact_reward_lamports(),
+        latest_interval_terminal_receipt_id: history.latest_terminal_receipt_id(),
+        resolution_activation_receipt_id,
+        recovery_terminal_receipt_id,
+        closed_recovery_join_id,
+    };
+    authority.authenticate_failure_market_recovery_close(facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(RECOVERY_CLOSE_DOMAIN_V2);
+    hash_recovery_close_facts(&mut hasher, facts);
+    let id = FailureMarketRecoveryCloseReceiptIdV2::from_bytes(hasher.finalize().into());
+    require_live(id.bytes())?;
+    let mut after = runtime;
+    after.phase = FailureMarketRuntimePhaseV1::RecoveryClosed;
+    after.transition_sequence = after
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    after.session_ids[RECOVERY_TERMINAL_RECEIPT_INDEX_V1] =
+        ProductContentId::from_bytes(id.bytes());
+    after.validate_against_admission(admission)?;
+    Ok((
+        FailureMarketRuntimeTerminalPlanV2 {
+            before: runtime,
+            after,
+        },
+        FailureMarketRecoveryCloseReceiptV2 { id, facts },
+    ))
+}
+
+/// Mint the exact pre-replay family aggregate from the Recovery-closed
+/// runtime and canonical Idle interval pair.
+#[allow(clippy::too_many_arguments)]
+pub fn admit_failure_market_family_aggregate_v2<
+    A: AuthenticatedFailureMarketFamilyAggregateV2 + ?Sized,
+>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    cell: FailureMarketIntervalCellV2,
+    history: FailureMarketIntervalHistoryV2,
+    recovery_close: FailureMarketRecoveryCloseReceiptV2,
+) -> Result<FailureMarketFamilyAggregateReceiptV2> {
+    runtime.validate_against_admission(admission)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::RecoveryClosed
+        || runtime.recovery_terminal_receipt_id().bytes() != recovery_close.id().bytes()
+    {
+        return Err(Error::WrongPhase);
+    }
+    let (interval_cell_state_id, interval_history_state_id) = validate_terminal_interval_pair(
+        runtime,
+        admission,
+        interval_funding,
+        quote,
+        cell,
+        history,
+    )?;
+    let recovery_facts = recovery_close.facts();
+    let runtime_before = runtime.commitment()?;
+    if recovery_facts.admission_state_id != admission.id()?
+        || recovery_facts.failure_policy_binding_id != admission.binding().id()
+        || recovery_facts.runtime_account_id != runtime.runtime_account_id
+        || recovery_facts.interval_cell_state_id != interval_cell_state_id
+        || recovery_facts.interval_history_state_id != interval_history_state_id
+        || recovery_facts.interval_history_root != history.history_root()
+        || recovery_facts.completed_session_count != history.completed_session_count()
+        || recovery_facts.completed_work_calls != history.completed_work_calls()
+        || recovery_facts.exact_reward_lamports != history.exact_reward_lamports()
+        || recovery_facts.latest_interval_terminal_receipt_id
+            != history.latest_terminal_receipt_id()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let policy = admission.binding().facts();
+    let facts = FailureMarketFamilyAggregateFactsV2 {
+        disposition: FailureMarketFamilyTerminalDispositionV2::Resolved,
+        runtime_before,
+        admission_state_id: admission.id()?,
+        failure_policy_binding_id: admission.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        admission_root_account_id: admission.root_funding().facts().root_account_id,
+        runtime_root_account_id: runtime.runtime_account_id,
+        interval_work_account_id: history.work_account(),
+        interval_history_account_id: history.history_account(),
+        interval_cell_state_id,
+        interval_history_state_id,
+        interval_history_root: history.history_root(),
+        completed_session_count: history.completed_session_count(),
+        completed_work_calls: history.completed_work_calls(),
+        exact_reward_lamports: history.exact_reward_lamports(),
+        recovery_close_receipt_id: recovery_close.id(),
+        resolution_activation_receipt_id: recovery_facts.resolution_activation_receipt_id,
+    };
+    authority.authenticate_failure_market_family_aggregate(facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(FAMILY_TERMINAL_DOMAIN_V2);
+    hasher.update(b"aggregate");
+    hash_family_aggregate_facts(&mut hasher, facts);
+    let id = FailureMarketFamilyAggregateReceiptIdV2::from_bytes(hasher.finalize().into());
+    require_live(id.bytes())?;
+    Ok(FailureMarketFamilyAggregateReceiptV2 { id, facts })
+}
+
+/// Join the family aggregate to its exact permanent replay terminal postimage
+/// and project the only runtime `FamilyTerminal` transition.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_finalize_failure_market_family_v2<
+    A: AuthenticatedFailureMarketFamilyTerminalV2 + ?Sized,
+>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    cell: FailureMarketIntervalCellV2,
+    history: FailureMarketIntervalHistoryV2,
+    aggregate: FailureMarketFamilyAggregateReceiptV2,
+    replay_terminal: FailureMarketReplayTerminalReceiptV2,
+) -> Result<(
+    FailureMarketRuntimeTerminalPlanV2,
+    FailureMarketFamilyTerminalReceiptV2,
+)> {
+    runtime.validate_against_admission(admission)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::RecoveryClosed {
+        return Err(Error::WrongPhase);
+    }
+    let (_, interval_history_state_id) = validate_terminal_interval_pair(
+        runtime,
+        admission,
+        interval_funding,
+        quote,
+        cell,
+        history,
+    )?;
+    let aggregate_facts = aggregate.facts();
+    let replay_facts = replay_terminal.facts();
+    let runtime_before = runtime.commitment()?;
+    if aggregate_facts.runtime_before != runtime_before
+        || aggregate_facts.admission_state_id != admission.id()?
+        || aggregate_facts.failure_policy_binding_id != admission.binding().id()
+        || aggregate_facts.interval_cell_state_id != cell.id()?
+        || aggregate_facts.interval_history_state_id != interval_history_state_id
+        || aggregate_facts.interval_history_root != history.history_root()
+        || aggregate_facts.completed_session_count != history.completed_session_count()
+        || replay_facts.family_aggregate_receipt_id != aggregate.id()
+        || replay_facts.runtime_terminal_state_commitment != runtime_before
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let policy = admission.binding().facts();
+    let facts = FailureMarketFamilyTerminalFactsV2 {
+        disposition: FailureMarketFamilyTerminalDispositionV2::Resolved,
+        family_aggregate_receipt_id: aggregate.id(),
+        failure_replay_account_id: replay_facts.replay_account,
+        failure_replay_terminal_receipt_id: replay_terminal.id(),
+        runtime_before,
+        admission_state_id: admission.id()?,
+        failure_policy_binding_id: admission.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        interval_history_state_id,
+        interval_history_root: history.history_root(),
+        completed_session_count: history.completed_session_count(),
+    };
+    authority.authenticate_failure_market_family_terminal(facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(FAMILY_TERMINAL_DOMAIN_V2);
+    hasher.update(b"final");
+    hash_family_terminal_facts(&mut hasher, facts);
+    let id = FailureMarketFamilyTerminalReceiptIdV2::from_bytes(hasher.finalize().into());
+    require_live(id.bytes())?;
+    let mut after = runtime;
+    after.phase = FailureMarketRuntimePhaseV1::FamilyTerminal;
+    after.transition_sequence = after
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    after.session_ids[FAMILY_TERMINAL_RECEIPT_INDEX_V1] = ProductContentId::from_bytes(id.bytes());
+    after.validate_against_admission(admission)?;
+    Ok((
+        FailureMarketRuntimeTerminalPlanV2 {
+            before: runtime,
+            after,
+        },
+        FailureMarketFamilyTerminalReceiptV2 { id, facts },
+    ))
+}
+
+fn validate_terminal_interval_pair(
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    cell: FailureMarketIntervalCellV2,
+    history: FailureMarketIntervalHistoryV2,
+) -> Result<(
+    FailureMarketIntervalCellStateIdV2,
+    FailureMarketIntervalHistoryStateIdV2,
+)> {
+    cell.validate_against(admission, interval_funding, history, quote)?;
+    history.validate_against(admission, quote)?;
+    if cell.phase() != FailureMarketIntervalCellPhaseV2::Idle
+        || cell.failure_policy_binding_id() != runtime.policy_binding_id
+        || cell.market_instance_id() != admission.binding().facts().market_instance_id
+        || cell.generation() != admission.binding().facts().generation
+        || cell.funding_receipt_id() != interval_funding.id()
+        || cell.history_account() != history.history_account()
+        || cell.completed_session_count() != history.completed_session_count()
+        || history.completed_session_count() == 0
+        || history.history_root() != runtime.session_history_commitment()
+        || history.completed_session_count() != runtime.completed_session_count
+        || history.latest_terminal_receipt_id() != runtime.interval_terminal_receipt_id()
+        || history.family_terminal_receipt_id().bytes() != [0; 32]
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok((cell.id()?, history.id()?))
+}
+
+fn hash_recovery_close_facts(hasher: &mut Sha256, facts: FailureMarketRecoveryCloseFactsV2) {
+    hasher.update(facts.runtime_before.bytes());
+    hasher.update(facts.admission_state_id.bytes());
+    hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.market_instance_id.bytes());
+    hasher.update(facts.generation.to_le_bytes());
+    hasher.update(facts.runtime_account_id.bytes());
+    hasher.update(facts.interval_cell_state_id.bytes());
+    hasher.update(facts.interval_history_state_id.bytes());
+    hasher.update(facts.interval_history_root.bytes());
+    hasher.update(facts.completed_session_count.to_le_bytes());
+    hasher.update(facts.completed_work_calls.to_le_bytes());
+    hasher.update(facts.exact_reward_lamports.to_le_bytes());
+    hasher.update(facts.latest_interval_terminal_receipt_id.bytes());
+    hasher.update(facts.resolution_activation_receipt_id.bytes());
+    hasher.update(facts.recovery_terminal_receipt_id.bytes());
+    hasher.update(facts.closed_recovery_join_id.bytes());
+}
+
+fn hash_family_aggregate_facts(hasher: &mut Sha256, facts: FailureMarketFamilyAggregateFactsV2) {
+    hasher.update([facts.disposition.byte()]);
+    hasher.update(facts.runtime_before.bytes());
+    hasher.update(facts.admission_state_id.bytes());
+    hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.market_instance_id.bytes());
+    hasher.update(facts.generation.to_le_bytes());
+    hasher.update(facts.admission_root_account_id.bytes());
+    hasher.update(facts.runtime_root_account_id.bytes());
+    hasher.update(facts.interval_work_account_id.bytes());
+    hasher.update(facts.interval_history_account_id.bytes());
+    hasher.update(facts.interval_cell_state_id.bytes());
+    hasher.update(facts.interval_history_state_id.bytes());
+    hasher.update(facts.interval_history_root.bytes());
+    hasher.update(facts.completed_session_count.to_le_bytes());
+    hasher.update(facts.completed_work_calls.to_le_bytes());
+    hasher.update(facts.exact_reward_lamports.to_le_bytes());
+    hasher.update(facts.recovery_close_receipt_id.bytes());
+    hasher.update(facts.resolution_activation_receipt_id.bytes());
+}
+
+fn hash_family_terminal_facts(hasher: &mut Sha256, facts: FailureMarketFamilyTerminalFactsV2) {
+    hasher.update([facts.disposition.byte()]);
+    hasher.update(facts.family_aggregate_receipt_id.bytes());
+    hasher.update(facts.failure_replay_account_id.bytes());
+    hasher.update(facts.failure_replay_terminal_receipt_id.bytes());
+    hasher.update(facts.runtime_before.bytes());
+    hasher.update(facts.admission_state_id.bytes());
+    hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.market_instance_id.bytes());
+    hasher.update(facts.generation.to_le_bytes());
+    hasher.update(facts.interval_history_state_id.bytes());
+    hasher.update(facts.interval_history_root.bytes());
+    hasher.update(facts.completed_session_count.to_le_bytes());
+}
+
 fn validate_session_descriptor(
     runtime: FailureMarketRuntimeV1,
     admission: FailureMarketAdmissionStateV1,
@@ -1346,7 +1964,7 @@ mod tests {
         ComponentDebitV1, EvidenceOnlyRecoveryPolicyId, MarketGenesisProfileV2Id,
         NativeClaimBasisId, PriceMeasurePolicyV1Id, ProductTemplateId,
         QuantizedIntervalConsensusProfileV1Id, RecoveryAttemptFundingV1,
-        RegistryCapabilityProfileV2Id, RegistryProgramReleaseV1Id, SeriesFundingQuoteV1,
+        RegistryCapabilityProfileV4Id, RegistryProgramReleaseV2Id, SeriesFundingQuoteV1,
         SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id, SeriesLinkObligationConfigurationV1,
         SeriesLinkObligationStatusV1, SeriesMarketDispositionV1, SeriesMarketLinkBindingV1,
         MAX_RECOVERY_ATTEMPTS,
@@ -1499,8 +2117,8 @@ mod tests {
             price_measure_policy_id: PriceMeasurePolicyV1Id::from_bytes([5; 32]),
             market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes([6; 32]),
             relation_policy_id: ProductContentId::from_bytes([7; 32]),
-            registry_release_id: RegistryProgramReleaseV1Id::from_bytes([8; 32]),
-            capability_profile_id: RegistryCapabilityProfileV2Id::from_bytes([9; 32]),
+            registry_release_id: RegistryProgramReleaseV2Id::from_bytes([8; 32]),
+            capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes([9; 32]),
             interval_consensus_profile_id: QuantizedIntervalConsensusProfileV1Id::from_bytes(
                 [10; 32],
             ),
@@ -1841,5 +2459,53 @@ mod tests {
             ProductContentId::from_bytes([152; 32]);
         overwritten.session_ids[INTERVAL_HISTORY_ROOT_INDEX_V1] = ProductContentId::ZERO;
         assert_eq!(overwritten.validate(), Err(Error::WrongPhase));
+    }
+
+    #[test]
+    fn final_family_identity_binds_replay_postimage_and_exact_history() {
+        let facts = FailureMarketFamilyTerminalFactsV2 {
+            disposition: FailureMarketFamilyTerminalDispositionV2::Resolved,
+            family_aggregate_receipt_id: FailureMarketFamilyAggregateReceiptIdV2::from_bytes(
+                [201; 32],
+            ),
+            failure_replay_account_id: FailureMarketAccountIdV1::from_bytes([202; 32]),
+            failure_replay_terminal_receipt_id:
+                crate::market_replay_v2::FailureMarketReplayTerminalReceiptIdV2::from_bytes(
+                    [203; 32],
+                ),
+            runtime_before: FailureMarketRuntimeStateCommitmentV1::from_bytes([204; 32]),
+            admission_state_id: FailureMarketAdmissionStateIdV1::from_bytes([205; 32]),
+            failure_policy_binding_id: FailurePolicyBindingId::from_bytes([206; 32]),
+            market_instance_id: MarketInstanceV2Id::from_bytes([207; 32]),
+            generation: 208,
+            interval_history_state_id: FailureMarketIntervalHistoryStateIdV2::from_bytes([209; 32]),
+            interval_history_root: FailureMarketIntervalHistoryRootV2::from_bytes([210; 32]),
+            completed_session_count: 211,
+        };
+        let mut first = Sha256::new();
+        first.update(FAMILY_TERMINAL_DOMAIN_V2);
+        first.update(b"final");
+        hash_family_terminal_facts(&mut first, facts);
+
+        let mut stale_replay = facts;
+        stale_replay.failure_replay_terminal_receipt_id =
+            crate::market_replay_v2::FailureMarketReplayTerminalReceiptIdV2::from_bytes([212; 32]);
+        let mut second = Sha256::new();
+        second.update(FAMILY_TERMINAL_DOMAIN_V2);
+        second.update(b"final");
+        hash_family_terminal_facts(&mut second, stale_replay);
+        assert_ne!(first.finalize(), second.finalize());
+
+        let mut overwritten_history = facts;
+        overwritten_history.completed_session_count += 1;
+        let mut third = Sha256::new();
+        third.update(FAMILY_TERMINAL_DOMAIN_V2);
+        third.update(b"final");
+        hash_family_terminal_facts(&mut third, overwritten_history);
+        let mut original = Sha256::new();
+        original.update(FAMILY_TERMINAL_DOMAIN_V2);
+        original.update(b"final");
+        hash_family_terminal_facts(&mut original, facts);
+        assert_ne!(original.finalize(), third.finalize());
     }
 }
