@@ -9,12 +9,15 @@ The new persisted facts have one owner each:
 
 | account | owner | exact body |
 | --- | --- | ---: |
-| `0xa4/v1` | immutable Market/Resolution/Realm/claim policy and resolved common lot | 296 |
+| `0xa4/v1` | immutable Market/Resolution-V5-data/Realm/claim policy and resolved common lot | 296 |
 | `0xa5/v1` | ClaimLedger account binding, aggregate numerator `K`, live-credit count, and global replay sequence | 224 |
 | `0xa6/v1` | one claimant's canonical numerator `<D`, generation, replay, and rent | 296 |
 | `0xa7/v1` | permanent zero-credit close/reopen identity | 232 |
 
-Resolution/Terms remain the sole vector owner. Full-width ClaimLedger V3
+Resolution V5 remains the sole vector owner. The policy and every owner credit
+persist its exact PDA-bound Resolution data ID, while each transition also
+recomputes the body-only semantic ID and returns the V5 quotient/remainder
+projection that names the exact outcome and burned quantity. Full-width ClaimLedger V3
 remains the sole internal-plus-bearer supply owner. Hoard V2 remains the sole
 owner of locked claim principal and Position-cash collateral classification.
 Position V3 and its purpose-owned Replay V3 remain the only internal
@@ -41,6 +44,11 @@ Exact lots take a zero-credit fast path. Arbitrary quantities use one owner-
 scoped numerator credit; mixed outcomes aggregate under the same exact
 Market/Resolution/payout/generation domain. Credit transfers are custom
 same-domain operations rather than a second bearer mint.
+
+Resolution V5's direct bearer route remains exact-only. A nonzero V5 remainder
+is not a permanent amount restriction: it enters the credited Fractional route,
+whose single plan atomically binds the bearer burn, a5/owner-credit successor,
+ClaimLedger/Hoard successor, exact whole payout, and retained numerator.
 
 Whole internal payouts reclassify Hoard V2 locked principal into Position-cash
 liability without moving token custody. Whole external payouts require the

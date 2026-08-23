@@ -112,16 +112,17 @@ impl FractionalLedgerPhaseV1 {
 
 /// Immutable policy binding Resolution to Realm-selected collateral and claims.
 ///
-/// The vector itself is not stored here. `payout_vector_id` is recomputed from
-/// the canonical Resolution/Terms projection on every transition.
+/// The vector itself is not stored here. `resolution_data_id` commits the exact
+/// canonical Resolution V5 account and body; the body-only semantic ID and
+/// vector are recomputed on every transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalPolicyV1 {
     /// Full successor MarketInstance identity.
     pub market_instance: Identity32V1,
     /// Canonical immutable Resolution account identity.
     pub resolution_account: Identity32V1,
-    /// Content identity of the exact Resolution-owned vector.
-    pub payout_vector_id: Identity32V1,
+    /// Account-bound data identity of the exact Resolution V5 body.
+    pub resolution_data_id: Identity32V1,
     /// Immutable Realm identity.
     pub realm: Identity32V1,
     /// Realm-selected collateral-policy identity.
@@ -161,6 +162,7 @@ impl FractionalPolicyV1 {
     pub fn validate_join(
         self,
         payout: PayoutVectorV1,
+        resolution_data_id: Identity32V1,
         collateral: BoundCollateralProfileV2,
         claims: BoundClaimIssuanceV1,
     ) -> Result<()> {
@@ -176,7 +178,7 @@ impl FractionalPolicyV1 {
             || self.collateral_policy.bytes() != collateral.policy_id().bytes()
             || self.collateral_release.bytes() != release_id.bytes()
             || self.claim_issuance_binding.bytes() != claims.binding_id().bytes()
-            || self.payout_vector_id != payout.id()?
+            || self.resolution_data_id != resolution_data_id
             || self.outcome_count != payout.outcome_count
             || self.common_lot != payout.common_lot()?
         {
@@ -198,7 +200,7 @@ impl FractionalPolicyV1 {
         for (offset, value) in [
             (16, self.market_instance),
             (48, self.resolution_account),
-            (80, self.payout_vector_id),
+            (80, self.resolution_data_id),
             (112, self.realm),
             (144, self.collateral_policy),
             (176, self.collateral_release),
@@ -224,7 +226,7 @@ impl FractionalPolicyV1 {
         let value = Self {
             market_instance: identity(input, 16)?,
             resolution_account: identity(input, 48)?,
-            payout_vector_id: identity(input, 80)?,
+            resolution_data_id: identity(input, 80)?,
             realm: identity(input, 112)?,
             collateral_policy: identity(input, 144)?,
             collateral_release: identity(input, 176)?,
@@ -255,7 +257,7 @@ impl FractionalPolicyV1 {
         FractionalPolicySeedsV1 {
             market_instance: self.market_instance,
             resolution_account: self.resolution_account,
-            payout_vector_id: self.payout_vector_id,
+            resolution_data_id: self.resolution_data_id,
             stored_bump: self.stored_bump,
         }
     }
@@ -398,8 +400,8 @@ pub struct FractionalCreditV1 {
     pub market_instance: Identity32V1,
     /// Canonical immutable Resolution account.
     pub resolution_account: Identity32V1,
-    /// Exact vector identity recomputed from Resolution.
-    pub payout_vector_id: Identity32V1,
+    /// Exact PDA-bound Resolution V5 data identity.
+    pub resolution_data_id: Identity32V1,
     /// Sole claimant owner of this numerator.
     pub claimant: Identity32V1,
     /// Resolution/credit accounting generation.
@@ -435,7 +437,7 @@ impl FractionalCreditV1 {
             || self.ledger_account != ledger_account
             || self.market_instance != policy.market_instance
             || self.resolution_account != policy.resolution_account
-            || self.payout_vector_id != policy.payout_vector_id
+            || self.resolution_data_id != policy.resolution_data_id
             || self.domain_generation != policy.domain_generation
         {
             return Err(Error::MismatchedBinding);
@@ -475,7 +477,7 @@ impl FractionalCreditV1 {
             (80, self.ledger_account),
             (112, self.market_instance),
             (144, self.resolution_account),
-            (176, self.payout_vector_id),
+            (176, self.resolution_data_id),
             (208, self.claimant),
         ] {
             put_identity(&mut output, offset, value)?;
@@ -504,7 +506,7 @@ impl FractionalCreditV1 {
             ledger_account: identity(input, 80)?,
             market_instance: identity(input, 112)?,
             resolution_account: identity(input, 144)?,
-            payout_vector_id: identity(input, 176)?,
+            resolution_data_id: identity(input, 176)?,
             claimant: identity(input, 208)?,
             domain_generation: u64_at(input, 8)?,
             account_generation: u64_at(input, 16)?,
@@ -541,8 +543,8 @@ pub struct FractionalCreditTombstoneV1 {
     pub market_instance: Identity32V1,
     /// Canonical immutable Resolution account.
     pub resolution_account: Identity32V1,
-    /// Exact vector identity recomputed from Resolution.
-    pub payout_vector_id: Identity32V1,
+    /// Exact PDA-bound Resolution V5 data identity.
+    pub resolution_data_id: Identity32V1,
     /// Claimant whose namespace cannot be resurrected by stale instructions.
     pub claimant: Identity32V1,
     /// Resolution/credit accounting generation.
@@ -586,7 +588,7 @@ impl FractionalCreditTombstoneV1 {
             (64, self.ledger_account),
             (96, self.market_instance),
             (128, self.resolution_account),
-            (160, self.payout_vector_id),
+            (160, self.resolution_data_id),
             (192, self.claimant),
         ] {
             put_identity(&mut output, offset, value)?;
@@ -613,7 +615,7 @@ impl FractionalCreditTombstoneV1 {
             ledger_account: identity(input, 64)?,
             market_instance: identity(input, 96)?,
             resolution_account: identity(input, 128)?,
-            payout_vector_id: identity(input, 160)?,
+            resolution_data_id: identity(input, 160)?,
             claimant: identity(input, 192)?,
             domain_generation: u64_at(input, 8)?,
             account_generation: u64_at(input, 16)?,
@@ -640,7 +642,7 @@ impl FractionalCreditTombstoneV1 {
 pub struct FractionalPolicySeedsV1 {
     market_instance: Identity32V1,
     resolution_account: Identity32V1,
-    payout_vector_id: Identity32V1,
+    resolution_data_id: Identity32V1,
     stored_bump: u8,
 }
 
@@ -657,9 +659,9 @@ impl FractionalPolicySeedsV1 {
     pub const fn resolution_account(self) -> Identity32V1 {
         self.resolution_account
     }
-    /// Exact payout-vector content seed.
-    pub const fn payout_vector_id(self) -> Identity32V1 {
-        self.payout_vector_id
+    /// Exact PDA-bound Resolution V5 data seed.
+    pub const fn resolution_data_id(self) -> Identity32V1 {
+        self.resolution_data_id
     }
     /// Stored bump.
     pub const fn stored_bump(self) -> u8 {
