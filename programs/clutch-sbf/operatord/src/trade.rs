@@ -79,7 +79,7 @@ fn banner(
         "precreated": precreated,
         "evidence_scope": "SBF_EXECUTED",
         "promotion": "unpromoted",
-        "network": "LOCAL; OPERATOR HTTP LOOPBACK; VALIDATOR RPC/Faucet BIND AUDITED SEPARATELY",
+        "network": "LOCAL; OPERATOR HTTP LOOPBACK; VALIDATOR RPC/FAUCET BIND AUDITED SEPARATELY",
         "value": "no value",
     })
 }

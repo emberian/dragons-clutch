@@ -416,7 +416,7 @@ mod network_tests {
     use std::process::Command;
 
     #[test]
-    fn accepts_disjoint_explicit_loopback_ports() {
+    fn accepts_disjoint_explicit_ports() {
         validate_validator_network(Some(9130), 9137, 9139, 9200, "9201-9250").unwrap();
     }
 
