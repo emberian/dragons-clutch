@@ -18,6 +18,7 @@ mod position;
 mod receipt_v4;
 mod successor;
 mod successor_v3;
+mod successor_v4;
 mod virtual_claim;
 
 pub use adapter::{
@@ -86,6 +87,24 @@ pub use successor_v3::{
     OWNER_SETTLEMENT_OUTER_TAG_V3, OWNER_SETTLEMENT_OUTER_VERSION_V3,
     OWNER_SETTLEMENT_PDA_DOMAIN_V3, SETTLEMENT_RECEIPT_BODY_V3_BYTES,
     SETTLEMENT_RECEIPT_DATA_ID_DOMAIN_V3, SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V3_BYTES,
+};
+
+pub use successor_v4::{
+    build_owner_settlement_expectation_basis_book_v4,
+    derive_owner_finalized_row_data_id_v4, prepare_create_owner_settlement_account_v4,
+    prepare_realize_owner_cash_v4, project_owner_merge_delivery_v4,
+    project_owner_receipt_end_to_owner_v4, project_owner_settlement_account_v4,
+    OwnerCashRealizationPlanV4, OwnerFinalizedRowDataHashV4, OwnerFinalizedRowDataIdV4,
+    OwnerMergeDeliveryEvidenceV4, OwnerMergeDeliveryProjectionV4,
+    OwnerSettlementAccountProjectionV4, OwnerSettlementAccountViewV4,
+    OwnerSettlementAccumulatorV4, OwnerSettlementCreatePlanV4, OwnerSettlementDispositionV4,
+    OwnerSettlementExpectationBasisBookV4, OwnerSettlementExpectationBasisV4,
+    OwnerSettlementExpectationV4, OwnerSettlementPdaProjectionV4,
+    OwnerSettlementReceiptAccountingProjectionV4Row, OwnerSettlementStateV4,
+    OwnerSettlementTerminalProjectionV4, SelectedOwnerRowAuthorityV4,
+    VerifiedSettlementOrderV4, OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V4,
+    OWNER_SETTLEMENT_BODY_V4_BYTES, OWNER_SETTLEMENT_OUTER_TAG_V4,
+    OWNER_SETTLEMENT_OUTER_VERSION_V4, OWNER_SETTLEMENT_PDA_DOMAIN_V4,
 };
 
 pub use direct::{

@@ -192,11 +192,13 @@ pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
 /// Withdrawn presence-explicit General V2 owner-settlement V2 version.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2: u8 = 2;
-/// Sole future Reservation-handoff General owner-settlement version.
+/// Withdrawn Reservation-handoff General owner-settlement version.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3: u8 = 3;
-/// Current General owner-settlement version; an alias only for V3.
+/// Sole future delivery-complete General owner-settlement version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4: u8 = 4;
+/// Current General owner-settlement version; an alias only for V4.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 =
-    GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3;
+    GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4;
 /// General V2 selected composite-fee record envelope discriminator.
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// General V2 selected composite-fee record envelope version.
@@ -917,6 +919,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-owner-settlement-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-owner-settlement-v4-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2385,6 +2396,10 @@ mod tests {
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
             ),
             (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
+            ),
+            (
                 GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
                 GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION,
             ),
@@ -2463,6 +2478,10 @@ mod tests {
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
             ),
             (
                 GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
