@@ -1293,8 +1293,6 @@ impl DealerFundedDependenciesV2 {
                 || runtime.account_ids[index]
                     == self.bindings.runtime_liveness_policy_account_id
                 || runtime.account_ids[index] == self.bindings.asset_vault_authority_account_id
-                || runtime.account_ids[index] == binding.facility_position_account_id
-                || runtime.account_ids[index] == binding.facility_replay_account_id
             {
                 return Err(Error::MismatchedBinding);
             }
