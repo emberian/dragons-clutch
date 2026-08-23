@@ -984,11 +984,7 @@ impl IndexedSettlementRootV1AccountV1 {
         Self::encoded_data_id(backend, root_account, output)
     }
 
-    /// Hash an exact-width encoded successor body under the canonical transcript.
-    ///
-    /// This function computes a byte identity; it does not authenticate account
-    /// ownership or claim that hostile bytes decode as a canonical successor.
-    pub fn encoded_data_id<B: Sha256BackendV1>(
+    fn encoded_data_id<B: Sha256BackendV1>(
         backend: &B,
         root_account: Id32,
         encoded: &[u8],
