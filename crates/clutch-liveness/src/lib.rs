@@ -9,6 +9,8 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod runtime_v1;
+
 /// A stable identity supplied and authenticated by an adapter.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(transparent)]
