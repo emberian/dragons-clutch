@@ -33,6 +33,7 @@ use clutch_source_plane_v3_runtime::{
     authenticate_receiver_route_v2, authenticate_reopen_lineage_account,
     authenticate_source_generation_request, authenticate_source_head_account,
     authenticate_source_reopen_generation_request,
+    authenticate_source_reopen_generation_request_before_close as authenticate_source_reopen_generation_request_before_close_runtime,
     authenticate_source_release_account, authenticate_source_route,
     authenticate_source_work_receipt_account, authenticate_statistic_result,
     authenticate_statistic_result_absence, authenticate_statistic_result_account,
@@ -43,6 +44,7 @@ use clutch_source_plane_v3_runtime::{
     AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2, AuthenticatedReopenLineageV1,
     AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
     AuthenticatedSourceReleaseV1, AuthenticatedSourceReopenGenerationV1,
+    AuthenticatedSourceReopenPrecloseV1,
     AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
@@ -80,7 +82,7 @@ const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 const SOURCE_GENERATION_REQUEST_SEED_V1: &[u8] = b"dc-sp3-generation-request";
-const SOURCE_REOPEN_REQUEST_SEED_V1: &[u8] = b"dc-sp3-reopen-request";
+pub(crate) const SOURCE_REOPEN_REQUEST_SEED_V1: &[u8] = b"dc-sp3-reopen-request";
 
 /// Route one centrally allocated but disabled SourcePlane action to refusal.
 ///
@@ -1045,6 +1047,41 @@ pub fn authenticate_reopen_generation_request(
             bump,
         },
         lineage,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate action 12's persisted reopen policy against the exact
+/// currently-open lineage and deterministic closed-lineage postimage. This is
+/// only a preclose proof; action 11 still requires the later closed-lineage
+/// authentication.
+pub fn authenticate_reopen_generation_request_before_close(
+    route: AuthenticatedSourceRouteV1,
+    request_account: &AccountInfo<'_>,
+    lineage: AuthenticatedReopenLineageV1,
+    terminal_semantic_id: ContentId,
+) -> SourceV3SbfResult<AuthenticatedSourceReopenPrecloseV1> {
+    let data = request_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let request = SourceReopenGenerationRequestV1::decode(&data)?;
+    let request_id = request.id()?;
+    let authority = Pubkey::new_from_array(route.generation_authority_program().bytes());
+    let (address, bump) = crate::seeds::find(
+        &authority,
+        &[SOURCE_REOPEN_REQUEST_SEED_V1, &request_id.bytes()],
+    );
+    authenticate_source_reopen_generation_request_before_close_runtime(
+        route,
+        runtime_account_view(request_account, &data),
+        RuntimeDerivedPdaV1 {
+            program_id: route.generation_authority_program(),
+            recipe_id: request_id,
+            address: runtime_key(&address),
+            bump,
+        },
+        lineage,
+        terminal_semantic_id,
     )
     .map_err(Into::into)
 }

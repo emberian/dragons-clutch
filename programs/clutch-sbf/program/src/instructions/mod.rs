@@ -152,7 +152,8 @@ pub mod product_artifact;
 pub(crate) mod product_general_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
-#[cfg(feature = "non-production-product-series-lab")]
+/// Always-compiled current Product/Series authority. Dispatcher tuples remain
+/// separately capability-gated, including in source-empty releases.
 pub mod product_series;
 pub mod resolution_work;
 pub mod series_failure_funding;
@@ -160,4 +161,8 @@ pub mod source_ingest;
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod source_series_successor;
+/// Unrouted private Source terminal composer. It is always compiled so the
+/// current final Failure postwrite can implement its default-refusing bridge;
+/// no checked capability tuple enters it until the complete chain is admitted.
+pub(crate) mod source_terminal_resolution_v5;
 pub mod split;

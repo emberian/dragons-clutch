@@ -23,6 +23,7 @@ use crate::source_plane_v3_actions::{
     apply_source_work_liveness, authenticate_source_work_schedule_artifact, bind_work_execution,
     close_head_generation, close_open_page_generation, close_statistic_result_generation,
     close_window_work_generation,
+    authenticate_source_terminal_policy_for_close,
     fold_window_pages, initialize_window_work, join_successful_evaluation_handoff,
     persist_evaluation_result, persist_source_policy_handoff, reopen_runtime_account,
     seal_raw_page, seal_window,
@@ -36,7 +37,8 @@ use clutch_source_plane_v3_adapter::{
     RuntimeCreationProjectionV1, RuntimeMutationProjectionV1,
 };
 use clutch_source_plane_v3_runtime::{
-    LineageAccessV1, OccurrenceDispositionV1, SourceReopenTargetV1, SourceWorkKindV1,
+    account_data_id, LineageAccessV1, OccurrenceDispositionV1, SourceReopenTargetV1,
+    SourceWorkKindV1,
 };
 use clutch_solana_layout::source_series::{
     CloseGenerationIntentV2, EmitFailureHandoffIntentV2, ReopenGenerationIntentV2,
@@ -978,7 +980,7 @@ pub(super) fn process_close_generation(
             && route.release_manifest_id().bytes() == intent.source_release_manifest_id,
         ClutchError::MismatchedState,
     )?;
-    let lineage = authenticate_lineage(program_id, route, &accounts[9], LineageAccessV1::Mutable)
+    let lineage = authenticate_lineage(program_id, route, &accounts[10], LineageAccessV1::Mutable)
         .map_err(Refusal::from)?;
     let expected_family = match intent.family {
         SourceMutableFamilyV2::SourceHead => {
@@ -998,15 +1000,22 @@ pub(super) fn process_close_generation(
         lineage.account_data_id().bytes() == intent.expected_lineage_state_id
             && lineage.lineage().family == expected_family
             && lineage.lineage().is_open
-            && lineage.lineage().active_account == runtime_key(accounts[8].key),
+            && lineage.lineage().active_account == runtime_key(accounts[9].key),
         ClutchError::MismatchedState,
     )?;
-    let terminal = authenticate_work_receipt(program_id, route, schedule, &accounts[10])
+    let terminal = authenticate_work_receipt(program_id, route, schedule, &accounts[11])
         .map_err(Refusal::from)?;
     require(
         terminal.receipt().semantic_receipt_id().bytes()
             == intent.semantic_terminal_receipt_id,
         ClutchError::MismatchedState,
+    )?;
+    let expected_closed_lineage_state_id = authenticate_source_terminal_policy_for_close(
+        program_id,
+        route,
+        lineage,
+        terminal.receipt().semantic_receipt_id(),
+        &accounts[8],
     )?;
     let target_generation = lineage.lineage().latest_generation;
     let close = match intent.family {
@@ -1014,49 +1023,60 @@ pub(super) fn process_close_generation(
             program_id,
             route,
             lineage,
-            &accounts[8],
             &accounts[9],
-            &accounts[11],
+            &accounts[10],
             &accounts[12],
+            &accounts[13],
             terminal,
         ),
         SourceMutableFamilyV2::OpenRawPage => close_open_page_generation(
             program_id,
             route,
             lineage,
-            &accounts[8],
             &accounts[9],
-            &accounts[11],
+            &accounts[10],
             &accounts[12],
+            &accounts[13],
             terminal,
         ),
         SourceMutableFamilyV2::WindowWork => close_window_work_generation(
             program_id,
             route,
             lineage,
-            &accounts[8],
             &accounts[9],
-            &accounts[11],
+            &accounts[10],
             &accounts[12],
+            &accounts[13],
             terminal,
         ),
         SourceMutableFamilyV2::StatisticResult => close_statistic_result_generation(
             program_id,
             route,
             lineage,
-            &accounts[8],
             &accounts[9],
-            &accounts[11],
+            &accounts[10],
             &accounts[12],
+            &accounts[13],
             terminal,
         ),
     }?;
+    let closed_lineage_bytes = close
+        .lineage_after
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let closed_lineage_state_id = account_data_id(
+        runtime_key(accounts[10].key),
+        &closed_lineage_bytes,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         !close.lineage_after.is_open
             && close.funding.generation == target_generation
             && close.funding.terminal_receipt_id.bytes()
                 == intent.semantic_terminal_receipt_id
-            && close.lineage_after.last_close_receipt_id == close.funding.close_receipt_id,
+            && close.lineage_after.last_close_receipt_id.bytes()
+                == intent.semantic_terminal_receipt_id
+            && closed_lineage_state_id == expected_closed_lineage_state_id,
         ClutchError::MismatchedState,
     )?;
     Ok(())
@@ -1065,6 +1085,9 @@ pub(super) fn process_close_generation(
 /// Reopen one exact closed Source generation from the immutable typed target
 /// persisted by the release-selected Product/Failure generation owner. The
 /// payload supplies only comparison digests and never supplies body bytes.
+/// The new generation is payer-sponsored: Source terminal composition already
+/// closed the retired generation's liveness compartment, so action 11 cannot
+/// debit that compartment or mint a second terminal/work receipt.
 pub(super) fn process_reopen_generation(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -1072,8 +1095,6 @@ pub(super) fn process_reopen_generation(
     intent: ReopenGenerationIntentV2,
 ) -> Outcome<()> {
     require(sequence != 0, ClutchError::Replay)?;
-    let call_ordinal =
-        u32::try_from(sequence).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
     let route = authenticate_route(
         program_id,
         &accounts[0],
@@ -1087,7 +1108,7 @@ pub(super) fn process_reopen_generation(
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
     require(
-        runtime_key(accounts[15].key) == schedule.payer(),
+        runtime_key(accounts[11].key) == schedule.payer(),
         ClutchError::MismatchedState,
     )?;
     let clock = Clock::get().map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
@@ -1143,11 +1164,11 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[15],
+            &accounts[11],
             &accounts[9],
             &accounts[10],
-            &accounts[16],
-            &accounts[17],
+            &accounts[12],
+            &accounts[13],
         ),
         SourceReopenTargetV1::OpenRawPage(body) => reopen_runtime_account(
             program_id,
@@ -1157,11 +1178,11 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[15],
+            &accounts[11],
             &accounts[9],
             &accounts[10],
-            &accounts[16],
-            &accounts[17],
+            &accounts[12],
+            &accounts[13],
         ),
         SourceReopenTargetV1::WindowWork(body) => reopen_runtime_account(
             program_id,
@@ -1171,11 +1192,11 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[15],
+            &accounts[11],
             &accounts[9],
             &accounts[10],
-            &accounts[16],
-            &accounts[17],
+            &accounts[12],
+            &accounts[13],
         ),
         SourceReopenTargetV1::StatisticResult(body) => reopen_runtime_account(
             program_id,
@@ -1185,59 +1206,32 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[15],
+            &accounts[11],
             &accounts[9],
             &accounts[10],
-            &accounts[16],
-            &accounts[17],
+            &accounts[12],
+            &accounts[13],
         ),
     }?;
     let lineage_after_id = opened
         .lineage_after
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?;
-    let semantic_receipt_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            b"dragons-clutch/source-reopen-execution/v1",
-            &authorization.id().bytes(),
-            &authorization.generation_policy_id().bytes(),
-            &recipe_id.bytes(),
-            &target_body_id.bytes(),
-            &opened.account_data_id.bytes(),
-            &opened.header.generation.to_le_bytes(),
-            &lineage_after_id.bytes(),
-        ])
-        .to_bytes(),
-    );
     require(
-        !semantic_receipt_id.is_zero(),
+        opened.header.generation
+                == lineage
+                    .lineage()
+                    .latest_generation
+                    .checked_add(1)
+                    .ok_or(ClutchError::Arithmetic)?
+            && opened.lineage_after.is_open
+            && opened.lineage_after.active_account == runtime_key(accounts[9].key)
+            && opened.lineage_after.last_opened_state_id == opened.account_data_id
+            && opened.lineage_after.last_close_receipt_id == ContentId::ZERO
+            && authorization.generation_policy_id()
+                == lineage.lineage().last_close_receipt_id
+            && !lineage_after_id.is_zero(),
         ClutchError::MismatchedState,
-    )?;
-    let kind = SourceWorkKindV1::TerminalLifecycle;
-    let ceiling = schedule.ceiling_for(kind);
-    let work = bind_work_execution(
-        program_id,
-        route,
-        schedule,
-        kind,
-        semantic_receipt_id,
-        &accounts[11],
-        call_ordinal,
-        ceiling,
-        accounts[14].key,
-        ceiling,
-        &accounts[15],
-        &accounts[16],
-        &accounts[17],
-    )?;
-    apply_source_work_liveness(
-        program_id,
-        route,
-        work,
-        &accounts[12],
-        &accounts[13],
-        &accounts[14],
-        &accounts[15],
     )?;
     Ok(())
 }

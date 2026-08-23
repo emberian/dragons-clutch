@@ -8,13 +8,18 @@ use crate::auth::{
     account_data_id, domain_id, AuthenticatedSourceRouteV1, RuntimeAccountViewV1,
     RuntimeDerivedPdaV1, RuntimeKey,
 };
-use crate::lineage::{AuthenticatedReopenLineageV1, LineageAccessV1, LineageFamilyV1};
+use crate::lineage::{
+    close_lineage_generation, AuthenticatedReopenLineageV1, LineageAccessV1,
+    LineageFamilyV1,
+};
 use crate::{Error, Result};
 
 const REOPEN_REQUEST_MAGIC: [u8; 8] = *b"DCSRPN01";
 const REOPEN_REQUEST_DOMAIN: &[u8] = b"dragons-clutch/source-reopen-request/v1";
 const REOPEN_TARGET_DOMAIN: &[u8] = b"dragons-clutch/source-reopen-target-body/v1";
 const REOPEN_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-reopen/v1";
+const REOPEN_PRECLOSE_AUTH_DOMAIN: &[u8] =
+    b"dragons-clutch/authenticated-source-reopen-preclose/v1";
 
 /// Maximum exact semantic body carried by a release-selected reopen request.
 pub const SOURCE_REOPEN_TARGET_BODY_BYTES: usize = OPEN_RAW_PAGE_BYTES;
@@ -37,6 +42,16 @@ pub enum SourceReopenFamilyV1 {
 }
 
 impl SourceReopenFamilyV1 {
+    /// Canonical wire discriminator without an unchecked enum cast.
+    pub const fn wire_byte(self) -> u8 {
+        match self {
+            Self::SourceHead => 1,
+            Self::OpenRawPage => 2,
+            Self::WindowWork => 3,
+            Self::StatisticResult => 4,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::SourceHead),
@@ -143,7 +158,7 @@ impl SourceReopenTargetV1 {
     pub fn body_id(&self) -> Result<ContentId> {
         let mut bytes = [0_u8; 8 + SOURCE_REOPEN_TARGET_BODY_BYTES];
         let len = self.encode_body(&mut bytes[8..])?;
-        bytes[0] = self.family() as u8;
+        bytes[0] = self.family().wire_byte();
         bytes[2..4].copy_from_slice(
             &u16::try_from(len)
                 .map_err(|_| Error::ArithmeticOverflow)?
@@ -210,6 +225,29 @@ pub struct SourceReopenGenerationRequestV1 {
 }
 
 impl SourceReopenGenerationRequestV1 {
+    /// Reconstruct the sole request body for an already projected closed
+    /// lineage. No instruction payload supplies target bytes or lineage facts.
+    pub fn new(
+        route: AuthenticatedSourceRouteV1,
+        expected_lineage_state_id: ContentId,
+        generation_policy_id: ContentId,
+        target: SourceReopenTargetV1,
+        closed_lineage: crate::lineage::ReopenLineageV1,
+    ) -> Result<Self> {
+        let value = Self {
+            source_release_manifest_id: route.release_manifest_id(),
+            route_id: route.route_id(),
+            source_plane_contract_id: route.source_plane_contract_id(),
+            source_spec_id: route.source_spec_id(),
+            source_work_schedule_id: route.source_work_schedule_id(),
+            expected_lineage_state_id,
+            generation_policy_id,
+            target,
+        };
+        value.validate_against_state(route, closed_lineage, expected_lineage_state_id)?;
+        Ok(value)
+    }
+
     fn validate_shape(&self) -> Result<()> {
         for id in [
             self.source_release_manifest_id,
@@ -234,7 +272,7 @@ impl SourceReopenGenerationRequestV1 {
         let mut out = [0_u8; SOURCE_REOPEN_GENERATION_REQUEST_BYTES];
         out[..8].copy_from_slice(&REOPEN_REQUEST_MAGIC);
         out[8..10].copy_from_slice(&1_u16.to_le_bytes());
-        out[10] = self.target.family() as u8;
+        out[10] = self.target.family().wire_byte();
         let ids = [
             self.source_release_manifest_id,
             self.route_id,
@@ -301,16 +339,27 @@ impl SourceReopenGenerationRequestV1 {
         route: AuthenticatedSourceRouteV1,
         lineage: AuthenticatedReopenLineageV1,
     ) -> Result<()> {
+        self.validate_against_state(route, lineage.lineage(), lineage.account_data_id())?;
+        if lineage.access() != LineageAccessV1::Mutable {
+            return Err(Error::WrongPrivilege);
+        }
+        Ok(())
+    }
+
+    fn validate_against_state(
+        &self,
+        route: AuthenticatedSourceRouteV1,
+        state: crate::lineage::ReopenLineageV1,
+        lineage_state_id: ContentId,
+    ) -> Result<()> {
         self.validate_shape()?;
-        let state = lineage.lineage();
         let recipe = self.target.recipe(route)?;
-        if lineage.access() != LineageAccessV1::Mutable
-            || self.source_release_manifest_id != route.release_manifest_id()
+        if self.source_release_manifest_id != route.release_manifest_id()
             || self.route_id != route.route_id()
             || self.source_plane_contract_id != route.source_plane_contract_id()
             || self.source_spec_id != route.source_spec_id()
             || self.source_work_schedule_id != route.source_work_schedule_id()
-            || self.expected_lineage_state_id != lineage.account_data_id()
+            || self.expected_lineage_state_id != lineage_state_id
             || state.family != self.target.family().lineage_family()
             || state.semantic_binding_id != recipe.id()?
             || state.is_open
@@ -320,6 +369,21 @@ impl SourceReopenGenerationRequestV1 {
         }
         Ok(())
     }
+
+    /// Exact closed-lineage account digest expected by action 11.
+    pub const fn expected_lineage_state_id(self) -> ContentId {
+        self.expected_lineage_state_id
+    }
+
+    /// Exact private terminal policy which requested this generation.
+    pub const fn generation_policy_id(self) -> ContentId {
+        self.generation_policy_id
+    }
+
+    /// Complete typed target reconstructed by the terminal policy owner.
+    pub const fn target(self) -> SourceReopenTargetV1 {
+        self.target
+    }
 }
 
 /// Private receipt for one exact selected-owner request and closed lineage.
@@ -328,6 +392,44 @@ pub struct AuthenticatedSourceReopenGenerationV1 {
     request_account: RuntimeKey,
     request: SourceReopenGenerationRequestV1,
     authorization_id: ContentId,
+}
+
+/// Private proof that one persisted request exactly predicts the action-12
+/// closed-lineage postimage. It grants no reopen authority while the lineage
+/// remains open.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceReopenPrecloseV1 {
+    request_account: RuntimeKey,
+    request: SourceReopenGenerationRequestV1,
+    projected_closed_lineage_state_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSourceReopenPrecloseV1 {
+    /// Physical immutable request account authenticated before close.
+    pub const fn request_account(self) -> RuntimeKey {
+        self.request_account
+    }
+
+    /// Exact private terminal policy carried by the projected close.
+    pub const fn generation_policy_id(self) -> ContentId {
+        self.request.generation_policy_id
+    }
+
+    /// Exact currently-open family which may close before this request opens.
+    pub const fn family(self) -> SourceReopenFamilyV1 {
+        self.request.target.family()
+    }
+
+    /// Digest of the sole closed-lineage postimage accepted by action 11.
+    pub const fn projected_closed_lineage_state_id(self) -> ContentId {
+        self.projected_closed_lineage_state_id
+    }
+
+    /// Complete request/PDA/open-lineage/projection authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
 }
 
 impl AuthenticatedSourceReopenGenerationV1 {
@@ -392,6 +494,71 @@ pub fn authenticate_source_reopen_generation_request(
     })
 }
 
+/// Authenticate an immutable reopen request before action 12 closes its exact
+/// currently-open lineage. The request must already commit to the deterministic
+/// closed-lineage postimage and the terminal receipt semantic used by the
+/// close; this receipt cannot itself authorize action 11.
+pub fn authenticate_source_reopen_generation_request_before_close(
+    route: AuthenticatedSourceRouteV1,
+    request_account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    lineage: AuthenticatedReopenLineageV1,
+    terminal_semantic_id: ContentId,
+) -> Result<AuthenticatedSourceReopenPrecloseV1> {
+    if request_account.owner != route.generation_authority_program() {
+        return Err(Error::WrongOwner);
+    }
+    if request_account.executable || request_account.signer || request_account.writable {
+        return Err(Error::WrongPrivilege);
+    }
+    if terminal_semantic_id.is_zero()
+        || lineage.access() != LineageAccessV1::Mutable
+        || !lineage.lineage().is_open
+    {
+        return Err(Error::InvalidLineage);
+    }
+    let request = SourceReopenGenerationRequestV1::decode(request_account.data)?;
+    if request.generation_policy_id != terminal_semantic_id {
+        return Err(Error::MismatchedBinding);
+    }
+    let state = lineage.lineage();
+    let projected_closed = close_lineage_generation(
+        state,
+        state.active_account,
+        state.latest_generation,
+        state.last_opened_state_id,
+        terminal_semantic_id,
+    )?;
+    let projected_bytes = projected_closed.encode()?;
+    let projected_closed_lineage_state_id =
+        account_data_id(state.lineage_account, &projected_bytes)?;
+    request.validate_against_state(
+        route,
+        projected_closed,
+        projected_closed_lineage_state_id,
+    )?;
+    derived_pda.validate_for(
+        route.generation_authority_program(),
+        request.id()?,
+        request_account.key,
+        derived_pda.bump,
+    )?;
+    let request_account_data_id = account_data_id(request_account.key, request_account.data)?;
+    let mut bytes = [0_u8; 192];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&request_account.key.bytes());
+    bytes[64..96].copy_from_slice(&request_account_data_id.bytes());
+    bytes[96..128].copy_from_slice(&request.id()?.bytes());
+    bytes[128..160].copy_from_slice(&lineage.id().bytes());
+    bytes[160..192].copy_from_slice(&projected_closed_lineage_state_id.bytes());
+    Ok(AuthenticatedSourceReopenPrecloseV1 {
+        request_account: request_account.key,
+        request,
+        projected_closed_lineage_state_id,
+        authentication_id: domain_id(REOPEN_PRECLOSE_AUTH_DOMAIN, &bytes),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,7 +596,7 @@ mod tests {
             Err(Error::InvalidCodec)
         );
         let mut hostile = bytes;
-        hostile[10] = SourceReopenFamilyV1::OpenRawPage as u8;
+        hostile[10] = SourceReopenFamilyV1::OpenRawPage.wire_byte();
         assert_eq!(
             SourceReopenGenerationRequestV1::decode(&hostile),
             Err(Error::InvalidCodec)

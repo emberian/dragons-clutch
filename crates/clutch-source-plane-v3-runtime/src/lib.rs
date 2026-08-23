@@ -24,6 +24,7 @@ mod funding;
 mod ingest;
 mod lineage;
 mod reopen;
+mod terminal;
 mod window;
 
 pub use account::{
@@ -70,9 +71,16 @@ pub use lineage::{
     REOPEN_LINEAGE_V2_BYTES,
 };
 pub use reopen::{
-    authenticate_source_reopen_generation_request, AuthenticatedSourceReopenGenerationV1,
+    authenticate_source_reopen_generation_request,
+    authenticate_source_reopen_generation_request_before_close,
+    AuthenticatedSourceReopenGenerationV1, AuthenticatedSourceReopenPrecloseV1,
     SourceReopenFamilyV1, SourceReopenGenerationRequestV1, SourceReopenTargetV1,
     SOURCE_REOPEN_GENERATION_REQUEST_BYTES, SOURCE_REOPEN_TARGET_BODY_BYTES,
+};
+pub use terminal::{
+    authenticate_source_no_reopen_terminal, AuthenticatedSourceNoReopenTerminalV1,
+    SourceNoReopenTerminalAccessV1, SourceNoReopenTerminalV1,
+    SOURCE_NO_REOPEN_TERMINAL_BYTES,
 };
 pub use window::{
     authenticate_evaluation_authority, authenticate_persisted_source_policy_handoff,

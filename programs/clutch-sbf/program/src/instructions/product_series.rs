@@ -1,7 +1,7 @@
 //! Concrete SBF account and lamport-custody boundary for recurring Series.
 //!
-//! This module is compiled only by the non-production Product/Series
-//! laboratory. It authenticates the account forms that already have frozen
+//! This module is always compiled so private Product/Failure/Source joins use
+//! one current authority. It authenticates the account forms that already have frozen
 //! semantics: registered-Series and funding-state PDAs, exact stored/current
 //! rent coverage, and six physically distinct zero-data System-owned lamport
 //! vaults. It also supplies exact-delta System transfers into and out of those
@@ -723,6 +723,21 @@ impl AuthenticatedSourceProductRouteV3 {
         self.source_release_authentication_id
     }
 
+    /// Exact fully authenticated Source adapter/parser/receiver route.
+    pub const fn source_route_id(self) -> ContentId {
+        self.source_route_id
+    }
+
+    /// Exact reviewed SourcePlane semantic program selected by the release.
+    pub const fn source_plane_contract_id(self) -> ContentId {
+        self.source_plane_contract_id
+    }
+
+    /// Exact SourceSpec selected by current BundleV5.
+    pub const fn source_spec_id(self) -> ContentId {
+        self.source_spec_id
+    }
+
     /// Exact current compiler graph.
     pub const fn compiler_bundle_id(self) -> CompiledProductSeriesBundleV5Id {
         self.compiler_bundle_id
@@ -1000,6 +1015,10 @@ pub struct AuthenticatedSourceResolutionInputV3 {
     result_account_authentication_id: ContentId,
     work_receipt_authentication_id: ContentId,
     failure_policy_binding_id: ContentId,
+    market_instance_id: ContentId,
+    source_repair_generation: u64,
+    window_id: ContentId,
+    statistic_key_id: ContentId,
 }
 
 impl AuthenticatedSourceResolutionInputV3 {
@@ -1054,6 +1073,26 @@ impl AuthenticatedSourceResolutionInputV3 {
     pub const fn failure_policy_binding_id(self) -> ContentId {
         self.failure_policy_binding_id
     }
+
+    /// Exact Product Market instance selected by the compiled occurrence.
+    pub const fn market_instance_id(self) -> ContentId {
+        self.market_instance_id
+    }
+
+    /// Exact Source repair generation retained by the successful occurrence.
+    pub const fn source_repair_generation(self) -> u64 {
+        self.source_repair_generation
+    }
+
+    /// Exact canonical Window selected by the successful occurrence.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
+    /// Exact predictable StatisticKey selected by the successful occurrence.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
 }
 
 /// Bind Source's successful action-10 handoff to the current authenticated
@@ -1097,6 +1136,10 @@ pub fn authenticate_source_resolution_input_v3(
             &handoff.result_account_authentication_id().bytes(),
             &source.work_receipt_authentication_id().bytes(),
             &handoff.failure_policy_binding_id().bytes(),
+            &occurrence.market_instance_id().bytes(),
+            &occurrence.repair_generation().to_le_bytes(),
+            &occurrence.window_id().bytes(),
+            &occurrence.statistic_key_id().bytes(),
         ])
         .to_bytes(),
     );
@@ -1112,6 +1155,10 @@ pub fn authenticate_source_resolution_input_v3(
         result_account_authentication_id: handoff.result_account_authentication_id(),
         work_receipt_authentication_id: source.work_receipt_authentication_id(),
         failure_policy_binding_id: handoff.failure_policy_binding_id(),
+        market_instance_id: ContentId::from_bytes(occurrence.market_instance_id().bytes()),
+        source_repair_generation: occurrence.repair_generation(),
+        window_id: occurrence.window_id(),
+        statistic_key_id: occurrence.statistic_key_id(),
     })
 }
 

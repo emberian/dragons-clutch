@@ -574,6 +574,8 @@ pub enum SourceAccountRoleV2 {
     HandoffReceipt,
     /// Family-selected immutable authority used to recompute a reopened body.
     GenerationAuthority,
+    /// Persisted no-reopen or reconstructed reopen-request terminal policy.
+    SourceTerminalPolicy,
     /// Generic mutable Source target selected by the payload family.
     GenerationTarget,
     /// Generic durable lineage selected by the payload family.
@@ -829,16 +831,13 @@ const REOPEN_GENERATION_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::GenerationAuthority, false, false),
     meta(SourceAccountRoleV2::GenerationTarget, true, false),
     meta(SourceAccountRoleV2::GenerationLineage, true, false),
-    meta(SourceAccountRoleV2::SourceWorkReceipt, true, false),
-    meta(SourceAccountRoleV2::LivenessPolicy, false, false),
-    meta(SourceAccountRoleV2::SourceCompartment, true, false),
-    meta(SourceAccountRoleV2::Keeper, true, true),
     meta(SourceAccountRoleV2::Payer, true, true),
     meta(SourceAccountRoleV2::SystemProgram, false, false),
     meta(SourceAccountRoleV2::RentSysvar, false, false),
 ];
 
 const CLOSE_GENERATION_METAS_V2: &[SourceAccountMetaV2] = &[
+    meta(SourceAccountRoleV2::SourceTerminalPolicy, false, false),
     meta(SourceAccountRoleV2::GenerationTarget, true, false),
     meta(SourceAccountRoleV2::GenerationLineage, true, false),
     meta(SourceAccountRoleV2::SourceWorkReceipt, false, false),
@@ -902,7 +901,7 @@ pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> Source
             (EMIT_FAILURE_HANDOFF_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::ReopenGeneration => {
-            (REOPEN_GENERATION_METAS_V2, PAYER_KEEPER_ALIASES_V2)
+            (REOPEN_GENERATION_METAS_V2, NO_ALIASES_V2)
         }
         registry::SourceSeriesAction::CloseGeneration => (CLOSE_GENERATION_METAS_V2, NO_ALIASES_V2),
     };

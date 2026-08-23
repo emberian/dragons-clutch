@@ -92,6 +92,8 @@ pub enum PdaFamilyV3 {
     StatisticKey = 18,
     /// Immutable persisted Source policy handoff authentication.
     SourcePolicyHandoff = 19,
+    /// Immutable proof that one resolved Source lineage must never reopen.
+    SourceNoReopenTerminal = 20,
 }
 
 /// Canonical fixed-capacity PDA seed recipe proposal.
@@ -229,6 +231,17 @@ impl PdaRecipeV3 {
             PdaFamilyV3::SourcePolicyHandoff,
             b"dc-sp3-policy-handoff",
             &handoff_join_id.bytes(),
+        )
+    }
+
+    /// Explicit no-reopen terminal selected only after the shared Product
+    /// ResolutionV5 and Failure resolved-cell postwrites both authenticate.
+    pub fn source_no_reopen_terminal(terminal_id: ContentId) -> Result<Self> {
+        live(terminal_id)?;
+        Self::two(
+            PdaFamilyV3::SourceNoReopenTerminal,
+            b"dc-sp3-no-reopen",
+            &terminal_id.bytes(),
         )
     }
 
