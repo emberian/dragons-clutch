@@ -110,6 +110,7 @@ clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-
 clutch-fractional-redemption-runtime = { path = "../../../crates/clutch-fractional-redemption-runtime" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
+clutch-direct-market-runtime = { path = "../../../crates/clutch-direct-market-runtime" }
 clutch-fee-runtime-contract = { path = "../../../crates/clutch-fee-runtime-contract", optional = true }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
 clutch-general-v2-runtime = { path = "../../../crates/clutch-general-v2-runtime", default-features = false, optional = true }
