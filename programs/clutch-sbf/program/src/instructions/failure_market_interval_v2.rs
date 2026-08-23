@@ -668,6 +668,10 @@ pub(crate) fn close_failure_market_interval_accounts_v2<'a>(
         require(recipient.is_writable, ClutchError::NotWritable)?;
         require(!recipient.is_signer, ClutchError::NonCanonical)?;
         require(!recipient.executable, ClutchError::ExecutableAccount)?;
+        require(
+            recipient.owner.to_bytes() == SYSTEM_PROGRAM_ID && recipient.data_len() == 0,
+            ClutchError::WrongProgramOwner,
+        )?;
     }
     authenticate_close_account_prestate(
         program_id,
