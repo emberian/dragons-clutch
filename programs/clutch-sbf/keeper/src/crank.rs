@@ -14,6 +14,19 @@
 //! it ([`Act::benign`]) and is never a wildcard: an unexpected code stops the
 //! keeper.
 //!
+//! ## Whole-witness terminal preflight
+//!
+//! The current keeper only constructs the direct two-order entitlement and
+//! settlement account shapes.  Before it constructs **any** terminal action,
+//! including [`Intent::FreezeEntitlement`], it verifies the selected feed as a
+//! whole and requires every declared slice to fit an account shape it can
+//! drive completely: an exclusive one-slice single/single pair, or an
+//! exclusive portfolio/portfolio group.  A late virtual, mixed, nonexclusive,
+//! duplicate-pair, or malformed slice therefore refuses the entire witness
+//! before an earlier direct prefix can create a pot, stamp a reservation, or
+//! create a receipt.  This is a keeper capability boundary, not a claim that
+//! the onchain program lacks the wider routes.
+//!
 //! ## What is and is not permissionless
 //!
 //! Everything below is permissionless — the fee payer is the only signer —
@@ -133,6 +146,202 @@ struct TxSpec {
     program: Vec<(Vec<[u8; 32]>, Vec<u8>)>,
     heap: bool,
     limit: u32,
+}
+
+/// Capability minted only after the keeper has preflighted the complete
+/// selected witness it is about to drive.
+///
+/// Terminal action builders require this value even when they do not read its
+/// slices themselves.  That makes the whole-witness check structurally prior
+/// to pot creation as well as to entitlement and settlement planning.
+#[derive(Debug)]
+struct SupportedWitness {
+    feed: Pda,
+    slices: Vec<PairingSlice>,
+    groups: Vec<SupportedGroup>,
+}
+
+/// One complete account route the keeper knows how to construct.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SupportedGroup {
+    coverage: Vec<u16>,
+    shape: SupportedGroupShape,
+}
+
+/// The route fact that decides the entitlement and settlement account tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SupportedGroupShape {
+    Single,
+    PortfolioPair,
+}
+
+impl SupportedWitness {
+    /// Mint the terminal capability only after two complete passes: first the
+    /// supported leg shape, then the live-order bindings.  Keeping shape as a
+    /// separate first pass means a hostile late virtual slice is found before
+    /// even the valid direct prefix is grouped for action construction.
+    fn preflight(
+        feed: Pda,
+        view: &View,
+        outcome_count: u8,
+        slices: Vec<PairingSlice>,
+    ) -> Result<Self, String> {
+        let pairs = preflight_direct_slice_shapes(&slices, outcome_count)?;
+        preflight_direct_order_bindings(view, &slices, &pairs)?;
+        let groups = preflight_supported_groups(view, &pairs)?;
+        Ok(Self {
+            feed,
+            slices,
+            groups,
+        })
+    }
+}
+
+/// Require every declared slice to be a nonempty, in-range direct pair.
+fn preflight_direct_slice_shapes(
+    slices: &[PairingSlice],
+    outcome_count: u8,
+) -> Result<Vec<(u8, u8)>, String> {
+    let mut pairs = Vec::with_capacity(slices.len());
+    for (at, slice) in slices.iter().enumerate() {
+        let index = u16::try_from(at)
+            .map_err(|_| "selected witness exceeds the keeper's index width".to_string())?;
+        let (LegRef::Order(buy), LegRef::Order(sell)) = (slice.buy_ref, slice.sell_ref) else {
+            return Err(format!(
+                "slice {index} carries a virtual leg; the onchain virtual route exists, but this \
+                 keeper does not yet construct its account shape, so no terminal action was built"
+            ));
+        };
+        if buy == sell {
+            return Err(format!(
+                "slice {index} names walk rank {buy} on both sides; no terminal action was built"
+            ));
+        }
+        if slice.quantity == 0 {
+            return Err(format!(
+                "slice {index} has zero quantity; no terminal action was built"
+            ));
+        }
+        if slice.outcome >= outcome_count {
+            return Err(format!(
+                "slice {index} names outcome {} outside the frozen width {outcome_count}; no \
+                 terminal action was built",
+                slice.outcome
+            ));
+        }
+        pairs.push((buy, sell));
+    }
+    Ok(pairs)
+}
+
+/// Bind every direct pair to the expected live roles and named outcome.
+fn preflight_direct_order_bindings(
+    view: &View,
+    slices: &[PairingSlice],
+    pairs: &[(u8, u8)],
+) -> Result<(), String> {
+    for (index, ((buy_rank, sell_rank), slice)) in pairs.iter().copied().zip(slices).enumerate() {
+        let index = u16::try_from(index)
+            .map_err(|_| "selected witness exceeds the keeper's index width".to_string())?;
+        let (buy, sell) = direct_pair_ends(view, index, buy_rank, sell_rank)?;
+        if buy.record.side != 0 || sell.record.side != 1 {
+            return Err(format!(
+                "slice {index} does not bind a buy order to a sell order at its declared ranks; \
+                 no terminal action was built"
+            ));
+        }
+        if buy.record.owner == sell.record.owner {
+            return Err(format!(
+                "slice {index} pairs one owner with itself; no terminal action was built"
+            ));
+        }
+        if (!buy.is_portfolio && buy.record.outcome != slice.outcome)
+            || (!sell.is_portfolio && sell.record.outcome != slice.outcome)
+        {
+            return Err(format!(
+                "slice {index} does not bind both single-Egg ends to outcome {}; no terminal \
+                 action was built",
+                slice.outcome
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Group the direct pairs only when the keeper owns their complete route.
+fn preflight_supported_groups(
+    view: &View,
+    pairs: &[(u8, u8)],
+) -> Result<Vec<SupportedGroup>, String> {
+    let mut grouped = vec![false; pairs.len()];
+    let mut groups = Vec::new();
+    for (entry, pair) in pairs.iter().copied().enumerate() {
+        if grouped[entry] {
+            continue;
+        }
+        let mut coverage = Vec::new();
+        for (at, candidate) in pairs.iter().copied().enumerate() {
+            if candidate == pair {
+                grouped[at] = true;
+                coverage.push(u16::try_from(at).map_err(|_| {
+                    "selected witness exceeds the keeper's index width".to_string()
+                })?);
+            }
+        }
+        let entry = u16::try_from(entry)
+            .map_err(|_| "selected witness exceeds the keeper's index width".to_string())?;
+        let (buy, sell) = direct_pair_ends(view, entry, pair.0, pair.1)?;
+        if !direct_pair_is_exclusive(pairs, pair) {
+            return Err(format!(
+                "slice {entry}'s pair shares an endpoint with another pair; this keeper does not \
+                 construct the generalized per-slice route, so no terminal action was built"
+            ));
+        }
+        let shape = supported_group_shape(entry, &coverage, &buy, &sell)?;
+        groups.push(SupportedGroup { coverage, shape });
+    }
+    Ok(groups)
+}
+
+/// Whether neither endpoint participates with any other counterparty.
+fn direct_pair_is_exclusive(pairs: &[(u8, u8)], pair: (u8, u8)) -> bool {
+    pairs.iter().copied().all(|candidate| {
+        candidate == pair
+            || (candidate.0 != pair.0
+                && candidate.1 != pair.0
+                && candidate.0 != pair.1
+                && candidate.1 != pair.1)
+    })
+}
+
+/// Select the one exact entitlement/settlement tail the keeper can build.
+fn supported_group_shape(
+    entry: u16,
+    coverage: &[u16],
+    buy: &Live,
+    sell: &Live,
+) -> Result<SupportedGroupShape, String> {
+    match (buy.is_portfolio, sell.is_portfolio) {
+        (false, false) if coverage.len() == 1 => Ok(SupportedGroupShape::Single),
+        (false, false) => Err(format!(
+            "slice {entry}'s single-Egg pair needs {} receipts; this keeper only constructs its \
+             one-slice route, so no terminal action was built",
+            coverage.len()
+        )),
+        (true, true) if coverage.len() <= clutch_solana_layout::MAX_OUTCOMES => {
+            Ok(SupportedGroupShape::PortfolioPair)
+        }
+        (true, true) => Err(format!(
+            "slice {entry}'s portfolio pair needs {} receipts, past the atomic route's bound {}; \
+             no terminal action was built",
+            coverage.len(),
+            clutch_solana_layout::MAX_OUTCOMES
+        )),
+        _ => Err(format!(
+            "slice {entry} mixes single-Egg and portfolio ends; this keeper does not construct the \
+             mixed per-slice route, so no terminal action was built"
+        )),
+    }
 }
 
 /// Byte offset of `ReservationAccount::epoch` on the wire: the two header
@@ -801,10 +1010,15 @@ impl Keeper {
 
         // --- economic close: entitle, then consume -----------------------
         if cleared && entitlement_open {
+            // This read-only gate is deliberately before the pot-presence
+            // branch.  FreezeEntitlement creates and funds the pot, so even
+            // that first terminal mutation must not run for a selected
+            // witness whose later slices this keeper cannot drive.
+            let witness = self.preflight_selected_witness(view, epoch, selected)?;
             if !view.pot_present {
-                return self.freeze_entitlement(selected).map(Step::Act);
+                return self.freeze_entitlement(selected, &witness).map(Step::Act);
             }
-            if let Some(act) = self.entitle_or_settle(view, epoch, selected)? {
+            if let Some(act) = self.entitle_or_settle(view, epoch, selected, &witness)? {
                 return Ok(Step::Act(act));
             }
         }
@@ -1331,7 +1545,74 @@ impl Keeper {
         )
     }
 
-    fn freeze_entitlement(&mut self, selected: Hash32) -> Result<Box<Act>, String> {
+    /// Load, verify, and bind the complete selected witness before the first
+    /// terminal mutation can be constructed.
+    fn preflight_selected_witness(
+        &mut self,
+        view: &View,
+        epoch: &EpochAccount,
+        selected: Hash32,
+    ) -> Result<SupportedWitness, String> {
+        let pages: Vec<OrderPageAccount> = view
+            .pages
+            .iter()
+            .map(|(index, _, page)| {
+                page.ok_or_else(|| {
+                    format!(
+                        "frozen page {index} is absent while entitlement remains open; no terminal \
+                         action was built"
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        epoch.binds_page_set(&pages).map_err(|error| {
+            format!(
+                "the frozen page set did not bind the terminal epoch: {error:?}; no terminal \
+                 action was built"
+            )
+        })?;
+        let feed_pda = self.deriver.candidate_feed(self.epoch_id, selected)?;
+        let feed_bytes = self.rpc.account(&feed_pda.address)?.ok_or_else(|| {
+            "the selected feed is absent while entitlement remains open".to_string()
+        })?;
+        let feed = clearing::verify_candidate_feed(&feed_bytes)
+            .map_err(|error| format!("the complete selected feed did not verify: {error:?}"))?;
+        if feed.candidate != selected
+            || feed.epoch != self.epoch_id
+            || feed.market != self.cfg.market
+            || feed.order_set != epoch.order_set
+            || feed.outcome_count != epoch.outcome_count
+            || feed.order_len
+                != u8::try_from(view.live.len()).map_err(|_| {
+                    "the frozen live-order view exceeds the selected feed's rank width".to_string()
+                })?
+            || u16::from(feed.order_len) != epoch.order_count
+            || feed.stored_bump != feed_pda.bump
+        {
+            return Err(
+                "the selected feed does not bind the frozen epoch and complete live-rank view; \
+                 no terminal action was built"
+                    .to_string(),
+            );
+        }
+        let declared = feed.declared_slices().ok_or_else(|| {
+            "the selected feed has no declared witness; no terminal action was built".to_string()
+        })?;
+        let mut slices = Vec::with_capacity(usize::from(declared));
+        for index in 0..declared {
+            slices.push(
+                clearing::slice_at(&feed_bytes, &feed, index)
+                    .map_err(|error| format!("slice {index} did not decode: {error:?}"))?,
+            );
+        }
+        SupportedWitness::preflight(feed_pda, view, epoch.outcome_count, slices)
+    }
+
+    fn freeze_entitlement(
+        &mut self,
+        selected: Hash32,
+        _witness: &SupportedWitness,
+    ) -> Result<Box<Act>, String> {
         let epoch_key = self.wiring()?.epoch.bytes;
         let record = self.deriver.candidate(self.epoch_id, selected)?;
         let work = self.deriver.clear_work(self.epoch_id, selected)?;
@@ -1388,40 +1669,14 @@ impl Keeper {
         view: &View,
         epoch: &EpochAccount,
         selected: Hash32,
+        witness: &SupportedWitness,
     ) -> Result<Option<Box<Act>>, String> {
-        if view.live.is_empty() {
-            // The frozen page set is gone, so there is no walk-rank index to
-            // resolve a slice's ends against.  A page can only close once
-            // every one of its live records' reservations is past ACTIVE,
-            // which is exactly the condition under which nothing remains to
-            // entitle or to consume.
-            return Ok(None);
-        }
-        let feed_pda = self.deriver.candidate_feed(self.epoch_id, selected)?;
-        let Some(feed_bytes) = self.rpc.account(&feed_pda.address)? else {
-            // The selected feed is gone, which only happens after its close;
-            // there is nothing left to entitle or consume from it.
-            return Ok(None);
-        };
-        let feed = CandidateFeedHeader::decode(&feed_bytes)
-            .map_err(|error| format!("the selected feed did not decode: {error:?}"))?;
-        let declared = feed.declared_slices().unwrap_or(0);
-        let mut slices = Vec::with_capacity(usize::from(declared));
-        for index in 0..declared {
-            slices.push(
-                clearing::slice_at(&feed_bytes, &feed, index)
-                    .map_err(|error| format!("slice {index} did not decode: {error:?}"))?,
-            );
-        }
+        let feed_pda = &witness.feed;
+        let slices = &witness.slices;
         let record_pda = self.deriver.candidate(self.epoch_id, selected)?;
 
-        for index in 0..declared {
-            let Some(coverage) = coverage_of(&slices, index) else {
-                continue;
-            };
-            if coverage[0] != index {
-                continue; // not the entry slice of its group
-            }
+        for group in &witness.groups {
+            let index = group.coverage[0];
             let receipt = self.deriver.receipt(self.epoch_id, selected, index)?;
             let receipt_bytes = self.rpc.account(&receipt.address)?;
             match receipt_bytes {
@@ -1432,22 +1687,14 @@ impl Keeper {
                     // would mint an entitlement over an already-consumed
                     // envelope.  The reservations are the authority — the
                     // entitlement is exactly the ACTIVE to ENTITLED move.
-                    let (buy_end, sell_end) = pair_ends(view, &slices, index)?;
+                    let (buy_end, sell_end) = pair_ends(view, slices, index)?;
                     if buy_end.state != Some(RESERVATION_STATE_ACTIVE)
                         || sell_end.state != Some(RESERVATION_STATE_ACTIVE)
                     {
                         continue;
                     }
                     return self
-                        .entitle_slice(
-                            view,
-                            epoch,
-                            selected,
-                            &feed_pda,
-                            &record_pda,
-                            &coverage,
-                            &slices,
-                        )
+                        .entitle_slice(view, epoch, selected, feed_pda, &record_pda, group, slices)
                         .map(Some);
                 }
                 Some(bytes) => {
@@ -1455,7 +1702,7 @@ impl Keeper {
                         .map_err(|error| format!("receipt {index} did not decode: {error:?}"))?;
                     if decoded.consumed_flags & RECEIPT_FLAG_SLICE_EXHAUSTED == 0 {
                         return self
-                            .settle_page(view, selected, &record_pda, &coverage, &slices, &decoded)
+                            .settle_page(view, selected, &record_pda, group, slices, &decoded)
                             .map(Some);
                     }
                 }
@@ -1472,12 +1719,13 @@ impl Keeper {
         selected: Hash32,
         feed: &Pda,
         record: &Pda,
-        coverage: &[u16],
+        group: &SupportedGroup,
         slices: &[PairingSlice],
     ) -> Result<Box<Act>, String> {
+        let coverage = &group.coverage;
         let entry = coverage[0];
         let (buy_end, sell_end) = pair_ends(view, slices, entry)?;
-        let portfolio = buy_end.is_portfolio && sell_end.is_portfolio;
+        let portfolio = group.shape == SupportedGroupShape::PortfolioPair;
         let epoch_key = self.wiring()?.epoch.bytes;
         let terms_key = self.wiring()?.terms_account.bytes;
         let pot = self.deriver.pot(self.epoch_id)?;
@@ -1583,13 +1831,14 @@ impl Keeper {
         view: &View,
         selected: Hash32,
         record: &Pda,
-        coverage: &[u16],
+        group: &SupportedGroup,
         slices: &[PairingSlice],
         receipt: &SettlementReceiptAccount,
     ) -> Result<Box<Act>, String> {
+        let coverage = &group.coverage;
         let entry = coverage[0];
         let (buy_end, sell_end) = pair_ends(view, slices, entry)?;
-        let portfolio = buy_end.is_portfolio && sell_end.is_portfolio;
+        let portfolio = group.shape == SupportedGroupShape::PortfolioPair;
         let epoch_key = self.wiring()?.epoch.bytes;
         let terms_key = self.wiring()?.terms_account.bytes;
         let buy_position = self
@@ -2354,38 +2603,25 @@ fn pair_ends(view: &View, slices: &[PairingSlice], index: u16) -> Result<(Live, 
              will not fabricate a shape for it"
         ));
     };
+    direct_pair_ends(view, index, buy_rank, sell_rank)
+}
+
+/// Resolve a preflighted direct pair against the complete frozen live-rank
+/// view.  The index is carried only to make a refusal identify the bad slice.
+fn direct_pair_ends(
+    view: &View,
+    index: u16,
+    buy_rank: u8,
+    sell_rank: u8,
+) -> Result<(Live, Live), String> {
     let find = |rank: u8| -> Result<Live, String> {
         view.live
             .iter()
             .find(|live| live.rank == u16::from(rank))
             .cloned()
-            .ok_or_else(|| format!("no live order at walk rank {rank}"))
+            .ok_or_else(|| format!("slice {index} names no live order at walk rank {rank}"))
     };
     Ok((find(buy_rank)?, find(sell_rank)?))
-}
-
-/// Every slice index referencing exactly the same `(buy, sell)` order pair as
-/// `index`, ascending.
-///
-/// This mirrors the program's `scan_witness`: the entry slice is the group's
-/// first index, and a group is entitled and consumed atomically.  `None` means
-/// the slice carries a virtual leg, which this keeper does not drive.
-fn coverage_of(slices: &[PairingSlice], index: u16) -> Option<Vec<u16>> {
-    let slice = slices.get(usize::from(index))?;
-    let (LegRef::Order(buy), LegRef::Order(sell)) = (slice.buy_ref, slice.sell_ref) else {
-        return None;
-    };
-    let mut out = Vec::new();
-    for (at, candidate) in slices.iter().enumerate() {
-        if candidate.buy_ref == LegRef::Order(buy) && candidate.sell_ref == LegRef::Order(sell) {
-            out.push(u16::try_from(at).ok()?);
-        }
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
 }
 
 /// The first eight base58 characters of an identity, for a log line.
@@ -2419,12 +2655,82 @@ mod tests {
     }
 
     fn order(buy: u8, sell: u8) -> PairingSlice {
+        order_at(buy, sell, 0)
+    }
+
+    fn order_at(buy: u8, sell: u8, outcome: u8) -> PairingSlice {
         PairingSlice {
             buy_ref: LegRef::Order(buy),
             sell_ref: LegRef::Order(sell),
-            outcome: 0,
+            outcome,
             quantity: 1,
         }
+    }
+
+    fn pda(byte: u8) -> Pda {
+        Pda {
+            address: format!("pda-{byte}"),
+            bytes: [byte; 32],
+            bump: byte,
+        }
+    }
+
+    fn shaped_view(shapes: &[(u8, bool)]) -> View {
+        let live = shapes
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(rank, (side, is_portfolio))| {
+                let rank = u16::try_from(rank).expect("test rank fits");
+                let byte = u8::try_from(rank).expect("test rank fits");
+                Live {
+                    rank,
+                    page_index: 0,
+                    record: OrderRecord {
+                        owner: hash(byte.saturating_add(1)),
+                        order_id: hash(byte.saturating_add(10)),
+                        outcome: 0,
+                        side,
+                        quantity: 1,
+                        limit: 1,
+                        minimum_fill: 0,
+                        flags: 0,
+                        generation: 0,
+                        expiry_epoch: 0,
+                    },
+                    is_portfolio,
+                    reservation: pda(byte),
+                    state: Some(RESERVATION_STATE_ACTIVE),
+                }
+            })
+            .collect();
+        View {
+            slot: 0,
+            epoch: None,
+            window: None,
+            pages: Vec::new(),
+            live,
+            pot: None,
+            pot_present: false,
+        }
+    }
+
+    fn direct_view() -> View {
+        shaped_view(&[(0, false), (1, false), (1, false), (0, false), (1, false)])
+    }
+
+    fn refused_without_action(view: &View, outcome_count: u8, slices: Vec<PairingSlice>) -> String {
+        let mut constructed_actions = 0;
+        let result =
+            SupportedWitness::preflight(pda(9), view, outcome_count, slices).inspect(|_witness| {
+                // Terminal builders require this capability.  This closure is
+                // the test's action-construction seam and must not run on
+                // refusal.
+                constructed_actions += 1;
+            });
+        let error = result.expect_err("the hostile witness must refuse");
+        assert_eq!(constructed_actions, 0);
+        error
     }
 
     #[test]
@@ -2487,30 +2793,101 @@ mod tests {
 
     #[test]
     fn a_single_crossing_is_its_own_group() {
-        let slices = [order(1, 2), order(3, 4)];
-        assert_eq!(coverage_of(&slices, 0), Some(vec![0]));
-        assert_eq!(coverage_of(&slices, 1), Some(vec![1]));
+        let witness =
+            SupportedWitness::preflight(pda(9), &direct_view(), 2, vec![order(0, 1), order(3, 4)])
+                .expect("both direct groups are supported");
+        assert_eq!(
+            witness.groups,
+            vec![
+                SupportedGroup {
+                    coverage: vec![0],
+                    shape: SupportedGroupShape::Single,
+                },
+                SupportedGroup {
+                    coverage: vec![1],
+                    shape: SupportedGroupShape::Single,
+                },
+            ]
+        );
     }
 
     #[test]
     fn every_slice_of_one_pair_collects_into_one_group_with_the_first_as_entry() {
-        // The portfolio shape: one (buy, sell) pair across several outcomes.
-        let slices = [order(0, 1), order(3, 4), order(0, 1), order(0, 1)];
-        let group = coverage_of(&slices, 2).expect("the group exists");
-        assert_eq!(group, vec![0, 2, 3]);
-        assert_eq!(group[0], 0, "the entry slice is the group's first index");
-        assert_eq!(coverage_of(&slices, 1), Some(vec![1]));
+        // The exclusive portfolio shape: one pair across several outcomes.
+        let view = shaped_view(&[(0, true), (1, true)]);
+        let witness = SupportedWitness::preflight(
+            pda(9),
+            &view,
+            2,
+            vec![order_at(0, 1, 0), order_at(0, 1, 1)],
+        )
+        .expect("the exclusive portfolio group is supported");
+        assert_eq!(
+            witness.groups,
+            vec![SupportedGroup {
+                coverage: vec![0, 1],
+                shape: SupportedGroupShape::PortfolioPair,
+            }]
+        );
     }
 
     #[test]
-    fn a_virtual_leg_is_refused_rather_than_guessed() {
-        let slices = [PairingSlice {
-            buy_ref: LegRef::Merge,
-            sell_ref: LegRef::Order(1),
-            outcome: 0,
-            quantity: 1,
-        }];
-        assert_eq!(coverage_of(&slices, 0), None);
+    fn a_late_virtual_slice_refuses_the_whole_witness_before_any_action_is_constructed() {
+        let slices = vec![
+            order(0, 1),
+            PairingSlice {
+                buy_ref: LegRef::Merge,
+                sell_ref: LegRef::Order(1),
+                outcome: 0,
+                quantity: 1,
+            },
+        ];
+        assert!(refused_without_action(&direct_view(), 2, slices)
+            .contains("slice 1 carries a virtual leg"));
+    }
+
+    #[test]
+    fn a_late_zero_quantity_refuses_the_whole_witness_before_any_action_is_constructed() {
+        let mut zero = order(3, 4);
+        zero.quantity = 0;
+        assert!(
+            refused_without_action(&direct_view(), 2, vec![order(0, 1), zero])
+                .contains("slice 1 has zero quantity")
+        );
+    }
+
+    #[test]
+    fn a_late_out_of_range_outcome_refuses_before_any_action_is_constructed() {
+        assert!(
+            refused_without_action(&direct_view(), 2, vec![order(0, 1), order_at(3, 4, 2)],)
+                .contains("slice 1 names outcome 2 outside the frozen width 2")
+        );
+    }
+
+    #[test]
+    fn a_late_nonexclusive_portfolio_pair_refuses_before_any_action_is_constructed() {
+        let view = shaped_view(&[(0, true), (1, true), (1, true)]);
+        assert!(
+            refused_without_action(&view, 2, vec![order(0, 1), order(0, 2)])
+                .contains("shares an endpoint with another pair")
+        );
+    }
+
+    #[test]
+    fn a_late_mixed_pair_refuses_before_any_action_is_constructed() {
+        let view = shaped_view(&[(0, false), (1, false), (0, false), (1, true)]);
+        assert!(
+            refused_without_action(&view, 2, vec![order(0, 1), order(2, 3)])
+                .contains("mixes single-Egg and portfolio ends")
+        );
+    }
+
+    #[test]
+    fn a_duplicate_single_pair_refuses_before_any_action_is_constructed() {
+        assert!(
+            refused_without_action(&direct_view(), 2, vec![order(0, 1), order(0, 1)])
+                .contains("single-Egg pair needs 2 receipts")
+        );
     }
 
     #[test]
