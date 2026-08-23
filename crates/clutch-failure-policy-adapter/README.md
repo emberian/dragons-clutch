@@ -43,9 +43,11 @@ absent.
 Action-specific pure projections consume the existing runtime's private-field
 accepted-resolution, liveness-work, and terminal capabilities. They bind every
 authenticated artifact back to the fixed intent before producing the exact
-root/reserve mutation. Source and relation refusal projections likewise pass
-the complete SourcePlane objects through the semantic runtime; an intent alone
-can never establish a refusal or accepted value.
+root/reserve mutation. Source absence/refusal projections pass complete
+authenticated SourcePlane runtime handoffs through the semantic runtime; an
+intent alone can never establish absence, refusal, or accepted value. In
+particular, maturity without a result requires the predictable unallocated
+result account and its never-created lineage handoff.
 
 Terminal projection is acyclic. A resolved or dormant failure runtime emits a
 recovery-funding close receipt for the liveness Recovery compartment; dormancy

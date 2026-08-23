@@ -18,6 +18,9 @@ use clutch_product_series::MarketInstanceV2Id;
 use clutch_source_plane_v3::{
     StatisticKeyV3, StatisticResultV3, SummaryProgramV3, WindowSealV3, WindowSpecV3,
 };
+use clutch_source_plane_v3_runtime::{
+    ClockPolicyV1, FailurePolicySourceHandoffV1, SourceFailureKindV1,
+};
 use sha2::{Digest, Sha256};
 
 const ROOT_MAGIC: [u8; 8] = *b"DCFAILA1";
@@ -27,7 +30,7 @@ const INTENT_MAGIC: [u8; 8] = *b"DCFAILI1";
 const INTENT_SCHEMA: u16 = 1;
 
 /// Exact canonical durable failure-root width.
-pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_860;
+pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_924;
 /// Exact canonical failure intent width.
 pub const FAILURE_INTENT_V1_BYTES: usize = 344;
 
@@ -91,6 +94,12 @@ impl From<clutch_failure_policy_runtime::Error> for Error {
 impl From<clutch_source_plane_v3::Error> for Error {
     fn from(value: clutch_source_plane_v3::Error) -> Self {
         Self::Runtime(clutch_failure_policy_runtime::Error::Source(value))
+    }
+}
+
+impl From<clutch_source_plane_v3_runtime::Error> for Error {
+    fn from(value: clutch_source_plane_v3_runtime::Error) -> Self {
+        Self::Runtime(clutch_failure_policy_runtime::Error::SourceRuntime(value))
     }
 }
 
@@ -582,9 +591,9 @@ pub fn project_failure_transition(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum FailureActionV1 {
-    /// Enter degraded recovery at immutable maturity.
+    /// Enter degraded recovery from authenticated result absence at maturity.
     TriggerMaturity = 1,
-    /// Enter degraded recovery with an exact SourcePlane refusal.
+    /// Enter degraded recovery with an authenticated SourcePlane refusal handoff.
     TriggerSourceRefusal = 2,
     /// Enter degraded recovery with a frozen relation refusal.
     TriggerRelationRefusal = 3,
@@ -661,8 +670,8 @@ impl FailureIntentV1 {
         let valid = match self.action {
             FailureActionV1::TriggerMaturity => {
                 !clock_is_zero
-                    && !has_window
-                    && !has_evidence
+                    && has_window
+                    && has_evidence
                     && !has_work
                     && !has_quote
                     && self.scheduled_ceiling_lamports == 0
@@ -856,10 +865,24 @@ impl FailureIntentV1 {
 pub fn project_maturity_transition(
     accounts: AuthenticatedFailureAccountsV1,
     intent: FailureIntentV1,
+    handoff: FailurePolicySourceHandoffV1,
+    clock_policy: &ClockPolicyV1,
     actual_reserve_post_balance: u64,
 ) -> Result<FailureAccountMutationV1> {
     let runtime = intent_runtime(&accounts, &intent, FailureActionV1::TriggerMaturity)?;
-    let plan = runtime.plan_trigger_maturity(intent.clock, accounts.reserve_lamports)?;
+    let clock = runtime.recovery_clock_for_source_handoff(handoff, clock_policy)?;
+    if handoff.kind() != SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution
+        || intent.clock != clock
+        || intent.window_id != handoff.occurrence().window_id().bytes()
+        || intent.evidence_id != handoff.id().bytes()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let plan = runtime.plan_trigger_source_handoff(
+        accounts.reserve_lamports,
+        handoff,
+        clock_policy,
+    )?;
     project_failure_transition(accounts, plan, actual_reserve_post_balance)
 }
 
@@ -868,11 +891,8 @@ pub fn project_maturity_transition(
 pub fn project_source_refusal_transition(
     accounts: AuthenticatedFailureAccountsV1,
     intent: FailureIntentV1,
-    result: &StatisticResultV3,
-    key: &StatisticKeyV3,
-    summary: &SummaryProgramV3,
-    seal: &WindowSealV3,
-    window: &WindowSpecV3,
+    handoff: FailurePolicySourceHandoffV1,
+    clock_policy: &ClockPolicyV1,
     actual_reserve_post_balance: u64,
 ) -> Result<FailureAccountMutationV1> {
     let runtime = intent_runtime(
@@ -880,20 +900,19 @@ pub fn project_source_refusal_transition(
         &intent,
         FailureActionV1::TriggerSourceRefusal,
     )?;
-    if intent.window_id != window.id()?.bytes()
-        || intent.evidence_id != result.id()?.bytes()
-        || intent.refusal_code != result.refusal_code()
+    let clock = runtime.recovery_clock_for_source_handoff(handoff, clock_policy)?;
+    if handoff.kind() != SourceFailureKindV1::SourceEvaluationRefused
+        || intent.clock != clock
+        || intent.window_id != handoff.occurrence().window_id().bytes()
+        || intent.evidence_id != handoff.id().bytes()
+        || intent.refusal_code != handoff.refusal_code()
     {
         return Err(Error::ArtifactMismatch);
     }
-    let plan = runtime.plan_trigger_source_refusal(
-        intent.clock,
+    let plan = runtime.plan_trigger_source_handoff(
         accounts.reserve_lamports,
-        result,
-        key,
-        summary,
-        seal,
-        window,
+        handoff,
+        clock_policy,
     )?;
     project_failure_transition(accounts, plan, actual_reserve_post_balance)
 }

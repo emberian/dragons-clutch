@@ -28,6 +28,10 @@ use clutch_source_plane_v3::{
     ContentId as SourceContentId, SourcePlaneProgramV3, StatisticKeyV3, StatisticResultStatusV3,
     StatisticResultV3, SummaryProgramV3, WindowSealV3, WindowSpecV3,
 };
+use clutch_source_plane_v3_runtime::{
+    ClockPolicyV1, ClockSnapshotV1, FailurePolicySourceHandoffV1, OccurrenceSourceReceiptV1,
+    SourceFailureKindV1,
+};
 use sha2::{Digest, Sha256};
 
 const POLICY_BINDING_DOMAIN: &[u8] = b"dragons-clutch/failure-policy-binding/v1";
@@ -41,7 +45,7 @@ const FAILURE_RUNTIME_MAGIC: [u8; 8] = *b"DCFAILR1";
 const FAILURE_RUNTIME_SCHEMA: u16 = 1;
 
 /// Exact canonical width of one persisted successor failure runtime.
-pub const FAILURE_RUNTIME_V1_BYTES: usize = 1_776;
+pub const FAILURE_RUNTIME_V1_BYTES: usize = 1_840;
 
 /// Result alias for the successor failure-policy join.
 pub type Result<T> = core::result::Result<T, Error>;
@@ -113,6 +117,8 @@ pub enum Error {
     Product(clutch_product_series::Error),
     /// SourcePlane refused the supplied source/evaluator join.
     Source(clutch_source_plane_v3::Error),
+    /// SourcePlane runtime/account owner refused the supplied authenticated handoff.
+    SourceRuntime(clutch_source_plane_v3_runtime::Error),
     /// The funded recovery owner refused the transition.
     Recovery(RecoveryError),
     /// An exact typed identity or immutable field did not match.
@@ -149,6 +155,12 @@ impl From<clutch_source_plane_v3::Error> for Error {
     }
 }
 
+impl From<clutch_source_plane_v3_runtime::Error> for Error {
+    fn from(value: clutch_source_plane_v3_runtime::Error) -> Self {
+        Self::SourceRuntime(value)
+    }
+}
+
 impl From<RecoveryError> for Error {
     fn from(value: RecoveryError) -> Self {
         Self::Recovery(value)
@@ -180,6 +192,8 @@ pub struct FailurePolicyBindingV1 {
     summary_program_id: SourceContentId,
     primary_window_id: SourceContentId,
     statistic_key_id: SourceContentId,
+    source_occurrence_receipt_id: SourceContentId,
+    clock_policy_id: SourceContentId,
     relation_policy_id: [u8; 32],
     recovery_state_id: RecoveryIdentity,
     generation: u64,
@@ -202,6 +216,8 @@ impl FailurePolicyBindingV1 {
         hasher.update(self.summary_program_id.bytes());
         hasher.update(self.primary_window_id.bytes());
         hasher.update(self.statistic_key_id.bytes());
+        hasher.update(self.source_occurrence_receipt_id.bytes());
+        hasher.update(self.clock_policy_id.bytes());
         hasher.update(self.relation_policy_id);
         hasher.update(self.recovery_state_id.bytes());
         hasher.update(self.generation.to_le_bytes());
@@ -266,6 +282,16 @@ impl FailurePolicyBindingV1 {
     /// Exact predictable statistic-request identity.
     pub const fn statistic_key_id(&self) -> SourceContentId {
         self.statistic_key_id
+    }
+
+    /// Authenticated Product/Series-to-Source occurrence receipt identity.
+    pub const fn source_occurrence_receipt_id(&self) -> SourceContentId {
+        self.source_occurrence_receipt_id
+    }
+
+    /// Immutable source Clock/bucket policy identity.
+    pub const fn clock_policy_id(&self) -> SourceContentId {
+        self.clock_policy_id
     }
 
     /// Exact frozen settlement/evidence-relation policy identity.
@@ -596,8 +622,10 @@ impl FailureRuntimeV1 {
         summary: &SummaryProgramV3,
         primary_window: WindowSpecV3,
         statistic_key: StatisticKeyV3,
+        source_occurrence: OccurrenceSourceReceiptV1,
+        clock_policy: &ClockPolicyV1,
         recovery_admission: RecoveryAdmission,
-        creation_clock: RecoveryClock,
+        creation_clock: ClockSnapshotV1,
         funding_observation: FundingObservation,
     ) -> Result<(Self, FailureAdmissionReceiptV1)> {
         let recomputed = compile_ordinal_v2(
@@ -643,6 +671,9 @@ impl FailureRuntimeV1 {
         let summary_program_id = summary.id()?;
         let primary_window_id = primary_window.id()?;
         let statistic_key_id = statistic_key.id()?;
+        let source_occurrence_receipt_id = source_occurrence.id();
+        let clock_policy_id = clock_policy.id()?;
+        let creation_clock = recovery_clock_from_snapshot(clock_policy, creation_clock)?;
         let expected_coverage = u16::try_from(template.coverage_policy_registry_value)
             .map_err(|_| Error::BindingMismatch)?;
         if template.source_plane_contract_id.bytes() != source_plane_id.bytes()
@@ -659,6 +690,18 @@ impl FailureRuntimeV1 {
             || statistic_key.window_id != primary_window_id
             || statistic_key.summary_program_id != summary_program_id
             || statistic_key.statistic as u16 != template.statistic_registry_value
+            || source_occurrence.series_plan_id().bytes() != compiled.series_plan_id.bytes()
+            || source_occurrence.ordinal() != compiled.ordinal
+            || source_occurrence.market_instance_id().bytes()
+                != compiled.market_instance_id.bytes()
+            || source_occurrence.attachment_plan_id().bytes()
+                != compiled.attachment_plan_id.bytes()
+            || source_occurrence.source_plane_contract_id() != source_plane_id
+            || source_occurrence.source_spec_id() != primary_window.source_spec_id
+            || source_occurrence.window_id() != primary_window_id
+            || source_occurrence.statistic_key_id() != statistic_key_id
+            || source_occurrence.repair_generation() != primary_window.repair_generation
+            || source_occurrence.clock_policy_id() != clock_policy_id
         {
             return Err(Error::BindingMismatch);
         }
@@ -677,6 +720,8 @@ impl FailureRuntimeV1 {
             summary_program_id,
             primary_window_id,
             statistic_key_id,
+            source_occurrence_receipt_id,
+            clock_policy_id,
             relation_policy_id: genesis.relation_policy_id.bytes(),
             recovery_state_id: recovery_admission.state_id,
             generation: recovery_admission.generation,
@@ -762,6 +807,8 @@ impl FailureRuntimeV1 {
         self.recovery.check()?;
         if self.binding_id.is_zero()
             || self.binding_id != self.binding.id()
+            || self.binding.source_occurrence_receipt_id.is_zero()
+            || self.binding.clock_policy_id.is_zero()
             || self.recovery.market_instance_v2_id() != Some(self.binding.market_instance_id)
             || self.recovery.recovery_policy_id() != self.binding.recovery_policy_id
             || self.recovery.series_funding_quote_id() != self.binding.funding_quote_id
@@ -806,6 +853,8 @@ impl FailureRuntimeV1 {
         writer.bytes(&self.binding.summary_program_id.bytes())?;
         writer.bytes(&self.binding.primary_window_id.bytes())?;
         writer.bytes(&self.binding.statistic_key_id.bytes())?;
+        writer.bytes(&self.binding.source_occurrence_receipt_id.bytes())?;
+        writer.bytes(&self.binding.clock_policy_id.bytes())?;
         writer.bytes(&self.binding.relation_policy_id)?;
         writer.bytes(&self.binding.recovery_state_id.bytes())?;
         writer.u64(self.binding.generation)?;
@@ -861,6 +910,8 @@ impl FailureRuntimeV1 {
             summary_program_id: SourceContentId::from_bytes(reader.bytes()?),
             primary_window_id: SourceContentId::from_bytes(reader.bytes()?),
             statistic_key_id: SourceContentId::from_bytes(reader.bytes()?),
+            source_occurrence_receipt_id: SourceContentId::from_bytes(reader.bytes()?),
+            clock_policy_id: SourceContentId::from_bytes(reader.bytes()?),
             relation_policy_id: reader.bytes()?,
             recovery_state_id: RecoveryIdentity::from_bytes(reader.bytes()?),
             generation: reader.u64()?,
@@ -919,52 +970,81 @@ impl FailureRuntimeV1 {
         Ok(())
     }
 
-    /// Trigger evidence-only recovery at immutable primary maturity.
-    pub fn plan_trigger_maturity(
+    /// Trigger from a complete SourcePlane runtime handoff proving either exact
+    /// absence or one stable evaluator refusal at immutable primary maturity.
+    pub fn plan_trigger_source_handoff(
         &self,
-        clock: RecoveryClock,
         actual_reserve_balance: u64,
+        handoff: FailurePolicySourceHandoffV1,
+        clock_policy: &ClockPolicyV1,
     ) -> Result<FailureTransitionPlanV1> {
-        let trigger = self.make_trigger(
-            FailureTriggerKindV1::PrimaryMaturityWithoutAcceptedResolution,
-            self.statistic_key_id.bytes(),
-            0,
-            clock,
-        )?;
+        let clock = self.recovery_clock_for_source_handoff(handoff, clock_policy)?;
+        let (kind, refusal_code) = match handoff.kind() {
+            SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => (
+                FailureTriggerKindV1::PrimaryMaturityWithoutAcceptedResolution,
+                0,
+            ),
+            SourceFailureKindV1::SourceEvaluationRefused => (
+                FailureTriggerKindV1::SourceEvaluationRefused,
+                handoff.refusal_code(),
+            ),
+        };
+        let trigger = self.make_trigger(kind, handoff.id().bytes(), refusal_code, clock)?;
         let recovery = self
             .recovery
             .plan_enter_degraded(clock, actual_reserve_balance)?;
         self.wrap_plan(recovery, Some(trigger))
     }
 
-    /// Trigger at the same immutable maturity while recording an exact stable
-    /// SourcePlane evaluator refusal. Wrong/stale Window generations refuse.
-    #[allow(clippy::too_many_arguments)]
-    pub fn plan_trigger_source_refusal(
+    /// Derive and validate the exact recovery Clock committed by a SourcePlane
+    /// runtime failure handoff.
+    pub fn recovery_clock_for_source_handoff(
         &self,
-        clock: RecoveryClock,
-        actual_reserve_balance: u64,
-        result: &StatisticResultV3,
-        key: &StatisticKeyV3,
-        summary: &SummaryProgramV3,
-        seal: &WindowSealV3,
-        window: &WindowSpecV3,
-    ) -> Result<FailureTransitionPlanV1> {
-        self.validate_primary_result(result, key, summary, seal, window)?;
-        if result.status() != StatisticResultStatusV3::Refused {
-            return Err(Error::SourceDidNotRefuse);
+        handoff: FailurePolicySourceHandoffV1,
+        clock_policy: &ClockPolicyV1,
+    ) -> Result<RecoveryClock> {
+        self.check()?;
+        clock_policy.validate()?;
+        let occurrence = handoff.occurrence();
+        if handoff.failure_policy_binding_id().bytes() != self.binding_id.bytes()
+            || occurrence.id() != self.binding.source_occurrence_receipt_id
+            || occurrence.series_plan_id().bytes() != self.binding.series_plan_id.bytes()
+            || occurrence.ordinal() != self.binding.ordinal
+            || occurrence.market_instance_id().bytes() != self.binding.market_instance_id.bytes()
+            || occurrence.source_plane_contract_id() != self.binding.source_plane_program_id
+            || occurrence.source_spec_id() != self.binding.source_spec_id
+            || occurrence.window_id() != self.binding.primary_window_id
+            || occurrence.statistic_key_id() != self.binding.statistic_key_id
+            || occurrence.repair_generation() != self.primary_window.repair_generation
+            || occurrence.clock_policy_id() != self.binding.clock_policy_id
+            || clock_policy.id()? != self.binding.clock_policy_id
+            || handoff.source_fact_receipt_id().is_zero()
+        {
+            return Err(Error::BindingMismatch);
         }
-        let result_id = result.id()?;
-        let trigger = self.make_trigger(
-            FailureTriggerKindV1::SourceEvaluationRefused,
-            result_id.bytes(),
-            result.refusal_code(),
-            clock,
-        )?;
-        let recovery = self
-            .recovery
-            .plan_enter_degraded(clock, actual_reserve_balance)?;
-        self.wrap_plan(recovery, Some(trigger))
+        match handoff.kind() {
+            SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
+                if !handoff.window_evidence_id().is_zero()
+                    || !handoff.statistic_result_id().is_zero()
+                    || handoff.refusal_code() != 0
+                {
+                    return Err(Error::BindingMismatch);
+                }
+            }
+            SourceFailureKindV1::SourceEvaluationRefused => {
+                if handoff.window_evidence_id().is_zero()
+                    || handoff.statistic_result_id().is_zero()
+                    || handoff.refusal_code() == 0
+                {
+                    return Err(Error::BindingMismatch);
+                }
+            }
+        }
+        let clock = recovery_clock_from_snapshot(clock_policy, handoff.clock())?;
+        if clock.current_bucket < self.primary_window.maturity_bucket_exclusive {
+            return Err(Error::TriggerBeforeMaturity);
+        }
+        Ok(clock)
     }
 
     /// Trigger at immutable maturity while recording the frozen relation's
@@ -1733,6 +1813,25 @@ impl FailureTerminalJoinV1 {
         self.source_release_receipt_id
     }
 
+}
+
+fn recovery_clock_from_snapshot(
+    policy: &ClockPolicyV1,
+    snapshot: ClockSnapshotV1,
+) -> Result<RecoveryClock> {
+    policy.validate()?;
+    let elapsed = snapshot
+        .unix_timestamp
+        .checked_sub(policy.anchor_unix_timestamp)
+        .ok_or(Error::BindingMismatch)?;
+    let current_bucket = elapsed / u64::from(policy.bucket_seconds);
+    let unix_timestamp =
+        i64::try_from(snapshot.unix_timestamp).map_err(|_| Error::BindingMismatch)?;
+    Ok(RecoveryClock {
+        slot: snapshot.slot,
+        unix_timestamp,
+        current_bucket,
+    })
 }
 
 const fn kind_code(kind: FailureTriggerKindV1) -> u8 {

@@ -16,6 +16,14 @@ but they cannot move it earlier or change its transfers. Stale or wrong-
 generation source objects fail their exact SourcePlane joins and are not proof
 that the source failed.
 
+The live maturity routes consume `FailurePolicySourceHandoffV1`, not a caller
+assertion or raw result DTO. Admission freezes the exact authenticated
+Product/Series occurrence receipt and Clock-policy identities. The no-result
+path requires the predictable unallocated StatisticResult PDA plus permanent
+never-created lineage; the refused path requires the exact account-authenticated
+Window evidence and evaluator result. Both handoffs bind the immutable primary
+Window and derive the recovery Clock from the same frozen bucket policy.
+
 Admission creates a real `RecoveryState` through `admit_v2`: the exact
 `SeriesFundingQuoteV1` work principal and separate rent principal must already
 have reached the reserve, while prior prefund remains a donation. The returned

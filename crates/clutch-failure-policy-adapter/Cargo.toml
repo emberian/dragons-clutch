@@ -17,4 +17,5 @@ clutch-evidence-recovery = { path = "../clutch-evidence-recovery" }
 clutch-failure-policy-runtime = { path = "../clutch-failure-policy-runtime" }
 clutch-product-series = { path = "../clutch-product-series" }
 clutch-source-plane-v3 = { path = "../clutch-source-plane-v3" }
+clutch-source-plane-v3-runtime = { path = "../clutch-source-plane-v3-runtime" }
 sha2 = { version = "=0.10.9", default-features = false }
