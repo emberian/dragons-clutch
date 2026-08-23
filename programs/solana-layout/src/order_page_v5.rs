@@ -21,9 +21,9 @@
 
 use super::{
     account_len, account_version, check_hash, decode_slot, encode_slot, order_id_rank,
-    page_base_rank, put_header, stream, CodecError, EpochId, Hash32, MarketId, OrderPageAccount,
-    OrderSlot, Reader, Result, Sha256, Writer, MAX_ORDERS_PER_PAGE, MAX_ORDER_PAGES,
-    MAX_PORTFOLIO_ORDERS, ORDER_PAGE_TAG, ORDER_SLOT_BYTES,
+    page_base_rank, projection::OwnerInterner, put_header, stream, CodecError, EpochId, Hash32,
+    MarketId, OrderPageAccount, OrderSlot, Reader, Result, Sha256, Writer, MAX_ORDERS_PER_PAGE,
+    MAX_ORDER_PAGES, MAX_OUTCOMES, MAX_PORTFOLIO_ORDERS, ORDER_PAGE_TAG, ORDER_SLOT_BYTES,
 };
 
 /// Canonical General OrderPage discriminator.
@@ -676,6 +676,21 @@ pub fn streamed_page_digest_v5(input: &[u8]) -> Result<Hash32> {
 }
 
 fn verify_page_folding_v5(input: &[u8]) -> Result<(OrderPageHeaderV5, usize)> {
+    verify_page_folding_v5_observing(input, |_| Ok(()))
+}
+
+/// Verify one exact V5 page while observing each validated populated slot.
+///
+/// The observer runs inside the semantic cursor pass that page verification
+/// already requires. It never sees padding and cannot replace the stored V5
+/// digest, slot-generation, record, range, or portfolio checks.
+fn verify_page_folding_v5_observing<F>(
+    input: &[u8],
+    mut observe: F,
+) -> Result<(OrderPageHeaderV5, usize)>
+where
+    F: FnMut(&VerifiedOrderSlotV5) -> Result<()>,
+{
     let header = OrderPageHeaderV5::decode(input)?;
     let digest = fold_page_digest_v5(input, &header)?;
     header.validate_shape()?;
@@ -688,6 +703,7 @@ fn verify_page_folding_v5(input: &[u8]) -> Result<(OrderPageHeaderV5, usize)> {
     while let Some(step) = cursor.next_slot() {
         let verified = step?;
         if index < header.order_count as usize {
+            observe(&verified)?;
             if index == 0 {
                 first = verified.slot.order_id();
             }
@@ -719,6 +735,323 @@ fn verify_page_folding_v5(input: &[u8]) -> Result<(OrderPageHeaderV5, usize)> {
 /// Verify one raw V5 page without materializing the 4,140-byte account.
 pub fn verify_page_v5(input: &[u8]) -> Result<OrderPageHeaderV5> {
     verify_page_folding_v5(input).map(|(header, _)| header)
+}
+
+/// Immutable Epoch-owned context for one V5 freeze traversal.
+///
+/// Market, Epoch, outcome width, and horizon come from authenticated root
+/// accounts in the adapter. Page-supplied copies are checked against this
+/// context and never become parallel authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FreezePageSetContextV5 {
+    market: MarketId,
+    epoch: EpochId,
+    outcome_count: u8,
+    epoch_index: u64,
+}
+
+impl FreezePageSetContextV5 {
+    /// Construct one checked context from authenticated root facts.
+    pub fn new(
+        market: MarketId,
+        epoch: EpochId,
+        outcome_count: u8,
+        epoch_index: u64,
+    ) -> Result<Self> {
+        check_hash(market)?;
+        check_hash(epoch)?;
+        if !(2..=u8::try_from(MAX_OUTCOMES).map_err(|_| CodecError::InvalidCount)?)
+            .contains(&outcome_count)
+        {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(Self {
+            market,
+            epoch,
+            outcome_count,
+            epoch_index,
+        })
+    }
+
+    /// Authenticated General MarketRuntime identity.
+    pub const fn market(&self) -> MarketId {
+        self.market
+    }
+
+    /// Authenticated General Epoch PDA identity.
+    pub const fn epoch(&self) -> EpochId {
+        self.epoch
+    }
+}
+
+/// Exact facts from one complete authenticated open OrderPage V5 traversal.
+///
+/// Fields are private so no caller can construct a commitment, cardinality,
+/// owner, horizon, or Position-generation summary. The retained bounded
+/// headers support both exact PDA authentication and cheap post-seal checks;
+/// no V5 page body is traversed again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FreezePageSetPrestateV5 {
+    context: FreezePageSetContextV5,
+    headers: [OrderPageHeaderV5; MAX_ORDER_PAGES],
+    page_count: u16,
+    order_set: Hash32,
+    populated_order_count: u16,
+    live_order_count: u16,
+    owner_count: u16,
+    position_generation_count: u16,
+}
+
+impl FreezePageSetPrestateV5 {
+    /// V5 order-set identity committing every exact page body and Position
+    /// generation tail.
+    pub const fn order_set(&self) -> Hash32 {
+        self.order_set
+    }
+
+    /// Exact number of pages authenticated in canonical index order.
+    pub const fn page_count(&self) -> u16 {
+        self.page_count
+    }
+
+    /// Populated slots, including tombstones.
+    pub const fn populated_order_count(&self) -> u16 {
+        self.populated_order_count
+    }
+
+    /// Live RelationV2 orders, excluding tombstones.
+    pub const fn live_order_count(&self) -> u16 {
+        self.live_order_count
+    }
+
+    /// Exact number of distinct live owners.
+    ///
+    /// Owner identities remain private interner scratch. Only cardinality is
+    /// exposed, preserving the owner-blind RelationV2/ScoreV2-Q policy.
+    pub const fn owner_count(&self) -> u16 {
+        self.owner_count
+    }
+
+    /// Live slots whose exact nonzero Position generation was authenticated.
+    pub const fn position_generation_count(&self) -> u16 {
+        self.position_generation_count
+    }
+
+    /// Return one authenticated page header for exact metadata/PDA checks.
+    pub fn header(&self, page_index: u16) -> Result<OrderPageHeaderV5> {
+        if page_index >= self.page_count {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(self.headers[usize::from(page_index)])
+    }
+
+    /// Compare a V5 seal result to its exact authenticated open header.
+    ///
+    /// Freeze may alter only `frozen`, `order_set`, and `set_order_count`.
+    /// Every generation-bearing body byte stays transitively committed by the
+    /// unchanged V5 page digest.
+    pub fn binds_sealed_header(
+        &self,
+        page_index: u16,
+        sealed: &OrderPageHeaderV5,
+    ) -> Result<()> {
+        let mut expected = self.header(page_index)?;
+        expected.frozen = 1;
+        expected.order_set = self.order_set;
+        expected.set_order_count = self.populated_order_count;
+        if *sealed != expected {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Confirm the supplied root context is exactly the one traversed.
+    pub fn binds_context(&self, context: FreezePageSetContextV5) -> Result<()> {
+        if context != self.context {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+}
+
+/// Authenticate one nonempty open V5 book and derive every freeze fact once.
+///
+/// This is a prestate operation: no byte is mutated. Each exact 4,140-byte
+/// page is digest-verified, its slot and Position-generation tail are decoded
+/// canonically, owners are interned only for live records, and width/expiry
+/// are checked against the authenticated Epoch context in the same semantic
+/// cursor sweep. Cross-page density, links, counts, and the V5 set commitment
+/// are then closed over the retained headers.
+///
+/// `owners` is bounded scratch and must be empty. It is not a caller summary;
+/// the page bodies are its only input. A failed traversal has no persisted
+/// effect and therefore cannot partially freeze a book.
+pub fn freeze_page_set_prestate_v5(
+    context: FreezePageSetContextV5,
+    pages: &[&[u8]],
+    owners: &mut OwnerInterner,
+) -> Result<FreezePageSetPrestateV5> {
+    if pages.is_empty() || pages.len() > MAX_ORDER_PAGES {
+        return Err(CodecError::InvalidCount);
+    }
+    if owners.count() != 0 {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let page_count = u16::try_from(pages.len()).map_err(|_| CodecError::InvalidCount)?;
+    let mut headers = [OrderPageHeaderV5::ZEROED; MAX_ORDER_PAGES];
+    let mut digests = [Hash32::ZERO; MAX_ORDER_PAGES];
+    let mut populated = 0u16;
+    let mut live = 0u16;
+    let mut generation_bound = 0u16;
+    let mut portfolios = 0usize;
+    let mut horizon_valid = true;
+    let mut index = 0usize;
+    while index < pages.len() {
+        let (header, page_portfolios) =
+            verify_page_folding_v5_observing(pages[index], |verified| {
+                match verified.slot {
+                    OrderSlot::Single(order) => {
+                        owners.intern(order.owner)?;
+                        generation_bound = generation_bound
+                            .checked_add(1)
+                            .ok_or(CodecError::ArithmeticOverflow)?;
+                        if verified.position_generation == 0
+                            || order.outcome >= context.outcome_count
+                            || order.expiry_epoch < context.epoch_index
+                        {
+                            horizon_valid = false;
+                        }
+                    }
+                    OrderSlot::Portfolio(order) => {
+                        owners.intern(order.owner)?;
+                        generation_bound = generation_bound
+                            .checked_add(1)
+                            .ok_or(CodecError::ArithmeticOverflow)?;
+                        if verified.position_generation == 0
+                            || order.active_len > context.outcome_count
+                            || order.expiry_epoch < context.epoch_index
+                        {
+                            horizon_valid = false;
+                        }
+                    }
+                    OrderSlot::Tombstone(_) => {
+                        if verified.position_generation != 0 {
+                            return Err(CodecError::NonCanonicalPadding);
+                        }
+                    }
+                    OrderSlot::Empty => return Err(CodecError::ZeroIdentity),
+                }
+                Ok(())
+            })?;
+        let expected_index = u16::try_from(index).map_err(|_| CodecError::InvalidCount)?;
+        if header.frozen != 0
+            || header.page_index != expected_index
+            || header.page_count != page_count
+            || header.market != context.market
+            || header.epoch != context.epoch
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if index == 0 {
+            if header.prev_page_last_order_id != Hash32::ZERO {
+                return Err(CodecError::NonCanonicalPadding);
+            }
+        } else if header.prev_page_last_order_id != headers[index - 1].last_order_id {
+            return Err(CodecError::NonCanonicalIdentity);
+        }
+        if index + 1 < pages.len() {
+            if usize::from(header.order_count) != MAX_ORDERS_PER_PAGE {
+                return Err(CodecError::InvalidCount);
+            }
+        } else if header.order_count == 0 {
+            return Err(CodecError::InvalidCount);
+        }
+        populated = populated
+            .checked_add(u16::from(header.order_count))
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        live = live
+            .checked_add(u16::from(header.live_count()))
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        portfolios = portfolios
+            .checked_add(page_portfolios)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        digests[index] = header.page_digest;
+        headers[index] = header;
+        index += 1;
+    }
+    if live == 0 || portfolios > MAX_PORTFOLIO_ORDERS {
+        return Err(CodecError::InvalidCount);
+    }
+    if !horizon_valid || generation_bound != live {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let order_set = canonical_order_set_id_v5(
+        context.market,
+        context.epoch,
+        page_count,
+        populated,
+        &digests[..pages.len()],
+    )?;
+    Ok(FreezePageSetPrestateV5 {
+        context,
+        headers,
+        page_count,
+        order_set,
+        populated_order_count: populated,
+        live_order_count: live,
+        owner_count: owners.count(),
+        position_generation_count: generation_bound,
+    })
+}
+
+/// Stamp one authenticated open V5 page with its set-wide commitment.
+///
+/// The V5 page digest already commits the complete slot and Position-
+/// generation body. Freeze changes exactly the three header fields excluded
+/// from that leaf preimage, validates the resulting frozen shape, and returns
+/// the header for [`FreezePageSetPrestateV5::binds_sealed_header`].
+pub fn seal_page_v5(
+    page: &mut [u8],
+    order_set: Hash32,
+    set_order_count: u16,
+) -> Result<OrderPageHeaderV5> {
+    let mut header = OrderPageHeaderV5::decode(page)?;
+    if header.frozen != 0 {
+        return Err(CodecError::MismatchedBinding);
+    }
+    header.frozen = 1;
+    header.order_set = order_set;
+    header.set_order_count = set_order_count;
+    header.validate_shape()?;
+    write_header_v5(page, &header)?;
+    Ok(header)
+}
+
+/// Write exactly the fixed V5 header, preserving all body and generation bytes.
+fn write_header_v5(page: &mut [u8], header: &OrderPageHeaderV5) -> Result<()> {
+    if page.len() != ORDER_PAGE_V5_BYTES {
+        return Err(CodecError::OutputTooSmall);
+    }
+    let mut writer = Writer::new(&mut page[..ORDER_PAGE_V5_HEADER_BYTES]);
+    put_header(
+        &mut writer,
+        ORDER_PAGE_TAG,
+        account_version::ORDER_PAGE_V5,
+    )?;
+    writer.hash(header.market)?;
+    writer.hash(header.epoch)?;
+    writer.hash(header.order_set)?;
+    writer.hash(header.page_digest)?;
+    writer.hash(header.first_order_id)?;
+    writer.hash(header.last_order_id)?;
+    writer.hash(header.prev_page_last_order_id)?;
+    writer.u16(header.page_index)?;
+    writer.u16(header.page_count)?;
+    writer.u16(header.set_order_count)?;
+    writer.u8(header.order_count)?;
+    writer.u8(header.tombstone_count)?;
+    writer.u8(header.frozen)?;
+    writer.u8(header.stored_bump)
 }
 
 /// Verify a frozen V5 page set from raw account slices.
@@ -979,6 +1312,120 @@ mod tests {
         assert_eq!(
             verify_page_set_v5_streaming(&[&bytes]),
             Ok(page.page.order_set)
+        );
+    }
+
+    #[test]
+    fn one_v5_freeze_traversal_owns_commitment_owner_horizon_and_generation_facts() {
+        let page = open_page(41);
+        let mut bytes = encoded(&page);
+        let before = bytes;
+        let context =
+            FreezePageSetContextV5::new(page.page.market, page.page.epoch, 2, 12).unwrap();
+        let mut owners = OwnerInterner::new();
+        let facts = freeze_page_set_prestate_v5(context, &[&bytes], &mut owners).unwrap();
+
+        assert_eq!(facts.page_count(), 1);
+        assert_eq!(facts.populated_order_count(), 1);
+        assert_eq!(facts.live_order_count(), 1);
+        assert_eq!(facts.owner_count(), 1);
+        assert_eq!(facts.position_generation_count(), 1);
+        assert_eq!(facts.header(0).unwrap().stored_bump, page.page.stored_bump);
+        assert_eq!(facts.binds_context(context), Ok(()));
+        assert_eq!(bytes, before, "prestate authentication is read-only");
+
+        let sealed = seal_page_v5(
+            &mut bytes,
+            facts.order_set(),
+            facts.populated_order_count(),
+        )
+        .unwrap();
+        assert_eq!(facts.binds_sealed_header(0, &sealed), Ok(()));
+        assert_eq!(
+            &bytes[ORDER_PAGE_V5_HEADER_BYTES..],
+            &before[ORDER_PAGE_V5_HEADER_BYTES..],
+            "the seal cannot alter a slot or Position generation",
+        );
+        assert_eq!(
+            verify_page_set_v5_streaming(&[&bytes]),
+            Ok(facts.order_set())
+        );
+    }
+
+    #[test]
+    fn v5_freeze_prestate_refuses_width_horizon_tail_and_caller_scratch_faults() {
+        let page = open_page(41);
+        let bytes = encoded(&page);
+        let context =
+            FreezePageSetContextV5::new(page.page.market, page.page.epoch, 2, 12).unwrap();
+
+        let stale =
+            FreezePageSetContextV5::new(page.page.market, page.page.epoch, 2, 13).unwrap();
+        assert_eq!(
+            freeze_page_set_prestate_v5(stale, &[&bytes], &mut OwnerInterner::new()),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut too_wide = page;
+        too_wide.page.orders[0] = match too_wide.page.orders[0] {
+            OrderSlot::Single(order) => OrderSlot::Single(OrderRecord {
+                outcome: 2,
+                ..order
+            }),
+            _ => unreachable!(),
+        };
+        too_wide.page.page_digest = too_wide.recomputed_page_digest().unwrap();
+        let too_wide_bytes = encoded(&too_wide);
+        assert_eq!(
+            freeze_page_set_prestate_v5(
+                context,
+                &[&too_wide_bytes],
+                &mut OwnerInterner::new(),
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut tampered_tail = bytes;
+        tampered_tail[ORDER_PAGE_V5_GENERATION_TAIL_OFFSET] ^= 1;
+        assert_eq!(
+            freeze_page_set_prestate_v5(
+                context,
+                &[&tampered_tail],
+                &mut OwnerInterner::new(),
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut prefilled = OwnerInterner::new();
+        prefilled.intern(Hash32::from_bytes([99; 32])).unwrap();
+        assert_eq!(
+            freeze_page_set_prestate_v5(context, &[&bytes], &mut prefilled),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn v5_freeze_header_receipt_refuses_any_postseal_drift() {
+        let page = open_page(41);
+        let mut bytes = encoded(&page);
+        let context =
+            FreezePageSetContextV5::new(page.page.market, page.page.epoch, 2, 12).unwrap();
+        let facts =
+            freeze_page_set_prestate_v5(context, &[&bytes], &mut OwnerInterner::new()).unwrap();
+        let mut sealed = seal_page_v5(
+            &mut bytes,
+            facts.order_set(),
+            facts.populated_order_count(),
+        )
+        .unwrap();
+        sealed.stored_bump ^= 1;
+        assert_eq!(
+            facts.binds_sealed_header(0, &sealed),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            facts.binds_sealed_header(1, &sealed),
+            Err(CodecError::InvalidCount)
         );
     }
 
