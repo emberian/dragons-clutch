@@ -1,0 +1,13 @@
+[package]
+name = "clutch-retirement"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Fixed-layout counted-retirement codecs and pure transition primitives for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

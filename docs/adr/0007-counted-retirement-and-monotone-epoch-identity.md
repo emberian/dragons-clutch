@@ -1,7 +1,8 @@
 # ADR-0007: counted retirement and monotone epoch identity
 
-Status: proposed 2026-08-22; **not implemented and not authorization to
-re-enable either close**
+Status: proposed 2026-08-22; production codec/transition seam implemented in
+`crates/clutch-retirement`, but **not integrated into live accounts and not
+authorization to re-enable either close**
 
 ## Context
 
@@ -32,6 +33,13 @@ The executable model for this decision is
 [`research/deletion-replay-v2`](../../research/deletion-replay-v2/README.md).
 It is host-tested model evidence, not an SBF, ELF, deployment, or formal-proof
 claim.
+
+The production-bound pure seam is
+[`crates/clutch-retirement`](../../crates/clutch-retirement/README.md). It owns
+the fixed extension/tombstone codecs and checked post-state transitions without
+allocating a live instruction or touching the SBF dispatcher. Its tests close
+the host codec/state obligations only; its provisional tombstone tag bytes are
+not live wire allocations, and the Promotion gate below remains open.
 
 ## Decision
 
@@ -202,6 +210,14 @@ ADR-0006 staging, sealed, verified-valid/refused, expired, and selected states
 are equally live children. The close requires the complete candidate bundle
 present and its canonical ClearWork absent, then closes the bundle and
 decrements once. The current feed-optional close shape is not carried into V3.
+
+The retirement seam does not re-declare either candidate state machine. Its
+adapter projection carries an opaque `(candidate tag, candidate version,
+status)` witness produced only after that schema's owning decoder and lifecycle
+validator succeed. Status updates preserve the registered tag/version and do
+not touch the count. Thus exhaustive counting covers every admitted status
+without creating a second semantic owner or making retirement interpret a
+candidate terminality byte.
 
 ADR-0006's CandidateIndex pages, CandidateVerdicts, and CandidateEscrows have
 independent creation and close times, so each has its own counter. Their close
@@ -384,4 +400,6 @@ rent arithmetic, or an ELF.
   tombstone estimate;
 - `programs/clutch-sbf/program/src/instructions/orders_batch/terminal_closure.rs`,
   current fail-closed runtime;
-- `research/deletion-replay-v2`, executable model and adversarial tests.
+- `research/deletion-replay-v2`, executable model and adversarial tests; and
+- `crates/clutch-retirement`, production-bound fixed codecs, frozen vectors,
+  hostile-byte decoders, and pure exact-once transitions.
