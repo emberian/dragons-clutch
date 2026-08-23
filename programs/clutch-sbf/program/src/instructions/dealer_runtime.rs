@@ -805,6 +805,21 @@ const RETIRE_STATE_ROOT: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
 ];
 
+const CLAIM_TERMINAL: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::LpPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::LpPage, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::TerminalAllocation, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::ClaimWork, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+];
+
 const QUEUE_NEW_CALLER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -885,6 +900,7 @@ pub fn meta_contract_v1(
         }
         DealerFacilityAction::QueueExit if !payload.existing_ticket => Some(QUEUE_NEW_EXTERNAL),
         DealerFacilityAction::QueueExit => Some(QUEUE_EXISTING_EXTERNAL),
+        DealerFacilityAction::Claim => Some(CLAIM_TERMINAL),
         DealerFacilityAction::Retire
             if payload.retire_target == DEALER_RETIRE_EXIT_TICKET_V1 =>
         {

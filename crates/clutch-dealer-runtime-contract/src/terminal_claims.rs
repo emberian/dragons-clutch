@@ -12,11 +12,13 @@ use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
     prepare_dealer_position_pair_transfer_v1, DealerActionLivenessAuthorizationV1,
     DealerAssetTransferAmountsV1, DealerAssetTransferBundleV1, DealerChildKindV2,
-    DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV1,
-    DealerPositionObservationV3, DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1,
-    DealerStateV2, DealerTransferPositionV3, DeletableRentOwnerV1, Error,
-    FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, PreparedDealerPositionPairTransferV1,
-    Result, DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1, DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1,
+    DealerFacilityReplayV1, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
+    DealerPositionMarketJoinV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
+    DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2,
+    DealerTransferPositionV3, DealerTransitionIntentV1, DealerTransitionLivenessModeV1,
+    DeletableRentOwnerV1, Error, FacilityPositionBindingV2, FixedCodec, Id, LpPageV2,
+    PreparedDealerPositionPairTransferV1, PreparedDealerReplayTransitionV1, Result,
+    DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1, DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1,
     DELETABLE_RENT_OWNER_BYTES, LP_ENTRIES_PER_PAGE, MAX_ATOMS, MAX_LP_PAGES,
 };
 use clutch_retirement::PositionLifecycleV3;
@@ -955,6 +957,88 @@ pub fn prepare_dealer_terminal_claim_v2(
         claimed_shares: entry.shares,
         claim_atoms,
         entry_index,
+    })
+}
+
+/// Atomic Claim capability binding assets, State, allocation, liveness, and Replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerTerminalClaimReplayV2 {
+    /// Exact facility-to-LP transfer and State/allocation postimages.
+    pub claim: PreparedDealerTerminalClaimV2,
+    /// Same-generation canonical Replay advance binding the Claim bundle.
+    pub replay: PreparedDealerReplayTransitionV1,
+}
+
+/// Prepare the sole public terminal Claim transition over one stable Replay.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_dealer_terminal_claim_replay_v2(
+    policy: &DealerPolicyV1,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    work: &DealerClaimWorkV1,
+    page_account_id: Id,
+    page: &LpPageV2,
+    allocation: &DealerTerminalAllocationV1,
+    entry_index: u8,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    authorization: &DealerActionLivenessAuthorizationV1,
+    market: DealerPositionMarketJoinV1,
+    facility_position: DealerTransferPositionV3,
+    lp_position: DealerTransferPositionV3,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+) -> Result<PreparedDealerTerminalClaimReplayV2> {
+    authorization.validate_against(schedule, runtime)?;
+    replay.validate()?;
+    if authorization.action != DealerRuntimeActionV1::Claim
+        || authorization.owner != state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
+        || replay.facility_position_account_id() != state.facility_position_account_id
+        || replay.replay_account_id() != state.facility_replay_account_id
+        || replay.facility_position_binding_id() != state.facility_position_binding_id
+        || replay.position_generation() != state.generation
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let prepared_claim = prepare_dealer_terminal_claim_v2(
+        policy,
+        state,
+        state_account_id,
+        work,
+        page_account_id,
+        page,
+        allocation,
+        entry_index,
+        market,
+        facility_position,
+        lp_position,
+    )?;
+    let bundle = prepared_claim.transfer_bundle();
+    let state_after = prepared_claim.state_after();
+    let prepared_replay = replay.prepare_transition(
+        replay_binding,
+        DealerTransitionIntentV1 {
+            replay_account_id: replay.replay_account_id(),
+            replay_pre_id: replay.replay_id()?,
+            state_pre_content_id: state.state_content_id()?,
+            state_post_content_id: state_after.state_content_id()?,
+            position_pre_semantic_id: bundle.source_pre_semantic_id,
+            position_post_semantic_id: bundle.source_post_semantic_id,
+            liveness_receipt_semantic_id: authorization.receipt_semantic_id,
+            fee_receipt_semantic_id: Id::ZERO,
+            asset_transfer_bundle_id: bundle.bundle_id()?,
+            position_generation_before: state.generation,
+            position_generation_after: state.generation,
+            expected_ordinal: replay.next_transition_ordinal(),
+            action: DealerRuntimeActionV1::Claim,
+            liveness_mode: DealerTransitionLivenessModeV1::ExternalReceipt,
+        },
+    )?;
+    Ok(PreparedDealerTerminalClaimReplayV2 {
+        claim: prepared_claim,
+        replay: prepared_replay,
     })
 }
 
