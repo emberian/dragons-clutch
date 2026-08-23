@@ -6,7 +6,7 @@
 //! Read-only mint and Hoard-token observations prove that no external custody
 //! balance or mint supply moved while those four semantic owners advanced.
 
-use crate::accounts::{require, require_count, require_distinct, require_signer, Outcome};
+use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use clutch_collateral_adapter_v2::{
     accept_complete_set_position_transition_v3, prepare_complete_set_position_transition_v3,
@@ -59,9 +59,14 @@ pub fn process_complete_set_v3(
     quantity: u64,
     action: CompleteSetActionV3,
 ) -> Outcome<()> {
-    require_count(accounts, COMPLETE_SET_ACCOUNT_COUNT_V3)?;
-    require_signer(&accounts[ix::ACTOR])?;
-    require_distinct(accounts)?;
+    validate_full_width_collateral_accounts_v3(
+        accounts,
+        match action {
+            CompleteSetActionV3::Split => CollateralActionV3::Split,
+            CompleteSetActionV3::Merge => CollateralActionV3::Merge,
+        },
+        None,
+    )?;
     require(
         accounts[ix::ACTOR].key.to_bytes() == owner.bytes(),
         ClutchError::UnauthorizedActor,
@@ -80,15 +85,6 @@ pub fn process_complete_set_v3(
         &accounts[ix::CLAIM_LEDGER],
         true,
         true,
-    )?;
-    validate_full_width_collateral_accounts_v3(
-        accounts,
-        match action {
-            CompleteSetActionV3::Split => CollateralActionV3::Split,
-            CompleteSetActionV3::Merge => CollateralActionV3::Merge,
-        },
-        liabilities.hoard.outcome_count,
-        None,
     )?;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes() == market_instance_id.bytes()

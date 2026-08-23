@@ -7,7 +7,7 @@
 //! by the separately owned Fractional route through Resolution's quotient and
 //! remainder projection.
 
-use crate::accounts::{expect_pda, require, require_signer, Outcome};
+use crate::accounts::{expect_pda, require, Outcome};
 use crate::claim_release::authenticate_claim_issuance_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
@@ -69,25 +69,6 @@ fn decode_request(request: &Request) -> Outcome<ExternalRedemptionRequestV3> {
         }),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
-}
-
-fn require_distinct_roles(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
-    let mut left = 0usize;
-    while left < accounts.len() {
-        let mut right = left + 1;
-        while right < accounts.len() {
-            let allowed_program_alias = left == ix::COLLATERAL_TOKEN_PROGRAM
-                && right == ix::OUTCOME_TOKEN_PROGRAM
-                && accounts[left].key == accounts[right].key;
-            require(
-                accounts[left].key != accounts[right].key || allowed_program_alias,
-                ClutchError::AccountAlias,
-            )?;
-            right += 1;
-        }
-        left += 1;
-    }
-    Ok(())
 }
 
 fn observe_mints(
@@ -238,14 +219,13 @@ pub fn process_external_redemption_v3(
     request: &Request,
 ) -> Outcome<()> {
     let request = decode_request(request)?;
-    require(
-        accounts.len() >= EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3,
-        ClutchError::AccountCount,
+    let observed_outcome_count = validate_full_width_collateral_accounts_v3(
+        accounts,
+        CollateralActionV3::RedeemExternal,
+        Some(request.outcome),
     )?;
-    require_signer(&accounts[ix::CLAIMANT])?;
     require(
-        !accounts[ix::CLAIMANT].is_writable
-            && request.claimant.bytes() == accounts[ix::CLAIMANT].key.to_bytes()
+        request.claimant.bytes() == accounts[ix::CLAIMANT].key.to_bytes()
             && request.source.bytes() == accounts[ix::SOURCE].key.to_bytes()
             && request.destination.bytes() == accounts[ix::DESTINATION].key.to_bytes(),
         ClutchError::UnauthorizedActor,
@@ -265,26 +245,15 @@ pub fn process_external_redemption_v3(
         true,
         true,
     )?;
-    let expected_count = EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3
-        .checked_add(usize::from(liabilities.market_binding.outcome_count))
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    require(accounts.len() == expected_count, ClutchError::AccountCount)?;
-    validate_full_width_collateral_accounts_v3(
-        accounts,
-        CollateralActionV3::RedeemExternal,
-        liabilities.hoard.outcome_count,
-        Some(request.outcome),
-    )?;
-    require_distinct_roles(accounts)?;
     require(
         request.market_instance_id.bytes()
             == liabilities.market_binding.market_instance_v2_id.bytes()
+            && liabilities.market_binding.outcome_count == observed_outcome_count
             && request.outcome < liabilities.market_binding.outcome_count
             && accounts[ix::COLLATERAL_MINT].key.to_bytes()
                 == liabilities.bound.policy().mint.bytes()
             && accounts[ix::HOARD_TOKEN].key.to_bytes() == liabilities.hoard.token_account.bytes()
             && accounts[ix::HOARD_AUTHORITY].key.to_bytes() == liabilities.hoard.authority.bytes()
-            && !accounts[ix::HOARD_AUTHORITY].is_writable
             && !accounts[ix::HOARD_AUTHORITY].executable
             && accounts[ix::HOARD_AUTHORITY].data_is_empty(),
         ClutchError::MismatchedState,

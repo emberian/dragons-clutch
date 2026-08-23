@@ -5,7 +5,7 @@
 //! Realm-selected collateral account are authenticated but never debited,
 //! credited, or used as mint authority.
 
-use crate::accounts::{require, require_signer, Outcome};
+use crate::accounts::{require, Outcome};
 use crate::claim_release::authenticate_claim_issuance_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
@@ -82,27 +82,6 @@ fn decode_request(request: &Request) -> Outcome<ClaimRepresentationRequestV3> {
     }
 }
 
-/// Permit only the unavoidable alias between collateral and outcome token
-/// program roles when a Realm itself selects Token-2022.
-fn require_distinct_claim_roles(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
-    let mut left = 0usize;
-    while left < accounts.len() {
-        let mut right = left + 1;
-        while right < accounts.len() {
-            let allowed_program_alias = left == ix::COLLATERAL_TOKEN_PROGRAM
-                && right == ix::OUTCOME_TOKEN_PROGRAM
-                && accounts[left].key == accounts[right].key;
-            require(
-                accounts[left].key != accounts[right].key || allowed_program_alias,
-                ClutchError::AccountAlias,
-            )?;
-            right += 1;
-        }
-        left += 1;
-    }
-    Ok(())
-}
-
 fn observe_mints(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -158,12 +137,14 @@ pub fn process_claim_representation_v3(
     request: &Request,
 ) -> Outcome<()> {
     let request = decode_request(request)?;
-    require(
-        accounts.len() >= CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3,
-        ClutchError::AccountCount,
+    let observed_outcome_count = validate_full_width_collateral_accounts_v3(
+        accounts,
+        match request.kind {
+            ClaimRepresentationKindV3::Materialize => CollateralActionV3::Materialize,
+            ClaimRepresentationKindV3::Dematerialize => CollateralActionV3::Dematerialize,
+        },
+        Some(request.outcome),
     )?;
-    require_signer(&accounts[ix::ACTOR])?;
-    require_distinct_claim_roles(accounts)?;
     require(
         accounts[ix::ACTOR].key.to_bytes() == request.owner.bytes()
             && accounts[ix::HOLDER_TOKEN].key.to_bytes() == request.holder_token_account.bytes(),
@@ -184,22 +165,10 @@ pub fn process_claim_representation_v3(
         false,
         true,
     )?;
-    let expected_count = CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3
-        .checked_add(usize::from(liabilities.market_binding.outcome_count))
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    require(accounts.len() == expected_count, ClutchError::AccountCount)?;
-    validate_full_width_collateral_accounts_v3(
-        accounts,
-        match request.kind {
-            ClaimRepresentationKindV3::Materialize => CollateralActionV3::Materialize,
-            ClaimRepresentationKindV3::Dematerialize => CollateralActionV3::Dematerialize,
-        },
-        liabilities.hoard.outcome_count,
-        Some(request.outcome),
-    )?;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()
             == request.market_instance_id.bytes()
+            && liabilities.market_binding.outcome_count == observed_outcome_count
             && request.outcome < liabilities.market_binding.outcome_count,
         ClutchError::MismatchedState,
     )?;

@@ -582,7 +582,9 @@ mod tests {
         let mut data = vec![0xd1, 1];
         data.extend_from_slice(&sequence.to_le_bytes());
         data.push(0);
-        data.extend_from_slice(&(encoded_intent.len() as u16).to_le_bytes());
+        let encoded_intent_len =
+            u16::try_from(encoded_intent.len()).expect("fixed Request intent fits u16");
+        data.extend_from_slice(&encoded_intent_len.to_le_bytes());
         data.extend_from_slice(&encoded_intent);
         data
     }
