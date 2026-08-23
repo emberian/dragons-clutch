@@ -121,9 +121,11 @@
       definition("Source commit", snapshot.release.declaredSourceCommit),
       definition("Capability profile", snapshot.release.declaredCapabilityProfileId),
       definition("Compiled Source profile", release.sourceProfile),
-      definition("Registered Source releases", release.registeredSourceReleaseCount === "0"
+      definition("Registered Source releases", release.sourceProfile === "production-inert"
         ? "0 — Source value routes refuse; no fixture or fallback identity is admitted"
-        : `${release.registeredSourceReleaseCount} — exact identities remain release-bound and untrusted as projections`),
+        : release.sourceProfile === "non-production-mock-source-lab"
+          ? "1 — fabricated laboratory identity; read-only projection only and Source construction refuses"
+          : "1 — non-production real-Pyth laboratory identity; release-bound untrusted projection only"),
       definition("Decoded families", release.families.join(", ")),
       definition("Enabled registry coordinates", release.enabledIntents.length === 0
         ? "none — transaction construction refuses every successor coordinate"
@@ -367,6 +369,10 @@
           && BigInt(instruction.localAction) >= 1n
           && BigInt(instruction.localAction) <= 12n) {
         throw new Error(`Source coordinate ${key} is unavailable because this exact checked ELF compiled zero registered Source releases; fixture and mock fallbacks are forbidden.`);
+      }
+      if (state.configuration.release.sourceProfile === "non-production-mock-source-lab"
+          && instruction.family === "source") {
+        throw new Error(`Source coordinate ${key} is unavailable in the operator client because this ELF uses a fabricated mock laboratory identity; mock observations never become construction authority.`);
       }
     }
     const transactionSha256 = await digest(fromHex(transaction.serializedTransactionHex));

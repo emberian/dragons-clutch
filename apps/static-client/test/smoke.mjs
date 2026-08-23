@@ -125,6 +125,7 @@ test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
   assert.match(builder, /No release-authenticated runtime capability verdict/);
   assert.match(app, /disabled capabilities are non-actionable/);
   assert.match(app, /fixture and mock fallbacks are forbidden/);
+  assert.match(app, /mock observations never become construction authority/);
   assert.match(app, /BigInt\(instruction\.localAction\).*12n/s);
 });
 

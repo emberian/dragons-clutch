@@ -73,7 +73,10 @@ releases. Glass labels that state explicitly and refuses Source actions 1–12;
 it never substitutes the mock or real-Pyth laboratory identity. Those two lab
 profiles are distinct release identities and each reports exactly one compiled
 registration. This count is derived from the checked identity class rather
-than accepted from an operator or browser.
+than accepted from an operator or browser. The mock laboratory may be viewed as
+an explicitly fabricated untrusted projection, but Glass refuses to construct
+Source actions from it. The distinct real-Pyth lab remains non-production and
+can reach only the unsigned construction boundary.
 
 Current General fee discovery distinguishes the rent-owned carry V3,
 finalization V4, payer allocation V2, and certified recipient allocation V2

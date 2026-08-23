@@ -96,6 +96,10 @@ The release projection names one of three checked compile-time Source profiles:
 Source releases, which is displayed as an unavailable Source-value surface and
 causes unsigned construction of Source actions 1–12 to fail. Glass never
 promotes a fixture, mock source, or operator-selected feed to release identity.
+The explicitly compiled mock laboratory may be inspected, but Glass also
+refuses to construct Source actions from it. Only the distinct real-Pyth lab
+profile can reach the still-unsigned construction boundary, and it remains
+prominently non-production and non-authoritative.
 
 Current General fee rows include the rent-owned carry V3/finalization V4 and
 the payer/recipient V2 snapshots. V4 and V2 bodies are decoded by their shared

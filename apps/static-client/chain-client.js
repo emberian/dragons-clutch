@@ -638,15 +638,18 @@
     const successorCapabilities = releases.selected.families.map((familyName) => {
       const coordinates = configuration.release.enabledIntents.filter((intent) => intent.family === familyName);
       const compiledSourceUnavailable = familyName === "source" && configuration.release.registeredSourceReleaseCount === "0";
+      const mockSourceUnavailable = familyName === "source" && configuration.release.sourceProfile === "non-production-mock-source-lab";
       return Object.freeze({
         surface: "successor-family",
         family: familyName,
         label: familyName,
         indexedByRelease: true,
-        allocationStatus: compiledSourceUnavailable ? "compiled with zero Source releases" : coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
+        allocationStatus: compiledSourceUnavailable ? "compiled with zero Source releases" : mockSourceUnavailable ? "fabricated laboratory Source identity" : coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
         enabled: false,
         reason: compiledSourceUnavailable
           ? "This exact checked ELF is production-inert and has zero registered Source identities. Source value routes refuse; fixture and laboratory identities are not fallbacks."
+          : mockSourceUnavailable
+            ? "This exact checked ELF uses the fabricated mock Source laboratory. Its accounts may be inspected as untrusted projections, but the operator client refuses to construct Source actions from them."
           : coordinates.length === 0
           ? "The checked release exposes this current decoder family but no enabled central-registry action coordinate. It is non-actionable."
           : `The checked release exposes ${coordinates.length} enabled coordinate(s), but this projection has no authoritative current-account runtime admission verdict. Execution remains disabled; only an explicitly labeled unsigned proposal can be constructed.`
