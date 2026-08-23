@@ -16,7 +16,10 @@ use crate::instructions::collateral_position_v3::{
     AuthenticatedMarketResolutionActivationPostwriteV5, GeneralMarketLiabilityAuthorityV2,
     RuntimeSha256,
 };
-use crate::instructions::failure_market_interval_v2::AuthenticatedFailureMarketProductResolutionV2;
+use crate::instructions::failure_market_interval_v2::{
+    write_failure_market_interval_resolution_plan_v2, AuthenticatedFailureMarketIntervalAccountsV2,
+    AuthenticatedFailureMarketProductResolutionV2,
+};
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
@@ -35,7 +38,9 @@ use clutch_collateral_adapter_v2::{
     MarketLiabilityLifecycleV1, ResolutionFinalizationFactsV5, ResolutionPayoutUnitBoundaryV5,
     ResolutionV5, CLAIM_LEDGER_V3_BYTES, HOARD_V2_BYTES, RESOLUTION_V5_BYTES,
 };
-use clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalCellResolutionReceiptV2;
+use clutch_failure_policy_runtime::market_interval_cell_v2::{
+    FailureMarketIntervalCellResolutionPlanV2, FailureMarketIntervalCellResolutionReceiptV2,
+};
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, ContentId, MarketFoundationSlotV2, MarketLifecyclePhaseV1,
     MarketResolutionActivationV1, SeriesMarketLinkPhaseV1,
@@ -173,9 +178,7 @@ struct AuthenticatedProductResolutionRootWriteV5 {
     finalization_evidence_id: ContentId,
 }
 
-impl AuthenticatedMarketResolutionActivationWriteV1
-    for AuthenticatedProductResolutionRootWriteV5
-{
+impl AuthenticatedMarketResolutionActivationWriteV1 for AuthenticatedProductResolutionRootWriteV5 {
     fn authenticate_market_resolution_activation_write_v1(
         &self,
         root_authentication_before: ContentId,
@@ -210,7 +213,7 @@ impl AuthenticatedMarketResolutionActivationWriteV1
 /// authentication before any write. The link stays read-only and pinned; the
 /// Failure cell is written only by the caller after this function returns.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn activate_failure_market_resolution_v5<'a, 'root, 'link, 'post>(
+fn activate_failure_market_resolution_v5<'a, 'root, 'link, 'post>(
     program_id: &Pubkey,
     market_root_account: &AccountInfo<'a>,
     series_link_account: &AccountInfo<'a>,
@@ -535,6 +538,82 @@ pub(crate) fn activate_failure_market_resolution_v5<'a, 'root, 'link, 'post>(
         slot10_preallocation_id: slot10.id(),
         finalization_evidence_id,
     })
+}
+
+/// Execute the only complete Market interval-resolution write batch.
+///
+/// This is the module's sole crate-visible mutation entry point. Product root,
+/// Resolution V5, Hoard, ClaimLedger, and Failure cell writes either all
+/// succeed in the same SVM instruction or all roll back. The narrower
+/// composer above is private so no sibling module can persist Product's
+/// once-only activation and omit the exact Resolved `0xab/v2` postimage.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_failure_market_interval_v5<'a, 'root, 'link, 'post>(
+    program_id: &Pubkey,
+    market_root_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    interval_cell_account: &AccountInfo<'a>,
+    interval_history_account: &AccountInfo<'a>,
+    resolution_account: &AccountInfo<'a>,
+    hoard_account: &AccountInfo<'a>,
+    claim_ledger_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    root_before: AuthenticatedMarketLifecycleRootV1<'root>,
+    link_before: AuthenticatedSeriesMarketLinkV1<'link>,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    registry: AuthenticatedRegistryCapabilityV3,
+    bundle: AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
+    slot10: AuthenticatedMarketFoundationPreallocationV2,
+    liabilities: GeneralMarketLiabilityAuthorityV2,
+    resolution: FailureMarketIntervalCellResolutionPlanV2,
+    root_decode_before: &'root mut MarketLifecycleRootAccountV1,
+    link_decode_before: &'link mut SeriesMarketLinkAccountV1,
+    root_decode_after: &'post mut MarketLifecycleRootAccountV1,
+) -> Outcome<(
+    AuthenticatedFailureMarketResolutionActivationV5,
+    AuthenticatedFailureMarketIntervalAccountsV2,
+)> {
+    require_distinct(&[
+        market_root_account.clone(),
+        series_link_account.clone(),
+        interval_cell_account.clone(),
+        interval_history_account.clone(),
+        resolution_account.clone(),
+        hoard_account.clone(),
+        claim_ledger_account.clone(),
+        rent_sysvar.clone(),
+        system_program.clone(),
+    ])?;
+    let activation = activate_failure_market_resolution_v5(
+        program_id,
+        market_root_account,
+        series_link_account,
+        resolution_account,
+        hoard_account,
+        claim_ledger_account,
+        rent_sysvar,
+        system_program,
+        root_before,
+        link_before,
+        registry,
+        bundle,
+        slot10,
+        liabilities,
+        resolution.receipt(),
+        root_decode_before,
+        link_decode_before,
+        root_decode_after,
+    )?;
+    let interval_after = write_failure_market_interval_resolution_plan_v2(
+        program_id,
+        interval_cell_account,
+        interval_history_account,
+        interval_before,
+        resolution,
+        &activation,
+    )?;
+    Ok((activation, interval_after))
 }
 
 #[allow(clippy::too_many_arguments)]
