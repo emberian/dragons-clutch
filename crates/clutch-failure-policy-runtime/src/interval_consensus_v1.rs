@@ -6,7 +6,7 @@
 //! work-capital custodian. This module owns only the bounded transition chain,
 //! permanent replay receipt, and exact work-account rent disposition.
 
-use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryPhase};
+use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock, RecoveryPhase};
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
     advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
@@ -22,7 +22,8 @@ use clutch_source_plane_v3_runtime::{AuthenticatedSourceReleaseV1, SuccessfulEva
 use sha2::{Digest, Sha256};
 
 use crate::external_v2::{
-    FailureExternalTransitionPlanV2, FailureRecoveryWorkReceiptIdV2, FailureRuntimeExternalV2,
+    AcceptedResolutionV2, FailureExternalTransitionPlanV2, FailureRecoveryWorkReceiptIdV2,
+    FailureRuntimeExternalV2,
 };
 use crate::{AcceptedResolutionId, Error, FailurePolicyBindingId, Result};
 
@@ -861,7 +862,7 @@ pub fn plan_resolve_failure_interval_consensus_v1<
     if failure_plan.resulting_phase() != RecoveryPhase::Resolved || failure_plan.work().is_some() {
         return Err(Error::BindingMismatch);
     }
-    let resolution_receipt = resolution_receipt(state, accepted.id(), certificate_id);
+    let resolution_receipt = resolution_receipt(state, accepted, certificate_id)?;
     let mut after = *state;
     after.phase = FailureIntervalConsensusPhaseV1::Resolved;
     after.certificate_id = certificate_id;
@@ -907,6 +908,8 @@ pub struct FailureIntervalConsensusResolutionReceiptV1 {
     last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2,
     product_certificate_id: QuantizedIntervalConsensusCertificateV1Id,
     accepted_resolution_id: AcceptedResolutionId,
+    resolution_window_id: SourceContentId,
+    resolution_clock: RecoveryClock,
 }
 
 impl FailureIntervalConsensusResolutionReceiptV1 {
@@ -993,6 +996,16 @@ impl FailureIntervalConsensusResolutionReceiptV1 {
     /// Exact Failure accepted-resolution semantic transition.
     pub const fn accepted_resolution_id(self) -> AcceptedResolutionId {
         self.accepted_resolution_id
+    }
+
+    /// Exact primary or repair Window at which the payout was accepted.
+    pub const fn resolution_window_id(self) -> SourceContentId {
+        self.resolution_window_id
+    }
+
+    /// Exact authenticated maturity Clock carried by the accepted resolution.
+    pub const fn resolution_clock(self) -> RecoveryClock {
+        self.resolution_clock
     }
 }
 
@@ -1366,7 +1379,28 @@ fn replay_from_state(state: FailureIntervalConsensusStateV1) -> FailureIntervalC
 
 fn resolution_receipt(
     state: &FailureIntervalConsensusStateV1,
+    accepted: AcceptedResolutionV2,
+    certificate_id: QuantizedIntervalConsensusCertificateV1Id,
+) -> Result<FailureIntervalConsensusResolutionReceiptV1> {
+    if accepted.source_success_handoff_id() != state.source_success_handoff_id
+        || accepted.resolution_evidence_id() != certificate_id.bytes()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(resolution_receipt_from_authenticated_facts(
+        state,
+        accepted.id(),
+        accepted.window_id(),
+        accepted.clock(),
+        certificate_id,
+    ))
+}
+
+fn resolution_receipt_from_authenticated_facts(
+    state: &FailureIntervalConsensusStateV1,
     accepted_resolution_id: AcceptedResolutionId,
+    resolution_window_id: SourceContentId,
+    resolution_clock: RecoveryClock,
     certificate_id: QuantizedIntervalConsensusCertificateV1Id,
 ) -> FailureIntervalConsensusResolutionReceiptV1 {
     let mut hasher = Sha256::new();
@@ -1387,6 +1421,10 @@ fn resolution_receipt(
     hasher.update(state.last_liveness_receipt_id.bytes());
     hasher.update(certificate_id.bytes());
     hasher.update(accepted_resolution_id.bytes());
+    hasher.update(resolution_window_id.bytes());
+    hasher.update(resolution_clock.slot.to_le_bytes());
+    hasher.update(resolution_clock.unix_timestamp.to_le_bytes());
+    hasher.update(resolution_clock.current_bucket.to_le_bytes());
     FailureIntervalConsensusResolutionReceiptV1 {
         id: FailureIntervalConsensusResolutionReceiptIdV1::from_bytes(hasher.finalize().into()),
         interval_binding_id: state.binding_id,
@@ -1405,6 +1443,8 @@ fn resolution_receipt(
         last_liveness_receipt_id: state.last_liveness_receipt_id,
         product_certificate_id: certificate_id,
         accepted_resolution_id,
+        resolution_window_id,
+        resolution_clock,
     }
 }
 
@@ -1574,10 +1614,24 @@ mod tests {
         let first_state = state_from_persisted_facts(active_facts()).unwrap();
         let accepted_resolution_id = AcceptedResolutionId::from_bytes([30; 32]);
         let certificate_id = QuantizedIntervalConsensusCertificateV1Id::from_bytes([31; 32]);
-        let first = resolution_receipt(&first_state, accepted_resolution_id, certificate_id);
+        let resolution_window_id = SourceContentId::from_bytes([28; 32]);
+        let clock = RecoveryClock {
+            slot: 100,
+            unix_timestamp: 200,
+            current_bucket: 300,
+        };
+        let first = resolution_receipt_from_authenticated_facts(
+            &first_state,
+            accepted_resolution_id,
+            resolution_window_id,
+            clock,
+            certificate_id,
+        );
         assert_eq!(first.market_instance_id(), first_state.market_instance_id);
         assert_eq!(first.product_certificate_id(), certificate_id);
         assert_eq!(first.accepted_resolution_id(), accepted_resolution_id);
+        assert_eq!(first.resolution_window_id(), resolution_window_id);
+        assert_eq!(first.resolution_clock(), clock);
 
         let changed_state = state_from_persisted_facts(FailureIntervalConsensusPersistedFactsV1 {
             source_interval_id: SourceContentId::from_bytes([29; 32]),
@@ -1586,7 +1640,25 @@ mod tests {
         .unwrap();
         assert_ne!(
             first.id(),
-            resolution_receipt(&changed_state, accepted_resolution_id, certificate_id,).id()
+            resolution_receipt_from_authenticated_facts(
+                &changed_state,
+                accepted_resolution_id,
+                resolution_window_id,
+                clock,
+                certificate_id,
+            )
+            .id()
+        );
+        assert_ne!(
+            first.id(),
+            resolution_receipt_from_authenticated_facts(
+                &first_state,
+                accepted_resolution_id,
+                resolution_window_id,
+                RecoveryClock { slot: 101, ..clock },
+                certificate_id,
+            )
+            .id()
         );
     }
 
