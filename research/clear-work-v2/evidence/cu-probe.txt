@@ -1,0 +1,36 @@
+ClearWork V1 actual-SBF codec interval probe
+============================================
+
+Source checkout: c6daa985e2788eb55820dc71d6880eac3cb6dda6
+Method: detached throwaway worktree; sol_remaining_compute_units immediately
+before/after the operation; one adjacent call measured 102 CU and was
+subtracted from every interval. The instrumentation was not applied to the
+live source tree and the ELF is not a release artifact.
+
+Instrumented ELF SHA-256:
+c7bcb84c5ca7ad9e68c354a875f4486302b938ffea6ee9cb96e05fd7f5326f58
+
+Full retained log SHA-256 (temporary measurement log):
+298ba6de1a23da58b22332dcf9bb0d0617b8adb1e1c68a37e574cc94b8861bc9
+
+route                 allocation  decode codec  encode codec
+begin + 1 order              231        72,303        49,544
+middle 2 orders              231        72,318        49,545
+pass-1 end                   231        72,318        49,545
+pass-2 end                   231        72,305        49,532
+
+ranges:
+allocation:              231 CU
+decode codec:     72,303-72,318 CU
+encode codec:     49,532-49,545 CU
+decode + encode: 121,835-121,863 CU
+
+Raw marker grammar:
+  0xc1eaa001 before after adjacent       boxed idle allocation/copy
+  0xc1ead002 before after adjacent       ClearWorkV1::decode_into
+  0xc1eae001 before after adjacent       ClearWorkV1::encode_into/body window
+
+The interval includes real SBF execution in ProgramTest. It is not inferred
+from host timing, instruction totals, or an ELF-size ratio. The 102-CU
+calibration is the measured cost between the second and third adjacent
+remaining-CU observations. Logging occurs after the measured interval.
