@@ -248,7 +248,7 @@ The additive `solve_quantized_atom_support3_hull_v1` continues through
 lexicographic coordinate triples under a separate triple work bound. It solves
 an affine-independent triple by exact barycentric 2-by-2 determinants, checks
 every payout equation, reduces the whole mass vector by an exact common gcd,
-and then invokes the same production verifier. A fixed 512-bit substrate holds
+and then invokes the same production verifier. A fixed 2048-bit substrate holds
 signed determinant magnitudes and reconstruction products; its binary gcd and
 exact division use no allocation, unchecked cast, float, or rounding.
 
@@ -261,7 +261,7 @@ representability with support four through `outcome_count`.
 The additive `solve_quantized_atom_support4_hull_v1` continues through a
 separately bounded lexicographic quartet family. It solves affine-independent
 quartets with a fixed 3-by-3 row-pivoted Bareiss fraction-free matrix over
-checked signed 512-bit magnitudes, checks every original payout equation,
+checked signed 2048-bit magnitudes, checks every original payout equation,
 reduces the complete primitive mass vector, and submits the result to the same
 production verifier. The width covers full-`u64` determinant and
 determinant-times-payout bounds without allocation, floats, or unchecked
@@ -274,6 +274,29 @@ certificate. It is not an incoherence decision: support five through
 `outcome_count` remains unimplemented, and omitted integer coordinates remain
 outside any non-full-domain report. The result makes no fair-value, uniqueness,
 or optimality claim and introduces no additional rounding boundary.
+
+The general `solve_quantized_atom_hull_v1` continues the increasing-support
+search through `outcome_count`, at most 16. It uses a fixed lexicographic subset
+cursor, a caller-declared per-support work bound, exact rectangular rank
+selection, and square Cramer systems of side at most 15. A dependent positive
+support is reducible to a proper subset and is therefore already owned by an
+earlier exhausted family. Every independent result is checked against all
+original payout rows, primitively reduced, and independently submitted to the
+production verifier.
+
+The reusable signed magnitude and matrix substrate is fixed at 2048 bits.
+Hadamard bounds put the largest full-`u64` 15-by-15 determinant below 1000 bits
+and the largest pre-division Bareiss product below 2048 bits; reconstruction
+also fits. The true remaining limits are bounded combinatorial work, the
+primitive-`u64` certificate representation, and partial coordinate sets. When
+the report records both full integer-domain coverage and exhaustion through
+`outcome_count`, `Unsupported` is a complete negative for the finite quantized
+atom hull by affine Caratheodory. It remains unrelated to fair value or
+candidate optimality.
+
+The fixed matrices make the constructor allocation-free, but their SBF stack
+and compute-unit suitability remains unmeasured; this does not place the
+inverse search inside the onchain adapter trust boundary.
 
 ## 4. Adapter certificate interface
 
