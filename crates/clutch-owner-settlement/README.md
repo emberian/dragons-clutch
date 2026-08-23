@@ -18,6 +18,13 @@ The semantic body is exactly 288 bytes. Its outer General V2 account
 tag/version remains centrally owned and unallocated in this isolated lane, so
 the codec cannot accidentally make the runtime capability live by itself.
 
+The fixed-capacity builder recomputes those rows from the complete authenticated
+filled-order set plus one explicit fee row per participating owner. It refuses
+duplicate order indices, missing/duplicate/foreign fee rows, seller cash
+reservations, or any mismatch with the candidate's owner count, buy/sell
+price-unit totals, fee atoms, rounding pot, and receipt-end count. Output rows
+are lexicographically owner-sorted for canonical account creation and paging.
+
 This crate contains no Solana SDK, account memory, hashing implementation,
 dynamic allocation, fee policy selection, or persisted DTO. It does not make
 General V1 accept shapes that its current per-order realization cannot settle;
