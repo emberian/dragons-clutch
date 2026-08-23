@@ -124,9 +124,11 @@ bearer lot. It does not allocate the `BURN` registry value itself.
 
 `compile_ordinal` authenticates every supplied basis/recovery/Template/Genesis/
 Attachment/Series content join, validates the terminal `BURN` value and bearer
-lot, checks the final finite recovery deadline, and derives an absolute schedule
-and full-width MarketInstanceId. Series provenance and attachments remain next
-to the market result rather than entering its economic preimage.
+lot, requires the Market cap to be at least one native bearer lot and an exact
+multiple of that lot, checks the final finite recovery deadline, and derives an
+absolute schedule and full-width MarketInstanceId. Series provenance and
+attachments remain next to the market result rather than entering its economic
+preimage.
 
 `SeriesFundingTermsV1::validate_bindings` additionally requires the exact
 GenesisProfile and the collateral mint/token-program projection returned by an

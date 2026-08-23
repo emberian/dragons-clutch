@@ -105,7 +105,7 @@ fn series_for(
         stride_buckets: 10,
         instance_count: 3,
         creation_lead_buckets: 5,
-        market_collateral_cap: 200,
+        market_collateral_cap: 1_000,
     }
 }
 
@@ -160,7 +160,7 @@ fn every_codec_round_trips_and_refuses_wrong_length_or_magic() {
         product_template_id: template().id().unwrap(),
         market_genesis_profile_id: genesis().id().unwrap(),
         start_bucket: 100,
-        collateral_cap: 200,
+        collateral_cap: 1_000,
     };
     assert_codec(&market);
     assert_codec(&attachment());
@@ -302,7 +302,7 @@ fn market_identity_commits_template_profile_start_and_cap() {
     assert_ne!(ordinal_one.market_instance_id, baseline.market_instance_id);
 
     let mut changed_cap = series();
-    changed_cap.market_collateral_cap += 1;
+    changed_cap.market_collateral_cap = 2_000;
     let compiled = compile_ordinal(
         &changed_cap,
         &template(),
@@ -315,6 +315,52 @@ fn market_identity_commits_template_profile_start_and_cap() {
     )
     .unwrap();
     assert_ne!(compiled.market_instance_id, baseline.market_instance_id);
+}
+
+#[test]
+fn market_cap_is_one_or_more_exact_native_lots() {
+    let mut below_lot = series();
+    below_lot.market_collateral_cap = genesis().native_bearer_lot - 1;
+    assert_eq!(
+        compile_ordinal(
+            &below_lot,
+            &template(),
+            &basis(),
+            &recovery(),
+            &genesis(),
+            &attachment(),
+            BURN_REGISTRY_VALUE,
+            0,
+        ),
+        Err(Error::MismatchedArtifact)
+    );
+
+    let mut fractional_lot = series();
+    fractional_lot.market_collateral_cap = genesis().native_bearer_lot + 1;
+    assert_eq!(
+        compile_ordinal(
+            &fractional_lot,
+            &template(),
+            &basis(),
+            &recovery(),
+            &genesis(),
+            &attachment(),
+            BURN_REGISTRY_VALUE,
+            0,
+        ),
+        Err(Error::MismatchedArtifact)
+    );
+
+    let hostile_market = MarketInstancePreimageV1 {
+        product_template_id: template().id().unwrap(),
+        market_genesis_profile_id: genesis().id().unwrap(),
+        start_bucket: 100,
+        collateral_cap: 200,
+    };
+    assert_eq!(
+        hostile_market.validate_bindings(&template(), &genesis()),
+        Err(Error::MismatchedArtifact)
+    );
 }
 
 #[test]
@@ -614,20 +660,20 @@ fn deterministic_identity_golden_vectors() {
                 230, 71, 254, 231, 47, 225, 27, 83, 109, 16, 95, 41, 47, 54,
             ],
             [
-                191, 18, 171, 251, 149, 219, 138, 132, 189, 120, 168, 199, 14, 42, 163, 155, 86,
-                35, 37, 244, 161, 219, 95, 40, 87, 100, 115, 197, 213, 168, 159, 124,
+                118, 26, 171, 35, 40, 113, 45, 174, 247, 93, 34, 252, 227, 251, 125, 48, 222, 121,
+                189, 24, 152, 105, 172, 23, 255, 111, 148, 28, 178, 174, 160, 249,
             ],
             [
                 202, 7, 24, 134, 16, 74, 151, 121, 31, 220, 71, 62, 129, 194, 139, 153, 188, 82,
                 128, 222, 101, 62, 48, 197, 200, 85, 170, 187, 95, 238, 8, 7,
             ],
             [
-                172, 12, 45, 84, 123, 174, 153, 11, 119, 94, 34, 215, 59, 10, 147, 138, 4, 55, 50,
-                3, 174, 15, 97, 154, 167, 138, 193, 194, 106, 29, 134, 179,
+                42, 68, 41, 225, 234, 59, 127, 93, 11, 116, 129, 239, 136, 23, 25, 71, 59, 223,
+                178, 113, 93, 115, 209, 237, 236, 167, 27, 6, 83, 236, 227, 165,
             ],
             [
-                103, 201, 137, 241, 64, 185, 34, 97, 90, 248, 19, 174, 81, 172, 90, 121, 19, 35,
-                187, 99, 109, 145, 152, 91, 93, 202, 30, 228, 211, 186, 227, 77,
+                128, 89, 63, 52, 126, 65, 203, 161, 25, 210, 68, 99, 252, 135, 38, 193, 136, 47,
+                160, 54, 186, 151, 204, 173, 100, 189, 8, 132, 99, 80, 70, 0,
             ],
         ]
     );

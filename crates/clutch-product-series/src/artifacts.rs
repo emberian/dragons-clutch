@@ -767,6 +767,10 @@ impl MarketInstancePreimageV1 {
         genesis.validate_shape()?;
         if self.product_template_id != template.id()?
             || self.market_genesis_profile_id != genesis.id()?
+            || self.collateral_cap < genesis.native_bearer_lot
+            || !self
+                .collateral_cap
+                .is_multiple_of(genesis.native_bearer_lot)
         {
             return Err(Error::MismatchedArtifact);
         }
@@ -959,6 +963,10 @@ impl SeriesPlanV4 {
         if self.product_template_id != template.id()?
             || self.market_genesis_profile_id != genesis.id()?
             || self.attachment_plan_id != attachment.id()?
+            || self.market_collateral_cap < genesis.native_bearer_lot
+            || !self
+                .market_collateral_cap
+                .is_multiple_of(genesis.native_bearer_lot)
         {
             return Err(Error::MismatchedArtifact);
         }
