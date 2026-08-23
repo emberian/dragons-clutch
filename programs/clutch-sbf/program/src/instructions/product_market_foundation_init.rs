@@ -27,10 +27,11 @@ use crate::instructions::product_series::{
 };
 use crate::seeds;
 use clutch_product_series::{
-    ComponentDebitV1, ContentId, MarketFoundationAccountGraphV2Id,
-    MarketFoundationScheduleV2Id, MarketInstanceV2Id, SeriesFundingComponentV2,
-    SeriesFundingPhaseV2, SeriesFundingQuoteV4, SeriesFundingTermsV2, SeriesMarketDispositionV1,
-    SeriesMarketLinkV1Id, SeriesPlanV5Id, SERIES_FUNDING_COMPONENT_COUNT_V2,
+    ComponentDebitV1, ContentId, MarketFoundationAccountGraphV2,
+    MarketFoundationAccountGraphV2Id, MarketFoundationScheduleV2, MarketFoundationScheduleV2Id,
+    MarketFoundationSlotV2, MarketInstanceV2Id, SeriesFundingComponentV2, SeriesFundingPhaseV2,
+    SeriesFundingQuoteV4, SeriesFundingTermsV2, SeriesMarketDispositionV1, SeriesMarketLinkV1Id,
+    SeriesPlanV5Id, SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     SeriesFundingAccountV2, SERIES_FUNDING_ACCOUNT_BYTES_V2,
@@ -97,11 +98,16 @@ pub(crate) struct FoundationVaultInitAuthorizationFactsV1 {
 ///
 /// The eventual implementation must be private to the atomic creator of the
 /// exact `0xaa/1` root and founder `0xad/1` link.  A decoded binding, caller
-/// intent, or content ID alone must never implement this trait.
+/// intent, or content ID alone must never implement this trait.  It must
+/// compare every active slot of `account_graph` to the canonical family-owned
+/// PDA/body source under `schedule`; equality of the recomputed graph ID alone
+/// is deliberately insufficient authority.
 pub(crate) trait AuthenticatedFoundationVaultInitAuthorityV1 {
     fn authenticate_foundation_vault_init_v1(
         &self,
         _facts: &FoundationVaultInitAuthorizationFactsV1,
+        _schedule: &MarketFoundationScheduleV2,
+        _account_graph: &MarketFoundationAccountGraphV2,
     ) -> Outcome<()> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
@@ -310,6 +316,7 @@ pub(crate) fn fund_product_foundation_vault_v1<
     capability: AuthenticatedRegistryCapabilityV3,
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
     funding: AuthenticatedSeriesFundingAccountV2,
+    foundation_account_graph: &MarketFoundationAccountGraphV2,
     funding_account: &AccountInfo<'a>,
     funding_terms_account: &AccountInfo<'a>,
     funding_quote_account: &AccountInfo<'a>,
@@ -534,6 +541,29 @@ pub(crate) fn fund_product_foundation_vault_v1<
         .foundation
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    foundation_account_graph
+        .validate(&quote.foundation)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let authenticated_graph_id = foundation_account_graph
+        .id(&quote.foundation)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        authenticated_graph_id == coordinates.foundation_account_graph_id
+            && foundation_account_graph.market_instance_id == coordinates.market_instance_id
+            && foundation_account_graph.generation == coordinates.generation
+            && foundation_account_graph.foundation_schedule_id == schedule_id
+            && foundation_account_graph
+                .account(MarketFoundationSlotV2::LifecycleRoot)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == coordinates.lifecycle_root_account.to_bytes()
+            && foundation_account_graph
+                .account(MarketFoundationSlotV2::ProductReplayAnchor)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == coordinates.lifecycle_replay_account.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
     let funding_state_id = observed_funding
         .state
         .id()
@@ -604,7 +634,11 @@ pub(crate) fn fund_product_foundation_vault_v1<
         foundation_vault_balance_before: plan.foundation_vault_balance_before,
         foundation_vault_balance_after: plan.foundation_vault_balance_after,
     };
-    authority.authenticate_foundation_vault_init_v1(&facts)?;
+    authority.authenticate_foundation_vault_init_v1(
+        &facts,
+        &quote.foundation,
+        foundation_account_graph,
+    )?;
 
     let series = bundle.series_plan_id.bytes();
     let component = [MARKET_CORE_COMPONENT_SEED_V2];
@@ -894,7 +928,20 @@ mod tests {
             foundation_vault_balance_after: 1,
         };
         assert!(NoAuthority
-            .authenticate_foundation_vault_init_v1(&facts)
+            .authenticate_foundation_vault_init_v1(
+                &facts,
+                &MarketFoundationScheduleV2 {
+                    outcome_count: 1,
+                    slot_principal_lamports: [0; 46],
+                    founding_timeout_buckets: 1,
+                },
+                &MarketFoundationAccountGraphV2 {
+                    market_instance_id: MarketInstanceV2Id::from_bytes([1; 32]),
+                    generation: 1,
+                    foundation_schedule_id: MarketFoundationScheduleV2Id::from_bytes([14; 32]),
+                    account_ids: [ContentId::ZERO; 46],
+                },
+            )
             .is_err());
     }
 }

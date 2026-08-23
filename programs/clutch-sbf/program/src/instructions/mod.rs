@@ -154,6 +154,10 @@ pub(crate) mod product_general_family;
 pub mod product_market;
 /// Staged-disabled Product founder custody transfer.  No dispatch or capability
 /// row reaches this module until the root/link creator consumes its receipt.
+/// Integration gate: before a deployable founder route is added, move its two
+/// Product/Series authentication receipts into an always-compiled owner and
+/// remove this module's laboratory cfg in the same commit.  Route disablement
+/// must not be implemented by omitting the final deployable semantic seam.
 #[cfg(feature = "non-production-product-series-lab")]
 pub(crate) mod product_market_foundation_init;
 #[cfg(feature = "non-production-product-series-lab")]
