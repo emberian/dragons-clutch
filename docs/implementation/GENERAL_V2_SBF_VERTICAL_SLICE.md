@@ -77,6 +77,7 @@ the pinned layout dependency graph.
 | disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
 | disabled treasury-ledger envelope | `0x86/1` | 148 |
 | disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
+| disabled combined FinalPot/virtual-budget envelope | `0x89/1` | 332 |
 
 Here `O` is the active outcome count, `N` the active order count, `A` the
 active quantized-atom count, and `S` the active settlement-slice count. Feeds
@@ -103,12 +104,23 @@ second allocation authority; the eventual adapter must add an explicit parity
 gate against the central registry.
 
 The same central block reserves the StructuredClaim descriptor at `0x88/1`
-and a fresh General FinalPot at `0x89/1`. Neither reservation supplies a live
-route or a FinalPot codec/retirement authority in this lab. SourcePlane V3 owns
+and a fresh General FinalPot at `0x89/1`. The FinalPot now has a strict
+332-byte outer codec around the canonical 328-byte combined FinalPot and
+selected virtual-budget body, but neither reservation supplies a live route or
+FinalPot retirement authority in this lab. SourcePlane V3 owns
 the immediately following `0x8a/1` through `0x92/1` block; General does not
 reinterpret those release, head, lineage, raw-page, work, seal, statistic, or
 liveness-receipt coordinates. Dealer allocations begin only after that
 coordinated block is complete.
+
+The FinalPot body is exactly five 32-byte slots (Market, Epoch, final
+candidate, owner/order-set digest, and the optional virtual relation witness), cash principal,
+`internal[16]`, authorized/processed/sequence `u64`s, four one-byte
+outcome/phase/kind/state fields, and four zero bytes. Its outer decoder also
+requires typed adapter facts for the derived FinalPot PDA and bump, both
+program owners, the writable bit, and the exact decoded SelectedCandidate PDA.
+The stored Epoch, Market, final candidate, and non-`None` relation witness must
+equal that selected authority before create, mutation, or close.
 
 The first implementation checkpoint additionally froze and centrally reserved:
 
@@ -251,9 +263,10 @@ never authority.
 | temporary recipient allocation | `["candidate-recipient-allocation:v1", selected_fee_record_PDA]` |
 | treasury ledger | `["fee-treasury-ledger:v1", selected_fee_record_PDA]` |
 | settlement cash pot | `["settlement-cash-pot:v1", Epoch_PDA, settlement_candidate_id]` |
+| FinalPot | `["general-final-pot:v2", Epoch_PDA, settlement_candidate_id]` |
 
-The exported order-page, reservation, receipt, and final-pot prefixes do not
-freeze their suffix tuples. Those remain unallocated until their complete
+The exported order-page, reservation, and receipt prefixes do not freeze their
+suffix tuples. Those remain unallocated until their complete
 successor handler contracts exist. The OwnerSettlement tuple and account bytes
 are centrally reserved but runtime-disabled pending the complete authenticated
 order/fee projection described below.
@@ -775,7 +788,7 @@ sell receipt/Position/Reservation delivery, and the complete-set merge while
 authenticating the AccountingComplete state-zero seller row without rewriting
 it, because the resulting merge proceeds precede seller finalization. Every
 layer must name the same Epoch, selected candidate, checked
-relation witness, receipt, and settlement transition ID. The FinalPot, Hoard,
+relation witness, receipt, and delivery transition ID. The FinalPot, Hoard,
 aggregate claim ledger, embedded FinalPot inventory-budget cursors, receipt, Position, Reservation,
 delivery latch, and Settlement liveness compartment form one rollback
 boundary; the owner row/accounting latch is an immutable authorization join.
