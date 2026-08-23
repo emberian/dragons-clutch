@@ -55,8 +55,15 @@ pub const PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2: &[u8; 44] =
     b"dragons-clutch/portfolio-pair-transition/v2\0";
 const PAIR_EFFECTS_TRANSITION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/portfolio-pair-effects/v2\0";
-const PAIR_RECEIPT_SET_DOMAIN_V2: &[u8] =
+/// Exact domain of the canonical pending Receipt V5 sibling-set digest.
+///
+/// Retirement adapters reconstruct the pre-delivery pending postimages from
+/// the committed layout owner and must reproduce this domain byte-for-byte
+/// before authenticating the immediate action-42 GEN1 delta.
+pub const PORTFOLIO_PAIR_RECEIPT_SET_DOMAIN_V2: &[u8] =
     b"dragons-clutch/portfolio-pair-receipt-set/v2\0";
+/// Canonical transcript byte for the V5 portfolio-pair transition kind.
+pub const PORTFOLIO_PAIR_RECEIPT_TRANSITION_KIND_V2_BYTE: u8 = 1;
 
 const SETTLEMENT_RECEIPT_DIRECT_END_MASK_V5: u8 = 0b0000_0011;
 
@@ -1716,7 +1723,7 @@ pub fn portfolio_settlement_receipt_v5_set_digest_v2(
         return Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch);
     }
     let mut hash = Sha256V2::new();
-    hash.update(PAIR_RECEIPT_SET_DOMAIN_V2)
+    hash.update(PORTFOLIO_PAIR_RECEIPT_SET_DOMAIN_V2)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&[PORTFOLIO_EXECUTION_VERSION_V2, receipt_set.receipt_count])
         .map_err(PortfolioExecutionErrorV2::Economic)?;
@@ -2283,7 +2290,9 @@ const fn valuation_boundary_byte(boundary: PortfolioValuationBoundaryV2) -> u8 {
 const fn receipt_transition_kind_byte(kind: SettlementReceiptTransitionKindV2) -> u8 {
     match kind {
         SettlementReceiptTransitionKindV2::None => 0,
-        SettlementReceiptTransitionKindV2::PortfolioPairV2 => 1,
+        SettlementReceiptTransitionKindV2::PortfolioPairV2 => {
+            PORTFOLIO_PAIR_RECEIPT_TRANSITION_KIND_V2_BYTE
+        }
     }
 }
 

@@ -1026,6 +1026,12 @@ impl SettlementRootV1AccountV1 {
     /// every committed Receipt V5 sibling, both consumed Reservation V9
     /// accounts, both Position/GEN1 child decrements, and every exact rent
     /// transfer before writing this successor.
+    ///
+    /// This transition deliberately leaves owner rows, the cash pot, and the
+    /// retained Feed live. Their separately typed retirement transitions must
+    /// close them before [`Self::terminal_projection`] can exist; the private
+    /// portfolio terminal receipt is never authority to skip that dependency
+    /// order or promote this successor directly to `Terminal`.
     pub fn retire_portfolio_pair_archives(
         &self,
         receipt_count: u8,
