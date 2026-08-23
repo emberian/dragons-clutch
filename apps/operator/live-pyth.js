@@ -137,12 +137,16 @@ const terminalCard = (result) => {
 const outputCard = (state) => {
   const section = el("section", "card");
   const heading = el("div", "card-heading");
-  heading.append(el("h2", null, "Supervised child output"), el("span", "count", `${state.liveOutput.length} lines`));
+  heading.append(el("h2", null, "Allowlisted campaign progress"), el("span", "count", `${state.liveOutput.length} lines`));
   const output = el("ol", "live-log");
   state.liveOutput.forEach((entry) => {
-    output.append(el("li", entry.stream === "stderr" ? "live-log-error" : null, `${entry.sequence} ${entry.stream} · ${entry.text}`));
+    output.append(el("li", null, `${entry.sequence} · ${entry.text}`));
   });
-  section.append(heading, output);
+  section.append(
+    heading,
+    el("p", "muted", "Only structurally allowlisted milestones, waits, and transaction results cross this boundary. Stderr, filesystem paths, arbitrary child text, and retained result JSON remain process-local."),
+    output
+  );
   return section;
 };
 

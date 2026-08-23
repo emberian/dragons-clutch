@@ -29,6 +29,7 @@ const RUN_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-run/v1";
 const EVENT_PREFIX: &str = "CLUTCH_OPERATOR_EVENT ";
 const PROFILE: &str = "NON-PRODUCTION-non-production-real-pyth-lab";
 const MAX_OUTPUT_LINE_BYTES: usize = 16 * 1024;
+const MULTIBOUNDARY_PASS: &str = "PASS: signed PriceGrid/policy artifacts -> CreateMarket -> two-owner funded general book -> freeze -> best valid submitted candidate verification/selection -> entitlement/settlement -> real router/receiver source window -> Resolve(1) -> two-owner redemption/withdrawal";
 
 pub struct Options {
     pub port: u16,
@@ -172,6 +173,78 @@ fn no_json_numbers(value: &Value) -> bool {
         Value::Object(values) => values.values().all(no_json_numbers),
         _ => true,
     }
+}
+
+fn digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Admit only source-authored, structurally bounded progress. Arbitrary child
+/// stdout and all stderr stay process-local: cargo can print filesystem paths,
+/// and a future tool must not accidentally turn a key-shaped line into browser
+/// data. Structured manifest/result events are validated separately.
+fn admitted_progress_line(stream: &str, line: &str) -> bool {
+    if stream != "stdout" {
+        return false;
+    }
+    if matches!(
+        line,
+        CLAIM
+            | "campaign_mode=joined-multiboundary-v1"
+            | "pinned loopback validator runtime: PASS"
+            | "== seed exact locked dependency source offline =="
+            | "== build standalone signed-RPC driver =="
+            | "== build unmistakably test-only Clutch ELF =="
+            | "== probe the same warped validator Clock before proof generation =="
+            | "== start explicitly selected validator =="
+            | "== real provider / joined Clutch campaign =="
+    ) || line == MULTIBOUNDARY_PASS
+    {
+        return true;
+    }
+    if let Some(clock) = line.strip_prefix("campaign_clock_settled=") {
+        return digits(clock);
+    }
+    if let Some(count) = line
+        .strip_prefix("prepared ")
+        .and_then(|rest| rest.strip_suffix(" exact genesis accounts"))
+    {
+        return digits(count);
+    }
+    if let Some(rest) = line.strip_prefix("waiting reason=") {
+        let Some((reason, counters)) = rest.split_once(" slot=") else {
+            return false;
+        };
+        if !matches!(
+            reason,
+            "general epoch freeze" | "best-valid-submitted-candidate selection"
+        ) {
+            return false;
+        }
+        let Some((slot, target)) = counters.split_once(" target=") else {
+            return false;
+        };
+        return digits(slot) && digits(target);
+    }
+    let Some(rest) = line.strip_prefix("step=") else {
+        return false;
+    };
+    let Some((label, rest)) = rest.split_once(" slot=") else {
+        return false;
+    };
+    let Some((slot, rest)) = rest.split_once(" cu=") else {
+        return false;
+    };
+    let Some((compute, error)) = rest.split_once(" error=") else {
+        return false;
+    };
+    !label.is_empty()
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && digits(slot)
+        && digits(compute)
+        && matches!(error, "null" | r#"{"InstructionError":[2,{"Custom":122}]}"#)
 }
 
 fn validate_common(value: &Value, schema: &str, role: &str) -> Result<()> {
@@ -557,16 +630,18 @@ fn publish_line(
                     return Ok(());
                 }
             }
-            *sequence = sequence
-                .checked_add(1)
-                .ok_or("live output sequence overflow")?;
-            bus.publish(&json!({
-                "type": "live-output",
-                "schema": RUN_SCHEMA,
-                "sequence": sequence.to_string(),
-                "stream": stream,
-                "text": line,
-            }));
+            if admitted_progress_line(stream, &line) {
+                *sequence = sequence
+                    .checked_add(1)
+                    .ok_or("live output sequence overflow")?;
+                bus.publish(&json!({
+                    "type": "live-output",
+                    "schema": RUN_SCHEMA,
+                    "sequence": sequence.to_string(),
+                    "stream": "stdout",
+                    "text": line,
+                }));
+            }
         }
     }
     Ok(())
@@ -871,5 +946,34 @@ mod tests {
             "read-only live child telemetry; no retained transcript; no browser key material"
         );
         assert_eq!(event["rpc_url"], "http://127.0.0.1:9137");
+    }
+
+    #[test]
+    fn browser_progress_refuses_paths_stderr_and_key_shaped_arbitrary_output() {
+        for admitted in [
+            "pinned loopback validator runtime: PASS",
+            "campaign_mode=joined-multiboundary-v1",
+            "campaign_clock_settled=1787540520",
+            "prepared 29 exact genesis accounts",
+            "waiting reason=best-valid-submitted-candidate selection slot=40 target=50",
+            "step=router-initialize slot=10 cu=34183 error=null",
+            "step=wrong-feed-post-update-plus-append-rollback slot=11 cu=81604 error={\"InstructionError\":[2,{\"Custom\":122}]}",
+        ] {
+            assert!(admitted_progress_line("stdout", admitted), "{admitted}");
+        }
+        for refused in [
+            "/private/tmp/campaign/payer.json",
+            "binary: /private/cache/solana-test-validator",
+            "ephemeral secret key bytes: [1,2,3]",
+            "step=../../payer slot=10 cu=1 error=null",
+            "step=ok slot=10 cu=1 error={\"InstructionError\":[2,{\"Custom\":121}]}",
+            "{\"result\":\"retained campaign body\"}",
+        ] {
+            assert!(!admitted_progress_line("stdout", refused), "{refused}");
+        }
+        assert!(!admitted_progress_line(
+            "stderr",
+            "step=router-initialize slot=10 cu=34183 error=null"
+        ));
     }
 }

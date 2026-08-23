@@ -390,7 +390,7 @@ export const createStore = () => {
         if (
           event.schema !== LIVE_RUN_SCHEMA
           || !CANONICAL_INTEGER.test(event.sequence)
-          || !["stdout", "stderr"].includes(event.stream)
+          || event.stream !== "stdout"
           || typeof event.text !== "string"
         ) {
           state.fault = {

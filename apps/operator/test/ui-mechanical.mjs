@@ -395,5 +395,7 @@ test("the live Pyth page is read-only and the launcher disables transcript reten
   assert.match(launcher, /unset CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR/);
   assert.doesNotMatch(launcher, /--transcript/);
   assert.match(daemon, /env_remove\("CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR"\)/);
-  assert.match(daemon, /"live-output"/);
+  assert.match(daemon, /admitted_progress_line/);
+  assert.match(daemon, /stream != "stdout"/);
+  assert.match(live, /filesystem paths, arbitrary child text, and retained result JSON remain process-local/);
 });

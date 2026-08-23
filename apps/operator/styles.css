@@ -194,7 +194,6 @@ p { margin: 0.5rem 0; }
 
 .precreated, .boot, .decoded, .identities { margin: 0.4rem 0 0; padding-left: 1.1rem; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); }
 .live-log { max-height: 32rem; overflow: auto; margin: 0.4rem 0 0; padding-left: 2.5rem; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
-.live-log-error { color: var(--accent-2); }
 
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.78rem; }
 th, td { padding: 0.28rem 0.5rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: baseline; }
