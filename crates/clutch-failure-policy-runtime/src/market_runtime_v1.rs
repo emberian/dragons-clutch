@@ -29,8 +29,11 @@ use crate::market_policy_v1::{
     FailureMarketRecoveryFundingReceiptIdV1,
 };
 use crate::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use crate::market_recovery_terminal_v2::{
+    FailureMarketClosedRecoveryJoinIdV2, FailureMarketRecoveryTerminalReceiptIdV2,
+    FailureMarketRecoveryTerminalReceiptV2,
+};
 use crate::market_replay_v2::FailureMarketReplayTerminalReceiptV2;
-use crate::retirement_v1::ClosedFailureRecoveryJoinIdV1;
 use crate::{Error, FailurePolicyBindingId, Result};
 
 const RUNTIME_ADMISSION_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-runtime-admission/v1";
@@ -169,9 +172,9 @@ pub struct FailureMarketRecoveryCloseFactsV2 {
     /// Product-private once-only Resolution V5 activation.
     pub resolution_activation_receipt_id: ProductContentId,
     /// Failure semantic owner's exact Recovery terminal receipt.
-    pub recovery_terminal_receipt_id: ProductContentId,
+    pub recovery_terminal_receipt_id: FailureMarketRecoveryTerminalReceiptIdV2,
     /// Liveness adapter's re-executed exact successful Recovery close.
-    pub closed_recovery_join_id: ClosedFailureRecoveryJoinIdV1,
+    pub closed_recovery_join_id: FailureMarketClosedRecoveryJoinIdV2,
 }
 
 /// Private authority over Product Resolution and the full liveness close.
@@ -972,7 +975,10 @@ impl FailureMarketRuntimeV1 {
         Ok(())
     }
 
-    fn validate_against_admission(self, admission: FailureMarketAdmissionStateV1) -> Result<()> {
+    pub(crate) fn validate_against_admission(
+        self,
+        admission: FailureMarketAdmissionStateV1,
+    ) -> Result<()> {
         self.validate()?;
         let policy = admission.binding().facts();
         let recovery_funding = admission.recovery_funding().facts();
@@ -1404,9 +1410,8 @@ pub fn plan_close_failure_market_recovery_v2<
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     cell: FailureMarketIntervalCellV2,
     history: FailureMarketIntervalHistoryV2,
-    resolution_activation_receipt_id: ProductContentId,
-    recovery_terminal_receipt_id: ProductContentId,
-    closed_recovery_join_id: ClosedFailureRecoveryJoinIdV1,
+    recovery_terminal: FailureMarketRecoveryTerminalReceiptV2,
+    closed_recovery_join_id: FailureMarketClosedRecoveryJoinIdV2,
 ) -> Result<(
     FailureMarketRuntimeTerminalPlanV2,
     FailureMarketRecoveryCloseReceiptV2,
@@ -1423,16 +1428,31 @@ pub fn plan_close_failure_market_recovery_v2<
         cell,
         history,
     )?;
+    let terminal_facts = recovery_terminal.facts();
     for id in [
-        resolution_activation_receipt_id.bytes(),
-        recovery_terminal_receipt_id.bytes(),
+        recovery_terminal.id().bytes(),
         closed_recovery_join_id.bytes(),
     ] {
         require_live(id)?;
     }
-    if resolution_activation_receipt_id == recovery_terminal_receipt_id
-        || resolution_activation_receipt_id.bytes() == closed_recovery_join_id.bytes()
-        || recovery_terminal_receipt_id.bytes() == closed_recovery_join_id.bytes()
+    if terminal_facts.runtime_before != runtime.commitment()?
+        || terminal_facts.admission_state_id != admission.id()?
+        || terminal_facts.failure_policy_binding_id != admission.binding().id()
+        || terminal_facts.market_instance_id != admission.binding().facts().market_instance_id
+        || terminal_facts.generation != admission.binding().facts().generation
+        || terminal_facts.receipt_account_id != runtime.runtime_account_id
+        || terminal_facts.interval_cell_state_id != interval_cell_state_id
+        || terminal_facts.interval_history_state_id != interval_history_state_id
+        || terminal_facts.interval_history_root != history.history_root()
+        || terminal_facts.completed_session_count != history.completed_session_count()
+        || terminal_facts.completed_work_calls != history.completed_work_calls()
+        || terminal_facts.exact_reward_lamports != history.exact_reward_lamports()
+        || terminal_facts.latest_interval_terminal_receipt_id
+            != history.latest_terminal_receipt_id()
+        || terminal_facts.resolution_activation_receipt_id.bytes() == recovery_terminal.id().bytes()
+        || terminal_facts.resolution_activation_receipt_id.bytes()
+            == closed_recovery_join_id.bytes()
+        || recovery_terminal.id().bytes() == closed_recovery_join_id.bytes()
     {
         return Err(Error::BindingMismatch);
     }
@@ -1452,8 +1472,8 @@ pub fn plan_close_failure_market_recovery_v2<
         completed_work_calls: history.completed_work_calls(),
         exact_reward_lamports: history.exact_reward_lamports(),
         latest_interval_terminal_receipt_id: history.latest_terminal_receipt_id(),
-        resolution_activation_receipt_id,
-        recovery_terminal_receipt_id,
+        resolution_activation_receipt_id: terminal_facts.resolution_activation_receipt_id,
+        recovery_terminal_receipt_id: recovery_terminal.id(),
         closed_recovery_join_id,
     };
     authority.authenticate_failure_market_recovery_close(facts)?;
@@ -1641,7 +1661,7 @@ pub fn plan_finalize_failure_market_family_v2<
     ))
 }
 
-fn validate_terminal_interval_pair(
+pub(crate) fn validate_terminal_interval_pair(
     runtime: FailureMarketRuntimeV1,
     admission: FailureMarketAdmissionStateV1,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
