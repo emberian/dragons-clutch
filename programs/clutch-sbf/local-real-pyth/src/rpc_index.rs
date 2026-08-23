@@ -49,6 +49,7 @@ impl std::error::Error for RpcIndexError {}
 /// Semantic families a reviewed program release is allowed to own.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CanonicalFamily {
+    Collateral,
     General,
     Source,
     Series,
@@ -65,6 +66,7 @@ impl CanonicalFamily {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::Collateral => "collateral",
             Self::General => "general",
             Self::Source => "source",
             Self::Series => "series",

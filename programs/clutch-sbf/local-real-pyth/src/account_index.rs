@@ -9,6 +9,11 @@ use crate::rpc_index::{
     RpcIndexPlan,
 };
 use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
+use clutch_collateral_adapter_v2::{
+    ClaimLedgerV3, HoardV2, ResolutionV5, CLAIM_LEDGER_V3_BYTES, CLAIM_LEDGER_V3_TAG,
+    CLAIM_LEDGER_V3_VERSION, HOARD_V2_BYTES, HOARD_V2_TAG, HOARD_V2_VERSION, RESOLUTION_V5_BYTES,
+    RESOLUTION_V5_TAG, RESOLUTION_V5_VERSION,
+};
 use clutch_dealer_runtime_contract::{
     DealerFacilityReplayV1, DealerLeaseV1, DealerPolicyV1, DealerStateV1, FeeBudgetV1,
     FixedCodec as DealerFixedCodec, LivenessBudgetV1, LpPageV1, SettlementPotV1,
@@ -122,6 +127,9 @@ impl std::error::Error for AccountIndexError {}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CanonicalAccountKind {
+    CollateralHoardV2,
+    CollateralClaimLedgerV3,
+    CollateralResolutionV5,
     GeneralMarketRuntime,
     GeneralEpoch,
     GeneralEconomicDomain,
@@ -175,6 +183,9 @@ impl CanonicalAccountKind {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::CollateralHoardV2 => "collateral-hoard-v2",
+            Self::CollateralClaimLedgerV3 => "collateral-claim-ledger-v3",
+            Self::CollateralResolutionV5 => "collateral-resolution-v5",
             Self::GeneralMarketRuntime => "general-market-runtime",
             Self::GeneralEpoch => "general-epoch",
             Self::GeneralEconomicDomain => "general-economic-domain",
@@ -325,6 +336,7 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
         account: &ObservedRpcAccount,
     ) -> Result<Option<CanonicalAccountProjection>> {
         match family {
+            CanonicalFamily::Collateral => decode_collateral(&account.data),
             CanonicalFamily::General => decode_general(&account.data),
             CanonicalFamily::Source => decode_source(&account.data, self.context),
             CanonicalFamily::Series => decode_series(&account.data),
@@ -337,6 +349,49 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
             CanonicalFamily::Failure => decode_failure(&account.data),
         }
     }
+}
+
+fn decode_collateral(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+    let projection = if tag_version(data, HOARD_V2_TAG, HOARD_V2_VERSION)
+        && data.len() == HOARD_V2_BYTES
+    {
+        let value = HoardV2::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Collateral,
+            CanonicalAccountKind::CollateralHoardV2,
+        );
+        projection.primary_binding = Some(value.market_instance_id.bytes());
+        projection.secondary_binding = Some(value.realm_id.bytes());
+        projection
+    } else if tag_version(data, CLAIM_LEDGER_V3_TAG, CLAIM_LEDGER_V3_VERSION)
+        && data.len() == CLAIM_LEDGER_V3_BYTES
+    {
+        let value =
+            ClaimLedgerV3::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Collateral,
+            CanonicalAccountKind::CollateralClaimLedgerV3,
+        );
+        projection.primary_binding = Some(value.market_instance_id.bytes());
+        projection.secondary_binding = Some(value.native_claim_basis_id.bytes());
+        projection
+    } else if tag_version(data, RESOLUTION_V5_TAG, RESOLUTION_V5_VERSION)
+        && data.len() == RESOLUTION_V5_BYTES
+    {
+        let value =
+            ResolutionV5::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Collateral,
+            CanonicalAccountKind::CollateralResolutionV5,
+        );
+        projection.generation = Some(value.facts.generation);
+        projection.primary_binding = Some(value.facts.market_instance_id.bytes());
+        projection.secondary_binding = Some(value.facts.native_claim_basis_id.bytes());
+        projection
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(projection))
 }
 
 fn tag_version(data: &[u8], tag: u8, version: u8) -> bool {
@@ -1865,6 +1920,119 @@ impl CanonicalAccountIndex {
     #[must_use]
     pub fn cluster_key(&self) -> String {
         self.plan.cluster.key()
+    }
+}
+
+#[cfg(test)]
+mod collateral_decoder_tests {
+    use super::*;
+    use clutch_collateral_adapter_v2::{
+        Id as CollateralId, MarketLiabilityLifecycleV1, ResolutionFinalizationFactsV5,
+        ResolutionPayoutUnitBoundaryV5,
+    };
+    use clutch_retirement::{DeletableRentOwnerV1, Identity32V1, MAX_OUTCOMES};
+
+    fn id(value: u8) -> CollateralId {
+        CollateralId::from_bytes([value; 32])
+    }
+
+    fn rent() -> DeletableRentOwnerV1 {
+        DeletableRentOwnerV1::from_persisted(Identity32V1::new([90; 32]).unwrap(), 1, 0).unwrap()
+    }
+
+    fn hoard() -> HoardV2 {
+        HoardV2 {
+            market_instance_id: id(1),
+            realm_id: id(2),
+            profile_id: id(3),
+            collateral_policy_id: id(4),
+            collateral_release_id: id(5),
+            authority: id(6),
+            token_account: id(7),
+            collateral_cap_atoms: 100,
+            cash_liability_atoms: 8,
+            locked_claim_principal_atoms: 9,
+            lifecycle: MarketLiabilityLifecycleV1::Open,
+            outcome_count: 2,
+            stored_bump: 1,
+            rent: rent(),
+        }
+    }
+
+    #[test]
+    fn canonical_collateral_bodies_index_by_full_market_identity() {
+        let mut hoard_bytes = [0; HOARD_V2_BYTES];
+        hoard().encode(&mut hoard_bytes).unwrap();
+        let projection = decode_collateral(&hoard_bytes).unwrap().unwrap();
+        assert_eq!(projection.kind, CanonicalAccountKind::CollateralHoardV2);
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some([2; 32]));
+
+        let claim_ledger = ClaimLedgerV3 {
+            market_instance_id: id(1),
+            realm_id: id(2),
+            native_claim_basis_id: id(8),
+            fractional_policy_id: id(9),
+            fractional_ledger_account: id(10),
+            resolution_account: CollateralId::ZERO,
+            aggregate_internal_supply: [0; MAX_OUTCOMES],
+            aggregate_materialized_supply: [0; MAX_OUTCOMES],
+            next_fractional_sequence: 0,
+            last_fractional_transition_id: CollateralId::ZERO,
+            lifecycle: MarketLiabilityLifecycleV1::Open,
+            outcome_count: 2,
+            stored_bump: 2,
+            rent: rent(),
+        };
+        let mut claim_bytes = [0; CLAIM_LEDGER_V3_BYTES];
+        claim_ledger.encode(&mut claim_bytes).unwrap();
+        let projection = decode_collateral(&claim_bytes).unwrap().unwrap();
+        assert_eq!(
+            projection.kind,
+            CanonicalAccountKind::CollateralClaimLedgerV3
+        );
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some([8; 32]));
+
+        let mut weights = [0; MAX_OUTCOMES];
+        weights[0] = 3;
+        weights[1] = 2;
+        let resolution = ResolutionV5::finalized(
+            ResolutionFinalizationFactsV5 {
+                market_instance_id: id(1),
+                native_claim_basis_id: id(8),
+                finalization_evidence_id: id(11),
+                outcome_count: 2,
+                payout_denominator: 5,
+                payout_weights: weights,
+                generation: 4,
+                payout_unit_boundary: ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms,
+            },
+            3,
+            rent(),
+        )
+        .unwrap();
+        let mut resolution_bytes = [0; RESOLUTION_V5_BYTES];
+        resolution.encode(&mut resolution_bytes).unwrap();
+        let projection = decode_collateral(&resolution_bytes).unwrap().unwrap();
+        assert_eq!(
+            projection.kind,
+            CanonicalAccountKind::CollateralResolutionV5
+        );
+        assert_eq!(projection.generation, Some(4));
+        assert_eq!(projection.primary_binding, Some([1; 32]));
+        assert_eq!(projection.secondary_binding, Some([8; 32]));
+    }
+
+    #[test]
+    fn malformed_canonical_tag_is_not_downgraded_to_unknown() {
+        let mut bytes = [0; HOARD_V2_BYTES];
+        hoard().encode(&mut bytes).unwrap();
+        bytes[5] = 1;
+        assert_eq!(
+            decode_collateral(&bytes),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
     }
 }
 
