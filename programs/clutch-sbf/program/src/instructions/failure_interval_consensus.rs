@@ -184,7 +184,7 @@ pub fn persist_failure_interval_consensus_accounts_v1(
         failure_policy_binding_id: facts.failure_policy_binding_id.bytes(),
         funding_receipt_id: facts.funding_receipt_id.bytes(),
         replay_account: facts.replay_account.bytes(),
-        rent_payer: facts.rent_payer.bytes(),
+        rent_refund_owner: facts.rent_refund_owner.bytes(),
         neutral_sink: facts.neutral_sink.bytes(),
         last_transition_receipt_id: facts.last_transition_receipt_id.bytes(),
         last_liveness_receipt_id: facts.last_liveness_receipt_id.bytes(),
@@ -354,7 +354,9 @@ pub fn authenticate_failure_interval_consensus_accounts_v1(
         replay_account: FailureIntervalConsensusAccountIdV1::from_bytes(
             replay_account.key.to_bytes(),
         ),
-        rent_payer: FailureIntervalConsensusAccountIdV1::from_bytes(work_record.rent_payer),
+        rent_refund_owner: FailureIntervalConsensusAccountIdV1::from_bytes(
+            work_record.rent_refund_owner,
+        ),
         neutral_sink: FailureIntervalConsensusAccountIdV1::from_bytes(work_record.neutral_sink),
         work_rent_principal_lamports: work_record.work_rent_principal_lamports,
         replay_rent_principal_lamports: work_record.replay_rent_principal_lamports,
