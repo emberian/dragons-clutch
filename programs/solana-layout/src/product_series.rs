@@ -2106,6 +2106,16 @@ mod tests {
             CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[CLOSE_SERIES_ARTIFACT_START_V2].role,
             CloseSeriesFundingAccountRoleV2::SeriesPlan
         );
+        assert!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ActivateSeriesFundingAccountRoleV2::Registry.index()]
+            .writable
+        );
+        assert!(
+            !CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [CloseSeriesFundingAccountRoleV2::Registry.index()]
+            .writable
+        );
         let refund = CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund.index();
         let sink = CloseSeriesFundingAccountRoleV2::NeutralLamportSink.index();
         let refund_key = observed_close_meta(refund).key;

@@ -376,7 +376,7 @@ fn process_activate_funding(
         registry_account,
         request.series_plan_id,
         &rent,
-        false,
+        true,
     )?;
     let artifacts = authenticate_series_artifact_accounts_v4(
         program_id,
@@ -384,7 +384,7 @@ fn process_activate_funding(
         request.series_plan_id,
         registry.value().funding_terms_id,
     )?;
-    let registry_refs = authenticate_series_registry_capability_refs_v2(
+    let registry_refs = authenticate_series_registry_capability_refs_v2_for_mutation(
         program_id,
         registry_account,
         request.series_plan_id,
@@ -698,7 +698,7 @@ fn process_close_funding(
         registry_account,
         request.series_plan_id,
         &rent,
-        true,
+        false,
     )?;
     let artifacts = authenticate_series_artifact_accounts_v4(
         program_id,
@@ -706,7 +706,7 @@ fn process_close_funding(
         request.series_plan_id,
         registry.value().funding_terms_id,
     )?;
-    let registry_refs = authenticate_series_registry_capability_refs_v2_for_mutation(
+    let registry_refs = authenticate_series_registry_capability_refs_v2(
         program_id,
         registry_account,
         request.series_plan_id,
