@@ -162,6 +162,7 @@ pub fn serve(options: Options) -> Result<()> {
         },
     )?;
     validator.await_ready(&program_id)?;
+    validator.probe_listeners(&work.join("listeners-before.txt"))?;
     bus.publish(&banner(&artifact, &validator, &program_id, &precreated));
 
     let keypairs: Vec<solana_keypair::Keypair> = keys
@@ -188,6 +189,7 @@ pub fn serve(options: Options) -> Result<()> {
 
     stage("found", "founding the market and funding both actors");
     session.found(ENDOW_ATOMS, SPLIT_SETS)?;
+    validator.probe_listeners(&work.join("listeners-after.txt"))?;
 
     if options.exit_when_settled {
         println!("trade session open; waiting for the scripted flow to settle it");

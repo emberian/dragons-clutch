@@ -5,6 +5,13 @@
 # public cluster.
 set -eu
 
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO=$(CDPATH= cd -- "$HERE/../../.." && pwd)
+LOOPBACK_TOOLS="$REPO/tools/agave-loopback-validator"
+LOOPBACK_CACHE="${CLUTCH_AGAVE_LOOPBACK_CACHE:-$REPO/.cache/agave-loopback-validator}"
+TEST_VALIDATOR="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-$LOOPBACK_CACHE/bin/solana-test-validator}}"
+python3 "$LOOPBACK_TOOLS/verify-runtime.py" --binary "$TEST_VALIDATOR"
+
 RPC_URL="https://api.devnet.solana.com"
 EXPECTED_GENESIS="EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 RECEIVER="rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
@@ -18,7 +25,7 @@ FAUCET_PORT="${DC_PYTH_CLONE_FAUCET_PORT:-9149}"
 GOSSIP_PORT="${DC_PYTH_CLONE_GOSSIP_PORT:-9150}"
 DYNAMIC_PORT_RANGE="${DC_PYTH_CLONE_DYNAMIC_PORT_RANGE:-9151-9199}"
 
-for required_tool in curl jq solana-test-validator; do
+for required_tool in curl jq python3 tee; do
     if ! command -v "$required_tool" >/dev/null 2>&1; then
         echo "missing required tool: $required_tool" >&2
         exit 1
@@ -39,6 +46,21 @@ if [ "$genesis_hash" != "$EXPECTED_GENESIS" ]; then
 fi
 
 clone_ledger=$(mktemp -d "${TMPDIR:-/tmp}/dragons-clutch-pyth-clone.XXXXXX")
+validator_pid=""
+
+cleanup() {
+    status=$?
+    trap - EXIT INT TERM
+    if [ -n "$validator_pid" ] && kill -0 "$validator_pid" 2>/dev/null; then
+        "$LOOPBACK_TOOLS/probe-listeners.sh" \
+            "$validator_pid" "$RPC_PORT" "$FAUCET_PORT" "$TEST_VALIDATOR" \
+            >"$clone_ledger/listeners-after.txt" 2>&1 || status=1
+        kill "$validator_pid" 2>/dev/null || true
+        wait "$validator_pid" 2>/dev/null || true
+    fi
+    exit "$status"
+}
+trap cleanup EXIT INT TERM
 
 echo "canonical devnet genesis: $genesis_hash"
 echo "fresh clone ledger: $clone_ledger"
@@ -46,8 +68,9 @@ echo "local RPC after boot: http://127.0.0.1:$RPC_PORT"
 echo "local RPC WebSocket port: $((RPC_PORT + 1))"
 echo "the ledger is retained after exit for inspection"
 
-# Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
-exec solana-test-validator \
+# This patched executable and the exact-PID probes are required because stock
+# Agave 4.0.2 leaves several service/client sockets wildcard-bound.
+"$TEST_VALIDATOR" \
     --ledger "$clone_ledger" \
     --quiet \
     --bind-address 127.0.0.1 \
@@ -60,4 +83,12 @@ exec solana-test-validator \
     --rpc-port "$RPC_PORT" \
     --faucet-port "$FAUCET_PORT" \
     --gossip-port "$GOSSIP_PORT" \
-    --dynamic-port-range "$DYNAMIC_PORT_RANGE"
+    --dynamic-port-range "$DYNAMIC_PORT_RANGE" \
+    >"$clone_ledger/validator.log" 2>&1 &
+validator_pid=$!
+"$LOOPBACK_TOOLS/probe-listeners.sh" \
+    "$validator_pid" "$RPC_PORT" "$FAUCET_PORT" "$TEST_VALIDATOR" \
+    | tee "$clone_ledger/listeners-before.txt"
+echo "loopback isolation proved; press Ctrl-C to stop"
+wait "$validator_pid"
+validator_pid=""

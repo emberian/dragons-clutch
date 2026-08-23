@@ -79,7 +79,10 @@ solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin
 solana_bin="${SOLANA_BIN:-$solana_home/solana}"
 keygen="${SOLANA_KEYGEN:-$solana_home/solana-keygen}"
 build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
-test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
+loopback_tools="$repo/tools/agave-loopback-validator"
+loopback_cache="${CLUTCH_AGAVE_LOOPBACK_CACHE:-$repo/.cache/agave-loopback-validator}"
+test_validator="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-$loopback_cache/bin/solana-test-validator}}"
+listener_probe="$loopback_tools/probe-listeners.sh"
 # Ports are picked from the 9000-9099 lane range so this gate can run beside
 # the other committed walks without either stealing the other's endpoint.
 rpc_port="${CLUTCH_KEEPER_RPC_PORT:-9011}"
@@ -89,6 +92,8 @@ dynamic_port_range="${CLUTCH_KEEPER_DYNAMIC_PORT_RANGE:-9020-9099}"
 url="http://127.0.0.1:${rpc_port}"
 validator_pid=""
 keeper_pid=""
+python3 "$loopback_tools/verify-runtime.py" --binary "$test_validator" \
+  | tee "$log/validator-runtime.txt"
 
 # The keeper's own wallet, and the four signing owners of the book.  The actor
 # is also the owner of the one order the candidate gives a zero fill, so it is
@@ -348,7 +353,7 @@ wait_for_log() {
 }
 
 start_validator() {
-  # Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
+  # Runtime provenance and listener isolation are mandatory around this gate.
   local validator_args=(
     --ledger "$work/ledger" --reset --quiet
     --bind-address 127.0.0.1
@@ -367,6 +372,8 @@ start_validator() {
     if curl -s -m 2 "$url" -H 'Content-Type: application/json' \
         -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$program_id\",{\"encoding\":\"base64\"}]}" \
         2>/dev/null | grep -q '"executable":true'; then
+      "$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+        | tee "$log/listeners-before.txt"
       return 0
     fi
     sleep 0.25
@@ -814,6 +821,8 @@ if bad:
     sys.exit(1)
 PY
 
+"$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+  | tee "$log/listeners-after.txt"
 stop_validator
 release_lock
 trap cleanup EXIT

@@ -330,6 +330,7 @@ fn serve(options: Options) -> Result<()> {
         },
     )?;
     validator.await_ready(&parsed.program_id)?;
+    validator.probe_listeners(&work.join("listeners-before.txt"))?;
     bus.publish(&banner(&artifact, &validator, &parsed));
     stage(
         &bus,
@@ -358,6 +359,7 @@ fn serve(options: Options) -> Result<()> {
             false
         }
     };
+    validator.probe_listeners(&work.join("listeners-after.txt"))?;
     bus.publish(&json!({
         "type": "done",
         "verdict": if green { "PASS" } else { "FAIL" },

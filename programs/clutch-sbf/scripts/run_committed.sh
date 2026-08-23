@@ -48,7 +48,10 @@ solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin
 solana_bin="${SOLANA_BIN:-$solana_home/solana}"
 keygen="${SOLANA_KEYGEN:-$solana_home/solana-keygen}"
 build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
-test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
+loopback_tools="$repo/tools/agave-loopback-validator"
+loopback_cache="${CLUTCH_AGAVE_LOOPBACK_CACHE:-$repo/.cache/agave-loopback-validator}"
+test_validator="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-$loopback_cache/bin/solana-test-validator}}"
+listener_probe="$loopback_tools/probe-listeners.sh"
 rpc_port="${CLUTCH_COMMITTED_RPC_PORT:-18929}"
 faucet_port="${CLUTCH_COMMITTED_FAUCET_PORT:-19930}"
 gossip_port="${CLUTCH_COMMITTED_GOSSIP_PORT:-18100}"
@@ -56,6 +59,8 @@ dynamic_port_range="${CLUTCH_COMMITTED_DYNAMIC_PORT_RANGE:-18101-18199}"
 url="http://127.0.0.1:${rpc_port}"
 validator_pid=""
 victim=""
+python3 "$loopback_tools/verify-runtime.py" --binary "$test_validator" \
+  | tee "$log/validator-runtime.txt"
 
 stop_validator() {
   if [ -n "$validator_pid" ] && kill -0 "$validator_pid" 2>/dev/null; then
@@ -160,7 +165,7 @@ PY
 )
 EOF
 
-# Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
+# Runtime provenance and listener isolation are mandatory around every walk.
 validator_args=(
   --ledger "$work/ledger" --reset --quiet
   --bind-address 127.0.0.1
@@ -174,7 +179,8 @@ while read -r role address file; do
 done < "$plan/genesis.txt"
 
 start_validator() {
-  "$test_validator" "${validator_args[@]}" >"$log/validator.log" 2>&1 &
+  local label="$1"
+  "$test_validator" "${validator_args[@]}" >"$log/validator-$label.log" 2>&1 &
   validator_pid=$!
   local ready=0
   for _ in $(seq 1 80); do
@@ -200,9 +206,17 @@ start_validator() {
   done
   if [ "$ready" -ne 1 ]; then
     echo "FAIL: local validator never exposed the executable program after slot zero"
-    tail -60 "$log/validator.log"
+    tail -60 "$log/validator-$label.log"
     exit 1
   fi
+  "$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+    | tee "$log/listeners-$label-before.txt"
+}
+
+probe_after() {
+  local label="$1"
+  "$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+    | tee "$log/listeners-$label-after.txt"
 }
 
 run_signed() {
@@ -220,8 +234,9 @@ run_signed() {
 
 echo
 echo "== signed, confirmed, committed walk =="
-start_validator
+start_validator committed
 run_signed | tee "$log/committed.log"
+probe_after committed
 stop_validator
 
 echo
@@ -235,11 +250,12 @@ text = open(path).read().strip()
 byte = (int(text[:2], 16) + 1) % 256
 open(path, "w").write(f"{byte:02x}" + text[2:] + "\n")
 PY
-start_validator
+start_validator falsify
 if run_signed >"$log/falsify.log" 2>&1; then
   echo "FAIL: corrupted terminal expectation still passed"
   exit 1
 fi
+probe_after falsify
 if ! grep -q 'committed bytes differ' "$log/falsify.log"; then
   echo "FAIL: negative run failed for an unrelated reason"
   tail -60 "$log/falsify.log"

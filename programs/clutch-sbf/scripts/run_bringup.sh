@@ -15,12 +15,16 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
+repo="$(cd "$root/../.." && pwd)"
 work="${1:-${TMPDIR:-/tmp}/clutch-sbf-bringup}"
 
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"
 export SOLANA_BIN="${SOLANA_BIN:-$solana_home/solana}"
 build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
-test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
+loopback_tools="$repo/tools/agave-loopback-validator"
+loopback_cache="${CLUTCH_AGAVE_LOOPBACK_CACHE:-$repo/.cache/agave-loopback-validator}"
+test_validator="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-$loopback_cache/bin/solana-test-validator}}"
+listener_probe="$loopback_tools/probe-listeners.sh"
 rpc_port="${CLUTCH_RPC_PORT:-18899}"
 faucet_port="${CLUTCH_FAUCET_PORT:-19900}"
 gossip_port="${CLUTCH_GOSSIP_PORT:-18000}"
@@ -33,6 +37,8 @@ mock_plan="$work/plan-non-production-mock-source"
 default_log="$work/logs/default-production-inert"
 mock_log="$work/logs/non-production-mock-source"
 mkdir -p "$default_plan" "$mock_plan" "$default_log" "$mock_log"
+python3 "$loopback_tools/verify-runtime.py" --binary "$test_validator" \
+  | tee "$work/validator-runtime.txt"
 
 echo "== toolchain =="
 "$SOLANA_BIN" --version
@@ -45,7 +51,6 @@ echo "== source pin =="
 # state is printed rather than assumed clean: a dirty tree still produces two
 # identical ELFs, but the digest then names a working tree and not a commit,
 # and that has to be visible in the evidence.
-repo="$(cd "$root/../.." && pwd)"
 # Exactly the paths `cargo-build-sbf --manifest-path program/Cargo.toml` reads.
 # A tree that is dirty *only* outside this list still produces a digest that
 # names a commit, and saying which of the two situations holds is the whole
@@ -216,7 +221,8 @@ run_profile() {
   lifecycle="$5"
   program_id="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["program_id"])' "$plan/plan.json")"
   payer="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["payer"])' "$plan/plan.json")"
-  # Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
+  # The patched binary plus the pre/post probes are both mandatory. The flag is
+  # still explicit because it scopes validator-node and gossip sockets too.
   validator_args=(
     --ledger "$work/ledger-$profile" --reset --quiet
     --bind-address 127.0.0.1
@@ -245,23 +251,22 @@ run_profile() {
     if ! kill -0 "$validator_pid" 2>/dev/null; then break; fi
     if curl -fsS -m 2 "$url" -X POST -H 'Content-Type: application/json' \
         -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$program_id\",{\"encoding\":\"base64\"}]}" 2>/dev/null \
-        | python3 -c 'import json,sys; v=json.load(sys.stdin).get("result", {}).get("value"); raise SystemExit(not (v and v.get("executable") is True))' 2>/dev/null \
-        && python3 "$here/simulate.py" --url "$url" --plan "$plan" --only split \
-          > "$profile_log/readiness.log" 2>&1; then
+        | python3 -c 'import json,sys; v=json.load(sys.stdin).get("result", {}).get("value"); raise SystemExit(not (v and v.get("executable") is True))' 2>/dev/null; then
       ready=1
       break
     fi
     sleep 1
   done
   if [ "$ready" -ne 1 ]; then
-    echo "FAIL: $profile validator did not execute the readiness probe"
-    tail -30 "$profile_log/readiness.log" 2>/dev/null || true
+    echo "FAIL: $profile validator did not expose the executable program"
     tail -30 "$profile_log/validator.log"
     status=1
     cleanup
     validator_pid=""
     return
   fi
+  "$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+    | tee "$profile_log/listeners-before.txt"
 
   profile_status=0
   python3 "$here/simulate.py" --url "$url" --plan "$plan" 2>&1 \
@@ -358,6 +363,8 @@ MUTATE
       mv "$plan/plan.json.orig" "$plan/plan.json"
     fi
   fi
+  "$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+    | tee "$profile_log/listeners-after.txt"
   cleanup
   validator_pid=""
 }

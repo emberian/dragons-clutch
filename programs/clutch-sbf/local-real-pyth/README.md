@@ -26,9 +26,16 @@ release, current deployment evidence, or a wallet client.
 Run from the repository root:
 
 ```sh
-CLUTCH_LOOPBACK_TEST_VALIDATOR=/absolute/path/to/solana-test-validator \
-  programs/clutch-sbf/scripts/run_local_real_pyth.sh
+programs/clutch-sbf/scripts/run_local_real_pyth.sh
 ```
+
+The runner defaults to
+`.cache/agave-loopback-validator/bin/solana-test-validator` and verifies its
+ignored build record against the tracked patch and toolchain pins before doing
+campaign work. Build that pinned runtime once using the instructions in
+`tools/agave-loopback-validator/README.md`. An explicit
+`CLUTCH_LOOPBACK_TEST_VALIDATOR` or `SOLANA_TEST_VALIDATOR` is accepted only
+when it resolves to that same provenance-checked cache binary.
 
 The default `source-only-v1` mode is an exact thirteen-transaction source
 campaign. Its current transcript schema is
@@ -36,8 +43,7 @@ campaign. Its current transcript schema is
 lifecycle is:
 
 ```sh
-CLUTCH_LOOPBACK_TEST_VALIDATOR=/absolute/path/to/solana-test-validator \
-  CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/new/empty/retained-directory \
+CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/new/empty/retained-directory \
   programs/clutch-sbf/scripts/run_local_joined_pyth_lifecycle.sh
 ```
 
@@ -94,7 +100,9 @@ The selected validator must bind RPC, WebSocket (`RPC+1`), and faucet
 listeners exclusively to `127.0.0.1`. The runner inspects the child process's
 live listeners and aborts before signing if any is wildcard/non-loopback.
 This is load-bearing: stock Agave 4.0.2 ignores `--bind-address` for some of
-these listeners and is intentionally refused. RPC, WebSocket, faucet, gossip,
+these listeners and is intentionally refused by both provenance and live-socket
+checks. The Clock probe and campaign each run before/after traffic probes. RPC,
+WebSocket, faucet, gossip,
 and dynamic service ports are collision-checked and can be set with the
 `CLUTCH_LOCAL_REAL_PYTH_*_PORT` variables. The patched outbound QUIC/UDP client
 paths remain loopback-only but retain upstream's fixed validator-client port

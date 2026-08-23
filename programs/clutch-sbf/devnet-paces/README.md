@@ -108,4 +108,6 @@ Builds both ELFs, loads them at fresh ids on one blank
 `solana-test-validator` (no genesis-injected Clutch or provider accounts —
 the same shape devnet presents), runs both profiles green, then requires a
 negative control (default expectations against the mock ELF) to go red on the
-0x0079/0x007a mismatch.
+0x0079/0x007a mismatch. This local launcher requires the repository's
+provenance-checked loopback-patched Agave runtime and retains exact-PID listener
+proofs before and after the campaign; it will not fall back to stock Agave.

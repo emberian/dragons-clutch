@@ -77,7 +77,34 @@ pub fn build_sbf() -> PathBuf {
     tool("CARGO_BUILD_SBF", "cargo-build-sbf")
 }
 pub fn test_validator() -> PathBuf {
-    tool("SOLANA_TEST_VALIDATOR", "solana-test-validator")
+    env::var("CLUTCH_LOOPBACK_TEST_VALIDATOR")
+        .or_else(|_| env::var("SOLANA_TEST_VALIDATOR"))
+        .map_or_else(
+            |_| crate::repo_path(".cache/agave-loopback-validator/bin/solana-test-validator"),
+            PathBuf::from,
+        )
+}
+
+fn verify_validator_runtime(binary: &Path, evidence: &Path) -> Result<()> {
+    let verifier = crate::repo_path("tools/agave-loopback-validator/verify-runtime.py");
+    let output = Command::new("python3")
+        .arg(&verifier)
+        .arg("--binary")
+        .arg(binary)
+        .output()?;
+    let mut transcript = output.stdout;
+    transcript.extend_from_slice(&output.stderr);
+    fs::write(evidence, &transcript)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&transcript);
+    Err(format!(
+        "refusing local validator {}: {}; stock Agave 4.0.2 has wildcard-listener risk",
+        binary.display(),
+        detail.trim()
+    )
+    .into())
 }
 
 /// Ephemeral signers, unlinked on drop.
@@ -200,6 +227,9 @@ pub fn build_artifact(program_manifest: &Path, out_dir: &Path, log: &Path) -> Re
 /// A running local validator, killed on drop.
 pub struct Validator {
     child: Child,
+    binary: PathBuf,
+    rpc_port: u16,
+    faucet_port: u16,
     pub url: String,
     pub ledger: PathBuf,
 }
@@ -224,7 +254,9 @@ impl Validator {
         network: ValidatorNetwork<'_>,
     ) -> Result<Self> {
         let ledger = work.join("ledger");
-        let mut command = Command::new(test_validator());
+        let binary = test_validator();
+        verify_validator_runtime(&binary, &work.join("validator-runtime.txt"))?;
+        let mut command = Command::new(&binary);
         command
             .arg("--ledger")
             .arg(&ledger)
@@ -261,6 +293,9 @@ impl Validator {
             .spawn()?;
         Ok(Self {
             child,
+            binary,
+            rpc_port: network.rpc_port,
+            faucet_port: network.faucet_port,
             url: format!("http://127.0.0.1:{}", network.rpc_port),
             ledger,
         })
@@ -307,6 +342,33 @@ impl Validator {
         }
         Err("local validator never exposed the executable program after slot zero".into())
     }
+
+    /// Record the exact-PID listener proof before and after protocol traffic.
+    pub fn probe_listeners(&mut self, evidence: &Path) -> Result<()> {
+        if let Some(status) = self.child.try_wait()? {
+            return Err(
+                format!("the local validator exited before its listener probe ({status})").into(),
+            );
+        }
+        let probe = crate::repo_path("tools/agave-loopback-validator/probe-listeners.sh");
+        let output = Command::new(&probe)
+            .arg(self.child.id().to_string())
+            .arg(self.rpc_port.to_string())
+            .arg(self.faucet_port.to_string())
+            .arg(&self.binary)
+            .output()?;
+        let mut transcript = output.stdout;
+        transcript.extend_from_slice(&output.stderr);
+        fs::write(evidence, &transcript)?;
+        if !output.status.success() {
+            return Err(format!(
+                "validator listener isolation probe failed; see {}",
+                evidence.display()
+            )
+            .into());
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Validator {
@@ -322,8 +384,9 @@ impl Drop for Validator {
 /// which makes independently configured local lanes steal one another's ports.
 /// Agave also reserves `rpc_port + 1` for RPC WebSocket without exposing a
 /// separate CLI flag, so that derived listener participates in every overlap
-/// check.  `--bind-address` only scopes gossip and the validator node sockets
-/// in stock Agave 4.0.2; RPC/faucet isolation is a separate launch-time gate.
+/// check. The required repository-patched binary covers every known bind path;
+/// `--bind-address` remains explicit and exact-PID probes independently refuse
+/// wildcard RPC, WebSocket, faucet, QUIC, or UDP sockets at runtime.
 pub fn validate_validator_network(
     http_port: Option<u16>,
     rpc_port: u16,
@@ -389,7 +452,7 @@ fn append_validator_network_args(
 ) -> Result<()> {
     validate_validator_network(None, rpc_port, faucet_port, gossip_port, dynamic_port_range)?;
     command
-        // Stock Agave applies this flag to gossip/node sockets, not RPC or faucet.
+        // Still required for the patched validator's gossip/node socket paths.
         .args(["--bind-address", "127.0.0.1"])
         .arg("--rpc-port")
         .arg(rpc_port.to_string())

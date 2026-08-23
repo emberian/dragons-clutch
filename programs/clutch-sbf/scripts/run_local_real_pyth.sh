@@ -15,15 +15,10 @@ repo="$(cd "$(dirname "$0")/../../.." && pwd)"
 crate="$repo/programs/clutch-sbf/local-real-pyth"
 program_manifest="$repo/programs/clutch-sbf/program/Cargo.toml"
 
-validator="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-}}"
-if [ -z "$validator" ]; then
-  echo "FAIL: set CLUTCH_LOOPBACK_TEST_VALIDATOR (or SOLANA_TEST_VALIDATOR) to an explicitly selected loopback-patched solana-test-validator" >&2
-  exit 1
-fi
-if [ ! -x "$validator" ]; then
-  echo "FAIL: validator is not executable: $validator" >&2
-  exit 1
-fi
+loopback_tools="$repo/tools/agave-loopback-validator"
+loopback_cache="${CLUTCH_AGAVE_LOOPBACK_CACHE:-$repo/.cache/agave-loopback-validator}"
+validator="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-$loopback_cache/bin/solana-test-validator}}"
+python3 "$loopback_tools/verify-runtime.py" --binary "$validator"
 for command in awk cargo cargo-build-sbf cp curl git grep ln lsof mktemp rustc sed seq shasum tee tr; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "FAIL: required command is absent: $command" >&2
@@ -293,6 +288,9 @@ if [ "$clock_probe_time" -le 300 ]; then
   echo "FAIL: Clock probe timestamp is too small" >&2
   exit 1
 fi
+"$loopback_tools/probe-listeners.sh" \
+  "$validator_pid" "$rpc_port" "$faucet_port" "$validator" \
+  >"$work/clock-probe-listeners-after.txt"
 publish_time=$(( ((clock_probe_time - 180) / 60) * 60 ))
 stop_validator
 

@@ -1544,7 +1544,11 @@ derivation is not compiled into these crates, so the harness derives ~70
 program addresses out of process while it builds the plan. That is also why the
 plan takes a few seconds to write.
 
-The gate needs `solana-test-validator`, `python3`, and `curl`. It binds
+The gate needs `python3`, `curl`, and the pinned patched validator built by
+`tools/agave-loopback-validator/build.sh`. It refuses stock or copied
+`solana-test-validator` binaries after checking the cached build record against
+tracked source/patch/toolchain pins, then retains exact-PID listener proofs
+before and after protocol traffic. It binds
 `127.0.0.1:18899` and `127.0.0.1:19900` by default (`CLUTCH_RPC_PORT`,
 `CLUTCH_FAUCET_PORT` override) and contacts nothing else. It uses **one**
 validator session for all 26 per-family transactions, the falsifiability

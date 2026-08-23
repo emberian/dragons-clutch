@@ -15,6 +15,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
+repo="$(cd "$root/../.." && pwd)"
 
 if [ "$#" -gt 1 ]; then
   echo "usage: scripts/run_devnet_paces_dryrun.sh [new-work-dir]"
@@ -38,13 +39,18 @@ mkdir -p "$keys" "$elves" "$log"
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"
 keygen="${SOLANA_KEYGEN:-$solana_home/solana-keygen}"
 build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
-test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
+loopback_tools="$repo/tools/agave-loopback-validator"
+loopback_cache="${CLUTCH_AGAVE_LOOPBACK_CACHE:-$repo/.cache/agave-loopback-validator}"
+test_validator="${CLUTCH_LOOPBACK_TEST_VALIDATOR:-${SOLANA_TEST_VALIDATOR:-$loopback_cache/bin/solana-test-validator}}"
+listener_probe="$loopback_tools/probe-listeners.sh"
 rpc_port="${CLUTCH_PACES_RPC_PORT:-18939}"
 faucet_port="${CLUTCH_PACES_FAUCET_PORT:-19940}"
 gossip_port="${CLUTCH_PACES_GOSSIP_PORT:-18200}"
 dynamic_port_range="${CLUTCH_PACES_DYNAMIC_PORT_RANGE:-18201-18299}"
 url="http://127.0.0.1:${rpc_port}"
 validator_pid=""
+python3 "$loopback_tools/verify-runtime.py" --binary "$test_validator" \
+  | tee "$log/validator-runtime.txt"
 
 cleanup() {
   if [ -n "$validator_pid" ] && kill -0 "$validator_pid" 2>/dev/null; then
@@ -112,7 +118,7 @@ paces="$root/devnet-paces/target/debug/devnet-paces"
 
 echo
 echo "== blank local validator carrying both deployed ELFs =="
-# Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
+# Runtime provenance and listener isolation are mandatory around the campaign.
 "$test_validator" \
   --ledger "$work/ledger" --reset --quiet \
   --bind-address 127.0.0.1 \
@@ -148,6 +154,8 @@ if [ "$ready" -ne 1 ]; then
   tail -40 "$log/validator.log"
   exit 1
 fi
+"$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+  | tee "$log/listeners-before.txt"
 
 echo
 echo "== profile default: fail-closed campaign against the default ELF =="
@@ -176,6 +184,8 @@ if ! grep -q 'expected Custom(0x0079)' "$log/paces-negative.log" \
   exit 1
 fi
 grep -m1 'expected Custom(0x0079)' "$log/paces-negative.log" | sed 's/^/  red: /'
+"$listener_probe" "$validator_pid" "$rpc_port" "$faucet_port" "$test_validator" \
+  | tee "$log/listeners-after.txt"
 
 echo
 for profile in default mock; do
