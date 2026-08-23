@@ -411,6 +411,7 @@ pure runtime elsewhere does not make a route executable.
 | `0xa7/2` | FractionalRedemption/replay | Resolution-V5-data-bound zero-credit tombstone (232 bytes) |
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
+| `0xa9/2` | General V2 | reserved-disabled counted exact-index SettlementRoot successor (1,196 bytes; canonical in-place Root PDA) |
 | `0xaa/1` | Product | shared MarketLifecycleRoot V1; phased prepaid founding and whole-Market terminal owner |
 | `0xab/1` | Failure | withdrawn one-shot interval-session cell |
 | `0xab/2` | Failure | reusable exclusive interval-session cell retained through Market terminality |

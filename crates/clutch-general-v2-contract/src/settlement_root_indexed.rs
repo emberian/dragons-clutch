@@ -4,19 +4,23 @@
 //!
 //! The live Root V1 cannot count the locator and adjacency accounts. This
 //! breaking wrapper retains the exact Root V1 body and makes those two accounts
-//! explicit expected/admitted/live/retired children. It has no Solana account
-//! discriminator, seed, action, or capability today: its eight-byte magic is a
-//! reviewable pure-codec envelope, not a deployable route allocation.
+//! explicit expected/admitted/live/retired children. Its central account
+//! coordinate and canonical in-place Root PDA are reserved, but every runtime
+//! capability remains disabled until the complete SBF transition family lands.
+
+use clutch_owner_settlement::SettlementCashPotV1;
 
 use crate::{
-    CodecError, Id32, Reader, SettlementRootPhaseV1, SettlementRootTerminalProjectionV1,
+    prepare_activate_merge_cash_pot_v1, CodecError, DeletableRentOwnerV1, Id32, Reader,
+    SettlementRootPhaseV1, SettlementRootSeedTupleV1, SettlementRootTerminalProjectionV1,
     SettlementRootV1AccountV1, Sha256BackendV1, Writer, SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    SETTLEMENT_ROOT_ACCOUNT_TAG,
 };
 
-/// Exact disabled successor magic. This is not a live Solana discriminator.
-pub const INDEXED_SETTLEMENT_ROOT_MAGIC_V1: [u8; 8] = *b"DCIXRT01";
-/// Exact disabled successor schema.
-pub const INDEXED_SETTLEMENT_ROOT_SCHEMA_V1: u8 = 1;
+/// Central persisted-account discriminator shared with the in-place Root V1.
+pub const INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG: u8 = SETTLEMENT_ROOT_ACCOUNT_TAG;
+/// Centrally reserved exact-index Root successor version.
+pub const INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 2;
 /// Exactly the locator and adjacency siblings are counted.
 pub const INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1: u8 = 2;
 /// Exact active successor width.
@@ -25,9 +29,365 @@ pub const INDEXED_SETTLEMENT_ROOT_BYTES_V1: usize =
 /// Account-key-bound data identity domain for the complete successor bytes.
 pub const INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-v2/indexed-settlement-root-data/v1\0";
+/// Exact fresh-allocation or in-place-upgrade projector transcript domain.
+pub const INDEXED_SETTLEMENT_ROOT_RENT_PROJECTOR_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-v2/indexed-settlement-root-rent-projector/v1\0";
+/// Canonical one-per-Root frozen-order locator PDA domain.
+pub const FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1: &[u8] =
+    b"general-exact-order-locator:v1";
+/// Canonical one-per-Root selected-candidate adjacency PDA domain.
+pub const CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1: &[u8] =
+    b"general-exact-candidate-adjacency:v1";
 
 const _: () = assert!(SETTLEMENT_ROOT_ACCOUNT_BYTES == 980);
 const _: () = assert!(INDEXED_SETTLEMENT_ROOT_BYTES_V1 == 1_196);
+const _: () = assert!(INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
+
+/// Canonical in-place PDA coordinates retained by the indexed Root successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IndexedSettlementRootSeedTupleV1 {
+    base: SettlementRootSeedTupleV1,
+}
+
+impl IndexedSettlementRootSeedTupleV1 {
+    /// Derive the unchanged Root PDA tuple from exact Epoch and candidate IDs.
+    pub fn new(epoch: Id32, candidate: Id32) -> Result<Self, CodecError> {
+        Ok(Self {
+            base: SettlementRootSeedTupleV1::new(epoch, candidate)?,
+        })
+    }
+
+    /// Canonical Root seed domain; the successor is an in-place version change.
+    pub const fn domain(&self) -> &'static [u8] {
+        self.base.domain()
+    }
+
+    /// Exact authenticated Epoch PDA seed.
+    pub const fn epoch(&self) -> &[u8; 32] {
+        self.base.epoch()
+    }
+
+    /// Exact stable selected-candidate seed.
+    pub const fn candidate(&self) -> &[u8; 32] {
+        self.base.candidate()
+    }
+}
+
+/// Canonical locator child PDA tuple, one-to-one with an indexed Root PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrozenOrderLocatorSeedTupleV1 {
+    root: [u8; 32],
+}
+
+impl FrozenOrderLocatorSeedTupleV1 {
+    /// Bind the unique locator to one nonzero indexed Root PDA.
+    pub fn new(root: Id32) -> Result<Self, CodecError> {
+        if root.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Ok(Self { root: root.bytes() })
+    }
+
+    /// Fresh non-aliasing locator seed domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1
+    }
+
+    /// Exact parent indexed Root PDA seed.
+    pub const fn root(&self) -> &[u8; 32] {
+        &self.root
+    }
+}
+
+/// Canonical adjacency child PDA tuple, one-to-one with an indexed Root PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateOrderSliceIndexSeedTupleV1 {
+    root: [u8; 32],
+}
+
+impl CandidateOrderSliceIndexSeedTupleV1 {
+    /// Bind the unique adjacency index to one nonzero indexed Root PDA.
+    pub fn new(root: Id32) -> Result<Self, CodecError> {
+        if root.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Ok(Self { root: root.bytes() })
+    }
+
+    /// Fresh non-aliasing adjacency seed domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1
+    }
+
+    /// Exact parent indexed Root PDA seed.
+    pub const fn root(&self) -> &[u8; 32] {
+        &self.root
+    }
+}
+
+/// Whether the reserved indexed root is allocated directly or upgrades V1.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum IndexedSettlementRootRentModeV1 {
+    /// Action 39 allocates the 1,196-byte successor directly.
+    Fresh = 1,
+    /// A 980-byte V1 root is atomically reallocated in place.
+    Upgrade = 2,
+}
+
+impl IndexedSettlementRootRentModeV1 {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Fresh => 1,
+            Self::Upgrade => 2,
+        }
+    }
+}
+
+/// Exact root-account rent/allocation preparation consumed by index creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IndexedSettlementRootRentPreparationV1 {
+    mode: IndexedSettlementRootRentModeV1,
+    root_account: Id32,
+    base_before: SettlementRootV1AccountV1,
+    base_after: SettlementRootV1AccountV1,
+    data_len_before: usize,
+    root_balance_before_lamports: u64,
+    root_balance_after_lamports: u64,
+    payer_debit_lamports: u64,
+    payer_balance_before_lamports: u64,
+    neutral_sink: Id32,
+    projector_id: Id32,
+}
+
+impl IndexedSettlementRootRentPreparationV1 {
+    /// Fresh allocation or in-place upgrade.
+    pub const fn mode(&self) -> IndexedSettlementRootRentModeV1 {
+        self.mode
+    }
+
+    /// Canonical Root PDA whose version/length changes atomically.
+    pub const fn root_account(&self) -> Id32 {
+        self.root_account
+    }
+
+    /// Exact source Root semantics authenticated before the transition.
+    pub const fn base_before(&self) -> &SettlementRootV1AccountV1 {
+        &self.base_before
+    }
+
+    /// Exact embedded Root semantics with current rent ownership.
+    pub const fn base_after(&self) -> &SettlementRootV1AccountV1 {
+        &self.base_after
+    }
+
+    /// Zero for direct allocation or 980 for an in-place upgrade.
+    pub const fn data_len_before(&self) -> usize {
+        self.data_len_before
+    }
+
+    /// Exact successor width, always 1,196 bytes.
+    pub const fn data_len_after(&self) -> usize {
+        INDEXED_SETTLEMENT_ROOT_BYTES_V1
+    }
+
+    /// Complete observed pre-transition root balance.
+    pub const fn root_balance_before_lamports(&self) -> u64 {
+        self.root_balance_before_lamports
+    }
+
+    /// Exact post-transition balance after the payer funds full principal.
+    pub const fn root_balance_after_lamports(&self) -> u64 {
+        self.root_balance_after_lamports
+    }
+
+    /// Exact debit from the persisted root rent payer.
+    pub const fn payer_debit_lamports(&self) -> u64 {
+        self.payer_debit_lamports
+    }
+
+    /// Authenticated payer balance shared with any sibling creates.
+    pub const fn payer_balance_before_lamports(&self) -> u64 {
+        self.payer_balance_before_lamports
+    }
+
+    /// Updated full principal and observed hostile-donation floor.
+    pub const fn rent_after(&self) -> DeletableRentOwnerV1 {
+        self.base_after.root_rent()
+    }
+
+    /// Immutable neutral sink which eventually receives every nonprincipal lamport.
+    pub const fn neutral_sink(&self) -> Id32 {
+        self.neutral_sink
+    }
+
+    /// Exact source/poststate/rent/width projector transcript.
+    pub const fn projector_id(&self) -> Id32 {
+        self.projector_id
+    }
+}
+
+/// Prepare a direct 1,196-byte allocation without a prefund discount.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_fresh_indexed_settlement_root_rent_v1<B: Sha256BackendV1>(
+    base: &SettlementRootV1AccountV1,
+    root_account: Id32,
+    root_balance_before_lamports: u64,
+    indexed_root_rent_minimum_lamports: u64,
+    payer_balance_before_lamports: u64,
+    neutral_sink: Id32,
+    backend: &B,
+) -> Result<IndexedSettlementRootRentPreparationV1, CodecError> {
+    base.validate()?;
+    let rent = base.root_rent();
+    rent.validate()?;
+    if base.phase() != SettlementRootPhaseV1::Materializing
+        || root_account.is_zero()
+        || neutral_sink.is_zero()
+        || root_account == neutral_sink
+        || root_account == rent.payer
+        || neutral_sink == rent.payer
+        || indexed_root_rent_minimum_lamports == 0
+        || rent.refundable_principal != indexed_root_rent_minimum_lamports
+        || rent.donation_floor != root_balance_before_lamports
+        || payer_balance_before_lamports < indexed_root_rent_minimum_lamports
+    {
+        return Err(CodecError::InvalidState);
+    }
+    let root_balance_after_lamports = root_balance_before_lamports
+        .checked_add(indexed_root_rent_minimum_lamports)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    prepare_indexed_root_rent_projection_v1(
+        IndexedSettlementRootRentModeV1::Fresh,
+        root_account,
+        *base,
+        *base,
+        0,
+        root_balance_before_lamports,
+        root_balance_after_lamports,
+        indexed_root_rent_minimum_lamports,
+        payer_balance_before_lamports,
+        neutral_sink,
+        backend,
+    )
+}
+
+/// Prepare an exact in-place 980-to-1,196-byte root upgrade.
+///
+/// Hostile prefunding never discounts principal. The persisted V1 payer funds
+/// the entire minimum increase; every pre-existing nonprincipal lamport becomes
+/// the successor's immutable donation floor.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_indexed_settlement_root_upgrade_rent_v1<B: Sha256BackendV1>(
+    base: &SettlementRootV1AccountV1,
+    root_account: Id32,
+    root_balance_before_lamports: u64,
+    indexed_root_rent_minimum_lamports: u64,
+    payer_balance_before_lamports: u64,
+    neutral_sink: Id32,
+    backend: &B,
+) -> Result<IndexedSettlementRootRentPreparationV1, CodecError> {
+    base.validate()?;
+    let before = base.root_rent();
+    before.validate()?;
+    if base.phase() != SettlementRootPhaseV1::Materializing
+        || root_account.is_zero()
+        || neutral_sink.is_zero()
+        || root_account == neutral_sink
+        || root_account == before.payer
+        || neutral_sink == before.payer
+        || indexed_root_rent_minimum_lamports <= before.refundable_principal
+    {
+        return Err(CodecError::InvalidState);
+    }
+    let donation_before_lamports = root_balance_before_lamports
+        .checked_sub(before.refundable_principal)
+        .ok_or(CodecError::InvalidState)?;
+    if donation_before_lamports < before.donation_floor {
+        return Err(CodecError::InvalidState);
+    }
+    let payer_debit_lamports = indexed_root_rent_minimum_lamports
+        .checked_sub(before.refundable_principal)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if payer_balance_before_lamports < payer_debit_lamports {
+        return Err(CodecError::InvalidState);
+    }
+    let after = DeletableRentOwnerV1 {
+        payer: before.payer,
+        refundable_principal: indexed_root_rent_minimum_lamports,
+        donation_floor: donation_before_lamports,
+    };
+    let base_after = base.with_indexed_root_rent(after)?;
+    let root_balance_after_lamports = root_balance_before_lamports
+        .checked_add(payer_debit_lamports)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    prepare_indexed_root_rent_projection_v1(
+        IndexedSettlementRootRentModeV1::Upgrade,
+        root_account,
+        *base,
+        base_after,
+        SETTLEMENT_ROOT_ACCOUNT_BYTES,
+        root_balance_before_lamports,
+        root_balance_after_lamports,
+        payer_debit_lamports,
+        payer_balance_before_lamports,
+        neutral_sink,
+        backend,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_indexed_root_rent_projection_v1<B: Sha256BackendV1>(
+    mode: IndexedSettlementRootRentModeV1,
+    root_account: Id32,
+    base_before: SettlementRootV1AccountV1,
+    base_after: SettlementRootV1AccountV1,
+    data_len_before: usize,
+    root_balance_before_lamports: u64,
+    root_balance_after_lamports: u64,
+    payer_debit_lamports: u64,
+    payer_balance_before_lamports: u64,
+    neutral_sink: Id32,
+    backend: &B,
+) -> Result<IndexedSettlementRootRentPreparationV1, CodecError> {
+    let before_id = base_before.data_id(backend, root_account)?;
+    let after_id = base_after.data_id(backend, root_account)?;
+    let before_len = u64::try_from(data_len_before).map_err(|_| CodecError::InvalidCount)?;
+    let after_len = u64::try_from(INDEXED_SETTLEMENT_ROOT_BYTES_V1)
+        .map_err(|_| CodecError::InvalidCount)?;
+    let rent = base_after.root_rent();
+    let projector_id = Id32::new(backend.sha256(&[
+        INDEXED_SETTLEMENT_ROOT_RENT_PROJECTOR_DOMAIN_V1,
+        &[INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG, INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION],
+        &[mode.code()],
+        &root_account.bytes(),
+        &before_id.bytes(),
+        &after_id.bytes(),
+        &before_len.to_le_bytes(),
+        &after_len.to_le_bytes(),
+        &root_balance_before_lamports.to_le_bytes(),
+        &root_balance_after_lamports.to_le_bytes(),
+        &payer_debit_lamports.to_le_bytes(),
+        &payer_balance_before_lamports.to_le_bytes(),
+        &rent.payer.bytes(),
+        &rent.refundable_principal.to_le_bytes(),
+        &rent.donation_floor.to_le_bytes(),
+        &neutral_sink.bytes(),
+    ]))?;
+    Ok(IndexedSettlementRootRentPreparationV1 {
+        mode,
+        root_account,
+        base_before,
+        base_after,
+        data_len_before,
+        root_balance_before_lamports,
+        root_balance_after_lamports,
+        payer_debit_lamports,
+        payer_balance_before_lamports,
+        neutral_sink,
+        projector_id,
+    })
+}
 
 /// Exhaustive lifecycle of the exact two-child index family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,6 +512,47 @@ pub struct IndexedSettlementRootTerminalProjectionV1 {
     plane_id: Id32,
     locator_data_id: Id32,
     adjacency_data_id: Id32,
+}
+
+/// Atomic indexed-root plus merge cash-pot activation plan.
+///
+/// This preserves the base contract's only lawful action-37 transition: the
+/// indexed-root postwrite cannot be obtained without the canonical cash-pot
+/// body, exact rent owner, account identity, and bump in the same typed plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IndexedActivateMergeCashPotPlanV1 {
+    root: IndexedSettlementRootV1AccountV1,
+    cash_pot_account: Id32,
+    cash_pot: SettlementCashPotV1,
+    rent: DeletableRentOwnerV1,
+    stored_bump: u8,
+}
+
+impl IndexedActivateMergeCashPotPlanV1 {
+    /// Indexed root successor latching the singleton cash pot live.
+    pub const fn root(&self) -> &IndexedSettlementRootV1AccountV1 {
+        &self.root
+    }
+
+    /// Exact canonical cash-pot PDA created atomically.
+    pub const fn cash_pot_account(&self) -> Id32 {
+        self.cash_pot_account
+    }
+
+    /// Canonical opening merge cash-pot body.
+    pub const fn cash_pot(&self) -> SettlementCashPotV1 {
+        self.cash_pot
+    }
+
+    /// Exact cash-pot rent/refund/donation owner.
+    pub const fn rent(&self) -> DeletableRentOwnerV1 {
+        self.rent
+    }
+
+    /// Stored canonical cash-pot PDA bump.
+    pub const fn stored_bump(&self) -> u8 {
+        self.stored_bump
+    }
 }
 
 impl IndexedSettlementRootTerminalProjectionV1 {
@@ -370,6 +771,29 @@ impl IndexedSettlementRootV1AccountV1 {
         Ok(value)
     }
 
+    /// Prepare the sole atomic merge cash-pot activation for the indexed root.
+    pub fn prepare_activate_merge_cash_pot(
+        &self,
+    ) -> Result<IndexedActivateMergeCashPotPlanV1, CodecError> {
+        self.validate()?;
+        if self.state != ExactIndexChildrenStateV1::Live {
+            return Err(CodecError::InvalidState);
+        }
+        let base = prepare_activate_merge_cash_pot_v1(&self.base)?;
+        let root = Self {
+            base: *base.root(),
+            ..*self
+        };
+        root.validate()?;
+        Ok(IndexedActivateMergeCashPotPlanV1 {
+            root,
+            cash_pot_account: base.cash_pot_account(),
+            cash_pot: base.cash_pot(),
+            rent: base.rent(),
+            stored_bump: base.stored_bump(),
+        })
+    }
+
     /// Atomically count both live siblings retired after the base graph is terminal.
     ///
     /// The runtime must close both exact accounts, transfer both rent principals
@@ -395,17 +819,17 @@ impl IndexedSettlementRootV1AccountV1 {
         Ok(value)
     }
 
-    /// Encode the exact disabled successor envelope and nested canonical Root V1.
+    /// Encode the exact reserved successor envelope and nested canonical Root V1.
     pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
         self.validate()?;
         let mut base = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
         self.base.encode(&mut base)?;
         let mut writer = Writer::exact(output, INDEXED_SETTLEMENT_ROOT_BYTES_V1)?;
-        writer.bytes(&INDEXED_SETTLEMENT_ROOT_MAGIC_V1)?;
-        writer.u8(INDEXED_SETTLEMENT_ROOT_SCHEMA_V1)?;
+        writer.u8(INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG)?;
+        writer.u8(INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION)?;
         writer.u8(self.state.code())?;
         writer.u8(0)?;
-        writer.bytes(&[0; 5])?;
+        writer.bytes(&[0; 12])?;
         writer.bytes(&base)?;
         for identity in [
             self.locator_account,
@@ -429,17 +853,17 @@ impl IndexedSettlementRootV1AccountV1 {
         writer.finish()
     }
 
-    /// Decode only the exact disabled successor schema and rerun every invariant.
+    /// Decode only the exact reserved successor schema and rerun every invariant.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, INDEXED_SETTLEMENT_ROOT_BYTES_V1)?;
-        if reader.array::<8>()? != INDEXED_SETTLEMENT_ROOT_MAGIC_V1 {
+        if reader.u8()? != INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if reader.u8()? != INDEXED_SETTLEMENT_ROOT_SCHEMA_V1 {
+        if reader.u8()? != INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION {
             return Err(CodecError::WrongVersion);
         }
         let state = ExactIndexChildrenStateV1::decode(reader.u8()?)?;
-        if reader.u8()? != 0 || reader.array::<5>()? != [0; 5] {
+        if reader.u8()? != 0 || reader.array::<12>()? != [0; 12] {
             return Err(CodecError::NonCanonicalPadding);
         }
         let base = SettlementRootV1AccountV1::decode(&reader.array::<SETTLEMENT_ROOT_ACCOUNT_BYTES>()?)?;
@@ -552,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn codec_refuses_historical_width_magic_version_and_reserved_bytes() {
+    fn codec_refuses_historical_width_tag_version_and_reserved_bytes() {
         assert_eq!(
             IndexedSettlementRootV1AccountV1::decode(&[0; INDEXED_SETTLEMENT_ROOT_BYTES_V1 - 1]),
             Err(CodecError::WrongLength)
@@ -562,15 +986,15 @@ mod tests {
             IndexedSettlementRootV1AccountV1::decode(&bytes),
             Err(CodecError::WrongTag)
         );
-        bytes[..8].copy_from_slice(&INDEXED_SETTLEMENT_ROOT_MAGIC_V1);
-        bytes[8] = 2;
+        bytes[0] = INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG;
+        bytes[1] = 3;
         assert_eq!(
             IndexedSettlementRootV1AccountV1::decode(&bytes),
             Err(CodecError::WrongVersion)
         );
-        bytes[8] = INDEXED_SETTLEMENT_ROOT_SCHEMA_V1;
-        bytes[9] = 1;
-        bytes[11] = 1;
+        bytes[1] = INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION;
+        bytes[2] = 1;
+        bytes[4] = 1;
         assert_eq!(
             IndexedSettlementRootV1AccountV1::decode(&bytes),
             Err(CodecError::NonCanonicalPadding)
