@@ -14,7 +14,7 @@ description = "Fail-closed SourceSeries operator construction with an opt-in loc
 [features]
 default = ["operator"]
 builder = ["dep:solana-keypair"]
-operator = ["dep:base64", "dep:serde", "dep:serde_json", "dep:sha2"]
+operator = ["dep:base64", "dep:serde", "dep:serde_json"]
 campaign = [
   "dep:clutch-sbf",
   "dep:clutch-sbf-svm-tests",
@@ -83,7 +83,7 @@ base64 = { version = "=0.22.1", optional = true }
 bincode = "=1.3.3"
 serde = { version = "=1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "=1.0.151", optional = true }
-sha2 = { version = "=0.10.9", optional = true }
+sha2 = "=0.10.9"
 
 # Same coherent host transaction stack as svm-tests/devnet-paces.
 solana-account = { version = "=4.3.2", optional = true }
