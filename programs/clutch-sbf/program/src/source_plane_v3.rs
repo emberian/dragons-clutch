@@ -28,6 +28,7 @@ use clutch_source_plane_v3::{
 use clutch_source_plane_v3_adapter::{PdaRecipeV3, MAX_PDA_SEEDS};
 use clutch_source_plane_v3_runtime::{
     account_data_id, authenticate_boundary, authenticate_evaluation_authority,
+    authenticate_persisted_window_evidence,
     authenticate_open_raw_page_account, authenticate_raw_page_account,
     authenticate_receiver_route_v2, authenticate_reopen_lineage_account,
     authenticate_source_generation_request, authenticate_source_head_account,
@@ -43,8 +44,9 @@ use clutch_source_plane_v3_runtime::{
     AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
-    ClockSnapshotV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, LineageAccessV1,
-    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, OccurrenceWindowReceiptV1,
+    ClockSnapshotV1, DeploymentBindingV1, EvaluationReleaseBindingV1,
+    FailurePolicySourceHandoffV1, LineageAccessV1, OccurrenceDispositionV1,
+    OccurrenceSourceReceiptV1, OccurrenceWindowReceiptV1,
     ParserOutputV1, ReopenLineageV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
     SourceGenerationRequestV1,
     SourceReceiptDispositionV1, SourceReleaseManifestV2, SourceWorkReceiptAccessV1,
@@ -61,8 +63,14 @@ use solana_pubkey::Pubkey;
 
 use crate::accounts::Outcome;
 use crate::error::{ClutchError, Refusal};
+use crate::loader_state::{
+    decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_SLOT_OFFSET, PROGRAM_LINK_OFFSET,
+    UPGRADEABLE_LOADER_ID,
+};
 use crate::source_identity::CLOCK_SYSVAR_ID;
-use crate::source_v2::auth::{decode_clock_view, AccountViewV2, AuthV2Error};
+
+const CLOCK_SYSVAR_BYTES_V1: usize = 40;
+const CLOCK_UNIX_TIMESTAMP_OFFSET_V1: usize = 32;
 
 const INSTRUCTION_DATA_DOMAIN: &[u8] = b"dragons-clutch/sbf-instruction-data/v1";
 const ACCOUNT_VECTOR_DOMAIN: &[u8] = b"dragons-clutch/sbf-account-vector/v1";
@@ -163,8 +171,6 @@ pub enum SourceV3SbfError {
     AccountBorrow,
     /// The canonical Clock account was not supplied read-only.
     WrongClockAccount,
-    /// The canonical Clock decoder or signed-to-unsigned projection refused.
-    Clock(AuthV2Error),
     /// The portable SourcePlane account/runtime contract refused.
     Runtime(clutch_source_plane_v3_runtime::Error),
     /// The canonical SourcePlane PDA recipe refused.
@@ -220,7 +226,6 @@ impl From<SourceV3SbfError> for Refusal {
         let error = match value {
             SourceV3SbfError::AccountBorrow => ClutchError::AccountBorrowFailed,
             SourceV3SbfError::WrongClockAccount => ClutchError::MismatchedState,
-            SourceV3SbfError::Clock(_) => ClutchError::SourceAdmissionFailed,
             SourceV3SbfError::Runtime(
                 clutch_source_plane_v3_runtime::Error::ArithmeticOverflow,
             ) => ClutchError::Arithmetic,
@@ -688,6 +693,95 @@ pub fn authenticate_window_seal(
     .map_err(Into::into)
 }
 
+/// Authenticate a durable WindowSeal account as the exact evidence admitted
+/// by action 9 under the current release and mature Clock.
+pub fn authenticate_persisted_window_evidence_account(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    seal_account: &AccountInfo<'_>,
+    clock: AuthenticatedClockBucketV1,
+    window: &WindowSpecV3,
+) -> SourceV3SbfResult<AuthenticatedWindowEvidenceV1> {
+    if clock.policy_id() != route.clock_policy_id() {
+        return Err(SourceV3SbfError::WrongClockAccount);
+    }
+    let seal = authenticate_window_seal(program_id, route, seal_account, window)?;
+    authenticate_persisted_window_evidence(
+        route,
+        &route.source_plane(),
+        &route.clock_policy(),
+        clock.snapshot(),
+        window,
+        seal,
+    )
+    .map_err(Into::into)
+}
+
+/// Derive action 9's evaluator release binding only from the presented
+/// Upgradeable Loader Program/ProgramData accounts, then require both the
+/// SummaryProgram deployment digest and the Source release's complete
+/// deployment-plus-semantics digest to match.
+pub fn authenticate_evaluation_release_binding(
+    route: AuthenticatedSourceRouteV1,
+    summary: SummaryProgramV3,
+    evaluator_program: &AccountInfo<'_>,
+    evaluator_programdata: &AccountInfo<'_>,
+) -> SourceV3SbfResult<EvaluationReleaseBindingV1> {
+    if evaluator_program.is_signer
+        || evaluator_program.is_writable
+        || evaluator_programdata.is_signer
+        || evaluator_programdata.is_writable
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::WrongPrivilege.into());
+    }
+    let program_data = evaluator_program
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let programdata_data = evaluator_programdata
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let decoded = decode_loader_pair_v1(
+        LoaderAccountViewV1::new(
+            evaluator_program.key.to_bytes(),
+            evaluator_program.owner.to_bytes(),
+            evaluator_program.executable,
+            &program_data,
+        ),
+        LoaderAccountViewV1::new(
+            evaluator_programdata.key.to_bytes(),
+            evaluator_programdata.owner.to_bytes(),
+            evaluator_programdata.executable,
+            &programdata_data,
+        ),
+    )
+    .map_err(|_| SourceV3SbfError::WrongEvaluatorProgram)?;
+    let deployment = DeploymentBindingV1 {
+        program: runtime_key(evaluator_program.key),
+        program_account_data_id: account_data_id(runtime_key(evaluator_program.key), &program_data)?,
+        programdata: runtime_key(evaluator_programdata.key),
+        programdata_account_data_id: account_data_id(
+            runtime_key(evaluator_programdata.key),
+            &programdata_data,
+        )?,
+        loader: RuntimeKey::from_bytes(UPGRADEABLE_LOADER_ID),
+        programdata_link_offset: u16::try_from(PROGRAM_LINK_OFFSET)
+            .map_err(|_| clutch_source_plane_v3_runtime::Error::ArithmeticOverflow)?,
+        deployment_slot_offset: u16::try_from(PROGRAMDATA_SLOT_OFFSET)
+            .map_err(|_| clutch_source_plane_v3_runtime::Error::ArithmeticOverflow)?,
+        deployment_slot: decoded.state.deployment_slot,
+    };
+    let binding = EvaluationReleaseBindingV1 {
+        deployment,
+        summary_program_id: summary.id()?,
+    };
+    if deployment.id()? != summary.evaluator_release_id
+        || binding.id()? != route.evaluation_release_id()
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    Ok(binding)
+}
+
 /// Authenticate one globally tagged immutable StatisticResult PDA.
 #[allow(clippy::too_many_arguments)]
 pub fn authenticate_result_account(
@@ -843,6 +937,29 @@ pub fn authenticate_generation_request(
     .map_err(Into::into)
 }
 
+fn decode_current_clock_snapshot(
+    clock_account: &AccountInfo<'_>,
+    data: &[u8],
+) -> SourceV3SbfResult<ClockSnapshotV1> {
+    if clock_account.owner.to_bytes() != crate::instructions_sysvar::SYSVAR_OWNER_ID
+        || clock_account.executable
+        || data.len() != CLOCK_SYSVAR_BYTES_V1
+    {
+        return Err(SourceV3SbfError::WrongClockAccount);
+    }
+    let mut slot = [0_u8; 8];
+    slot.copy_from_slice(&data[..8]);
+    let mut unix_timestamp = [0_u8; 8];
+    unix_timestamp.copy_from_slice(
+        &data[CLOCK_UNIX_TIMESTAMP_OFFSET_V1..CLOCK_UNIX_TIMESTAMP_OFFSET_V1 + 8],
+    );
+    Ok(ClockSnapshotV1 {
+        slot: u64::from_le_bytes(slot),
+        unix_timestamp: u64::try_from(i64::from_le_bytes(unix_timestamp))
+            .map_err(|_| SourceV3SbfError::WrongClockAccount)?,
+    })
+}
+
 /// Derive a policy-bound current bucket from the canonical Solana Clock account.
 pub fn authenticate_clock_bucket(
     release: AuthenticatedSourceReleaseV1,
@@ -857,21 +974,10 @@ pub fn authenticate_clock_bucket(
     let data = clock_account
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
-    let clock = decode_clock_view(AccountViewV2::new(
-        clock_account.key.to_bytes(),
-        clock_account.owner.to_bytes(),
-        clock_account.executable,
-        &data,
-    ))
-    .map_err(SourceV3SbfError::Clock)?;
-    let unix_timestamp =
-        u64::try_from(clock.unix_timestamp).map_err(|_| SourceV3SbfError::WrongClockAccount)?;
+    let clock = decode_current_clock_snapshot(clock_account, &data)?;
     AuthenticatedClockBucketV1::from_snapshot(
         &release.clock_policy(),
-        ClockSnapshotV1 {
-            slot: clock.slot,
-            unix_timestamp,
-        },
+        clock,
     )
     .map_err(Into::into)
 }
@@ -891,23 +997,8 @@ pub fn authenticate_route_clock_bucket(
     let data = clock_account
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
-    let clock = decode_clock_view(AccountViewV2::new(
-        clock_account.key.to_bytes(),
-        clock_account.owner.to_bytes(),
-        clock_account.executable,
-        &data,
-    ))
-    .map_err(SourceV3SbfError::Clock)?;
-    let unix_timestamp =
-        u64::try_from(clock.unix_timestamp).map_err(|_| SourceV3SbfError::WrongClockAccount)?;
-    AuthenticatedClockBucketV1::from_snapshot(
-        &route.clock_policy(),
-        ClockSnapshotV1 {
-            slot: clock.slot,
-            unix_timestamp,
-        },
-    )
-    .map_err(Into::into)
+    let clock = decode_current_clock_snapshot(clock_account, &data)?;
+    AuthenticatedClockBucketV1::from_snapshot(&route.clock_policy(), clock).map_err(Into::into)
 }
 
 /// Authenticate Product's exact occurrence PDA/body and join it to Source semantics.

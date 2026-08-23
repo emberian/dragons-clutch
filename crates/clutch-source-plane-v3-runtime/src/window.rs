@@ -25,6 +25,8 @@ const WORK_STATE_DOMAIN: &[u8] = b"dragons-clutch/window-work-state/v1";
 const SEAL_ACCOUNT_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-seal-account/v1";
 const FOLD_DOMAIN: &[u8] = b"dragons-clutch/window-page-fold-batch/v1";
 const WINDOW_EVIDENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-evidence/v1";
+const PERSISTED_WINDOW_EVIDENCE_DOMAIN: &[u8] =
+    b"dragons-clutch/authenticated-persisted-window-evidence/v1";
 const EVALUATION_AUTHORITY_DOMAIN: &[u8] = b"dragons-clutch/evaluation-authority/v1";
 const EVALUATION_RELEASE_DOMAIN: &[u8] =
     b"dragons-clutch/source-evaluation-release-binding/v1";
@@ -430,6 +432,72 @@ pub fn seal_authenticated_window(
         seal,
         evidence_id,
     })
+}
+
+/// Re-authenticate the durable action-8 WindowSeal as evaluation evidence.
+///
+/// The ephemeral page/work receipt used to create the seal intentionally does
+/// not cross transactions. The immutable seal carries every field needed to
+/// reconstruct its canonical closure receipt; matching that reconstructed
+/// receipt to `closure_receipt_id`, the content-addressed seal account, the
+/// exact release, and a mature Clock snapshot is the durable action-9
+/// authority.
+pub fn authenticate_persisted_window_evidence(
+    route: AuthenticatedSourceRouteV1,
+    source_plane: &SourcePlaneProgramV3,
+    clock_policy: &ClockPolicyV1,
+    clock: ClockSnapshotV1,
+    window: &WindowSpecV3,
+    authenticated_seal: AuthenticatedWindowSealAccountV1,
+) -> Result<AuthenticatedWindowEvidenceV1> {
+    source_plane.validate()?;
+    validate_window_route(route, window)?;
+    if source_plane.id()? != route.source_plane_contract_id()
+        || clock_policy.id()? != route.clock_policy_id()
+        || clock.unix_timestamp < clock_policy.bucket_timestamp(window.maturity_bucket_exclusive)?
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let seal = authenticated_seal.seal();
+    let closure = reconstruct_persisted_window_closure(window, &seal)?;
+    seal.validate_against(window)?;
+    let mut bytes = [0_u8; 208];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&route.release_authentication_id().bytes());
+    bytes[64..96].copy_from_slice(&authenticated_seal.id().bytes());
+    bytes[96..128].copy_from_slice(&closure.id()?.bytes());
+    bytes[128..160].copy_from_slice(&seal.id()?.bytes());
+    bytes[160..192].copy_from_slice(&window.id()?.bytes());
+    bytes[192..200].copy_from_slice(&clock.slot.to_le_bytes());
+    bytes[200..208].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+    Ok(AuthenticatedWindowEvidenceV1 {
+        route_id: route.route_id(),
+        source_spec_id: window.source_spec_id,
+        source_plane_contract_id: window.source_plane_program_id,
+        window_id: window.id()?,
+        repair_generation: window.repair_generation,
+        closure,
+        seal,
+        evidence_id: domain_id(PERSISTED_WINDOW_EVIDENCE_DOMAIN, &bytes),
+    })
+}
+
+fn reconstruct_persisted_window_closure(
+    window: &WindowSpecV3,
+    seal: &WindowSealV3,
+) -> Result<WindowClosureReceiptV3> {
+    let closure = WindowClosureReceiptV3 {
+        source_plane_program_id: window.source_plane_program_id,
+        source_spec_id: window.source_spec_id,
+        maturity_page_id: seal.last_page_id,
+        sealed_boundary_bucket: seal.sealed_boundary_bucket,
+        repair_generation: window.repair_generation,
+    };
+    closure.validate_against(window, seal.last_page_id, seal.sealed_boundary_bucket)?;
+    if closure.id()? != seal.closure_receipt_id {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(closure)
 }
 
 /// Reviewed evaluator deployment plus its exact summary-program semantic owner.
@@ -1798,3 +1866,62 @@ fn window_work_state_id(work: &WindowWorkV3) -> Result<ContentId> {
 
 const _: () = assert!(RAW_PAGE_BYTES == 2_152);
 const _: () = assert!(WINDOW_SEAL_BYTES == 192);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clutch_source_plane_v3::COVERAGE_COMPLETE_REQUIRED;
+
+    fn id(seed: u8) -> ContentId {
+        ContentId::from_bytes([seed; 32])
+    }
+
+    fn window() -> WindowSpecV3 {
+        WindowSpecV3 {
+            source_spec_id: id(1),
+            source_plane_program_id: id(2),
+            start_bucket: 10,
+            end_bucket_exclusive: 12,
+            maturity_bucket_exclusive: 12,
+            repair_generation: 3,
+            coverage_policy_id: COVERAGE_COMPLETE_REQUIRED,
+            coverage_policy_parameter: 0,
+        }
+    }
+
+    fn seal(window: &WindowSpecV3) -> WindowSealV3 {
+        let closure = WindowClosureReceiptV3 {
+            source_plane_program_id: window.source_plane_program_id,
+            source_spec_id: window.source_spec_id,
+            maturity_page_id: id(4),
+            sealed_boundary_bucket: 12,
+            repair_generation: window.repair_generation,
+        };
+        WindowSealV3 {
+            window_id: window.id().unwrap(),
+            first_page_id: id(4),
+            last_page_id: id(4),
+            record_stream_root: id(5),
+            closure_receipt_id: closure.id().unwrap(),
+            sealed_boundary_bucket: 12,
+            accepted_count: 2,
+            gap_count: 0,
+            evidence_page_count: 1,
+        }
+    }
+
+    #[test]
+    fn persisted_seal_reconstructs_exact_closure_and_rejects_forged_id() {
+        let window = window();
+        let mut seal = seal(&window);
+        let closure = reconstruct_persisted_window_closure(&window, &seal).unwrap();
+        assert_eq!(closure.maturity_page_id, seal.last_page_id);
+        assert_eq!(closure.sealed_boundary_bucket, seal.sealed_boundary_bucket);
+
+        seal.closure_receipt_id = id(9);
+        assert_eq!(
+            reconstruct_persisted_window_closure(&window, &seal),
+            Err(Error::MismatchedBinding)
+        );
+    }
+}

@@ -9,26 +9,34 @@ use super::source_series::require_live_intent;
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::source_plane_v3::{
-    authenticate_head, authenticate_lineage, authenticate_occurrence_window,
-    authenticate_open_page, authenticate_raw_page, authenticate_route,
-    authenticate_route_clock_bucket, authenticate_window_spec_input, authenticate_window_work,
-    runtime_key,
+    authenticate_evaluation_release_binding, authenticate_head, authenticate_lineage,
+    authenticate_occurrence, authenticate_occurrence_window, authenticate_open_page,
+    authenticate_persisted_window_evidence_account, authenticate_raw_page, authenticate_route,
+    authenticate_route_clock_bucket, authenticate_statistic_key_input,
+    authenticate_summary_program_input, authenticate_window_spec_input, authenticate_window_work,
+    invoke_statistic_evaluator, runtime_key,
 };
 use crate::source_plane_v3_actions::{
     apply_source_work_liveness, authenticate_source_work_schedule_artifact, bind_work_execution,
-    fold_window_pages, initialize_window_work, seal_raw_page, seal_window,
+    fold_window_pages, initialize_window_work, persist_evaluation_result, seal_raw_page,
+    seal_window,
 };
 use clutch_source_plane_v3::ContentId;
 use clutch_source_plane_v3_adapter::{
-    project_runtime_fold_window_page, project_runtime_initialize_window_work,
-    project_runtime_seal_raw_page, project_runtime_seal_window, IntentPreimageV3,
-    RuntimeCloseProjectionV1, RuntimeCreationProjectionV1, RuntimeMutationProjectionV1,
+    project_runtime_evaluate_statistic, project_runtime_fold_window_page,
+    project_runtime_initialize_window_work, project_runtime_seal_raw_page,
+    project_runtime_seal_window, IntentPreimageV3, RuntimeCloseProjectionV1,
+    RuntimeCreationProjectionV1, RuntimeMutationProjectionV1,
 };
 use clutch_source_plane_v3_runtime::{
     LineageAccessV1, OccurrenceDispositionV1, SourceWorkKindV1,
 };
 use solana_account_info::AccountInfo;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+const EVALUATOR_REQUEST_MAGIC_V1: [u8; 8] = *b"DCSPEV01";
+const EVALUATOR_REQUEST_BYTES_V1: usize = 256;
 
 /// Execute action 5 as one rollback domain: authenticate both mutable
 /// generations, freeze an immutable page, advance SourceHead, close the
@@ -540,6 +548,234 @@ pub(super) fn process_seal_window(
         &accounts[19],
         &accounts[20],
         &accounts[21],
+    )?;
+    Ok(())
+}
+
+fn evaluator_instruction_v1(
+    evaluator_program: &Pubkey,
+    window_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    summary_account: &AccountInfo<'_>,
+    seal_account: &AccountInfo<'_>,
+    route_id: ContentId,
+    occurrence_id: ContentId,
+    window_id: ContentId,
+    statistic_key_id: ContentId,
+    summary_id: ContentId,
+    seal_id: ContentId,
+    evidence_id: ContentId,
+    clock_slot: u64,
+    clock_unix_timestamp: u64,
+) -> Instruction {
+    let mut data = std::vec![0_u8; EVALUATOR_REQUEST_BYTES_V1];
+    data[..8].copy_from_slice(&EVALUATOR_REQUEST_MAGIC_V1);
+    data[8..10].copy_from_slice(&1_u16.to_le_bytes());
+    data[16..48].copy_from_slice(&route_id.bytes());
+    data[48..80].copy_from_slice(&occurrence_id.bytes());
+    data[80..112].copy_from_slice(&window_id.bytes());
+    data[112..144].copy_from_slice(&statistic_key_id.bytes());
+    data[144..176].copy_from_slice(&summary_id.bytes());
+    data[176..208].copy_from_slice(&seal_id.bytes());
+    data[208..240].copy_from_slice(&evidence_id.bytes());
+    data[240..248].copy_from_slice(&clock_slot.to_le_bytes());
+    data[248..256].copy_from_slice(&clock_unix_timestamp.to_le_bytes());
+    Instruction {
+        program_id: *evaluator_program,
+        accounts: std::vec![
+            AccountMeta::new_readonly(*window_account.key, false),
+            AccountMeta::new_readonly(*statistic_key_account.key, false),
+            AccountMeta::new_readonly(*summary_account.key, false),
+            AccountMeta::new_readonly(*seal_account.key, false),
+        ],
+        data,
+    }
+}
+
+/// Execute action 9 from the current release's exact evaluator Program,
+/// ProgramData/ELF, SummaryProgram semantics, persisted action-8 seal, and
+/// Product occurrence. The CPI request contains no caller-provided semantic
+/// coordinates and the result/work/liveness writes share one rollback domain.
+pub(super) fn process_evaluate_statistic(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    intent: IntentPreimageV3,
+) -> Outcome<()> {
+    require(sequence != 0, ClutchError::Replay)?;
+    let call_ordinal =
+        u32::try_from(sequence).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let route = authenticate_route(
+        program_id,
+        &accounts[0],
+        &accounts[1],
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &accounts[5],
+        &accounts[6],
+    )
+    .map_err(Refusal::from)?;
+    let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
+    require(
+        runtime_key(accounts[22].key) == schedule.payer(),
+        ClutchError::MismatchedState,
+    )?;
+    require_live_intent(program_id, &accounts[21], intent)?;
+    let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
+    let window_input = authenticate_window_spec_input(program_id, route, &accounts[10])
+        .map_err(Refusal::from)?;
+    let summary_input = authenticate_summary_program_input(program_id, route, &accounts[12])
+        .map_err(Refusal::from)?;
+    let statistic_key_input = authenticate_statistic_key_input(
+        program_id,
+        route,
+        &accounts[11],
+        window_input,
+        summary_input,
+    )
+    .map_err(Refusal::from)?;
+    let window = window_input.window();
+    let summary = summary_input.summary();
+    let key = statistic_key_input.key();
+    let occurrence = authenticate_occurrence(
+        program_id,
+        route,
+        &accounts[9],
+        OccurrenceDispositionV1::ExactExisting,
+        &window,
+        &key,
+    )
+    .map_err(Refusal::from)?;
+    let evidence = authenticate_persisted_window_evidence_account(
+        program_id,
+        route,
+        &accounts[13],
+        clock,
+        &window,
+    )
+    .map_err(Refusal::from)?;
+    let binding = authenticate_evaluation_release_binding(
+        route,
+        summary,
+        &accounts[14],
+        &accounts[15],
+    )
+    .map_err(Refusal::from)?;
+    let evaluator_instruction = evaluator_instruction_v1(
+        accounts[14].key,
+        &accounts[10],
+        &accounts[11],
+        &accounts[12],
+        &accounts[13],
+        route.route_id(),
+        occurrence.id(),
+        window.id().map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?,
+        key.id().map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?,
+        summary
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?,
+        evidence
+            .seal()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?,
+        evidence.id(),
+        clock.snapshot().slot,
+        clock.snapshot().unix_timestamp,
+    );
+    let evaluator_accounts = [
+        accounts[10].clone(),
+        accounts[11].clone(),
+        accounts[12].clone(),
+        accounts[13].clone(),
+        accounts[14].clone(),
+    ];
+    let evaluation = invoke_statistic_evaluator(
+        route,
+        binding,
+        summary,
+        &accounts[14],
+        &accounts[15],
+        clock.snapshot(),
+        &window,
+        &key,
+        evidence,
+        &evaluator_instruction,
+        &evaluator_accounts,
+    )
+    .map_err(Refusal::from)?;
+    let result = persist_evaluation_result(
+        program_id,
+        route,
+        &key,
+        evidence,
+        evaluation,
+        &accounts[22],
+        &accounts[16],
+        &accounts[17],
+        &accounts[23],
+        &accounts[24],
+    )?;
+    let ledger = result.funding.ledger;
+    let evaluation_authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/source-evaluation-action-authority/v1",
+            &occurrence.id().bytes(),
+            &window_input.id().bytes(),
+            &summary_input.id().bytes(),
+            &statistic_key_input.id().bytes(),
+            &evidence.id().bytes(),
+            &evaluation.id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    let plan = project_runtime_evaluate_statistic(
+        &route.source_plane(),
+        &window,
+        &key,
+        &summary,
+        &evidence.seal(),
+        &evaluation.result(),
+        RuntimeCreationProjectionV1 {
+            account_data_id: result.account_data_id,
+            generation: result.header.generation,
+            payer: ContentId::from_bytes(ledger.principal_recipient.bytes()),
+            rent_principal_lamports: ledger.payer_principal_lamports,
+        },
+        evaluation_authentication_id,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    intent
+        .validate_for_program(ContentId::from_bytes(program_id.to_bytes()), plan)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let semantic_receipt_id = plan
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let kind = SourceWorkKindV1::EvaluateStatistic;
+    let ceiling = schedule.ceiling_for(kind);
+    let work = bind_work_execution(
+        program_id,
+        route,
+        schedule,
+        kind,
+        semantic_receipt_id,
+        &accounts[18],
+        call_ordinal,
+        ceiling,
+        accounts[21].key,
+        ceiling,
+        &accounts[22],
+        &accounts[23],
+        &accounts[24],
+    )?;
+    apply_source_work_liveness(
+        program_id,
+        route,
+        work,
+        &accounts[19],
+        &accounts[20],
+        &accounts[21],
+        &accounts[22],
     )?;
     Ok(())
 }

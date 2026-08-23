@@ -701,6 +701,80 @@ fn promoted_window_seal_projection_binds_evidence_and_close_split() {
 }
 
 #[test]
+fn promoted_evaluation_projection_binds_result_semantics_and_exact_postimage() {
+    let plane = source_plane();
+    let summary = summary();
+    let (window, page) = page_and_window();
+    let work = WindowWorkV3::new(&window)
+        .unwrap()
+        .push_page(&window, &page)
+        .unwrap();
+    let closure = WindowClosureReceiptV3::from_page(&plane, &window, &page).unwrap();
+    let seal = work.finish(&window, &closure).unwrap();
+    let key = StatisticKeyV3 {
+        window_id: window.id().unwrap(),
+        summary_program_id: summary.id().unwrap(),
+        statistic: StatisticKindV3::TerminalInterval,
+    };
+    let result = StatisticResultV3::terminal(&key, &summary, &seal, &window, 70, 120).unwrap();
+    let runtime = RuntimeCreationProjectionV1 {
+        account_data_id: id(42),
+        generation: 1,
+        payer: id(43),
+        rent_principal_lamports: 900,
+    };
+    let plan = project_runtime_evaluate_statistic(
+        &plane,
+        &window,
+        &key,
+        &summary,
+        &seal,
+        &result,
+        runtime,
+        id(44),
+    )
+    .unwrap();
+    assert_eq!(plan.action(), TransitionActionV3::WriteTerminalResult);
+    assert_eq!((plan.mutation_count(), plan.creation_count(), plan.close_count()), (0, 1, 0));
+    assert_eq!(
+        plan.creation(0).unwrap().state.binding_id(),
+        PdaRecipeV3::statistic_result(key.id().unwrap())
+            .unwrap()
+            .id()
+            .unwrap()
+    );
+    assert_eq!(
+        project_runtime_evaluate_statistic(
+            &plane,
+            &window,
+            &key,
+            &summary,
+            &seal,
+            &result,
+            runtime,
+            ContentId::ZERO,
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+    assert_eq!(
+        project_runtime_evaluate_statistic(
+            &plane,
+            &window,
+            &key,
+            &summary,
+            &seal,
+            &result,
+            RuntimeCreationProjectionV1 {
+                payer: ContentId::ZERO,
+                ..runtime
+            },
+            id(44),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+}
+
+#[test]
 fn window_core_requires_v3_maturity_while_adapter_reads_remain_opaque() {
     let plane = source_plane();
     let (window, page) = page_and_window();

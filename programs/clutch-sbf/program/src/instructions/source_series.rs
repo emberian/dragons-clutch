@@ -99,6 +99,11 @@ pub fn process(
                 program_id, accounts, sequence, intent,
             )
         }
+        (SourceSeriesAction::EvaluateStatistic, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_evaluate_statistic(
+                program_id, accounts, sequence, intent,
+            )
+        }
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }

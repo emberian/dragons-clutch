@@ -69,7 +69,8 @@ pub use lineage::{
     REOPEN_LINEAGE_V2_BYTES,
 };
 pub use window::{
-    authenticate_evaluation_authority, authenticate_raw_page_account,
+    authenticate_evaluation_authority, authenticate_persisted_window_evidence,
+    authenticate_raw_page_account,
     authenticate_statistic_result, authenticate_statistic_result_absence,
     authenticate_statistic_result_account, authenticate_window_seal_account,
     authenticate_window_work_account, fold_authenticated_pages, join_source_occurrence,

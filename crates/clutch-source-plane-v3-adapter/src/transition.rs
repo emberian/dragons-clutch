@@ -1,8 +1,9 @@
 use clutch_source_plane_v3::{
     CompiledInstanceV3, ContentId, DrawdownSummaryV3, LiquidityEnvelopeV3, OpenRawPageV3,
     PartitionViewV3, PayoutTableV3, ProductTemplateV3, RawPageV3, RawRecordV3, SeriesFundingV3,
-    SeriesPlanV3, SourceHeadV3, SourcePlaneProgramV3, StatisticKeyV3, StatisticResultV3,
-    SummaryProgramV3, WindowClosureReceiptV3, WindowSealV3, WindowSpecV3, WindowWorkV3,
+    SeriesPlanV3, SourceHeadV3, SourcePlaneProgramV3, StatisticKeyV3, StatisticKindV3,
+    StatisticResultV3, SummaryProgramV3, WindowClosureReceiptV3, WindowSealV3, WindowSpecV3,
+    WindowWorkV3,
     WorkEnvelopeV3, DRAWDOWN_SUMMARY_BYTES, INSTANCE_DESCRIPTOR_BYTES, OPEN_RAW_PAGE_BYTES,
     SERIES_FUNDING_BYTES, SERIES_PLAN_BYTES, SOURCE_HEAD_BYTES, STATISTIC_RESULT_BYTES,
     WINDOW_SEAL_BYTES, WINDOW_WORK_BYTES,
@@ -1238,6 +1239,57 @@ pub fn project_runtime_seal_window(
         payer_principal_lamports: work_runtime.payer_principal_lamports,
         neutral_sink: work_runtime.neutral_sink,
         neutral_surplus_lamports: work_runtime.neutral_surplus_lamports,
+    })?;
+    plan.finish()
+}
+
+/// Recompute action 9 from the exact release-authenticated evaluator result
+/// and promoted immutable StatisticResult postimage.
+#[allow(clippy::too_many_arguments)]
+pub fn project_runtime_evaluate_statistic(
+    source_plane: &SourcePlaneProgramV3,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    summary: &SummaryProgramV3,
+    seal: &WindowSealV3,
+    result: &StatisticResultV3,
+    result_runtime: RuntimeCreationProjectionV1,
+    evaluation_authentication_id: ContentId,
+) -> Result<TransitionPlanV3> {
+    source_plane.validate()?;
+    window.validate()?;
+    key.validate()?;
+    summary.validate()?;
+    seal.validate_against(window)?;
+    result.validate_against(key, summary, seal, window)?;
+    if source_plane.id()? != window.source_plane_program_id
+        || key.window_id != window.id()?
+        || key.summary_program_id != summary.id()?
+        || result_runtime.account_data_id.is_zero()
+        || result_runtime.generation == 0
+        || result_runtime.payer.is_zero() != (result_runtime.rent_principal_lamports == 0)
+        || evaluation_authentication_id.is_zero()
+    {
+        return Err(Error::InvalidParameter);
+    }
+    let action = match key.statistic {
+        StatisticKindV3::TerminalInterval => TransitionActionV3::WriteTerminalResult,
+        StatisticKindV3::MaximumDrawdownInterval => TransitionActionV3::WriteDrawdownResult,
+    };
+    let binding_id = PdaRecipeV3::statistic_result(key.id()?)?.id()?;
+    let mut plan = TransitionPlanV3::new(action, evaluation_authentication_id);
+    plan.push_creation(AccountCreationV3 {
+        state: AccountStateV3::new(
+            AccountFamilyV3::StatisticResult,
+            binding_id,
+            result_runtime.account_data_id,
+            result_runtime.generation,
+        )?,
+        payer: result_runtime.payer,
+        rent_principal_lamports: result_runtime.rent_principal_lamports,
+        creation_budget_lamports: 0,
+        prepaid_work_lamports: 0,
+        liquidity_collateral: 0,
     })?;
     plan.finish()
 }
