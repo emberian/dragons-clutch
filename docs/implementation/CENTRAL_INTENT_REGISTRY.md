@@ -172,7 +172,8 @@ or pure runtime elsewhere does not make a route executable.
 | `0x7e/1` | Dealer | immutable policy |
 | `0x7f/1` | Recurring Series | registry |
 | `0x80/1` | Recurring Series | present-funding compartments |
-| `0x81/1` | General V2 | owner settlement |
+| `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
+| `0x81/2` | General V2 | presence-explicit owner settlement V2; sole future row |
 | `0x82/1` | General V2 | selected fee record |
 | `0x83/1` | General V2 | owner fee carry |
 | `0x84/1` | General V2 | payer allocation |

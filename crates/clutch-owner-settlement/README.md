@@ -14,9 +14,13 @@ Egg movements remain receipt-exact. An SBF adapter must authenticate every
 receipt/order membership, reconcile reservation funding and Position bytes,
 and consume every receipt/root count before closing the epoch.
 
-The semantic body is exactly 288 bytes. Its outer General V2 account
-tag/version remains centrally owned and unallocated in this isolated lane, so
-the codec cannot accidentally make the runtime capability live by itself.
+The presence-explicit V2 semantic body remains exactly 288 bytes. Central
+coordinates `0x81/2` select it; `0x81/1` remains withdrawn and no decoder
+aliases the versions. V2 reuses one of V1's three trailing padding bytes as a
+canonical bitmap: expected buy, expected sell, consumed buy, consumed sell.
+The remaining two bytes must be zero. A set bit makes an exact zero value real;
+an unset bit requires the corresponding integer field to be zero. Unknown bits,
+consumed-without-expected sides, and nonzero padding are refused.
 
 The fixed-capacity builder recomputes those rows from the complete authenticated
 filled-order set plus one explicit fee row per participating owner. It refuses
@@ -25,8 +29,8 @@ reservations, or any mismatch with the candidate's owner count, buy/sell
 price-unit totals, fee atoms, rounding pot, and receipt-end count. Output rows
 are lexicographically owner-sorted for canonical account creation and paging.
 
-The account-neutral adapter contract binds each row to the ordered
-`owner-settlement:v1`, Epoch, final-candidate, owner PDA preimage; creates it
+The account-neutral successor binds each future row to the ordered
+`owner-settlement:v2`, Epoch, final-candidate, owner PDA preimage; creates it
 with pre-fund-safe rent ownership; and stages each receipt-end accounting latch
 without moving Eggs. Accounting uses a receipt-scoped `receipt_accounting_id`;
 delivery uses a distinct `delivery_transition_id`, so neither replay latch can
@@ -43,6 +47,22 @@ The pot may become allocation-complete, but no API retires it or the rows: the
 distinct General V2 FinalPot terminal/disposition authority is not yet owned,
 and rounding or virtual-claim principal cannot be sent to the neutral donation
 sink.
+
+The candidate projection emits one presence-explicit receipt shape for all
+three routes: direct, virtual split to a real buyer, and a real seller to a
+virtual merge. Price and consideration are present even when their exact value
+is zero, and consideration must still equal `quantity * price`. Receipt,
+accounting, and delivery identities remain nonzero and distinct. The pure V2
+projection derives one receipt-prestate data ID over its exact canonical
+344-byte transcript, including both latch masks; Replay therefore binds the
+semantic receipt prestate rather than a detached authorization flag. The pure V2
+projection does not activate action 25: its eventual handler must atomically
+advance the canonical Reservation accounting state, reserved-cash handoff,
+receipt latch, and V2 owner row.
+V2 cash realization is likewise intentionally unavailable until action 38
+consumes the fee runtime's private typed terminal projection (selected fee,
+carry, payer allocation, immutable fee receipt, and payer-allocation close) in
+the same atomic plan. A caller-supplied authorization boolean is not authority.
 
 The successor direct-Egg contract closes the value-plane half only after
 accounting and owner cash finalization have completed. Action 25 advances exact
