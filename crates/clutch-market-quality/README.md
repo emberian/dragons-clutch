@@ -17,6 +17,30 @@ at least one zero active coordinate; scaling that layer gives both the exact
 complete sets available to Merge and, under the protocol's atom-parity model,
 the collateral atoms Merge returns.
 
+The representative-point shape compiler supports any canonical bounded
+partition of two through sixteen cells, rather than a binary-only market. A
+partition provides strict shared boundaries and one exact integer
+representative per cell. Digital tails, inclusive ranges, and increasing or
+decreasing capped linear ramps compile into native Egg coefficients. A ramp
+whose representative-point value is fractional refuses instead of rounding.
+For a smooth native basis those values are control coefficients; the compiler
+does not falsely claim that the resulting spline interpolates every cell
+representative.
+One position unit always means one whole compiled shape at its declared payout
+atoms. The compiler preserves those coefficients rather than silently dividing
+by a GCD and changing the unit definition.
+
+Compiled payoffs retain their complete partition capability. Exact comparison
+classifies aggregate positions as equal, left-dominating, right-dominating, or
+incomparable, and reports the minimum complete-set layer needed to make either
+side pointwise dominate the other. That layer is also the collateral cost of
+an authorized Split under the crate's atom-parity model; this crate does not
+authorize that Split.
+Coefficientwise dominance guarantees payoff dominance for every nonnegative
+partition-of-unity resolution vector. Incomparability is deliberately the
+weaker coefficient-vector statement; a restricted smooth reachable set may
+still order two otherwise incomparable coefficient vectors.
+
 The distinction matters for Dragon's Clutch. A native coefficient portfolio
 is not a bag of unrelated categorical tokens: at resolution its payout is a
 convex combination of its Egg coefficients. The minimum coefficient is

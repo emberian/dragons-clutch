@@ -20,13 +20,22 @@
 
 pub use clutch_kernel::{MAX_OUTCOMES, MIN_OUTCOMES};
 
+mod payoff_shape;
+
+pub use payoff_shape::{
+    certify_compiled_payoff_compression_v1, compare_compiled_payoffs_v1,
+    compile_payoff_shape_v1, CappedLinearDirectionV1, CompiledPayoffCompressionV1,
+    CompiledPayoffV1, ExactPayoffComparisonV1, ExhaustivePartitionV1, PayoffRelationV1,
+    PayoffShapeV1, TailDirectionV1, MAX_PARTITION_BOUNDARIES,
+};
+
 /// Refusals produced while validating or evaluating an economic certificate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Error {
     /// The active outcome prefix is smaller than two or wider than the kernel.
     InvalidOutcomeCount = 0,
-    /// A Market or immutable Terms identity is the all-zero sentinel.
+    /// A required Market, Terms, or partition identity is the all-zero sentinel.
     ZeroIdentity = 1,
     /// An exact simplex cannot have a zero scale.
     ZeroPriceScale = 2,
@@ -48,6 +57,16 @@ pub enum Error {
     ArithmeticOverflow = 10,
     /// An internally derived compression relation failed reconstruction.
     InvariantViolation = 11,
+    /// Boundaries do not form one ordered exhaustive canonical partition.
+    NoncanonicalPartition = 12,
+    /// A representative point does not belong to its canonical partition cell.
+    InvalidRepresentativePoint = 13,
+    /// Shape parameters do not name a bounded nonnegative shape.
+    InvalidPayoffShape = 14,
+    /// Exact linear evaluation would require a fractional Egg coefficient.
+    InexactPayoffCoefficient = 15,
+    /// Two compiled payoffs do not share the exact same partition capability.
+    MismatchedPartition = 16,
 }
 
 /// Result type for exact market-quality arithmetic.
@@ -515,7 +534,7 @@ fn validate_outcome_count(outcome_count: u8) -> Result<usize> {
     Ok(usize::from(outcome_count))
 }
 
-fn is_zero_identity(identity: &[u8; 32]) -> bool {
+pub(crate) fn is_zero_identity(identity: &[u8; 32]) -> bool {
     let mut index = 0usize;
     while index < identity.len() {
         if identity[index] != 0 {
