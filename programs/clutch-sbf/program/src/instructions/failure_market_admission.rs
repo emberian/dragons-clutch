@@ -11,7 +11,7 @@
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
-    allocate_data, assign_data, require_system_program, SYSTEM_PROGRAM_ID,
+    allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_policy_v1::{
@@ -185,7 +185,7 @@ pub(crate) fn authenticate_initial_market_recovery_funding_v1(
 /// Allocation/assignment and the Product FoundationVault debit occur outside
 /// this helper but in the same atomic instruction. This function verifies the
 /// exact authenticated postfund balance before the first and only data write.
-pub fn persist_failure_market_root_v2(
+fn persist_failure_market_root_v2(
     program_id: &Pubkey,
     root: &AccountInfo<'_>,
     state: FailureMarketAdmissionStateV1,
@@ -252,14 +252,18 @@ pub fn persist_failure_market_root_v2(
 /// Product must have applied the authenticated FoundationVault debit first in
 /// the same outer instruction. This helper performs no transfer and therefore
 /// cannot source rent from a signer, Recovery custody, Hoard, or future fees.
+/// The supplied canonical Rent sysvar fixes the exact refundable principal for
+/// the current 2,172-byte account width; prior lamports remain donations.
 pub fn initialize_prefunded_failure_market_root_v2<'a>(
     program_id: &Pubkey,
     root: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     state: FailureMarketAdmissionStateV1,
 ) -> Outcome<AuthenticatedFailureMarketRootV2> {
     require_system_program(system_program)?;
-    require_distinct(&[root.clone(), system_program.clone()])?;
+    require_distinct(&[root.clone(), rent_sysvar.clone(), system_program.clone()])?;
+    let rent = read_rent(rent_sysvar)?;
     let policy = state.binding().facts();
     let funding = state.root_funding().facts();
     let expected_balance = funding
@@ -274,6 +278,8 @@ pub fn initialize_prefunded_failure_market_root_v2<'a>(
             && root.data_len() == 0
             && root.lamports() == expected_balance
             && funding.observed_balance_lamports == expected_balance
+            && funding.rent_principal_lamports
+                == rent.minimum_balance(FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2)?
             && funding.root_account_id.bytes() == root.key.to_bytes()
             && policy.recovery_state_id.bytes() == root.key.to_bytes(),
         ClutchError::MismatchedState,
