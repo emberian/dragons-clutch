@@ -25,6 +25,7 @@ profile-general-source-v2-point = [
 ]
 
 [dependencies]
+clutch-collateral-adapter-v2 = { path = "../clutch-collateral-adapter-v2" }
 clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
 clutch-retirement = { path = "../clutch-retirement" }
 clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }

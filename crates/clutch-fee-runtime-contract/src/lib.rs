@@ -17,6 +17,7 @@ pub mod integration;
 pub mod intent;
 pub mod projection;
 pub mod selected;
+pub mod terminal;
 pub mod treasury;
 
 pub use clutch_batch_policy_identity::Identity32V1 as Id;
@@ -60,6 +61,8 @@ pub enum Error {
     RevenueSourceForbidden,
     RedemptionRakeForbidden,
     LivenessCapitalizationForbidden,
+    InvalidTerminalDisposition,
+    MissingClosure,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

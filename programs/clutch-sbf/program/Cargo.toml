@@ -43,7 +43,6 @@ laboratory-fixtures = []
 # bodies, but deliberately cannot register a Series or create an occurrence.
 non-production-product-series-lab = [
     "dep:clutch-collateral-adapter-v2",
-    "dep:clutch-source-plane-v3-runtime",
     "clutch-solana-layout/non-production-product-series-lab",
 ]
 # Mutually exclusive deployable products. Each forwards the same identity to
@@ -106,10 +105,9 @@ clutch-product-series = { path = "../../../crates/clutch-product-series" }
 # `orders_batch::terminal_closure` drive the ledger's begin/settle/close
 # transitions from the Position close route instead of restating them.
 clutch-liveness = { path = "../../../crates/clutch-liveness" }
-clutch-source-plane-v3-runtime = {
-    path = "../../../crates/clutch-source-plane-v3-runtime",
-    optional = true,
-}
+clutch-source-plane-v3 = { path = "../../../crates/clutch-source-plane-v3" }
+clutch-source-plane-v3-adapter = { path = "../../../crates/clutch-source-plane-v3-adapter" }
+clutch-source-plane-v3-runtime = { path = "../../../crates/clutch-source-plane-v3-runtime" }
 clutch-solana-layout = { path = "../../solana-layout", default-features = false }
 clutch-solana-reference = { path = "../../solana-reference", default-features = false }
 solana-account-info = "=3.1.1"

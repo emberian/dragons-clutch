@@ -318,6 +318,7 @@ fn registry_for(
             collateral_mint: id(53),
             token_program: id(54),
             neutral_incinerator: id(52),
+            neutral_lamport_sink: id(55),
             market_collateral_cap_ceiling: 2_000,
         },
     }
@@ -349,10 +350,38 @@ fn funding_terms_v2() -> SeriesFundingTermsV2 {
         series_plan_id: series().id().unwrap(),
         lamport_principal_refund: id(50),
         collateral_principal_refund_token_account: id(51),
-        neutral_sink: id(52),
+        neutral_collateral_disposition_token_account: id(52),
+        neutral_lamport_sink: id(55),
         collateral_mint: id(53),
         token_program: id(54),
     }
+}
+
+#[test]
+fn successor_funding_terms_separate_refunds_and_neutral_destinations() {
+    let value = funding_terms_v2();
+    value.validate_shape().unwrap();
+
+    let mut aliases = value;
+    aliases.neutral_collateral_disposition_token_account = aliases.lamport_principal_refund;
+    assert_eq!(aliases.validate_shape(), Err(Error::InvalidParameter));
+
+    aliases = value;
+    aliases.neutral_collateral_disposition_token_account =
+        aliases.collateral_principal_refund_token_account;
+    assert_eq!(aliases.validate_shape(), Err(Error::InvalidParameter));
+
+    aliases = value;
+    aliases.neutral_lamport_sink = aliases.lamport_principal_refund;
+    assert_eq!(aliases.validate_shape(), Err(Error::InvalidParameter));
+
+    aliases = value;
+    aliases.neutral_lamport_sink = aliases.collateral_principal_refund_token_account;
+    assert_eq!(aliases.validate_shape(), Err(Error::InvalidParameter));
+
+    aliases = value;
+    aliases.neutral_lamport_sink = aliases.neutral_collateral_disposition_token_account;
+    assert_eq!(aliases.validate_shape(), Err(Error::InvalidParameter));
 }
 
 fn legacy_funding_terms() -> SeriesFundingTermsV1 {
@@ -953,14 +982,10 @@ fn successor_codecs_round_trip_and_cross_version_bytes_refuse() {
     let terms_v2 = funding_terms_v2();
     let mut terms_v2_bytes = [0; SERIES_FUNDING_TERMS_V2_BYTES];
     terms_v2.encode_into(&mut terms_v2_bytes).unwrap();
-    assert_eq!(
-        terms_v2.id().unwrap().bytes(),
-        [
-            0xce, 0x34, 0x37, 0x1b, 0x40, 0x81, 0x72, 0x41, 0xab, 0xa8, 0x4e, 0xc4, 0xb1, 0xe1,
-            0x48, 0x5e, 0x12, 0x95, 0x85, 0x4b, 0x16, 0x3a, 0x3a, 0x43, 0xa6, 0xfc, 0xcb, 0x71,
-            0x08, 0x40, 0x36, 0xbd,
-        ]
-    );
+    assert_eq!(&terms_v2_bytes[112..144], &[52; 32]);
+    assert_eq!(&terms_v2_bytes[144..176], &[55; 32]);
+    assert_eq!(&terms_v2_bytes[176..208], &[53; 32]);
+    assert_eq!(&terms_v2_bytes[208..240], &[54; 32]);
     assert_eq!(
         terms_v2.id().unwrap().bytes(),
         independent_digest(SERIES_FUNDING_TERMS_V2_DOMAIN, &terms_v2_bytes)

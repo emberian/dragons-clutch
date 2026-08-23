@@ -6,11 +6,12 @@ use clutch_retirement::{
     DIRECT_RESERVATION_V8_BYTES, EPOCH_ACCOUNT_TAG, EPOCH_ACCOUNT_VERSION_V5, EPOCH_V5_BYTES,
     GENERAL_EPOCH_TOMBSTONE_TAG, GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
     GENERAL_EPOCH_TOMBSTONE_VERSION_V1, MARKET_ACCOUNT_TAG, MARKET_ACCOUNT_VERSION_V2,
-    MARKET_V2_BYTES, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V2, POSITION_TOMBSTONE_TAG,
-    POSITION_TOMBSTONE_V1_BYTES, POSITION_TOMBSTONE_V2_BYTES, POSITION_TOMBSTONE_VERSION_V1,
-    POSITION_TOMBSTONE_VERSION_V2, POSITION_V2_BYTES, RESERVATION_ACCOUNT_TAG,
-    RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V5_BYTES,
-    RESERVATION_V7_BYTES,
+    MARKET_V2_BYTES, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V2,
+    POSITION_ACCOUNT_VERSION_V3, POSITION_TOMBSTONE_TAG, POSITION_TOMBSTONE_V1_BYTES,
+    POSITION_TOMBSTONE_V2_BYTES, POSITION_TOMBSTONE_V3_BYTES, POSITION_TOMBSTONE_VERSION_V1,
+    POSITION_TOMBSTONE_VERSION_V2, POSITION_TOMBSTONE_VERSION_V3, POSITION_V2_BYTES,
+    POSITION_V3_BYTES, RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5,
+    RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
 };
 use clutch_solana_layout::direct_selection_v3::{DIRECT_EPOCH_V4_BYTES, DIRECT_EPOCH_V4_VERSION};
 use clutch_solana_layout::registry::{
@@ -20,11 +21,13 @@ use clutch_solana_layout::registry::{
 use crate::{RetirementAdapterErrorV1, RetirementAdapterErrorV2};
 
 const POSITION_STORED_BUMP_OFFSET: usize = 218;
+const POSITION_V3_STORED_BUMP_OFFSET: usize = 5;
 const MARKET_STORED_BUMP_OFFSET: usize = 132;
 const EPOCH_STORED_BUMP_OFFSET: usize = 327;
 const DIRECT_EPOCH_V4_STORED_BUMP_OFFSET: usize = 343;
 const RESERVATION_STORED_BUMP_OFFSET: usize = 312;
 const POSITION_TOMBSTONE_STORED_BUMP_OFFSET: usize = 75;
+const POSITION_TOMBSTONE_V3_STORED_BUMP_OFFSET: usize = 4;
 const EPOCH_TOMBSTONE_STORED_BUMP_OFFSET: usize = 83;
 const REPLAY_SUCCESSOR_STORED_BUMP_OFFSET: usize = 82;
 const EPOCH_BUDGET_STORED_BUMP_OFFSET: usize = 270;
@@ -336,6 +339,27 @@ pub fn authenticate_position_v2_exact<'a>(
     )
 }
 
+/// Authenticate the canonical global Position V3 under an exact runtime role.
+pub fn authenticate_position_v3_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+    access: AccountAccessV2,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: POSITION_ACCOUNT_TAG,
+            version: POSITION_ACCOUNT_VERSION_V3,
+            len: POSITION_V3_BYTES,
+            bump_offset: POSITION_V3_STORED_BUMP_OFFSET,
+        },
+        access,
+    )
+}
+
 /// Authenticate Market V2 under an exact read-only or writable role.
 pub fn authenticate_market_v2_exact<'a>(
     view: AccountViewV2<'a>,
@@ -434,6 +458,26 @@ pub fn authenticate_position_tombstone_v2_exact<'a>(
             version: POSITION_TOMBSTONE_VERSION_V2,
             len: POSITION_TOMBSTONE_V2_BYTES,
             bump_offset: POSITION_TOMBSTONE_STORED_BUMP_OFFSET,
+        },
+        AccountAccessV2::Writable,
+    )
+}
+
+/// Authenticate the canonical full-identity Position V3 tombstone for reopen.
+pub fn authenticate_position_tombstone_v3_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    authenticate_v2(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: POSITION_TOMBSTONE_TAG,
+            version: POSITION_TOMBSTONE_VERSION_V3,
+            len: POSITION_TOMBSTONE_V3_BYTES,
+            bump_offset: POSITION_TOMBSTONE_V3_STORED_BUMP_OFFSET,
         },
         AccountAccessV2::Writable,
     )
