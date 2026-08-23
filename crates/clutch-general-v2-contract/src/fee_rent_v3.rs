@@ -20,7 +20,10 @@ use clutch_fee_runtime_contract::terminal::{
     OWNER_FEE_FINALIZATION_VERSION_V2,
 };
 
-use crate::{CodecError, DeletableRentOwnerV1, Id32, Sha256BackendV1};
+use crate::{
+    CodecError, DeletableRentOwnerV1, Id32, Sha256BackendV1,
+    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4,
+};
 
 /// Data-ID domain for the rent-owned fee-account transition.
 pub const OWNER_FEE_RENT_TRANSITION_DATA_ID_DOMAIN_V3: &[u8] =
@@ -28,6 +31,23 @@ pub const OWNER_FEE_RENT_TRANSITION_DATA_ID_DOMAIN_V3: &[u8] =
 /// Content domain for the exact reviewed fee semantic schema bundle.
 pub const FEE_RUNTIME_SEMANTIC_RELEASE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fee-runtime-semantic-release/v1\0";
+/// Full-outer data-ID domain for the exact rent-owned terminal carry account.
+pub const OWNER_FEE_FINALIZATION_ACCOUNT_DATA_ID_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/owner-fee-finalization-account-data/v4\0";
+
+/// Hash the exact hostile-byte-authenticated 548-byte 0x83/v4 outer account.
+pub fn owner_fee_finalization_account_data_id_v4<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[
+        OWNER_FEE_FINALIZATION_ACCOUNT_DATA_ID_DOMAIN_V4,
+        bytes,
+    ]))
+}
 
 /// Derive the exact fee semantic schema release committed by terminal state.
 ///
