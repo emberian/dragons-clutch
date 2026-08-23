@@ -41,6 +41,10 @@ pub const SOURCE_SERIES_FAMILY_VERSION: u8 = 2;
 pub const RECOVERY_FAMILY_TAG: u8 = 78;
 /// Evidence-only recovery successor intent-family version.
 pub const RECOVERY_FAMILY_VERSION: u8 = 1;
+/// Exact fractional-redemption successor intent-family tag.
+pub const FRACTIONAL_REDEMPTION_FAMILY_TAG: u8 = 79;
+/// Exact fractional-redemption successor intent-family version.
+pub const FRACTIONAL_REDEMPTION_FAMILY_VERSION: u8 = 1;
 
 /// Existing Source Archive V2 **account** discriminator: hexadecimal `0x74`,
 /// decimal 116.
@@ -352,6 +356,30 @@ pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION: u8 = 1;
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
 /// Permanent failure-generation replay tombstone version.
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Immutable exact fractional-redemption policy discriminator.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG: u8 = 0xa4;
+/// Immutable exact fractional-redemption policy version.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION: u8 = 1;
+/// Exact immutable fractional-redemption policy bytes.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_BYTES: usize = 296;
+/// Sole aggregate numerator-credit ledger discriminator.
+pub const FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_TAG: u8 = 0xa5;
+/// Sole aggregate numerator-credit ledger version.
+pub const FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION: u8 = 1;
+/// Exact aggregate numerator-credit ledger bytes.
+pub const FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_BYTES: usize = 224;
+/// Owner-scoped exact numerator-credit discriminator.
+pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG: u8 = 0xa6;
+/// Owner-scoped exact numerator-credit version.
+pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION: u8 = 1;
+/// Exact owner-scoped numerator-credit bytes.
+pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES: usize = 296;
+/// Permanent zero-credit replay tombstone discriminator.
+pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa7;
+/// Permanent zero-credit replay tombstone version.
+pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Exact permanent zero-credit replay tombstone bytes.
+pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES: usize = 232;
 /// Mutable exhaustive quantized interval-consensus work discriminator.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG: u8 = 0xab;
 /// Interval-consensus work account version.
@@ -538,6 +566,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "evidence-only-recovery",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainIntent,
+            tag: FRACTIONAL_REDEMPTION_FAMILY_TAG,
+            version: FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "exact-fractional-redemption",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1181,6 +1218,42 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "fractional-redemption-policy-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "fractional-redemption-ledger-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "fractional-redemption-credit-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "fractional-redemption-credit-tombstone-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
             version: DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
         },
@@ -1238,6 +1311,8 @@ pub enum ExtensionFamily {
     SourceSeries,
     /// Evidence-only recovery services.
     Recovery,
+    /// Exact fractional-redemption and owner-credit services.
+    FractionalRedemption,
 }
 
 impl ExtensionFamily {
@@ -1249,6 +1324,7 @@ impl ExtensionFamily {
             Self::Dealer => DEALER_FAMILY_TAG,
             Self::SourceSeries => SOURCE_SERIES_FAMILY_TAG,
             Self::Recovery => RECOVERY_FAMILY_TAG,
+            Self::FractionalRedemption => FRACTIONAL_REDEMPTION_FAMILY_TAG,
         }
     }
 
@@ -1260,6 +1336,7 @@ impl ExtensionFamily {
             Self::Dealer => DEALER_FAMILY_VERSION,
             Self::SourceSeries => SOURCE_SERIES_FAMILY_VERSION,
             Self::Recovery => RECOVERY_FAMILY_VERSION,
+            Self::FractionalRedemption => FRACTIONAL_REDEMPTION_FAMILY_VERSION,
         }
     }
 
@@ -1273,6 +1350,9 @@ impl ExtensionFamily {
             (DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION) => Some(Self::Dealer),
             (SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION) => Some(Self::SourceSeries),
             (RECOVERY_FAMILY_TAG, RECOVERY_FAMILY_VERSION) => Some(Self::Recovery),
+            (FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION) => {
+                Some(Self::FractionalRedemption)
+            }
             _ => None,
         }
     }
@@ -1887,6 +1967,77 @@ impl RecoveryAction {
     }
 }
 
+/// Exact fractional-redemption family-local actions inside 79/v1.
+///
+/// Coordinates freeze the runtime contract while every tuple remains
+/// capability-disabled. Activation must join Resolution, ClaimLedger V3,
+/// Hoard V2, Position/Replay V3, Realm collateral, Token-2022 claims, and rent
+/// atomically.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalRedemptionAction {
+    /// Create the immutable policy and sole aggregate-credit ledger.
+    Initialize = 1,
+    /// Redeem an exact internal lot without owner-credit state.
+    RedeemInternalExact = 2,
+    /// Redeem an exact bearer lot without owner-credit state.
+    RedeemBearerExact = 3,
+    /// Redeem arbitrary internal claims into exact owner credit.
+    RedeemInternalCredit = 4,
+    /// Redeem arbitrary bearer claims into exact owner credit.
+    RedeemBearerCredit = 5,
+    /// Transfer an explicit numerator between owner credits.
+    TransferCredit = 6,
+    /// Merge one entire source residue into a destination credit.
+    MergeCredit = 7,
+    /// Close one zero credit into its permanent tombstone.
+    CloseZeroCredit = 8,
+    /// Seal canonical native supply exhausted without sweeping backing.
+    SealClaimsExhausted = 9,
+    /// Close a claims/credit/backing-empty fractional domain under Product root.
+    CloseEmptyLedger = 10,
+}
+
+impl FractionalRedemptionAction {
+    /// First fractional-redemption local action.
+    pub const FIRST_TAG: u8 = 1;
+    /// Last fractional-redemption local action.
+    pub const LAST_TAG: u8 = 10;
+
+    /// Return the family-local tag.
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::Initialize => 1,
+            Self::RedeemInternalExact => 2,
+            Self::RedeemBearerExact => 3,
+            Self::RedeemInternalCredit => 4,
+            Self::RedeemBearerCredit => 5,
+            Self::TransferCredit => 6,
+            Self::MergeCredit => 7,
+            Self::CloseZeroCredit => 8,
+            Self::SealClaimsExhausted => 9,
+            Self::CloseEmptyLedger => 10,
+        }
+    }
+
+    /// Decode one exact family-local action.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Initialize),
+            2 => Some(Self::RedeemInternalExact),
+            3 => Some(Self::RedeemBearerExact),
+            4 => Some(Self::RedeemInternalCredit),
+            5 => Some(Self::RedeemBearerCredit),
+            6 => Some(Self::TransferCredit),
+            7 => Some(Self::MergeCredit),
+            8 => Some(Self::CloseZeroCredit),
+            9 => Some(Self::SealClaimsExhausted),
+            10 => Some(Self::CloseEmptyLedger),
+            _ => None,
+        }
+    }
+}
+
 /// One allocated successor family-local action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
@@ -1904,6 +2055,8 @@ pub enum ExtensionAction {
     RecurringSeries(RecurringSeriesAction),
     /// One evidence-only Recovery action.
     Recovery(RecoveryAction),
+    /// One exact fractional-redemption action.
+    FractionalRedemption(FractionalRedemptionAction),
 }
 
 impl ExtensionAction {
@@ -1915,6 +2068,7 @@ impl ExtensionAction {
             Self::StructuredClaim(_) => ExtensionFamily::StructuredClaim,
             Self::SourceV3(_) | Self::RecurringSeries(_) => ExtensionFamily::SourceSeries,
             Self::Recovery(_) => ExtensionFamily::Recovery,
+            Self::FractionalRedemption(_) => ExtensionFamily::FractionalRedemption,
         }
     }
 
@@ -1928,6 +2082,7 @@ impl ExtensionAction {
             Self::SourceV3(action) => action.tag(),
             Self::RecurringSeries(action) => action.tag(),
             Self::Recovery(action) => action.tag(),
+            Self::FractionalRedemption(action) => action.tag(),
         }
     }
 }
@@ -1982,6 +2137,12 @@ pub const fn decode_extension_action(
             Some(action) => Ok(ExtensionAction::Recovery(action)),
             None => Err(RegistryError::UnknownLocalAction),
         },
+        Some(ExtensionFamily::FractionalRedemption) => {
+            match FractionalRedemptionAction::from_tag(local_action) {
+                Some(action) => Ok(ExtensionAction::FractionalRedemption(action)),
+                None => Err(RegistryError::UnknownLocalAction),
+            }
+        }
         None => Err(RegistryError::UnknownFamilyVersion),
     }
 }
@@ -2103,6 +2264,9 @@ mod tests {
                         (76, 1) => Some(IntentAllocation::Extension(ExtensionFamily::Dealer)),
                         (77, 2) => Some(IntentAllocation::Extension(ExtensionFamily::SourceSeries)),
                         (78, 1) => Some(IntentAllocation::Extension(ExtensionFamily::Recovery)),
+                        (79, 1) => Some(IntentAllocation::Extension(
+                            ExtensionFamily::FractionalRedemption,
+                        )),
                         _ => None,
                     }
                 };
@@ -2434,6 +2598,52 @@ mod tests {
     }
 
     #[test]
+    fn fractional_redemption_account_block_is_complete_and_disabled() {
+        let expected = [
+            (
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION,
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_BYTES,
+                296,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION,
+                FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_BYTES,
+                224,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION,
+                FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES,
+                296,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION,
+                FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES,
+                232,
+            ),
+        ];
+        for (offset, (tag, version, bytes, expected_bytes)) in expected.into_iter().enumerate() {
+            assert_eq!(tag, 0xa4 + u8::try_from(offset).expect("small block"));
+            assert_eq!(bytes, expected_bytes);
+            let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.next().map(|entry| entry.status),
+                Some(AllocationStatus::ReservedDisabled),
+                "account {tag}/{version}"
+            );
+            assert!(
+                matching.next().is_none(),
+                "duplicate account {tag}/{version}"
+            );
+        }
+    }
+
+    #[test]
     fn counted_retirement_wrapper_coordinates_are_reserved_but_disabled() {
         let expected = [
             (
@@ -2510,6 +2720,13 @@ mod tests {
                 recovery.is_ok(),
                 (RecoveryAction::FIRST_TAG..=RecoveryAction::LAST_TAG).contains(&local_action),
                 "recovery action {local_action}"
+            );
+            let fractional = decode_extension_action(79, 1, local_action);
+            assert_eq!(
+                fractional.is_ok(),
+                (FractionalRedemptionAction::FIRST_TAG..=FractionalRedemptionAction::LAST_TAG)
+                    .contains(&local_action),
+                "fractional-redemption action {local_action}"
             );
         }
     }

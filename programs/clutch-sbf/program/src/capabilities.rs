@@ -333,8 +333,19 @@ mod tests {
                         && (clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG)
                             .contains(&local_action);
-                    let expected_allocated =
-                        general || dealer || structured || source_or_series || recovery;
+                    let fractional = family_tag
+                        == clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::FractionalRedemptionAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::FractionalRedemptionAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general
+                        || dealer
+                        || structured
+                        || source_or_series
+                        || recovery
+                        || fractional;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,

@@ -1,8 +1,10 @@
 # Fractional-redemption research model
 
-Status: **MODEL-ONLY / HOST-TESTED**. This standalone crate changes no kernel,
-SBF instruction, account layout, market terms, deployment artifact, or release
-claim.
+Status: **RETAINED DERIVATION MODEL**. The promoted fixed-layout runtime
+contract is `crates/clutch-fractional-redemption-runtime`; this standalone
+crate remains the exhaustive small-domain algebra and comparison harness. It
+does not own runtime accounts, enable an SBF instruction, or make a deployment
+or release claim.
 
 The safe `no_std`, allocation-free Rust model compares:
 
@@ -23,4 +25,3 @@ cargo clippy --manifest-path research/fractional-redemption/Cargo.toml \
 The design, Solana implications, terminal impossibility result, and V1
 recommendation are in
 [`docs/implementation/FRACTIONAL_REDEMPTION.md`](../../docs/implementation/FRACTIONAL_REDEMPTION.md).
-
