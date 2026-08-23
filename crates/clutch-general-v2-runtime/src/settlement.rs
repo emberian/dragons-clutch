@@ -1452,7 +1452,7 @@ pub fn prepare_account_receipt_end_transition_v2(
     input.selected_candidate.account.validate()?;
     let selected = input.selected_candidate.account;
     let settlement = input.settlement;
-    if input.selected_candidate.artifact != input.payload.selected_candidate
+    if input.selected_candidate.artifact != input.payload.settlement_root
         || input.payload.epoch != settlement.epoch
         || input.payload.owner_settlement.bytes() != input.owner_row.address
         || input.payload.receipt.bytes() != input.receipt.receipt()
@@ -1903,7 +1903,7 @@ pub fn prepare_account_receipt_end_transition_v3(
     let selected = input.selected_candidate.account;
     let (feed, tail) = complete_candidate_feed_v2(input.selected_feed_body, true)?;
     let feed_bundle_id = derive_candidate_bundle_digest_v1(input.selected_feed_body)?;
-    if input.selected_candidate.artifact != input.payload.selected_candidate
+    if input.selected_candidate.artifact != input.payload.settlement_root
         || input.payload.epoch != selected.epoch
         || input.payload.owner_settlement.bytes() != input.owner_row.address
         || input.payload.receipt.is_zero()
@@ -2716,7 +2716,7 @@ pub fn prepare_account_receipt_end_transition_v4(
     let selected = settlement_coordinates_v4(input.settlement_root)?;
     let (feed, tail) = complete_candidate_feed_v2(input.selected_feed_body, true)?;
     let feed_bundle_id = derive_candidate_bundle_digest_v1(input.selected_feed_body)?;
-    if input.settlement_root_account != input.payload.selected_candidate
+    if input.settlement_root_account != input.payload.settlement_root
         || input.payload.epoch != selected.epoch
         || input.payload.owner_settlement.bytes() != input.owner_row.address()
         || input.payload.receipt.is_zero()
