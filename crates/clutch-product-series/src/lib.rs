@@ -164,8 +164,9 @@ pub use registry::{
 };
 pub use source_series::{
     compile_source_occurrence_v3, compile_source_occurrence_v4,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
-    SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
+    compile_source_semantic_inputs_v1, AuthenticatedSourceSeriesAuthorityV3,
+    CompiledSourceOccurrenceV3, CompiledSourceSemanticInputsV1, SOURCE_OCCURRENCE_RECORD_BYTES,
+    SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use successor::{
     compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, compile_ordinal_v5,

@@ -134,6 +134,67 @@ pub struct ImmutableAccountFundingV1 {
     pub account_balance_after: u64,
 }
 
+/// Exact permanent funding observation for one raw immutable Source semantic
+/// input account. These accounts have no terminal close or refund path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImmutableSourceInputFundingV1 {
+    /// Physical content-addressed account.
+    pub account: RuntimeKey,
+    /// Payer of this call's exact rent shortfall, or zero for exact-existing/prefund.
+    pub payer: RuntimeKey,
+    /// Exact lamports supplied by this call.
+    pub payer_debit_lamports: u64,
+    /// Lamports already present before creation or observed on exact-existing input.
+    pub permanent_prefund_lamports: u64,
+    /// Digest of the complete canonical raw semantic body.
+    pub account_data_id: ContentId,
+    /// Exact semantic identity used by the content-addressed PDA.
+    pub semantic_id: ContentId,
+}
+
+/// Private postwrite receipt for the three immutable Source semantic inputs of
+/// one authenticated Product occurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublishedSourceSemanticInputsV1 {
+    /// Private Product/Profile/Bundle publication authority consumed.
+    publication_authorization_id: ContentId,
+    /// Canonical WindowSpec publication observation.
+    window: ImmutableSourceInputFundingV1,
+    /// Reviewed SummaryProgram publication observation.
+    summary: ImmutableSourceInputFundingV1,
+    /// Predictable StatisticKey publication observation.
+    statistic_key: ImmutableSourceInputFundingV1,
+    /// Identity of the exact three-account postwrite join.
+    receipt_id: ContentId,
+}
+
+impl PublishedSourceSemanticInputsV1 {
+    /// Private Product/Profile/Bundle publication authority consumed.
+    pub const fn publication_authorization_id(self) -> ContentId {
+        self.publication_authorization_id
+    }
+
+    /// Canonical WindowSpec publication observation.
+    pub const fn window(self) -> ImmutableSourceInputFundingV1 {
+        self.window
+    }
+
+    /// Reviewed SummaryProgram publication observation.
+    pub const fn summary(self) -> ImmutableSourceInputFundingV1 {
+        self.summary
+    }
+
+    /// Predictable StatisticKey publication observation.
+    pub const fn statistic_key(self) -> ImmutableSourceInputFundingV1 {
+        self.statistic_key
+    }
+
+    /// Identity of the exact three-account postwrite join.
+    pub const fn id(self) -> ContentId {
+        self.receipt_id
+    }
+}
+
 /// One persisted paid-work receipt and its sole liveness transition intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceWorkExecutionV1 {
@@ -1201,6 +1262,181 @@ pub fn persist_evaluation_result(
         system_program,
         rent_sysvar,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_immutable_source_input<T: FixedCodec>(
+    program_id: &Pubkey,
+    body: &T,
+    semantic_id: ContentId,
+    recipe: &PdaRecipeV3,
+    payer: &AccountInfo<'_>,
+    target: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent: &RentParameters,
+) -> Outcome<ImmutableSourceInputFundingV1> {
+    semantic_id.validate().map_err(source_core)?;
+    require_system_program(system_program)?;
+    require(
+        payer.is_signer
+            && payer.is_writable
+            && !payer.executable
+            && target.is_writable
+            && !target.is_signer
+            && !target.executable
+            && payer.key != target.key,
+        ClutchError::MismatchedState,
+    )?;
+    let derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
+    require(
+        derived.address == runtime_key(target.key),
+        ClutchError::WrongPda,
+    )?;
+    let mut bytes = vec![0_u8; T::ENCODED_LEN];
+    body.encode_into(&mut bytes).map_err(source_core)?;
+    let minimum = rent.minimum_balance(bytes.len())?;
+    if target.owner == program_id {
+        require(
+            target.data_len() == bytes.len() && target.lamports() >= minimum,
+            ClutchError::MismatchedState,
+        )?;
+        let data = target
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(&*data == bytes.as_slice(), ClutchError::MismatchedState)?;
+        let data_id = account_data_id(runtime_key(target.key), &data).map_err(source_runtime)?;
+        return Ok(ImmutableSourceInputFundingV1 {
+            account: runtime_key(target.key),
+            payer: RuntimeKey::ZERO,
+            payer_debit_lamports: 0,
+            permanent_prefund_lamports: target.lamports(),
+            account_data_id: data_id,
+            semantic_id,
+        });
+    }
+    require_creation_roles(program_id, payer, target, system_program)?;
+    let before = target.lamports();
+    let debit = minimum.saturating_sub(before);
+    create_with_recipe(
+        program_id,
+        payer,
+        target,
+        system_program,
+        rent,
+        bytes.len(),
+        recipe,
+        derived.bump,
+    )?;
+    write_exact_account_data(target, &bytes)?;
+    let data_id = account_data_id(runtime_key(target.key), &bytes).map_err(source_runtime)?;
+    Ok(ImmutableSourceInputFundingV1 {
+        account: runtime_key(target.key),
+        payer: if debit == 0 {
+            RuntimeKey::ZERO
+        } else {
+            runtime_key(payer.key)
+        },
+        payer_debit_lamports: debit,
+        permanent_prefund_lamports: before,
+        account_data_id: data_id,
+        semantic_id,
+    })
+}
+
+/// Publish the exact three immutable Source semantic accounts selected by one
+/// private current Product/Profile/Bundle authorization.
+///
+/// This is crate-private: no instruction decoder can supply the authorization
+/// digest or semantic bodies directly. The Product authority module must mint
+/// and consume its private capability in the same call.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_authenticated_source_semantic_inputs(
+    program_id: &Pubkey,
+    publication_authorization_id: ContentId,
+    window: WindowSpecV3,
+    summary: SummaryProgramV3,
+    statistic_key: StatisticKeyV3,
+    payer: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    summary_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<PublishedSourceSemanticInputsV1> {
+    publication_authorization_id
+        .validate()
+        .map_err(source_core)?;
+    window.validate().map_err(source_core)?;
+    summary.validate().map_err(source_core)?;
+    statistic_key.validate().map_err(source_core)?;
+    let window_id = window.id().map_err(source_core)?;
+    let summary_id = summary.id().map_err(source_core)?;
+    let statistic_key_id = statistic_key.id().map_err(source_core)?;
+    require(
+        statistic_key.window_id == window_id
+            && statistic_key.summary_program_id == summary_id
+            && summary.supports(statistic_key.statistic)
+            && window_account.key != summary_account.key
+            && window_account.key != statistic_key_account.key
+            && summary_account.key != statistic_key_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let rent = read_rent(rent_sysvar)?;
+    let window_recipe = PdaRecipeV3::window_spec(window_id).map_err(source_pda)?;
+    let summary_recipe = PdaRecipeV3::summary_program(summary_id).map_err(source_pda)?;
+    let statistic_key_recipe =
+        PdaRecipeV3::statistic_key(statistic_key_id).map_err(source_pda)?;
+    let window_funding = publish_immutable_source_input(
+        program_id,
+        &window,
+        window_id,
+        &window_recipe,
+        payer,
+        window_account,
+        system_program,
+        &rent,
+    )?;
+    let summary_funding = publish_immutable_source_input(
+        program_id,
+        &summary,
+        summary_id,
+        &summary_recipe,
+        payer,
+        summary_account,
+        system_program,
+        &rent,
+    )?;
+    let statistic_key_funding = publish_immutable_source_input(
+        program_id,
+        &statistic_key,
+        statistic_key_id,
+        &statistic_key_recipe,
+        payer,
+        statistic_key_account,
+        system_program,
+        &rent,
+    )?;
+    let receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/published-source-semantic-inputs/v1",
+            &publication_authorization_id.bytes(),
+            &window_funding.account.bytes(),
+            &window_funding.account_data_id.bytes(),
+            &summary_funding.account.bytes(),
+            &summary_funding.account_data_id.bytes(),
+            &statistic_key_funding.account.bytes(),
+            &statistic_key_funding.account_data_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(receipt_id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(PublishedSourceSemanticInputsV1 {
+        publication_authorization_id,
+        window: window_funding,
+        summary: summary_funding,
+        statistic_key: statistic_key_funding,
+        receipt_id,
+    })
 }
 
 /// Persist one immutable RawPage or WindowSeal account with its exact header

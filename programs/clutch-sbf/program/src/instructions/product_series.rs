@@ -46,8 +46,9 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_product_series::{
     assemble_compiled_product_series_bundle_v5, compile_source_occurrence_v3,
-    compile_source_occurrence_v4, AuthenticatedSeriesFundingAuthorityV1,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV1,
+    compile_source_occurrence_v4, compile_source_semantic_inputs_v1,
+    AuthenticatedSeriesFundingAuthorityV1, AuthenticatedSourceSeriesAuthorityV3,
+    CompiledProductSeriesBundleV1,
     CompiledProductSeriesBundleV1Id, CompiledProductSeriesBundleV5,
     CompiledProductSeriesBundleV5Id, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
@@ -66,7 +67,9 @@ use clutch_solana_layout::product_series::{
     SERIES_REGISTRY_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::registry::RecurringSeriesAction;
-use clutch_source_plane_v3::{SourcePlaneProgramV3, StatisticKindV3, SummaryProgramV3};
+use clutch_source_plane_v3::{
+    SourcePlaneProgramV3, StatisticKeyV3, StatisticKindV3, SummaryProgramV3, WindowSpecV3,
+};
 use clutch_source_plane_v3_runtime::{
     AuthenticatedClockBucketV1, AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1,
     AuthenticatedSourceRouteV1, ClockSnapshotV1, OccurrenceSourceReceiptV1,
@@ -81,6 +84,8 @@ use solana_pubkey::Pubkey;
 pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
 const SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/source-product-route-authentication/v3";
+const SOURCE_SEMANTIC_PUBLICATION_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/source-semantic-publication-authentication/v1";
 /// Canonical generation of the sole funding activation permitted by V1.
 pub const SERIES_ACTIVATION_GENERATION_V1: u64 = 1;
 
@@ -742,6 +747,167 @@ pub fn authenticate_source_product_route_v3(
         collateral_mint: collateral.collateral_mint,
         collateral_token_program: collateral.token_program,
     })
+}
+
+/// Private current authority to publish one exact ordinal's immutable Source
+/// semantic input accounts.
+///
+/// This capability has no decoder or public field constructor. It is minted
+/// only by recompiling the ordinal through the authenticated ProfileV4,
+/// BundleV5, Source release, registry, Realm, and attachment graph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceSemanticPublicationV1 {
+    id: ContentId,
+    route: AuthenticatedSourceProductRouteV3,
+    occurrence: CompiledSourceOccurrenceV3,
+    window: WindowSpecV3,
+    statistic_key: StatisticKeyV3,
+    summary_program: SummaryProgramV3,
+}
+
+impl AuthenticatedSourceSemanticPublicationV1 {
+    /// Authentication identity of this exact publication capability.
+    pub const fn id(self) -> ContentId {
+        self.id
+    }
+
+    /// Complete current Source/Product route.
+    pub const fn route(self) -> AuthenticatedSourceProductRouteV3 {
+        self.route
+    }
+
+    /// Exact Product/Series occurrence compiled for this ordinal.
+    pub const fn occurrence(self) -> CompiledSourceOccurrenceV3 {
+        self.occurrence
+    }
+
+    /// Canonical immutable WindowSpec body.
+    pub const fn window(self) -> WindowSpecV3 {
+        self.window
+    }
+
+    /// Canonical immutable StatisticKey body.
+    pub const fn statistic_key(self) -> StatisticKeyV3 {
+        self.statistic_key
+    }
+
+    /// Exact reviewed SummaryProgram selected by ProfileV4.
+    pub const fn summary_program(self) -> SummaryProgramV3 {
+        self.summary_program
+    }
+}
+
+/// Recompile and authenticate the only immutable Source inputs publishable for
+/// one current Series ordinal.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_source_semantic_publication_v1(
+    route: AuthenticatedSourceProductRouteV3,
+    authority: &AuthenticatedProductSourceAuthorityV1,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    projection: &RegistryCapabilityProjectionV2,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    ordinal: u32,
+) -> Outcome<AuthenticatedSourceSemanticPublicationV1> {
+    let compiled = compile_source_semantic_inputs_v1(
+        authority,
+        &artifacts.series,
+        &artifacts.template,
+        &artifacts.basis,
+        &artifacts.recovery,
+        &artifacts.price_policy,
+        &artifacts.genesis,
+        &artifacts.attachment,
+        projection,
+        ordinal,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let occurrence_id = compiled
+        .occurrence
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let window_id = compiled
+        .window
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let statistic_key_id = compiled
+        .statistic_key
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let summary_program_id = compiled
+        .summary_program
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        compiler_bundle.bundle_id() == route.compiler_bundle_id
+            && compiler_bundle.bundle().capability_profile_id.content_id()
+                == route.capability_profile_id
+            && compiler_bundle.bundle().source_release_manifest_id.bytes()
+                == route.source_release_manifest_id.bytes()
+            && compiler_bundle.bundle().source_plane_contract_id.bytes()
+                == route.source_plane_contract_id.bytes()
+            && compiler_bundle.bundle().source_spec_id.bytes() == route.source_spec_id.bytes()
+            && artifacts.genesis.realm_id == route.realm_id
+            && artifacts.genesis.profile_id == route.profile_id
+            && compiled.window.source_plane_program_id.bytes()
+                == route.source_plane_contract_id.bytes()
+            && compiled.window.source_spec_id.bytes() == route.source_spec_id.bytes()
+            && compiled.occurrence.source_window_id.bytes() == window_id.bytes()
+            && compiled.occurrence.statistic_key_id.bytes() == statistic_key_id.bytes()
+            && compiled.statistic_key.window_id == window_id
+            && compiled.statistic_key.summary_program_id == summary_program_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_SEMANTIC_PUBLICATION_AUTHENTICATION_DOMAIN_V1,
+            &route.id.bytes(),
+            &occurrence_id.bytes(),
+            &window_id.bytes(),
+            &statistic_key_id.bytes(),
+            &summary_program_id.bytes(),
+            &ordinal.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceSemanticPublicationV1 {
+        id,
+        route,
+        occurrence: compiled.occurrence,
+        window: compiled.window,
+        statistic_key: compiled.statistic_key,
+        summary_program: compiled.summary_program,
+    })
+}
+
+/// Consume one private current publication authority and create or
+/// authenticate the exact content-addressed WindowSpec, SummaryProgram, and
+/// StatisticKey accounts. The returned receipt is postwrite-only and carries
+/// no caller-selected semantic coordinates.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_source_semantic_inputs_v1(
+    program_id: &Pubkey,
+    publication: AuthenticatedSourceSemanticPublicationV1,
+    payer: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    summary_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<crate::source_plane_v3_actions::PublishedSourceSemanticInputsV1> {
+    crate::source_plane_v3_actions::publish_authenticated_source_semantic_inputs(
+        program_id,
+        publication.id,
+        publication.window,
+        publication.summary_program,
+        publication.statistic_key,
+        payer,
+        window_account,
+        summary_account,
+        statistic_key_account,
+        system_program,
+        rent_sysvar,
+    )
 }
 
 /// Private successful Source handoff selected by the current Product route.
