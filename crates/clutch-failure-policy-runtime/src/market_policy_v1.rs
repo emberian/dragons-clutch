@@ -454,6 +454,14 @@ pub enum FailureMarketFamilyTerminalDispositionV1 {
     ResolvedInterval = 1,
 }
 
+impl FailureMarketFamilyTerminalDispositionV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::ResolvedInterval => 1,
+        }
+    }
+}
+
 /// Complete expected facts for one market-level Failure terminal receipt.
 ///
 /// This projection is not authority. The live adapter must derive it from the
@@ -1129,7 +1137,7 @@ fn hash_family_terminal(
 ) -> FailureMarketFamilyTerminalReceiptIdV1 {
     let mut hasher = Sha256::new();
     hasher.update(MARKET_FAMILY_TERMINAL_DOMAIN_V1);
-    hasher.update([facts.disposition as u8]);
+    hasher.update([facts.disposition.byte()]);
     hasher.update(facts.failure_policy_binding_id.bytes());
     hasher.update(facts.market_instance_id.bytes());
     hasher.update(facts.generation.to_le_bytes());
