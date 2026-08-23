@@ -35,9 +35,10 @@ This directory contains offline `no_std` crates
 - `clutch-structured-claim` — exact rational coefficient realization,
   complete-set-compressed native backing, flat wrapper composition, and
   transactional transferable-claim custody/lifecycle semantics.
-- `clutch-structured-claim-adapter` — the exact wrapper descriptor,
-  deployment/basis identity reconstruction, and atomic Position
-  cash/native-Egg transfer contract for a future small SBF/Token-2022 adapter.
+- `clutch-structured-claim-runtime-contract` — the exact wrapper descriptor,
+  deployment/basis identity reconstruction, full-vector wrap/unwind,
+  compaction/redemption/retirement, and atomic Position cash/native-Egg
+  transfer contract for a future small SBF/Token-2022 adapter.
 - `clutch-owner-settlement` — exact owner-aggregated General V2 receipt/cash
   realization across several single or portfolio orders at one named rounding
   boundary.

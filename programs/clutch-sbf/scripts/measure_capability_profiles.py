@@ -31,6 +31,7 @@ PROGRAMDATA_METADATA_DATA_LEN_BYTES = 45
 BUFFER_METADATA_DATA_LEN_BYTES = 37
 MAX_PERMITTED_DATA_LENGTH = 10 * 1024 * 1024
 PLATFORM_TOOLS_RE = re.compile(r"^platform-tools (v[^ ]+)$", re.MULTILINE)
+LEGACY_RUST_SYMBOL_HASH = re.compile(r"17h[0-9a-f]{16}E\Z")
 
 # Conservative first-party ELF input closure. It intentionally covers every
 # crate because a newly added path dependency must not evade the dirty-input
@@ -43,10 +44,12 @@ SOURCE_CLOSURE = (
     "programs/clutch-sbf/Cargo.lock",
     "programs/clutch-sbf/program",
     "programs/clutch-sbf/harness/Cargo.toml",
+    "programs/clutch-sbf/scripts",
     "programs/clutch-sbf/vendor",
     "programs/solana-layout",
     "programs/solana-reference",
     "research/batch-policy-identity",
+    *(path for _role, path in checker.LINKED_MEASUREMENT_CODE_INPUTS),
 )
 
 
@@ -181,15 +184,61 @@ def require_clean_state(state: dict[str, Any], phase: str) -> None:
         )
 
 
-def section_size(readobj_text: str, name: str) -> int:
-    match = re.search(
-        rf"Name: {re.escape(name)} \(\d+\).*?\n\s*Size: (\d+)",
+def section_extent(readobj_text: str, name: str) -> tuple[int, int]:
+    """Return the exact virtual-address base and byte size of one ELF section."""
+
+    matches: list[tuple[int, int]] = []
+    for block in re.findall(
+        r"(?:^|\n)\s*Section \{\n(.*?)(?=\n\s*\}(?:\n|\Z))",
         readobj_text,
         flags=re.DOTALL,
-    )
-    if match is None:
+    ):
+        section_name = re.search(r"^\s*Name: ([^ ]+)(?: \(\d+\))?\s*$", block, re.MULTILINE)
+        if section_name is None or section_name.group(1) != name:
+            continue
+        address = re.search(r"^\s*Address: (0x[0-9A-Fa-f]+|[0-9]+)\s*$", block, re.MULTILINE)
+        size = re.search(r"^\s*Size: (0x[0-9A-Fa-f]+|[0-9]+)\s*$", block, re.MULTILINE)
+        if address is None or size is None:
+            raise MeasurementError(f"final ELF {name} section lacks address or size")
+        matches.append((int(address.group(1), 0), int(size.group(1), 0)))
+    if len(matches) != 1:
         raise MeasurementError(f"final ELF has no exact {name} section")
-    return int(match.group(1))
+    return matches[0]
+
+
+def section_size(readobj_text: str, name: str) -> int:
+    return section_extent(readobj_text, name)[1]
+
+
+def measurement_code_provenance(repo: Path, commit: str) -> list[dict[str, str]]:
+    """Bind every executed first-party measurement body to bytes and Git blob."""
+
+    rows: list[dict[str, str]] = []
+    for role, relative in checker.LINKED_MEASUREMENT_CODE_INPUTS:
+        path = repo / relative
+        if not path.is_file() or path.is_symlink():
+            raise MeasurementError(f"measurement code is not a regular file: {relative}")
+        blob = run(["git", "rev-parse", f"{commit}:{relative}"], cwd=repo)
+        if checker.GIT_OBJECT_ID.fullmatch(blob) is None or set(blob) == {"0"}:
+            raise MeasurementError(f"malformed Git blob identity for {relative}: {blob}")
+        working_sha256 = sha256_file(path)
+        committed_bytes = run_bytes(
+            ["git", "cat-file", "blob", f"{commit}:{relative}"], cwd=repo
+        )
+        committed_sha256 = hashlib.sha256(committed_bytes).hexdigest()
+        if working_sha256 != committed_sha256:
+            raise MeasurementError(
+                f"measurement code differs from selected Git blob: {relative}"
+            )
+        rows.append(
+            {
+                "role": role,
+                "path": relative,
+                "sha256": working_sha256,
+                "git_blob_oid": blob,
+            }
+        )
+    return rows
 
 
 def undefined_dynamic_symbols(readobj_text: str) -> list[str]:
@@ -238,6 +287,18 @@ def backend_stack_audit(build_log: str, symbol_text: str) -> dict[str, int]:
     }
 
 
+def stable_symbol_identity(symbol: str) -> str:
+    """Remove only rustc's per-compilation legacy symbol hash.
+
+    Cargo-default and explicit-feature builds can produce an identical stripped
+    deployable ELF while the unstripped audit symbols carry different rustc
+    hashes. The function path and every numeric frame result remain evidence;
+    the compiler-internal suffix is not part of deployable artifact identity.
+    """
+
+    return LEGACY_RUST_SYMBOL_HASH.sub("E", symbol)
+
+
 def final_frame_audit(symbol_text: str, disassembly: str) -> dict[str, Any]:
     function_symbols: set[str] = set()
     function_addresses: set[int] = set()
@@ -276,7 +337,7 @@ def final_frame_audit(symbol_text: str, disassembly: str) -> dict[str, Any]:
                 )
             if offset > max_offset:
                 max_offset = offset
-                max_function = current
+                max_function = stable_symbol_identity(current)
     missing = function_addresses - seen_addresses
     if missing:
         raise MeasurementError(
@@ -553,6 +614,7 @@ def main(argv: list[str] | None = None) -> int:
         require_clean_state(before, "pre-build")
         commit_before = run(["git", "rev-parse", "HEAD"], cwd=repo)
         tree_before = run(["git", "rev-parse", "HEAD^{tree}"], cwd=repo)
+        code_provenance = measurement_code_provenance(repo, commit_before)
 
         cargo_build_sbf = Path(
             os.environ.get(
@@ -686,6 +748,7 @@ def main(argv: list[str] | None = None) -> int:
                 "closure_paths": closure_paths,
                 "closure_file_count": len(before["files"]),
                 "closure_digest_sha256": before["digest"],
+                "measurement_code": code_provenance,
                 "cleanliness": {
                     "tracked_before": before["tracked_dirty"],
                     "untracked_before": before["untracked"],
