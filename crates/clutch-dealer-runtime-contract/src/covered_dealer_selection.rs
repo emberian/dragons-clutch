@@ -798,7 +798,7 @@ fn write_dealer_quote(value: &DealerQuotePreconditionV2, writer: &mut Writer<'_>
     writer.bytes(&value.facility.facility_semantics_digest);
     writer.bytes(&value.facility.policy_semantics_digest);
     writer.u64(value.facility.pre_generation);
-    writer.u8(value.cash_policy as u8);
+    writer.u8(cash_policy_byte(value.cash_policy));
     writer.reserved(7);
     writer.bytes(&value.fee_policy_semantics_digest);
     let mut outcome = 0usize;
@@ -1065,7 +1065,7 @@ fn hash_dealer_quote(value: &DealerQuotePreconditionV2, hasher: &mut Sha256) {
     hasher.update(value.facility.facility_semantics_digest);
     hasher.update(value.facility.policy_semantics_digest);
     hasher.update(value.facility.pre_generation.to_le_bytes());
-    hasher.update([value.cash_policy as u8]);
+    hasher.update([cash_policy_byte(value.cash_policy)]);
     hasher.update([0; 7]);
     hasher.update(value.fee_policy_semantics_digest);
     let mut outcome = 0usize;
@@ -1090,6 +1090,12 @@ fn hash_dealer_quote(value: &DealerQuotePreconditionV2, hasher: &mut Sha256) {
         row += 1;
     }
     hasher.update(value.semantic_quote_digest);
+}
+
+const fn cash_policy_byte(value: DealerCashPolicyV2) -> u8 {
+    match value {
+        DealerCashPolicyV2::MinimumGrossHamiltonV1 => 1,
+    }
 }
 
 fn hash_covered_selection(value: &CoveredDealerSelectionV1, hasher: &mut Sha256) {
