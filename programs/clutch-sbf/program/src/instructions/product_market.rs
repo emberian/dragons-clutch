@@ -30,8 +30,8 @@ use clutch_product_series::{
     SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationDispositionV1,
     SeriesLinkObligationStatusV1, SeriesLinkObligationTerminalProjectionV1,
     SeriesLinkObligationV1, SeriesMarketDispositionV1, SeriesMarketLinkPhaseV1,
-    SeriesMarketAdmissionProjectionV1, SeriesMarketLinkV1, SeriesMarketLinkV1Id,
-    SeriesPlanV5Id, SourceOccurrenceV1Id,
+    SeriesMarketAdmissionProjectionV1, SeriesMarketLinkRetirementProjectionV1,
+    SeriesMarketLinkV1, SeriesMarketLinkV1Id, SeriesPlanV5Id, SourceOccurrenceV1Id,
 };
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
@@ -62,6 +62,10 @@ const SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-wrapper-terminal-authentication/v1";
 const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-failure-release-authentication/v1";
+const SERIES_MARKET_LINK_RETIREMENT_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-market-link-retirement-authentication/v1";
+const SERIES_MARKET_LINK_CLOSE_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-market-link-close-authentication/v1";
 const MARKET_RECOVERY_SCHEDULE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-recovery-schedule-authentication/v1";
 const MARKET_FOUNDATION_DEBIT_AUTHENTICATION_DOMAIN_V1: &[u8] =
@@ -342,6 +346,383 @@ impl<'state> AuthenticatedSeriesMarketLinkV1<'state> {
     /// Account/PDA/body/rent authentication identity.
     pub const fn authentication_id(self) -> ContentId {
         self.authentication_id
+    }
+}
+
+/// Exact Product-derived transition facts accepted by the bounded per-Series
+/// lifecycle aggregate before one `0xad/1` link may be physically closed.
+///
+/// This is not caller authority and owns no parallel persisted state. Every
+/// field is derived from hostile-authenticated Product root/link prestates and
+/// their exact postwrites. The future counted Series aggregate receives this
+/// value only through the crate-private default-refusing trait below.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SeriesMarketLinkRetirementPostwriteFactsV1 {
+    root_account: Pubkey,
+    root_binding_id: ContentId,
+    root_authentication_before: ContentId,
+    root_authentication_after: ContentId,
+    root_semantic_before: ContentId,
+    root_semantic_after: ContentId,
+    root_data_before: ContentId,
+    root_data_after: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+    admitted_series_links: u32,
+    live_series_links_before: u32,
+    live_series_links_after: u32,
+    retired_series_links_before: u32,
+    retired_series_links_after: u32,
+    resolution_semantic_id: ContentId,
+    resolution_data_id: ContentId,
+    resolution_activation_receipt_id: ContentId,
+    link_account: Pubkey,
+    link_binding_id: ContentId,
+    link_authentication_before: ContentId,
+    link_authentication_after: ContentId,
+    link_semantic_before: SeriesMarketLinkV1Id,
+    link_semantic_retiring: SeriesMarketLinkV1Id,
+    link_semantic_after: SeriesMarketLinkV1Id,
+    link_data_before: ContentId,
+    link_data_after: ContentId,
+    link_transition_sequence_before: u64,
+    link_transition_sequence_after: u64,
+    retirement_projection_id: ContentId,
+    market_admission_receipt_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    observed_balance_lamports: u64,
+    rent_principal_lamports: u64,
+    surplus_lamports: u64,
+    refund_balance_before: u64,
+    refund_balance_after: u64,
+    sink_balance_before: u64,
+    sink_balance_after: u64,
+}
+
+impl SeriesMarketLinkRetirementPostwriteFactsV1 {
+    fn validate(self) -> Outcome<()> {
+        require(
+            self.root_account != Pubkey::default()
+                && self.link_account != Pubkey::default()
+                && self.root_account != self.link_account
+                && self.rent_refund_owner != self.neutral_lamport_sink
+                && self.rent_refund_owner != self.root_account
+                && self.rent_refund_owner != self.link_account
+                && self.neutral_lamport_sink != self.root_account
+                && self.neutral_lamport_sink != self.link_account
+                && self.generation != 0
+                && self.rent_principal_lamports != 0
+                && self.root_transition_sequence_after
+                    == self
+                        .root_transition_sequence_before
+                        .checked_add(1)
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                && self.link_transition_sequence_after
+                    == self
+                        .link_transition_sequence_before
+                        .checked_add(2)
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                && self.live_series_links_before != 0
+                && self.live_series_links_after
+                    == self
+                        .live_series_links_before
+                        .checked_sub(1)
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                && self.retired_series_links_after
+                    == self
+                        .retired_series_links_before
+                        .checked_add(1)
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                && self.admitted_series_links != 0
+                && self
+                    .live_series_links_before
+                    .checked_add(self.retired_series_links_before)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                    == self.admitted_series_links
+                && self
+                    .live_series_links_after
+                    .checked_add(self.retired_series_links_after)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                    == self.admitted_series_links
+                && self.observed_balance_lamports
+                    == self
+                        .rent_principal_lamports
+                        .checked_add(self.surplus_lamports)
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                && self.refund_balance_after
+                    == self
+                        .refund_balance_before
+                        .checked_add(self.rent_principal_lamports)
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+                && self.sink_balance_after
+                    == self
+                        .sink_balance_before
+                        .checked_add(self.surplus_lamports)
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?,
+            ClutchError::MismatchedState,
+        )?;
+        for id in [
+            self.root_binding_id,
+            self.root_authentication_before,
+            self.root_authentication_after,
+            self.root_semantic_before,
+            self.root_semantic_after,
+            self.root_data_before,
+            self.root_data_after,
+            self.resolution_semantic_id,
+            self.resolution_data_id,
+            self.resolution_activation_receipt_id,
+            self.link_binding_id,
+            self.link_authentication_before,
+            self.link_authentication_after,
+            self.link_semantic_before.content_id(),
+            self.link_semantic_retiring.content_id(),
+            self.link_semantic_after.content_id(),
+            self.link_data_before,
+            self.link_data_after,
+            self.retirement_projection_id,
+            self.market_admission_receipt_id,
+            self.market_instance_id.content_id(),
+            self.series_plan_id.content_id(),
+        ] {
+            require_live_content_id(id)?;
+        }
+        require(
+            self.link_semantic_before != self.link_semantic_retiring
+                && self.link_semantic_retiring != self.link_semantic_after
+                && self.link_semantic_before != self.link_semantic_after
+                && self.root_semantic_before != self.root_semantic_after
+                && self.root_authentication_before != self.root_authentication_after
+                && self.link_authentication_before != self.link_authentication_after,
+            ClutchError::MismatchedState,
+        )
+    }
+
+    pub(crate) fn id(self) -> Outcome<ContentId> {
+        self.validate()?;
+        let id = ContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                SERIES_MARKET_LINK_RETIREMENT_AUTHENTICATION_DOMAIN_V1,
+                self.root_account.as_ref(),
+                &self.root_binding_id.bytes(),
+                &self.root_authentication_before.bytes(),
+                &self.root_authentication_after.bytes(),
+                &self.root_semantic_before.bytes(),
+                &self.root_semantic_after.bytes(),
+                &self.root_data_before.bytes(),
+                &self.root_data_after.bytes(),
+                &self.root_transition_sequence_before.to_le_bytes(),
+                &self.root_transition_sequence_after.to_le_bytes(),
+                &self.admitted_series_links.to_le_bytes(),
+                &self.live_series_links_before.to_le_bytes(),
+                &self.live_series_links_after.to_le_bytes(),
+                &self.retired_series_links_before.to_le_bytes(),
+                &self.retired_series_links_after.to_le_bytes(),
+                &self.resolution_semantic_id.bytes(),
+                &self.resolution_data_id.bytes(),
+                &self.resolution_activation_receipt_id.bytes(),
+                self.link_account.as_ref(),
+                &self.link_binding_id.bytes(),
+                &self.link_authentication_before.bytes(),
+                &self.link_authentication_after.bytes(),
+                &self.link_semantic_before.bytes(),
+                &self.link_semantic_retiring.bytes(),
+                &self.link_semantic_after.bytes(),
+                &self.link_data_before.bytes(),
+                &self.link_data_after.bytes(),
+                &self.link_transition_sequence_before.to_le_bytes(),
+                &self.link_transition_sequence_after.to_le_bytes(),
+                &self.retirement_projection_id.bytes(),
+                &self.market_admission_receipt_id.bytes(),
+                &self.market_instance_id.bytes(),
+                &self.generation.to_le_bytes(),
+                &self.series_plan_id.bytes(),
+                &self.ordinal.to_le_bytes(),
+                self.rent_refund_owner.as_ref(),
+                self.neutral_lamport_sink.as_ref(),
+                &self.observed_balance_lamports.to_le_bytes(),
+                &self.rent_principal_lamports.to_le_bytes(),
+                &self.surplus_lamports.to_le_bytes(),
+                &self.refund_balance_before.to_le_bytes(),
+                &self.refund_balance_after.to_le_bytes(),
+                &self.sink_balance_before.to_le_bytes(),
+                &self.sink_balance_after.to_le_bytes(),
+            ])
+            .to_bytes(),
+        );
+        require_live_content_id(id)?;
+        Ok(id)
+    }
+
+    pub(crate) const fn root_account(self) -> Pubkey {
+        self.root_account
+    }
+    pub(crate) const fn root_binding_id(self) -> ContentId {
+        self.root_binding_id
+    }
+    pub(crate) const fn root_authentication_before(self) -> ContentId {
+        self.root_authentication_before
+    }
+    pub(crate) const fn root_authentication_after(self) -> ContentId {
+        self.root_authentication_after
+    }
+    pub(crate) const fn root_semantic_before(self) -> ContentId {
+        self.root_semantic_before
+    }
+    pub(crate) const fn root_semantic_after(self) -> ContentId {
+        self.root_semantic_after
+    }
+    pub(crate) const fn root_data_before(self) -> ContentId {
+        self.root_data_before
+    }
+    pub(crate) const fn root_data_after(self) -> ContentId {
+        self.root_data_after
+    }
+    pub(crate) const fn root_transition_sequence_before(self) -> u64 {
+        self.root_transition_sequence_before
+    }
+    pub(crate) const fn link_account(self) -> Pubkey {
+        self.link_account
+    }
+    pub(crate) const fn link_binding_id(self) -> ContentId {
+        self.link_binding_id
+    }
+    pub(crate) const fn link_authentication_before(self) -> ContentId {
+        self.link_authentication_before
+    }
+    pub(crate) const fn link_authentication_after(self) -> ContentId {
+        self.link_authentication_after
+    }
+    pub(crate) const fn link_semantic_before(self) -> SeriesMarketLinkV1Id {
+        self.link_semantic_before
+    }
+    pub(crate) const fn link_semantic_retiring(self) -> SeriesMarketLinkV1Id {
+        self.link_semantic_retiring
+    }
+    pub(crate) const fn link_semantic_after(self) -> SeriesMarketLinkV1Id {
+        self.link_semantic_after
+    }
+    pub(crate) const fn link_data_before(self) -> ContentId {
+        self.link_data_before
+    }
+    pub(crate) const fn link_data_after(self) -> ContentId {
+        self.link_data_after
+    }
+    pub(crate) const fn link_transition_sequence_before(self) -> u64 {
+        self.link_transition_sequence_before
+    }
+    pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+    pub(crate) const fn generation(self) -> u64 {
+        self.generation
+    }
+    pub(crate) const fn series_plan_id(self) -> SeriesPlanV5Id {
+        self.series_plan_id
+    }
+    pub(crate) const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+    pub(crate) const fn retirement_projection_id(self) -> ContentId {
+        self.retirement_projection_id
+    }
+    pub(crate) const fn market_admission_receipt_id(self) -> ContentId {
+        self.market_admission_receipt_id
+    }
+    pub(crate) const fn root_transition_sequence_after(self) -> u64 {
+        self.root_transition_sequence_after
+    }
+    pub(crate) const fn link_transition_sequence_after(self) -> u64 {
+        self.link_transition_sequence_after
+    }
+    pub(crate) const fn admitted_series_links(self) -> u32 {
+        self.admitted_series_links
+    }
+    pub(crate) const fn live_series_links_before(self) -> u32 {
+        self.live_series_links_before
+    }
+    pub(crate) const fn live_series_links_after(self) -> u32 {
+        self.live_series_links_after
+    }
+    pub(crate) const fn retired_series_links_before(self) -> u32 {
+        self.retired_series_links_before
+    }
+    pub(crate) const fn retired_series_links_after(self) -> u32 {
+        self.retired_series_links_after
+    }
+    pub(crate) const fn resolution_semantic_id(self) -> ContentId {
+        self.resolution_semantic_id
+    }
+    pub(crate) const fn resolution_data_id(self) -> ContentId {
+        self.resolution_data_id
+    }
+    pub(crate) const fn resolution_activation_receipt_id(self) -> ContentId {
+        self.resolution_activation_receipt_id
+    }
+    pub(crate) const fn rent_refund_owner(self) -> Pubkey {
+        self.rent_refund_owner
+    }
+    pub(crate) const fn neutral_lamport_sink(self) -> Pubkey {
+        self.neutral_lamport_sink
+    }
+    pub(crate) const fn observed_balance_lamports(self) -> u64 {
+        self.observed_balance_lamports
+    }
+    pub(crate) const fn rent_principal_lamports(self) -> u64 {
+        self.rent_principal_lamports
+    }
+    pub(crate) const fn surplus_lamports(self) -> u64 {
+        self.surplus_lamports
+    }
+    pub(crate) const fn refund_balance_before(self) -> u64 {
+        self.refund_balance_before
+    }
+    pub(crate) const fn refund_balance_after(self) -> u64 {
+        self.refund_balance_after
+    }
+    pub(crate) const fn sink_balance_before(self) -> u64 {
+        self.sink_balance_before
+    }
+    pub(crate) const fn sink_balance_after(self) -> u64 {
+        self.sink_balance_after
+    }
+}
+
+/// Default-refusing authority supplied only by a durable counted per-Series
+/// aggregate postwrite. Funding `Closed` alone cannot implement this trait.
+pub(crate) trait AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 {
+    fn authenticate_series_link_retirement_aggregate_postwrite_v1(
+        &self,
+        _facts: SeriesMarketLinkRetirementPostwriteFactsV1,
+    ) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Private receipt proving exact root/link retirement, physical principal
+/// refund, and surplus disposition after a counted Series aggregate accepted
+/// the same link exactly once.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesMarketLinkRetirementV1 {
+    id: ContentId,
+    aggregate_postwrite_id: ContentId,
+    facts: SeriesMarketLinkRetirementPostwriteFactsV1,
+}
+
+impl AuthenticatedSeriesMarketLinkRetirementV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+    pub(crate) const fn aggregate_postwrite_id(self) -> ContentId {
+        self.aggregate_postwrite_id
+    }
+    pub(crate) const fn facts(self) -> SeriesMarketLinkRetirementPostwriteFactsV1 {
+        self.facts
     }
 }
 
@@ -4463,6 +4844,257 @@ fn write_series_market_link_v1<'next>(
     Ok(rebound)
 }
 
+/// Atomically retire one exact `0xad/1` link in its shared `0xaa/1`, require a
+/// bounded per-Series aggregate to accept the same link exactly once, refund
+/// only the immutable rent principal, and sink every tracked or unsolicited
+/// surplus lamport.
+///
+/// This helper deliberately remains route-less. The default-refusing aggregate
+/// boundary prevents a FundingV2 `Closed` projection from standing in for the
+/// missing admitted/retired link partition.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retire_and_close_series_market_link_v1<'a, A>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'a>,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    link_account: &AccountInfo<'a>,
+    link: AuthenticatedSeriesMarketLinkV1<'_>,
+    refund_owner: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    aggregate: &A,
+    root_successor_output: &mut MarketLifecycleRootV1,
+    link_retiring_output: &mut SeriesMarketLinkV1,
+    link_retired_output: &mut SeriesMarketLinkV1,
+    root_rebound_output: &mut MarketLifecycleRootAccountV1,
+    link_retiring_rebound_output: &mut SeriesMarketLinkAccountV1,
+    link_retired_rebound_output: &mut SeriesMarketLinkAccountV1,
+) -> Outcome<AuthenticatedSeriesMarketLinkRetirementV1>
+where
+    A: AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 + ?Sized,
+{
+    require_distinct(&[
+        root_account.clone(),
+        link_account.clone(),
+        refund_owner.clone(),
+        neutral_lamport_sink.clone(),
+    ])?;
+    let root_state = root.state();
+    let root_binding = root_state.binding();
+    let link_state = link.state();
+    let link_binding = link_state.binding();
+    let root_binding_id = root_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_binding_id = link_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        root.is_writable()
+            && link.is_writable()
+            && *root_account.key == root.account()
+            && *link_account.key == link.account()
+            && root.owner_program() == *program_id
+            && link.owner_program() == *program_id
+            && root_state.phase() == MarketLifecyclePhaseV1::Active
+            && link_state.phase() == SeriesMarketLinkPhaseV1::Active
+            && root_state.resolution_semantic_id() != ContentId::ZERO
+            && root_state.resolution_data_id() != ContentId::ZERO
+            && root_state.resolution_activation_receipt_id() != ContentId::ZERO
+            && link_binding.market_instance_id == root_binding.market_instance_id
+            && link_binding.generation == root_binding.generation
+            && link_binding.market_root_account_id.bytes() == root.account().to_bytes()
+            && link_binding.market_binding_id == root_binding_id
+            && link_binding.rent_refund_owner.bytes() == refund_owner.key.to_bytes()
+            && link_binding.neutral_lamport_sink.bytes()
+                == neutral_lamport_sink.key.to_bytes()
+            && link_state.market_admission_sequence() != 0
+            && link_state.market_admission_receipt_id() != ContentId::ZERO
+            && root_state.live_series_links() != 0
+            && root_state.retired_series_links() < root_state.admitted_series_links()
+            && refund_owner.is_writable
+            && !refund_owner.executable
+            && refund_owner.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && refund_owner.data_len() == 0
+            && neutral_lamport_sink.is_writable
+            && !neutral_lamport_sink.executable
+            && neutral_lamport_sink.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && neutral_lamport_sink.data_len() == 0,
+        ClutchError::MismatchedState,
+    )?;
+
+    let observed_balance_lamports = link.observed_lamports();
+    require(
+        observed_balance_lamports == link_account.lamports(),
+        ClutchError::MismatchedState,
+    )?;
+    let rent_principal_lamports = link_state.rent_principal_lamports();
+    let surplus_lamports = observed_balance_lamports
+        .checked_sub(rent_principal_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        surplus_lamports >= link_state.current_donation_lamports(),
+        ClutchError::MismatchedState,
+    )?;
+    let refund_balance_before = refund_owner.lamports();
+    let refund_balance_after = refund_balance_before
+        .checked_add(rent_principal_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let sink_balance_before = neutral_lamport_sink.lamports();
+    let sink_balance_after = sink_balance_before
+        .checked_add(surplus_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+
+    let root_semantic_before = root_state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_semantic_before = link_state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    link_state
+        .begin_retirement_into(link_retiring_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let retirement: SeriesMarketLinkRetirementProjectionV1 = link_retiring_output
+        .retirement_projection()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    root_state
+        .retire_series_link_into(retirement, root_successor_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    link_retiring_output
+        .mark_retired_into(retirement, link_retired_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let link_retiring = write_series_market_link_v1(
+        program_id,
+        link_account,
+        link,
+        link_retiring_output,
+        link_retiring_rebound_output,
+    )?;
+    let root_rebound = write_market_lifecycle_root_v1(
+        program_id,
+        root_account,
+        root,
+        root_successor_output,
+        root_rebound_output,
+    )?;
+    let link_rebound = write_series_market_link_v1(
+        program_id,
+        link_account,
+        link_retiring,
+        link_retired_output,
+        link_retired_rebound_output,
+    )?;
+
+    let root_semantic_after = root_rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_semantic_retiring = link_retiring_output
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_semantic_after = link_rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        root_rebound.state() == &*root_successor_output
+            && link_rebound.state() == &*link_retired_output
+            && root_rebound.state().phase() == MarketLifecyclePhaseV1::Active
+            && link_rebound.state().phase() == SeriesMarketLinkPhaseV1::Retired
+            && link_rebound.observed_lamports() == observed_balance_lamports
+            && link_account.lamports() == observed_balance_lamports,
+        ClutchError::MismatchedState,
+    )?;
+
+    let facts = SeriesMarketLinkRetirementPostwriteFactsV1 {
+        root_account: root.account(),
+        root_binding_id,
+        root_authentication_before: root.authentication_id(),
+        root_authentication_after: root_rebound.authentication_id(),
+        root_semantic_before,
+        root_semantic_after,
+        root_data_before: root.data_id(),
+        root_data_after: root_rebound.data_id(),
+        root_transition_sequence_before: root_state.transition_sequence(),
+        root_transition_sequence_after: root_rebound.state().transition_sequence(),
+        admitted_series_links: root_rebound.state().admitted_series_links(),
+        live_series_links_before: root_state.live_series_links(),
+        live_series_links_after: root_rebound.state().live_series_links(),
+        retired_series_links_before: root_state.retired_series_links(),
+        retired_series_links_after: root_rebound.state().retired_series_links(),
+        resolution_semantic_id: root_state.resolution_semantic_id(),
+        resolution_data_id: root_state.resolution_data_id(),
+        resolution_activation_receipt_id: root_state.resolution_activation_receipt_id(),
+        link_account: link.account(),
+        link_binding_id,
+        link_authentication_before: link.authentication_id(),
+        link_authentication_after: link_rebound.authentication_id(),
+        link_semantic_before,
+        link_semantic_retiring,
+        link_semantic_after,
+        link_data_before: link.data_id(),
+        link_data_after: link_rebound.data_id(),
+        link_transition_sequence_before: link_state.transition_sequence(),
+        link_transition_sequence_after: link_rebound.state().transition_sequence(),
+        retirement_projection_id: retirement.id(),
+        market_admission_receipt_id: link_state.market_admission_receipt_id(),
+        market_instance_id: root_binding.market_instance_id,
+        generation: root_binding.generation,
+        series_plan_id: link_binding.series_plan_id,
+        ordinal: link_binding.ordinal,
+        rent_refund_owner: *refund_owner.key,
+        neutral_lamport_sink: *neutral_lamport_sink.key,
+        observed_balance_lamports,
+        rent_principal_lamports,
+        surplus_lamports,
+        refund_balance_before,
+        refund_balance_after,
+        sink_balance_before,
+        sink_balance_after,
+    };
+    let facts_id = facts.id()?;
+
+    debit_program_owned_lamports_v1(link_account, observed_balance_lamports)?;
+    credit_program_owned_lamports_v1(refund_owner, rent_principal_lamports)?;
+    credit_program_owned_lamports_v1(neutral_lamport_sink, surplus_lamports)?;
+    link_account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    link_account.assign(&SYSTEM_PROGRAM_ID);
+    require(
+        link_account.lamports() == 0
+            && link_account.data_len() == 0
+            && link_account.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && refund_owner.lamports() == refund_balance_after
+            && neutral_lamport_sink.lamports() == sink_balance_after,
+        ClutchError::MismatchedState,
+    )?;
+
+    let aggregate_postwrite_id = aggregate
+        .authenticate_series_link_retirement_aggregate_postwrite_v1(facts)?;
+    require_live_content_id(aggregate_postwrite_id)?;
+    require(
+        aggregate_postwrite_id != facts_id
+            && aggregate_postwrite_id != retirement.id()
+            && aggregate_postwrite_id != link_state.market_admission_receipt_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_MARKET_LINK_CLOSE_AUTHENTICATION_DOMAIN_V1,
+            &facts_id.bytes(),
+            &aggregate_postwrite_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(AuthenticatedSeriesMarketLinkRetirementV1 {
+        id,
+        aggregate_postwrite_id,
+        facts,
+    })
+}
+
 /// Persist the first Product-side Wrapper admission in the same instruction
 /// that an authenticated Structured owner accepts its root/descriptor.
 pub(crate) fn admit_series_wrapper_obligation_v1<'next>(
@@ -5065,5 +5697,115 @@ mod adversarial_resolution_repin_tests {
         ] {
             assert!(require_unresolved_market_resolution_v1(fields.0, fields.1, fields.2).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod adversarial_series_link_retirement_tests {
+    use super::*;
+
+    fn id(byte: u8) -> ContentId {
+        ContentId::from_bytes([byte; 32])
+    }
+
+    fn facts() -> SeriesMarketLinkRetirementPostwriteFactsV1 {
+        SeriesMarketLinkRetirementPostwriteFactsV1 {
+            root_account: Pubkey::new_from_array([1; 32]),
+            root_binding_id: id(2),
+            root_authentication_before: id(3),
+            root_authentication_after: id(4),
+            root_semantic_before: id(5),
+            root_semantic_after: id(6),
+            root_data_before: id(7),
+            root_data_after: id(8),
+            root_transition_sequence_before: 40,
+            root_transition_sequence_after: 41,
+            admitted_series_links: 3,
+            live_series_links_before: 2,
+            live_series_links_after: 1,
+            retired_series_links_before: 1,
+            retired_series_links_after: 2,
+            resolution_semantic_id: id(9),
+            resolution_data_id: id(10),
+            resolution_activation_receipt_id: id(11),
+            link_account: Pubkey::new_from_array([12; 32]),
+            link_binding_id: id(13),
+            link_authentication_before: id(14),
+            link_authentication_after: id(15),
+            link_semantic_before: SeriesMarketLinkV1Id::from_bytes([16; 32]),
+            link_semantic_retiring: SeriesMarketLinkV1Id::from_bytes([17; 32]),
+            link_semantic_after: SeriesMarketLinkV1Id::from_bytes([18; 32]),
+            link_data_before: id(19),
+            link_data_after: id(20),
+            link_transition_sequence_before: 50,
+            link_transition_sequence_after: 52,
+            retirement_projection_id: id(21),
+            market_admission_receipt_id: id(22),
+            market_instance_id: MarketInstanceV2Id::from_bytes([23; 32]),
+            generation: 24,
+            series_plan_id: SeriesPlanV5Id::from_bytes([25; 32]),
+            ordinal: 26,
+            rent_refund_owner: Pubkey::new_from_array([27; 32]),
+            neutral_lamport_sink: Pubkey::new_from_array([28; 32]),
+            observed_balance_lamports: 100,
+            rent_principal_lamports: 70,
+            surplus_lamports: 30,
+            refund_balance_before: 1_000,
+            refund_balance_after: 1_070,
+            sink_balance_before: 2_000,
+            sink_balance_after: 2_030,
+        }
+    }
+
+    struct NoSeriesAggregate;
+    impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 for NoSeriesAggregate {}
+
+    #[test]
+    fn exact_retirement_facts_are_canonical_and_substitution_changes_identity() {
+        let exact = facts();
+        let exact_id = exact.id().unwrap();
+        let mut substituted = exact;
+        substituted.market_admission_receipt_id = id(29);
+        assert_ne!(substituted.id().unwrap(), exact_id);
+        let mut substituted = exact;
+        substituted.link_data_after = id(30);
+        assert_ne!(substituted.id().unwrap(), exact_id);
+    }
+
+    #[test]
+    fn unresolved_or_noncanonical_retirement_facts_refuse() {
+        let exact = facts();
+        for field in 0..3 {
+            let mut unresolved = exact;
+            match field {
+                0 => unresolved.resolution_semantic_id = ContentId::ZERO,
+                1 => unresolved.resolution_data_id = ContentId::ZERO,
+                _ => unresolved.resolution_activation_receipt_id = ContentId::ZERO,
+            }
+            assert!(unresolved.validate().is_err());
+        }
+
+        let mut bad_sequence = exact;
+        bad_sequence.link_transition_sequence_after = 51;
+        assert!(bad_sequence.validate().is_err());
+
+        let mut bad_count = exact;
+        bad_count.live_series_links_after = 2;
+        assert!(bad_count.validate().is_err());
+
+        let mut bad_conservation = exact;
+        bad_conservation.surplus_lamports = 29;
+        assert!(bad_conservation.validate().is_err());
+
+        let mut aliased = exact;
+        aliased.neutral_lamport_sink = aliased.rent_refund_owner;
+        assert!(aliased.validate().is_err());
+    }
+
+    #[test]
+    fn default_series_aggregate_cannot_close_a_link() {
+        assert!(NoSeriesAggregate
+            .authenticate_series_link_retirement_aggregate_postwrite_v1(facts())
+            .is_err());
     }
 }
