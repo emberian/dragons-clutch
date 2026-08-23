@@ -600,14 +600,33 @@ class CapabilityProfileTests(unittest.TestCase):
                 )
 
     def test_runtime_real_pyth_release_never_enables_a_fixture_feature(self) -> None:
-        inert = checker.validate_manifest(manifest(), repo=ROOT)
+        inert = checker.validate_manifest(
+            manifest(profile_feature="profile-full"), repo=ROOT
+        )
         runtime = checker.validate_manifest(
-            manifest(source_identity="runtime-real-pyth-release"), repo=ROOT
+            manifest(
+                profile_feature="profile-full",
+                source_identity="runtime-real-pyth-release",
+            ),
+            repo=ROOT,
         )
         self.assertNotEqual(
             inert["profile_identity_sha256"], runtime["profile_identity_sha256"]
         )
         self.assertEqual(inert["cargo_features"], runtime["cargo_features"])
+
+    def test_runtime_real_pyth_release_refuses_legacy_narrow_profile(self) -> None:
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "runtime real-Pyth release requires Source V3 profile-full",
+        ):
+            checker.validate_manifest(
+                manifest(
+                    profile_feature="profile-general-source-v2-point",
+                    source_identity="runtime-real-pyth-release",
+                ),
+                repo=ROOT,
+            )
 
     def test_full_profile_records_cargo_default_identity_marker(self) -> None:
         full = checker.validate_manifest(

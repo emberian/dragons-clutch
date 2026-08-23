@@ -14,7 +14,7 @@
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/full/v6-source-ingest-general-v5-staged-disabled";
+    "dragons-clutch/capability-profile/full/v7-source-v3-release-legacy-source-lab-gated-general-v5-staged-disabled";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
@@ -22,13 +22,15 @@ pub const PROFILE_LABEL: &str =
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v6-source-ingest-general-v5-staged-disabled";
-/// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v7-source-v3-release-legacy-source-lab-gated-general-v5-staged-disabled";
+/// Direct V3 exact-point product with legacy Source authority disabled.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
-pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
-/// General clearing, Source V2, and archive-direct exact-point d1-d3 resolution product.
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/direct-v3-source-disabled-point/v2";
+/// General clearing product with legacy Source authority disabled.
 #[cfg(feature = "profile-general-source-v2-point")]
-pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-source-v2-point/v1";
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/general-source-disabled-point/v2";
 /// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
@@ -51,8 +53,8 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x05, 0x1c, 0x8a, 0xde, 0xc7, 0x94, 0x74, 0x2b, 0x76, 0x9f, 0x0f, 0x5a, 0x19, 0xfd, 0xeb, 0x3c,
-    0x16, 0x4e, 0xef, 0xf6, 0x66, 0xcf, 0x43, 0x1e, 0x65, 0x4d, 0x3f, 0x9e, 0x4b, 0xc2, 0x93, 0xb0,
+    0xbf, 0x5c, 0x48, 0x9a, 0x5a, 0x1c, 0xcd, 0x6a, 0x48, 0xc3, 0x77, 0x84, 0x4c, 0x58, 0xe1, 0xcd,
+    0xec, 0x68, 0x91, 0x38, 0x6c, 0x58, 0xa8, 0x54, 0xb8, 0x0e, 0xf9, 0x61, 0x40, 0x94, 0xa5, 0x26,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
@@ -61,20 +63,20 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x20, 0x5b, 0x64, 0x10, 0x78, 0xec, 0x45, 0x1b, 0x39, 0x2f, 0x6b, 0xd2, 0x85, 0x72, 0x15, 0xe5,
-    0x7d, 0xfc, 0xb3, 0xf3, 0x74, 0x96, 0x09, 0xac, 0xc6, 0x4d, 0x08, 0xda, 0x87, 0x63, 0x6f, 0x61,
+    0xb8, 0x48, 0xe9, 0xc9, 0xd1, 0xf4, 0x70, 0xd9, 0xe3, 0x13, 0x00, 0x41, 0x6c, 0x55, 0xbe, 0xbf,
+    0xc5, 0x46, 0xa9, 0xf9, 0x8d, 0xca, 0x97, 0x9d, 0x72, 0x4b, 0xe7, 0xbf, 0x5c, 0xd4, 0xd4, 0x1e,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0xb7, 0x35, 0x87, 0x22, 0x84, 0x69, 0x1c, 0xed, 0x6a, 0x71, 0x29, 0xe4, 0x58, 0x83, 0x3e, 0x21,
-    0x21, 0x79, 0x30, 0x09, 0xba, 0xd1, 0x2c, 0x45, 0xe6, 0xcb, 0xaa, 0x3c, 0x88, 0x6e, 0x78, 0x97,
+    0x5e, 0x7c, 0x05, 0x29, 0xdd, 0x07, 0x92, 0x83, 0xd1, 0x2c, 0x77, 0x84, 0x62, 0x74, 0xeb, 0x27,
+    0xbd, 0x82, 0xae, 0x8b, 0xb3, 0xbd, 0x6b, 0x7e, 0x23, 0x0d, 0x22, 0xa8, 0x43, 0xa0, 0x1d, 0x2d,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x1f, 0x9e, 0x2f, 0x27, 0x4c, 0x09, 0xa8, 0x30, 0x14, 0x50, 0x60, 0xef, 0xe1, 0x70, 0x91, 0x28,
-    0x78, 0x0a, 0x12, 0x72, 0xc0, 0x83, 0xc7, 0xc2, 0x25, 0x4f, 0x35, 0x3a, 0xa7, 0x8b, 0xf8, 0x20,
+    0xd3, 0x39, 0x83, 0xa3, 0x0f, 0x4e, 0xfa, 0x57, 0x7e, 0x54, 0x09, 0x38, 0x1d, 0xb1, 0x8f, 0xe4,
+    0x39, 0x4d, 0x45, 0xf5, 0x60, 0xbc, 0x2e, 0x06, 0x3a, 0x51, 0xee, 0x78, 0x42, 0x0c, 0x1d, 0xef,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
 #[cfg(all(
@@ -100,10 +102,21 @@ pub const GENERAL_V2_IDENTITY_LAB: bool =
 pub const DEALER_POLICY_CATALOG_LAB: bool =
     cfg!(feature = "profile-non-production-dealer-policy-catalog-lab");
 
-/// Whether the profile contains legacy Source V1 ingestion and resolution.
-pub const SOURCE_V1: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
-/// Whether the profile contains Source V2 ingestion and resolution.
-pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB;
+/// Whether this artifact was explicitly compiled as a non-production Source lab.
+///
+/// Checked deployable profiles reject both features. Keeping the laboratory
+/// gate here lets historical fixtures remain test inputs without leaving their
+/// V1/V2 dispatch coordinates reachable in a release artifact.
+pub const LEGACY_SOURCE_LAB: bool = cfg!(any(
+    feature = "non-production-mock-source",
+    feature = "non-production-real-pyth-lab"
+));
+/// Whether the non-production laboratory contains legacy Source V1 ingestion.
+pub const SOURCE_V1: bool =
+    LEGACY_SOURCE_LAB && cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
+/// Whether the non-production laboratory contains Source V2 ingestion.
+pub const SOURCE_V2: bool =
+    LEGACY_SOURCE_LAB && !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB;
 /// Whether the profile contains legacy Direct V2 clearing.
 pub const DIRECT_V2: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Direct V3 clearing.
@@ -130,9 +143,15 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
     }
     match tag {
         // Common construction, custody, trading, exit and artifact plane.
-        1..=5 | 7 | 10..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
-        // The old feed buffer, direct-page settlement and Source V1 families.
-        6 | 22..=31 => cfg!(feature = "profile-full"),
+        1..=5 | 7 | 10..=21 | 68 => !GENERAL_V2_IDENTITY_LAB,
+        // Historical Source V2 is laboratory-only. A checked release cannot
+        // reach its ingest/archive intent tags 70 through 73.
+        70..=73 => SOURCE_V2,
+        // The old feed buffer and direct-page settlement families.
+        6 | 22 | 27..=31 => cfg!(feature = "profile-full"),
+        // Historical Source V1 is laboratory-only. Tags 23 through 26 are
+        // never admitted merely because a deployable profile is full-width.
+        23..=26 => SOURCE_V1,
         // Resumable occupation work.
         32..=35 => cfg!(feature = "profile-full"),
         // General clearing and its terminal routes. ClosePosition remains
@@ -278,16 +297,27 @@ mod tests {
             legacy_intent_tag_enabled(1),
             !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB
         );
-        assert_eq!(
-            legacy_intent_tag_enabled(70),
-            !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB
-        );
+        assert_eq!(legacy_intent_tag_enabled(70), SOURCE_V2);
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
         assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
         assert_eq!(legacy_intent_tag_enabled(47), GENERAL_CLEARING);
         assert_eq!(legacy_intent_tag_enabled(23), SOURCE_V1);
         assert_eq!(legacy_intent_tag_enabled(27), DIRECT_V2);
+    }
+
+    #[test]
+    fn legacy_source_tags_require_an_explicit_nonproduction_lab() {
+        for tag in [23_u8, 24, 25, 26] {
+            assert_eq!(legacy_intent_tag_enabled(tag), SOURCE_V1, "tag {tag}");
+        }
+        for tag in [70_u8, 71, 72, 73] {
+            assert_eq!(legacy_intent_tag_enabled(tag), SOURCE_V2, "tag {tag}");
+        }
+        if !LEGACY_SOURCE_LAB {
+            assert!(!SOURCE_V1);
+            assert!(!SOURCE_V2);
+        }
     }
 
     #[test]

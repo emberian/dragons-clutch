@@ -67,6 +67,7 @@ profile.
 | Identity | Additional Cargo feature | Meaning |
 | --- | --- | --- |
 | `production-inert` | none | Ordinary artifact identity; this name does not claim a production source release. |
+| `runtime-real-pyth-release` | none | Checked full-profile identity for a separately authenticated SourceReleaseManifestV2/real-Pyth route; it compiles no fixture row. |
 | `non-production-mock-source-lab` | `non-production-mock-source` | Fabricated-provider laboratory ELF. |
 | `non-production-real-pyth-lab` | `non-production-real-pyth-lab` | Captured real-program/local-synthetic-observation laboratory ELF. |
 
@@ -74,6 +75,13 @@ The source class and exact Cargo features are in the profile identity. A mock
 ELF and a real-Pyth laboratory ELF therefore cannot share a capability identity
 even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
+
+`runtime-real-pyth-release` is admitted only with `profile-full`, whose current
+SourceSeries authority is the `77/v2` Source V3 family. The checked-profile
+gate refuses both laboratory identities as deployable; the runtime also gates
+legacy Source V1 tags `23..=26` and Source V2 tags `70..=73` on those explicit
+non-production features. A release-class ELF therefore has no fixture or
+legacy Source fallback.
 
 The separately named
 `profile-non-production-dealer-policy-catalog-lab` is a capability profile,

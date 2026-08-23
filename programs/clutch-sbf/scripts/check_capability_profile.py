@@ -1399,14 +1399,18 @@ def validate_manifest(
         classification in {"planning", "deployable"},
         "profile.classification: unknown state",
     )
+    build_contract = validate_build_contract(data["build_contract"])
     if classification == "deployable":
         require(
             build_contract["source_identity"]
             in {"production-inert", "runtime-real-pyth-release"},
             "profile: non-production source identity cannot be deployable",
         )
-
-    build_contract = validate_build_contract(data["build_contract"])
+    if build_contract["source_identity"] == "runtime-real-pyth-release":
+        require(
+            build_contract["cargo_profile_feature"] == "profile-full",
+            "profile: runtime real-Pyth release requires Source V3 profile-full",
+        )
     capabilities = validate_capabilities(data["capabilities"])
     central_registry = validate_registry(data["central_registry"], capabilities)
     artifact_budget = data["artifact_budget"]
