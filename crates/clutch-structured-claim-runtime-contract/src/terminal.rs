@@ -330,11 +330,9 @@ fn validate_product_terminal(
     if product.link_account != root_before.binding.link_account
         || product.market_instance_id != root_before.binding.market_instance_id.bytes()
         || product.generation != root_before.binding.generation
-        || product.previous_link_authentication_id != previous.link_authentication_id
-        || product.previous_link_semantic_id != previous.link_semantic_id
-        || product.previous_link_transition_sequence
-            != previous.product_link_transition_sequence
         || product.product_admission_receipt_id != previous.product_admission_receipt_id
+        || product.previous_link_transition_sequence
+            < previous.last_observed_link_transition_sequence
         || product.owner_terminal_receipt_id != root_after.aggregate_terminal_receipt_id
         || product.successor_link_transition_sequence
             != product
@@ -494,10 +492,10 @@ mod tests {
         )
         .unwrap();
         let lineage = StructuredProductLineageV1 {
-            link_authentication_id: id(41),
-            link_semantic_id: id(42),
+            link_binding_id: id(41),
+            wrapper_obligation_configuration_id: id(42),
             product_admission_receipt_id: admission,
-            product_link_transition_sequence: 7,
+            last_observed_link_transition_sequence: 7,
         };
         let root = StructuredMarketRootV1::initialize(
             binding,
@@ -521,11 +519,11 @@ mod tests {
             link_account: root.binding.link_account,
             market_instance_id: root.binding.market_instance_id.bytes(),
             generation: root.binding.generation,
-            previous_link_authentication_id: root.product_lineage.link_authentication_id,
-            previous_link_semantic_id: root.product_lineage.link_semantic_id,
+            previous_link_authentication_id: id(50),
+            previous_link_semantic_id: id(51),
             previous_link_transition_sequence: root
                 .product_lineage
-                .product_link_transition_sequence,
+                .last_observed_link_transition_sequence,
             product_admission_receipt_id: root.product_lineage.product_admission_receipt_id,
             owner_terminal_receipt_id,
             obligation_terminal_receipt_id: id(44),
@@ -533,7 +531,7 @@ mod tests {
             successor_link_semantic_id: id(46),
             successor_link_transition_sequence: root
                 .product_lineage
-                .product_link_transition_sequence
+                .last_observed_link_transition_sequence
                 + 1,
         }
     }
@@ -606,6 +604,28 @@ mod tests {
         assert_eq!(plan.root_after, candidate);
         assert_eq!(plan.root_close.unwrap().refund_lamports, 100);
         assert_eq!(plan.root_close.unwrap().donation_lamports, 7);
+
+        let mut after_sibling_churn = projection;
+        after_sibling_churn.previous_link_authentication_id = id(60);
+        after_sibling_churn.previous_link_semantic_id = id(61);
+        after_sibling_churn.previous_link_transition_sequence += 4;
+        after_sibling_churn.successor_link_authentication_id = id(62);
+        after_sibling_churn.successor_link_semantic_id = id(63);
+        after_sibling_churn.successor_link_transition_sequence =
+            after_sibling_churn.previous_link_transition_sequence + 1;
+        assert!(prepare_structured_descriptor_terminal_v1(
+            root,
+            107,
+            [54; 32],
+            [51; 32],
+            [52; 32],
+            [53; 32],
+            descriptor,
+            retirement,
+            Some(after_sibling_churn),
+            &hash,
+        )
+        .is_ok());
 
         let mut substituted = projection;
         substituted.owner_terminal_receipt_id = id(47);

@@ -1070,6 +1070,8 @@ pub struct AuthenticatedSeriesWrapperAuthorizationV1 {
     link_account: Pubkey,
     link_authentication_id: ContentId,
     link_semantic_id: SeriesMarketLinkV1Id,
+    link_binding_id: ContentId,
+    wrapper_obligation_configuration_id: ContentId,
     series_plan_id: SeriesPlanV5Id,
     ordinal: u32,
     market_instance_id: MarketInstanceV2Id,
@@ -1216,6 +1218,14 @@ impl AuthenticatedSeriesWrapperAuthorizationV1 {
     pub const fn link_semantic_id(self) -> SeriesMarketLinkV1Id {
         self.link_semantic_id
     }
+    /// Immutable complete Series-link binding identity.
+    pub const fn link_binding_id(self) -> ContentId {
+        self.link_binding_id
+    }
+    /// Immutable configuration governing the Wrapper obligation.
+    pub const fn wrapper_obligation_configuration_id(self) -> ContentId {
+        self.wrapper_obligation_configuration_id
+    }
     /// Exact Series.
     pub const fn series_plan_id(self) -> SeriesPlanV5Id {
         self.series_plan_id
@@ -1329,6 +1339,9 @@ pub fn authenticate_series_wrapper_authorization_v1(
         .state()
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let wrapper_admission_receipt_id = link
         .state()
         .obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper);
@@ -1356,6 +1369,8 @@ pub fn authenticate_series_wrapper_authorization_v1(
         link_account: link.account(),
         link_authentication_id: link.authentication_id(),
         link_semantic_id,
+        link_binding_id,
+        wrapper_obligation_configuration_id: binding.obligation_configuration_id.content_id(),
         series_plan_id: binding.series_plan_id,
         ordinal: binding.ordinal,
         market_instance_id: binding.market_instance_id,

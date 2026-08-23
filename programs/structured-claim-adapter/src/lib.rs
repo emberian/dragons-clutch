@@ -47,11 +47,13 @@ pub use custody::{
     STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1,
 };
 pub use current_lifecycle::{
-    prepare_current_compact_donation_v1, prepare_current_redeem_terminal_v1,
+    finalize_current_compaction_disposition_v1, prepare_current_compact_donation_v1,
+    prepare_current_redeem_terminal_v1,
     prepare_current_retire_descriptor_v1, prepare_current_unwrap_full_v1,
     prepare_current_wrap_full_v1,
     CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
     CurrentStructuredTransitionPlanV1, CurrentStructuredVaultAccountsV1,
+    CURRENT_STRUCTURED_COMPACTION_DISPOSITION_DOMAIN_V1,
     CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1, CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1,
     CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2,
 };

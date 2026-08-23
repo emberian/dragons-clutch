@@ -26,8 +26,13 @@ wrapper explicitly refuses those historical wire variants.
 
 Full-vector wrap/unwind, beneficiary-free surplus compaction, and exact
 terminal redemption are implemented behind the zero mask. Compaction uses a
-27-account vault-only frame, performs no Token-2022 CPI, and reconciles the
-unchanged mint plus exact PositionV3/ReplayV3/HoardV2/ClaimLedgerV3 successors.
+exact 32-account compaction frame, performs an exact Hoard-to-neutral Token-2022 CPI
+only when donated cash is nonzero, and reconciles the unchanged wrapper mint,
+exact Hoard/neutral raw-token deltas, and exact
+PositionV3/ReplayV3/HoardV2/ClaimLedgerV3 successors. The five appended roles
+are the distinct Hoard authority, neutral token, Structured root, Product
+`0xad` link, and immutable FundingTermsV2 artifact; the three loader releases
+follow them at indices 29 through 31.
 Descriptor retirement uses a 31-account frame. The wrapper first revokes the
 zero-supply mint through its private mint-authority PDA, persists the descriptor
 tombstone, and calls the base with only the distinct vault-owner PDA signed.

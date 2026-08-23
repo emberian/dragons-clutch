@@ -14,11 +14,15 @@
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5Id, ContentId, FixedCodec,
     MarketInstanceV2Id, NativeClaimBasisV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
-    SeriesAttachmentPlanV4Id, SeriesPlanV5Id,
+    SeriesAttachmentPlanV4Id, SeriesFundingTermsV2, SeriesLinkObligationStatusV1,
+    SeriesLinkObligationV1, SeriesMarketLinkPhaseV1, SeriesPlanV5Id,
 };
 use clutch_collateral_adapter_v2::{
-    admit_collateral_account_v2, admit_collateral_mint_v2, RuntimeAccountViewV2,
-    TokenAccountRoleV2,
+    accept_hoard_surplus_disposition_v1, admit_collateral_account_v2,
+    admit_collateral_mint_v2, prepare_hoard_surplus_disposition_v1, BoundCollateralProfileV2,
+    CpiAccountMetaV2, HoardSurplusDispositionRequestV1, Id as CollateralId,
+    PreparedHoardSurplusDispositionV1, RuntimeAccountViewV2, TokenAccountRoleV2,
+    TransferAuthorityKindV2, TransferAuthorityV2,
 };
 use clutch_retirement::{
     plan_position_v3_replay_v3_retirement_v1, PositionAccountV3, PositionPurposeV3,
@@ -54,6 +58,7 @@ use clutch_structured_claim_adapter::{
     canonical_native_claim_id_v1, canonical_series_scoped_wrapper_product_id_v2,
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
     decode_retired_canonical_wrapper_mint_v1,
+    finalize_current_compaction_disposition_v1,
     prepare_current_compact_donation_v1, prepare_current_redeem_terminal_v1,
     prepare_current_retire_descriptor_v1,
     prepare_current_structured_position_poststate_v1,
@@ -142,8 +147,10 @@ pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT: usize = 32;
 /// Exact account count for current terminal wrapper redemption.
 pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
 
-/// Exact account count for beneficiary-free single-vault compaction.
-pub const STRUCTURED_COMPACTION_ACCOUNT_COUNT: usize = 27;
+/// Exact account count for beneficiary-free single-vault compaction. The five
+/// Product/collateral authority roles are distinct from the original 27-frame:
+/// Hoard authority, neutral token, Structured root, Product link, FundingTerms.
+pub const STRUCTURED_COMPACTION_ACCOUNT_COUNT: usize = 32;
 /// Exact action-8 frame. Hoard and ClaimLedger are current read-only semantic
 /// owners; the descriptor, mint, Position/Replay, root, and optional Product
 /// link terminal successor are mutated atomically.
@@ -180,9 +187,15 @@ const CX_CLAIM_LEDGER_V3: usize = 20;
 const CX_WRAPPER_MINT: usize = 21;
 const CX_COLLATERAL_MINT: usize = 22;
 const CX_HOARD_TOKEN: usize = 23;
-const CX_WRAPPER_RELEASE_V2: usize = 24;
-const CX_BASE_RELEASE_V2: usize = 25;
-const CX_TOKEN_RELEASE_V2: usize = 26;
+const CX_HOARD_AUTHORITY: usize = 24;
+const CX_NEUTRAL_TOKEN: usize = 25;
+const CX_STRUCTURED_ROOT: usize = 26;
+const CX_SERIES_LINK: usize = 27;
+const CX_FUNDING_TERMS_V2: usize = 28;
+const CX_WRAPPER_RELEASE_V2: usize = 29;
+const CX_BASE_RELEASE_V2: usize = 30;
+const CX_TOKEN_RELEASE_V2: usize = 31;
+const _: () = assert!(CX_TOKEN_RELEASE_V2 + 1 == STRUCTURED_COMPACTION_ACCOUNT_COUNT);
 
 const RT_VAULT_AUTHORITY: usize = 0;
 const RT_REALM: usize = 1;
@@ -261,6 +274,8 @@ const ACCOUNT_INDICES: [usize; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
 
 const STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT: usize = 34;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
+const STRUCTURED_COMPACTION_PRODUCT_AUTHORITY_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/compaction-product-authority/v1\0";
 const CV_VAULT_AUTHORITY: usize = 0;
 const CV_PAYER: usize = 1;
 const CV_SYSTEM: usize = 2;
@@ -306,6 +321,21 @@ struct AuthenticatedStructuredDeploymentsV2 {
     base_release_id: ContentId,
     token_release_id: ContentId,
     owner_release_id: ContentId,
+}
+
+/// Private action-6 capability. Every field is derived from the current
+/// Structured root, exact Product link/FundingTerms, current collateral value
+/// authority, and the family-local compaction plan. Public request structs are
+/// never accepted as authority by the executable composer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedStructuredCompactionV1 {
+    plan: clutch_structured_claim_adapter::CurrentStructuredTransitionPlanV1,
+    bound: BoundCollateralProfileV2,
+    hoard_before: clutch_collateral_adapter_v2::HoardV2,
+    claim_ledger_before: clutch_collateral_adapter_v2::ClaimLedgerV3,
+    destination_token: CollateralId,
+    destination_semantic_owner: CollateralId,
+    collateral_value_receipt_id: CollateralId,
 }
 
 /// Private postwrite authority proving the exact terminal Structured root and
@@ -887,10 +917,11 @@ fn structured_product_lineage_v1(
     authorization: AuthenticatedSeriesWrapperAuthorizationV1,
 ) -> StructuredProductLineageV1 {
     StructuredProductLineageV1 {
-        link_authentication_id: authorization.link_authentication_id(),
-        link_semantic_id: ContentId::from_bytes(authorization.link_semantic_id().bytes()),
+        link_binding_id: authorization.link_binding_id(),
+        wrapper_obligation_configuration_id: authorization
+            .wrapper_obligation_configuration_id(),
         product_admission_receipt_id: authorization.wrapper_admission_receipt_id(),
-        product_link_transition_sequence: authorization.link_transition_sequence(),
+        last_observed_link_transition_sequence: authorization.link_transition_sequence(),
     }
 }
 
@@ -1264,8 +1295,9 @@ pub fn process_full_vector(
 }
 
 /// Erase all vault surplus without a beneficiary while preserving exact
-/// wrapper backing. The wrapper performs no Token-2022 CPI: it snapshots the
-/// unchanged mint and reconciles this base mutation after one signed CPI.
+/// wrapper backing. Donated cash is atomically transferred from the Hoard to
+/// the Product/Realm-selected neutral account; Egg-only compaction emits no
+/// token CPI. Replay commits the accepted exact collateral disposition.
 pub fn process_compact_donation(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -1389,17 +1421,11 @@ pub fn process_compact_donation(
     )
     .map_err(map_adapter_error)?;
 
-    let (plan, poststate) = {
+    let plan = {
         let vault_position_data = accounts[CX_VAULT_POSITION]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
         let vault_replay_data = accounts[CX_VAULT_REPLAY]
-            .try_borrow_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let hoard_data = accounts[CX_HOARD_V2]
-            .try_borrow_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let claim_ledger_data = accounts[CX_CLAIM_LEDGER_V3]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
         let mint_data = accounts[CX_WRAPPER_MINT]
@@ -1427,7 +1453,7 @@ pub fn process_compact_donation(
             &mint_data,
         )
         .map_err(map_adapter_error)?;
-        let plan = prepare_current_compact_donation_v1(
+        prepare_current_compact_donation_v1(
             &bound_descriptor,
             liabilities.bound,
             CurrentStructuredVaultAccountsV1 {
@@ -1446,60 +1472,23 @@ pub fn process_compact_donation(
             current_position_projection(vault, &replay),
             &RuntimeSha256,
         )
-        .map_err(map_adapter_error)?;
-        let position_raw = RawAccountV1 {
-            role: AccountRoleV1::SourcePositionV3,
-            key: accounts[CX_VAULT_POSITION].key.to_bytes(),
-            owner: accounts[CX_VAULT_POSITION].owner.to_bytes(),
-            lamports: accounts[CX_VAULT_POSITION].lamports(),
-            data: &vault_position_data,
-            signer: false,
-            writable: true,
-            executable: false,
-        };
-        let replay_raw = RawAccountV1 {
-            role: AccountRoleV1::SourceReplayV3,
-            key: accounts[CX_VAULT_REPLAY].key.to_bytes(),
-            owner: accounts[CX_VAULT_REPLAY].owner.to_bytes(),
-            lamports: accounts[CX_VAULT_REPLAY].lamports(),
-            data: &vault_replay_data,
-            signer: false,
-            writable: true,
-            executable: false,
-        };
-        let hoard_raw = RawAccountV1 {
-            role: AccountRoleV1::HoardV2,
-            key: accounts[CX_HOARD_V2].key.to_bytes(),
-            owner: accounts[CX_HOARD_V2].owner.to_bytes(),
-            lamports: accounts[CX_HOARD_V2].lamports(),
-            data: &hoard_data,
-            signer: false,
-            writable: true,
-            executable: false,
-        };
-        let claim_raw = RawAccountV1 {
-            role: AccountRoleV1::ClaimLedgerV3,
-            key: accounts[CX_CLAIM_LEDGER_V3].key.to_bytes(),
-            owner: accounts[CX_CLAIM_LEDGER_V3].owner.to_bytes(),
-            lamports: accounts[CX_CLAIM_LEDGER_V3].lamports(),
-            data: &claim_ledger_data,
-            signer: false,
-            writable: true,
-            executable: false,
-        };
-        let poststate = prepare_current_structured_vault_poststate_v1(
-            &position_raw,
-            &replay_raw,
-            &hoard_raw,
-            &claim_raw,
-            &bound_descriptor,
-            plan,
-            &verifier,
-        )
-        .map_err(map_adapter_error)?;
-        (plan, poststate)
+        .map_err(map_adapter_error)?
     };
-    authenticate_compaction_collateral_observations(accounts, liabilities.bound, plan)?;
+    let capability = authenticate_structured_compaction_v1(
+        program_id,
+        accounts,
+        descriptor,
+        liabilities.bound,
+        liabilities.hoard,
+        liabilities.claim_ledger,
+        value_authority.receipt_id,
+        plan,
+    )?;
+    let plan = capability.plan;
+    let accepted = execute_structured_compaction_disposition(accounts, capability)?;
+    let plan = finalize_current_compaction_disposition_v1(plan, accepted, &RuntimeSha256)
+        .map_err(map_adapter_error)?;
+    let poststate = prepare_compaction_poststate(accounts, &bound_descriptor, plan, &verifier)?;
     write_compaction_poststate(accounts, poststate, plan)
 }
 
@@ -1534,6 +1523,15 @@ pub fn process_retire_descriptor(
     drop(root_data);
     let family_terminal = root_before.live_descriptor_count == 1;
     validate_retirement_privileges(program_id, accounts, family_terminal)?;
+    let current_product_lineage = authenticate_current_structured_product_lineage(
+        program_id,
+        accounts,
+        root_before,
+        family_terminal,
+    )?;
+    let root_before = root_before
+        .observe_current_product_lineage(current_product_lineage)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
     let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
@@ -1989,9 +1987,10 @@ pub fn process_retire_descriptor(
                 generation: root_before.binding.generation,
                 previous_link_authentication_id: terminal.link_authentication_before(),
                 previous_link_semantic_id: terminal.link_semantic_before(),
-                previous_link_transition_sequence: root_before
-                    .product_lineage
-                    .product_link_transition_sequence,
+                previous_link_transition_sequence: projection
+                    .link_transition_sequence
+                    .checked_sub(1)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
                 product_admission_receipt_id: terminal.wrapper_admission_receipt_id(),
                 owner_terminal_receipt_id: terminal.owner_terminal_receipt_id(),
                 obligation_terminal_receipt_id,
@@ -2358,17 +2357,21 @@ fn terminalize_product_wrapper(
         true,
         &mut link_output,
     )?;
+    let current_binding = link.state().binding();
     require(
         link.account() == *accounts[RT_SERIES_LINK].key
-            && link.authentication_id() == root_before.product_lineage.link_authentication_id
-            && ContentId::from_bytes(
-                link.state()
-                    .semantic_id()
-                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                    .bytes(),
-            ) == root_before.product_lineage.link_semantic_id
+            && current_binding
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == root_before.product_lineage.link_binding_id
+            && current_binding.obligation_configuration_id.content_id()
+                == root_before
+                    .product_lineage
+                    .wrapper_obligation_configuration_id
             && link.state().transition_sequence()
-                == root_before.product_lineage.product_link_transition_sequence
+                >= root_before
+                    .product_lineage
+                    .last_observed_link_transition_sequence
             && link.state().obligation_admission_receipt_id(
                 clutch_product_series::SeriesLinkObligationV1::Wrapper,
             ) == root_before.product_lineage.product_admission_receipt_id,
@@ -2382,6 +2385,58 @@ fn terminalize_product_wrapper(
         &owner,
         &mut rebound,
     )
+}
+
+fn authenticate_current_structured_product_lineage(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    root: StructuredMarketRootV1,
+    require_writable: bool,
+) -> Outcome<StructuredProductLineageV1> {
+    let mut link_output = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let link_data = accounts[RT_SERIES_LINK]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    SeriesMarketLinkAccountV1::decode_into(&link_data, &mut link_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    drop(link_data);
+    let untrusted = link_output.state.binding();
+    let link = authenticate_series_market_link_v1(
+        program_id,
+        &accounts[RT_SERIES_LINK],
+        root.binding.series_plan_id,
+        root.binding.ordinal,
+        root.binding.market_instance_id,
+        root.binding.generation,
+        Pubkey::new_from_array(untrusted.market_root_account_id.bytes()),
+        require_writable,
+        &mut link_output,
+    )?;
+    let binding = link.state().binding();
+    let binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let sequence = link.state().transition_sequence();
+    require(
+        binding_id == root.product_lineage.link_binding_id
+            && binding.obligation_configuration_id.content_id()
+                == root.product_lineage.wrapper_obligation_configuration_id
+            && link.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && link.state().obligation_status(SeriesLinkObligationV1::Wrapper)
+                == SeriesLinkObligationStatusV1::Live
+            && link.state().obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper)
+                == root.product_lineage.product_admission_receipt_id
+            && sequence >= root.product_lineage.last_observed_link_transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(StructuredProductLineageV1 {
+        link_binding_id: binding_id,
+        wrapper_obligation_configuration_id: binding
+            .obligation_configuration_id
+            .content_id(),
+        product_admission_receipt_id: root.product_lineage.product_admission_receipt_id,
+        last_observed_link_transition_sequence: sequence,
+    })
 }
 
 fn close_structured_root(
@@ -2437,17 +2492,17 @@ fn validate_compaction_privileges(
     let signer = [
         true, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false,
+        false, false, false, false, false, false,
     ];
     let writable = [
         false, false, false, false, false, false, false, false, true, true, false, false, false,
-        false, false, false, false, false, false, true, true, false, false, false, false, false,
-        false,
+        false, false, false, false, false, false, true, true, false, false, true, false, true,
+        false, false, false, false, false, false,
     ];
     let executable = [
         false, false, false, false, true, false, false, false, false, false, false, true, false,
         true, false, true, false, false, false, false, false, false, false, false, false, false,
-        false,
+        false, false, false, false, false, false,
     ];
     let mut index = 0usize;
     while index < accounts.len() {
@@ -2464,7 +2519,11 @@ fn validate_compaction_privileges(
             && accounts[CX_DESCRIPTOR].owner == accounts[CX_WRAPPER_PROGRAM].key
             && accounts[CX_WRAPPER_MINT].owner == accounts[CX_TOKEN_2022_PROGRAM].key
             && accounts[CX_COLLATERAL_MINT].owner == accounts[CX_COLLATERAL_TOKEN_PROGRAM].key
-            && accounts[CX_HOARD_TOKEN].owner == accounts[CX_COLLATERAL_TOKEN_PROGRAM].key,
+            && accounts[CX_HOARD_TOKEN].owner == accounts[CX_COLLATERAL_TOKEN_PROGRAM].key
+            && accounts[CX_NEUTRAL_TOKEN].owner == accounts[CX_COLLATERAL_TOKEN_PROGRAM].key
+            && accounts[CX_STRUCTURED_ROOT].owner == program_id
+            && accounts[CX_SERIES_LINK].owner == program_id
+            && accounts[CX_FUNDING_TERMS_V2].owner == program_id,
         ClutchError::MismatchedState,
     )?;
     for release in [
@@ -2642,39 +2701,351 @@ fn authenticate_full_vector_collateral_observations(
     )
 }
 
-fn authenticate_compaction_collateral_observations(
+#[allow(clippy::too_many_arguments)]
+fn authenticate_structured_compaction_v1(
+    program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    bound: clutch_collateral_adapter_v2::BoundCollateralProfileV2,
-    plan: clutch_structured_claim_adapter::CurrentStructuredTransitionPlanV1,
-) -> Outcome<()> {
+    descriptor: StructuredClaimDescriptorV2,
+    bound: BoundCollateralProfileV2,
+    hoard_before: clutch_collateral_adapter_v2::HoardV2,
+    claim_ledger_before: clutch_collateral_adapter_v2::ClaimLedgerV3,
+    collateral_value_receipt_id: CollateralId,
+    mut plan: clutch_structured_claim_adapter::CurrentStructuredTransitionPlanV1,
+) -> Outcome<AuthenticatedStructuredCompactionV1> {
+    require(
+        plan.action == StructuredClaimActionV1::CompactDonation
+            && descriptor.state == clutch_structured_claim_adapter::runtime_contract::DescriptorStateV1::Active
+            && accounts[CX_STRUCTURED_ROOT].owner == program_id
+            && !accounts[CX_STRUCTURED_ROOT].is_signer
+            && !accounts[CX_STRUCTURED_ROOT].is_writable
+            && !accounts[CX_STRUCTURED_ROOT].executable
+            && accounts[CX_STRUCTURED_ROOT].data_len() == STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    let root_data = accounts[CX_STRUCTURED_ROOT]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let root = StructuredMarketRootV1::decode(&root_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let root_data_id =
+        ContentId::from_bytes(solana_sha256_hasher::hashv(&[&root_data[..]]).to_bytes());
+    drop(root_data);
+    let root_id = root
+        .binding
+        .id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_pda = Pubkey::find_program_address(
+        &[STRUCTURED_ROOT_SEED_V1, &descriptor.structured_root_id],
+        program_id,
+    );
+    let root_accounted_lamports = root
+        .rent_principal_lamports
+        .checked_add(root.current_donation_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let observed_root_donation_lamports = accounts[CX_STRUCTURED_ROOT]
+        .lamports()
+        .checked_sub(root.rent_principal_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        root_id.bytes() == descriptor.structured_root_id
+            && *accounts[CX_STRUCTURED_ROOT].key == root_pda.0
+            && root.root_bump == root_pda.1
+            && accounts[CX_STRUCTURED_ROOT].lamports() >= root_accounted_lamports
+            && observed_root_donation_lamports >= root.donation_floor_lamports
+            && root.live_descriptor_count != 0
+            && root.binding.link_account == accounts[CX_SERIES_LINK].key.to_bytes()
+            && root.binding.market_instance_id.bytes() == bound.market().market.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut link_output = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let link_data = accounts[CX_SERIES_LINK]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    SeriesMarketLinkAccountV1::decode_into(&link_data, &mut link_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    drop(link_data);
+    let untrusted_link_binding = link_output.state.binding();
+    let link = authenticate_series_market_link_v1(
+        program_id,
+        &accounts[CX_SERIES_LINK],
+        root.binding.series_plan_id,
+        root.binding.ordinal,
+        root.binding.market_instance_id,
+        root.binding.generation,
+        Pubkey::new_from_array(untrusted_link_binding.market_root_account_id.bytes()),
+        false,
+        &mut link_output,
+    )?;
+    let link_binding = link.state().binding();
+    let link_binding_id = link_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_semantic_id = link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        link.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && link.state().obligation_status(SeriesLinkObligationV1::Wrapper)
+                == SeriesLinkObligationStatusV1::Live
+            && link_binding_id == root.product_lineage.link_binding_id
+            && link_binding.obligation_configuration_id.content_id()
+                == root.product_lineage.wrapper_obligation_configuration_id
+            && link.state().transition_sequence()
+                >= root.product_lineage.last_observed_link_transition_sequence
+            && link.state().obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper)
+                == root.product_lineage.product_admission_receipt_id
+            && link_binding.capability_profile_id == root.binding.capability_profile_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    let funding_terms = authenticate_product_artifact_v1::<SeriesFundingTermsV2>(
+        program_id,
+        &accounts[CX_FUNDING_TERMS_V2],
+        link_binding.funding_terms_id.content_id(),
+    )?;
+    let terms = *funding_terms.value();
+    let terms_id = terms
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        terms_id == link_binding.funding_terms_id
+            && terms.series_plan_id == root.binding.series_plan_id
+            && terms.collateral_mint.bytes() == bound.policy().mint.bytes()
+            && terms.token_program.bytes() == bound.policy().token_program.bytes()
+            && terms.token_program.bytes() == accounts[CX_COLLATERAL_TOKEN_PROGRAM].key.to_bytes()
+            && terms.neutral_collateral_disposition_token_account.bytes()
+                == accounts[CX_NEUTRAL_TOKEN].key.to_bytes()
+            && accounts[CX_NEUTRAL_TOKEN].key != accounts[CX_HOARD_TOKEN].key,
+        ClutchError::MismatchedState,
+    )?;
+
+    let market_bytes = bound.market().market.bytes();
+    let expected_hoard_authority = seeds::hoard_authority_v2_pda(program_id, &market_bytes);
+    require(
+        *accounts[CX_HOARD_AUTHORITY].key == expected_hoard_authority.0
+            && accounts[CX_HOARD_AUTHORITY].key.to_bytes() == hoard_before.authority.bytes()
+            && accounts[CX_HOARD_AUTHORITY].owner == &SYSTEM_PROGRAM_ID
+            && accounts[CX_HOARD_AUTHORITY].data_is_empty()
+            && !accounts[CX_HOARD_AUTHORITY].is_signer
+            && !accounts[CX_HOARD_AUTHORITY].is_writable
+            && !accounts[CX_HOARD_AUTHORITY].executable,
+        ClutchError::WrongPda,
+    )?;
+
+    let product_authority_receipt = solana_sha256_hasher::hashv(&[
+        STRUCTURED_COMPACTION_PRODUCT_AUTHORITY_DOMAIN_V1,
+        &plan.transition_id,
+        &collateral_value_receipt_id.bytes(),
+        accounts[CX_STRUCTURED_ROOT].key.as_ref(),
+        &root_id.bytes(),
+        &root_data_id.bytes(),
+        &root.transition_sequence.to_le_bytes(),
+        &accounts[CX_STRUCTURED_ROOT].lamports().to_le_bytes(),
+        &observed_root_donation_lamports.to_le_bytes(),
+        accounts[CX_SERIES_LINK].key.as_ref(),
+        &link.authentication_id().bytes(),
+        &link_semantic_id.bytes(),
+        &link_binding_id.bytes(),
+        &link_binding.obligation_configuration_id.bytes(),
+        &link.state().transition_sequence().to_le_bytes(),
+        &root.product_lineage.product_admission_receipt_id.bytes(),
+        accounts[CX_FUNDING_TERMS_V2].key.as_ref(),
+        &terms_id.bytes(),
+        accounts[CX_NEUTRAL_TOKEN].key.as_ref(),
+    ])
+    .to_bytes();
+    require(
+        product_authority_receipt != [0; 32] && product_authority_receipt != plan.transition_id,
+        ClutchError::MismatchedState,
+    )?;
+    plan.transition_id = product_authority_receipt;
+    Ok(AuthenticatedStructuredCompactionV1 {
+        plan,
+        bound,
+        hoard_before,
+        claim_ledger_before,
+        destination_token: CollateralId::from_bytes(accounts[CX_NEUTRAL_TOKEN].key.to_bytes()),
+        destination_semantic_owner: CollateralId::from_bytes(terms_id.bytes()),
+        collateral_value_receipt_id,
+    })
+}
+
+fn execute_structured_compaction_disposition(
+    accounts: &[AccountInfo<'_>],
+    capability: AuthenticatedStructuredCompactionV1,
+) -> Outcome<clutch_collateral_adapter_v2::AcceptedHoardSurplusDispositionV1> {
     let mint_data = accounts[CX_COLLATERAL_MINT]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let hoard_token_data = accounts[CX_HOARD_TOKEN]
+    let hoard_data = accounts[CX_HOARD_TOKEN]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let _mint = admit_collateral_mint_v2(
-        bound,
+    let destination_data = accounts[CX_NEUTRAL_TOKEN]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared = prepare_hoard_surplus_disposition_v1(
+        capability.bound,
+        HoardSurplusDispositionRequestV1 {
+            transition_id: CollateralId::from_bytes(capability.plan.transition_id),
+            collateral_value_receipt_id: capability.collateral_value_receipt_id,
+            destination_token_account: capability.destination_token,
+            destination_semantic_owner: capability.destination_semantic_owner,
+            donated_cash_atoms: capability.plan.donated_cash_atoms,
+            donated_internal: capability.plan.donated_internal,
+            hoard_before: capability.hoard_before,
+            hoard_after: capability.plan.hoard_after,
+            claim_ledger_before: capability.claim_ledger_before,
+            claim_ledger_after: capability.plan.claim_ledger_after,
+        },
+        TransferAuthorityV2 {
+            address: CollateralId::from_bytes(accounts[CX_HOARD_AUTHORITY].key.to_bytes()),
+            kind: TransferAuthorityKindV2::ProgramDerived,
+            is_transaction_signer: false,
+            program_address_authenticated: true,
+            is_writable: false,
+            executable: false,
+            data_is_empty: true,
+        },
         collateral_view(&accounts[CX_COLLATERAL_MINT], &mint_data),
+        collateral_view(&accounts[CX_HOARD_TOKEN], &hoard_data),
+        collateral_view(&accounts[CX_NEUTRAL_TOKEN], &destination_data),
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let hoard_token = admit_collateral_account_v2(
-        bound,
-        collateral_view(&accounts[CX_HOARD_TOKEN], &hoard_token_data),
-        TokenAccountRoleV2::Hoard,
+    drop((mint_data, hoard_data, destination_data));
+    invoke_and_accept_structured_compaction_disposition(accounts, prepared)
+}
+
+fn cpi_account_meta_v2(value: CpiAccountMetaV2) -> AccountMeta {
+    AccountMeta {
+        pubkey: Pubkey::new_from_array(value.address.bytes()),
+        is_signer: value.signer,
+        is_writable: value.writable,
+    }
+}
+
+fn invoke_and_accept_structured_compaction_disposition(
+    accounts: &[AccountInfo<'_>],
+    prepared: PreparedHoardSurplusDispositionV1,
+) -> Outcome<clutch_collateral_adapter_v2::AcceptedHoardSurplusDispositionV1> {
+    if let Some(cpi) = prepared.cpi() {
+        require(
+            cpi.program_signed
+                && cpi.token_program
+                    == CollateralId::from_bytes(accounts[CX_COLLATERAL_TOKEN_PROGRAM].key.to_bytes())
+                && cpi.accounts[0].address
+                    == CollateralId::from_bytes(accounts[CX_HOARD_TOKEN].key.to_bytes())
+                && cpi.accounts[1].address
+                    == CollateralId::from_bytes(accounts[CX_COLLATERAL_MINT].key.to_bytes())
+                && cpi.accounts[2].address
+                    == CollateralId::from_bytes(accounts[CX_NEUTRAL_TOKEN].key.to_bytes())
+                && cpi.accounts[3].address
+                    == CollateralId::from_bytes(accounts[CX_HOARD_AUTHORITY].key.to_bytes()),
+            ClutchError::MismatchedState,
+        )?;
+        let instruction = Instruction::new_with_bytes(
+            *accounts[CX_COLLATERAL_TOKEN_PROGRAM].key,
+            &cpi.data,
+            cpi.accounts.into_iter().map(cpi_account_meta_v2).collect(),
+        );
+        let infos = [
+            accounts[CX_HOARD_TOKEN].clone(),
+            accounts[CX_COLLATERAL_MINT].clone(),
+            accounts[CX_NEUTRAL_TOKEN].clone(),
+            accounts[CX_HOARD_AUTHORITY].clone(),
+            accounts[CX_COLLATERAL_TOKEN_PROGRAM].clone(),
+        ];
+        let market_bytes = prepared.hoard_after().market_instance_id.bytes();
+        let bump = [seeds::hoard_authority_v2_pda(
+            accounts[CX_BASE_PROGRAM].key,
+            &market_bytes,
+        )
+        .1];
+        let signer: [&[u8]; 3] = [seeds::SEED_HOARD_AUTHORITY_V2, &market_bytes, &bump];
+        invoke_signed(&instruction, &infos, &[&signer])
+            .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
+    }
+    let mint_after = accounts[CX_COLLATERAL_MINT]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let hoard_after = accounts[CX_HOARD_TOKEN]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let destination_after = accounts[CX_NEUTRAL_TOKEN]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    accept_hoard_surplus_disposition_v1(
+        prepared,
+        collateral_view(&accounts[CX_COLLATERAL_MINT], &mint_after),
+        collateral_view(&accounts[CX_HOARD_TOKEN], &hoard_after),
+        collateral_view(&accounts[CX_NEUTRAL_TOKEN], &destination_after),
     )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let required_after = plan
-        .hoard_after
-        .cash_liability_atoms
-        .checked_add(plan.hoard_after.locked_claim_principal_atoms)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    require(
-        plan.action == StructuredClaimActionV1::CompactDonation
-            && hoard_token.address.bytes() == plan.hoard_after.token_account.bytes()
-            && hoard_token.amount_atoms >= required_after,
-        ClutchError::MismatchedState,
+    .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))
+}
+
+fn prepare_compaction_poststate(
+    accounts: &[AccountInfo<'_>],
+    descriptor: &clutch_structured_claim_adapter::BoundDescriptorV1,
+    plan: clutch_structured_claim_adapter::CurrentStructuredTransitionPlanV1,
+    verifier: &RuntimeStructuredPdaVerifierV1,
+) -> Outcome<clutch_structured_claim_adapter::StructuredVaultPoststateV1> {
+    let position_data = accounts[CX_VAULT_POSITION]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let replay_data = accounts[CX_VAULT_REPLAY]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let hoard_data = accounts[CX_HOARD_V2]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let claim_data = accounts[CX_CLAIM_LEDGER_V3]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let position = RawAccountV1 {
+        role: AccountRoleV1::SourcePositionV3,
+        key: accounts[CX_VAULT_POSITION].key.to_bytes(),
+        owner: accounts[CX_VAULT_POSITION].owner.to_bytes(),
+        lamports: accounts[CX_VAULT_POSITION].lamports(),
+        data: &position_data,
+        signer: false,
+        writable: true,
+        executable: false,
+    };
+    let replay = RawAccountV1 {
+        role: AccountRoleV1::SourceReplayV3,
+        key: accounts[CX_VAULT_REPLAY].key.to_bytes(),
+        owner: accounts[CX_VAULT_REPLAY].owner.to_bytes(),
+        lamports: accounts[CX_VAULT_REPLAY].lamports(),
+        data: &replay_data,
+        signer: false,
+        writable: true,
+        executable: false,
+    };
+    let hoard = RawAccountV1 {
+        role: AccountRoleV1::HoardV2,
+        key: accounts[CX_HOARD_V2].key.to_bytes(),
+        owner: accounts[CX_HOARD_V2].owner.to_bytes(),
+        lamports: accounts[CX_HOARD_V2].lamports(),
+        data: &hoard_data,
+        signer: false,
+        writable: true,
+        executable: false,
+    };
+    let claim = RawAccountV1 {
+        role: AccountRoleV1::ClaimLedgerV3,
+        key: accounts[CX_CLAIM_LEDGER_V3].key.to_bytes(),
+        owner: accounts[CX_CLAIM_LEDGER_V3].owner.to_bytes(),
+        lamports: accounts[CX_CLAIM_LEDGER_V3].lamports(),
+        data: &claim_data,
+        signer: false,
+        writable: true,
+        executable: false,
+    };
+    prepare_current_structured_vault_poststate_v1(
+        &position, &replay, &hoard, &claim, descriptor, plan, verifier,
     )
+    .map_err(map_adapter_error)
 }
 
 fn write_compaction_poststate(
