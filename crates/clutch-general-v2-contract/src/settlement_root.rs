@@ -1546,12 +1546,7 @@ pub fn initialize_settlement_root_v1(
         flags: 0,
     };
     root.validate()?;
-    let epoch = GeneralEpochV6AccountV1 {
-        selected_candidate_count: 1,
-        phase: GeneralEpochPhaseV1::Finalized,
-        ..*request.epoch
-    };
-    epoch.validate()?;
+    let epoch = finalize_epoch_for_settlement_root(request.epoch)?;
     let mut window_after = *window;
     window_after.finalized_slot = request.current_slot;
     window_after.selected_candidate_artifact = request.root_account;
@@ -1594,6 +1589,22 @@ pub fn initialize_settlement_root_v1(
         cash_pot,
         final_pot,
     })
+}
+
+fn finalize_epoch_for_settlement_root(
+    epoch: &GeneralEpochV6AccountV1,
+) -> Result<GeneralEpochV6AccountV1, CodecError> {
+    epoch.validate()?;
+    if epoch.phase != GeneralEpochPhaseV1::Frozen || epoch.selected_candidate_count != 0 {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let successor = GeneralEpochV6AccountV1 {
+        selected_candidate_count: 1,
+        phase: GeneralEpochPhaseV1::Finalized,
+        ..*epoch
+    };
+    successor.validate()?;
+    Ok(successor)
 }
 
 /// Structural zero-liability handoff for the Product occurrence adapter.
@@ -1786,3 +1797,91 @@ fn read_counts(reader: &mut Reader<'_>) -> Result<SettlementRootChildCountsV1, C
 
 const _: () = assert!(IDENTITY_COUNT == 19);
 const _: () = assert!(SETTLEMENT_ROOT_ACCOUNT_BYTES == 980);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id32 {
+        Id32::from_bytes([byte; ID_BYTES])
+    }
+
+    fn frozen_epoch() -> GeneralEpochV6AccountV1 {
+        GeneralEpochV6AccountV1 {
+            market_binding: id(1),
+            market_runtime: id(2),
+            market_instance_v2_id: id(3),
+            economic_domain: id(4),
+            window: id(5),
+            budget: id(6),
+            order_set: id(7),
+            epoch_index: 8,
+            generation: 9,
+            freeze_deadline_slot: 10,
+            frozen_slot: 10,
+            candidate_bundle_count: 1,
+            work_count: 0,
+            selected_candidate_count: 0,
+            rent: DeletableRentOwnerV1 {
+                payer: id(11),
+                refundable_principal: 12,
+                donation_floor: 0,
+            },
+            phase: GeneralEpochPhaseV1::Frozen,
+            stored_bump: 13,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn root_creation_owns_the_only_frozen_to_finalized_epoch_transition() {
+        let epoch = frozen_epoch();
+        let successor = finalize_epoch_for_settlement_root(&epoch).unwrap();
+        assert_eq!(successor.phase, GeneralEpochPhaseV1::Finalized);
+        assert_eq!(successor.selected_candidate_count, 1);
+
+        let mut hostile = epoch;
+        hostile.phase = GeneralEpochPhaseV1::Finalized;
+        assert!(finalize_epoch_for_settlement_root(&hostile).is_err());
+    }
+
+    #[test]
+    fn fresh_final_pot_encoding_is_exact_and_root_owned() {
+        let initialization = SettlementFinalPotInitializationV1 {
+            account: id(1),
+            market: id(2),
+            epoch: id(3),
+            candidate: id(4),
+            owner_order_set_digest: id(5),
+            settlement_witness_digest: id(6),
+            kind: VirtualReceiptKindV1::Split,
+            authorized_complete_set_atoms: 7,
+            outcome_count: 2,
+            rent: DeletableRentOwnerV1 {
+                payer: id(8),
+                refundable_principal: 9,
+                donation_floor: 0,
+            },
+            stored_bump: 10,
+        };
+        let mut bytes = [0u8; FINAL_POT_ACCOUNT_BYTES];
+        initialization.encode(&mut bytes).unwrap();
+        assert_eq!(bytes[0], FINAL_POT_ACCOUNT_TAG);
+        assert_eq!(bytes[1], FINAL_POT_ACCOUNT_VERSION);
+        assert_eq!(bytes[FINAL_POT_ACCOUNT_BYTES - 2], 10);
+        assert_eq!(bytes[FINAL_POT_ACCOUNT_BYTES - 1], 0);
+        let body: [u8; 328] = bytes[2..330].try_into().unwrap();
+        let decoded = AuthenticatedFinalPotV1::decode_body(&body, id(1).bytes(), true, true).unwrap();
+        assert_eq!(decoded.candidate, id(4).bytes());
+        assert_eq!(decoded.inventory_kind, VirtualReceiptKindV1::Split);
+        assert_eq!(decoded.authorized_complete_set_atoms, 7);
+
+        let mut short = [0u8; FINAL_POT_ACCOUNT_BYTES - 1];
+        assert!(initialization.encode(&mut short).is_err());
+        let hostile = SettlementFinalPotInitializationV1 {
+            outcome_count: 1,
+            ..initialization
+        };
+        assert!(hostile.encode(&mut bytes).is_err());
+    }
+}
