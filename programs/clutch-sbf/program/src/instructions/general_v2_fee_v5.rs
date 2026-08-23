@@ -1,4 +1,4 @@
-//! Capability-disabled fee-bearing owner evidence for General settlement.
+//! Current counted-root fee-bearing owner evidence for General settlement.
 //!
 //! This module authenticates the immutable selected fee record, terminal
 //! owner carry, persisted payer-allocation snapshot, and both policy
