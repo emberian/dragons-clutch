@@ -14,7 +14,7 @@
   const HASH32 = /^[0-9a-f]{64}$/;
   const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
-  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v3-product-v5-current";
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v4-product-v5-general-successor-current";
   const SOURCE_PROFILE_RELEASE_COUNTS = Object.freeze({
     "production-inert": "0",
     "non-production-mock-source-lab": "1",
@@ -55,7 +55,6 @@
     "general-candidate-feed-stage": kind("general", "candidate"),
     "general-candidate-feed": kind("general", "candidate"),
     "general-clear-work": kind("general", "candidate"),
-    "general-selected-candidate": kind("general", "candidate"),
     "general-epoch-budget": kind("general", "candidate"),
     "general-owner-settlement-v5": kind("general", "settlement"),
     "general-settlement-receipt-v5": kind("general", "settlement"),
@@ -90,13 +89,9 @@
     "source-lineage": kind("source", "source"),
     "source-work-receipt": kind("source", "source"),
     "fee-selected-record": kind("fees", "settlement"),
-    "fee-owner-carry": kind("fees", "settlement"),
     "fee-owner-carry-v3": kind("fees", "settlement"),
-    "fee-owner-finalization": kind("fees", "settlement"),
     "fee-owner-finalization-v4": kind("fees", "settlement"),
-    "fee-payer-allocation": kind("fees", "settlement"),
     "fee-payer-allocation-v2": kind("fees", "settlement"),
-    "fee-recipient-allocation": kind("fees", "settlement"),
     "fee-recipient-allocation-v2": kind("fees", "settlement"),
     "fee-treasury-ledger": kind("fees", "settlement"),
     "liveness-policy": kind("liveness", "settlement"),

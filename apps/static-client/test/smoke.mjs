@@ -129,6 +129,14 @@ test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
   assert.match(app, /BigInt\(instruction\.localAction\).*12n/s);
 });
 
+test("chain client exposes only the current General decoder contract", () => {
+  assert.match(chain, /canonical-account-decoders\/v4-product-v5-general-successor-current/);
+  assert.doesNotMatch(chain, /general-selected-candidate/);
+  for (const withdrawn of ["fee-owner-carry\"", "fee-owner-finalization\"", "fee-payer-allocation\"", "fee-recipient-allocation\""]) {
+    assert.equal(chain.includes(withdrawn), false);
+  }
+});
+
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
   assert.match(html, /compile_production_payoff_v1/);
   assert.match(html, /current BundleV5 assembler/);

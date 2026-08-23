@@ -44,16 +44,12 @@ use clutch_general_v2_contract::{
     EPOCH_BUDGET_ACCOUNT_VERSION, FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG,
     FINAL_POT_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
     MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V2, MARKET_RUNTIME_ACCOUNT_TAG,
-    MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
-    OWNER_FEE_CARRY_ACCOUNT_TAG, OWNER_FEE_CARRY_ACCOUNT_VERSION,
-    OWNER_FEE_CARRY_ACCOUNT_VERSION_V3, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
-    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+    MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3, OWNER_FEE_CARRY_ACCOUNT_TAG,
+    OWNER_FEE_CARRY_ACCOUNT_VERSION_V3, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4,
     OWNER_FEE_FINALIZATION_ACCOUNT_VERSION_V4, OWNER_SETTLEMENT_ACCOUNT_TAG,
-    OWNER_SETTLEMENT_ACCOUNT_VERSION_V5, PAYER_ALLOCATION_ACCOUNT_BYTES,
-    PAYER_ALLOCATION_ACCOUNT_BYTES_V2, PAYER_ALLOCATION_ACCOUNT_TAG,
-    PAYER_ALLOCATION_ACCOUNT_VERSION, PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
-    RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
-    RECIPIENT_ALLOCATION_ACCOUNT_TAG, RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+    OWNER_SETTLEMENT_ACCOUNT_VERSION_V5, PAYER_ALLOCATION_ACCOUNT_BYTES_V2,
+    PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
     RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
     SETTLEMENT_CASH_POT_ACCOUNT_TAG, SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
@@ -222,13 +218,9 @@ pub enum CanonicalAccountKind {
     SourceLineage,
     SourceWorkReceipt,
     FeeSelectedRecord,
-    FeeOwnerCarry,
     FeeOwnerCarryV3,
-    FeeOwnerFinalization,
     FeeOwnerFinalizationV4,
-    FeePayerAllocation,
     FeePayerAllocationV2,
-    FeeRecipientAllocation,
     FeeRecipientAllocationV2,
     FeeTreasuryLedger,
     LivenessPolicy,
@@ -322,13 +314,9 @@ impl CanonicalAccountKind {
             Self::SourceLineage => "source-lineage",
             Self::SourceWorkReceipt => "source-work-receipt",
             Self::FeeSelectedRecord => "fee-selected-record",
-            Self::FeeOwnerCarry => "fee-owner-carry",
             Self::FeeOwnerCarryV3 => "fee-owner-carry-v3",
-            Self::FeeOwnerFinalization => "fee-owner-finalization",
             Self::FeeOwnerFinalizationV4 => "fee-owner-finalization-v4",
-            Self::FeePayerAllocation => "fee-payer-allocation",
             Self::FeePayerAllocationV2 => "fee-payer-allocation-v2",
-            Self::FeeRecipientAllocation => "fee-recipient-allocation",
             Self::FeeRecipientAllocationV2 => "fee-recipient-allocation-v2",
             Self::FeeTreasuryLedger => "fee-treasury-ledger",
             Self::LivenessPolicy => "liveness-policy",
@@ -1460,16 +1448,6 @@ fn decode_fee(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     } else if tag_version(
         data,
         OWNER_FEE_CARRY_ACCOUNT_TAG,
-        OWNER_FEE_CARRY_ACCOUNT_VERSION,
-    ) && data.len() == OWNER_FEE_CARRY_ACCOUNT_BYTES
-    {
-        Some((
-            CanonicalAccountKind::FeeOwnerCarry,
-            "authenticated selected fee record",
-        ))
-    } else if tag_version(
-        data,
-        OWNER_FEE_CARRY_ACCOUNT_TAG,
         OWNER_FEE_CARRY_ACCOUNT_VERSION_V3,
     ) {
         if data.len() != OWNER_FEE_CARRY_ACCOUNT_BYTES_V3 {
@@ -1478,36 +1456,6 @@ fn decode_fee(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         Some((
             CanonicalAccountKind::FeeOwnerCarryV3,
             "canonical carry PDA plus authenticated selected fee record",
-        ))
-    } else if tag_version(
-        data,
-        OWNER_FEE_CARRY_ACCOUNT_TAG,
-        OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
-    ) && data.len() == OWNER_FEE_FINALIZATION_ACCOUNT_BYTES
-    {
-        Some((
-            CanonicalAccountKind::FeeOwnerFinalization,
-            "authenticated owner settlement and selected fee record",
-        ))
-    } else if tag_version(
-        data,
-        PAYER_ALLOCATION_ACCOUNT_TAG,
-        PAYER_ALLOCATION_ACCOUNT_VERSION,
-    ) && data.len() == PAYER_ALLOCATION_ACCOUNT_BYTES
-    {
-        Some((
-            CanonicalAccountKind::FeePayerAllocation,
-            "authenticated fee assessment and signed envelopes",
-        ))
-    } else if tag_version(
-        data,
-        RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-        RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
-    ) && data.len() == RECIPIENT_ALLOCATION_ACCOUNT_BYTES
-    {
-        Some((
-            CanonicalAccountKind::FeeRecipientAllocation,
-            "authenticated selected record, revenue policy, and maker rows",
         ))
     } else if tag_version(
         data,
