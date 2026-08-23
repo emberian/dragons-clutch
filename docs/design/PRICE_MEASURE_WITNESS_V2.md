@@ -1,14 +1,21 @@
 # Price-measure witness V2
 
-Status: **ISOLATED SAFE-RUST CHECKERS / NOT SELECTED BY SBF**.
+Status: **PURE-CORE GENERAL V2 JOIN / NOT SELECTED BY SBF**.
 
 `crates/clutch-price-measure` implements two deliberately separate exact
 certificate interfaces. The continuous per-span Bernstein witness reproduces
 `research/price-measure-witness`. The finite atom witness targets the actual
 integer-coordinate, largest-remainder-quantized `clutch-bspline` payout map.
 Both are safe, `no_std`, allocation-free, fixed-capacity Rust. No SBF
-dispatcher, account layout, candidate checkpoint, or Realm profile selects
-either checker.
+dispatcher or persisted verified-price checkpoint selects either checker; the
+General V2 feed layout that carries the V3 body remains disabled.
+
+`crates/clutch-general-v2-runtime` now composes the V3 quantized checker with
+the sealed General V2 feed codec, exact Product V2 bodies, canonical
+PriceGrid membership, owner-blind RelationV2, and ScoreV2-Q for smooth degrees
+two and three. That pure composition freezes the canonical fixed-width V3
+witness-body digest and keeps it outside the economic candidate identity and
+rank. It still persists no checkpoint and activates no SBF capability.
 
 ## 1. Critical semantic split
 
@@ -246,7 +253,8 @@ settlement, or vice versa.
 
 Before an SBF profile selects either checker:
 
-1. freeze the canonical basis/price/body digest preimages and account parser;
+1. authenticate the already-frozen Product basis, RelationV2 price, General
+   domain/feed, and V3 body preimages at the SBF owner/PDA boundary;
 2. independently generate the transfer templates and derivation manifest;
 3. add a solver that emits exact continuous moments or quantized atoms without
    treating floating residuals as consensus evidence;
