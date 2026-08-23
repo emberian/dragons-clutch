@@ -248,9 +248,14 @@
     return Object.freeze({ status: "ready", cluster: raw.cluster, projectionAuthority: "untrusted", signing: false, submission: false });
   };
 
-  const validateAcquisition = (raw) => {
+  const validateAcquisition = (raw, configuration) => {
     requirePlain(raw, "acquisition");
     if (raw.authority !== "untrusted read model") throw new Error("acquisition authority is not the expected untrusted read model.");
+    const transportMode = text(raw.transportMode, "acquisition.transportMode", 80);
+    const processedAvailable = bool(raw.processedAvailable, "acquisition.processedAvailable");
+    if (configuration.commitment === "processed" && !processedAvailable) {
+      throw new Error(`Processed projection is disabled: operatord reports ${transportMode} without the complete processed subscription set.`);
+    }
     return Object.freeze({
       bootstrapComplete: bool(raw.bootstrapComplete, "acquisition.bootstrapComplete"),
       remainingScans: decimal(raw.remainingScans, "acquisition.remainingScans").toString(),
@@ -260,7 +265,9 @@
       pendingAccountBytes: decimal(raw.pendingAccountBytes, "acquisition.pendingAccountBytes").toString(),
       pendingRoot: raw.pendingRoot === null ? null : decimal(raw.pendingRoot, "acquisition.pendingRoot").toString(),
       nextReceiveSequence: decimal(raw.nextReceiveSequence, "acquisition.nextReceiveSequence").toString(),
-      authority: raw.authority
+      authority: raw.authority,
+      transportMode,
+      processedAvailable
     });
   };
 
@@ -495,7 +502,7 @@
     const reader = new BoundedGetReader(configuration, fetchFunction);
     const healthRaw = await reader.get("/v1/health");
     const health = validateHealth(healthRaw, configuration);
-    const acquisition = validateAcquisition(await reader.get("/v1/acquisition"));
+    const acquisition = validateAcquisition(await reader.get("/v1/acquisition"), configuration);
     const releases = validateReleaseResponse(await reader.get("/v1/releases"), configuration);
     const accounts = validateAccountsResponse(await reader.get(`/v1/accounts?commitment=${configuration.commitment}`), configuration);
     const keeper = validateKeeper(await reader.get(`/v1/keeper/next?commitment=${configuration.commitment}`), configuration);

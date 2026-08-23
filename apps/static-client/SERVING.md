@@ -19,6 +19,18 @@ for the exact static origin. The browser always uses `credentials: omit`; do
 not solve CORS by enabling credentials or a wildcard origin. The current Rust
 operatord implementation does not itself emit CORS headers.
 
+The implemented read-only topology is:
+
+```text
+operatord chain-serve --config chain.json --port 9130 --static apps/static-client
+```
+
+It serves the static client, bounded finalized index `GET` routes, and the pure
+compiler `POST` route from the same exact loopback authority. `compiler-serve`
+is the smaller no-RPC mode when only compiler output and static inspection are
+needed. See [`CHAIN_SERVE.md`](CHAIN_SERVE.md) and
+[`COMPILER_TRANSPORT.md`](COMPILER_TRANSPORT.md).
+
 ## Meta policy
 
 `index.html` includes:
