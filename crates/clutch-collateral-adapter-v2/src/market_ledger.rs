@@ -15,7 +15,9 @@ use clutch_retirement::{
 };
 
 use crate::codec::{Reader, Writer};
-use crate::{digest, Error, Id, Result};
+use crate::{
+    digest, AcceptedClaimRedemptionCollateralV2, CustodyTransferKindV2, Error, Id, Result,
+};
 
 /// Reused historical Hoard discriminator under the full-width V2 layout.
 pub const HOARD_V2_TAG: u8 = 0x05;
@@ -765,6 +767,7 @@ pub struct FractionalClaimRedemptionPlanV3 {
     hoard_after: HoardV2,
     hoard_after_id: Id,
     payout_atoms: u64,
+    disposition: FractionalPayoutDispositionV3,
     receipt_id: Id,
 }
 
@@ -794,10 +797,28 @@ impl FractionalClaimRedemptionPlanV3 {
         self.payout_atoms
     }
 
+    /// Whether paid atoms become Position cash or leave token custody.
+    pub const fn disposition(self) -> FractionalPayoutDispositionV3 {
+        self.disposition
+    }
+
     /// Canonical atomic redemption receipt.
     pub const fn receipt_id(self) -> Id {
         self.receipt_id
     }
+}
+
+/// Custody classification of whole atoms paid by fractional redemption.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalPayoutDispositionV3 {
+    /// Locked principal becomes canonical PositionV3 cash and stays in Hoard.
+    InternalPositionCash,
+    /// Locked principal leaves Hoard through an accepted Realm-selected CPI.
+    /// `None` is canonical only for a zero payout, which emits no CPI.
+    ExternalCustodyTransfer {
+        /// Exact accepted claim-redemption custody movement when nonzero.
+        accepted: Option<AcceptedClaimRedemptionCollateralV2>,
+    },
 }
 
 /// Burn or preserve native supply, advance the 0xa5 latch, and release exactly
@@ -811,6 +832,7 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
     consumed_sequence: u64,
     mutation: FractionalClaimSupplyMutationV3,
     payout_atoms: u64,
+    disposition: FractionalPayoutDispositionV3,
     backend: &B,
 ) -> Result<FractionalClaimRedemptionPlanV3> {
     hoard.validate()?;
@@ -832,11 +854,52 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
         backend,
     )?;
     let hoard_before_id = hoard.semantic_id(backend)?;
+    let locked_claim_principal_atoms = hoard
+        .locked_claim_principal_atoms
+        .checked_sub(payout_atoms)
+        .ok_or(Error::AggregateLiabilityInsufficient)?;
+    let (cash_liability_atoms, custody_receipt_id) = match disposition {
+        FractionalPayoutDispositionV3::InternalPositionCash => (
+            hoard
+                .cash_liability_atoms
+                .checked_add(payout_atoms)
+                .ok_or(Error::Arithmetic)?,
+            Id::ZERO,
+        ),
+        FractionalPayoutDispositionV3::ExternalCustodyTransfer { accepted } => {
+            match (payout_atoms, accepted) {
+                (0, None) => (hoard.cash_liability_atoms, Id::ZERO),
+                (0, Some(_)) | (_, None) => return Err(Error::MismatchedBinding),
+                (amount, Some(accepted)) => {
+                    let custody = accepted.custody();
+                    let request = accepted.request();
+                    let backing_after = accepted.backing_after();
+                    let visible_hoard_after = custody
+                        .hoard_atoms_after
+                        .ok_or(Error::PostAdmissionFailed)?;
+                    let required_custody_atoms = hoard
+                        .cash_liability_atoms
+                        .checked_add(locked_claim_principal_atoms)
+                        .ok_or(Error::Arithmetic)?;
+                    if request.claim_redemption_id != fractional.transition_id
+                        || request.payout_atoms != amount
+                        || custody.kind != CustodyTransferKindV2::ClaimRedemption
+                        || custody.source_semantic_owner != hoard.market_instance_id
+                        || custody.amount_atoms != amount
+                        || backing_after.locked_atoms != locked_claim_principal_atoms
+                        || backing_after.cap_atoms != hoard.collateral_cap_atoms
+                        || visible_hoard_after < required_custody_atoms
+                    {
+                        return Err(Error::PostAdmissionFailed);
+                    }
+                    (hoard.cash_liability_atoms, accepted.receipt_id())
+                }
+            }
+        }
+    };
     let hoard_after = HoardV2 {
-        locked_claim_principal_atoms: hoard
-            .locked_claim_principal_atoms
-            .checked_sub(payout_atoms)
-            .ok_or(Error::AggregateLiabilityInsufficient)?,
+        locked_claim_principal_atoms,
+        cash_liability_atoms,
         ..hoard
     };
     hoard_after.validate()?;
@@ -847,6 +910,10 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
     let receipt_id = digest(
         FRACTIONAL_CLAIM_REDEMPTION_DOMAIN_V3,
         &[
+            &[match disposition {
+                FractionalPayoutDispositionV3::InternalPositionCash => 1,
+                FractionalPayoutDispositionV3::ExternalCustodyTransfer { .. } => 2,
+            }],
             &hoard.market_instance_id.bytes(),
             &fractional.transition_id.bytes(),
             &fractional.claim_ledger_before_id.bytes(),
@@ -854,6 +921,7 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
             &hoard_before_id.bytes(),
             &hoard_after_id.bytes(),
             &payout_atoms.to_le_bytes(),
+            &custody_receipt_id.bytes(),
         ],
     );
     receipt_id.require_live()?;
@@ -863,6 +931,7 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
         hoard_after,
         hoard_after_id,
         payout_atoms,
+        disposition,
         receipt_id,
     })
 }
