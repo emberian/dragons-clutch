@@ -3,7 +3,7 @@
 This allocation-free contract removes the accidental equality between “one
 filled order” and “one participating owner.” General V2 freezes one row per
 owner with exact aggregate buy/sell price units, order masks, slice count,
-reserved cash, and any already-selected fee atoms. Receipt consumption adds
+and any already-selected fee atoms. Receipt consumption adds
 exact price units without rounding. Only terminal owner finalization converts
 the aggregate payer side with `ceil` and the aggregate payee side with `floor`,
 at the one named `TerminalOwnerFloor` boundary.
@@ -14,9 +14,33 @@ Egg movements remain receipt-exact. An SBF adapter must authenticate every
 receipt/order membership, reconcile reservation funding and Position bytes,
 and consume every receipt/root count before closing the epoch.
 
-The semantic body is exactly 288 bytes. Its outer General V2 account
-tag/version remains centrally owned and unallocated in this isolated lane, so
-the codec cannot accidentally make the runtime capability live by itself.
+The canonical Reservation-handoff V3 semantic body remains exactly 288 bytes.
+Central coordinates `0x81/3` select it; `0x81/1` and `0x81/2` are withdrawn and
+the hostile decoder requires the exact outer tag and version before accepting
+body bytes. V3 retains V2's explicit presence bitmap but replaces V2's
+immutable `reserved_cash_atoms` field at the same byte offset with mutable
+`buy_cash_handoff_atoms`, initialized to zero. Only the unique terminal buy end
+may add the exact authenticated Reservation cash handoff, and it does so in the
+same transition that completes the order bit. Nonterminal buy ends and all sell
+ends require an absent handoff, including when a terminal buy legitimately
+hands off zero cash.
+
+The row enters explicit `AccountingComplete` only when every exact receipt end,
+consideration total, and order mask is complete and the accumulated handoff can
+fund aggregate buyer `ceil` plus the selected fee. Finalization has no external
+cash summary or top-up: it removes that exact handoff from Position cash and
+reserved ownership, returns only the handoff excess to free Position cash,
+credits aggregate seller `floor`, and advances the buyer-first candidate pot.
+Fresh V3 receipt-prestate and finalized-row domains prevent V2 evidence from
+being reused as V3 transition evidence. All returned V3 plan fields are private
+and exposed only through typed getters.
+
+The historical presence-explicit V2 semantic body was exactly 288 bytes. V2
+reused one of V1's three trailing padding bytes as a
+canonical bitmap: expected buy, expected sell, consumed buy, consumed sell.
+The remaining two bytes must be zero. A set bit makes an exact zero value real;
+an unset bit requires the corresponding integer field to be zero. Unknown bits,
+consumed-without-expected sides, and nonzero padding are refused.
 
 The fixed-capacity builder recomputes those rows from the complete authenticated
 filled-order set plus one explicit fee row per participating owner. It refuses
@@ -25,8 +49,8 @@ reservations, or any mismatch with the candidate's owner count, buy/sell
 price-unit totals, fee atoms, rounding pot, and receipt-end count. Output rows
 are lexicographically owner-sorted for canonical account creation and paging.
 
-The account-neutral adapter contract binds each row to the ordered
-`owner-settlement:v1`, Epoch, final-candidate, owner PDA preimage; creates it
+The account-neutral successor binds each future row to the ordered
+`owner-settlement:v2`, Epoch, final-candidate, owner PDA preimage; creates it
 with pre-fund-safe rent ownership; and stages each receipt-end accounting latch
 without moving Eggs. Accounting uses a receipt-scoped `receipt_accounting_id`;
 delivery uses a distinct `delivery_transition_id`, so neither replay latch can
@@ -44,6 +68,27 @@ distinct General V2 FinalPot terminal/disposition authority is not yet owned,
 and rounding or virtual-claim principal cannot be sent to the neutral donation
 sink.
 
+The candidate projection emits one presence-explicit receipt shape for all
+three routes: direct, virtual split to a real buyer, and a real seller to a
+virtual merge. Price and consideration are present even when their exact value
+is zero, and consideration must still equal `quantity * price`. Receipt,
+accounting, and delivery identities remain nonzero and distinct. The pure V2
+projection derives one receipt-prestate data ID over its exact canonical
+344-byte transcript, including both latch masks; Replay therefore binds the
+semantic receipt prestate rather than a detached authorization flag. The pure V2
+projection does not activate action 25: its eventual handler must atomically
+advance the canonical Reservation accounting state, reserved-cash handoff,
+receipt latch, and V2 owner row.
+V2 cash realization is an explicitly non-authorizing structural projection. It
+consumes the complete V2 row, canonical Position V3, and candidate cash pot;
+the row's immutable selected-fee amount is its only fee input. It derives the
+finalized row data ID from the exact terminal 288-byte body, stages the exact
+Position and pot successors, and preserves buyer-first liquidity refusal. The
+live action 38 composer must additionally rederive the fee runtime's private
+typed terminal projection and bind the deleted payer-allocation prestate data
+ID as GEN1 evidence before any atomic write. A caller-supplied authorization
+boolean is not authority.
+
 The successor direct-Egg contract closes the value-plane half only after
 accounting and owner cash finalization have completed. Action 25 advances exact
 price units, owner rows, Reservation accounting totals, and the accounting
@@ -57,6 +102,19 @@ and both terminal owner rows. Its one plan transfers the exact Egg quantity,
 advances delivery totals, returns a completing portfolio seller's entire
 unfilled vector, and sets independent buy/sell delivery latches. It cannot
 repeat price accounting or rounding.
+
+All owner cash and Egg transitions consume the canonical 480-byte
+`PositionAccountV3`, not a settlement-local balance projection. The input
+therefore retains the full MarketInstanceV2, Realm, collateral-policy,
+collateral-release, purpose binding, controller, Replay, rent, generation, and
+outstanding-Reservation identities while binding the separate General runtime
+Market PDA. Every plan returns the exact canonical successor plus the
+authenticated prestate semantic ID; the adapter must compare-and-write that
+prestate and derive the successor semantic ID from the final body.
+The row-data-ID binder re-runs the complete owner realization from its
+authenticated row, Position, fee, and cash-pot prestates before it can return a
+bound plan, so a caller-authored public plan cannot smuggle an alternate
+Position or pot successor through the second-stage hashing seam.
 
 Virtual split and merge use separate typed contracts and cannot pass through
 the paired-direct API. Their default-deny authority records bind a checked

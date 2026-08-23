@@ -29,7 +29,9 @@ account, and the ownerless RelationV2 book. The crate then:
    contract's single active-width transcript owner;
 4. proves every candidate price is an exact grid member;
 5. verifies exact finite-atom coherence against the production quantized
-   B-spline evaluator;
+   B-spline evaluator and, for degrees two and three, reprojects the same feed
+   atoms into the stronger payout-denominator-scale positive-mixture
+   certificate;
 6. verifies the owner-blind coefficient-vector relation and recomputes its
    final candidate digest;
 7. recomputes ScoreV2-Q; and
@@ -39,6 +41,18 @@ account, and the ownerless RelationV2 book. The crate then:
 The sole payout rounding boundary is Product's immutable largest-remainder,
 lowest-outcome-index quantizer. Prices are exact integer grid members before
 entry; neither certificate reconstruction nor RelationV2 rounds.
+
+For degree-two and degree-three markets, General admission additionally
+requires the MarketBinding/Grid price scale to equal the authenticated
+NativeClaimBasis payout denominator. The exact Genesis V2 identity supplies
+the complete coordinate-domain Terms binding, the NativeClaimBasis identity
+supplies the evaluator binding, and RelationV2's canonical candidate-price
+digest supplies the price binding. The verifier constructs the 544-byte
+certificate ephemerally from the already-retained feed atoms; there is no
+second atom account, persisted certificate, or caller-selected identity.
+Degree-zero and degree-one markets remain on their exact V3 finite/mapped
+checker because the positive-mixture V1 theorem deliberately covers only
+degrees two and three.
 
 The price witness is intentionally representation-nonunique. Its canonical
 body digest authenticates the retained sidecar but is absent from the

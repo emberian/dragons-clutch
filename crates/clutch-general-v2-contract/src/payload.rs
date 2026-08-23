@@ -28,17 +28,17 @@ pub const CLEANUP_CANDIDATE_PAYLOAD_BYTES: usize = 96;
 /// Exact action-21 payload bytes.
 pub const CLAIM_SOLVER_PAYLOAD_BYTES: usize = 32;
 /// Exact action-24 selector payload bytes.
-pub const FREEZE_ENTITLEMENT_PAYLOAD_BYTES: usize = 96;
+pub const FREEZE_ENTITLEMENT_PAYLOAD_BYTES: usize = 64;
 /// Exact action-25 accounting selector payload bytes.
-pub const ACCOUNT_RECEIPT_END_PAYLOAD_BYTES: usize = 160;
+pub const ACCOUNT_RECEIPT_END_PAYLOAD_BYTES: usize = 128;
 /// Exact action-26 disabled direct-receipt selector bytes.
-pub const CONSUME_DIRECT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
+pub const CONSUME_DIRECT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 64;
 /// Exact action-36 disabled virtual-split receipt selector bytes.
-pub const CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
+pub const CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 64;
 /// Exact action-37 disabled virtual-merge receipt selector bytes.
-pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
+pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 64;
 /// Exact action-38 disabled owner-finalization selector bytes.
-pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 192;
+pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 160;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -491,33 +491,27 @@ impl ClaimSolverPayloadV1 {
 
 /// Action-24 `FreezeEntitlement` identity selector.
 ///
-/// This payload selects one owner row but does not supply its expectation. A
-/// future adapter must obtain that expectation only from the complete,
-/// authenticated filled-order and selected-fee projection.
+/// This payload selects only the counted candidate. The strict next-slice
+/// materializer derives every owner, order, Reservation, row, and receipt fact
+/// from the authenticated selected Feed and frozen settlement projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FreezeEntitlementPayloadV1 {
     /// Finalized parent Epoch PDA.
     pub epoch: Id32,
     /// Counted SelectedCandidate PDA.
     pub selected_candidate: Id32,
-    /// Semantic Position owner identity.
-    pub owner: Id32,
 }
 
 impl FreezeEntitlementPayloadV1 {
-    /// Decode exactly 96 hostile selector bytes.
+    /// Decode exactly 64 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, FREEZE_ENTITLEMENT_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
             selected_candidate: live_id(&mut reader)?,
-            owner: live_id(&mut reader)?,
         };
         reader.finish()?;
-        if value.epoch == value.selected_candidate
-            || value.epoch == value.owner
-            || value.selected_candidate == value.owner
-        {
+        if value.epoch == value.selected_candidate {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(value)
@@ -528,8 +522,8 @@ impl FreezeEntitlementPayloadV1 {
 ///
 /// Slice, order, side, price, and completion facts are owned solely by the
 /// authenticated receipt and selected-order projection. The accounting ID is
-/// a replay identity for the owner-row mutation and must never be reused as a
-/// later Egg-delivery transition ID.
+/// derived from the authenticated receipt PDA and exact prestate, never from
+/// caller bytes, and remains distinct from every delivery transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccountReceiptEndPayloadV1 {
     /// Finalized parent Epoch PDA.
@@ -540,12 +534,10 @@ pub struct AccountReceiptEndPayloadV1 {
     pub owner_settlement: Id32,
     /// Receipt PDA whose authenticated body must reproduce every claim below.
     pub receipt: Id32,
-    /// Opaque identity of this accounting-only receipt-end mutation.
-    pub receipt_accounting_id: Id32,
 }
 
 impl AccountReceiptEndPayloadV1 {
-    /// Decode exactly 160 hostile selector bytes.
+    /// Decode exactly 128 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, ACCOUNT_RECEIPT_END_PAYLOAD_BYTES)?;
         let value = Self {
@@ -553,7 +545,6 @@ impl AccountReceiptEndPayloadV1 {
             selected_candidate: live_id(&mut reader)?,
             owner_settlement: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
-            receipt_accounting_id: live_id(&mut reader)?,
         };
         reader.finish()?;
         let identities = [
@@ -561,7 +552,6 @@ impl AccountReceiptEndPayloadV1 {
             value.selected_candidate,
             value.owner_settlement,
             value.receipt,
-            value.receipt_accounting_id,
         ];
         let mut left = 0usize;
         while left < identities.len() {
@@ -580,32 +570,26 @@ impl AccountReceiptEndPayloadV1 {
 
 /// Action-26 `ConsumeDirectReceiptEggs` immutable selector.
 ///
-/// The delivery ID is equality-bound to the authenticated direct receipt
-/// and its complete pure poststate plan. No economic field is caller-owned.
+/// The delivery ID is derived from the authenticated direct receipt and its
+/// complete pure poststate plan. No economic or replay field is caller-owned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConsumeDirectReceiptEggsPayloadV1 {
     /// Counted parent Epoch PDA.
     pub epoch: Id32,
     /// Canonical selected direct-receipt account PDA.
     pub receipt: Id32,
-    /// Opaque identity of the complete atomic Egg/reservation delivery.
-    pub delivery_transition_id: Id32,
 }
 
 impl ConsumeDirectReceiptEggsPayloadV1 {
-    /// Decode exactly 96 hostile selector bytes.
+    /// Decode exactly 64 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, CONSUME_DIRECT_RECEIPT_EGGS_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
-            delivery_transition_id: live_id(&mut reader)?,
         };
         reader.finish()?;
-        if value.epoch == value.receipt
-            || value.epoch == value.delivery_transition_id
-            || value.receipt == value.delivery_transition_id
-        {
+        if value.epoch == value.receipt {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(value)
@@ -614,33 +598,27 @@ impl ConsumeDirectReceiptEggsPayloadV1 {
 
 /// Action-36 `ConsumeVirtualSplitReceiptEggs` immutable selector.
 ///
-/// The delivery ID must authenticate one indivisible plan containing both
-/// the checked complete-set split and the associated real buy receipt end.
-/// No inventory-only successor action is allocated.
+/// One receipt-derived delivery ID authenticates the indivisible checked
+/// complete-set split and associated real buy end. No inventory-only
+/// successor action is allocated and no ID is accepted from the caller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConsumeVirtualSplitReceiptEggsPayloadV1 {
     /// Counted parent Epoch PDA.
     pub epoch: Id32,
     /// Canonical selected virtual-split receipt account PDA.
     pub receipt: Id32,
-    /// Opaque identity of the complete inventory-and-real-end transition.
-    pub delivery_transition_id: Id32,
 }
 
 impl ConsumeVirtualSplitReceiptEggsPayloadV1 {
-    /// Decode exactly 96 hostile selector bytes.
+    /// Decode exactly 64 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
-            delivery_transition_id: live_id(&mut reader)?,
         };
         reader.finish()?;
-        if value.epoch == value.receipt
-            || value.epoch == value.delivery_transition_id
-            || value.receipt == value.delivery_transition_id
-        {
+        if value.epoch == value.receipt {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(value)
@@ -649,33 +627,27 @@ impl ConsumeVirtualSplitReceiptEggsPayloadV1 {
 
 /// Action-37 `ConsumeVirtualMergeReceiptEggs` immutable selector.
 ///
-/// The delivery ID must authenticate one indivisible plan containing both
-/// the associated real sell receipt end and the checked complete-set merge.
-/// No inventory-only successor action is allocated.
+/// One receipt-derived delivery ID authenticates the indivisible real sell
+/// end and checked complete-set merge. No inventory-only successor action is
+/// allocated and no ID is accepted from the caller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConsumeVirtualMergeReceiptEggsPayloadV1 {
     /// Counted parent Epoch PDA.
     pub epoch: Id32,
     /// Canonical selected virtual-merge receipt account PDA.
     pub receipt: Id32,
-    /// Opaque identity of the complete real-end-and-inventory transition.
-    pub delivery_transition_id: Id32,
 }
 
 impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
-    /// Decode exactly 96 hostile selector bytes.
+    /// Decode exactly 64 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
-            delivery_transition_id: live_id(&mut reader)?,
         };
         reader.finish()?;
-        if value.epoch == value.receipt
-            || value.epoch == value.delivery_transition_id
-            || value.receipt == value.delivery_transition_id
-        {
+        if value.epoch == value.receipt {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(value)
@@ -684,10 +656,9 @@ impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
 
 /// Action-38 `FinalizeOwnerSettlement` immutable selector.
 ///
-/// The finalization identity is persisted only after the accounting-complete
-/// owner row, Position, and candidate cash pot have all reached the exact
-/// atomic poststate. It is distinct from receipt accounting and Egg-delivery
-/// transition identities.
+/// The live composer derives the SHA-256 data ID of the exact finalized V2
+/// owner row together with Position, Replay, and cash-pot successors. No
+/// caller-carried finalization identity is accepted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeOwnerSettlementPayloadV1 {
     /// Counted parent Epoch PDA.
@@ -700,12 +671,10 @@ pub struct FinalizeOwnerSettlementPayloadV1 {
     pub position: Id32,
     /// Candidate-wide directional settlement cash-pot PDA.
     pub settlement_cash_pot: Id32,
-    /// Once-only owner Position/cash-pot realization identity.
-    pub owner_finalization_id: Id32,
 }
 
 impl FinalizeOwnerSettlementPayloadV1 {
-    /// Decode exactly 192 hostile selector bytes.
+    /// Decode exactly 160 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES)?;
         let value = Self {
@@ -714,7 +683,6 @@ impl FinalizeOwnerSettlementPayloadV1 {
             owner_settlement: live_id(&mut reader)?,
             position: live_id(&mut reader)?,
             settlement_cash_pot: live_id(&mut reader)?,
-            owner_finalization_id: live_id(&mut reader)?,
         };
         reader.finish()?;
         let identities = [
@@ -723,7 +691,6 @@ impl FinalizeOwnerSettlementPayloadV1 {
             value.owner_settlement,
             value.position,
             value.settlement_cash_pot,
-            value.owner_finalization_id,
         ];
         let mut left = 0usize;
         while left < identities.len() {
@@ -963,7 +930,6 @@ mod tests {
         let mut selector = [0u8; CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES];
         selector[..32].copy_from_slice(&live(1));
         selector[32..64].copy_from_slice(&live(2));
-        selector[64..].copy_from_slice(&live(3));
 
         assert!(matches!(
             decode_virtual_settlement_payload_v1(36, &selector),
@@ -986,7 +952,7 @@ mod tests {
             Err(CodecError::InvalidState)
         );
         assert_eq!(
-            decode_virtual_settlement_payload_v1(36, &selector[..95]),
+            decode_virtual_settlement_payload_v1(36, &selector[..63]),
             Err(CodecError::WrongLength)
         );
 
@@ -1005,21 +971,20 @@ mod tests {
     #[test]
     fn account_receipt_end_is_identity_only_and_strict() {
         let mut selector = [0u8; ACCOUNT_RECEIPT_END_PAYLOAD_BYTES];
-        for (index, byte) in (1_u8..=5).enumerate() {
+        for (index, byte) in (1_u8..=4).enumerate() {
             let start = index * ID_BYTES;
             selector[start..start + ID_BYTES].copy_from_slice(&live(byte));
         }
-        let decoded = AccountReceiptEndPayloadV1::decode(&selector).unwrap();
-        assert_eq!(decoded.receipt_accounting_id, Id32::new(live(5)).unwrap());
+        AccountReceiptEndPayloadV1::decode(&selector).unwrap();
         assert!(matches!(
             decode_owner_settlement_payload_v1(25, &selector),
             Ok(OwnerSettlementPayloadV1::AccountReceiptEnd(_))
         ));
         assert_eq!(
-            decode_owner_settlement_payload_v1(25, &selector[..159]),
+            decode_owner_settlement_payload_v1(25, &selector[..127]),
             Err(CodecError::WrongLength)
         );
-        selector[4 * ID_BYTES..5 * ID_BYTES].copy_from_slice(&live(1));
+        selector[3 * ID_BYTES..4 * ID_BYTES].copy_from_slice(&live(1));
         assert_eq!(
             decode_owner_settlement_payload_v1(25, &selector),
             Err(CodecError::MismatchedBinding)
@@ -1027,23 +992,22 @@ mod tests {
     }
 
     #[test]
-    fn owner_finalization_selector_binds_six_distinct_identities() {
+    fn owner_finalization_selector_derives_finalized_row_data_id() {
         let mut selector = [0u8; FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES];
-        for (index, byte) in (1_u8..=6).enumerate() {
+        for (index, byte) in (1_u8..=5).enumerate() {
             let start = index * ID_BYTES;
             selector[start..start + ID_BYTES].copy_from_slice(&live(byte));
         }
-        let decoded = FinalizeOwnerSettlementPayloadV1::decode(&selector).unwrap();
-        assert_eq!(decoded.owner_finalization_id, Id32::new(live(6)).unwrap());
+        FinalizeOwnerSettlementPayloadV1::decode(&selector).unwrap();
         assert!(matches!(
             decode_owner_settlement_payload_v1(38, &selector),
             Ok(OwnerSettlementPayloadV1::FinalizeOwnerSettlement(_))
         ));
         assert_eq!(
-            decode_owner_settlement_payload_v1(38, &selector[..191]),
+            decode_owner_settlement_payload_v1(38, &selector[..159]),
             Err(CodecError::WrongLength)
         );
-        selector[5 * ID_BYTES..6 * ID_BYTES].copy_from_slice(&live(3));
+        selector[4 * ID_BYTES..5 * ID_BYTES].copy_from_slice(&live(3));
         assert_eq!(
             decode_owner_settlement_payload_v1(38, &selector),
             Err(CodecError::MismatchedBinding)

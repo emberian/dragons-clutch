@@ -241,56 +241,8 @@ impl EconomicBookV2 {
         let mut order_index = 0usize;
         while order_index < usize::from(self.len) {
             let order = self.orders[order_index];
-            if is_zero_digest(&order.order_id) || (order_index != 0 && previous >= order.order_id) {
-                return Err(EconomicErrorV2::NonCanonicalOrderOrder {
-                    order: bounded_index(order_index)?,
-                });
-            }
+            validate_live_order_shape_v2(domain, &order, bounded_index(order_index)?, previous)?;
             previous = order.order_id;
-            if order.quantity == 0 || order.minimum_fill > order.quantity {
-                return Err(EconomicErrorV2::InvalidQuantity {
-                    order: bounded_index(order_index)?,
-                });
-            }
-            if order.partial_policy == PartialPolicy::AllOrNone
-                && order.minimum_fill != order.quantity
-            {
-                return Err(EconomicErrorV2::InvalidMinimumFill {
-                    order: bounded_index(order_index)?,
-                });
-            }
-            if order.expiry_epoch < domain.epoch_index {
-                return Err(EconomicErrorV2::ExpiredOrder {
-                    order: bounded_index(order_index)?,
-                });
-            }
-            let mut nonzero = false;
-            let mut outcome = 0usize;
-            while outcome < domain.outcomes() {
-                let coefficient = order.coefficients[outcome];
-                nonzero |= coefficient != 0;
-                coefficient
-                    .checked_mul(order.quantity)
-                    .ok_or(EconomicErrorV2::FlowOverflow {
-                        order: bounded_index(order_index)?,
-                        outcome: bounded_index(outcome)?,
-                    })?;
-                outcome += 1;
-            }
-            if !nonzero {
-                return Err(EconomicErrorV2::InvalidQuantity {
-                    order: bounded_index(order_index)?,
-                });
-            }
-            while outcome < MAX_OUTCOMES {
-                if order.coefficients[outcome] != 0 {
-                    return Err(EconomicErrorV2::NonCanonicalCoefficientPadding {
-                        order: bounded_index(order_index)?,
-                        outcome: bounded_index(outcome)?,
-                    });
-                }
-                outcome += 1;
-            }
             order_index += 1;
         }
         while order_index < MAX_ORDERS {
@@ -303,6 +255,55 @@ impl EconomicBookV2 {
         }
         Ok(())
     }
+}
+
+/// Validate one live order using the exact shape rules shared by the bounded
+/// and resumable RelationV2 paths.
+pub(crate) fn validate_live_order_shape_v2(
+    domain: &EconomicDomainV2,
+    order: &EconomicOrderV2,
+    order_index: u8,
+    previous_order_id: [u8; 32],
+) -> Result<(), EconomicErrorV2> {
+    if is_zero_digest(&order.order_id) || (order_index != 0 && previous_order_id >= order.order_id)
+    {
+        return Err(EconomicErrorV2::NonCanonicalOrderOrder { order: order_index });
+    }
+    if order.quantity == 0 || order.minimum_fill > order.quantity {
+        return Err(EconomicErrorV2::InvalidQuantity { order: order_index });
+    }
+    if order.partial_policy == PartialPolicy::AllOrNone && order.minimum_fill != order.quantity {
+        return Err(EconomicErrorV2::InvalidMinimumFill { order: order_index });
+    }
+    if order.expiry_epoch < domain.epoch_index {
+        return Err(EconomicErrorV2::ExpiredOrder { order: order_index });
+    }
+    let mut nonzero = false;
+    let mut outcome = 0usize;
+    while outcome < domain.outcomes() {
+        let coefficient = order.coefficients[outcome];
+        nonzero |= coefficient != 0;
+        coefficient
+            .checked_mul(order.quantity)
+            .ok_or(EconomicErrorV2::FlowOverflow {
+                order: order_index,
+                outcome: bounded_index(outcome)?,
+            })?;
+        outcome += 1;
+    }
+    if !nonzero {
+        return Err(EconomicErrorV2::InvalidQuantity { order: order_index });
+    }
+    while outcome < MAX_OUTCOMES {
+        if order.coefficients[outcome] != 0 {
+            return Err(EconomicErrorV2::NonCanonicalCoefficientPadding {
+                order: order_index,
+                outcome: bounded_index(outcome)?,
+            });
+        }
+        outcome += 1;
+    }
+    Ok(())
 }
 
 /// Submitted economic fill coordinates.
@@ -430,6 +431,8 @@ pub enum EconomicErrorV2 {
     ArithmeticOverflow,
     /// The already-validated aggregate unexpectedly failed ScoreV2.
     Score(ScoreErrorV2),
+    /// A resumed canonical-candidate SHA-256 checkpoint was malformed.
+    InvalidHashCheckpoint,
 }
 
 /// Verify one submitted owner-blind economic candidate.
@@ -445,9 +448,24 @@ pub fn verify_economic_candidate_v2(
     candidate: &EconomicCandidateV2,
 ) -> Result<VerifiedEconomicsV2, EconomicErrorV2> {
     let unbalanced = derive_unbalanced_economics_v2(domain, book, price, candidate)?;
-    let buy_flow = unbalanced.aggregate_buy_flow;
-    let sell_flow = unbalanced.aggregate_sell_flow;
+    close_economic_candidate_v2(
+        domain,
+        candidate,
+        unbalanced.aggregate_buy_flow,
+        unbalanced.aggregate_sell_flow,
+        unbalanced.economic_candidate_digest,
+    )
+}
 
+/// Close already checked RelationV2 order flows under the canonical
+/// conservation and ScoreV2-Q rules.
+pub(crate) fn close_economic_candidate_v2(
+    domain: &EconomicDomainV2,
+    candidate: &EconomicCandidateV2,
+    buy_flow: [u64; MAX_OUTCOMES],
+    sell_flow: [u64; MAX_OUTCOMES],
+    digest: [u8; 32],
+) -> Result<VerifiedEconomicsV2, EconomicErrorV2> {
     let mut direct_flow = [0u64; MAX_OUTCOMES];
     let mut outcome = 0usize;
     while outcome < domain.outcomes() {
@@ -476,7 +494,6 @@ pub fn verify_economic_candidate_v2(
         outcome += 1;
     }
 
-    let digest = unbalanced.economic_candidate_digest;
     let delta = CandidateDeltaV2 {
         normalization_policy: NormalizationPolicyV2::OwnerBlindAggregate,
         outcome_count: domain.outcome_count,
@@ -518,82 +535,23 @@ pub(crate) fn derive_unbalanced_economics_v2(
     if candidate.virtual_split != 0 && candidate.virtual_merge != 0 {
         return Err(EconomicErrorV2::NonCanonicalVirtualConversion);
     }
-
-    let mut order_index = usize::from(book.len);
-    while order_index < MAX_ORDERS {
-        if candidate.fills[order_index] != 0 {
-            return Err(EconomicErrorV2::NonCanonicalFillPadding {
-                order: bounded_index(order_index)?,
-            });
-        }
-        if mask_bit(candidate.honored_aon_mask, order_index) {
-            return Err(EconomicErrorV2::AonMaskNotApplicable {
-                order: bounded_index(order_index)?,
-            });
-        }
-        order_index += 1;
-    }
+    validate_candidate_padding_v2(candidate, book.len)?;
 
     let mut buy_flow = [0u64; MAX_OUTCOMES];
     let mut sell_flow = [0u64; MAX_OUTCOMES];
-    order_index = 0;
+    let mut order_index = 0usize;
     while order_index < usize::from(book.len) {
         let order = book.orders[order_index];
-        let fill = candidate.fills[order_index];
-        let aon_bit = mask_bit(candidate.honored_aon_mask, order_index);
-        if fill > order.quantity {
-            return Err(EconomicErrorV2::FillExceedsQuantity {
-                order: bounded_index(order_index)?,
-            });
-        }
-        match order.partial_policy {
-            PartialPolicy::Allow => {
-                if aon_bit {
-                    return Err(EconomicErrorV2::AonMaskNotApplicable {
-                        order: bounded_index(order_index)?,
-                    });
-                }
-                if fill != 0 && fill < order.minimum_fill {
-                    return Err(EconomicErrorV2::MinimumFillViolation {
-                        order: bounded_index(order_index)?,
-                    });
-                }
-            }
-            PartialPolicy::AllOrNone => {
-                if fill != 0 && fill != order.quantity {
-                    return Err(EconomicErrorV2::AllOrNoneViolation {
-                        order: bounded_index(order_index)?,
-                    });
-                }
-                if aon_bit != (fill != 0) {
-                    return Err(EconomicErrorV2::AonMaskMismatch {
-                        order: bounded_index(order_index)?,
-                    });
-                }
-            }
-        }
-
-        let unit_value = order_unit_value(&order, &price.prices, domain.outcomes())?;
-        if fill != 0 {
-            let limit_ok = match order.side {
-                Side::Buy => unit_value <= order.limit_value_price_units_per_unit,
-                Side::Sell => unit_value >= order.limit_value_price_units_per_unit,
-            };
-            if !limit_ok {
-                return Err(EconomicErrorV2::LimitViolation {
-                    order: bounded_index(order_index)?,
-                });
-            }
-        }
-
+        let legs = validate_live_order_fill_v2(
+            domain,
+            price,
+            candidate,
+            &order,
+            bounded_index(order_index)?,
+        )?;
         let mut outcome = 0usize;
         while outcome < domain.outcomes() {
-            let leg = order.coefficients[outcome].checked_mul(fill).ok_or(
-                EconomicErrorV2::FlowOverflow {
-                    order: bounded_index(order_index)?,
-                    outcome: bounded_index(outcome)?,
-                },
-            )?;
+            let leg = legs[outcome];
             let cell = match order.side {
                 Side::Buy => &mut buy_flow[outcome],
                 Side::Sell => &mut sell_flow[outcome],
@@ -613,6 +571,93 @@ pub(crate) fn derive_unbalanced_economics_v2(
         aggregate_sell_flow: sell_flow,
         economic_candidate_digest: digest,
     })
+}
+
+/// Validate inactive candidate coordinates after the active book prefix.
+pub(crate) fn validate_candidate_padding_v2(
+    candidate: &EconomicCandidateV2,
+    book_len: u8,
+) -> Result<(), EconomicErrorV2> {
+    if usize::from(book_len) > MAX_ORDERS {
+        return Err(EconomicErrorV2::TooManyOrders);
+    }
+    let mut order_index = usize::from(book_len);
+    while order_index < MAX_ORDERS {
+        if candidate.fills[order_index] != 0 {
+            return Err(EconomicErrorV2::NonCanonicalFillPadding {
+                order: bounded_index(order_index)?,
+            });
+        }
+        if mask_bit(candidate.honored_aon_mask, order_index) {
+            return Err(EconomicErrorV2::AonMaskNotApplicable {
+                order: bounded_index(order_index)?,
+            });
+        }
+        order_index += 1;
+    }
+    Ok(())
+}
+
+/// Validate one live fill and return its exact filled coefficient vector.
+pub(crate) fn validate_live_order_fill_v2(
+    domain: &EconomicDomainV2,
+    price: &PricePreconditionV2,
+    candidate: &EconomicCandidateV2,
+    order: &EconomicOrderV2,
+    order_index: u8,
+) -> Result<[u64; MAX_OUTCOMES], EconomicErrorV2> {
+    let at = usize::from(order_index);
+    if at >= MAX_ORDERS {
+        return Err(EconomicErrorV2::TooManyOrders);
+    }
+    let fill = candidate.fills[at];
+    let aon_bit = mask_bit(candidate.honored_aon_mask, at);
+    if fill > order.quantity {
+        return Err(EconomicErrorV2::FillExceedsQuantity { order: order_index });
+    }
+    match order.partial_policy {
+        PartialPolicy::Allow => {
+            if aon_bit {
+                return Err(EconomicErrorV2::AonMaskNotApplicable { order: order_index });
+            }
+            if fill != 0 && fill < order.minimum_fill {
+                return Err(EconomicErrorV2::MinimumFillViolation { order: order_index });
+            }
+        }
+        PartialPolicy::AllOrNone => {
+            if fill != 0 && fill != order.quantity {
+                return Err(EconomicErrorV2::AllOrNoneViolation { order: order_index });
+            }
+            if aon_bit != (fill != 0) {
+                return Err(EconomicErrorV2::AonMaskMismatch { order: order_index });
+            }
+        }
+    }
+
+    let unit_value = order_unit_value(order, &price.prices, domain.outcomes())?;
+    if fill != 0 {
+        let limit_ok = match order.side {
+            Side::Buy => unit_value <= order.limit_value_price_units_per_unit,
+            Side::Sell => unit_value >= order.limit_value_price_units_per_unit,
+        };
+        if !limit_ok {
+            return Err(EconomicErrorV2::LimitViolation { order: order_index });
+        }
+    }
+
+    let mut legs = [0u64; MAX_OUTCOMES];
+    let mut outcome = 0usize;
+    while outcome < domain.outcomes() {
+        legs[outcome] =
+            order.coefficients[outcome]
+                .checked_mul(fill)
+                .ok_or(EconomicErrorV2::FlowOverflow {
+                    order: order_index,
+                    outcome: bounded_index(outcome)?,
+                })?;
+        outcome += 1;
+    }
+    Ok(legs)
 }
 
 fn order_unit_value(
@@ -659,6 +704,22 @@ fn economic_candidate_digest(
     price: &PricePreconditionV2,
     candidate: &EconomicCandidateV2,
 ) -> Result<[u8; 32], EconomicErrorV2> {
+    let mut hash = begin_economic_candidate_hash_v2(domain, book.len)?;
+    let mut order_index = 0usize;
+    while order_index < usize::from(book.len) {
+        hash_economic_order_v2(&mut hash, &book.orders[order_index])?;
+        order_index += 1;
+    }
+    finish_economic_candidate_hash_v2(hash, book.len, price, candidate)
+}
+
+pub(crate) fn begin_economic_candidate_hash_v2(
+    domain: &EconomicDomainV2,
+    book_len: u8,
+) -> Result<Sha256V2, EconomicErrorV2> {
+    if usize::from(book_len) > MAX_ORDERS {
+        return Err(EconomicErrorV2::TooManyOrders);
+    }
     let mut hash = Sha256V2::new();
     hash.update(ECONOMIC_CANDIDATE_DIGEST_DOMAIN_V2)?;
     hash.update(&domain.relation_version.to_le_bytes())?;
@@ -669,22 +730,38 @@ fn economic_candidate_digest(
     hash.update(&domain.epoch_index.to_le_bytes())?;
     hash.update(&[domain.outcome_count])?;
     hash.update(&domain.price_scale.to_le_bytes())?;
-    hash.update(&[book.len])?;
-    let mut order_index = 0usize;
+    hash.update(&[book_len])?;
+    Ok(hash)
+}
+
+pub(crate) fn hash_economic_order_v2(
+    hash: &mut Sha256V2,
+    order: &EconomicOrderV2,
+) -> Result<(), EconomicErrorV2> {
+    hash.update(&order.order_id)?;
+    hash.update(&[side_byte(order.side)])?;
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        hash.update(&order.coefficients[outcome].to_le_bytes())?;
+        outcome += 1;
+    }
+    hash.update(&order.quantity.to_le_bytes())?;
+    hash.update(&order.minimum_fill.to_le_bytes())?;
+    hash.update(&[partial_byte(order.partial_policy)])?;
+    hash.update(&order.expiry_epoch.to_le_bytes())?;
+    hash.update(&order.limit_value_price_units_per_unit.to_le_bytes())?;
+    Ok(())
+}
+
+pub(crate) fn finish_economic_candidate_hash_v2(
+    mut hash: Sha256V2,
+    book_len: u8,
+    price: &PricePreconditionV2,
+    candidate: &EconomicCandidateV2,
+) -> Result<[u8; 32], EconomicErrorV2> {
+    let mut order_index = usize::from(book_len);
     while order_index < MAX_ORDERS {
-        let order = book.orders[order_index];
-        hash.update(&order.order_id)?;
-        hash.update(&[side_byte(order.side)])?;
-        let mut outcome = 0usize;
-        while outcome < MAX_OUTCOMES {
-            hash.update(&order.coefficients[outcome].to_le_bytes())?;
-            outcome += 1;
-        }
-        hash.update(&order.quantity.to_le_bytes())?;
-        hash.update(&order.minimum_fill.to_le_bytes())?;
-        hash.update(&[partial_byte(order.partial_policy)])?;
-        hash.update(&order.expiry_epoch.to_le_bytes())?;
-        hash.update(&order.limit_value_price_units_per_unit.to_le_bytes())?;
+        hash_economic_order_v2(&mut hash, &EMPTY_ECONOMIC_ORDER_V2)?;
         order_index += 1;
     }
     hash.update(&price.policy_digest)?;
@@ -719,6 +796,35 @@ const fn partial_byte(policy: PartialPolicy) -> u8 {
     }
 }
 
+/// Canonical, serializable SHA-256 continuation for RelationV2 candidate
+/// identity. This is a work checkpoint, not an independent semantic owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EconomicSha256CheckpointV2 {
+    /// Eight SHA-256 chaining words.
+    pub state: [u32; 8],
+    /// Pending bytes followed by canonical zero padding.
+    pub block: [u8; 64],
+    /// Active prefix of `block`, in `0..64`.
+    pub block_len: u8,
+    /// Total transcript bytes consumed.
+    pub total_len: u64,
+}
+
+impl EconomicSha256CheckpointV2 {
+    /// Refuse malformed length congruence or noncanonical pending padding.
+    pub fn validate(self) -> Result<Self, EconomicErrorV2> {
+        if self.block_len >= 64
+            || self.total_len % 64 != u64::from(self.block_len)
+            || self.block[usize::from(self.block_len)..]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(EconomicErrorV2::InvalidHashCheckpoint);
+        }
+        Ok(self)
+    }
+}
+
 /// Small, allocation-free SHA-256 state used solely for canonical semantic
 /// identities. The implementation follows FIPS 180-4 and has independent
 /// known-answer tests. It is ordinary safe Rust, not an FFI or runtime syscall.
@@ -746,6 +852,29 @@ impl Sha256V2 {
             block_len: 0,
             message_len: 0,
         }
+    }
+
+    pub(crate) fn from_checkpoint(
+        checkpoint: EconomicSha256CheckpointV2,
+    ) -> Result<Self, EconomicErrorV2> {
+        let checkpoint = checkpoint.validate()?;
+        Ok(Self {
+            state: checkpoint.state,
+            block: checkpoint.block,
+            block_len: usize::from(checkpoint.block_len),
+            message_len: checkpoint.total_len,
+        })
+    }
+
+    pub(crate) fn checkpoint(&self) -> Result<EconomicSha256CheckpointV2, EconomicErrorV2> {
+        EconomicSha256CheckpointV2 {
+            state: self.state,
+            block: self.block,
+            block_len: u8::try_from(self.block_len)
+                .map_err(|_| EconomicErrorV2::InvalidHashCheckpoint)?,
+            total_len: self.message_len,
+        }
+        .validate()
     }
 
     pub(crate) fn update(&mut self, input: &[u8]) -> Result<(), EconomicErrorV2> {

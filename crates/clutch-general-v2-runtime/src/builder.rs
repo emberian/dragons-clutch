@@ -18,7 +18,8 @@ use clutch_batch::{PartialPolicy, Side};
 use clutch_general_v2_contract::{
     candidate_feed_account_len, economic_domain_digest_v2, AdmissionNodeStatusV1,
     AdmissionNodeV3AccountV1, CandidateFeedHeaderV2, CodecError, DeletableRentOwnerV1,
-    EconomicDomainV2AccountV1, Id32, MarketBindingV1, SettlementCandidateKindV1,
+    EconomicDomainV2AccountV1, GeneralOrderPageSeedTupleV5, Id32, MarketBindingV1,
+    SettlementCandidateKindV1,
     CANDIDATE_FEED_HEADER_BYTES, MAX_ORDERS, MAX_OUTCOMES, MAX_QUANTIZED_ATOMS,
     PRICE_MEASURE_WITNESS_SCHEMA_V3, QUANTIZED_PRICE_MEASURE_SEMANTICS_V1, SETTLEMENT_SLICE_BYTES,
 };
@@ -31,7 +32,10 @@ use clutch_product_series::{
     Error as ProductError, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1,
 };
-use clutch_solana_layout::{stream, CodecError as LayoutError, OrderSlot, PriceGridAccount};
+use clutch_solana_layout::{
+    order_page_v5::{verify_page_set_v5_streaming, verify_page_v5, OrderSlotCursorV5},
+    stream, CodecError as LayoutError, OrderSlot, PriceGridAccount, MAX_ORDER_PAGES,
+};
 
 use crate::{
     relation_v2_policy_id_v1, score_v2_q_policy_id_v1, CanonicalSha256, GeneralV2RuntimeError,
@@ -639,6 +643,85 @@ pub struct OwnerBlindBookProjectionV1 {
     order_membership: [FrozenOrderMembershipV1; MAX_ORDERS],
 }
 
+/// One SBF-authenticated General OrderPage V5 presented to the pure builder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderPageInputV5<'a> {
+    /// Program-owned page PDA authenticated by the live adapter.
+    pub account: Id32,
+    /// Exact hostile tag-8/version-5 page body.
+    pub body: &'a [u8],
+}
+
+/// Frozen General book successor carrying immutable placement generations.
+///
+/// The inner owner-blind book remains the sole RelationV2 projection. This
+/// successor adds only page/PDA coordinates and the Position generation frozen
+/// by action 3, so settlement can derive Reservation and General Position
+/// identities without rereading every mutable account on every slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerBlindBookProjectionV2 {
+    base: OwnerBlindBookProjectionV1,
+    page_accounts: [Id32; MAX_ORDER_PAGES],
+    page_count: u8,
+    position_generations: [u64; MAX_ORDERS],
+    order_page_accounts: [Id32; MAX_ORDERS],
+    order_page_indices: [u16; MAX_ORDERS],
+}
+
+impl OwnerBlindBookProjectionV2 {
+    /// Exact RelationV2 owner-blind projection over the same V5 pages.
+    pub const fn base(&self) -> &OwnerBlindBookProjectionV1 {
+        &self.base
+    }
+
+    /// Number of exact frozen V5 pages in this projection.
+    pub const fn page_count(&self) -> u8 {
+        self.page_count
+    }
+
+    /// Program-owned page identity at one canonical page index.
+    pub fn page_account(&self, page_index: u16) -> Option<Id32> {
+        if usize::from(page_index) < usize::from(self.page_count) {
+            Some(self.page_accounts[usize::from(page_index)])
+        } else {
+            None
+        }
+    }
+
+    /// Typed page PDA tuple the adapter must rederive.
+    pub fn page_seed(&self, page_index: u16) -> Option<GeneralOrderPageSeedTupleV5> {
+        self.page_account(page_index)?;
+        GeneralOrderPageSeedTupleV5::new(self.base.epoch, page_index).ok()
+    }
+
+    /// Immutable Position generation frozen beside one dense live order.
+    pub fn position_generation(&self, order_index: u8) -> Option<u64> {
+        if order_index < self.base.book.len {
+            Some(self.position_generations[usize::from(order_index)])
+        } else {
+            None
+        }
+    }
+
+    /// V5 page account containing one dense live order.
+    pub fn order_page_account(&self, order_index: u8) -> Option<Id32> {
+        if order_index < self.base.book.len {
+            Some(self.order_page_accounts[usize::from(order_index)])
+        } else {
+            None
+        }
+    }
+
+    /// Canonical V5 page index containing one dense live order.
+    pub fn order_page_index(&self, order_index: u8) -> Option<u16> {
+        if order_index < self.base.book.len {
+            Some(self.order_page_indices[usize::from(order_index)])
+        } else {
+            None
+        }
+    }
+}
+
 /// Original frozen order family retained for reservation authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -859,6 +942,160 @@ pub fn project_owner_blind_book_v2(
     })
 }
 
+/// Project canonical General OrderPage V5 bytes into the owner-blind book and
+/// retain each placement's immutable Position generation.
+///
+/// V5 is a breaking page successor: this function accepts no historical V4
+/// page. The complete page set is verified under its generation-bearing digest
+/// and canonical order-set fold before any RelationV2 order is emitted. Page
+/// account PDAs remain an adapter obligation, represented by exact typed seed
+/// tuples in the returned private projection.
+#[allow(clippy::too_many_arguments)]
+pub fn project_owner_blind_book_v3(
+    pages: &[GeneralOrderPageInputV5<'_>],
+    expected_order_set: Id32,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    price_grid: &PriceGridAccount,
+) -> Result<OwnerBlindBookProjectionV2, CandidateBuilderErrorV1> {
+    economic_domain_account.validate()?;
+    market_binding.validate()?;
+    price_grid.validate()?;
+    let domain = relation_domain_from_account(economic_domain_account)?;
+    let domain_digest =
+        economic_domain_digest_v2(&CanonicalSha256, economic_domain_account.transcript)?;
+    if pages.is_empty()
+        || pages.len() > MAX_ORDER_PAGES
+        || expected_order_set.is_zero()
+        || domain.price_scale != price_grid.price_scale
+        || market_binding.price_scale != domain.price_scale
+        || market_binding.outcome_count != domain.outcome_count
+        || market_binding.relation_version != domain.relation_version
+        || market_binding.market_instance_v2_id.bytes() != domain.market_semantics_digest
+        || market_binding.relation_policy_id.bytes() != domain.relation_policy_digest
+        || market_binding.price_measure_policy_v1_id.bytes() != domain.price_policy_digest
+        || market_binding.native_claim_basis_id
+            != economic_domain_account.transcript.native_claim_basis_id
+        || market_binding.relation_policy_id != relation_v2_policy_id_v1()?
+        || market_binding.score_policy_id != score_v2_q_policy_id_v1()?
+    {
+        return Err(CandidateBuilderErrorV1::BindingMismatch);
+    }
+
+    let mut bodies: [&[u8]; MAX_ORDER_PAGES] = [&[]; MAX_ORDER_PAGES];
+    let mut page_accounts = [Id32::ZERO; MAX_ORDER_PAGES];
+    let mut page = 0usize;
+    while page < pages.len() {
+        let input = pages[page];
+        if input.account.is_zero()
+            || input.account == market_binding.market
+            || input.account == economic_domain_account.epoch
+            || input.account == expected_order_set
+        {
+            return Err(CandidateBuilderErrorV1::BindingMismatch);
+        }
+        let mut prior = 0usize;
+        while prior < page {
+            if page_accounts[prior] == input.account {
+                return Err(CandidateBuilderErrorV1::BindingMismatch);
+            }
+            prior += 1;
+        }
+        bodies[page] = input.body;
+        page_accounts[page] = input.account;
+        page += 1;
+    }
+    let observed_order_set = verify_page_set_v5_streaming(&bodies[..pages.len()])?;
+    if observed_order_set.bytes() != expected_order_set.bytes() {
+        return Err(CandidateBuilderErrorV1::BindingMismatch);
+    }
+
+    let mut book = EconomicBookV2::empty();
+    let mut order_membership = [FrozenOrderMembershipV1::EMPTY; MAX_ORDERS];
+    let mut position_generations = [0u64; MAX_ORDERS];
+    let mut order_page_accounts = [Id32::ZERO; MAX_ORDERS];
+    let mut order_page_indices = [0u16; MAX_ORDERS];
+    page = 0;
+    while page < pages.len() {
+        let header = verify_page_v5(pages[page].body)?;
+        if header.market.bytes() != market_binding.market.bytes()
+            || header.epoch.bytes() != economic_domain_account.epoch.bytes()
+            || header.order_set.bytes() != expected_order_set.bytes()
+            || usize::from(header.page_index) != page
+            || GeneralOrderPageSeedTupleV5::new(
+                economic_domain_account.epoch,
+                header.page_index,
+            )
+            .is_err()
+        {
+            return Err(CandidateBuilderErrorV1::BindingMismatch);
+        }
+        let mut cursor = OrderSlotCursorV5::new(pages[page].body)?;
+        let mut slot_index = 0usize;
+        while slot_index < usize::from(header.order_count) {
+            let verified = cursor
+                .next_slot()
+                .ok_or(CandidateBuilderErrorV1::Layout(LayoutError::Truncated))??;
+            match verified.slot {
+                OrderSlot::Single(record) => {
+                    price_grid.tick_of(record.limit)?;
+                }
+                OrderSlot::Portfolio(record) => {
+                    record.validate_on_scale(price_grid.price_scale)?;
+                }
+                OrderSlot::Tombstone(_) => {}
+                OrderSlot::Empty => {
+                    return Err(CandidateBuilderErrorV1::Layout(LayoutError::ZeroIdentity))
+                }
+            }
+            if let Some((order, membership)) = project_owner_blind_slot(verified.slot, &domain)? {
+                let at = usize::from(book.len);
+                if verified.position_generation == 0 {
+                    return Err(CandidateBuilderErrorV1::BindingMismatch);
+                }
+                if at >= MAX_ORDERS {
+                    return Err(CandidateBuilderErrorV1::Relation(
+                        EconomicErrorV2::TooManyOrders,
+                    ));
+                }
+                book.orders[at] = order;
+                order_membership[at] = membership;
+                position_generations[at] = verified.position_generation;
+                order_page_accounts[at] = pages[page].account;
+                order_page_indices[at] = header.page_index;
+                book.len = book
+                    .len
+                    .checked_add(1)
+                    .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
+            }
+            slot_index += 1;
+        }
+        page += 1;
+    }
+    book.validate(&domain)?;
+    let base = OwnerBlindBookProjectionV1 {
+        market_binding: *market_binding,
+        market: market_binding.market,
+        epoch: economic_domain_account.epoch,
+        order_set: expected_order_set,
+        domain,
+        economic_domain_digest: domain_digest,
+        price_grid_id: Id32::new(price_grid.grid.bytes())?,
+        realm: Id32::new(price_grid.realm.bytes())?,
+        book,
+        order_membership,
+    };
+    Ok(OwnerBlindBookProjectionV2 {
+        base,
+        page_accounts,
+        page_count: u8::try_from(pages.len())
+            .map_err(|_| CandidateBuilderErrorV1::ArithmeticOverflow)?,
+        position_generations,
+        order_page_accounts,
+        order_page_indices,
+    })
+}
+
 /// Search exact finite atom measures and owner-blind fills, returning the best
 /// valid submitted candidate encountered under ScoreV2-Q.
 ///
@@ -985,7 +1222,10 @@ struct PreparedBuilderContextV1<'a> {
     order_set: Id32,
     domain: EconomicDomainV2,
     domain_digest: Id32,
+    terms_id: [u8; 32],
     basis_digest: Id32,
+    coordinate_domain_min: u128,
+    coordinate_domain_max: u128,
     price_measure_policy_id: Id32,
     basis: QuantizedBasisProjectionV1,
     native_basis: &'a NativeClaimBasisV1,
@@ -1096,6 +1336,8 @@ impl<'a> PreparedBuilderContextV1<'a> {
             || transcript.coordinate_domain_max != inputs.genesis.coordinate_domain_max
             || inputs.price_grid.grid.bytes() != inputs.genesis.price_grid_id.bytes()
             || inputs.price_grid.realm.bytes() != inputs.genesis.realm_id.bytes()
+            || ((2..=3).contains(&basis.degree())
+                && inputs.market_binding.price_scale != basis.payout_denominator())
         {
             return Err(CandidateBuilderErrorV1::BindingMismatch);
         }
@@ -1108,7 +1350,10 @@ impl<'a> PreparedBuilderContextV1<'a> {
             order_set: inputs.book_projection.order_set,
             domain,
             domain_digest,
+            terms_id: genesis_id,
             basis_digest,
+            coordinate_domain_min: inputs.genesis.coordinate_domain_min,
+            coordinate_domain_max: inputs.genesis.coordinate_domain_max,
             price_measure_policy_id,
             basis,
             native_basis: inputs.native_basis,
@@ -1322,6 +1567,24 @@ fn consider_atom_measure(
             verify_quantized_price_measure_v3_smooth(&bindings, basis, &price, &witness)?
         }
     };
+    if let QuantizedBasisProjectionV1::Smooth(basis) = context.basis {
+        if (2..=3).contains(&basis.degree) {
+            crate::verify_exact_smooth_atom_mixture_v1(
+                context.market,
+                context.terms_id,
+                context.basis_digest,
+                candidate_price_digest,
+                context.coordinate_domain_min,
+                context.coordinate_domain_max,
+                basis,
+                price.prices,
+                atoms.atom_count,
+                atoms.common_denominator,
+                atoms.atom_coordinates,
+                atoms.atom_masses,
+            )?;
+        }
+    }
     search_fills(
         context,
         price,
