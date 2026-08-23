@@ -406,6 +406,60 @@ pub fn authenticate_selected_portfolio_order_v2<A: PortfolioAdapterV2>(
     expected_economic_candidate_digest: PortfolioIdentityV2,
     record: SelectedPortfolioOrderRecordV2,
 ) -> Result<AuthenticatedSelectedPortfolioOrderV2, PortfolioExecutionErrorV2> {
+    authenticate_selected_portfolio_order_with_access_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        book,
+        candidate,
+        expected_economic_candidate_digest,
+        record,
+        SelectedAccountAccessV2::Delivery,
+    )
+}
+
+/// Authenticate one materialization-time selected order under the atomic root
+/// transition account contract: SettlementRoot writable and Position exact
+/// read-only. This is deliberately a named, disjoint entrypoint; callers cannot
+/// change either privilege through a boolean or public enum argument.
+pub fn authenticate_selected_portfolio_order_for_materialization_v2<A: PortfolioAdapterV2>(
+    adapter: &A,
+    owner_program_id: PortfolioIdentityV2,
+    domain: &EconomicDomainV2,
+    book: &EconomicBookV2,
+    candidate: &EconomicCandidateV2,
+    expected_economic_candidate_digest: PortfolioIdentityV2,
+    record: SelectedPortfolioOrderRecordV2,
+) -> Result<AuthenticatedSelectedPortfolioOrderV2, PortfolioExecutionErrorV2> {
+    authenticate_selected_portfolio_order_with_access_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        book,
+        candidate,
+        expected_economic_candidate_digest,
+        record,
+        SelectedAccountAccessV2::Materialization,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectedAccountAccessV2 {
+    Delivery,
+    Materialization,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_selected_portfolio_order_with_access_v2<A: PortfolioAdapterV2>(
+    adapter: &A,
+    owner_program_id: PortfolioIdentityV2,
+    domain: &EconomicDomainV2,
+    book: &EconomicBookV2,
+    candidate: &EconomicCandidateV2,
+    expected_economic_candidate_digest: PortfolioIdentityV2,
+    record: SelectedPortfolioOrderRecordV2,
+    account_access: SelectedAccountAccessV2,
+) -> Result<AuthenticatedSelectedPortfolioOrderV2, PortfolioExecutionErrorV2> {
     record.validate_shape()?;
     domain.validate().map_err(PortfolioExecutionErrorV2::Economic)?;
     book.validate(domain).map_err(PortfolioExecutionErrorV2::Economic)?;
@@ -446,7 +500,7 @@ pub fn authenticate_selected_portfolio_order_v2<A: PortfolioAdapterV2>(
             owner_program_id,
             data_semantic_id: record.settlement_root_pre_semantic_id,
             generation: Some(record.settlement_root_epoch_generation),
-            writable: false,
+            writable: account_access == SelectedAccountAccessV2::Materialization,
             must_exist: true,
         },
         PortfolioAccountExpectationV2 {
@@ -475,7 +529,7 @@ pub fn authenticate_selected_portfolio_order_v2<A: PortfolioAdapterV2>(
             owner_program_id,
             data_semantic_id: record.position_pre_semantic_id,
             generation: Some(record.position_generation),
-            writable: true,
+            writable: account_access == SelectedAccountAccessV2::Delivery,
             must_exist: true,
         },
     ];

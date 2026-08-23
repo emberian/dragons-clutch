@@ -121,7 +121,7 @@ fn require_all_distinct(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
     Ok(())
 }
 
-fn encode_account(
+pub(crate) fn encode_account(
     account: &AccountInfo<'_>,
     encode: impl FnOnce(&mut [u8]) -> Result<(), contract::CodecError>,
 ) -> Outcome<()> {
@@ -132,7 +132,7 @@ fn encode_account(
     Ok(())
 }
 
-fn rent_owner(
+pub(crate) fn rent_owner(
     payer: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     rent: &RentParameters,
@@ -146,7 +146,7 @@ fn rent_owner(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn create_from_payer<'a>(
+pub(crate) fn create_from_payer<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
     target: &AccountInfo<'a>,
