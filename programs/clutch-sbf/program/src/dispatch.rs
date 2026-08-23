@@ -1736,7 +1736,7 @@ mod extension_registry_tests {
         for (family_tag, family_version, local_action) in [
             (74, 2, 1),
             (74, 1, 0),
-            (74, 1, 35),
+            (74, 1, 39),
             (75, 1, 1),
             (77, 2, 0),
             (77, 2, 19),
