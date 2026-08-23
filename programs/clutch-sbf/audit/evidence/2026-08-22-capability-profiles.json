@@ -9,7 +9,7 @@
     "platform_tools": "v1.53",
     "reproducibility_scope": "two fresh target directories under one source checkout; Cargo path-dependency crate disambiguators remain checkout-path sensitive",
     "rustc": "rustc 1.89.0-dev",
-    "source_checkout_path_sha256": "49bdc05f6cb228b2a286c13165af274ec0b75946b507ad3afa4fcc2e120448f5"
+    "source_checkout_path_sha256": "bc857533f6b82a2b9d5febf8d09988f0983fe02a1ee28ce65dd15a840bfadc3e"
   },
   "manifest_input_source_clean": true,
   "profiles": [
@@ -116,7 +116,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 2083112,
           "elf_headroom_bytes_under_ten_sol": -646668,
-          "elf_sha256": "56dd8315cf01915a149cac4a404b1055161b25e10310b1491e03e3022fe0d30f",
+          "elf_sha256": "093ff75e82780f94a49184297beec3246f30c84661d080c510977a7c695e720d",
           "fits_under_ten_sol": false,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 14499663600,
@@ -131,7 +131,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 2083112,
           "elf_headroom_bytes_under_ten_sol": -646668,
-          "elf_sha256": "56dd8315cf01915a149cac4a404b1055161b25e10310b1491e03e3022fe0d30f",
+          "elf_sha256": "093ff75e82780f94a49184297beec3246f30c84661d080c510977a7c695e720d",
           "fits_under_ten_sol": false,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 14499663600,
@@ -256,7 +256,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 1056864,
           "elf_headroom_bytes_under_ten_sol": 379580,
-          "elf_sha256": "d7534e8f1a71c0c1b2860677e6a54ed3a65e268863d751ca04ebab9646806884",
+          "elf_sha256": "d9b90d81f58fbbf8c3d7d027f9db558111122d0b4d2a478473c4168e7c2ec95b",
           "fits_under_ten_sol": true,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 7356977520,
@@ -271,7 +271,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 1056864,
           "elf_headroom_bytes_under_ten_sol": 379580,
-          "elf_sha256": "d7534e8f1a71c0c1b2860677e6a54ed3a65e268863d751ca04ebab9646806884",
+          "elf_sha256": "d9b90d81f58fbbf8c3d7d027f9db558111122d0b4d2a478473c4168e7c2ec95b",
           "fits_under_ten_sol": true,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 7356977520,
@@ -392,31 +392,31 @@
           "builder_diagnostics_are_not_final_elf_reachability_proof": true,
           "builder_stack_frame_overflow_diagnostics": 28,
           "builder_stack_frame_overwrite_diagnostics": 69,
-          "elf_bytes": 1450392,
-          "elf_headroom_bytes_under_ten_sol": -13948,
-          "elf_sha256": "bf0a069bf62b3097598283ba92367135f04a8887ef72614f3f0de3320b44e87e",
-          "fits_under_ten_sol": false,
+          "elf_bytes": 1435352,
+          "elf_headroom_bytes_under_ten_sol": 1092,
+          "elf_sha256": "ed463eae732d2227244664adbad0caae72e3d0db31c18d1ff051d4f1ea269f79",
+          "fits_under_ten_sol": true,
           "program_account_rent_lamports": 1141440,
-          "programdata_account_rent_lamports": 10095932400,
+          "programdata_account_rent_lamports": 9991254000,
           "run": 1,
-          "text_bytes": 1335344,
-          "total_loader_rent_lamports": 10097073840,
-          "total_loader_rent_sol": "10.097073840"
+          "text_bytes": 1320040,
+          "total_loader_rent_lamports": 9992395440,
+          "total_loader_rent_sol": "9.992395440"
         },
         {
           "builder_diagnostics_are_not_final_elf_reachability_proof": true,
           "builder_stack_frame_overflow_diagnostics": 28,
           "builder_stack_frame_overwrite_diagnostics": 69,
-          "elf_bytes": 1450392,
-          "elf_headroom_bytes_under_ten_sol": -13948,
-          "elf_sha256": "bf0a069bf62b3097598283ba92367135f04a8887ef72614f3f0de3320b44e87e",
-          "fits_under_ten_sol": false,
+          "elf_bytes": 1435352,
+          "elf_headroom_bytes_under_ten_sol": 1092,
+          "elf_sha256": "ed463eae732d2227244664adbad0caae72e3d0db31c18d1ff051d4f1ea269f79",
+          "fits_under_ten_sol": true,
           "program_account_rent_lamports": 1141440,
-          "programdata_account_rent_lamports": 10095932400,
+          "programdata_account_rent_lamports": 9991254000,
           "run": 2,
-          "text_bytes": 1335344,
-          "total_loader_rent_lamports": 10097073840,
-          "total_loader_rent_sol": "10.097073840"
+          "text_bytes": 1320040,
+          "total_loader_rent_lamports": 9992395440,
+          "total_loader_rent_sol": "9.992395440"
         }
       ],
       "name": "general-source-v2-point",
@@ -449,8 +449,8 @@
       "programs/solana-reference",
       "research/batch-policy-identity"
     ],
-    "git_commit": "256a3105e19e091b71abb00aa7755c8a3beacff2",
-    "git_tree": "98ae3763d7c664010638c16b6794a51401d620ef",
+    "git_commit": "625cd65ac0c17be3ed4371df5ab8f23db67b9eae",
+    "git_tree": "2c8dccf48cab97753db78cd82bd4722d407a3aff",
     "tracked_dirty": []
   }
 }
