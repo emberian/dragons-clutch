@@ -1968,16 +1968,32 @@ mod tests {
             SEED_PRODUCT_SERIES_MARKET_LINK,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,
+            SEED_FAILURE_REPLAY_TOMBSTONE,
+            SEED_FAILURE_MARKET_REPLAY_V2,
             SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
             SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
             SEED_FAILURE_MARKET_INTERVAL_CELL_V2,
             SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2,
-            SEED_FAILURE_MARKET_REPLAY_V2,
         ];
         for (index, prefix) in prefixes.iter().enumerate() {
+            assert!(prefix.len() <= 32);
             for later in prefixes.iter().skip(index + 1) {
                 assert_ne!(*prefix, *later);
             }
         }
+        let program_id = Pubkey::new_from_array([7; 32]);
+        let market = [8; 32];
+        assert_ne!(
+            failure_market_interval_cell_v2_pda(&program_id, &market, 9).0,
+            failure_interval_consensus_work_pda(&program_id, &market, 9).0,
+        );
+        assert_ne!(
+            failure_market_interval_history_v2_pda(&program_id, &market, 9).0,
+            failure_interval_consensus_replay_pda(&program_id, &market, 9).0,
+        );
+        assert_ne!(
+            failure_market_replay_v2_pda(&program_id, &market, 9).0,
+            failure_replay_tombstone_pda(&program_id, &market, 9).0,
+        );
     }
 }
