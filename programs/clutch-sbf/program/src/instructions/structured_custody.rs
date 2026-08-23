@@ -1203,12 +1203,18 @@ pub fn process_full_vector(
             hoard: liabilities.hoard,
             claim_ledger: liabilities.claim_ledger,
         };
+        // Hard refusal until the collateral V2 lane supplies its private,
+        // per-instruction ProgramData/ELF value-route receipt. The current
+        // planners reject this zero rather than accepting the historical V1
+        // liability projection as sufficient authority.
+        let unavailable_collateral_value_receipt_id = [0_u8; 32];
         let plan = match action {
             StructuredClaimActionV1::WrapFull => prepare_current_wrap_full_v1(
                 &bound_descriptor,
                 liabilities.bound,
                 route_accounts,
                 liability_prestate,
+                unavailable_collateral_value_receipt_id,
                 mint_before,
                 holder_before,
                 current_position_projection(user, &user_replay),
@@ -1221,6 +1227,7 @@ pub fn process_full_vector(
                 liabilities.bound,
                 route_accounts,
                 liability_prestate,
+                unavailable_collateral_value_receipt_id,
                 mint_before,
                 holder_before,
                 current_position_projection(user, &user_replay),
@@ -1239,6 +1246,7 @@ pub fn process_full_vector(
                     liabilities.bound,
                     route_accounts,
                     liability_prestate,
+                    unavailable_collateral_value_receipt_id,
                     resolution.account_id.bytes(),
                     resolution.resolution,
                     mint_before,
