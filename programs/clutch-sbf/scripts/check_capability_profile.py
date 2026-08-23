@@ -860,7 +860,7 @@ def validate_v2_run(
     }
 
 
-def validate_source(value: Any) -> None:
+def validate_source(value: Any) -> dict[str, str]:
     require(isinstance(value, dict), "measurement evidence.source: expected object")
     exact_keys(
         value,
@@ -953,6 +953,7 @@ def validate_source(value: Any) -> None:
             cleanliness[key] == [],
             f"measurement evidence.source.cleanliness.{key}: linked input closure is dirty",
         )
+    return {"git_commit": commit_oid, "git_tree": tree_oid}
 
 
 def validate_toolchain(value: Any) -> None:
@@ -1158,7 +1159,7 @@ def extract_linked_measurement(
         evidence["refusals"] == [],
         "measurement evidence: available evidence carries refusals",
     )
-    validate_source(evidence["source"])
+    source = validate_source(evidence["source"])
     validate_toolchain(evidence["toolchain"])
     rent_model = validate_loader_model(evidence["rent_model"])
 
@@ -1320,6 +1321,8 @@ def extract_linked_measurement(
 
     loader = runs[0]["loader"]
     return {
+        "source_git_commit": source["git_commit"],
+        "source_git_tree": source["git_tree"],
         "elf_sha256": runs[0]["elf_sha256"],
         "elf_bytes": runs[0]["elf_bytes"],
         "text_bytes": runs[0]["text_bytes"],

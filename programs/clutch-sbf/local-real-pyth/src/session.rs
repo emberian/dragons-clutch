@@ -21,7 +21,7 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 /// Marker proving a directory was created by this lifecycle owner.
 pub const SESSION_MARKER: &str = "dragons-clutch/local-validator-session/v1\n";
 /// Public, secret-free configuration artifact written into every session.
-pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v5";
+pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v6";
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -247,6 +247,38 @@ pub struct LocalProgramRelease {
     pub elf_path: PathBuf,
 }
 
+/// Cross-manifest seal for a chain-attached local release. Semantic capability
+/// rows stay owned by the capability-profile manifest; this record pins that
+/// checked owner to the exact deployed ELF and local runtime coordinates.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckedChainReleaseBinding {
+    pub capability_manifest_sha256: [u8; 32],
+    pub capability_profile_id: [u8; 32],
+    pub source_commit: String,
+    pub compiler_release_sha256: [u8; 32],
+    pub source_neutral_sink: Address,
+}
+
+impl CheckedChainReleaseBinding {
+    pub fn validate(&self) -> Result<()> {
+        if self.capability_manifest_sha256 == [0; 32]
+            || self.capability_profile_id == [0; 32]
+            || self.compiler_release_sha256 == [0; 32]
+            || self.source_neutral_sink == Address::default()
+            || !matches!(self.source_commit.len(), 40 | 64)
+            || !self
+                .source_commit
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(SessionError::InvalidRelease(
+                "checked local chain-release binding is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl LocalProgramRelease {
     pub fn validate(&self) -> Result<()> {
         if self.program_id == Address::default()
@@ -274,6 +306,7 @@ pub struct LocalSessionConfig {
     pub root: PathBuf,
     pub ports: LocalValidatorPorts,
     pub clutch_release: LocalProgramRelease,
+    pub checked_chain_release: CheckedChainReleaseBinding,
     /// External parser/transport releases loaded alongside Clutch. Source V3
     /// itself executes inside `clutch_release`, never as a second adapter ELF.
     pub external_program_releases: Vec<LocalProgramRelease>,
@@ -285,6 +318,7 @@ impl LocalSessionConfig {
         validate_root(&self.root)?;
         self.ports.validate()?;
         self.clutch_release.validate()?;
+        self.checked_chain_release.validate()?;
         self.source.validate()?;
         let clutch_identities = [
             self.clutch_release.program_id,
@@ -428,6 +462,43 @@ impl SessionLayout {
         let mut body = String::new();
         writeln!(body, "schema={PUBLIC_MANIFEST_SCHEMA}").expect("String write is infallible");
         writeln!(body, "network=local-validator").expect("String write is infallible");
+        writeln!(body, "release_coordinates=sealed").expect("String write is infallible");
+        writeln!(
+            body,
+            "decoder_set={}",
+            crate::account_index::CANONICAL_ACCOUNT_DECODER_SET
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "capability_manifest_sha256={}",
+            hex(&config.checked_chain_release.capability_manifest_sha256)
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "capability_profile_identity={}",
+            hex(&config.checked_chain_release.capability_profile_id)
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "source_commit={}",
+            config.checked_chain_release.source_commit
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "compiler_release_sha256={}",
+            hex(&config.checked_chain_release.compiler_release_sha256)
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "source_neutral_sink={}",
+            config.checked_chain_release.source_neutral_sink
+        )
+        .expect("String write is infallible");
         writeln!(body, "rpc_http={}", config.ports.rpc_http()).expect("String write is infallible");
         writeln!(body, "rpc_websocket={}", config.ports.rpc_websocket())
             .expect("String write is infallible");
@@ -929,6 +1000,13 @@ mod tests {
                 dynamic_end: 9250,
             },
             clutch_release: program(1, 11, "clutch"),
+            checked_chain_release: CheckedChainReleaseBinding {
+                capability_manifest_sha256: [18; 32],
+                capability_profile_id: [19; 32],
+                source_commit: "20".repeat(20),
+                compiler_release_sha256: [21; 32],
+                source_neutral_sink: Address::new_from_array([22; 32]),
+            },
             external_program_releases: vec![
                 program(2, 12, "receiver"),
                 program(3, 13, "parser"),

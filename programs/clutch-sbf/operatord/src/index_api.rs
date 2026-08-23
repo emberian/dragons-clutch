@@ -442,6 +442,14 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
                 "programData": release.program_data.to_string(),
                 "deploymentSlot": release.deployment_slot.to_string(),
                 "elfSha256": hex32(release.elf_sha256),
+                "releaseManifestSha256": hex32(release.release_manifest_sha256),
+                "capabilityProfileId": hex32(release.capability_profile_id),
+                "sourceCommit": release.source_commit,
+                "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
+                    "familyTag": intent.family_tag.to_string(),
+                    "familyVersion": intent.family_version.to_string(),
+                    "localAction": intent.local_action.to_string()
+                })).collect::<Vec<_>>(),
                 "families": release.families.iter().map(|family| family.name()).collect::<Vec<_>>()
             })
         })
