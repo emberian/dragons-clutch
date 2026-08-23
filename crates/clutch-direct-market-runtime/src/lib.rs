@@ -19,6 +19,7 @@ use clutch_product_series::{
 
 pub mod selection_v1;
 pub mod settlement_v1;
+pub mod codec_v1;
 
 /// Maximum funded Reservations ever admitted by one minimal Direct root.
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;

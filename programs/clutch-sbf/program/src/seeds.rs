@@ -199,6 +199,14 @@ pub const SEED_DIRECT_WORK_V3: &[u8] = b"dc:direct-work:v3";
 pub const SEED_DIRECT_RECEIPT_V3: &[u8] = b"dc:direct-receipt:v3";
 /// Direct V3 zero-pot seed prefix, disjoint from V2 pots.
 pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
+/// Current `0xb1/1` Direct Market root; disjoint from every legacy window.
+pub const SEED_DIRECT_MARKET_ROOT_V1: &[u8] = b"dc:direct-market-root:v1";
+/// Current permanent `0xb3/1` Direct action replay/receipt.
+pub const SEED_DIRECT_ACTION_REPLAY_V1: &[u8] = b"dc:direct-action-replay:v1";
+/// Current `0xb2/1` exact Selection owner.
+pub const SEED_DIRECT_SELECTION_V1: &[u8] = b"dc:direct-selection:v1";
+/// Current `0xb4/1` funded Reservation owner.
+pub const SEED_DIRECT_RESERVATION_V1: &[u8] = b"dc:direct-reservation:v1";
 /// Immutable authenticated source-spec account seed prefix.
 pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
 /// Per-window authenticated source-archive account seed prefix.

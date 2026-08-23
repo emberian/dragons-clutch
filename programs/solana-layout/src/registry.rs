@@ -487,18 +487,26 @@ pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 pub const DIRECT_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb1;
 /// Current Direct root account version.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct root frame bytes.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 758;
 /// Current Direct exact-selection owner discriminator.
 pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
 /// Current Direct exact-selection account version.
 pub const DIRECT_SELECTION_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct Selection frame bytes.
+pub const DIRECT_SELECTION_ACCOUNT_BYTES: usize = 1_501;
 /// Current Direct permanent action replay/terminal receipt discriminator.
 pub const DIRECT_ACTION_REPLAY_ACCOUNT_TAG: u8 = 0xb3;
 /// Current Direct permanent action replay/terminal receipt version.
 pub const DIRECT_ACTION_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Exact permanent Direct action replay frame bytes.
+pub const DIRECT_ACTION_REPLAY_ACCOUNT_BYTES: usize = 293;
 /// Current Direct funded Reservation owner discriminator.
 pub const DIRECT_RESERVATION_ACCOUNT_TAG: u8 = 0xb4;
 /// Current Direct funded Reservation account version.
 pub const DIRECT_RESERVATION_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct Reservation frame bytes.
+pub const DIRECT_RESERVATION_ACCOUNT_BYTES: usize = 425;
 /// First Dealer CoveredDealer selection attachment version.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// Exact attachment bytes including the Dealer global envelope.

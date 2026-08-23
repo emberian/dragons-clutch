@@ -1,4 +1,10 @@
 use super::*;
+use crate::codec_v1::{
+    decode_direct_action_replay_body_v1, decode_direct_market_root_body_v1,
+    decode_direct_reservation_body_v1, decode_direct_selection_body_v1,
+    encode_direct_action_replay_body_v1, encode_direct_market_root_body_v1,
+    encode_direct_reservation_body_v1, encode_direct_selection_body_v1,
+};
 use crate::reservation_v1::{
     prepare_direct_reservation_admission_v1, AuthenticatedDirectReservationAdmissionV1,
     DirectReservationPhaseV1,
@@ -381,6 +387,19 @@ fn exact_pair_is_required_and_replay_is_linear() {
 }
 
 #[test]
+fn root_and_permanent_replay_semantic_bodies_round_trip_exactly() {
+    let value = state();
+    let root_body = encode_direct_market_root_body_v1(value.root).unwrap();
+    let decoded_root = decode_direct_market_root_body_v1(&root_body).unwrap();
+    assert_eq!(decoded_root, value.root);
+    let replay_body = encode_direct_action_replay_body_v1(value.replay, value.root).unwrap();
+    assert_eq!(
+        decode_direct_action_replay_body_v1(&replay_body, decoded_root),
+        Ok(value.replay)
+    );
+}
+
+#[test]
 fn schedule_boundaries_are_owned_by_pure_transitions() {
     assert_eq!(
         state().admit_reservation(1, 9, id(20), id(21), &Sha),
@@ -544,6 +563,11 @@ fn zero_price_buyer_reservation_is_exact_and_counts_the_child() {
     assert_eq!(fields.cash_atoms, 100);
     assert_eq!(fields.reserved_cash_atoms, 0);
     assert_eq!(fields.outstanding_reservations, 1);
+    let body = encode_direct_reservation_body_v1(plan.reservation, state().root).unwrap();
+    assert_eq!(
+        decode_direct_reservation_body_v1(&body, state().root),
+        Ok(plan.reservation)
+    );
 }
 
 #[test]
@@ -687,6 +711,11 @@ fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
     let pair = selected.selection.selected_pair().unwrap();
     assert_eq!(pair.quantity(), 10);
     assert_eq!(pair.consideration_cash_atoms(), 0);
+    let body = encode_direct_selection_body_v1(selected.selection, selected.state.root).unwrap();
+    assert_eq!(
+        decode_direct_selection_body_v1(&body, selected.state.root),
+        Ok(selected.selection)
+    );
 }
 
 #[test]
