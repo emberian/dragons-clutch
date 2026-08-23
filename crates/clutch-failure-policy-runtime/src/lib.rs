@@ -12,6 +12,7 @@
 //! evidence recovery followed by recoverable dormancy.
 
 pub mod external_v2;
+pub mod retirement_v1;
 
 use clutch_evidence_recovery::{
     EvidenceDecision, FundingObservation, Identity as RecoveryIdentity, RecoveryAdmission,
