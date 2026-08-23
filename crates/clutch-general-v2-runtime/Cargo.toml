@@ -16,8 +16,12 @@ layout-profile-general = ["clutch-solana-layout/profile-general-source-v2-point"
 
 [dependencies]
 clutch-batch = { path = "../clutch-batch" }
+clutch-collateral-adapter-v2 = { path = "../clutch-collateral-adapter-v2" }
 clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
+clutch-fee-runtime-contract = { path = "../clutch-fee-runtime-contract" }
+clutch-owner-settlement = { path = "../clutch-owner-settlement" }
 clutch-price-measure = { path = "../clutch-price-measure" }
 clutch-product-series = { path = "../clutch-product-series" }
+clutch-retirement = { path = "../clutch-retirement" }
 clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }
 sha2 = { version = "=0.10.9", default-features = false }

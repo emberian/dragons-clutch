@@ -42,7 +42,7 @@ const PRODUCT_MARKET_GENESIS_V2_BYTES: usize = 416;
 const PRODUCT_FUNDING_QUOTE_BYTES: usize = 264;
 const PRODUCT_ATTACHMENT_PLAN_BYTES: usize = 112;
 const PRODUCT_SERIES_PLAN_V5_BYTES: usize = 152;
-const PRODUCT_FUNDING_TERMS_V2_BYTES: usize = 208;
+const PRODUCT_FUNDING_TERMS_V2_BYTES: usize = 240;
 
 #[cfg(feature = "non-production-product-series-lab")]
 const _: () = {
@@ -901,7 +901,8 @@ mod tests {
             series_plan_id: SeriesPlanV5Id::from_bytes(product_series().id().unwrap().bytes()),
             lamport_principal_refund: product_id(50),
             collateral_principal_refund_token_account: product_id(51),
-            neutral_sink: product_id(52),
+            neutral_collateral_disposition_token_account: product_id(52),
+            neutral_lamport_sink: product_id(55),
             collateral_mint: product_id(53),
             token_program: product_id(54),
         }

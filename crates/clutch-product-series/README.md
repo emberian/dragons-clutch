@@ -237,7 +237,7 @@ policy body in the complete registry join.
 |---|---|---|
 | `MarketInstancePreimageV2` | 88: magic `DCMKTIN2` `0..8`, Template ID `8..40`, GenesisProfileV2 ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v2` |
 | `SeriesPlanV5` | 152: fresh 16-byte schema-2 header, Template/GenesisV2/Attachment IDs `16..112`, recurrence/cap `112..152` | `dragons-clutch/series-plan/v5` |
-| `SeriesFundingTermsV2` | 208: fresh 16-byte schema-2 header, SeriesPlanV5 ID `16..48`, refund/sink/mint/token identities `48..208` | `dragons-clutch/series-funding-terms/v2` |
+| `SeriesFundingTermsV2` | 240: fresh 16-byte schema-2 header, SeriesPlanV5 ID `16..48`, lamport/collateral refund identities `48..112`, collateral-neutral token account `112..144`, lamport-neutral System account `144..176`, mint `176..208`, token program `208..240` | `dragons-clutch/series-funding-terms/v2` |
 | `CompiledSourceOccurrenceV3` | 184: 16-byte header, SeriesPlanV5 ID + ordinal `16..56`, MarketInstanceV2/Attachment/Window/Statistic IDs `56..184` | `dragons-clutch/source-occurrence-record/v1` |
 | `SeriesFundingStateV1` | 324: 16-byte header, Series/FundingTerms/Quote IDs `16..112`, cursor/lapse fields `112..124`, five 40-byte principal/donation/consumption compartments `124..324` | mutable state; no content ID |
 
