@@ -79,6 +79,7 @@ impl LocalValidatorPorts {
     pub fn validate(self) -> Result<()> {
         let fixed = [self.rpc, self.rpc_websocket, self.faucet, self.gossip];
         if fixed.iter().any(|port| *port == 0)
+            || self.rpc.checked_add(1) != Some(self.rpc_websocket)
             || self.dynamic_start == 0
             || self.dynamic_start > self.dynamic_end
         {
@@ -133,6 +134,8 @@ impl RealSourceAcquisitionV3 {
             } => {
                 if !https_rpc_url.starts_with("https://")
                     || https_rpc_url.contains('@')
+                    || https_rpc_url.contains('?')
+                    || https_rpc_url.contains('#')
                     || *maximum_account_reads == 0
                     || *maximum_account_reads > 1_024
                 {
@@ -788,12 +791,16 @@ impl LocalValidatorInvocation {
                 "local validator invocation is not explicitly bound",
             ));
         }
+        let release_addresses = core::iter::once(&config.clutch_release)
+            .chain(&config.external_program_releases)
+            .flat_map(|release| [release.program_id, release.program_data])
+            .collect::<BTreeSet<_>>();
         let mut addresses = BTreeSet::new();
         for account in genesis_accounts {
             account.validate(layout.root())?;
-            if !addresses.insert(account.address) {
+            if release_addresses.contains(&account.address) || !addresses.insert(account.address) {
                 return Err(SessionError::InvalidRelease(
-                    "local genesis account address is duplicated",
+                    "local genesis account aliases a release or is duplicated",
                 ));
             }
         }
@@ -964,6 +971,18 @@ mod tests {
         assert!(ports.validate().is_ok());
         assert!(require_loopback_endpoint(&ports.rpc_http(), "http://").is_ok());
         assert!(require_loopback_endpoint(&ports.rpc_websocket(), "ws://").is_ok());
+        assert!(LocalValidatorPorts {
+            rpc_websocket: 9140,
+            ..ports
+        }
+        .validate()
+        .is_err());
+        assert!(RealSourceAcquisitionV3::BoundedPublicRead {
+            https_rpc_url: "https://api.devnet.solana.com/?api-key=secret".into(),
+            maximum_account_reads: 16,
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

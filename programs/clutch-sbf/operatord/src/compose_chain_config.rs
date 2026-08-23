@@ -187,7 +187,15 @@ impl Drop for ExactManifestCopy {
     }
 }
 
-fn checked_capability_summary(path: &Path) -> Result<(Value, [u8; 32])> {
+pub(crate) struct CheckedCapabilityRelease {
+    summary: Value,
+    pub(crate) manifest_sha256: [u8; 32],
+    pub(crate) profile_identity: [u8; 32],
+    pub(crate) source_commit: String,
+    pub(crate) elf_sha256: [u8; 32],
+}
+
+pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilityRelease> {
     let bytes = bounded_read(path, MAX_CAPABILITY_MANIFEST_BYTES, "capability manifest")?;
     let exact_copy = ExactManifestCopy::create(&bytes)?;
     let checker = repo_path("programs/clutch-sbf/scripts/check_capability_profile.py");
@@ -220,11 +228,34 @@ fn checked_capability_summary(path: &Path) -> Result<(Value, [u8; 32])> {
     {
         return Err("capability profile is not a completely linked deployable input".into());
     }
-    let canonical_sha256 = hash32(
+    let manifest_sha256 = hash32(
         summary_string(&summary, &["manifest_canonical_sha256"])?,
         "checked profile manifest_canonical_sha256",
     )?;
-    Ok((summary, canonical_sha256))
+    let profile_identity = hash32(
+        summary_string(&summary, &["profile_identity_sha256"] )?,
+        "checked profile identity",
+    )?;
+    let source_commit = summary_string(&summary, &["measurement", "source_git_commit"])?;
+    if !matches!(source_commit.len(), 40 | 64)
+        || !source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || source_commit.bytes().all(|byte| byte == b'0')
+    {
+        return Err("checked profile source commit is not canonical".into());
+    }
+    let elf_sha256 = hash32(
+        summary_string(&summary, &["measurement", "elf_sha256"] )?,
+        "checked profile ELF digest",
+    )?;
+    Ok(CheckedCapabilityRelease {
+        summary,
+        manifest_sha256,
+        profile_identity,
+        source_commit: source_commit.to_string(),
+        elf_sha256,
+    })
 }
 
 fn summary_string<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
@@ -350,6 +381,18 @@ fn sha_join(parts: &[&[u8]]) -> [u8; 32] {
     solana_sha256_hasher::hash(&bytes).to_bytes()
 }
 
+pub(crate) fn validate_upgradeable_release_coordinates(
+    program: Address,
+    program_data: Address,
+) -> Result<()> {
+    let loader = Address::new_from_array(clutch_sbf::loader_state::UPGRADEABLE_LOADER_ID);
+    let expected = Address::find_program_address(&[program.as_ref()], &loader).0;
+    if program == Address::default() || program_data != expected {
+        return Err("ProgramData is not the canonical upgradeable-loader derivation".into());
+    }
+    Ok(())
+}
+
 pub fn compose(options: &ComposeOptions) -> Result<String> {
     let local = parse_local_manifest(&options.local_release_manifest)?;
     if field(&local, "rpc_http")? != options.rpc_http_url
@@ -357,25 +400,27 @@ pub fn compose(options: &ComposeOptions) -> Result<String> {
     {
         return Err("explicit RPC endpoints differ from the sealed local session manifest".into());
     }
-    let (summary, capability_manifest_sha256) =
-        checked_capability_summary(&options.capability_manifest)?;
+    let checked = checked_capability_release(&options.capability_manifest)?;
     if hash32(
         field(&local, "capability_manifest_sha256")?,
         "capability_manifest_sha256",
-    )? != capability_manifest_sha256
+    )? != checked.manifest_sha256
     {
         return Err("sealed local release pins a different canonical capability manifest".into());
     }
-    let capability_profile_id = summary_string(&summary, &["profile_identity_sha256"])?;
-    if field(&local, "capability_profile_identity")? != capability_profile_id {
+    if hash32(
+        field(&local, "capability_profile_identity")?,
+        "capability_profile_identity",
+    )? != checked.profile_identity
+    {
         return Err("sealed local release pins a different capability-profile identity".into());
     }
-    let measured_elf = summary_string(&summary, &["measurement", "elf_sha256"])?;
-    if field(&local, "clutch_elf_sha256")? != measured_elf {
+    if hash32(field(&local, "clutch_elf_sha256")?, "clutch_elf_sha256")?
+        != checked.elf_sha256
+    {
         return Err("sealed local ELF digest differs from checked profile measurement".into());
     }
-    let source_commit = summary_string(&summary, &["measurement", "source_git_commit"])?;
-    if field(&local, "source_commit")? != source_commit {
+    if field(&local, "source_commit")? != checked.source_commit.as_str() {
         return Err("sealed local source commit differs from checked measurement source".into());
     }
     let elf_path = Path::new(field(&local, "clutch_elf_path")?);
@@ -383,46 +428,85 @@ pub fn compose(options: &ComposeOptions) -> Result<String> {
         return Err("sealed local ELF path is not an absolute file path".into());
     }
     let elf = bounded_read(elf_path, 10 * 1024 * 1024, "deployed ELF")?;
-    if hex(solana_sha256_hasher::hash(&elf).to_bytes()) != measured_elf {
+    if solana_sha256_hasher::hash(&elf).to_bytes() != checked.elf_sha256 {
         return Err("deployed ELF bytes differ from the sealed and measured digest".into());
     }
     let program = Address::from_str(field(&local, "clutch_program")?)?;
     let program_data = Address::from_str(field(&local, "clutch_program_data")?)?;
-    if program == Address::default()
-        || program_data == Address::default()
-        || program == program_data
-    {
-        return Err("sealed Program/ProgramData coordinates are invalid".into());
-    }
+    validate_upgradeable_release_coordinates(program, program_data)?;
     let slot: u64 = field(&local, "clutch_deployment_slot")?.parse()?;
     if slot == 0 || field(&local, "clutch_deployment_slot")?.starts_with('0') {
         return Err("sealed deployment slot is not a canonical positive integer".into());
     }
-    let intents = enabled_intents(&summary)?;
-    let families = selected_families(&summary)?;
+    compose_checked_chain_config(
+        &checked,
+        &options.cluster_name,
+        &options.expected_genesis,
+        &options.rpc_http_url,
+        &options.rpc_websocket_url,
+        program,
+        program_data,
+        slot,
+        field(&local, "source_neutral_sink")?,
+        field(&local, "compiler_release_sha256")?,
+        &checked.manifest_sha256,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_checked_chain_config(
+    checked: &CheckedCapabilityRelease,
+    cluster_name: &str,
+    expected_genesis: &str,
+    rpc_http_url: &str,
+    rpc_websocket_url: &str,
+    program: Address,
+    program_data: Address,
+    slot: u64,
+    source_neutral_sink: &str,
+    compiler_release_sha256: &str,
+    workflow_binding: &[u8; 32],
+) -> Result<String> {
+    let intents = enabled_intents(&checked.summary)?;
+    let families = selected_families(&checked.summary)?;
+    let sink = Address::from_str(source_neutral_sink)?;
+    if sink == Address::default() {
+        return Err("source neutral sink is zero".into());
+    }
+    hash32(compiler_release_sha256, "compiler_release_sha256")?;
+    validate_upgradeable_release_coordinates(program, program_data)?;
+    if slot == 0
+        || workflow_binding == &[0; 32]
+        || cluster_name.is_empty()
+        || expected_genesis.is_empty()
+        || rpc_http_url.is_empty()
+        || rpc_websocket_url.is_empty()
+    {
+        return Err("chain configuration coordinates are incomplete".into());
+    }
     let workflow_id = sha_join(&[
         WORKFLOW_DOMAIN,
-        &capability_manifest_sha256,
-        options.expected_genesis.as_bytes(),
+        workflow_binding,
+        expected_genesis.as_bytes(),
         program.as_ref(),
     ]);
     let value = json!({
         "schema": "dragons-clutch/operatord-chain-config/v2",
         "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
         "cluster": {
-            "name": options.cluster_name,
-            "genesisHash": options.expected_genesis,
-            "rpcHttpUrl": options.rpc_http_url,
-            "rpcWebsocketUrl": options.rpc_websocket_url
+            "name": cluster_name,
+            "genesisHash": expected_genesis,
+            "rpcHttpUrl": rpc_http_url,
+            "rpcWebsocketUrl": rpc_websocket_url
         },
         "releases": [{
             "programId": program.to_string(),
             "programData": program_data.to_string(),
-            "elfSha256": measured_elf,
+            "elfSha256": hex(checked.elf_sha256),
             "deploymentSlot": slot.to_string(),
-            "releaseManifestSha256": hex(capability_manifest_sha256),
-            "capabilityProfileId": capability_profile_id,
-            "sourceCommit": source_commit,
+            "releaseManifestSha256": hex(checked.manifest_sha256),
+            "capabilityProfileId": hex(checked.profile_identity),
+            "sourceCommit": checked.source_commit.as_str(),
             "enabledIntents": intents.iter().map(|triple| json!({
                 "familyTag": triple[0].to_string(),
                 "familyVersion": triple[1].to_string(),
@@ -430,7 +514,7 @@ pub fn compose(options: &ComposeOptions) -> Result<String> {
             })).collect::<Vec<_>>(),
             "families": families.iter().map(|family| family.name()).collect::<Vec<_>>()
         }],
-        "sourceNeutralSink": field(&local, "source_neutral_sink")?,
+        "sourceNeutralSink": source_neutral_sink,
         "workflowId": hex(workflow_id),
         "maximumKeeperActions": "4096",
         "bounds": {
@@ -446,7 +530,7 @@ pub fn compose(options: &ComposeOptions) -> Result<String> {
         "rpcTimeoutSeconds": "30",
         "websocketReconnectInitialMilliseconds": "500",
         "websocketReconnectMaximumMilliseconds": "30000",
-        "compilerReleaseSha256": field(&local, "compiler_release_sha256")?
+        "compilerReleaseSha256": compiler_release_sha256
     });
     let output = serde_json::to_string_pretty(&value)? + "\n";
     chain_server::validate_chain_config_bytes(output.as_bytes())?;
