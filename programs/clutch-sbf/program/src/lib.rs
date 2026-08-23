@@ -154,6 +154,8 @@ pub mod error;
 pub mod instructions;
 pub mod instructions_sysvar;
 pub mod loader_state;
+#[cfg(feature = "observed-positive-collateral-release-manifest")]
+mod observed_collateral_release_manifest_v2;
 pub mod native_window;
 pub mod pyth_receiver;
 pub mod seeds;

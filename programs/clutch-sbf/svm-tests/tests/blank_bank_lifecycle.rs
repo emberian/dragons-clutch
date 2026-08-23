@@ -9,7 +9,9 @@
 //! prefunded before construction to prove that SOL donations cannot squat them.
 
 use {
-    clutch_sbf::{error::ClutchError, instructions::market_init, seeds},
+    clutch_sbf::{
+        error::ClutchError, instructions::market_init, loader_state::UPGRADEABLE_LOADER_ID, seeds,
+    },
     clutch_solana_layout::{
         account_len,
         artifact::{ArtifactKind, ARTIFACT_CHUNK_BYTES},
@@ -53,6 +55,14 @@ const OUTCOMES: u8 = 2;
 
 fn derive(seeds: &[&[u8]]) -> (Address, u8) {
     Address::find_program_address(seeds, &PROGRAM_ID)
+}
+
+fn token_2022_programdata() -> Address {
+    Address::find_program_address(
+        &[TOKEN_2022.as_ref()],
+        &Address::new_from_array(UPGRADEABLE_LOADER_ID),
+    )
+    .0
 }
 
 fn stage_address(funder: Address, kind: ArtifactKind, context: Hash32, digest: Hash32) -> Address {
@@ -501,6 +511,8 @@ async fn prepare(
                     AccountMeta::new_readonly(policy, false),
                     AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                     AccountMeta::new_readonly(RENT_SYSVAR, false),
+                    AccountMeta::new_readonly(TOKEN_2022, false),
+                    AccountMeta::new_readonly(token_2022_programdata(), false),
                 ],
             ),
         ],

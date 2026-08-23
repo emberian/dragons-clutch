@@ -46,6 +46,11 @@ non-production-structured-custody-lab = [
     "dep:clutch-structured-claim",
     "dep:clutch-structured-claim-adapter",
 ]
+# Selects a separately reviewed, checked-in collateral release manifest whose
+# rows bind an observed positive-slot Upgradeable Loader deployment. The
+# repository manifest is intentionally empty until exact cluster observations
+# and ELF digests are committed; it never accepts build-time environment rows.
+observed-positive-collateral-release-manifest = []
 # Enables the non-activating Product/Series artifact-catalog laboratory. It can
 # publish exact successor artifacts, including immutable funding-requirement
 # bodies, but deliberately cannot register a Series or create an occurrence.

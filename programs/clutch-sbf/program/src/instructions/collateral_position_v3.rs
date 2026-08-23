@@ -9,8 +9,9 @@ use clutch_collateral_adapter_v2::{
     accept_market_liability_founding_v3, refine_market_collateral_v2,
     AcceptedMarketLiabilityFoundingV3, BoundCollateralProfileV2, ClaimLedgerV3, HoardV2,
     Id as CollateralId, MarketCollateralBindingV2, MarketLiabilityFoundingPlanV3,
-    MarketLiabilityFoundingPostwriteV3, ResolutionStateV5, ResolutionV5, RuntimeAccountViewV2,
-    CLAIM_LEDGER_V3_BYTES, HOARD_V2_BYTES, RESOLUTION_V5_BYTES,
+    MarketLiabilityFoundingPostwriteV3, MarketResolutionActivationPlanV5, ResolutionStateV5,
+    ResolutionV5, RuntimeAccountViewV2, CLAIM_LEDGER_V3_BYTES, HOARD_V2_BYTES,
+    RESOLUTION_V5_BYTES,
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
@@ -21,8 +22,8 @@ use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_product_series::MarketInstancePreimageV2;
 use clutch_retirement::{
     project_general_position_v3, AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3,
-    GeneralPositionProjectionV3, Identity32V1, PositionAccountV3, PositionPurposeV3,
-    PositionV3Sha256Backend, ReplayV3HashBackend, POSITION_V3_BYTES,
+    DeletableRentOwnerV1, GeneralPositionProjectionV3, Identity32V1, PositionAccountV3,
+    PositionPurposeV3, PositionV3Sha256Backend, ReplayV3HashBackend, POSITION_V3_BYTES,
 };
 use clutch_solana_layout::collateral_v3_accounts::{
     validate_inferred_collateral_account_metas_with_v3, CollateralActionV3,
@@ -36,6 +37,17 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
 use super::product_artifact::authenticate_product_artifact_v1;
+
+const GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/general-market/value-authority/v2\0";
+const GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/general-market/liability-authority/v2\0";
+const GENERAL_MARKET_BINDING_DATA_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/general-market/binding-data/v2\0";
+const GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/general-market/runtime-data/v3\0";
+const MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/market-resolution/activation-postwrite/v5\0";
 
 /// Enforce the central full-width account-role, privilege, and alias contract
 /// over live effective AccountInfo metadata without allocation.
@@ -99,13 +111,31 @@ pub(crate) struct GeneralPositionReplayAuthorityV2 {
 
 /// Authenticated full-width collateral and native-claim Market owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GeneralMarketLiabilityAuthorityV1 {
+pub(crate) struct GeneralMarketLiabilityAuthorityV2 {
     pub(crate) bound: BoundCollateralProfileV2,
-    pub(crate) market_binding: MarketBindingV1,
+    pub(crate) market_binding: MarketBindingV2,
     pub(crate) market_runtime: MarketRuntimeV3AccountV1,
     pub(crate) market_instance: MarketInstancePreimageV2,
     pub(crate) hoard: HoardV2,
     pub(crate) claim_ledger: ClaimLedgerV3,
+    pub(crate) market_binding_data_id: CollateralId,
+    pub(crate) market_runtime_data_id: CollateralId,
+    pub(crate) hoard_semantic_id: CollateralId,
+    pub(crate) claim_ledger_semantic_id: CollateralId,
+    pub(crate) hoard_lamports: u64,
+    pub(crate) claim_ledger_lamports: u64,
+    pub(crate) receipt_id: CollateralId,
+}
+
+/// Same-instruction current collateral deployment proof for a value-bearing
+/// Hoard CPI. Internal reclassification routes cannot construct this type
+/// without presenting the exact linked ProgramData account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralMarketValueAuthorityV2 {
+    pub(crate) liabilities: GeneralMarketLiabilityAuthorityV2,
+    pub(crate) deployment:
+        crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
+    pub(crate) receipt_id: CollateralId,
 }
 
 /// Hostile-decoded full-width Resolution bound to its exact PDA and ledgers.
@@ -115,6 +145,45 @@ pub(crate) struct AuthenticatedResolutionV5 {
     pub(crate) resolution: ResolutionV5,
     pub(crate) semantic_id: CollateralId,
     pub(crate) data_id: CollateralId,
+}
+
+/// Hostile-decoded receipt for the three exact Resolution activation
+/// postimages. Construction remains private to this SBF adapter; Product and
+/// Failure must separately authorize the transition before any write occurs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedMarketResolutionActivationPostwriteV5 {
+    plan: MarketResolutionActivationPlanV5,
+    liability_authority_receipt_id: CollateralId,
+    resolution_lamports: u64,
+    hoard_lamports: u64,
+    claim_ledger_lamports: u64,
+    receipt_id: CollateralId,
+}
+
+impl AuthenticatedMarketResolutionActivationPostwriteV5 {
+    pub(crate) const fn plan(self) -> MarketResolutionActivationPlanV5 {
+        self.plan
+    }
+
+    pub(crate) const fn liability_authority_receipt_id(self) -> CollateralId {
+        self.liability_authority_receipt_id
+    }
+
+    pub(crate) const fn resolution_lamports(self) -> u64 {
+        self.resolution_lamports
+    }
+
+    pub(crate) const fn hoard_lamports(self) -> u64 {
+        self.hoard_lamports
+    }
+
+    pub(crate) const fn claim_ledger_lamports(self) -> u64 {
+        self.claim_ledger_lamports
+    }
+
+    pub(crate) const fn receipt_id(self) -> CollateralId {
+        self.receipt_id
+    }
 }
 
 fn require_program_account(
@@ -140,6 +209,42 @@ fn require_program_account(
     )
 }
 
+fn required_deletable_rent_balance_v1(rent: DeletableRentOwnerV1) -> Outcome<u64> {
+    rent.refundable_principal()
+        .checked_add(rent.donation_floor())
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+}
+
+fn require_deletable_rent_coverage_v1(
+    rent: DeletableRentOwnerV1,
+    observed_lamports: u64,
+    exact: bool,
+) -> Outcome<()> {
+    let required = required_deletable_rent_balance_v1(rent)?;
+    require(
+        if exact {
+            observed_lamports == required
+        } else {
+            observed_lamports >= required
+        },
+        ClutchError::MismatchedState,
+    )
+}
+
+fn authenticated_account_data_id_v1(
+    domain: &[u8],
+    account: &Pubkey,
+    data: &[u8],
+) -> Outcome<CollateralId> {
+    let value = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[domain, account.as_ref(), data]).to_bytes(),
+    );
+    value
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(value)
+}
+
 /// Authenticate exact full-width liability/custody postwrites and release the
 /// private accepted founding receipt.
 ///
@@ -163,6 +268,12 @@ pub(crate) fn accept_general_market_liability_founding_postwrite_v3(
     )?;
     let hoard = plan.hoard();
     let claim_ledger = plan.claim_ledger();
+    require_deletable_rent_coverage_v1(hoard.rent, hoard_account.lamports(), true)?;
+    require_deletable_rent_coverage_v1(
+        claim_ledger.rent,
+        claim_ledger_account.lamports(),
+        true,
+    )?;
     let market = hoard.market_instance_id.bytes();
     expect_pda(
         hoard_account.key,
@@ -305,7 +416,7 @@ pub(crate) fn authenticate_general_market_v2(
 /// the replacement Hoard/ClaimLedger accounts without consulting any lowered
 /// legacy Market, Kernel, or SupplyLedger identity.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_general_market_liabilities_v1(
+pub(crate) fn authenticate_general_market_liabilities_v2(
     program_id: &Pubkey,
     realm_account: &AccountInfo<'_>,
     profile_account: &AccountInfo<'_>,
@@ -318,7 +429,7 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
     claim_ledger_account: &AccountInfo<'_>,
     hoard_writable: bool,
     claim_ledger_writable: bool,
-) -> Outcome<GeneralMarketLiabilityAuthorityV1> {
+) -> Outcome<GeneralMarketLiabilityAuthorityV2> {
     let realm = crate::collateral_release::authenticate_realm_collateral_v2(
         program_id,
         realm_account,
@@ -327,20 +438,21 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
         token_program,
     )?;
     let (market_binding, market_runtime) =
-        authenticate_general_market_v1(program_id, market_binding_account, market_runtime_account)?;
+        authenticate_general_market_v2(program_id, market_binding_account, market_runtime_account)?;
+    let relation_market = market_binding.base();
     let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
         program_id,
         market_instance_account,
-        market_binding.market_instance_v2_id.content_id(),
+        relation_market.market_instance_v2_id.content_id(),
     )?;
     let market_instance = *market_instance_artifact.value();
     let market_instance_id = market_instance
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        market_instance_id.bytes() == market_binding.market_instance_v2_id.bytes()
+        market_instance_id.bytes() == relation_market.market_instance_v2_id.bytes()
             && market_instance.market_genesis_profile_id.bytes()
-                == market_binding.market_genesis_profile_v2_id.bytes(),
+                == relation_market.market_genesis_profile_v2_id.bytes(),
         ClutchError::MismatchedState,
     )?;
     require_program_account(program_id, hoard_account, hoard_writable, HOARD_V2_BYTES)?;
@@ -354,7 +466,7 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_account.data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let market_bytes = market_binding.market_instance_v2_id.bytes();
+    let market_bytes = relation_market.market_instance_v2_id.bytes();
     expect_pda(
         hoard_account.key,
         seeds::hoard_v2_pda(program_id, &market_bytes),
@@ -383,10 +495,10 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
             && claim_ledger.market_instance_id == hoard.market_instance_id
             && claim_ledger.realm_id == hoard.realm_id
             && claim_ledger.native_claim_basis_id
-                == CollateralId::from_bytes(market_binding.native_claim_basis_id.bytes())
+                == CollateralId::from_bytes(relation_market.native_claim_basis_id.bytes())
             && claim_ledger.lifecycle == hoard.lifecycle
             && claim_ledger.outcome_count == hoard.outcome_count
-            && claim_ledger.outcome_count == market_binding.outcome_count,
+            && claim_ledger.outcome_count == relation_market.outcome_count,
         ClutchError::MismatchedState,
     )?;
     let bound = refine_market_collateral_v2(
@@ -401,13 +513,266 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
         },
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok(GeneralMarketLiabilityAuthorityV1 {
+    let hoard_semantic_id = hoard
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger_semantic_id = claim_ledger
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_binding_data = market_binding_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let market_binding_data_id = authenticated_account_data_id_v1(
+        GENERAL_MARKET_BINDING_DATA_DOMAIN_V2,
+        market_binding_account.key,
+        &market_binding_data[..],
+    )?;
+    drop(market_binding_data);
+    let market_runtime_data = market_runtime_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let market_runtime_data_id = authenticated_account_data_id_v1(
+        GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3,
+        market_runtime_account.key,
+        &market_runtime_data[..],
+    )?;
+    drop(market_runtime_data);
+    let hoard_lamports = hoard_account.lamports();
+    let claim_ledger_lamports = claim_ledger_account.lamports();
+    require_deletable_rent_coverage_v1(hoard.rent, hoard_lamports, false)?;
+    require_deletable_rent_coverage_v1(claim_ledger.rent, claim_ledger_lamports, false)?;
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V2,
+            market_binding_account.key.as_ref(),
+            &market_binding_data_id.bytes(),
+            market_runtime_account.key.as_ref(),
+            &market_runtime_data_id.bytes(),
+            market_instance_account.key.as_ref(),
+            &market_instance_id.bytes(),
+            hoard_account.key.as_ref(),
+            &hoard_semantic_id.bytes(),
+            &hoard_lamports.to_le_bytes(),
+            claim_ledger_account.key.as_ref(),
+            &claim_ledger_semantic_id.bytes(),
+            &claim_ledger_lamports.to_le_bytes(),
+            &realm.policy_id().bytes(),
+            &bound
+                .release()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
+                .bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(GeneralMarketLiabilityAuthorityV2 {
         bound,
         market_binding,
         market_runtime,
         market_instance,
         hoard,
         claim_ledger,
+        market_binding_data_id,
+        market_runtime_data_id,
+        hoard_semantic_id,
+        claim_ledger_semantic_id,
+        hoard_lamports,
+        claim_ledger_lamports,
+        receipt_id,
+    })
+}
+
+/// Authenticate the full-width liability owners and the exact current
+/// Profile-selected collateral ProgramData before any value-bearing CPI.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_market_value_authority_v2(
+    program_id: &Pubkey,
+    realm_account: &AccountInfo<'_>,
+    profile_account: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    market_instance_account: &AccountInfo<'_>,
+    hoard_account: &AccountInfo<'_>,
+    claim_ledger_account: &AccountInfo<'_>,
+    hoard_writable: bool,
+    claim_ledger_writable: bool,
+) -> Outcome<GeneralMarketValueAuthorityV2> {
+    let liabilities = authenticate_general_market_liabilities_v2(
+        program_id,
+        realm_account,
+        profile_account,
+        policy_account,
+        token_program,
+        market_binding_account,
+        market_runtime_account,
+        market_instance_account,
+        hoard_account,
+        claim_ledger_account,
+        hoard_writable,
+        claim_ledger_writable,
+    )?;
+    let deployment = crate::collateral_release::authenticate_collateral_release_deployment_v2(
+        liabilities.bound.release(),
+        token_program,
+        token_programdata,
+    )?;
+    require(
+        deployment.release_id()
+            == liabilities
+                .bound
+                .release()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V2,
+            &liabilities.receipt_id.bytes(),
+            &liabilities.market_binding.base().market_instance_v2_id.bytes(),
+            &liabilities.bound.policy_id().bytes(),
+            &deployment.release_id().bytes(),
+            &deployment.programdata_account().bytes(),
+            &deployment.deployment_slot().to_le_bytes(),
+            &deployment.receipt_id().bytes(),
+            &liabilities.hoard_semantic_id.bytes(),
+            &liabilities.claim_ledger_semantic_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(GeneralMarketValueAuthorityV2 {
+        liabilities,
+        deployment,
+        receipt_id,
+    })
+}
+
+/// Authenticate the exact newly finalized Resolution and both liability
+/// successor postimages after the private Product/Failure writer has applied
+/// one [`MarketResolutionActivationPlanV5`].
+///
+/// This function is deliberately not an authorization to write. It accepts
+/// only the private prewrite liability authority and the pure activation plan,
+/// then hostile-decodes all three writable accounts and binds their exact
+/// semantic identities into a private receipt.
+pub(crate) fn authenticate_market_resolution_activation_postwrite_v5(
+    program_id: &Pubkey,
+    liabilities: GeneralMarketLiabilityAuthorityV2,
+    plan: MarketResolutionActivationPlanV5,
+    resolution_account: &AccountInfo<'_>,
+    hoard_account: &AccountInfo<'_>,
+    claim_ledger_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedMarketResolutionActivationPostwriteV5> {
+    require_program_account(program_id, resolution_account, true, RESOLUTION_V5_BYTES)?;
+    require_program_account(program_id, hoard_account, true, HOARD_V2_BYTES)?;
+    require_program_account(
+        program_id,
+        claim_ledger_account,
+        true,
+        CLAIM_LEDGER_V3_BYTES,
+    )?;
+    let relation_market = liabilities.market_binding.base();
+    let market_bytes = relation_market.market_instance_v2_id.bytes();
+    let expected_resolution_account = CollateralId::from_bytes(resolution_account.key.to_bytes());
+    require(
+        plan.resolution_account() == expected_resolution_account
+            && plan.hoard_before_id() == liabilities.hoard_semantic_id
+            && plan.claim_ledger_before_id() == liabilities.claim_ledger_semantic_id,
+        ClutchError::MismatchedState,
+    )?;
+    let resolution = ResolutionV5::decode(&resolution_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expect_pda(
+        resolution_account.key,
+        seeds::resolution_v5_pda(program_id, &market_bytes),
+        Some(resolution.stored_bump),
+    )?;
+    expect_pda(
+        hoard_account.key,
+        seeds::hoard_v2_pda(program_id, &market_bytes),
+        Some(plan.hoard_after().stored_bump),
+    )?;
+    expect_pda(
+        claim_ledger_account.key,
+        seeds::claim_ledger_v3_pda(program_id, &market_bytes),
+        Some(plan.claim_ledger_after().stored_bump),
+    )?;
+
+    let hoard = HoardV2::decode(&hoard_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_semantic_id = resolution
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_data_id = resolution
+        .data_id(expected_resolution_account)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let hoard_semantic_id = hoard
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger_semantic_id = claim_ledger
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_lamports = resolution_account.lamports();
+    let hoard_lamports = hoard_account.lamports();
+    let claim_ledger_lamports = claim_ledger_account.lamports();
+    require_deletable_rent_coverage_v1(resolution.rent, resolution_lamports, true)?;
+    require_deletable_rent_coverage_v1(hoard.rent, hoard_lamports, false)?;
+    require_deletable_rent_coverage_v1(claim_ledger.rent, claim_ledger_lamports, false)?;
+    require(
+        resolution.state == ResolutionStateV5::Finalized
+            && resolution.facts.market_instance_id == CollateralId::from_bytes(market_bytes)
+            && resolution.facts.native_claim_basis_id
+                == CollateralId::from_bytes(relation_market.native_claim_basis_id.bytes())
+            && resolution.facts.outcome_count == relation_market.outcome_count
+            && resolution_semantic_id == plan.resolution_id()
+            && resolution_data_id == plan.resolution_data_id()
+            && hoard == plan.hoard_after()
+            && hoard_semantic_id == plan.hoard_after_id()
+            && claim_ledger == plan.claim_ledger_after()
+            && claim_ledger_semantic_id == plan.claim_ledger_after_id()
+            && hoard_lamports == liabilities.hoard_lamports
+            && claim_ledger_lamports == liabilities.claim_ledger_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V5,
+            &liabilities.receipt_id.bytes(),
+            &plan.receipt_id().bytes(),
+            resolution_account.key.as_ref(),
+            &resolution_semantic_id.bytes(),
+            &resolution_data_id.bytes(),
+            &resolution_lamports.to_le_bytes(),
+            hoard_account.key.as_ref(),
+            &hoard_semantic_id.bytes(),
+            &hoard_lamports.to_le_bytes(),
+            claim_ledger_account.key.as_ref(),
+            &claim_ledger_semantic_id.bytes(),
+            &claim_ledger_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedMarketResolutionActivationPostwriteV5 {
+        plan,
+        liability_authority_receipt_id: liabilities.receipt_id,
+        resolution_lamports,
+        hoard_lamports,
+        claim_ledger_lamports,
+        receipt_id,
     })
 }
 
@@ -416,26 +781,28 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
 pub(crate) fn authenticate_resolution_v5(
     program_id: &Pubkey,
     resolution_account: &AccountInfo<'_>,
-    liabilities: GeneralMarketLiabilityAuthorityV1,
+    liabilities: GeneralMarketLiabilityAuthorityV2,
 ) -> Outcome<AuthenticatedResolutionV5> {
     require_program_account(program_id, resolution_account, false, RESOLUTION_V5_BYTES)?;
     let resolution = ResolutionV5::decode(&resolution_account.data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let market_bytes = liabilities.market_binding.market_instance_v2_id.bytes();
+    let relation_market = liabilities.market_binding.base();
+    let market_bytes = relation_market.market_instance_v2_id.bytes();
     expect_pda(
         resolution_account.key,
         seeds::resolution_v5_pda(program_id, &market_bytes),
         Some(resolution.stored_bump),
     )?;
     let account_id = CollateralId::from_bytes(resolution_account.key.to_bytes());
+    require_deletable_rent_coverage_v1(resolution.rent, resolution_account.lamports(), false)?;
     require(
         resolution.state == ResolutionStateV5::Finalized
             && resolution.facts.market_instance_id == CollateralId::from_bytes(market_bytes)
             && resolution.facts.native_claim_basis_id
                 == CollateralId::from_bytes(
-                    liabilities.market_binding.native_claim_basis_id.bytes(),
+                    relation_market.native_claim_basis_id.bytes(),
                 )
-            && resolution.facts.outcome_count == liabilities.market_binding.outcome_count
+            && resolution.facts.outcome_count == relation_market.outcome_count
             && liabilities.hoard.lifecycle
                 == clutch_collateral_adapter_v2::MarketLiabilityLifecycleV1::Resolved
             && liabilities.claim_ledger.lifecycle
@@ -771,4 +1138,62 @@ pub(crate) fn authenticate_general_position_replay_readonly_v2(
         expected_sequence,
         false,
     )
+}
+
+#[cfg(test)]
+mod rent_coverage_tests {
+    use super::*;
+
+    #[test]
+    fn deletable_rent_coverage_distinguishes_founding_from_live_surplus() {
+        let rent = DeletableRentOwnerV1::from_persisted(
+            Identity32V1::new([7; 32]).unwrap(),
+            10,
+            3,
+        )
+        .unwrap();
+        assert!(require_deletable_rent_coverage_v1(rent, 12, false).is_err());
+        assert!(require_deletable_rent_coverage_v1(rent, 13, true).is_ok());
+        assert!(require_deletable_rent_coverage_v1(rent, 14, false).is_ok());
+        assert!(require_deletable_rent_coverage_v1(rent, 14, true).is_err());
+    }
+
+    #[test]
+    fn full_binding_and_runtime_data_ids_change_on_one_hostile_byte() {
+        let account = Pubkey::new_from_array([9; 32]);
+        let binding = [11u8; MARKET_BINDING_ACCOUNT_BYTES_V2];
+        let mut changed_binding = binding;
+        changed_binding[MARKET_BINDING_ACCOUNT_BYTES_V2 - 1] ^= 1;
+        let binding_id = authenticated_account_data_id_v1(
+            GENERAL_MARKET_BINDING_DATA_DOMAIN_V2,
+            &account,
+            &binding,
+        )
+        .unwrap();
+        let changed_binding_id = authenticated_account_data_id_v1(
+            GENERAL_MARKET_BINDING_DATA_DOMAIN_V2,
+            &account,
+            &changed_binding,
+        )
+        .unwrap();
+        assert_ne!(binding_id, changed_binding_id);
+
+        let runtime = [13u8; MARKET_RUNTIME_ACCOUNT_BYTES];
+        let mut changed_runtime = runtime;
+        changed_runtime[MARKET_RUNTIME_ACCOUNT_BYTES - 1] ^= 1;
+        let runtime_id = authenticated_account_data_id_v1(
+            GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3,
+            &account,
+            &runtime,
+        )
+        .unwrap();
+        let changed_runtime_id = authenticated_account_data_id_v1(
+            GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3,
+            &account,
+            &changed_runtime,
+        )
+        .unwrap();
+        assert_ne!(runtime_id, changed_runtime_id);
+        assert_ne!(binding_id, runtime_id);
+    }
 }

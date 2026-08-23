@@ -10,7 +10,7 @@
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
 };
-use crate::claim_release::authenticate_claim_issuance_v1;
+use crate::claim_release::authenticate_claim_issuance_release_with_programdata_v1;
 use crate::error::{ClutchError, Refusal};
 use crate::{capabilities, seeds, token};
 use clutch_collateral_adapter_v2::{
@@ -52,8 +52,8 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_general_position_replay_v1,
-    authenticate_resolution_v5,
+    authenticate_general_market_liabilities_v2, authenticate_general_market_value_authority_v2,
+    authenticate_general_position_replay_v2, authenticate_resolution_v5,
 };
 use super::external_redemption_v3::{
     accept_zero_claim_collateral_payout, bearer_claim_observation_v3,
@@ -69,7 +69,7 @@ use super::genesis::{
 /// Exact account count for action 2.
 pub const REDEEM_INTERNAL_EXACT_ACCOUNT_COUNT_V1: usize = 15;
 /// Fixed exact-bearer prefix before one canonical mint per active outcome.
-pub const REDEEM_BEARER_EXACT_PREFIX_ACCOUNTS_V1: usize = 19;
+pub const REDEEM_BEARER_EXACT_PREFIX_ACCOUNTS_V1: usize = 21;
 /// Live-credit action-4 width, including its authenticated Rent sysvar.
 pub const REDEEM_INTERNAL_CREDIT_LIVE_ACCOUNT_COUNT_V1: usize = 19;
 /// Extra payer/System roles required only for fresh creation or reopen.
@@ -85,6 +85,73 @@ const FRACTIONAL_ADMISSION_POSTWRITE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/fractional/admission-postwrite-authentication/v1\0";
 const FRACTIONAL_TERMINAL_POSTWRITE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/fractional/terminal-postwrite-authentication/v1\0";
+const FRACTIONAL_COLLATERAL_EXECUTION_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/fractional/collateral-execution-receipt/v2\0";
+
+/// Private same-instruction join between the canonical Fractional transition
+/// and the exact current collateral/claim loader releases that executed it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedFractionalCollateralExecutionV2 {
+    transition_id: CollateralId,
+    receipt_id: CollateralId,
+}
+
+fn bind_fractional_collateral_execution_v2(
+    transition_id: CollateralId,
+    collateral_release_receipt_id: CollateralId,
+    claim_release_receipt_id: CollateralId,
+    claim_burn_receipt_id: CollateralId,
+    collateral_delta_receipt_id: CollateralId,
+) -> Outcome<AuthenticatedFractionalCollateralExecutionV2> {
+    transition_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    collateral_release_receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    collateral_delta_receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require(
+        claim_release_receipt_id.is_zero() == claim_burn_receipt_id.is_zero(),
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    if !claim_release_receipt_id.is_zero() {
+        claim_release_receipt_id
+            .require_live()
+            .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+        claim_burn_receipt_id
+            .require_live()
+            .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    }
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FRACTIONAL_COLLATERAL_EXECUTION_RECEIPT_DOMAIN_V2,
+            &transition_id.bytes(),
+            &collateral_release_receipt_id.bytes(),
+            &claim_release_receipt_id.bytes(),
+            &claim_burn_receipt_id.bytes(),
+            &collateral_delta_receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedFractionalCollateralExecutionV2 {
+        transition_id,
+        receipt_id,
+    })
+}
+
+fn collateral_delta_receipt_id(
+    accepted: AcceptedBearerRedemptionCollateralV3,
+) -> CollateralId {
+    match accepted {
+        AcceptedBearerRedemptionCollateralV3::Zero(value) => value.receipt_id(),
+        AcceptedBearerRedemptionCollateralV3::Nonzero(value) => value.receipt_id(),
+    }
+}
 
 const IX_ACTOR: usize = 0;
 const IX_REALM: usize = 1;
@@ -126,7 +193,9 @@ mod bearer_ix {
     pub const HOARD_AUTHORITY: usize = 15;
     pub const HOARD_TOKEN: usize = 16;
     pub const OUTCOME_TOKEN_PROGRAM: usize = 17;
-    pub const SOURCE: usize = 18;
+    pub const OUTCOME_TOKEN_PROGRAMDATA: usize = 18;
+    pub const SOURCE: usize = 19;
+    pub const COLLATERAL_TOKEN_PROGRAMDATA: usize = 20;
     pub const OUTCOME_MINTS: usize = super::REDEEM_BEARER_EXACT_PREFIX_ACCOUNTS_V1;
 }
 
@@ -747,7 +816,7 @@ fn process_redeem_internal_exact(
         ClutchError::MismatchedState,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let liabilities = authenticate_general_market_liabilities_v2(
         program_id,
         &accounts[IX_REALM],
         &accounts[IX_PROFILE],
@@ -762,7 +831,7 @@ fn process_redeem_internal_exact(
         true,
     )?;
     require(
-        intent.outcome < liabilities.market_binding.outcome_count,
+        intent.outcome < liabilities.market_binding.base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     let resolution = authenticate_resolution_v5(program_id, &accounts[IX_RESOLUTION], liabilities)?;
@@ -774,13 +843,13 @@ fn process_redeem_internal_exact(
         IX_RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes() == accounts[IX_CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let position = authenticate_general_position_replay_v1(
+    let position = authenticate_general_position_replay_v2(
         program_id,
         liabilities.bound,
         &accounts[IX_MARKET_BINDING],
@@ -877,6 +946,7 @@ fn require_bearer_account_contract(
         .ok_or(ClutchError::Arithmetic)?;
     require_count(accounts, expected_count)?;
     require_signer(&accounts[bearer_ix::CLAIMANT])?;
+    require_correlated_bearer_loader_aliases_v2(accounts)?;
     let selected_mint = bearer_ix::OUTCOME_MINTS + usize::from(selected_outcome);
     let mut index = 0usize;
     while index < accounts.len() {
@@ -903,11 +973,7 @@ fn require_bearer_account_contract(
         )?;
         let mut other = index + 1;
         while other < accounts.len() {
-            let token_program_alias = (index == bearer_ix::COLLATERAL_TOKEN_PROGRAM
-                && other == bearer_ix::OUTCOME_TOKEN_PROGRAM)
-                || (index == bearer_ix::OUTCOME_TOKEN_PROGRAM
-                    && other == bearer_ix::COLLATERAL_TOKEN_PROGRAM);
-            if !token_program_alias {
+            if !bearer_loader_alias_pair_v2(index, other) {
                 require(
                     accounts[index].key != accounts[other].key,
                     ClutchError::AccountAlias,
@@ -939,6 +1005,74 @@ enum CreditFundingAdmissionV1 {
 
 fn identity32(bytes: [u8; 32]) -> Outcome<Identity32V1> {
     Identity32V1::new(bytes).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+fn bearer_loader_alias_pair_v2(left: usize, right: usize) -> bool {
+    matches!(
+        (left, right),
+        (
+            bearer_ix::COLLATERAL_TOKEN_PROGRAM,
+            bearer_ix::OUTCOME_TOKEN_PROGRAM
+        ) | (
+            bearer_ix::OUTCOME_TOKEN_PROGRAM,
+            bearer_ix::COLLATERAL_TOKEN_PROGRAM
+        ) | (
+            bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA,
+            bearer_ix::OUTCOME_TOKEN_PROGRAMDATA
+        ) | (
+            bearer_ix::OUTCOME_TOKEN_PROGRAMDATA,
+            bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA
+        )
+    )
+}
+
+fn require_correlated_loader_alias_keys_v2(
+    collateral_program: [u8; 32],
+    outcome_program: [u8; 32],
+    collateral_programdata: [u8; 32],
+    outcome_programdata: [u8; 32],
+) -> Outcome<()> {
+    require(
+        (collateral_program == outcome_program)
+            == (collateral_programdata == outcome_programdata),
+        ClutchError::AccountAlias,
+    )
+}
+
+fn require_correlated_bearer_loader_aliases_v2(
+    accounts: &[AccountInfo<'_>],
+) -> Outcome<()> {
+    require_correlated_loader_alias_keys_v2(
+        accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[bearer_ix::OUTCOME_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA]
+            .key
+            .to_bytes(),
+        accounts[bearer_ix::OUTCOME_TOKEN_PROGRAMDATA]
+            .key
+            .to_bytes(),
+    )
+}
+
+#[cfg(test)]
+mod loader_alias_tests {
+    use super::*;
+
+    #[test]
+    fn bearer_loader_aliases_refuse_half_and_cross_pairs() {
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [1; 32], [2; 32], [2; 32])
+            .is_ok());
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [3; 32], [2; 32], [4; 32])
+            .is_ok());
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [1; 32], [2; 32], [4; 32])
+            .is_err());
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [3; 32], [2; 32], [2; 32])
+            .is_err());
+        assert!(!bearer_loader_alias_pair_v2(
+            bearer_ix::COLLATERAL_TOKEN_PROGRAM,
+            bearer_ix::OUTCOME_TOKEN_PROGRAMDATA,
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1235,7 +1369,7 @@ fn process_redeem_internal_credit(
             && accounts[IX_CREDIT].key.to_bytes() == intent.credit_or_policy.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let liabilities = authenticate_general_market_liabilities_v2(
         program_id,
         &accounts[IX_REALM],
         &accounts[IX_PROFILE],
@@ -1250,7 +1384,7 @@ fn process_redeem_internal_credit(
         true,
     )?;
     require(
-        intent.outcome < liabilities.market_binding.outcome_count,
+        intent.outcome < liabilities.market_binding.base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     let resolution = authenticate_resolution_v5(program_id, &accounts[IX_RESOLUTION], liabilities)?;
@@ -1262,7 +1396,7 @@ fn process_redeem_internal_credit(
         IX_RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes() == accounts[IX_CLAIM_LEDGER].key.to_bytes(),
@@ -1271,7 +1405,7 @@ fn process_redeem_internal_credit(
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[IX_MARKET_LIFECYCLE_ROOT],
-        liabilities.market_binding.market_instance_v2_id,
+        liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
     )?;
@@ -1295,7 +1429,7 @@ fn process_redeem_internal_credit(
         intent.claimant,
         identity32(neutral.bytes())?,
     )?;
-    let position = authenticate_general_position_replay_v1(
+    let position = authenticate_general_position_replay_v2(
         program_id,
         liabilities.bound,
         &accounts[IX_MARKET_BINDING],
@@ -1416,12 +1550,13 @@ fn process_redeem_bearer_exact(
         ClutchError::MismatchedState,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[bearer_ix::REALM],
         &accounts[bearer_ix::PROFILE],
         &accounts[bearer_ix::COLLATERAL_POLICY],
         &accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA],
         &accounts[bearer_ix::MARKET_BINDING],
         &accounts[bearer_ix::MARKET_RUNTIME],
         &accounts[bearer_ix::MARKET_INSTANCE],
@@ -1430,13 +1565,14 @@ fn process_redeem_bearer_exact(
         true,
         true,
     )?;
+    let liabilities = value_authority.liabilities;
     require(
-        intent.outcome < liabilities.market_binding.outcome_count,
+        intent.outcome < liabilities.market_binding.base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     require_bearer_account_contract(
         accounts,
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         intent.outcome,
     )?;
     require(
@@ -1450,7 +1586,7 @@ fn process_redeem_bearer_exact(
             && accounts[bearer_ix::HOARD_AUTHORITY].data_is_empty(),
         ClutchError::MismatchedState,
     )?;
-    let market_bytes = liabilities.market_binding.market_instance_v2_id.bytes();
+    let market_bytes = liabilities.market_binding.base().market_instance_v2_id.bytes();
     expect_pda(
         accounts[bearer_ix::HOARD_AUTHORITY].key,
         seeds::hoard_authority_v2_pda(program_id, &market_bytes),
@@ -1463,9 +1599,10 @@ fn process_redeem_bearer_exact(
     )?;
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[bearer_ix::RESOLUTION], liabilities)?;
-    let claim = authenticate_claim_issuance_v1(
+    let claim = authenticate_claim_issuance_release_with_programdata_v1(
         liabilities.bound,
         &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAM],
+        &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAMDATA],
     )?;
     let (policy, ledger) = decode_fractional_accounts(
         program_id,
@@ -1488,7 +1625,7 @@ fn process_redeem_bearer_exact(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         intent.outcome,
     )?;
     let selected_mint = &accounts[bearer_ix::OUTCOME_MINTS + usize::from(intent.outcome)];
@@ -1511,7 +1648,7 @@ fn process_redeem_bearer_exact(
         liabilities.hoard,
         resolution.resolution,
         liabilities.bound,
-        claim,
+        claim.bound(),
     )
     .map_err(map_fractional)?;
     let prepared = prepare_bearer_exact_v1(
@@ -1532,7 +1669,7 @@ fn process_redeem_bearer_exact(
     )
     .map_err(map_fractional)?;
     let prepared_burn = prepare_fractional_bearer_claim_burn_v3(
-        claim,
+        claim.bound(),
         CollateralId::from_bytes(accounts[bearer_ix::MARKET_RUNTIME].key.to_bytes()),
         CollateralId::from_bytes(accounts[bearer_ix::CLAIMANT].key.to_bytes()),
         intent.outcome,
@@ -1565,7 +1702,7 @@ fn process_redeem_bearer_exact(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         intent.outcome,
     )?;
     let token_after = bearer_claim_observation_v3(
@@ -1639,6 +1776,13 @@ fn process_redeem_bearer_exact(
             )?)
         }
     };
+    let runtime_execution = bind_fractional_collateral_execution_v2(
+        accepted_burn.fractional().transition_id(),
+        value_authority.receipt_id,
+        claim.receipt_id(),
+        accepted_burn.burn_receipt_id(),
+        collateral_delta_receipt_id(collateral),
+    )?;
     let plan = finish_bearer_exact_v1(burned, collateral).map_err(map_fractional)?;
     let RedemptionSourcePoststateV1::Bearer(source_after) = plan.source_after else {
         return Err(ClutchError::MismatchedState.into());
@@ -1648,6 +1792,8 @@ fn process_redeem_bearer_exact(
             && plan.claimant_numerator_after == 0
             && source_after.transition_id.bytes()
                 == accepted_burn.fractional().transition_id().bytes()
+            && runtime_execution.transition_id == accepted_burn.fractional().transition_id()
+            && !runtime_execution.receipt_id.is_zero()
             && source_after.burn_receipt_id.map(Identity32V1::bytes)
                 == Some(accepted_burn.burn_receipt_id().bytes())
             && source_after.claim_token_account.bytes()
@@ -1698,6 +1844,7 @@ fn require_bearer_credit_account_contract(
     let expected = funding_index + if creation { CREDIT_CREATION_SUFFIX_ACCOUNTS_V1 } else { 0 };
     require_count(accounts, expected)?;
     require_signer(&accounts[bearer_ix::CLAIMANT])?;
+    require_correlated_bearer_loader_aliases_v2(accounts)?;
     let selected_mint = bearer_ix::OUTCOME_MINTS + usize::from(selected_outcome);
     let payer_alias = creation && accounts[bearer_ix::CLAIMANT].key == accounts[funding_index].key;
     let mut index = 0usize;
@@ -1722,14 +1869,10 @@ fn require_bearer_credit_account_contract(
         require(accounts[index].is_signer == expected_signer, ClutchError::MismatchedState)?;
         let mut other = index + 1;
         while other < accounts.len() {
-            let token_program_alias = (index == bearer_ix::COLLATERAL_TOKEN_PROGRAM
-                && other == bearer_ix::OUTCOME_TOKEN_PROGRAM)
-                || (index == bearer_ix::OUTCOME_TOKEN_PROGRAM
-                    && other == bearer_ix::COLLATERAL_TOKEN_PROGRAM);
             let payer_alias = creation
                 && ((index == bearer_ix::CLAIMANT && other == funding_index)
                     || (index == funding_index && other == bearer_ix::CLAIMANT));
-            if !token_program_alias && !payer_alias {
+            if !bearer_loader_alias_pair_v2(index, other) && !payer_alias {
                 require(accounts[index].key != accounts[other].key, ClutchError::AccountAlias)?;
             }
             other += 1;
@@ -1760,12 +1903,13 @@ fn process_redeem_bearer_credit(
             && accounts[bearer_ix::DESTINATION].key.to_bytes() == intent.payout_target.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[bearer_ix::REALM],
         &accounts[bearer_ix::PROFILE],
         &accounts[bearer_ix::COLLATERAL_POLICY],
         &accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA],
         &accounts[bearer_ix::MARKET_BINDING],
         &accounts[bearer_ix::MARKET_RUNTIME],
         &accounts[bearer_ix::MARKET_INSTANCE],
@@ -1774,14 +1918,15 @@ fn process_redeem_bearer_credit(
         true,
         true,
     )?;
+    let liabilities = value_authority.liabilities;
     require(
-        intent.outcome < liabilities.market_binding.outcome_count,
+        intent.outcome < liabilities.market_binding.base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     let (credit_index, root_index, neutral_index, rent_index, funding_index) =
         require_bearer_credit_account_contract(
             accounts,
-            liabilities.market_binding.outcome_count,
+            liabilities.market_binding.base().outcome_count,
             intent.outcome,
             intent.credit_mode,
         )?;
@@ -1797,7 +1942,7 @@ fn process_redeem_bearer_credit(
             && accounts[bearer_ix::HOARD_AUTHORITY].data_is_empty(),
         ClutchError::MismatchedState,
     )?;
-    let market_bytes = liabilities.market_binding.market_instance_v2_id.bytes();
+    let market_bytes = liabilities.market_binding.base().market_instance_v2_id.bytes();
     expect_pda(
         accounts[bearer_ix::HOARD_AUTHORITY].key,
         seeds::hoard_authority_v2_pda(program_id, &market_bytes),
@@ -1810,9 +1955,10 @@ fn process_redeem_bearer_credit(
     )?;
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[bearer_ix::RESOLUTION], liabilities)?;
-    let claim = authenticate_claim_issuance_v1(
+    let claim = authenticate_claim_issuance_release_with_programdata_v1(
         liabilities.bound,
         &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAM],
+        &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAMDATA],
     )?;
     let (policy, ledger) = decode_fractional_accounts(
         program_id,
@@ -1832,7 +1978,7 @@ fn process_redeem_bearer_credit(
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[root_index],
-        liabilities.market_binding.market_instance_v2_id,
+        liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
     )?;
@@ -1862,7 +2008,7 @@ fn process_redeem_bearer_credit(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         intent.outcome,
     )?;
     let selected_mint = &accounts[bearer_ix::OUTCOME_MINTS + usize::from(intent.outcome)];
@@ -1882,7 +2028,7 @@ fn process_redeem_bearer_credit(
         liabilities.hoard,
         resolution.resolution,
         liabilities.bound,
-        claim,
+        claim.bound(),
     )
     .map_err(map_fractional)?;
     let prepared = prepare_bearer_credit_v1(
@@ -1904,7 +2050,7 @@ fn process_redeem_bearer_credit(
     )
     .map_err(map_fractional)?;
     let prepared_burn = prepare_fractional_bearer_claim_burn_v3(
-        claim,
+        claim.bound(),
         CollateralId::from_bytes(accounts[bearer_ix::MARKET_RUNTIME].key.to_bytes()),
         CollateralId::from_bytes(accounts[bearer_ix::CLAIMANT].key.to_bytes()),
         intent.outcome,
@@ -1937,7 +2083,7 @@ fn process_redeem_bearer_credit(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.outcome_count,
+        liabilities.market_binding.base().outcome_count,
         intent.outcome,
     )?;
     let token_after = bearer_claim_observation_v3(
@@ -2011,6 +2157,13 @@ fn process_redeem_bearer_credit(
             )?)
         }
     };
+    let runtime_execution = bind_fractional_collateral_execution_v2(
+        accepted_burn.fractional().transition_id(),
+        value_authority.receipt_id,
+        claim.receipt_id(),
+        accepted_burn.burn_receipt_id(),
+        collateral_delta_receipt_id(collateral),
+    )?;
     let plan = finish_bearer_credit_v1(burned, collateral).map_err(map_fractional)?;
     let credit_after = plan
         .credit_after
@@ -2022,6 +2175,8 @@ fn process_redeem_bearer_credit(
         credit_after.claimant == intent.claimant
             && source_after.transition_id.bytes()
                 == accepted_burn.fractional().transition_id().bytes()
+            && runtime_execution.transition_id == accepted_burn.fractional().transition_id()
+            && !runtime_execution.receipt_id.is_zero()
             && source_after.burn_receipt_id.map(Identity32V1::bytes)
                 == Some(accepted_burn.burn_receipt_id().bytes()),
         ClutchError::MismatchedState,
@@ -2078,7 +2233,7 @@ fn require_credit_move_contract(
     let creation = matches!(destination_mode, 2 | 3);
     let (root, neutral, rent) = match payout_kind {
         1 => (18, 19, 20),
-        2 => (20, 21, 22),
+        2 => (21, 22, 23),
         _ => return Err(ClutchError::MismatchedState.into()),
     };
     let funding = rent + 1;
@@ -2168,20 +2323,42 @@ fn process_credit_move(
                 || (intent.payout_kind == 2 && intent.expected_payout_replay_sequence == 0)),
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v1(
-        program_id,
-        &accounts[move_ix::REALM],
-        &accounts[move_ix::PROFILE],
-        &accounts[move_ix::COLLATERAL_POLICY],
-        &accounts[move_ix::COLLATERAL_TOKEN_PROGRAM],
-        &accounts[move_ix::MARKET_BINDING],
-        &accounts[move_ix::MARKET_RUNTIME],
-        &accounts[move_ix::MARKET_INSTANCE],
-        &accounts[move_ix::HOARD],
-        &accounts[move_ix::CLAIM_LEDGER],
-        true,
-        true,
-    )?;
+    let (liabilities, collateral_release_receipt) = if intent.payout_kind == 2 {
+        let value_authority = authenticate_general_market_value_authority_v2(
+            program_id,
+            &accounts[move_ix::REALM],
+            &accounts[move_ix::PROFILE],
+            &accounts[move_ix::COLLATERAL_POLICY],
+            &accounts[move_ix::COLLATERAL_TOKEN_PROGRAM],
+            &accounts[move_ix::PAYOUT + 4],
+            &accounts[move_ix::MARKET_BINDING],
+            &accounts[move_ix::MARKET_RUNTIME],
+            &accounts[move_ix::MARKET_INSTANCE],
+            &accounts[move_ix::HOARD],
+            &accounts[move_ix::CLAIM_LEDGER],
+            true,
+            true,
+        )?;
+        (value_authority.liabilities, Some(value_authority.receipt_id))
+    } else {
+        (
+            authenticate_general_market_liabilities_v2(
+                program_id,
+                &accounts[move_ix::REALM],
+                &accounts[move_ix::PROFILE],
+                &accounts[move_ix::COLLATERAL_POLICY],
+                &accounts[move_ix::COLLATERAL_TOKEN_PROGRAM],
+                &accounts[move_ix::MARKET_BINDING],
+                &accounts[move_ix::MARKET_RUNTIME],
+                &accounts[move_ix::MARKET_INSTANCE],
+                &accounts[move_ix::HOARD],
+                &accounts[move_ix::CLAIM_LEDGER],
+                true,
+                true,
+            )?,
+            None,
+        )
+    };
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[move_ix::RESOLUTION], liabilities)?;
     let (policy, ledger) = decode_fractional_accounts(
@@ -2192,7 +2369,7 @@ fn process_credit_move(
         move_ix::RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes()
@@ -2202,7 +2379,7 @@ fn process_credit_move(
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[geometry.root],
-        liabilities.market_binding.market_instance_v2_id,
+        liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
     )?;
@@ -2260,12 +2437,12 @@ fn process_credit_move(
     )
     .map_err(map_fractional)?;
 
-    let plan = if intent.payout_kind == 1 {
+    let (plan, runtime_execution) = if intent.payout_kind == 1 {
         require(
             accounts[move_ix::PAYOUT].key.to_bytes() == intent.payout_target.bytes(),
             ClutchError::MismatchedState,
         )?;
-        let position = authenticate_general_position_replay_v1(
+        let position = authenticate_general_position_replay_v2(
             program_id,
             liabilities.bound,
             &accounts[move_ix::MARKET_BINDING],
@@ -2305,8 +2482,11 @@ fn process_credit_move(
                 target,
             )
         }
+        .map(|plan| (plan, None))
         .map_err(map_fractional)?
     } else {
+        let collateral_release_receipt = collateral_release_receipt
+            .ok_or(Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
         require(
             accounts[move_ix::PAYOUT + 1].key.to_bytes() == intent.payout_target.bytes()
                 && accounts[move_ix::PAYOUT].key.to_bytes()
@@ -2319,7 +2499,7 @@ fn process_credit_move(
                 && accounts[move_ix::PAYOUT + 2].data_is_empty(),
             ClutchError::MismatchedState,
         )?;
-        let market_bytes = liabilities.market_binding.market_instance_v2_id.bytes();
+        let market_bytes = liabilities.market_binding.base().market_instance_v2_id.bytes();
         expect_pda(
             accounts[move_ix::PAYOUT + 2].key,
             seeds::hoard_authority_v2_pda(program_id, &market_bytes),
@@ -2421,13 +2601,31 @@ fn process_credit_move(
                 )
             }
         };
-        finish_external_credit_transfer_v1(prepared, collateral).map_err(map_fractional)?
+        let plan = finish_external_credit_transfer_v1(prepared, collateral)
+            .map_err(map_fractional)?;
+        let runtime_execution = bind_fractional_collateral_execution_v2(
+            plan.custody_after.fractional().transition_id(),
+            collateral_release_receipt,
+            CollateralId::ZERO,
+            CollateralId::ZERO,
+            plan.custody_after.receipt_id(),
+        )?;
+        (plan, Some(runtime_execution))
     };
 
     require(
         plan.source_after.claimant == intent.source_claimant
             && plan.destination_after.claimant == intent.destination_claimant
-            && plan.custody_after.payout_atoms() == plan.paid_atoms,
+            && plan.custody_after.payout_atoms() == plan.paid_atoms
+            && match runtime_execution {
+                None => intent.payout_kind == 1,
+                Some(execution) => {
+                    intent.payout_kind == 2
+                        && execution.transition_id
+                            == plan.custody_after.fractional().transition_id()
+                        && !execution.receipt_id.is_zero()
+                }
+            },
         ClutchError::MismatchedState,
     )?;
     apply_credit_funding(
@@ -2559,7 +2757,7 @@ fn process_close_zero_credit(
             && !accounts[close_credit_ix::PAYER].executable,
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let liabilities = authenticate_general_market_liabilities_v2(
         program_id,
         &accounts[close_credit_ix::REALM],
         &accounts[close_credit_ix::PROFILE],
@@ -2586,7 +2784,7 @@ fn process_close_zero_credit(
         close_credit_ix::RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes()
@@ -2596,7 +2794,7 @@ fn process_close_zero_credit(
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[close_credit_ix::MARKET_ROOT],
-        liabilities.market_binding.market_instance_v2_id,
+        liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
     )?;
@@ -2738,7 +2936,7 @@ fn process_seal_claims_exhausted(
         require(!accounts[index].is_signer, ClutchError::MismatchedState)?;
         index += 1;
     }
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let liabilities = authenticate_general_market_liabilities_v2(
         program_id,
         &accounts[seal_ix::REALM],
         &accounts[seal_ix::PROFILE],
@@ -2762,7 +2960,7 @@ fn process_seal_claims_exhausted(
         seal_ix::RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes()
