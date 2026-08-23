@@ -33,6 +33,14 @@ pub const PROFILE_LABEL: &str =
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/general-source-v2-point/v4-current-collateral-legacy-general-founder-placement-withdrawn";
+/// Current chain-attached successor with no legacy Source or laboratory plane.
+///
+/// This is label version 2: version 1 did not make contradictory Source lab
+/// features a compile error and could report legacy Source V2 under the same
+/// nominal identity.
+#[cfg(feature = "profile-successor-chain-attached-v1")]
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/successor-chain-attached/v2-current-collateral-direct-source-series-no-legacy-source-labs";
 /// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
@@ -80,6 +88,12 @@ pub const PROFILE_ID: [u8; 32] = [
     0x32, 0x6d, 0x46, 0xb2, 0xab, 0x1b, 0x4b, 0xc7, 0xb7, 0xcf, 0xd9, 0x45, 0x66, 0x1f, 0x65, 0xd6,
     0x3c, 0xcf, 0x31, 0x93, 0xf0, 0xe3, 0x6c, 0x36, 0x8a, 0xf1, 0x65, 0x8c, 0xe0, 0x6c, 0xb3, 0x60,
 ];
+/// SHA-256 of the chain-attached successor [`PROFILE_LABEL`].
+#[cfg(feature = "profile-successor-chain-attached-v1")]
+pub const PROFILE_ID: [u8; 32] = [
+    0xb5, 0x86, 0x52, 0x48, 0x59, 0xe1, 0x57, 0xdd, 0xc1, 0x3f, 0x1c, 0xc0, 0xbf, 0x56, 0x48, 0x94,
+    0x06, 0x0f, 0xbd, 0x57, 0x7f, 0x7b, 0x5a, 0x7f, 0xcf, 0xd6, 0xaa, 0xb2, 0x36, 0x74, 0x23, 0xba,
+];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
 #[cfg(all(
     feature = "profile-non-production-dealer-policy-catalog-lab",
@@ -104,16 +118,25 @@ pub const GENERAL_V2_IDENTITY_LAB: bool =
 pub const DEALER_POLICY_CATALOG_LAB: bool =
     cfg!(feature = "profile-non-production-dealer-policy-catalog-lab");
 
+/// Whether the exact checked chain-attached successor profile is selected.
+pub const SUCCESSOR_CHAIN_ATTACHED: bool =
+    cfg!(feature = "profile-successor-chain-attached-v1");
+
 /// Whether the profile contains legacy Source V1 ingestion and resolution.
-pub const SOURCE_V1: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
+pub const SOURCE_V1: bool = !SUCCESSOR_CHAIN_ATTACHED
+    && cfg!(feature = "profile-full")
+    && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Source V2 ingestion and resolution.
-pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB;
+pub const SOURCE_V2: bool = !SUCCESSOR_CHAIN_ATTACHED
+    && !DEALER_POLICY_CATALOG_LAB
+    && !GENERAL_V2_IDENTITY_LAB;
 /// Whether the profile contains legacy Direct V2 clearing.
 pub const DIRECT_V2: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Direct V3 clearing.
 pub const DIRECT_V3: bool = cfg!(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 )) && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains the withdrawn legacy General clearing family.
 /// No checked release does; current General successors remain allocated but
@@ -134,7 +157,9 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
     match tag {
         // Current full-width collateral/value, Realm/Profile, artifact,
         // revenue-record, and Source V2 planes.
-        2..=5 | 10..=11 | 15..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
+        2..=5 | 10..=11 | 15..=21 | 68 => !GENERAL_V2_IDENTITY_LAB,
+        // Historical Source V2 exists only outside the checked successor.
+        70..=73 => SOURCE_V2,
         // The old feed buffer, direct-page settlement and Source V1 families.
         6 | 22..=31 => cfg!(feature = "profile-full"),
         // Resumable occupation work.
@@ -201,7 +226,10 @@ pub const fn extension_intent_action_allocated(
 /// authenticated parser ingestion. Actions 5 through 12 remain independently
 /// disabled.
 #[cfg(all(
-    feature = "profile-full",
+    any(
+        feature = "profile-full",
+        feature = "profile-successor-chain-attached-v1"
+    ),
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
@@ -210,9 +238,11 @@ pub const fn extension_intent_action_allocated(
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
 
-/// Narrow non-laboratory profiles have not yet admitted Source execution.
+/// Narrow non-laboratory profiles other than the checked successor have not
+/// admitted Source execution.
 #[cfg(all(
     not(feature = "profile-full"),
+    not(feature = "profile-successor-chain-attached-v1"),
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
@@ -269,10 +299,7 @@ mod tests {
             PROFILE_ID
         );
         assert!(!legacy_intent_tag_enabled(1));
-        assert_eq!(
-            legacy_intent_tag_enabled(70),
-            !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB
-        );
+        assert_eq!(legacy_intent_tag_enabled(70), SOURCE_V2);
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
         assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
@@ -386,7 +413,10 @@ mod tests {
                             .contains(&local_action)
                             || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
                     let general_enabled = false;
-                    let source_runtime_enabled = cfg!(feature = "profile-full")
+                    let source_runtime_enabled = cfg!(any(
+                        feature = "profile-full",
+                        feature = "profile-successor-chain-attached-v1"
+                    ))
                         && !DEALER_POLICY_CATALOG_LAB
                         && !GENERAL_V2_IDENTITY_LAB
                         && family_tag == 77
@@ -405,7 +435,28 @@ mod tests {
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
             !(DEALER_POLICY_CATALOG_LAB
-                || (cfg!(feature = "profile-full") && !GENERAL_V2_IDENTITY_LAB))
+                || (cfg!(any(
+                    feature = "profile-full",
+                    feature = "profile-successor-chain-attached-v1"
+                )) && !GENERAL_V2_IDENTITY_LAB))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    fn successor_has_one_current_source_owner_and_no_legacy_source_surface() {
+        assert!(SUCCESSOR_CHAIN_ATTACHED);
+        assert!(!SOURCE_V1);
+        assert!(!SOURCE_V2);
+        for tag in 23..=26 {
+            assert!(!legacy_intent_tag_enabled(tag), "Source V1 tag {tag}");
+        }
+        for tag in 70..=73 {
+            assert!(!legacy_intent_tag_enabled(tag), "Source V2 tag {tag}");
+        }
+        assert_eq!(
+            ENABLED_EXTENSION_ACTIONS,
+            &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)]
         );
     }
 

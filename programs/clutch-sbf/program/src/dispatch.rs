@@ -45,22 +45,26 @@ use crate::instructions::dealer_facility;
 use crate::instructions::dealer_policy;
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 use crate::instructions::direct_selection_v3;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, observe_resolve, orders_batch, source_ingest_v2,
+    fractional_redemption, genesis, orders_batch,
 };
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+use crate::instructions::source_ingest_v2;
 #[cfg(feature = "profile-full")]
-use crate::instructions::{direct_selection, resolution_work, source_ingest};
+use crate::instructions::{direct_selection, observe_resolve, resolution_work, source_ingest};
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 use clutch_solana_reference::DirectV3Request;
 use clutch_solana_reference::{Action, ExtensionRequest, Request};
@@ -88,12 +92,14 @@ enum Route {
     FractionalRedemption,
     #[cfg(feature = "profile-full")]
     SourceIngest,
+    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     SourceIngestV2,
     #[cfg(feature = "profile-full")]
     DirectSelection,
     #[cfg(any(
         feature = "profile-full",
-        feature = "profile-direct-v3-source-v2-point"
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-successor-chain-attached-v1"
     ))]
     DirectSelectionV3,
     #[cfg(feature = "profile-full")]
@@ -231,6 +237,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
              * The two never share a frame: V1's append holds three provider
              * account views and v2's holds six, and the pull authentication
              * join below it is the deepest call in either family. */
+            #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_V2_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_V2_HINT
@@ -257,7 +264,8 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             // and its handler match is exhaustive with no unimplemented arm.
             #[cfg(any(
                 feature = "profile-full",
-                feature = "profile-direct-v3-source-v2-point"
+                feature = "profile-direct-v3-source-v2-point",
+                feature = "profile-successor-chain-attached-v1"
             ))]
             Some(INTENT_INIT_DIRECT_EPOCH_V4_HINT..=INTENT_LAPSE_SELECTED_DIRECT_V3_HINT) => {
                 Route::DirectSelectionV3
@@ -316,12 +324,14 @@ pub fn process(
         }
         #[cfg(feature = "profile-full")]
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
+        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
         Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
         #[cfg(feature = "profile-full")]
         Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
         #[cfg(any(
             feature = "profile-full",
-            feature = "profile-direct-v3-source-v2-point"
+            feature = "profile-direct-v3-source-v2-point",
+            feature = "profile-successor-chain-attached-v1"
         ))]
         Route::DirectSelectionV3 => {
             process_direct_selection_v3(program_id, accounts, instruction_data)
@@ -718,6 +728,7 @@ fn process_source_ingest(
 }
 
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 fn process_source_ingest_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -763,7 +774,8 @@ fn process_direct_selection(
 #[inline(never)]
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 fn process_direct_selection_v3(
     program_id: &Pubkey,

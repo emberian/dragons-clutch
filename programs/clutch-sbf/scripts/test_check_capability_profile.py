@@ -784,18 +784,39 @@ class CapabilityProfileTests(unittest.TestCase):
             )
 
     def test_chain_attached_successor_requires_runtime_release_identity(self) -> None:
-        with self.assertRaisesRegex(
-            checker.ProfileError,
-            "chain-attached successor requires the runtime real-Pyth release identity",
+        for source_identity in (
+            "production-inert",
+            "non-production-mock-source-lab",
+            "non-production-real-pyth-lab",
         ):
-            checker.validate_manifest(
-                manifest(
-                    linkage="linked",
-                    profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
-                    source_identity="production-inert",
-                ),
-                repo=ROOT,
-            )
+            with self.subTest(source_identity=source_identity), self.assertRaisesRegex(
+                checker.ProfileError,
+                "chain-attached successor requires the runtime real-Pyth release identity",
+            ):
+                checker.validate_manifest(
+                    manifest(
+                        linkage="linked",
+                        profile_feature=checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE,
+                        source_identity=source_identity,
+                    ),
+                    repo=ROOT,
+                )
+
+    def test_chain_attached_successor_source_labs_are_compile_time_excluded(self) -> None:
+        program = (ROOT / "programs/clutch-sbf/program/src/lib.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('feature = "profile-successor-chain-attached-v1"', program)
+        for feature in (
+            "non-production-mock-source",
+            "non-production-real-pyth-lab",
+            "laboratory-fixtures",
+        ):
+            self.assertIn(f'feature = "{feature}"', program)
+        self.assertIn(
+            "the chain-attached successor cannot include legacy, mock, or real-Pyth Source laboratories",
+            program,
+        )
 
     def test_chain_attached_successor_wire_surface_is_exact(self) -> None:
         value = manifest(

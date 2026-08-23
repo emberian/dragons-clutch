@@ -83,6 +83,21 @@
 #[cfg(all(target_os = "solana", test))]
 compile_error!("host-forensic General fixtures cannot compile for Solana");
 
+// The checked successor has one Source authority: the manifest-bound current
+// SourceSeries runtime. None of the historical fixture/parser laboratories may
+// alter the same Cargo/profile identity or make legacy Source tags observable.
+#[cfg(all(
+    feature = "profile-successor-chain-attached-v1",
+    any(
+        feature = "non-production-mock-source",
+        feature = "non-production-real-pyth-lab",
+        feature = "laboratory-fixtures"
+    )
+))]
+compile_error!(
+    "the chain-attached successor cannot include legacy, mock, or real-Pyth Source laboratories"
+);
+
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",

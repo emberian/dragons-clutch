@@ -101,7 +101,10 @@ production or network-price evidence.
 `profile-successor-chain-attached-v1`, whose current SourceSeries authority is
 the `77/v2` Source V3 family. That profile in turn requires this exact Source
 identity; `production-inert` cannot be relabeled as the chain-attached
-successor. The checked-profile gate refuses both laboratory identities as
+successor. The compiled profile label is version 2 because the program now
+also makes the successor mutually exclusive with the mock-source,
+real-Pyth-lab, and legacy laboratory-fixture Cargo features; its Source V1 and
+Source V2 capability constants are defense-in-depth false. The checked-profile gate refuses both laboratory identities as
 deployable; the runtime also gates legacy Source V1 tags `23..=26` and Source
 V2 tags `70..=73` on those explicit non-production features. A release-class
 ELF therefore has no fixture or legacy Source fallback.

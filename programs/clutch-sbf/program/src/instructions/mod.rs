@@ -161,6 +161,7 @@ pub mod product_series;
 pub mod resolution_work;
 pub mod series_failure_funding;
 pub mod source_ingest;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod split;
