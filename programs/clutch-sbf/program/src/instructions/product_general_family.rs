@@ -14,8 +14,10 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, CompiledProductSeriesBundleV5, ContentId,
-    MarketFamilyAggregatorV1, MarketFamilyV1, MarketInstancePreimageV2, MarketInstanceV2Id,
-    MarketLifecyclePhaseV1, RegistryCapabilityProfileV4, SeriesAttachmentPlanV4,
+    MarketFamilyAggregatorV1, MarketFamilyV1, MarketFoundationAccountGraphV2,
+    MarketFoundationScheduleV2, MarketFoundationSlotV2, MarketInstancePreimageV2,
+    MarketInstanceV2Id, MarketLifecyclePhaseV1, MarketLifecycleRootV1,
+    RegistryCapabilityProfileV4, SeriesAttachmentPlanV4,
     SeriesMarketDispositionV1, SeriesMarketLinkPhaseV1, SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::product_series::{
@@ -27,11 +29,17 @@ use solana_pubkey::Pubkey;
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
-    write_authenticated_general_family_admission_root_v1,
+    advance_market_foundation_step_v2, write_authenticated_general_family_admission_root_v1,
     AuthenticatedGeneralFamilyRootWriteV1, AuthenticatedMarketLifecycleRootV1,
+    AuthenticatedMarketFoundationDebitV1, AuthenticatedMarketFoundationStepPostwriteV2,
+    AuthenticatedMarketFoundationStepV2, AuthenticatedMarketFounderFoundationV1,
     AuthenticatedSeriesMarketLinkV1,
 };
 
+const GENERAL_FOUNDATION_LINEAGE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/product/general-foundation-lineage/v1\0";
+const GENERAL_RUNTIME_FOUNDATION_AUTHORITY_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/product/general-runtime-foundation-authority/v1\0";
 const GENERAL_FAMILY_PREAUTHORIZATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/product/general-family-preauthorization/v1\0";
 const GENERAL_FAMILY_ADMISSION_PROJECTION_DOMAIN_V1: &[u8] =
@@ -63,7 +71,13 @@ pub(crate) struct AuthenticatedGeneralFamilyPreauthorizationV1 {
     claim_issuance_binding_id: ContentId,
     general_founding_capability_id: ContentId,
     general_market_owner_account: Pubkey,
+    general_market_runtime_account: Pubkey,
     family_admission_sequence: u32,
+    founder_authorization_id: ContentId,
+    market_runtime_founder_authorization_id: ContentId,
+    foundation_lineage_id: ContentId,
+    market_binding_foundation_step_id: ContentId,
+    market_runtime_foundation_step_id: ContentId,
     preauthorization_id: ContentId,
 }
 
@@ -123,10 +137,127 @@ impl AuthenticatedGeneralFamilyPreauthorizationV1 {
     pub(crate) const fn general_market_owner_account(self) -> Pubkey {
         self.general_market_owner_account
     }
+    pub(crate) const fn general_market_runtime_account(self) -> Pubkey {
+        self.general_market_runtime_account
+    }
     pub(crate) const fn family_admission_sequence(self) -> u32 {
         self.family_admission_sequence
     }
+    pub(crate) const fn founder_authorization_id(self) -> ContentId {
+        self.founder_authorization_id
+    }
+    pub(crate) const fn market_runtime_founder_authorization_id(self) -> ContentId {
+        self.market_runtime_founder_authorization_id
+    }
+    pub(crate) const fn foundation_lineage_id(self) -> ContentId {
+        self.foundation_lineage_id
+    }
+    pub(crate) const fn market_binding_foundation_step_id(self) -> ContentId {
+        self.market_binding_foundation_step_id
+    }
+    pub(crate) const fn market_runtime_foundation_step_id(self) -> ContentId {
+        self.market_runtime_foundation_step_id
+    }
     pub(crate) const fn preauthorization_id(self) -> ContentId { self.preauthorization_id }
+}
+
+/// Initial exact Product graph authorized only for General's slot-1 binding.
+///
+/// The nested stale root snapshot is private and has no getter. General may
+/// persist only `lineage_id`; it cannot use this receipt as the later family
+/// admission authority after Product advances either Foundation slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedGeneralFoundationLineageV1 {
+    graph: AuthenticatedGeneralFamilyPreauthorizationV1,
+    general_market_runtime_account: Pubkey,
+    lineage_id: ContentId,
+}
+
+impl AuthenticatedGeneralFoundationLineageV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.lineage_id
+    }
+
+    pub(crate) const fn general_market_owner_account(self) -> Pubkey {
+        self.graph.general_market_owner_account
+    }
+
+    pub(crate) const fn general_market_runtime_account(self) -> Pubkey {
+        self.general_market_runtime_account
+    }
+
+    pub(crate) const fn market_instance_v2_id(self) -> MarketInstanceV2Id {
+        self.graph.market_instance_v2_id
+    }
+
+    pub(crate) const fn product_generation(self) -> u64 {
+        self.graph.product_generation
+    }
+}
+
+/// Slot-1 accepted successor authorizing only General's exact slot-2 runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedGeneralRuntimeFoundationAuthorityV1 {
+    lineage: AuthenticatedGeneralFoundationLineageV1,
+    market_binding_foundation_step_id: ContentId,
+    root_semantic_after_binding: ContentId,
+    root_data_after_binding: ContentId,
+    root_authentication_after_binding: ContentId,
+    authority_id: ContentId,
+}
+
+impl AuthenticatedGeneralRuntimeFoundationAuthorityV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.authority_id
+    }
+
+    pub(crate) const fn lineage_id(self) -> ContentId {
+        self.lineage.lineage_id
+    }
+
+    pub(crate) const fn general_market_runtime_account(self) -> Pubkey {
+        self.lineage.general_market_runtime_account
+    }
+}
+
+/// General-private accepted Binding postwrite for the exact slot-1 lineage.
+pub(crate) trait AuthenticatedGeneralMarketBindingFoundationPostwriteV1:
+    AuthenticatedMarketFoundationStepPostwriteV2
+{
+    fn authenticate_general_market_binding_foundation_postwrite_v1(
+        &self,
+        _foundation_lineage_id: ContentId,
+        _market_binding_account: Pubkey,
+        _market_runtime_account: Pubkey,
+        _market_liability_founding_id: ContentId,
+        _claim_mint_founding_plan_id: ContentId,
+        _claim_issuance_binding_id: ContentId,
+        _general_founding_capability_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// General-private accepted Runtime postwrite for the exact slot-2 authority.
+pub(crate) trait AuthenticatedGeneralMarketRuntimeFoundationPostwriteV1:
+    AuthenticatedMarketFoundationStepPostwriteV2
+{
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_general_market_runtime_foundation_postwrite_v1(
+        &self,
+        _runtime_foundation_authority_id: ContentId,
+        _foundation_lineage_id: ContentId,
+        _market_binding_foundation_step_id: ContentId,
+        _current_founder_authorization_id: ContentId,
+        _market_binding_account: Pubkey,
+        _market_runtime_account: Pubkey,
+        _market_liability_founding_id: ContentId,
+        _claim_mint_founding_plan_id: ContentId,
+        _claim_issuance_binding_id: ContentId,
+        _general_founding_capability_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
 }
 
 /// Private General-owned postwrite interface. Its implementation must expose
@@ -155,6 +286,11 @@ pub(crate) trait AuthenticatedGeneralMarketPostwriteV1 {
     fn claim_mint_founding_plan_id(&self) -> ContentId;
     fn claim_issuance_binding_id(&self) -> ContentId;
     fn general_founding_capability_id(&self) -> ContentId;
+    fn product_foundation_lineage_id(&self) -> ContentId;
+    fn product_market_runtime_founder_authorization_id(&self) -> ContentId;
+    fn product_market_binding_foundation_step_id(&self) -> ContentId;
+    fn product_market_runtime_foundation_step_id(&self) -> ContentId;
+    fn product_market_runtime_account(&self) -> Pubkey;
     fn product_preauthorization_id(&self) -> ContentId;
     fn semantic_id(&self) -> ContentId;
     fn data_id(&self) -> ContentId;
@@ -170,6 +306,7 @@ pub(crate) struct AuthenticatedGeneralFamilyAdmissionProjectionV1 {
     general_postwrite_data_id: ContentId,
     general_postwrite_authentication_id: ContentId,
     market_lifecycle_root_post_semantic_id: ContentId,
+    market_lifecycle_root_post_data_id: ContentId,
     market_lifecycle_root_post_authentication_id: ContentId,
     family_admission_transition_id: ContentId,
     projection_id: ContentId,
@@ -191,6 +328,9 @@ impl AuthenticatedGeneralFamilyAdmissionProjectionV1 {
     pub(crate) const fn market_lifecycle_root_post_semantic_id(self) -> ContentId {
         self.market_lifecycle_root_post_semantic_id
     }
+    pub(crate) const fn market_lifecycle_root_post_data_id(self) -> ContentId {
+        self.market_lifecycle_root_post_data_id
+    }
     pub(crate) const fn market_lifecycle_root_post_authentication_id(self) -> ContentId {
         self.market_lifecycle_root_post_authentication_id
     }
@@ -202,6 +342,35 @@ impl AuthenticatedGeneralFamilyAdmissionProjectionV1 {
 
 fn hash_id(parts: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(parts).to_bytes())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn general_family_admission_projection_id_v1(
+    preauthorization_id: ContentId,
+    general_postwrite_semantic_id: ContentId,
+    general_postwrite_data_id: ContentId,
+    general_postwrite_authentication_id: ContentId,
+    root_pre_semantic_id: ContentId,
+    root_post_semantic_id: ContentId,
+    root_post_data_id: ContentId,
+    root_post_authentication_id: ContentId,
+    family_admission_transition_id: ContentId,
+) -> Outcome<ContentId> {
+    let id = hash_id(&[
+        GENERAL_FAMILY_ADMISSION_PROJECTION_DOMAIN_V1,
+        &preauthorization_id.bytes(),
+        &general_postwrite_semantic_id.bytes(),
+        &general_postwrite_data_id.bytes(),
+        &general_postwrite_authentication_id.bytes(),
+        &root_pre_semantic_id.bytes(),
+        &root_post_semantic_id.bytes(),
+        &root_post_data_id.bytes(),
+        &root_post_authentication_id.bytes(),
+        &family_admission_transition_id.bytes(),
+    ]);
+    id.validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(id)
 }
 
 /// Private equality surface derived only from authenticated Product bodies.
@@ -309,11 +478,13 @@ fn authenticate_link_from_body<'a>(
     )
 }
 
-/// Authenticate the exact Product graph and mint the only preauthorization
-/// accepted by the current General Market owner.
+/// Authenticate the exact Product graph and mint only General's slot-1
+/// foundation lineage. This stale pre-slot root cannot authorize family
+/// admission after either General account advances Product.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_general_family_preauthorization_v1(
+pub(crate) fn authenticate_general_foundation_lineage_v1(
     program_id: &Pubkey,
+    founder: AuthenticatedMarketFounderFoundationV1,
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
     market_instance_account: &AccountInfo<'_>,
@@ -323,7 +494,7 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
     attachment_plan_account: &AccountInfo<'_>,
     root_output: &mut MarketLifecycleRootAccountV1,
     link_output: &mut SeriesMarketLinkAccountV1,
-) -> Outcome<AuthenticatedGeneralFamilyPreauthorizationV1> {
+) -> Outcome<AuthenticatedGeneralFoundationLineageV1> {
     let root = authenticate_root_from_body(program_id, root_account, true, root_output)?;
     let link = authenticate_link_from_body(
         program_id,
@@ -369,6 +540,11 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
     let general_account = seeds::general_v2_market_binding_pda(
         program_id,
         &root_binding.market_instance_id.bytes(),
+    )
+    .0;
+    let general_runtime_account = seeds::general_v2_market_runtime_pda(
+        program_id,
+        &general_account.to_bytes(),
     )
     .0;
     let product_market_binding_id = root_binding
@@ -434,6 +610,7 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         *capability_profile_account.key,
         *attachment_plan_account.key,
         general_account,
+        general_runtime_account,
     ];
     let mut left = 0usize;
     while left < physical_accounts.len() {
@@ -448,7 +625,25 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         left += 1;
     }
     require(
-        root.state().phase() == MarketLifecyclePhaseV1::Founding
+        founder.root_account() == *root_account.key
+            && founder.root_authentication_id() == root.authentication_id()
+            && founder.link_account() == *link_account.key
+            && founder.link_authentication_id() == link.authentication_id()
+            && founder.market_instance_id() == root_binding.market_instance_id
+            && founder.generation() == root_binding.generation
+            && founder.series_plan_id() == link_binding.series_plan_id
+            && founder.ordinal() == link_binding.ordinal
+            && founder.funding_terms_id() == link_binding.funding_terms_id.content_id()
+            && founder.funding_quote_id() == link_binding.funding_quote_id
+            && founder.attachment_plan_id() == link_binding.attachment_plan_id
+            && founder.compiler_bundle_id() == bundle_id
+            && founder.registry_release_id() == root_binding.registry_release_id
+            && founder.capability_profile_id() == root_binding.capability_profile_id
+            && founder.foundation_schedule_id()
+                == root_binding.foundation_schedule_id.content_id()
+            && founder.foundation_account_graph_id()
+                == root_binding.foundation_account_graph_id.content_id()
+            && root.state().phase() == MarketLifecyclePhaseV1::Founding
             && link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket
             && root.state().capital().founder_link_id().content_id() == link_semantic_id
             && root_binding.market_instance_id == link_binding.market_instance_id
@@ -508,8 +703,8 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         .state()
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let preauthorization_id = hash_id(&[
-        GENERAL_FAMILY_PREAUTHORIZATION_DOMAIN_V1,
+    let lineage_id = hash_id(&[
+        GENERAL_FOUNDATION_LINEAGE_DOMAIN_V1,
         program_id.as_ref(),
         root_account.key.as_ref(),
         &root_pre_semantic_id.bytes(),
@@ -531,12 +726,14 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         &root_binding.claim_issuance_binding_id.bytes(),
         &root_binding.general_founding_capability_id.bytes(),
         general_account.as_ref(),
+        general_runtime_account.as_ref(),
         &family_admission_sequence.to_le_bytes(),
+        &founder.id().bytes(),
     ]);
-    preauthorization_id
+    lineage_id
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(AuthenticatedGeneralFamilyPreauthorizationV1 {
+    let graph = AuthenticatedGeneralFamilyPreauthorizationV1 {
         program_id: *program_id,
         market_lifecycle_root_account: *root_account.key,
         market_lifecycle_root_pre_semantic_id: root_pre_semantic_id,
@@ -558,15 +755,453 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         claim_issuance_binding_id: root_binding.claim_issuance_binding_id,
         general_founding_capability_id: root_binding.general_founding_capability_id,
         general_market_owner_account: general_account,
+        general_market_runtime_account: general_runtime_account,
         family_admission_sequence,
-        preauthorization_id,
+        founder_authorization_id: founder.id(),
+        market_runtime_founder_authorization_id: ContentId::ZERO,
+        foundation_lineage_id: lineage_id,
+        market_binding_foundation_step_id: ContentId::ZERO,
+        market_runtime_foundation_step_id: ContentId::ZERO,
+        preauthorization_id: ContentId::ZERO,
+    };
+    Ok(AuthenticatedGeneralFoundationLineageV1 {
+        graph,
+        general_market_runtime_account,
+        lineage_id,
     })
+}
+
+/// Consume the exact accepted slot-1 Product transition and authorize only
+/// General's canonical slot-2 runtime account.
+pub(crate) fn accept_general_market_binding_foundation_v1(
+    lineage: AuthenticatedGeneralFoundationLineageV1,
+    step: AuthenticatedMarketFoundationStepV2,
+) -> Outcome<AuthenticatedGeneralRuntimeFoundationAuthorityV1> {
+    let graph = lineage.graph;
+    for identity in [
+        lineage.lineage_id,
+        step.id(),
+        step.debit_id(),
+        step.accepted_poststate_receipt_id(),
+        step.root_semantic_before(),
+        step.root_semantic_after(),
+        step.root_data_before(),
+        step.root_data_after(),
+        step.root_authentication_before(),
+        step.root_authentication_after(),
+    ] {
+        identity
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    }
+    require(
+        lineage.lineage_id != ContentId::ZERO
+            && step.founder_authorization_id() == graph.founder_authorization_id
+            && step.root_account() == graph.market_lifecycle_root_account
+            && step.root_semantic_before() == graph.market_lifecycle_root_pre_semantic_id
+            && step.root_data_before() == graph.market_lifecycle_root_pre_data_id
+            && step.root_authentication_before()
+                == graph.market_lifecycle_root_authentication_id
+            && step.slot() == MarketFoundationSlotV2::MarketBinding
+            && step.account() == graph.general_market_owner_account
+            && step.accepted_poststate_receipt_id() != lineage.lineage_id,
+        ClutchError::MismatchedState,
+    )?;
+    let authority_id = hash_id(&[
+        GENERAL_RUNTIME_FOUNDATION_AUTHORITY_DOMAIN_V1,
+        &lineage.lineage_id.bytes(),
+        &step.id().bytes(),
+        &step.accepted_poststate_receipt_id().bytes(),
+        step.root_account().as_ref(),
+        &step.root_semantic_before().bytes(),
+        &step.root_semantic_after().bytes(),
+        &step.root_data_before().bytes(),
+        &step.root_data_after().bytes(),
+        &step.root_authentication_before().bytes(),
+        &step.root_authentication_after().bytes(),
+        graph.general_market_owner_account.as_ref(),
+        lineage.general_market_runtime_account.as_ref(),
+        &graph.market_liability_founding_id.bytes(),
+        &graph.claim_mint_founding_plan_id.bytes(),
+        &graph.claim_issuance_binding_id.bytes(),
+        &graph.general_founding_capability_id.bytes(),
+        &graph.series_plan_v5_id.bytes(),
+        &graph.series_ordinal.to_le_bytes(),
+        &graph.compiler_bundle_v5_id.bytes(),
+        &graph.capability_profile_v4_id.bytes(),
+        &graph.attachment_plan_v4_id.bytes(),
+    ]);
+    authority_id
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedGeneralRuntimeFoundationAuthorityV1 {
+        lineage,
+        market_binding_foundation_step_id: step.id(),
+        root_semantic_after_binding: step.root_semantic_after(),
+        root_data_after_binding: step.root_data_after(),
+        root_authentication_after_binding: step.root_authentication_after(),
+        authority_id,
+    })
+}
+
+/// Advance General's exact Binding foundation slot and mint only the chained
+/// authority for its Runtime slot.
+///
+/// The General-specific postwrite check and Product's generic debit/postwrite
+/// checks are deliberately inseparable here.  The returned slot-2 authority
+/// commits the hostile-reauthenticated Product root successor; the initial
+/// lineage cannot authorize the Runtime slot or later family admission.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn advance_general_market_binding_foundation_v1<'next, A>(
+    program_id: &Pubkey,
+    lineage: AuthenticatedGeneralFoundationLineageV1,
+    founder: AuthenticatedMarketFounderFoundationV1,
+    root_account: &AccountInfo<'_>,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    foundation_vault: &AccountInfo<'_>,
+    market_binding_account: &AccountInfo<'_>,
+    debit: AuthenticatedMarketFoundationDebitV1,
+    schedule: &MarketFoundationScheduleV2,
+    account_graph: &MarketFoundationAccountGraphV2,
+    postwrite: &A,
+    successor_output: &mut MarketLifecycleRootV1,
+    rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<(
+    AuthenticatedMarketLifecycleRootV1<'next>,
+    AuthenticatedMarketFoundationStepV2,
+    AuthenticatedGeneralRuntimeFoundationAuthorityV1,
+)>
+where
+    A: AuthenticatedGeneralMarketBindingFoundationPostwriteV1 + ?Sized,
+{
+    let graph = lineage.graph;
+    let root_semantic_id = root
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        *program_id == graph.program_id
+            && founder.id() == graph.founder_authorization_id
+            && *root_account.key == graph.market_lifecycle_root_account
+            && root.account() == graph.market_lifecycle_root_account
+            && root.is_writable()
+            && root_semantic_id == graph.market_lifecycle_root_pre_semantic_id
+            && root.data_id() == graph.market_lifecycle_root_pre_data_id
+            && root.authentication_id() == graph.market_lifecycle_root_authentication_id
+            && *market_binding_account.key == graph.general_market_owner_account,
+        ClutchError::MismatchedState,
+    )?;
+    postwrite.authenticate_general_market_binding_foundation_postwrite_v1(
+        lineage.lineage_id,
+        graph.general_market_owner_account,
+        lineage.general_market_runtime_account,
+        graph.market_liability_founding_id,
+        graph.claim_mint_founding_plan_id,
+        graph.claim_issuance_binding_id,
+        graph.general_founding_capability_id,
+    )?;
+    let (rebound, step) = advance_market_foundation_step_v2(
+        program_id,
+        founder,
+        root_account,
+        root,
+        foundation_vault,
+        market_binding_account,
+        debit,
+        schedule,
+        account_graph,
+        postwrite,
+        successor_output,
+        rebound_output,
+    )?;
+    let runtime_authority = accept_general_market_binding_foundation_v1(lineage, step)?;
+    Ok((rebound, step, runtime_authority))
+}
+
+fn require_general_runtime_foundation_step_v1(
+    runtime_authority: AuthenticatedGeneralRuntimeFoundationAuthorityV1,
+    runtime_step: AuthenticatedMarketFoundationStepV2,
+) -> Outcome<()> {
+    let lineage = runtime_authority.lineage;
+    let graph = lineage.graph;
+    for identity in [
+        runtime_authority.authority_id,
+        lineage.lineage_id,
+        runtime_authority.market_binding_foundation_step_id,
+        runtime_step.id(),
+        runtime_step.debit_id(),
+        runtime_step.accepted_poststate_receipt_id(),
+        runtime_step.root_semantic_before(),
+        runtime_step.root_semantic_after(),
+        runtime_step.root_data_before(),
+        runtime_step.root_data_after(),
+        runtime_step.root_authentication_before(),
+        runtime_step.root_authentication_after(),
+    ] {
+        identity
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    }
+    require(
+        runtime_step.founder_authorization_id() != ContentId::ZERO
+            && runtime_step.founder_authorization_id() != graph.founder_authorization_id
+            && runtime_step.root_account() == graph.market_lifecycle_root_account
+            && runtime_step.root_semantic_before()
+                == runtime_authority.root_semantic_after_binding
+            && runtime_step.root_data_before() == runtime_authority.root_data_after_binding
+            && runtime_step.root_authentication_before()
+                == runtime_authority.root_authentication_after_binding
+            && runtime_step.slot() == MarketFoundationSlotV2::MarketRuntime
+            && runtime_step.account() == lineage.general_market_runtime_account
+            && runtime_step.accepted_poststate_receipt_id()
+                != runtime_authority.market_binding_foundation_step_id,
+        ClutchError::MismatchedState,
+    )
+}
+
+/// Consume the exact accepted slot-2 transition and mint the fresh current-root
+/// preauthorization used by General's atomic runtime pin + Product admission.
+///
+/// The initial slot-1 lineage remains committed for audit, but only this value
+/// carries the post-slot root semantic/data/authentication tuple accepted by
+/// the unchanged strict family-admission equality.
+pub(crate) fn authenticate_general_family_preauthorization_v1(
+    runtime_authority: AuthenticatedGeneralRuntimeFoundationAuthorityV1,
+    runtime_step: AuthenticatedMarketFoundationStepV2,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    link: AuthenticatedSeriesMarketLinkV1<'_>,
+) -> Outcome<AuthenticatedGeneralFamilyPreauthorizationV1> {
+    let lineage = runtime_authority.lineage;
+    let graph = lineage.graph;
+    require_general_runtime_foundation_step_v1(runtime_authority, runtime_step)?;
+    let root_binding = root.state().binding();
+    let link_binding = link.state().binding();
+    let root_semantic_id = root
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_semantic_id = link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let general_slot = root
+        .state()
+        .product_families()
+        .family(MarketFamilyV1::General);
+    let family_admission_sequence = general_slot.counts().admitted;
+    require(
+        root.account() == graph.market_lifecycle_root_account
+            && root.is_writable()
+            && root_semantic_id == runtime_step.root_semantic_after()
+            && root.data_id() == runtime_step.root_data_after()
+            && root.authentication_id() == runtime_step.root_authentication_after()
+            && root.state().phase() == MarketLifecyclePhaseV1::Founding
+            && root_binding.market_instance_id == graph.market_instance_v2_id
+            && root_binding.generation == graph.product_generation
+            && root_binding
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == graph.product_market_binding_id
+            && root_binding.market_liability_founding_id
+                == graph.market_liability_founding_id
+            && root_binding.claim_mint_founding_plan_id
+                == graph.claim_mint_founding_plan_id
+            && root_binding.claim_issuance_binding_id == graph.claim_issuance_binding_id
+            && root_binding.general_founding_capability_id
+                == graph.general_founding_capability_id
+            && link.account() == graph.series_market_link_account
+            && !link.is_writable()
+            && link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket
+            && link_semantic_id == graph.series_market_link_semantic_id
+            && link.authentication_id() == graph.series_market_link_authentication_id
+            && link_binding.series_plan_id == graph.series_plan_v5_id
+            && link_binding.ordinal == graph.series_ordinal
+            && link_binding.compiler_output_id == graph.compiler_bundle_v5_id
+            && link_binding.capability_profile_id == graph.capability_profile_v4_id
+            && link_binding.attachment_plan_id == graph.attachment_plan_v4_id
+            && family_admission_sequence == graph.family_admission_sequence
+            && root
+                .state()
+                .product_families()
+                .admits_new_child(MarketFamilyV1::General)
+            && root
+                .state()
+                .product_families()
+                .binding()
+                .family_root_id(MarketFamilyV1::General)
+                .bytes()
+                == graph.general_market_owner_account.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let preauthorization_id = hash_id(&[
+        GENERAL_FAMILY_PREAUTHORIZATION_DOMAIN_V1,
+        &lineage.lineage_id.bytes(),
+        &runtime_authority.authority_id.bytes(),
+        &runtime_authority.market_binding_foundation_step_id.bytes(),
+        &runtime_step.founder_authorization_id().bytes(),
+        &runtime_step.id().bytes(),
+        &runtime_step.accepted_poststate_receipt_id().bytes(),
+        graph.program_id.as_ref(),
+        root.account().as_ref(),
+        &root_semantic_id.bytes(),
+        &root.data_id().bytes(),
+        &root.authentication_id().bytes(),
+        &graph.market_instance_v2_id.bytes(),
+        &graph.product_market_binding_id.bytes(),
+        &graph.product_generation.to_le_bytes(),
+        &graph.series_plan_v5_id.bytes(),
+        &graph.series_ordinal.to_le_bytes(),
+        link.account().as_ref(),
+        &link_semantic_id.bytes(),
+        &link.authentication_id().bytes(),
+        &graph.compiler_bundle_v5_id.bytes(),
+        &graph.capability_profile_v4_id.bytes(),
+        &graph.attachment_plan_v4_id.bytes(),
+        &graph.market_liability_founding_id.bytes(),
+        &graph.claim_mint_founding_plan_id.bytes(),
+        &graph.claim_issuance_binding_id.bytes(),
+        &graph.general_founding_capability_id.bytes(),
+        graph.general_market_owner_account.as_ref(),
+        graph.general_market_runtime_account.as_ref(),
+        &family_admission_sequence.to_le_bytes(),
+    ]);
+    preauthorization_id
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedGeneralFamilyPreauthorizationV1 {
+        market_lifecycle_root_pre_semantic_id: root_semantic_id,
+        market_lifecycle_root_pre_data_id: root.data_id(),
+        market_lifecycle_root_authentication_id: root.authentication_id(),
+        series_market_link_semantic_id: link_semantic_id,
+        series_market_link_authentication_id: link.authentication_id(),
+        family_admission_sequence,
+        founder_authorization_id: graph.founder_authorization_id,
+        market_runtime_founder_authorization_id: runtime_step.founder_authorization_id(),
+        foundation_lineage_id: lineage.lineage_id,
+        market_binding_foundation_step_id: runtime_authority
+            .market_binding_foundation_step_id,
+        market_runtime_foundation_step_id: runtime_step.id(),
+        preauthorization_id,
+        ..graph
+    })
+}
+
+/// Advance General's exact Runtime foundation slot and mint the sole fresh
+/// family-admission preauthorization from the post-slot Product root.
+///
+/// General may persist the initial lineage in its Binding, but only the value
+/// returned here is current enough for the strict family postwrite/admission
+/// handshake.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn advance_general_market_runtime_foundation_v1<'next, A>(
+    program_id: &Pubkey,
+    runtime_authority: AuthenticatedGeneralRuntimeFoundationAuthorityV1,
+    founder: AuthenticatedMarketFounderFoundationV1,
+    root_account: &AccountInfo<'_>,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    founder_link: AuthenticatedSeriesMarketLinkV1<'_>,
+    foundation_vault: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    debit: AuthenticatedMarketFoundationDebitV1,
+    schedule: &MarketFoundationScheduleV2,
+    account_graph: &MarketFoundationAccountGraphV2,
+    postwrite: &A,
+    successor_output: &mut MarketLifecycleRootV1,
+    rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<(
+    AuthenticatedMarketLifecycleRootV1<'next>,
+    AuthenticatedMarketFoundationStepV2,
+    AuthenticatedGeneralFamilyPreauthorizationV1,
+)>
+where
+    A: AuthenticatedGeneralMarketRuntimeFoundationPostwriteV1 + ?Sized,
+{
+    let lineage = runtime_authority.lineage;
+    let graph = lineage.graph;
+    let root_semantic_id = root
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        *program_id == graph.program_id
+            && founder.id() != ContentId::ZERO
+            && founder.id() != graph.founder_authorization_id
+            && founder.root_account() == graph.market_lifecycle_root_account
+            && founder.root_authentication_id()
+                == runtime_authority.root_authentication_after_binding
+            && founder.link_account() == graph.series_market_link_account
+            && founder.link_authentication_id()
+                == graph.series_market_link_authentication_id
+            && founder.market_instance_id() == graph.market_instance_v2_id
+            && founder.generation() == graph.product_generation
+            && founder.series_plan_id() == graph.series_plan_v5_id
+            && founder.ordinal() == graph.series_ordinal
+            && founder.attachment_plan_id() == graph.attachment_plan_v4_id
+            && founder.compiler_bundle_id() == graph.compiler_bundle_v5_id
+            && founder.capability_profile_id() == graph.capability_profile_v4_id
+            && *root_account.key == graph.market_lifecycle_root_account
+            && root.account() == graph.market_lifecycle_root_account
+            && root.is_writable()
+            && root_semantic_id == runtime_authority.root_semantic_after_binding
+            && root.data_id() == runtime_authority.root_data_after_binding
+            && root.authentication_id() == runtime_authority.root_authentication_after_binding
+            && founder_link.account() == graph.series_market_link_account
+            && !founder_link.is_writable()
+            && *market_runtime_account.key == lineage.general_market_runtime_account,
+        ClutchError::MismatchedState,
+    )?;
+    postwrite.authenticate_general_market_runtime_foundation_postwrite_v1(
+        runtime_authority.authority_id,
+        lineage.lineage_id,
+        runtime_authority.market_binding_foundation_step_id,
+        founder.id(),
+        graph.general_market_owner_account,
+        lineage.general_market_runtime_account,
+        graph.market_liability_founding_id,
+        graph.claim_mint_founding_plan_id,
+        graph.claim_issuance_binding_id,
+        graph.general_founding_capability_id,
+    )?;
+    let (rebound, step) = advance_market_foundation_step_v2(
+        program_id,
+        founder,
+        root_account,
+        root,
+        foundation_vault,
+        market_runtime_account,
+        debit,
+        schedule,
+        account_graph,
+        postwrite,
+        successor_output,
+        rebound_output,
+    )?;
+    let preauthorization = authenticate_general_family_preauthorization_v1(
+        runtime_authority,
+        step,
+        rebound,
+        founder_link,
+    )?;
+    Ok((rebound, step, preauthorization))
 }
 
 fn require_matching_general_postwrite<P: AuthenticatedGeneralMarketPostwriteV1 + ?Sized>(
     preauthorization: AuthenticatedGeneralFamilyPreauthorizationV1,
     postwrite: &P,
 ) -> Outcome<()> {
+    for identity in [
+        preauthorization.founder_authorization_id,
+        preauthorization.foundation_lineage_id,
+        preauthorization.market_runtime_founder_authorization_id,
+        preauthorization.market_binding_foundation_step_id,
+        preauthorization.market_runtime_foundation_step_id,
+        preauthorization.preauthorization_id,
+    ] {
+        identity
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    }
     postwrite
         .authenticate_product_general_postwrite(&preauthorization)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -577,6 +1212,24 @@ fn require_matching_general_postwrite<P: AuthenticatedGeneralMarketPostwriteV1 +
     }
     require(
         postwrite.semantic_id() != postwrite.data_id()
+            && preauthorization.foundation_lineage_id
+                != preauthorization.market_binding_foundation_step_id
+            && preauthorization.founder_authorization_id
+                != preauthorization.market_runtime_founder_authorization_id
+            && preauthorization.market_runtime_founder_authorization_id
+                != preauthorization.market_binding_foundation_step_id
+            && preauthorization.market_runtime_founder_authorization_id
+                != preauthorization.market_runtime_foundation_step_id
+            && preauthorization.foundation_lineage_id
+                != preauthorization.market_runtime_foundation_step_id
+            && preauthorization.market_binding_foundation_step_id
+                != preauthorization.market_runtime_foundation_step_id
+            && preauthorization.preauthorization_id
+                != preauthorization.foundation_lineage_id
+            && preauthorization.preauthorization_id
+                != preauthorization.market_binding_foundation_step_id
+            && preauthorization.preauthorization_id
+                != preauthorization.market_runtime_foundation_step_id
             && postwrite.semantic_id() != postwrite.authentication_id()
             && postwrite.data_id() != postwrite.authentication_id()
             && postwrite.semantic_id() != preauthorization.preauthorization_id
@@ -606,6 +1259,16 @@ fn require_matching_general_postwrite<P: AuthenticatedGeneralMarketPostwriteV1 +
                 == preauthorization.claim_issuance_binding_id
             && postwrite.general_founding_capability_id()
                 == preauthorization.general_founding_capability_id
+            && postwrite.product_foundation_lineage_id()
+                == preauthorization.foundation_lineage_id
+            && postwrite.product_market_runtime_founder_authorization_id()
+                == preauthorization.market_runtime_founder_authorization_id
+            && postwrite.product_market_binding_foundation_step_id()
+                == preauthorization.market_binding_foundation_step_id
+            && postwrite.product_market_runtime_foundation_step_id()
+                == preauthorization.market_runtime_foundation_step_id
+            && postwrite.product_market_runtime_account()
+                == preauthorization.general_market_runtime_account
             && postwrite.product_preauthorization_id() == preauthorization.preauthorization_id,
         ClutchError::MismatchedState,
     )
@@ -762,31 +1425,30 @@ pub(crate) fn admit_authenticated_general_family_postwrite_v1<
         .state()
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_post_data_id = rebound.data_id();
     let family_admission_transition_id = rebound
         .state()
         .product_families()
         .family(MarketFamilyV1::General)
         .last_admission_transition_id();
-    let projection_id = hash_id(&[
-        GENERAL_FAMILY_ADMISSION_PROJECTION_DOMAIN_V1,
-        &preauthorization.preauthorization_id.bytes(),
-        &postwrite.semantic_id().bytes(),
-        &postwrite.data_id().bytes(),
-        &postwrite.authentication_id().bytes(),
-        &root_pre_semantic_id.bytes(),
-        &root_post_semantic_id.bytes(),
-        &rebound.authentication_id().bytes(),
-        &family_admission_transition_id.bytes(),
-    ]);
-    projection_id
-        .validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projection_id = general_family_admission_projection_id_v1(
+        preauthorization.preauthorization_id,
+        postwrite.semantic_id(),
+        postwrite.data_id(),
+        postwrite.authentication_id(),
+        root_pre_semantic_id,
+        root_post_semantic_id,
+        root_post_data_id,
+        rebound.authentication_id(),
+        family_admission_transition_id,
+    )?;
     Ok(AuthenticatedGeneralFamilyAdmissionProjectionV1 {
         preauthorization,
         general_postwrite_semantic_id: postwrite.semantic_id(),
         general_postwrite_data_id: postwrite.data_id(),
         general_postwrite_authentication_id: postwrite.authentication_id(),
         market_lifecycle_root_post_semantic_id: root_post_semantic_id,
+        market_lifecycle_root_post_data_id: root_post_data_id,
         market_lifecycle_root_post_authentication_id: rebound.authentication_id(),
         family_admission_transition_id,
         projection_id,
@@ -858,6 +1520,21 @@ mod adversarial_tests {
         fn general_founding_capability_id(&self) -> ContentId {
             self.preauthorization.general_founding_capability_id
         }
+        fn product_foundation_lineage_id(&self) -> ContentId {
+            self.preauthorization.foundation_lineage_id
+        }
+        fn product_market_runtime_founder_authorization_id(&self) -> ContentId {
+            self.preauthorization.market_runtime_founder_authorization_id
+        }
+        fn product_market_binding_foundation_step_id(&self) -> ContentId {
+            self.preauthorization.market_binding_foundation_step_id
+        }
+        fn product_market_runtime_foundation_step_id(&self) -> ContentId {
+            self.preauthorization.market_runtime_foundation_step_id
+        }
+        fn product_market_runtime_account(&self) -> Pubkey {
+            self.preauthorization.general_market_runtime_account
+        }
         fn product_preauthorization_id(&self) -> ContentId {
             self.preauthorization.preauthorization_id
         }
@@ -889,9 +1566,86 @@ mod adversarial_tests {
             claim_issuance_binding_id: id(26),
             general_founding_capability_id: id(27),
             general_market_owner_account: Pubkey::new_from_array([17; 32]),
+            general_market_runtime_account: Pubkey::new_from_array([28; 32]),
             family_admission_sequence: 0,
+            founder_authorization_id: id(29),
+            market_runtime_founder_authorization_id: id(62),
+            foundation_lineage_id: id(41),
+            market_binding_foundation_step_id: id(42),
+            market_runtime_foundation_step_id: id(43),
             preauthorization_id: id(18),
         }
+    }
+
+    fn lineage() -> AuthenticatedGeneralFoundationLineageV1 {
+        let mut graph = preauthorization();
+        graph.market_lifecycle_root_pre_semantic_id = id(3);
+        graph.market_lifecycle_root_pre_data_id = id(4);
+        graph.market_lifecycle_root_authentication_id = id(5);
+        graph.foundation_lineage_id = id(41);
+        graph.market_runtime_founder_authorization_id = ContentId::ZERO;
+        graph.market_binding_foundation_step_id = ContentId::ZERO;
+        graph.market_runtime_foundation_step_id = ContentId::ZERO;
+        graph.preauthorization_id = ContentId::ZERO;
+        AuthenticatedGeneralFoundationLineageV1 {
+            graph,
+            general_market_runtime_account: graph.general_market_runtime_account,
+            lineage_id: id(41),
+        }
+    }
+
+    fn binding_step() -> AuthenticatedMarketFoundationStepV2 {
+        let lineage = lineage();
+        AuthenticatedMarketFoundationStepV2::test_only(
+            id(44),
+            lineage.graph.founder_authorization_id,
+            id(45),
+            id(46),
+            lineage.graph.market_lifecycle_root_account,
+            lineage.graph.market_lifecycle_root_pre_semantic_id,
+            id(47),
+            lineage.graph.market_lifecycle_root_pre_data_id,
+            id(48),
+            lineage.graph.market_lifecycle_root_authentication_id,
+            id(49),
+            MarketFoundationSlotV2::MarketBinding,
+            lineage.graph.general_market_owner_account,
+        )
+    }
+
+    fn runtime_authority() -> AuthenticatedGeneralRuntimeFoundationAuthorityV1 {
+        accept_general_market_binding_foundation_v1(lineage(), binding_step()).unwrap()
+    }
+
+    fn runtime_step() -> AuthenticatedMarketFoundationStepV2 {
+        let authority = runtime_authority();
+        AuthenticatedMarketFoundationStepV2::test_only(
+            id(55),
+            id(63),
+            id(56),
+            id(57),
+            authority.lineage.graph.market_lifecycle_root_account,
+            authority.root_semantic_after_binding,
+            id(58),
+            authority.root_data_after_binding,
+            id(59),
+            authority.root_authentication_after_binding,
+            id(60),
+            MarketFoundationSlotV2::MarketRuntime,
+            authority.lineage.general_market_runtime_account,
+        )
+    }
+
+    struct RefusingFoundationPostwrite;
+
+    impl AuthenticatedMarketFoundationStepPostwriteV2 for RefusingFoundationPostwrite {}
+    impl AuthenticatedGeneralMarketBindingFoundationPostwriteV1
+        for RefusingFoundationPostwrite
+    {
+    }
+    impl AuthenticatedGeneralMarketRuntimeFoundationPostwriteV1
+        for RefusingFoundationPostwrite
+    {
     }
 
     fn exact_graph_join() -> GeneralFamilyGraphJoinV1 {
@@ -966,6 +1720,202 @@ mod adversarial_tests {
                 require_matching_general_postwrite(preauthorization, &wrong_capability).is_err()
             );
         }
+        for replacement in [id(50), id(51), id(52)] {
+            let mut wrong_chain = exact;
+            wrong_chain.preauthorization.foundation_lineage_id = replacement;
+            assert!(require_matching_general_postwrite(preauthorization, &wrong_chain).is_err());
+            let mut wrong_binding_step = exact;
+            wrong_binding_step
+                .preauthorization
+                .market_binding_foundation_step_id = replacement;
+            assert!(
+                require_matching_general_postwrite(preauthorization, &wrong_binding_step)
+                    .is_err()
+            );
+            let mut wrong_runtime_step = exact;
+            wrong_runtime_step
+                .preauthorization
+                .market_runtime_foundation_step_id = replacement;
+            assert!(
+                require_matching_general_postwrite(preauthorization, &wrong_runtime_step)
+                    .is_err()
+            );
+            let mut wrong_runtime_founder = exact;
+            wrong_runtime_founder
+                .preauthorization
+                .market_runtime_founder_authorization_id = replacement;
+            assert!(
+                require_matching_general_postwrite(preauthorization, &wrong_runtime_founder)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn general_slot_chain_refuses_order_account_and_root_splices() {
+        let lineage = lineage();
+        let exact = binding_step();
+        assert!(accept_general_market_binding_foundation_v1(lineage, exact).is_ok());
+
+        let wrong_slot = AuthenticatedMarketFoundationStepV2::test_only(
+            exact.id(),
+            exact.founder_authorization_id(),
+            exact.debit_id(),
+            exact.accepted_poststate_receipt_id(),
+            exact.root_account(),
+            exact.root_semantic_before(),
+            exact.root_semantic_after(),
+            exact.root_data_before(),
+            exact.root_data_after(),
+            exact.root_authentication_before(),
+            exact.root_authentication_after(),
+            MarketFoundationSlotV2::MarketRuntime,
+            exact.account(),
+        );
+        assert!(accept_general_market_binding_foundation_v1(lineage, wrong_slot).is_err());
+
+        let wrong_account = AuthenticatedMarketFoundationStepV2::test_only(
+            exact.id(),
+            exact.founder_authorization_id(),
+            exact.debit_id(),
+            exact.accepted_poststate_receipt_id(),
+            exact.root_account(),
+            exact.root_semantic_before(),
+            exact.root_semantic_after(),
+            exact.root_data_before(),
+            exact.root_data_after(),
+            exact.root_authentication_before(),
+            exact.root_authentication_after(),
+            exact.slot(),
+            Pubkey::new_from_array([53; 32]),
+        );
+        assert!(accept_general_market_binding_foundation_v1(lineage, wrong_account).is_err());
+
+        let stale_root = AuthenticatedMarketFoundationStepV2::test_only(
+            exact.id(),
+            exact.founder_authorization_id(),
+            exact.debit_id(),
+            exact.accepted_poststate_receipt_id(),
+            exact.root_account(),
+            id(54),
+            exact.root_semantic_after(),
+            exact.root_data_before(),
+            exact.root_data_after(),
+            exact.root_authentication_before(),
+            exact.root_authentication_after(),
+            exact.slot(),
+            exact.account(),
+        );
+        assert!(accept_general_market_binding_foundation_v1(lineage, stale_root).is_err());
+
+        let runtime_authority = runtime_authority();
+        let runtime_step = runtime_step();
+        assert!(require_general_runtime_foundation_step_v1(
+            runtime_authority,
+            runtime_step,
+        )
+        .is_ok());
+        let wrong_runtime_slot = AuthenticatedMarketFoundationStepV2::test_only(
+            runtime_step.id(),
+            runtime_step.founder_authorization_id(),
+            runtime_step.debit_id(),
+            runtime_step.accepted_poststate_receipt_id(),
+            runtime_step.root_account(),
+            runtime_step.root_semantic_before(),
+            runtime_step.root_semantic_after(),
+            runtime_step.root_data_before(),
+            runtime_step.root_data_after(),
+            runtime_step.root_authentication_before(),
+            runtime_step.root_authentication_after(),
+            MarketFoundationSlotV2::MarketBinding,
+            runtime_step.account(),
+        );
+        assert!(require_general_runtime_foundation_step_v1(
+            runtime_authority,
+            wrong_runtime_slot,
+        )
+        .is_err());
+        let stale_runtime_root = AuthenticatedMarketFoundationStepV2::test_only(
+            runtime_step.id(),
+            runtime_step.founder_authorization_id(),
+            runtime_step.debit_id(),
+            runtime_step.accepted_poststate_receipt_id(),
+            runtime_step.root_account(),
+            id(61),
+            runtime_step.root_semantic_after(),
+            runtime_step.root_data_before(),
+            runtime_step.root_data_after(),
+            runtime_step.root_authentication_before(),
+            runtime_step.root_authentication_after(),
+            runtime_step.slot(),
+            runtime_step.account(),
+        );
+        assert!(require_general_runtime_foundation_step_v1(
+            runtime_authority,
+            stale_runtime_root,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn general_specific_foundation_postwrite_traits_default_refuse() {
+        let postwrite = RefusingFoundationPostwrite;
+        let lineage = lineage();
+        assert!(postwrite
+            .authenticate_general_market_binding_foundation_postwrite_v1(
+                lineage.id(),
+                lineage.general_market_owner_account(),
+                lineage.general_market_runtime_account(),
+                lineage.graph.market_liability_founding_id,
+                lineage.graph.claim_mint_founding_plan_id,
+                lineage.graph.claim_issuance_binding_id,
+                lineage.graph.general_founding_capability_id,
+            )
+            .is_err());
+        let runtime_authority = runtime_authority();
+        assert!(postwrite
+            .authenticate_general_market_runtime_foundation_postwrite_v1(
+                runtime_authority.id(),
+                runtime_authority.lineage_id(),
+                runtime_authority.market_binding_foundation_step_id,
+                id(63),
+                runtime_authority.lineage.graph.general_market_owner_account,
+                runtime_authority.general_market_runtime_account(),
+                runtime_authority.lineage.graph.market_liability_founding_id,
+                runtime_authority.lineage.graph.claim_mint_founding_plan_id,
+                runtime_authority.lineage.graph.claim_issuance_binding_id,
+                runtime_authority.lineage.graph.general_founding_capability_id,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn general_admission_projection_commits_root_post_data_id() {
+        let exact = general_family_admission_projection_id_v1(
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            id(7),
+            id(8),
+            id(9),
+        )
+        .unwrap();
+        let substituted = general_family_admission_projection_id_v1(
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            id(10),
+            id(8),
+            id(9),
+        )
+        .unwrap();
+        assert_ne!(exact, substituted);
     }
 
     #[test]
