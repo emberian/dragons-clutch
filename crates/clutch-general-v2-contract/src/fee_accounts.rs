@@ -16,9 +16,10 @@ use clutch_fee_runtime_contract::allocation::{
 };
 use clutch_fee_runtime_contract::codec::{
     decode_fee_record_v1, decode_owner_fee_carry_v1, decode_payer_allocation_v1,
-    decode_recipient_allocation_v1, decode_treasury_ledger_v1, encode_fee_record_v1,
-    encode_owner_fee_carry_v1, encode_payer_allocation_v1, encode_recipient_allocation_v1,
-    encode_treasury_ledger_v1, FEE_RECORD_ACCOUNT_V1_BYTES, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
+    decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
+    decode_treasury_ledger_v1, encode_fee_record_v1, encode_owner_fee_carry_v1,
+    encode_payer_allocation_v1, encode_recipient_allocation_v1, encode_treasury_ledger_v1,
+    FEE_RECORD_ACCOUNT_V1_BYTES, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
     PAYER_ALLOCATION_ACCOUNT_V1_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES,
     TREASURY_LEDGER_ACCOUNT_V1_BYTES,
 };
@@ -261,6 +262,23 @@ impl PayerAllocationV1AccountV1 {
         )?;
         Ok(Self {
             semantic: map_fee_error(decode_payer_allocation_v1(&body, assessment, envelopes))?,
+            stored_bump,
+        })
+    }
+
+    /// Decode a canonical persisted snapshot without replaying envelopes.
+    ///
+    /// This establishes only exact outer/inner structure. The live adapter
+    /// must additionally authenticate program ownership and the payer PDA;
+    /// the fee projection then joins this semantic body to its terminal carry.
+    pub fn decode_persisted(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, stored_bump) = decode_outer(
+            PAYER_ALLOCATION_ACCOUNT_TAG,
+            PAYER_ALLOCATION_ACCOUNT_VERSION,
+            input,
+        )?;
+        Ok(Self {
+            semantic: map_fee_error(decode_persisted_payer_allocation_v1(&body))?,
             stored_bump,
         })
     }
