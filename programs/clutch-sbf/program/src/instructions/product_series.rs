@@ -70,6 +70,7 @@ use clutch_source_plane_v3::{SourcePlaneProgramV3, StatisticKindV3, SummaryProgr
 use clutch_source_plane_v3_runtime::{
     AuthenticatedClockBucketV1, AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1,
     AuthenticatedSourceRouteV1, ClockSnapshotV1, OccurrenceSourceReceiptV1,
+    SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -616,6 +617,9 @@ pub struct AuthenticatedSourceProductRouteV3 {
     source_route_id: ContentId,
     receiver_route_id: ContentId,
     source_release_manifest_id: ContentId,
+    source_release_authentication_id: ContentId,
+    source_plane_contract_id: ContentId,
+    source_spec_id: ContentId,
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
     compiler_bundle_id: CompiledProductSeriesBundleV5Id,
@@ -635,6 +639,11 @@ impl AuthenticatedSourceProductRouteV3 {
     /// Exact Source release selected by current BundleV5.
     pub const fn source_release_manifest_id(self) -> ContentId {
         self.source_release_manifest_id
+    }
+
+    /// Exact owner/PDA/body authentication of the Source release account.
+    pub const fn source_release_authentication_id(self) -> ContentId {
+        self.source_release_authentication_id
     }
 
     /// Exact current compiler graph.
@@ -701,6 +710,9 @@ pub fn authenticate_source_product_route_v3(
             &route.route_id().bytes(),
             &receiver.id().bytes(),
             &route.release_manifest_id().bytes(),
+            &route.release_authentication_id().bytes(),
+            &route.source_plane_contract_id().bytes(),
+            &route.source_spec_id().bytes(),
             &registry.registry_release_id().bytes(),
             &registry.capability_profile_id().bytes(),
             &bundle_id.bytes(),
@@ -718,6 +730,9 @@ pub fn authenticate_source_product_route_v3(
         source_route_id: route.route_id(),
         receiver_route_id: receiver.id(),
         source_release_manifest_id: route.release_manifest_id(),
+        source_release_authentication_id: route.release_authentication_id(),
+        source_plane_contract_id: route.source_plane_contract_id(),
+        source_spec_id: route.source_spec_id(),
         registry_release_id: registry.registry_release_id(),
         capability_profile_id: registry.capability_profile_id(),
         compiler_bundle_id: bundle_id,
@@ -726,6 +741,119 @@ pub fn authenticate_source_product_route_v3(
         profile_id: collateral.profile_id,
         collateral_mint: collateral.collateral_mint,
         collateral_token_program: collateral.token_program,
+    })
+}
+
+/// Private successful Source handoff selected by the current Product route.
+///
+/// This contains no payout or relation DTO. It only makes Source's exact
+/// release/deployment/result/work-receipt authority available to the future
+/// shared Product ResolutionV5 writer, which must separately consume
+/// Failure's private resolved-cell receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceResolutionInputV3 {
+    id: ContentId,
+    route: AuthenticatedSourceProductRouteV3,
+    source_handoff_authentication_id: ContentId,
+    successful_evaluation_handoff_id: ContentId,
+    occurrence_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    result_account_authentication_id: ContentId,
+    work_receipt_authentication_id: ContentId,
+    failure_policy_binding_id: ContentId,
+}
+
+impl AuthenticatedSourceResolutionInputV3 {
+    /// Authentication identity of the exact current Source resolution input.
+    pub const fn id(self) -> ContentId {
+        self.id
+    }
+
+    /// Current Source/ProfileV4/BundleV5 route selected by this handoff.
+    pub const fn route(self) -> AuthenticatedSourceProductRouteV3 {
+        self.route
+    }
+
+    /// Exact semantic successful-evaluation handoff.
+    pub const fn successful_evaluation_handoff_id(self) -> ContentId {
+        self.successful_evaluation_handoff_id
+    }
+
+    /// Exact Source-owned physical handoff authentication.
+    pub const fn source_handoff_authentication_id(self) -> ContentId {
+        self.source_handoff_authentication_id
+    }
+
+    /// Exact Product/Series occurrence account selected before evaluation.
+    pub const fn occurrence_account(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.occurrence_account
+    }
+
+    /// Exact owner/PDA/body authentication of the successful result account.
+    pub const fn result_account_authentication_id(self) -> ContentId {
+        self.result_account_authentication_id
+    }
+
+    /// Exact immutable Source work-receipt authentication.
+    pub const fn work_receipt_authentication_id(self) -> ContentId {
+        self.work_receipt_authentication_id
+    }
+
+    /// Exact downstream Failure policy selected before Source evaluation.
+    pub const fn failure_policy_binding_id(self) -> ContentId {
+        self.failure_policy_binding_id
+    }
+}
+
+/// Bind Source's successful action-10 handoff to the current authenticated
+/// Product route without classifying a relation or constructing a payout.
+pub fn authenticate_source_resolution_input_v3(
+    route: AuthenticatedSourceProductRouteV3,
+    handoff: SuccessfulEvaluationHandoffV1,
+    source: SourcePolicyHandoffJoinV1,
+) -> Outcome<AuthenticatedSourceResolutionInputV3> {
+    let occurrence = handoff.occurrence();
+    require(
+        source.handoff_id() == handoff.id()
+            && source.release_authentication_id() == route.source_release_authentication_id
+            && source.route_id() == route.source_route_id
+            && source.source_spec_id() == route.source_spec_id
+            && occurrence.route_id() == route.source_route_id
+            && occurrence.source_plane_contract_id() == route.source_plane_contract_id
+            && occurrence.source_spec_id() == route.source_spec_id
+            && source.occurrence_account() == occurrence.occurrence_account()
+            && source.source_fact_authentication_id()
+                == handoff.result_account_authentication_id()
+            && source.failure_policy_binding_id() == handoff.failure_policy_binding_id()
+            && source.window_id() == occurrence.window_id()
+            && source.statistic_key_id() == occurrence.statistic_key_id()
+            && source.clock_policy_id() == handoff.clock_policy_id()
+            && source.clock() == handoff.clock(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/source-resolution-input/v3",
+            &route.id.bytes(),
+            &source.id().bytes(),
+            &handoff.id().bytes(),
+            &occurrence.id().bytes(),
+            &source.occurrence_account().bytes(),
+            &handoff.result_account_authentication_id().bytes(),
+            &source.work_receipt_authentication_id().bytes(),
+            &handoff.failure_policy_binding_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceResolutionInputV3 {
+        id,
+        route,
+        source_handoff_authentication_id: source.id(),
+        successful_evaluation_handoff_id: handoff.id(),
+        occurrence_account: source.occurrence_account(),
+        result_account_authentication_id: handoff.result_account_authentication_id(),
+        work_receipt_authentication_id: source.work_receipt_authentication_id(),
+        failure_policy_binding_id: handoff.failure_policy_binding_id(),
     })
 }
 
