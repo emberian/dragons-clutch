@@ -19,6 +19,14 @@
 //! crate does not parse a Clock sysvar, map Unix time to source buckets,
 //! authenticate source evidence, or compute a payout.
 
+mod external;
+
+pub use external::{
+    ExternalRecoveryAdmissionV1, ExternalRecoveryFundingV1, ExternalRecoveryStateV1,
+    ExternalRecoveryTransitionPlanV1, ExternalRecoveryWorkAuthorizationV1,
+    EXTERNAL_RECOVERY_STATE_V1_BYTES,
+};
+
 pub use clutch_product_series::{
     AbsoluteRecoveryAttemptV1, CompiledScheduleV1, ComponentDebitV1, EvidenceOnlyRecoveryPolicyId,
     MarketInstanceId, MarketInstanceV2Id, RecoveryAttemptFundingV1, SeriesFundingQuoteId,
@@ -211,6 +219,12 @@ pub enum RecoveryError {
     StalePlan,
     /// The exact post-transfer reserve balance differs from the plan.
     PostBalanceMismatch,
+    /// A successor semantic state attempted to duplicate liveness custody.
+    ExternalCustodyMismatch,
+    /// A scheduled liveness debit could not cover the exact semantic reward.
+    InvalidScheduledCeiling,
+    /// The independently funded liveness call budget was exhausted.
+    ExternalCallBudgetExhausted,
     /// New exposure is closed by phase or the current authenticated bucket.
     ExposureClosed,
     /// A private reachable-state or conservation invariant failed.
@@ -727,10 +741,9 @@ impl RecoveryState {
         };
         let series_funding_quote_id = SeriesFundingQuoteId::from_bytes(reader.bytes()?);
         let quote = reader.bytes::<{ clutch_product_series::SERIES_FUNDING_QUOTE_BYTES }>()?;
-        let funding_quote = <SeriesFundingQuoteV1 as clutch_product_series::FixedCodec>::decode(
-            &quote,
-        )
-        .map_err(map_funding_quote_error)?;
+        let funding_quote =
+            <SeriesFundingQuoteV1 as clutch_product_series::FixedCodec>::decode(&quote)
+                .map_err(map_funding_quote_error)?;
         let state_id = Identity::from_bytes(reader.bytes()?);
         let work_funder = Identity::from_bytes(reader.bytes()?);
         let rent_payer = Identity::from_bytes(reader.bytes()?);
