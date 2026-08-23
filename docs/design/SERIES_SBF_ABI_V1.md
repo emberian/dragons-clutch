@@ -70,9 +70,11 @@ Each stores the exact state-account rent principal, and the funding wrapper also
 stores the five exact collateral-vault rent principals, so closes can separate
 refundable payer principal from unsolicited account surplus even if runtime
 rent parameters later change. Predictable-address prefunding never discounts
-the payer. FundingTerms V2 remains the sole owner of the refund destination;
-surplus is donation residue for its neutral sink. All other facts remain owned
-by the pure state, quote, and FundingTerms V2.
+the payer. FundingTerms V2 remains the sole owner of the refund destinations,
+the receive-only collateral disposition token account, and the distinct
+System-owned neutral lamport sink. Collateral residue never reaches the lamport
+sink, and rent or donation lamports never reach the token sink. All other facts
+remain owned by the pure state, quote, and FundingTerms V2.
 
 The registration PDA persists after funding close as the replay anchor. Its
 close remains disabled until a counted-retirement/nullifier successor can
@@ -142,9 +144,11 @@ No action may be enabled from the codecs alone. At minimum:
 - `ObserveDonation` derives one positive delta from the named physical balance;
   the request never supplies an amount.
 - `CloseFunding` requires the pure state to be closed, refunds every remaining
-  payer-principal component to FundingTerms V2 destinations, sends only donation
-  residue to the immutable neutral sink, enforces exact post-deltas, and closes
-  the rent-funded state to the named lamport-principal owner.
+  payer-principal component to FundingTerms V2 destinations, sends collateral
+  donation residue only to the receive-only neutral token account and lamport
+  donation residue only to the System-owned neutral lamport sink, enforces exact
+  post-deltas, and closes the rent-funded state to the named lamport-principal
+  owner.
 
 Until these joins are simultaneously implemented, the central allocation is
 visible but `ENABLED_EXTENSION_ACTIONS` stays empty and the dispatcher refuses
@@ -175,7 +179,7 @@ need any missing semantic receipt:
 - a private terminal receipt binding the consumed registry replay anchor, exact
   closed funding PDA/body, and authenticated FundingTerms/quote graph; and
 - account close that returns only stored rent principal to its owner and sends
-  account surplus to the distinct neutral sink.
+  account surplus to the distinct System-owned neutral lamport sink.
 
 These helpers are deliberately not dispatched. Collateral-vault post-deltas,
 complete activation, occurrence fulfillment, terminal multi-asset ordering,

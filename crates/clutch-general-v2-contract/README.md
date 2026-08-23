@@ -32,6 +32,7 @@ counted Epoch codecs must not be described as General V2-compatible.
 | disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
 | disabled treasury-ledger envelope | `0x86/1` | 148 |
 | disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
+| disabled combined FinalPot/virtual-budget envelope | `0x89/1` | 332 |
 
 The successor `solana-layout` collision ledger reserves every coordinate above
 as `ReservedDisabled`, records retirement's provisional
@@ -43,8 +44,9 @@ owner-settlement coordinate is a reservation, not an
 executable capability. A complete legacy-account inventory cross-check remains
 an activation gate.
 The same coordinated block reserves the StructuredClaim descriptor at
-`0x88/1` and a fresh General FinalPot at `0x89/1`; neither has a live route in
-this crate.
+`0x88/1` and a fresh General FinalPot at `0x89/1`. The latter now has a strict
+332-byte outer codec around the canonical 328-byte combined FinalPot and
+selected virtual-budget body, but no live route or retirement authority.
 The numeric constants in this standalone crate describe matching codec bytes,
 not a second allocation authority; the eventual adapter must add a parity gate
 against the central registry when both crates are dependencies.
@@ -55,7 +57,9 @@ mass scale, and live slice shape.
 
 Fresh seed domains are exported for Market binding, Epoch, EconomicDomain,
 Window, admission node, feed, work, budget, selected candidate, order page,
-reservation, receipt, and final pot. PDA derivation, stored-bump checking,
+reservation, receipt, and final pot. The frozen FinalPot tuple is
+`general-final-pot:v2`, Epoch PDA, final SettlementCandidateId. PDA derivation,
+stored-bump checking,
 program ownership, and generation authentication remain adapter obligations.
 The first-spine tuples are exact ordered seeds:
 
@@ -207,8 +211,9 @@ settlement_cash_pot || owner_finalization_id`. It exists separately because a
 last receipt fragment may leave a credit-bearing owner waiting for earlier
 buyer or merge liquidity. Net owner debits are admitted into the pot first;
 credits refuse and retry without consuming replay or liveness when liquidity
-is absent. The accounting-complete row becomes finalized and records the
-distinct finalization identity only after the exact Position/cash-pot transfer.
+is absent. The request identity must equal the adapter-authenticated data ID of
+the canonical finalized 288-byte row; it is not copied into the row. The
+one-way row state and in-place fee finalization receipt own persistent replay.
 No success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per
 participating owner, checked candidate totals, and a canonically derived owner
@@ -218,23 +223,28 @@ zero flags. Its pre-fund-safe creation plan must atomically update the separate
 rent ledger that owns payer principal, refund recipient, and donation sink.
 
 Action 26 is renamed `ConsumeDirectReceiptEggs` and has the exact disabled
-96-byte selector `epoch || receipt || settlement_transition_id`. The imported
-pure planner requires both real ends already accounting-latched, then
+96-byte selector `epoch || receipt || delivery_transition_id`. The imported
+pure planner requires both real ends already accounting-latched and both owner
+rows already finalized by action 38, then
 atomically stages a distinct delivery latch, both Positions, and both
-Reservations while treating owner rows as read-only accounting evidence. It
-moves only internal native Eggs; cash conversion remains owner-terminal. The action stays disabled
-until the direct receipt can project an exact Settlement-compartment liveness
-receipt, call ordinal, quote ceiling, keeper payment, and payer refund.
+Reservations while treating terminal owner rows as read-only finalization
+evidence. It moves only internal native Eggs; cash conversion remains
+owner-terminal. The action stays disabled until the direct receipt can project
+an exact Settlement-compartment liveness receipt, call ordinal, quote ceiling,
+keeper payment, and payer refund.
 
 Actions 36 `ConsumeVirtualSplitReceiptEggs` and 37
 `ConsumeVirtualMergeReceiptEggs` each have a distinct strict 96-byte disabled
-selector `epoch || receipt || settlement_transition_id`. They are not aliases
+selector `epoch || receipt || delivery_transition_id`. They are not aliases
 for action 26 or for each other. A future handler must bind one checked
-selected-candidate witness and transition ID across the virtual inventory
-budget, FinalPot, Hoard/aggregate supply, one real receipt end, Position,
-Reservation, distinct delivery latch, and Settlement liveness mutation. The
-already-accounted owner row is authenticated but not rewritten. No inventory-only
-action is allocated, and neither route is executable yet.
+selected-candidate witness and transition ID across the 328-byte FinalPot's
+embedded virtual budget, Hoard/aggregate supply, one real receipt end, Position,
+Reservation, distinct delivery latch, and Settlement liveness mutation. Split
+authenticates a finalized buyer row and the exact remaining split cash; merge
+authenticates an AccountingComplete state-zero seller row because its proceeds
+must exist before seller finalization. Neither row is rewritten. No inventory-only
+account, rent owner, close authority, or action is allocated, and neither route
+is executable yet.
 
 The capability-disabled fee envelopes at `0x82` through `0x86` add only an
 exact outer tag/version, the constructor-checked inner fee codec, a stored PDA
