@@ -26,9 +26,9 @@ mod lineage;
 mod window;
 
 pub use account::{
-    decode_runtime_account, encode_runtime_account, observe_runtime_account_header,
-    RuntimeAccountBodyV1, RuntimeAccountHeaderV1, RUNTIME_ACCOUNT_HEADER_BYTES,
-    RUNTIME_ACCOUNT_LAYOUT_VERSION,
+    canonical_runtime_account_data_id, decode_runtime_account, encode_runtime_account,
+    observe_runtime_account_header, RuntimeAccountBodyV1, RuntimeAccountHeaderV1,
+    RUNTIME_ACCOUNT_HEADER_BYTES, RUNTIME_ACCOUNT_LAYOUT_VERSION,
 };
 pub use auth::{
     account_data_id, authenticate_boundary, authenticate_source_route, AdapterInvocationV1,
@@ -62,8 +62,8 @@ pub use window::{
     AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1, AuthenticatedWindowEvidenceV1,
     AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1, EvaluationAuthorityV1,
     EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
-    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1, MAX_PAGES_PER_FOLD,
-    SOURCE_OCCURRENCE_RECORD_BYTES,
+    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
+    SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD, SOURCE_OCCURRENCE_RECORD_BYTES,
 };
 
 use clutch_source_plane_v3::Error as CoreError;
