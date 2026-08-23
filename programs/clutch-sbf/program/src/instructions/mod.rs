@@ -51,6 +51,8 @@ pub mod dealer_runtime;
 pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod external_exit;
+#[cfg(feature = "non-production-failure-recovery-lab")]
+pub mod failure_recovery;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_terminal;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]

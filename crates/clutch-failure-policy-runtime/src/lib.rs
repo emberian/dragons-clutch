@@ -12,6 +12,8 @@
 //! evidence recovery followed by recoverable dormancy.
 
 pub mod external_v2;
+pub mod relation_execution_v1;
+pub mod retirement_v1;
 
 use clutch_evidence_recovery::{
     EvidenceDecision, FundingObservation, Identity as RecoveryIdentity, RecoveryAdmission,
@@ -1721,9 +1723,11 @@ impl FailureRecoveryTerminalReceiptV1 {
 /// Typed terminal boundary to separately authenticated lifecycle owners.
 ///
 /// Construction does not infer zero liabilities. A live adapter must first
-/// authenticate the retirement root, permanent replay tombstone, and final
-/// SourcePlane release receipt under the same market generation. Dormancy is
-/// deliberately insufficient; accepted evidence must have resolved the market.
+/// authenticate the retirement root, pre-funded predictable replay account,
+/// and final SourcePlane release receipt under the same market generation.
+/// The adapter seals the resulting join into that account atomically with
+/// close. Dormancy is deliberately insufficient; accepted evidence must have
+/// resolved the market.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureTerminalJoinV1 {
     id: FailureTerminalJoinId,
@@ -1736,7 +1740,8 @@ pub struct FailureTerminalJoinV1 {
 }
 
 impl FailureTerminalJoinV1 {
-    /// Construct after the adapter authenticates every separately owned terminal fact.
+    /// Construct after the adapter authenticates every separately owned
+    /// terminal fact and the pending immutable replay-account binding.
     pub fn from_adapter(
         runtime: &FailureRuntimeV1,
         generation: u64,

@@ -76,7 +76,8 @@ pub use window::{
     AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1, EvaluationAuthorityV1,
     EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
     OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
-    SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD, SOURCE_OCCURRENCE_RECORD_BYTES,
+    SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD,
+    SOURCE_OCCURRENCE_RECORD_BYTES,
 };
 
 use clutch_source_plane_v3::Error as CoreError;

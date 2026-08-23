@@ -220,7 +220,8 @@ impl ArtifactKind {
     ///
     /// These artifacts are reusable across Realms. Their upload context is
     /// therefore the exact zero sentinel; Realm binding is checked later from
-    /// the Genesis and Series bodies, never smuggled into transport identity.
+    /// the Genesis, Series, and Failure-policy bodies, never smuggled into
+    /// transport identity.
     pub const fn is_globally_content_addressed(self) -> bool {
         matches!(
             self,
@@ -246,7 +247,7 @@ pub struct ArtifactBinding {
     /// Codec family.
     pub kind: ArtifactKind,
     /// Profile id for a collateral policy; Realm id for grid and terms; the
-    /// canonical zero sentinel for globally reusable Product/Series bodies.
+    /// canonical zero sentinel for globally reusable successor bodies.
     pub context: Hash32,
     /// Canonical semantic digest owned by the artifact codec.
     pub digest: Hash32,
