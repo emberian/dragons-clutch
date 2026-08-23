@@ -143,7 +143,12 @@ test-only signers.
   is limited to those widths.
 - Frozen ScoreV1 rewards risk-free complete-set wash flow and pubkey
   fragmentation; it is experimental economics, not a release-quality market
-  objective. A successor score must be complete-set-invariant and Sybil-neutral.
+  objective. The implemented ScoreV2-Q economic prefix is
+  complete-set-invariant and representation-neutral after owner-blind
+  admission; later tie fields select the min-zero, lower-churn representative.
+  It is not person-neutral or wash-proof: public keys do not establish
+  independent controllers. It is not selected by an SBF profile while
+  normalization, price-quality, and fee/reward integration gates remain open.
 - For multi-span degree 2/3, the finite moment-cone checks are necessary rather
   than a complete no-arbitrage membership decision. The first public coupled
   profile should remain degree 0/1 until a full witness or safe inner

@@ -5,6 +5,10 @@ changes no runtime score, account layout, market terms, deployment artifact,
 fee, solver payment, or release claim. It uses only Python's standard library,
 integer atoms, and deterministic exhaustive tests.
 
+The independent safe-Rust core reproduction has since landed in
+`crates/clutch-batch/src/score_v2.rs`; see
+`docs/design/SCORE_V2_Q.md`. No SBF profile selects it yet.
+
 ## Decision
 
 Replace ScoreV1's economic prefix with one owner-blind quantity:
@@ -197,9 +201,10 @@ reported volume. Any maker/executor rebate needs its own wash-recovery bound.
 
 ## Migration plan
 
-1. Freeze this research model and independently reproduce it in Rust with
-   `u64` fields and the full-width digest.
-2. Specify the V2 relation input to `d_i = B_i - sigma = E_i - mu` and prove
+1. **Landed:** independently reproduce this model in safe, allocation-free Rust
+   with `u64` fields, full-width digest, and frozen differential vectors.
+2. **Landed at the core boundary:** specify the V2 input as
+   `d_i = B_i - sigma = E_i - mu` and check both sides exactly. Next, prove
    that both the monolithic and streamed verifiers derive identical values.
 3. Decide the owner-normalization policy. Do not claim Sybil neutrality while
    the feasible set itself changes under key relabeling.

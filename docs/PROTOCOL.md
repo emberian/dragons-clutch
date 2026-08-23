@@ -258,6 +258,24 @@ not be advertised as such.
 An offchain solver improves search only. It supplies no trusted fact and is not a
 required service. A static client can solve small batches.
 
+### Candidate score boundary
+
+Frozen ScoreV1 remains an experimental legacy objective. The implemented
+ScoreV2-Q core interface instead maximizes the exact price-free range of
+aggregate direct flow, then canonically minimizes its complete-set layer and
+virtual churn before the candidate-digest tie. Its economic prefix is
+complete-set invariant and representation-neutral only after owner-blind
+admission; the later fields deliberately choose the min-zero, lower-churn
+representative. It is not person-neutral: public keys do not prove independent
+beneficial owners, and an honest two-key cross is byte-indistinguishable from
+one controller using two keys. Owner-tagged normalization therefore refuses at
+the ScoreV2-Q interface.
+
+ScoreV2-Q does not judge price quality and does not determine fees, bonds, or
+solver compensation. Those require separate immutable policy identities. It is
+not selected by an SBF profile until the integration gates in
+[SCORE_V2_Q.md](design/SCORE_V2_Q.md) close.
+
 ## 7. Authority boundaries
 
 V1 programs contain no instruction for:

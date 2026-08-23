@@ -92,10 +92,15 @@ size earns only `990,000q`. Same-owner overlap does not help against two keys,
 and the later `distinct_owners` component rewards key fragmentation again.
 
 This does not break conservation, but it makes candidate selection economically
-gameable. Keep the frozen ScoreV1 only as an experimental profile. A ScoreV2
-must be exactly invariant to constant complete-set shifts, must not use pubkey
-count as personhood, and needs adversarial quotient-invariance, Sybil, tail, and
-representation tests before it controls a public market.
+gameable. Keep the frozen ScoreV1 only as an experimental profile. The
+implemented ScoreV2-Q economic prefix is exactly invariant to constant
+complete-set shifts; its later fields select the min-zero, lower-churn
+representative. It does not use pubkey count and has executable quotient, tail,
+padding, refinement, overflow, and representation tests. Its precise claim is
+**representation-neutral after owner-blind admission**, not person-neutral:
+an honest two-key cross and one controller using two keys can be byte-identical.
+Owner-tagged normalization, price quality, and fee/reward composition remain
+promotion gates before it controls a public market.
 
 ### P0 — degree-two/three price admission is not a no-arbitrage certificate
 

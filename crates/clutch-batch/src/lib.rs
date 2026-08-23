@@ -30,6 +30,10 @@ pub mod relation_v1_stream_v2;
 
 #[cfg(test)]
 mod relation_v1_stream_v2_tests;
+pub mod score_v2;
+
+#[cfg(test)]
+mod score_v2_tests;
 
 pub const MAX_ORDERS: usize = 64;
 pub const MAX_GRID_TICKS: usize = 64;

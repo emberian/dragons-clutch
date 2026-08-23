@@ -1,0 +1,10 @@
+# ScoreV2-Q frozen differential vectors, version 1.
+# name|outcomes|buy|sell|claimed-direct|sigma|mu|digest-byte|risk|cash-layer|churn
+empty|2|0,0|0,0|0,0|0|0|255|0|0|0
+complete-set-wash|2|7,7|7,7|7,7|0|0|0|0|7|0
+binary-tail|2|7,0|7,0|7,0|0|0|9|7|0|0
+shifted-binary-tail|2|12,5|12,5|12,5|0|0|8|7|5|0
+three-state-complement|3|0,9,5|0,9,5|0,9,5|0|0|7|9|0|0
+virtual-split-translation|3|14,5,9|9,0,4|9,0,4|5|0|6|9|0|5
+virtual-merge-translation|3|9,0,4|14,5,9|9,0,4|0|5|5|9|0|5
+u64-boundary|2|18446744073709551615,0|18446744073709551615,0|18446744073709551615,0|0|0|4|18446744073709551615|0|0

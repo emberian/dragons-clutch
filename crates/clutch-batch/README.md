@@ -48,6 +48,25 @@ Executable facts:
 - the relation is `no_std`, allocation free, `forbid(unsafe_code)`, float free,
   and every accumulator is checked exact integer arithmetic.
 
+## ScoreV2-Q core interface
+
+`src/score_v2.rs` implements the production-quality core arithmetic for the
+complete-set-quotiented successor score, without selecting it in the V1
+relation or any SBF profile. It independently derives
+`d_i = B_i - sigma = E_i - mu` and ranks valid submitted candidates by:
+
+1. maximum `max(d) - min(d)`;
+2. minimum directly crossed complete-set layer `min(d)`;
+3. minimum virtual split/merge churn; and
+4. the smaller full candidate digest.
+
+The API accepts only an explicit owner-blind normalization contract. It names
+and refuses the owner-tag-dependent V1 variants because public-key relabeling
+can change their admitted flow. The exact claim is representation-neutral after
+admission, never person-neutral or wash-proof. Price quality, fees, bonds, and
+solver compensation remain separate policies. See
+[`docs/design/SCORE_V2_Q.md`](../../docs/design/SCORE_V2_Q.md).
+
 Not implemented, and refused rather than guessed: portfolio marginal lot
 rationing (`P-b` returns `PolicyVariantUnimplemented`), the `N-c` owner-aware
 decreasing-fixed-point capping rule (infeasible candidates are refused, not
