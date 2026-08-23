@@ -16,16 +16,20 @@ use clutch_fee_runtime_contract::allocation::{
 };
 use clutch_fee_runtime_contract::codec::{
     decode_fee_record_v1, decode_owner_fee_carry_v1, decode_payer_allocation_v1,
+    decode_persisted_certified_recipient_allocation_v2,
     decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
     decode_treasury_ledger_v1, encode_fee_record_v1, encode_owner_fee_carry_v1,
-    encode_payer_allocation_v1, encode_recipient_allocation_v1, encode_treasury_ledger_v1,
-    FEE_RECORD_ACCOUNT_V1_BYTES, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
+    encode_certified_recipient_allocation_v2, encode_payer_allocation_v1,
+    encode_recipient_allocation_v1, encode_treasury_ledger_v1,
+    CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, FEE_RECORD_ACCOUNT_V1_BYTES,
+    OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
     PAYER_ALLOCATION_ACCOUNT_V1_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES,
     TREASURY_LEDGER_ACCOUNT_V1_BYTES,
 };
 use clutch_fee_runtime_contract::selected::{
     OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1,
 };
+use clutch_fee_runtime_contract::projection::CertifiedRecipientAllocationV2;
 pub use clutch_fee_runtime_contract::terminal::{
     AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV1, FeeRecordTerminalReceiptV1,
     FeeTerminalOutcomeV1, FeeTerminalReceiptBundleV1, GeneralFeeTerminalProjectionV1,
@@ -47,7 +51,8 @@ use crate::{
     PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION,
     PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
     RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-    RECIPIENT_ALLOCATION_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+    RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
     TREASURY_LEDGER_ACCOUNT_BYTES, TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
 };
@@ -550,6 +555,50 @@ impl RecipientAllocationV1AccountV1 {
     }
 }
 
+/// Sole future rent-owned recipient allocation certified by a complete book.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecipientAllocationV2AccountV1 {
+    /// Exact allocation plus complete selected-owner fee-book certificate.
+    pub semantic: CertifiedRecipientAllocationV2,
+    /// Exact payer-owned refundable rent principal and donation floor.
+    pub rent: DeletableRentOwnerV1,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+}
+
+impl RecipientAllocationV2AccountV1 {
+    /// Encode the exact current certified recipient account.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        let body = map_fee_error(encode_certified_recipient_allocation_v2(&self.semantic))?;
+        encode_rent_owned_outer(
+            RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+            &body,
+            self.rent,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Structurally decode the immutable program-owned persisted certificate.
+    ///
+    /// The adapter must additionally authenticate the canonical PDA and prove
+    /// that no route can create this version without the complete fee book and
+    /// exhaustive traversal digest/count.
+    pub fn decode_persisted(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) = decode_rent_owned_outer(
+            RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+            input,
+        )?;
+        Ok(Self {
+            semantic: map_fee_error(decode_persisted_certified_recipient_allocation_v2(&body))?,
+            rent,
+            stored_bump,
+        })
+    }
+}
+
 /// Treasury ordinary-Position ledger outer envelope.
 #[derive(Debug, Eq, PartialEq)]
 pub struct TreasuryLedgerV1AccountV1 {
@@ -620,6 +669,12 @@ const _: () = assert!(
 const _: () = assert!(
     RECIPIENT_ALLOCATION_ACCOUNT_BYTES
         == RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2
+        == CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES
+            + DELETABLE_RENT_OWNER_BYTES
+            + OUTER_FEE_ACCOUNT_BYTES
 );
 const _: () = assert!(
     TREASURY_LEDGER_ACCOUNT_BYTES == TREASURY_LEDGER_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES

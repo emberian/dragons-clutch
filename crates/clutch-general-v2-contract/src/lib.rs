@@ -897,6 +897,10 @@ pub const RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x85;
 pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact candidate-wide recipient-allocation outer bytes.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES: usize = 2_644;
+/// Sole future rent-owned complete-book-certified recipient version.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact rent-owned certified recipient-allocation outer bytes.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2: usize = 2_764;
 /// Fresh disabled selected-record treasury-ledger envelope tag.
 pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 /// First selected-record treasury-ledger envelope version.
@@ -980,7 +984,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 34] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 35] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1060,6 +1064,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 34] = [
         tag: RECIPIENT_ALLOCATION_ACCOUNT_TAG,
         version: RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/RecipientAllocationV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+        version: RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/RecipientAllocationV2AccountV1",
     },
     AccountAllocationV1 {
         tag: TREASURY_LEDGER_ACCOUNT_TAG,

@@ -11,9 +11,13 @@
 use clutch_fee_runtime_contract::terminal::OwnerFeeRentDispositionV2;
 use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_fee_runtime_contract::codec::{
-    FEE_RECORD_ACCOUNT_V1_BYTES, FEE_RECORD_MAGIC_V1, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
-    OWNER_FEE_CARRY_MAGIC_V1, PAYER_ALLOCATION_ACCOUNT_V1_BYTES, PAYER_ALLOCATION_MAGIC_V1,
+    CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, FEE_RECORD_ACCOUNT_V1_BYTES, FEE_RECORD_MAGIC_V1,
+    OWNER_FEE_CARRY_ACCOUNT_V1_BYTES, OWNER_FEE_CARRY_MAGIC_V1,
+    PAYER_ALLOCATION_ACCOUNT_V1_BYTES, PAYER_ALLOCATION_MAGIC_V1,
     RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES, RECIPIENT_ALLOCATION_MAGIC_V1,
+};
+use clutch_fee_runtime_contract::projection::{
+    SELECTED_OWNER_FEE_BOOK_MAGIC_V1, SELECTED_OWNER_FEE_BOOK_V1_BYTES,
 };
 use clutch_fee_runtime_contract::terminal::{
     OWNER_FEE_FINALIZATION_BODY_V2_BYTES, OWNER_FEE_FINALIZATION_MAGIC_V2,
@@ -22,7 +26,7 @@ use clutch_fee_runtime_contract::terminal::{
 
 use crate::{
     CodecError, DeletableRentOwnerV1, Id32, Sha256BackendV1,
-    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4,
+    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
 };
 
 /// Data-ID domain for the rent-owned fee-account transition.
@@ -34,6 +38,9 @@ pub const FEE_RUNTIME_SEMANTIC_RELEASE_DOMAIN_V1: &[u8] =
 /// Full-outer data-ID domain for the exact rent-owned terminal carry account.
 pub const OWNER_FEE_FINALIZATION_ACCOUNT_DATA_ID_DOMAIN_V4: &[u8] =
     b"dragons-clutch/owner-fee-finalization-account-data/v4\0";
+/// Full-outer data-ID domain for the certified recipient-allocation account.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/certified-recipient-allocation-account-data/v2\0";
 
 /// Hash the exact hostile-byte-authenticated 548-byte 0x83/v4 outer account.
 pub fn owner_fee_finalization_account_data_id_v4<B: Sha256BackendV1>(
@@ -45,6 +52,20 @@ pub fn owner_fee_finalization_account_data_id_v4<B: Sha256BackendV1>(
     }
     Id32::new(backend.sha256(&[
         OWNER_FEE_FINALIZATION_ACCOUNT_DATA_ID_DOMAIN_V4,
+        bytes,
+    ]))
+}
+
+/// Hash the exact hostile-byte-authenticated 2,764-byte 0x85/v2 outer account.
+pub fn recipient_allocation_account_data_id_v2<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[
+        RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2,
         bytes,
     ]))
 }
@@ -69,6 +90,12 @@ pub fn fee_runtime_semantic_release_id_v1<B: Sha256BackendV1>(
     let recipient_bytes = u64::try_from(RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES)
         .map_err(|_| CodecError::ArithmeticOverflow)?
         .to_le_bytes();
+    let certified_recipient_bytes = u64::try_from(CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let owner_fee_book_bytes = u64::try_from(SELECTED_OWNER_FEE_BOOK_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
     let terminal_version = OWNER_FEE_FINALIZATION_VERSION_V2.to_le_bytes();
     let terminal_bytes = u64::try_from(OWNER_FEE_FINALIZATION_BODY_V2_BYTES)
         .map_err(|_| CodecError::ArithmeticOverflow)?
@@ -83,6 +110,9 @@ pub fn fee_runtime_semantic_release_id_v1<B: Sha256BackendV1>(
         &payer_bytes,
         &RECIPIENT_ALLOCATION_MAGIC_V1,
         &recipient_bytes,
+        &certified_recipient_bytes,
+        &SELECTED_OWNER_FEE_BOOK_MAGIC_V1,
+        &owner_fee_book_bytes,
         &OWNER_FEE_FINALIZATION_MAGIC_V2,
         &terminal_version,
         &terminal_bytes,
