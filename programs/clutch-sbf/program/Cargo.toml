@@ -73,6 +73,9 @@ profile-general-source-v2-point = [
 # table rejects every legacy and incomplete Dealer action before accounts. It
 # must never be combined with another profile.
 profile-non-production-dealer-policy-catalog-lab = [
+    "dep:clutch-fee-runtime-contract",
+    "dep:clutch-general-v2-runtime",
+    "clutch-general-v2-runtime/layout-profile-general",
     "profile-full",
 ]
 # A deliberately non-production product whose only successes are the twelve

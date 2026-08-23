@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     DealerActionLivenessAuthorizationV1, DealerAssetTransferAmountsV1, DealerAssetTransferBundleV1,
-    DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
+    DealerEpochBindingV2, DealerFacilityReplayV1,
     CoveredDealerSelectionV1, DealerFundedDependenciesV2, DealerLeaseSelectionEvidenceV3,
     DealerLeaseV2,
     DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV1,
@@ -116,7 +116,6 @@ pub fn dealer_pot_creation_intent_id_v1(
 /// Admit one authenticated selected Lease/Pot and move the exact Begin deposit.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_begin_lease_pot_v3<S: DealerLeasePotSelectionV3>(
-    genesis: &DealerFacilityGenesisV1,
     policy: &DealerPolicyV1,
     binding: &FacilityPositionBindingV2,
     state: &DealerStateV2,
@@ -138,8 +137,8 @@ pub fn prepare_begin_lease_pot_v3<S: DealerLeasePotSelectionV3>(
     current_slot: u64,
 ) -> Result<PreparedDealerBeginLeaseV3> {
     state.validate_against_policy(policy)?;
-    let binding_id = binding.binding_id_for(genesis, policy)?;
-    dependency.validate_bindings_v3(genesis, binding, policy, schedule, runtime)?;
+    let binding_id = binding.binding_id()?;
+    dependency.validate_live_bindings_v4(binding, policy, schedule, runtime)?;
     select_begin.validate_against(schedule, runtime)?;
     selected_fee.validate()?;
     epoch.validate()?;
@@ -286,12 +285,12 @@ pub fn prepare_begin_lease_pot_v3<S: DealerLeasePotSelectionV3>(
 ///
 /// The permissionless actor may front account creation, but every refundable
 /// rent principal remains owned by the original Candidate-compartment funding
-/// payer. The prepaid action ceiling must cover all three exact principals;
+/// payer. The prepaid action ceiling must cover the receipt, selection, Lease,
+/// and Pot principals;
 /// adapters must additionally require the successful keeper payment to cover
 /// the same sum before applying account creation.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_begin_covered_lease_pot_v4(
-    genesis: &DealerFacilityGenesisV1,
     policy: &DealerPolicyV1,
     binding: &FacilityPositionBindingV2,
     state: &DealerStateV2,
@@ -300,6 +299,7 @@ pub fn prepare_begin_covered_lease_pot_v4(
     epoch: &DealerEpochBindingV2,
     settlement_root: &SettlementRootV1AccountV1,
     selection: &CoveredDealerSelectionV1,
+    action_receipt_rent: crate::DeletableRentOwnerV1,
     lease: &DealerLeaseV2,
     pot_account_id: Id,
     pot: &SettlementPotV2,
@@ -318,8 +318,10 @@ pub fn prepare_begin_covered_lease_pot_v4(
         || selection.created_slot != current_slot
         || selection.rent.payer
             != runtime.payer(crate::DealerLivenessCompartmentV1::Candidate)
+        || action_receipt_rent.payer != selection.rent.payer
         || lease.rent.payer != selection.rent.payer
         || pot.rent.payer != selection.rent.payer
+        || action_receipt_rent.neutral_sink != policy.neutral_sink
         || lease.rent.neutral_sink != policy.neutral_sink
         || pot.rent.neutral_sink != policy.neutral_sink
     {
@@ -328,7 +330,8 @@ pub fn prepare_begin_covered_lease_pot_v4(
     let rent_principal = selection
         .rent
         .refundable_principal
-        .checked_add(lease.rent.refundable_principal)
+        .checked_add(action_receipt_rent.refundable_principal)
+        .and_then(|value| value.checked_add(lease.rent.refundable_principal))
         .and_then(|value| value.checked_add(pot.rent.refundable_principal))
         .ok_or(Error::ArithmeticOverflow)?;
     if rent_principal > select_begin.call_ceiling_lamports {
@@ -338,7 +341,6 @@ pub fn prepare_begin_covered_lease_pot_v4(
         .admit_dealer_child()
         .map_err(|_| Error::MismatchedBinding)?;
     let dealer = prepare_begin_lease_pot_v3(
-        genesis,
         policy,
         binding,
         state,

@@ -1509,7 +1509,11 @@ impl<'a> PreparedBuilderContextV1<'a> {
     }
 }
 
-pub(crate) fn project_owner_blind_slot(
+/// Project one hostile-decoded canonical OrderPage slot into the sole
+/// owner-blind RelationV2 row shape. Adapters must authenticate the containing
+/// page/PDA/digest before calling this helper; the returned membership remains
+/// an exact projection of the same slot, not a caller-authored row DTO.
+pub fn project_owner_blind_slot(
     slot: OrderSlot,
     domain: &EconomicDomainV2,
 ) -> Result<Option<(EconomicOrderV2, FrozenOrderMembershipV1)>, CandidateBuilderErrorV1> {

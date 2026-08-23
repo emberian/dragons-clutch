@@ -463,6 +463,8 @@ impl DealerRuntimePayloadV1 {
 /// Runtime owner or sysvar class required for one ordered account role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerMetaOwnerV1 {
+    /// Arbitrary non-executable read-only data, authenticated by signed bytes.
+    AnyReadOnly,
     /// The deployed Dragon's Clutch program.
     SelfProgram,
     /// Canonical shared PositionV3/Replay owner authenticated by its adapter.
@@ -479,6 +481,8 @@ pub enum DealerMetaOwnerV1 {
     ClockSysvar,
     /// Rent sysvar at its exact well-known address.
     RentSysvar,
+    /// Instructions sysvar at its exact well-known address.
+    InstructionsSysvar,
     /// Signer identity with no data-owner requirement.
     Signer,
 }
@@ -554,12 +558,40 @@ pub enum DealerMetaRoleV1 {
     SelectedCandidate,
     /// Selected sealed General feed that owns candidate and settlement witness bytes.
     SelectedFeed,
+    /// Counted General SettlementRoot selected-candidate owner.
+    SettlementRoot,
+    /// Immutable General MarketBinding V2.
+    MarketBinding,
+    /// Signed immutable CoveredDealer quote admission bytes.
+    QuoteAdmission,
+    /// Instructions sysvar proving the immediately preceding Ed25519 signature.
+    InstructionsSysvar,
+    /// Realm-selected scalar price grid.
+    PriceGrid,
+    /// Full-width Product MarketInstance V2 artifact.
+    MarketInstance,
+    /// Product template artifact owning the exact basis identity.
+    ProductTemplate,
+    /// Native claim-basis artifact.
+    NativeBasis,
+    /// Market genesis artifact owning coordinate bounds and policy identities.
+    MarketGenesis,
+    /// Immutable batch-policy body selected by MarketBinding V2.
+    BatchPolicy,
+    /// Immutable revenue-policy record selected by the fee record.
+    RevenuePolicy,
+    /// Realm-owned record binding the revenue-policy digest and treasury.
+    RevenuePolicyRecord,
     /// Selected owner-netted fee record.
     FeeRecord,
     /// Authenticated canonical EconomicDomainV2.
     EconomicDomain,
     /// Immutable quantized price-measure policy artifact.
     PriceMeasurePolicy,
+    /// Newly materialized counted CoveredDealer selection certificate.
+    CoveredSelection,
+    /// Canonical frozen General OrderPage V5.
+    OrderPage,
     /// Sole refundable-rent recipient.
     RentPayer,
     /// Present-funding/rent recipient retained by one liveness compartment.
@@ -787,6 +819,7 @@ const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
+const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 40;
 const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -795,18 +828,43 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, true),
-    meta(DealerMetaRoleV1::GeneralEpoch, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
-    meta(DealerMetaRoleV1::EconomicDomain, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
-    meta(DealerMetaRoleV1::SelectedCandidate, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
-    meta(DealerMetaRoleV1::SelectedFeed, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
-    meta(DealerMetaRoleV1::FeeRecord, DealerMetaOwnerV1::FeeRuntime, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::SettlementRoot, DealerMetaOwnerV1::GeneralV2Runtime, false, true),
+    meta(DealerMetaRoleV1::SelectedFeed, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::EconomicDomain, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::MarketBinding, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::QuoteAdmission, DealerMetaOwnerV1::AnyReadOnly, false, false),
+    meta(DealerMetaRoleV1::InstructionsSysvar, DealerMetaOwnerV1::InstructionsSysvar, false, false),
+    meta(DealerMetaRoleV1::PriceGrid, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::MarketInstance, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::ProductTemplate, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::NativeBasis, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::PriceMeasurePolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::MarketGenesis, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::BatchPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::RevenuePolicy, DealerMetaOwnerV1::AnyReadOnly, false, false),
+    meta(DealerMetaRoleV1::RevenuePolicyRecord, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::FeeRecord, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CoveredSelection, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::Lease, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::SettlementPot, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
 
 const CANCEL_FUNDING: &[DealerMetaSpecV1] = &[
@@ -1073,7 +1131,10 @@ pub fn meta_contract_v1(
         DealerFacilityAction::RefundCancelledSponsor => Some(REFUND_SPONSOR),
         DealerFacilityAction::BindEpoch => Some(BIND_EPOCH),
         DealerFacilityAction::LapseEpoch => Some(LAPSE_EPOCH),
-        DealerFacilityAction::SelectLeaseAndBegin => Some(SELECT_LEASE_BEGIN),
+        DealerFacilityAction::SelectLeaseAndBegin => Some(
+            &SELECT_LEASE_BEGIN
+                [..SELECT_LEASE_BEGIN_FIXED_COUNT + usize::from(payload.book_page_count)],
+        ),
         DealerFacilityAction::SponsorHalt => Some(SPONSOR_HALT),
         DealerFacilityAction::TimedClose => Some(TIMED_CLOSE),
         DealerFacilityAction::QueueExit

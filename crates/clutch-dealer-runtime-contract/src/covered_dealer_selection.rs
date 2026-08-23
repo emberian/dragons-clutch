@@ -243,6 +243,7 @@ pub struct CoveredDealerSelectionV1 {
     /// Counted Dealer Epoch-binding account.
     pub epoch_binding_account_id: Id,
     /// Counted General SettlementRoot account.
+    pub settlement_root_account_id: Id,
     /// Retained General Feed account.
     pub retained_feed_account_id: Id,
     /// Frozen General order-set identity.
