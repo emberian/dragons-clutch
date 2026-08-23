@@ -155,7 +155,7 @@ impl IndexedSettlementRootRentModeV1 {
 }
 
 /// Exact root-account rent/allocation preparation consumed by index creation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct IndexedSettlementRootRentPreparationV1 {
     mode: IndexedSettlementRootRentModeV1,
     root_account: Id32,
@@ -240,7 +240,7 @@ impl IndexedSettlementRootRentPreparationV1 {
     /// Authenticate the exact borrowed source Root and mint one noncopyable
     /// authority for compact indexed-root construction.
     pub fn authenticate_source<'a, B: Sha256BackendV1>(
-        &'a self,
+        self,
         base_before: &'a SettlementRootV1AccountV1,
         backend: &B,
     ) -> Result<AuthenticatedIndexedSettlementRootRentV1<'a>, CodecError> {
@@ -260,7 +260,7 @@ impl IndexedSettlementRootRentPreparationV1 {
 /// the exact borrowed source Root used by index construction.
 #[derive(Debug)]
 pub struct AuthenticatedIndexedSettlementRootRentV1<'a> {
-    preparation: &'a IndexedSettlementRootRentPreparationV1,
+    preparation: IndexedSettlementRootRentPreparationV1,
     base_before: &'a SettlementRootV1AccountV1,
     _private: (),
 }
@@ -357,7 +357,7 @@ const _: () = assert!(
     core::mem::size_of::<IndexedSettlementRootRentPreparationV1>() <= 320
 );
 const _: () = assert!(
-    core::mem::size_of::<AuthenticatedIndexedSettlementRootRentV1<'static>>() <= 24
+    core::mem::size_of::<AuthenticatedIndexedSettlementRootRentV1<'static>>() <= 352
 );
 
 /// Prepare a direct 1,196-byte allocation without a prefund discount.
@@ -1541,8 +1541,18 @@ mod tests {
             expected.data_id(&Sha2Backend, root_account).unwrap(),
         );
 
+        let wrong_preparation = prepare_indexed_settlement_root_upgrade_rent_v1(
+            &base_before,
+            root_account,
+            110,
+            150,
+            50,
+            id(27),
+            &Sha2Backend,
+        )
+        .unwrap();
         assert!(matches!(
-            preparation.authenticate_source(&base_after, &Sha2Backend),
+            wrong_preparation.authenticate_source(&base_after, &Sha2Backend),
             Err(CodecError::MismatchedBinding),
         ));
     }

@@ -44,10 +44,10 @@ The current upstream traversal implementation still materializes large
 fixed-capacity settlement facts before boxing them. Promotion therefore
 requires the pending streaming or heap-initialized traversal authority; merely
 keeping the compact index itself below the SBF frame limit is insufficient.
-The compact rent preparation persists only source/poststate IDs, the updated
+The compact noncopyable rent preparation persists only source/poststate IDs, the updated
 rent compartment, balances, and its exact projector transcript; it does not
-carry two 980-byte Root values. It authenticates one borrowed source Root and
-mints a noncopyable authority consumed by the pure builder. The builder borrows
+carry two 980-byte Root values. Authentication consumes the preparation, joins
+one borrowed source Root, and mints a noncopyable authority consumed by the pure builder. The builder borrows
 its construction input, streams the 1,196-byte indexed root directly into
 caller-owned account memory, and hashes that encoded buffer without constructing
 an indexed-root value or a second base scratch array. Upgrade preparation and
