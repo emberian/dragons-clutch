@@ -542,8 +542,12 @@ impl DirectRootPhaseV1 {
 /// Exhaustive economic terminal reason.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectTerminalReasonV1 {
+    /// The open root was never frozen before candidate submission closed.
+    MissedFreezeLapse,
     /// No complete pair existed when the prefix froze.
     EmptyLapse,
+    /// Action 8 finalized an exhaustive empty candidate traversal as no-trade.
+    NoCandidate,
     /// Candidate work did not select before its deadline.
     UnselectedLapse,
     /// Selected authority expired before settlement.
@@ -560,6 +564,8 @@ impl DirectTerminalReasonV1 {
             Self::UnselectedLapse => 2,
             Self::SelectedLapse => 3,
             Self::Settled => 4,
+            Self::MissedFreezeLapse => 5,
+            Self::NoCandidate => 6,
         }
     }
 }
@@ -575,6 +581,8 @@ pub struct DirectMarketRootV1 {
     admitted_reservations: u8,
     live_reservations: u8,
     retired_reservations: u8,
+    reservation_accounts: [[u8; 32]; 2],
+    reservation_semantic_ids: [[u8; 32]; 2],
     selection_account: [u8; 32],
 }
 
@@ -595,6 +603,25 @@ impl DirectMarketRootV1 {
     pub const fn live_reservations(self) -> u8 { self.live_reservations }
     /// Reservation archives already retired by cancellation.
     pub const fn retired_reservations(self) -> u8 { self.retired_reservations }
+    /// Exact active Reservation account at one compact root coordinate.
+    pub fn reservation_account(self, index: u8) -> Result<[u8; 32], DirectMarketErrorV1> {
+        let at = usize::from(index);
+        if at >= usize::from(self.live_reservations) {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        Ok(self.reservation_accounts[at])
+    }
+    /// Exact active Reservation semantic ID at one compact root coordinate.
+    pub fn reservation_semantic_id(
+        self,
+        index: u8,
+    ) -> Result<[u8; 32], DirectMarketErrorV1> {
+        let at = usize::from(index);
+        if at >= usize::from(self.live_reservations) {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        Ok(self.reservation_semantic_ids[at])
+    }
     /// Canonical Selection account, zero before freeze.
     pub const fn selection_account(self) -> [u8; 32] { self.selection_account }
 
@@ -610,6 +637,23 @@ impl DirectMarketRootV1 {
                 != Some(self.admitted_reservations)
         {
             return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        let mut index = 0usize;
+        while index < 2 {
+            if index < usize::from(self.live_reservations) {
+                require_fresh_child_account(self.binding, self.reservation_accounts[index])?;
+                require_live(self.reservation_semantic_ids[index])?;
+                if index != 0
+                    && self.reservation_accounts[index - 1] == self.reservation_accounts[index]
+                {
+                    return Err(DirectMarketErrorV1::IdentityAlias);
+                }
+            } else if self.reservation_accounts[index] != [0; 32]
+                || self.reservation_semantic_ids[index] != [0; 32]
+            {
+                return Err(DirectMarketErrorV1::InvalidCount);
+            }
+            index += 1;
         }
         match self.phase {
             DirectRootPhaseV1::Open => {
@@ -664,7 +708,10 @@ impl DirectMarketRootV1 {
             &self.root_rent.payer, &self.root_rent.principal_lamports.to_le_bytes(),
             &self.root_rent.donation_floor_lamports.to_le_bytes(),
             &[self.phase.byte()], &[terminal], &[self.admitted_reservations],
-            &[self.live_reservations], &[self.retired_reservations], &self.selection_account,
+            &[self.live_reservations], &[self.retired_reservations],
+            &self.reservation_accounts[0], &self.reservation_accounts[1],
+            &self.reservation_semantic_ids[0], &self.reservation_semantic_ids[1],
+            &self.selection_account,
         ]);
         require_live(id)?;
         Ok(id)
@@ -877,17 +924,19 @@ pub struct DirectRootReplayPostV1 {
 
 impl DirectRootReplayPostV1 {
     /// Admit one funded Reservation archive.
-    pub fn admit_reservation<B: DirectHashBackendV1>(
+    pub(crate) fn admit_reservation<B: DirectHashBackendV1>(
         self,
         consumed_sequence: u64,
         observed_slot: u64,
         reservation_account: [u8; 32],
         reservation_poststate_id: [u8; 32],
+        admission_receipt_id: [u8; 32],
         backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
         self.replay.require_action(self.root, consumed_sequence)?;
         require_live(reservation_account)?;
         require_live(reservation_poststate_id)?;
+        require_live(admission_receipt_id)?;
         require_fresh_child_account(self.root.binding, reservation_account)?;
         if self.root.phase != DirectRootPhaseV1::Open
             || observed_slot < self.root.schedule.admission_opens_slot
@@ -898,13 +947,16 @@ impl DirectRootReplayPostV1 {
         }
         let root_pre_id = self.root.semantic_id(backend)?;
         let mut root = self.root;
+        let at = usize::from(root.live_reservations);
+        root.reservation_accounts[at] = reservation_account;
+        root.reservation_semantic_ids[at] = reservation_poststate_id;
         root.admitted_reservations = root.admitted_reservations.checked_add(1)
             .ok_or(DirectMarketErrorV1::Arithmetic)?;
         root.live_reservations = root.live_reservations.checked_add(1)
             .ok_or(DirectMarketErrorV1::Arithmetic)?;
         let root_post_id = root.semantic_id(backend)?;
         let replay = self.replay.advance(root_pre_id, root_post_id,
-            DirectMarketActionV1::AdmitOrder, observed_slot, reservation_poststate_id, backend)?;
+            DirectMarketActionV1::AdmitOrder, observed_slot, admission_receipt_id, backend)?;
         replay.validate_against(root)?;
         Ok(Self { root, replay })
     }
@@ -913,14 +965,18 @@ impl DirectRootReplayPostV1 {
     ///
     /// `reservation_retirement_id` binds Reservation terminal state, exact
     /// principal refund, and all surplus to the neutral sink.
-    pub fn cancel_reservation<B: DirectHashBackendV1>(
+    pub(crate) fn cancel_reservation<B: DirectHashBackendV1>(
         self,
         consumed_sequence: u64,
         observed_slot: u64,
+        reservation_account: [u8; 32],
+        reservation_prestate_id: [u8; 32],
         reservation_retirement_id: [u8; 32],
         backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
         self.replay.require_action(self.root, consumed_sequence)?;
+        require_live(reservation_account)?;
+        require_live(reservation_prestate_id)?;
         require_live(reservation_retirement_id)?;
         if self.root.phase != DirectRootPhaseV1::Open
             || observed_slot < self.root.schedule.admission_opens_slot
@@ -931,6 +987,25 @@ impl DirectRootReplayPostV1 {
         }
         let root_pre_id = self.root.semantic_id(backend)?;
         let mut root = self.root;
+        let mut found = None;
+        let mut index = 0usize;
+        while index < usize::from(root.live_reservations) {
+            if root.reservation_accounts[index] == reservation_account
+                && root.reservation_semantic_ids[index] == reservation_prestate_id
+            {
+                found = Some(index);
+                break;
+            }
+            index += 1;
+        }
+        let at = found.ok_or(DirectMarketErrorV1::MismatchedBinding)?;
+        let last = usize::from(root.live_reservations)
+            .checked_sub(1)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        root.reservation_accounts[at] = root.reservation_accounts[last];
+        root.reservation_semantic_ids[at] = root.reservation_semantic_ids[last];
+        root.reservation_accounts[last] = [0; 32];
+        root.reservation_semantic_ids[last] = [0; 32];
         root.live_reservations = root.live_reservations.checked_sub(1)
             .ok_or(DirectMarketErrorV1::Arithmetic)?;
         root.retired_reservations = root.retired_reservations.checked_add(1)
@@ -943,7 +1018,7 @@ impl DirectRootReplayPostV1 {
     }
 
     /// Freeze the exhaustive zero-, one-, or two-Reservation prefix.
-    pub fn freeze<B: DirectHashBackendV1>(
+    pub(crate) fn freeze<B: DirectHashBackendV1>(
         self,
         consumed_sequence: u64,
         observed_slot: u64,
@@ -975,7 +1050,7 @@ impl DirectRootReplayPostV1 {
     }
 
     /// Record one bounded candidate admission owned by Selection.
-    pub fn record_submission<B: DirectHashBackendV1>(
+    pub(crate) fn record_submission<B: DirectHashBackendV1>(
         self, consumed_sequence: u64, observed_slot: u64,
         selection_poststate_id: [u8; 32], backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
@@ -984,7 +1059,7 @@ impl DirectRootReplayPostV1 {
     }
 
     /// Begin exhaustive retained-candidate traversal.
-    pub fn begin_verification<B: DirectHashBackendV1>(
+    pub(crate) fn begin_verification<B: DirectHashBackendV1>(
         self, consumed_sequence: u64, observed_slot: u64,
         selection_poststate_id: [u8; 32], backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
@@ -994,7 +1069,7 @@ impl DirectRootReplayPostV1 {
     }
 
     /// Record the next canonical retained-candidate verification coordinate.
-    pub fn record_verification<B: DirectHashBackendV1>(
+    pub(crate) fn record_verification<B: DirectHashBackendV1>(
         self, consumed_sequence: u64, observed_slot: u64,
         selection_poststate_id: [u8; 32], backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
@@ -1003,7 +1078,7 @@ impl DirectRootReplayPostV1 {
     }
 
     /// Commit the exact complete selected traversal.
-    pub fn select<B: DirectHashBackendV1>(
+    pub(crate) fn select<B: DirectHashBackendV1>(
         self, consumed_sequence: u64, observed_slot: u64,
         selected_traversal_id: [u8; 32], backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
@@ -1013,30 +1088,65 @@ impl DirectRootReplayPostV1 {
     }
 
     /// Commit one exact economic terminal transition.
-    pub fn terminalize<B: DirectHashBackendV1>(
+    pub(crate) fn terminalize<B: DirectHashBackendV1>(
         self,
         consumed_sequence: u64,
         observed_slot: u64,
         reason: DirectTerminalReasonV1,
+        terminal_selection_account: [u8; 32],
         economic_terminal_receipt_id: [u8; 32],
         backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
         self.replay.require_action(self.root, consumed_sequence)?;
         require_live(economic_terminal_receipt_id)?;
-        let (expected, action) = match reason {
+        require_live(terminal_selection_account)?;
+        let action = match reason {
+            DirectTerminalReasonV1::MissedFreezeLapse => DirectMarketActionV1::LapseEmpty,
             DirectTerminalReasonV1::EmptyLapse =>
-                (DirectRootPhaseV1::FrozenEmpty, DirectMarketActionV1::LapseEmpty),
+                DirectMarketActionV1::LapseEmpty,
+            DirectTerminalReasonV1::NoCandidate => DirectMarketActionV1::FinalizeSelection,
             DirectTerminalReasonV1::UnselectedLapse =>
-                (DirectRootPhaseV1::Verifying, DirectMarketActionV1::LapseUnselected),
+                DirectMarketActionV1::LapseUnselected,
             DirectTerminalReasonV1::SelectedLapse =>
-                (DirectRootPhaseV1::Selected, DirectMarketActionV1::LapseSelected),
+                DirectMarketActionV1::LapseSelected,
             DirectTerminalReasonV1::Settled =>
-                (DirectRootPhaseV1::Selected, DirectMarketActionV1::SettlePair),
+                DirectMarketActionV1::SettlePair,
         };
-        if self.root.phase != expected { return Err(DirectMarketErrorV1::WrongPhase); }
+        let valid_phase = match reason {
+            DirectTerminalReasonV1::MissedFreezeLapse => {
+                self.root.phase == DirectRootPhaseV1::Open
+                    && self.root.selection_account == [0; 32]
+            }
+            DirectTerminalReasonV1::EmptyLapse => {
+                self.root.phase == DirectRootPhaseV1::FrozenEmpty
+            }
+            DirectTerminalReasonV1::NoCandidate => {
+                self.root.phase == DirectRootPhaseV1::Verifying
+            }
+            DirectTerminalReasonV1::UnselectedLapse => matches!(
+                self.root.phase,
+                DirectRootPhaseV1::SubmissionOpen | DirectRootPhaseV1::Verifying
+            ),
+            DirectTerminalReasonV1::SelectedLapse | DirectTerminalReasonV1::Settled => {
+                self.root.phase == DirectRootPhaseV1::Selected
+            }
+        };
+        if !valid_phase { return Err(DirectMarketErrorV1::WrongPhase); }
+        if reason != DirectTerminalReasonV1::MissedFreezeLapse
+            && terminal_selection_account != self.root.selection_account
+        {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
         let valid_slot = match reason {
+            DirectTerminalReasonV1::MissedFreezeLapse => {
+                observed_slot >= self.root.schedule.submission_closes_slot
+            }
             DirectTerminalReasonV1::EmptyLapse => {
                 observed_slot >= self.root.schedule.admission_closes_slot
+            }
+            DirectTerminalReasonV1::NoCandidate => {
+                observed_slot >= self.root.schedule.submission_closes_slot
+                    && observed_slot < self.root.schedule.selection_deadline_slot
             }
             DirectTerminalReasonV1::UnselectedLapse => {
                 observed_slot >= self.root.schedule.selection_deadline_slot
@@ -1052,6 +1162,7 @@ impl DirectRootReplayPostV1 {
         if !valid_slot { return Err(DirectMarketErrorV1::WrongPhase); }
         let root_pre_id = self.root.semantic_id(backend)?;
         let mut root = self.root;
+        root.selection_account = terminal_selection_account;
         root.phase = DirectRootPhaseV1::Terminal;
         root.terminal_reason = Some(reason);
         let root_post_id = root.semantic_id(backend)?;
@@ -1264,7 +1375,8 @@ pub fn prepare_direct_foundation_v1<
     let root = DirectMarketRootV1 {
         binding, schedule, root_rent, phase: DirectRootPhaseV1::Open,
         terminal_reason: None, admitted_reservations: 0, live_reservations: 0,
-        retired_reservations: 0, selection_account: [0; 32],
+        retired_reservations: 0, reservation_accounts: [[0; 32]; 2],
+        reservation_semantic_ids: [[0; 32]; 2], selection_account: [0; 32],
     };
     let replay = DirectActionReplayV1 {
         market_instance_id: binding.market_instance_id, generation: binding.generation,
@@ -1529,7 +1641,9 @@ fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
         Some(DirectTerminalReasonV1::Settled) => {
             crate::reservation_v1::DirectReservationPhaseV1::Settled
         }
-        Some(DirectTerminalReasonV1::EmptyLapse)
+        Some(DirectTerminalReasonV1::MissedFreezeLapse)
+        | Some(DirectTerminalReasonV1::EmptyLapse)
+        | Some(DirectTerminalReasonV1::NoCandidate)
         | Some(DirectTerminalReasonV1::UnselectedLapse)
         | Some(DirectTerminalReasonV1::SelectedLapse) => {
             crate::reservation_v1::DirectReservationPhaseV1::Lapsed

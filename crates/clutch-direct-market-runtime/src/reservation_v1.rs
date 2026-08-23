@@ -46,6 +46,7 @@ pub trait AuthenticatedDirectReservationAdmissionV1 {
         &self,
         _root: DirectMarketRootV1,
         _position: AuthenticatedPositionV3,
+        _existing_peer: Option<DirectReservationV1>,
         _reservation_account: [u8; 32],
         _order_id: [u8; 32],
         _side: Side,
@@ -139,6 +140,7 @@ impl DirectReservationV1 {
         self.rent.validate()?;
         if self.generation == 0
             || self.position_generation == 0
+            || self.expiry_epoch < self.generation
             || !(2..=MAX_OUTCOMES).contains(&usize::from(self.outcome_count))
             || usize::from(self.outcome) >= usize::from(self.outcome_count)
             || self.quantity == 0
@@ -281,10 +283,12 @@ pub struct DirectReservationAdmissionPlanV1 {
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_direct_reservation_admission_v1<
     A: AuthenticatedDirectReservationAdmissionV1 + ?Sized,
+    B: DirectHashBackendV1,
 >(
     authority: &A,
     root: DirectMarketRootV1,
     position: AuthenticatedPositionV3,
+    existing_peer: Option<DirectReservationV1>,
     reservation_account: [u8; 32],
     order_id: [u8; 32],
     side: Side,
@@ -295,6 +299,7 @@ pub fn prepare_direct_reservation_admission_v1<
     expiry_epoch: u64,
     limit_price_units_per_egg: u128,
     rent: DirectRentOwnerV1,
+    backend: &B,
 ) -> Result<DirectReservationAdmissionPlanV1, DirectMarketErrorV1> {
     root.validate()?;
     position
@@ -322,11 +327,30 @@ pub fn prepare_direct_reservation_admission_v1<
         || fields.replay_account.bytes() == reservation_account
         || fields.outcome_count != binding.outcome_count
         || usize::from(outcome) >= usize::from(binding.outcome_count)
+        || expiry_epoch < binding.generation
         || quantity == 0
         || minimum_fill > quantity
         || (partial_policy == PartialPolicy::AllOrNone && minimum_fill != quantity)
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    match (root.live_reservations(), existing_peer) {
+        (0, None) => {}
+        (1, Some(peer)) => {
+            peer.validate_against_root(root)?;
+            let peer_id = peer.semantic_id(backend)?;
+            if peer.phase() != DirectReservationPhaseV1::Active
+                || peer.account() != root.reservation_account(0)?
+                || peer_id != root.reservation_semantic_id(0)?
+                || peer.account() == reservation_account
+                || peer.order_id() == order_id
+                || peer.side() == side
+                || peer.outcome() != outcome
+            {
+                return Err(DirectMarketErrorV1::MismatchedBinding);
+            }
+        }
+        _ => return Err(DirectMarketErrorV1::MismatchedBinding),
     }
     let reserved_cash_atoms = match side {
         Side::Buy => exact_cash_atoms(quantity, limit_price_units_per_egg, binding.price_scale)?,
@@ -336,6 +360,7 @@ pub fn prepare_direct_reservation_admission_v1<
     authority.authenticate_admission(
         &root,
         position,
+        existing_peer,
         reservation_account,
         order_id,
         side,

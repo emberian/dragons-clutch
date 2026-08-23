@@ -17,7 +17,10 @@ use crate::reservation_v1::{
     prepare_direct_reservation_admission_v1, AuthenticatedDirectReservationAdmissionV1,
     DirectReservationPhaseV1, DirectReservationV1,
 };
-use crate::selection_v1::{DirectSelectionPhaseV1, DirectSelectionV1};
+use crate::selection_v1::{
+    build_direct_selection_v1, AuthenticatedDirectSelectionFreezeV1,
+    DirectSelectionPhaseV1, DirectSelectionV1,
+};
 use crate::{
     require_live, DirectHashBackendV1, DirectMarketErrorV1, DirectPrincipalRefundV1,
     DirectRentOwnerV1,
@@ -100,6 +103,7 @@ pub fn prepare_direct_reservation_admission_with_replay_v1<
     authority: &A,
     state: DirectRootReplayPostV1,
     position_replay: GeneralPositionReplayPrestateV1,
+    existing_peer: Option<DirectReservationV1>,
     consumed_sequence: u64,
     observed_slot: u64,
     order: DirectReservationOrderInputV1,
@@ -110,6 +114,7 @@ pub fn prepare_direct_reservation_admission_with_replay_v1<
         authority,
         state.root,
         position_replay.position(),
+        existing_peer,
         order.reservation_account,
         order.order_id,
         order.side,
@@ -120,6 +125,7 @@ pub fn prepare_direct_reservation_admission_with_replay_v1<
         order.expiry_epoch,
         order.limit_price_units_per_egg,
         order.rent,
+        backend,
     )?;
     require_position_replay_binding(admission.reservation, position_replay)?;
     let reservation_id = admission.reservation.semantic_id(backend)?;
@@ -162,6 +168,7 @@ pub fn prepare_direct_reservation_admission_with_replay_v1<
         consumed_sequence,
         observed_slot,
         admission.reservation.account(),
+        reservation_id,
         admission_receipt_id,
         backend,
     )?;
@@ -305,6 +312,8 @@ pub fn prepare_direct_reservation_cancel_v1<
     let state = state.cancel_reservation(
         consumed_sequence,
         observed_slot,
+        reservation.account(),
+        reservation_pre_id,
         retirement_receipt_id,
         backend,
     )?;
@@ -382,8 +391,85 @@ pub fn prepare_direct_economic_terminal_v1<
     observed_slot: u64,
     backend: &B,
 ) -> Result<DirectEconomicTerminalPlanV1, DirectMarketErrorV1> {
+    prepare_direct_economic_terminal_from_projection_v1(
+        authority,
+        state,
+        state.root,
+        selection,
+        endpoints,
+        reason,
+        consumed_sequence,
+        observed_slot,
+        backend,
+    )
+}
+
+/// Atomically create the canonical Selection and lapse an open root which
+/// missed the submission-close freeze boundary. Reservation and endpoint
+/// counts remain derived from the root-owned exact live prefix.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_direct_missed_freeze_terminal_v1<
+    F: AuthenticatedDirectSelectionFreezeV1 + ?Sized,
+    A: AuthenticatedDirectEconomicTerminalV1 + ?Sized,
+    B: DirectSettlementHashBackendV1,
+>(
+    freeze_authority: &F,
+    terminal_authority: &A,
+    state: DirectRootReplayPostV1,
+    selection_account: [u8; 32],
+    selection_rent: DirectRentOwnerV1,
+    reservations: [Option<DirectReservationV1>; 2],
+    domain: clutch_batch::relation_v2::EconomicDomainV2,
+    price: clutch_batch::relation_v2::PricePreconditionV2,
+    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    consumed_sequence: u64,
+    observed_slot: u64,
+    backend: &B,
+) -> Result<DirectEconomicTerminalPlanV1, DirectMarketErrorV1> {
     state.replay.validate_against(state.root)?;
-    selection.validate_against(state.root)?;
+    if observed_slot < state.root.schedule().submission_closes_slot {
+        return Err(DirectMarketErrorV1::WrongPhase);
+    }
+    let (selection, selection_validation_root) = build_direct_selection_v1(
+        freeze_authority,
+        state.root,
+        selection_account,
+        selection_rent,
+        reservations,
+        domain,
+        price,
+        backend,
+    )?;
+    prepare_direct_economic_terminal_from_projection_v1(
+        terminal_authority,
+        state,
+        selection_validation_root,
+        selection,
+        endpoints,
+        DirectTerminalReasonV1::MissedFreezeLapse,
+        consumed_sequence,
+        observed_slot,
+        backend,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_direct_economic_terminal_from_projection_v1<
+    A: AuthenticatedDirectEconomicTerminalV1 + ?Sized,
+    B: DirectSettlementHashBackendV1,
+>(
+    authority: &A,
+    state: DirectRootReplayPostV1,
+    selection_validation_root: crate::DirectMarketRootV1,
+    selection: DirectSelectionV1,
+    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    reason: DirectTerminalReasonV1,
+    consumed_sequence: u64,
+    observed_slot: u64,
+    backend: &B,
+) -> Result<DirectEconomicTerminalPlanV1, DirectMarketErrorV1> {
+    state.replay.validate_against(state.root)?;
+    selection.validate_against(selection_validation_root)?;
     require_terminal_phase(selection, reason)?;
     let ordered = canonical_terminal_endpoints(selection, endpoints, backend)?;
     authority.authenticate_terminal(
@@ -395,7 +481,7 @@ pub fn prepare_direct_economic_terminal_v1<
         observed_slot,
     )?;
     let endpoint_count = selection.reservation_count();
-    let selection_pre_id = selection.semantic_id(state.root, backend)?;
+    let selection_pre_id = selection.semantic_id(selection_validation_root, backend)?;
     let mut reservation_pre_ids = [[0u8; 32]; 2];
     let mut position_pre_ids = [[0u8; 32]; 2];
     let mut replay_pre_ids = [[0u8; 32]; 2];
@@ -429,7 +515,7 @@ pub fn prepare_direct_economic_terminal_v1<
     ]);
     require_live(transition_id)?;
 
-    let root_post_projection = terminal_root_projection(state.root, reason);
+    let root_post_projection = terminal_root_projection(state.root, selection.account(), reason);
     let selection_post = selection.terminalize(root_post_projection, transition_id)?;
     let selection_post_id = selection_post.semantic_id(root_post_projection, backend)?;
     let mut projected = [None; 2];
@@ -460,7 +546,9 @@ pub fn prepare_direct_economic_terminal_v1<
             DirectTerminalReasonV1::Settled => EndpointEffectV1::Settle(
                 selection.selected_pair().ok_or(DirectMarketErrorV1::WrongPhase)?,
             ),
-            DirectTerminalReasonV1::EmptyLapse
+            DirectTerminalReasonV1::MissedFreezeLapse
+            | DirectTerminalReasonV1::EmptyLapse
+            | DirectTerminalReasonV1::NoCandidate
             | DirectTerminalReasonV1::UnselectedLapse
             | DirectTerminalReasonV1::SelectedLapse => EndpointEffectV1::Release,
         };
@@ -497,6 +585,7 @@ pub fn prepare_direct_economic_terminal_v1<
         consumed_sequence,
         observed_slot,
         reason,
+        selection.account(),
         economic_terminal_receipt_id,
         backend,
     )?;
@@ -749,11 +838,23 @@ fn require_terminal_phase(
     reason: DirectTerminalReasonV1,
 ) -> Result<(), DirectMarketErrorV1> {
     let correct = match reason {
+        DirectTerminalReasonV1::MissedFreezeLapse => matches!(
+            selection.phase(),
+            DirectSelectionPhaseV1::FrozenEmpty | DirectSelectionPhaseV1::SubmissionOpen
+        ),
         DirectTerminalReasonV1::EmptyLapse => {
             selection.phase() == DirectSelectionPhaseV1::FrozenEmpty
         }
-        DirectTerminalReasonV1::UnselectedLapse => {
+        DirectTerminalReasonV1::NoCandidate => {
             selection.phase() == DirectSelectionPhaseV1::Verifying
+                && selection.candidate_count() == 0
+                && selection.verification_cursor() == 0
+        }
+        DirectTerminalReasonV1::UnselectedLapse => {
+            matches!(
+                selection.phase(),
+                DirectSelectionPhaseV1::SubmissionOpen | DirectSelectionPhaseV1::Verifying
+            )
         }
         DirectTerminalReasonV1::SelectedLapse | DirectTerminalReasonV1::Settled => {
             selection.phase() == DirectSelectionPhaseV1::Selected
@@ -764,8 +865,10 @@ fn require_terminal_phase(
 
 fn terminal_root_projection(
     mut root: crate::DirectMarketRootV1,
+    selection_account: [u8; 32],
     reason: DirectTerminalReasonV1,
 ) -> crate::DirectMarketRootV1 {
+    root.selection_account = selection_account;
     root.phase = DirectRootPhaseV1::Terminal;
     root.terminal_reason = Some(reason);
     root
@@ -903,6 +1006,12 @@ const fn terminal_kind(
         (DirectTerminalReasonV1::Settled, Side::Sell) => {
             GeneralReplayTransitionKindV1::DirectMarketSettleSeller
         }
+        (DirectTerminalReasonV1::MissedFreezeLapse, Side::Buy) => {
+            GeneralReplayTransitionKindV1::DirectMarketLapseEmptyBuyer
+        }
+        (DirectTerminalReasonV1::MissedFreezeLapse, Side::Sell) => {
+            GeneralReplayTransitionKindV1::DirectMarketLapseEmptySeller
+        }
         (DirectTerminalReasonV1::EmptyLapse, Side::Buy) => {
             GeneralReplayTransitionKindV1::DirectMarketLapseEmptyBuyer
         }
@@ -912,7 +1021,13 @@ const fn terminal_kind(
         (DirectTerminalReasonV1::UnselectedLapse, Side::Buy) => {
             GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedBuyer
         }
+        (DirectTerminalReasonV1::NoCandidate, Side::Buy) => {
+            GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedBuyer
+        }
         (DirectTerminalReasonV1::UnselectedLapse, Side::Sell) => {
+            GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedSeller
+        }
+        (DirectTerminalReasonV1::NoCandidate, Side::Sell) => {
             GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedSeller
         }
         (DirectTerminalReasonV1::SelectedLapse, Side::Buy) => {

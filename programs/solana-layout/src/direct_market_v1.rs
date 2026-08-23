@@ -411,7 +411,7 @@ fn require_nonzero(value: &[u8]) -> Result<()> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 754);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 882);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
 const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 289);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 421);

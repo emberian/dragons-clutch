@@ -25,7 +25,7 @@ use crate::{
 };
 
 /// Exact semantic bytes inside the `0xb1/1` frame.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 754;
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 882;
 /// Exact semantic bytes inside the `0xb2/1` frame.
 pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_497;
 /// Exact semantic bytes inside the `0xb3/1` frame.
@@ -48,6 +48,10 @@ pub fn encode_direct_market_root_body_v1(
     writer.u8(value.admitted_reservations)?;
     writer.u8(value.live_reservations)?;
     writer.u8(value.retired_reservations)?;
+    writer.id(value.reservation_accounts[0])?;
+    writer.id(value.reservation_accounts[1])?;
+    writer.id(value.reservation_semantic_ids[0])?;
+    writer.id(value.reservation_semantic_ids[1])?;
     writer.id(value.selection_account)?;
     writer.finish()?;
     Ok(output)
@@ -67,6 +71,8 @@ pub fn decode_direct_market_root_body_v1(
         admitted_reservations: reader.u8()?,
         live_reservations: reader.u8()?,
         retired_reservations: reader.u8()?,
+        reservation_accounts: [reader.id()?, reader.id()?],
+        reservation_semantic_ids: [reader.id()?, reader.id()?],
         selection_account: reader.id()?,
     };
     reader.finish()?;
@@ -618,6 +624,8 @@ fn decode_terminal_reason(
         2 => Ok(Some(DirectTerminalReasonV1::UnselectedLapse)),
         3 => Ok(Some(DirectTerminalReasonV1::SelectedLapse)),
         4 => Ok(Some(DirectTerminalReasonV1::Settled)),
+        5 => Ok(Some(DirectTerminalReasonV1::MissedFreezeLapse)),
+        6 => Ok(Some(DirectTerminalReasonV1::NoCandidate)),
         _ => Err(DirectMarketErrorV1::WrongPhase),
     }
 }
@@ -738,10 +746,9 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 754);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 882);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
 const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 289);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 421);
 const _: () = assert!(core::mem::size_of::<[u8; 253]>() == 253);
 const _: EconomicOrderV2 = EMPTY_ECONOMIC_ORDER_V2;
-

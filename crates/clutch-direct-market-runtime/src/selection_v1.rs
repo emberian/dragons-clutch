@@ -271,6 +271,7 @@ impl DirectSelectionV1 {
             (DirectSelectionPhaseV1::Terminal, DirectRootPhaseV1::Terminal)
                 if self.terminal_receipt_id != [0; 32] => {
                     require_live(self.terminal_receipt_id)?;
+                    self.validate_terminal_partition(root)?;
                 }
             _ => return Err(DirectMarketErrorV1::WrongPhase),
         }
@@ -344,6 +345,50 @@ impl DirectSelectionV1 {
         Ok(())
     }
 
+    fn validate_terminal_partition(
+        self,
+        root: DirectMarketRootV1,
+    ) -> Result<(), DirectMarketErrorV1> {
+        let reason = root.terminal_reason().ok_or(DirectMarketErrorV1::WrongPhase)?;
+        let no_selection = self.selected_pair.is_none()
+            && self.selected_candidate_index.is_none();
+        let valid = match reason {
+            crate::DirectTerminalReasonV1::MissedFreezeLapse => {
+                self.candidate_count == 0 && self.verification_cursor == 0 && no_selection
+            }
+            crate::DirectTerminalReasonV1::EmptyLapse => {
+                self.reservation_count < MAX_DIRECT_RESERVATIONS_V1
+                    && self.candidate_count == 0
+                    && self.verification_cursor == 0
+                    && no_selection
+            }
+            crate::DirectTerminalReasonV1::NoCandidate => {
+                self.reservation_count == MAX_DIRECT_RESERVATIONS_V1
+                    && self.candidate_count == 0
+                    && self.verification_cursor == 0
+                    && no_selection
+            }
+            crate::DirectTerminalReasonV1::UnselectedLapse => {
+                self.reservation_count == MAX_DIRECT_RESERVATIONS_V1 && no_selection
+            }
+            crate::DirectTerminalReasonV1::SelectedLapse
+            | crate::DirectTerminalReasonV1::Settled => {
+                self.reservation_count == MAX_DIRECT_RESERVATIONS_V1
+                    && self.candidate_count != 0
+                    && self.verification_cursor == self.candidate_count
+                    && self.selected_pair.is_some()
+                    && self.selected_candidate_index.is_some()
+            }
+        };
+        if !valid {
+            return Err(DirectMarketErrorV1::WrongPhase);
+        }
+        if self.selected_pair.is_some() {
+            self.validate_selected_pair()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn terminalize(
         mut self,
         root_post: DirectMarketRootV1,
@@ -387,10 +432,49 @@ pub fn prepare_direct_selection_freeze_v1<
     backend: &B,
 ) -> Result<DirectSelectionFreezePlanV1, DirectMarketErrorV1> {
     state.replay.validate_against(state.root)?;
-    require_fresh_child_account(state.root.binding(), selection_account)?;
+    let (selection, expected_root) = build_direct_selection_v1(
+        authority,
+        state.root,
+        selection_account,
+        rent,
+        reservations,
+        domain,
+        price,
+        backend,
+    )?;
+    let selection_poststate_id = selection.semantic_id(expected_root, backend)?;
+    let state = state.freeze(
+        consumed_sequence,
+        observed_slot,
+        selection_account,
+        selection_poststate_id,
+        backend,
+    )?;
+    Ok(DirectSelectionFreezePlanV1 { state, selection })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_direct_selection_v1<
+    A: AuthenticatedDirectSelectionFreezeV1 + ?Sized,
+    B: DirectHashBackendV1,
+>(
+    authority: &A,
+    root: DirectMarketRootV1,
+    selection_account: [u8; 32],
+    rent: DirectRentOwnerV1,
+    reservations: [Option<DirectReservationV1>; 2],
+    domain: EconomicDomainV2,
+    price: PricePreconditionV2,
+    backend: &B,
+) -> Result<(DirectSelectionV1, DirectMarketRootV1), DirectMarketErrorV1> {
+    if root.phase() != DirectRootPhaseV1::Open || root.selection_account() != [0; 32] {
+        return Err(DirectMarketErrorV1::WrongPhase);
+    }
+    require_fresh_child_account(root.binding(), selection_account)?;
     rent.validate()?;
-    validate_domain_binding(state.root, &domain, &price)?;
-    let (ordered, reservation_count) = canonical_reservation_prefix(state.root, reservations)?;
+    validate_domain_binding(root, &domain, &price)?;
+    let (ordered, reservation_count) =
+        canonical_reservation_prefix(root, reservations, backend)?;
     let mut reservation_accounts = [[0u8; 32]; 2];
     let mut reservation_semantic_ids = [[0u8; 32]; 2];
     let mut book = DirectEconomicBookV1 {
@@ -414,7 +498,7 @@ pub fn prepare_direct_selection_freeze_v1<
         validate_complete_pair(&ordered)?;
     }
     authority.authenticate_freeze(
-        state.root,
+        root,
         selection_account,
         rent,
         &ordered,
@@ -429,8 +513,8 @@ pub fn prepare_direct_selection_freeze_v1<
     };
     let traversal_transcript_id = backend.sha256_parts(&[
         SELECTION_TRAVERSAL_DOMAIN_V1,
-        &state.root.binding().market_instance_id,
-        &state.root.binding().generation.to_le_bytes(),
+        &root.binding().market_instance_id,
+        &root.binding().generation.to_le_bytes(),
         &selection_account,
         &[reservation_count],
         &reservation_semantic_ids[0],
@@ -439,9 +523,9 @@ pub fn prepare_direct_selection_freeze_v1<
     ]);
     require_live(traversal_transcript_id)?;
     let selection_pre_root = DirectSelectionV1 {
-        market_instance_id: state.root.binding().market_instance_id,
-        generation: state.root.binding().generation,
-        direct_root_account: state.root.binding().direct_root_account,
+        market_instance_id: root.binding().market_instance_id,
+        generation: root.binding().generation,
+        direct_root_account: root.binding().direct_root_account,
         selection_account,
         reservation_accounts,
         reservation_semantic_ids,
@@ -461,7 +545,7 @@ pub fn prepare_direct_selection_freeze_v1<
         rent,
         phase,
     };
-    let mut expected_root = state.root;
+    let mut expected_root = root;
     expected_root.selection_account = selection_account;
     expected_root.phase = if reservation_count == MAX_DIRECT_RESERVATIONS_V1 {
         DirectRootPhaseV1::SubmissionOpen
@@ -469,15 +553,7 @@ pub fn prepare_direct_selection_freeze_v1<
         DirectRootPhaseV1::FrozenEmpty
     };
     selection_pre_root.validate_against(expected_root)?;
-    let selection_poststate_id = selection_pre_root.semantic_id(expected_root, backend)?;
-    let state = state.freeze(
-        consumed_sequence,
-        observed_slot,
-        selection_account,
-        selection_poststate_id,
-        backend,
-    )?;
-    Ok(DirectSelectionFreezePlanV1 { state, selection: selection_pre_root })
+    Ok((selection_pre_root, expected_root))
 }
 
 /// Submit one checked, nonduplicate candidate under action 5.
@@ -714,9 +790,10 @@ impl AuthenticatedDirectSelectionAuthorityV1 for FrozenSelectionAuthorityV1 {
     }
 }
 
-fn canonical_reservation_prefix(
+fn canonical_reservation_prefix<B: DirectHashBackendV1>(
     root: DirectMarketRootV1,
     reservations: [Option<DirectReservationV1>; 2],
+    backend: &B,
 ) -> Result<([Option<DirectReservationV1>; 2], u8), DirectMarketErrorV1> {
     let mut values = reservations;
     let count = match values {
@@ -753,6 +830,23 @@ fn canonical_reservation_prefix(
             || reservation.outcome_count != binding.outcome_count
             || reservation.price_scale != binding.price_scale
         {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        let reservation_id = reservation.semantic_id(backend)?;
+        let mut root_index = 0usize;
+        let mut found = false;
+        while root_index < usize::from(root.live_reservations()) {
+            let bounded =
+                u8::try_from(root_index).map_err(|_| DirectMarketErrorV1::Arithmetic)?;
+            if reservation.account() == root.reservation_account(bounded)?
+                && reservation_id == root.reservation_semantic_id(bounded)?
+            {
+                found = true;
+                break;
+            }
+            root_index += 1;
+        }
+        if !found {
             return Err(DirectMarketErrorV1::MismatchedBinding);
         }
         index += 1;
