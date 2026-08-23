@@ -56,6 +56,17 @@ Activation must be atomic with all of the following:
 
 ## Trust-boundary responsibilities
 
+This adapter stays separate from `programs/clutch-sbf` deliberately. The
+descriptor, wrapper mint, mint-authority PDA, wrapper executable, and
+Token-2022 post-CPI observations belong to the wrapper deployment, while the
+base program alone owns Position V3 and Replay writes. Linking the adapter as
+a shared `no_std` library lets both entrypoints reconstruct one identical
+typed custody call without moving wrapper authority into the base ELF or
+inventing a second account DTO. It does **not** authorize either side to trust
+the other's projection: the wrapper prepares the private-field call, and the
+base must reconstruct it again from its own `AccountInfo` observations before
+publishing all four successors atomically.
+
 The adapter owns only facts that cannot live in the pure runtime contract:
 
 - exact wrapper/base/Token-2022 Program and ProgramData ownership, linkage,
