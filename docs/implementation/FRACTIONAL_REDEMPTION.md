@@ -393,13 +393,17 @@ retirement-state identity. A private Product five-family aggregator authorizatio
 bind the Market, generation, both physical accounts, both terminal state IDs,
 and the ClaimLedger retirement transition before either account is deleted.
 Each account refunds only its own stored rent payer; hostile or unsolicited
-lamports go to the frozen neutral sink. The executable route remains disabled
-until that typed Product authorization seam is integrated. Fractional projects
-the terminal receipt, committing both physical accounts and terminal state
-IDs, the ClaimLedger post/transition IDs, both exact payer/neutral rent splits,
-and a separately adapter-authenticated Fractional runtime/capability release
-ID. Product consumes that receipt; it cannot invent a substitute release or
-reuse the Realm collateral release retained by the policy.
+lamports go to the frozen neutral sink. Fractional projects the terminal
+receipt, committing both physical accounts and terminal state IDs, the
+ClaimLedger post/transition IDs, both exact payer/neutral rent splits, and a
+separately adapter-authenticated Fractional runtime/capability release ID. Its
+crate-private SBF postwrite capability hostile-decodes the exact writable
+a4/a5/ClaimLedger bodies, authenticates all three PDAs, rechecks both observed
+rent balances, and derives the release only from a loader-authenticated
+registry capability narrowed to action 10. Product consumes that private value;
+it cannot construct a substitute receipt, invent a release, or reuse the Realm
+collateral release retained by the policy. The executable route remains
+disabled only until Product lands its stable atomic aggregator/root consumer.
 
 ## 6. Selected runtime contract and activation boundary
 
@@ -426,15 +430,23 @@ evidence.
 
 The exact-internal action-2, exact-bearer action-3, and claims-exhausted
 action-9 SBF handlers are present but capability-disabled until Product lands
-the canonical Foundation, Resolution activation, and five-family admission
-producer needed by action 1. Action 3 already composes the real Token-2022
+the stable five-family admission producer needed by action 1. The Fractional
+side already exposes a crate-private postwrite capability that proves exact
+a4/a5/ClaimLedger founding bodies and PDAs and carries the full admission
+receipt, including the canonical claim-issuance binding. Product Foundation
+remains the sole owner of the slot-11/12 debit and preallocation evidence: the
+prestates are prefunded zero-data System-owned writable PDAs, and Fractional
+Initialize must allocate/assign/write them without a second debit or refund.
+Action 3 already composes the real Token-2022
 burn adapter and Realm-selected collateral CPI, orders burn acceptance before
 collateral request exposure, and writes `0xa5`, ClaimLedger V3, and Hoard V2
 atomically. Action 9 advances only `0xa5` and ClaimLedger after exact canonical
 supply reaches zero; it requires neither a signer nor bearer-release authority.
-Release-profile admission and local-bank adversarial execution remain open.
-Family 79/v1 stays
-`ReservedDisabled` until those boundaries are integrated and reviewed.
+The remaining live-route blocker is Product's stable private per-slot
+preallocation authority plus its atomic admission/terminal consumers and final
+account order. Release-profile admission and local-bank adversarial execution
+remain open. Family 79/v1 stays `ReservedDisabled` until those boundaries are
+integrated and reviewed.
 
 ## 7. Evidence and intentionally deferred validation
 
@@ -460,10 +472,11 @@ tests:
 This is **HOST-TESTED model evidence**, not a proof, SBF execution, audit,
 deployment, or source-to-runtime refinement result.
 
-The promoted runtime contract now also carries 17 authored adversarial tests.
+The promoted runtime contract also carries authored adversarial tests.
 This tranche adds exact two-phase bearer-burn binding, prior direct-burn supply
 synchronization, hostile observed-supply refusal, full post-burn vector
-refusal, dynamic account-geometry checks, and release-bound terminal/rent
-receipt checks. Per the implementation-cycle instruction, none of those tests,
-the build, or a validator was run for this tranche; validation is deliberately
-deferred rather than implied by their presence.
+refusal, dynamic account-geometry checks, release-bound terminal/rent receipt
+checks, exact founding-postwrite verification, and substituted physical/latch
+refusal. Per the implementation-cycle instruction, none of those tests, the
+build, a formatter, or a validator was run for this tranche; validation is
+deliberately deferred rather than implied by their presence.
