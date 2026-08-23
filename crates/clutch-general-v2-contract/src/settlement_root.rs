@@ -456,6 +456,28 @@ impl SettlementRootV1AccountV1 {
         self.root_rent
     }
 
+    /// Replace only the root rent compartment for the reserved indexed-root
+    /// in-place upgrade. The sibling module derives the exact principal top-up
+    /// and observed donation; no external caller can mint this rewrite.
+    pub(super) fn with_indexed_root_rent(
+        &self,
+        rent: DeletableRentOwnerV1,
+    ) -> Result<Self, CodecError> {
+        self.validate()?;
+        rent.validate()?;
+        if self.phase != SettlementRootPhaseV1::Materializing
+            || rent.payer != self.root_rent.payer
+            || rent.refundable_principal < self.root_rent.refundable_principal
+            || rent.donation_floor < self.root_rent.donation_floor
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut value = *self;
+        value.root_rent = rent;
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Stored root PDA bump.
     pub const fn stored_bump(&self) -> u8 {
         self.stored_bump
@@ -1979,6 +2001,29 @@ mod tests {
         }
     }
 
+    fn materializing_root() -> SettlementRootV1AccountV1 {
+        let mut root = portfolio_settling_root();
+        root.counts.admitted_receipts = 0;
+        root.counts.live_receipts = 0;
+        root.counts.admitted_owner_rows = 0;
+        root.counts.live_owner_rows = 0;
+        root.counts.admitted_reservations = 0;
+        root.counts.live_reservations = 0;
+        root.counts.completed_owner_finalizations = 0;
+        root.phase = SettlementRootPhaseV1::Materializing;
+        root.validate().unwrap();
+        root
+    }
+
+    #[derive(Debug)]
+    struct EchoHash;
+
+    impl Sha256BackendV1 for EchoHash {
+        fn sha256(&self, _parts: &[&[u8]]) -> [u8; 32] {
+            [0x44; 32]
+        }
+    }
+
     #[test]
     fn root_creation_owns_the_only_frozen_to_finalized_epoch_transition() {
         let epoch = frozen_epoch();
@@ -1989,6 +2034,70 @@ mod tests {
         let mut hostile = epoch;
         hostile.phase = GeneralEpochPhaseV1::Finalized;
         assert!(finalize_epoch_for_settlement_root(&hostile).is_err());
+    }
+
+    #[test]
+    fn indexed_root_rent_paths_preserve_full_principal_and_donation() {
+        let root = materializing_root();
+        let upgrade = crate::prepare_indexed_settlement_root_upgrade_rent_v1(
+            &root,
+            id(20),
+            110,
+            150,
+            50,
+            id(21),
+            &EchoHash,
+        )
+        .unwrap();
+        assert_eq!(upgrade.data_len_before(), SETTLEMENT_ROOT_ACCOUNT_BYTES);
+        assert_eq!(upgrade.data_len_after(), 1_196);
+        assert_eq!(upgrade.payer_debit_lamports(), 50);
+        assert_eq!(upgrade.root_balance_after_lamports(), 160);
+        assert_eq!(upgrade.rent_after().refundable_principal, 150);
+        assert_eq!(upgrade.rent_after().donation_floor, 10);
+
+        let fresh_base = root
+            .with_indexed_root_rent(DeletableRentOwnerV1 {
+                payer: id(18),
+                refundable_principal: 150,
+                donation_floor: 10,
+            })
+            .unwrap();
+        let fresh = crate::prepare_fresh_indexed_settlement_root_rent_v1(
+            &fresh_base,
+            id(20),
+            10,
+            150,
+            150,
+            id(21),
+            &EchoHash,
+        )
+        .unwrap();
+        assert_eq!(fresh.data_len_before(), 0);
+        assert_eq!(fresh.payer_debit_lamports(), 150);
+        assert_eq!(fresh.root_balance_after_lamports(), 160);
+        assert_eq!(fresh.rent_after().donation_floor, 10);
+
+        assert!(crate::prepare_indexed_settlement_root_upgrade_rent_v1(
+            &root,
+            id(20),
+            110,
+            99,
+            100,
+            id(21),
+            &EchoHash,
+        )
+        .is_err());
+        assert!(crate::prepare_indexed_settlement_root_upgrade_rent_v1(
+            &root,
+            id(20),
+            110,
+            150,
+            49,
+            id(21),
+            &EchoHash,
+        )
+        .is_err());
     }
 
     #[test]
