@@ -55,8 +55,8 @@ use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
-    artifact, collateral_cash_v3, external_exit, genesis, market_init, merge_materialize,
-    observe_resolve, orders_batch, source_ingest_v2, split,
+    artifact, collateral_cash_v3, complete_set_v3, external_exit, genesis, market_init,
+    merge_materialize, observe_resolve, orders_batch, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -596,15 +596,14 @@ fn process_split(
             market,
             owner,
             quantity,
-        }) => split::process(
+        }) => complete_set_v3::process_complete_set_v3(
             program_id,
             accounts,
-            &split::SplitRequest {
-                sequence: request.sequence,
-                market,
-                owner,
-                quantity,
-            },
+            request.sequence,
+            market,
+            owner,
+            quantity,
+            complete_set_v3::CompleteSetActionV3::Split,
         ),
         _ => unexpected_route(),
     }
@@ -618,8 +617,20 @@ fn process_merge_materialize(
 ) -> Outcome<()> {
     let request = Request::decode(instruction_data)?;
     match request.action {
-        Action::Layout(Intent::Merge { .. })
-        | Action::Layout(Intent::Materialize { .. })
+        Action::Layout(Intent::Merge {
+            market,
+            owner,
+            quantity,
+        }) => complete_set_v3::process_complete_set_v3(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            owner,
+            quantity,
+            complete_set_v3::CompleteSetActionV3::Merge,
+        ),
+        Action::Layout(Intent::Materialize { .. })
         | Action::Layout(Intent::Dematerialize { .. }) => {
             merge_materialize::process(program_id, accounts, &request)
         }
