@@ -716,7 +716,7 @@ fn process_genesis(
     let request = Request::decode(instruction_data)?;
     match request.action {
         Action::Layout(Intent::InitRealm { .. })
-        | Action::Layout(Intent::InitProfile { .. })
+        | Action::Layout(Intent::InitProfileV2 { .. })
         | Action::Layout(Intent::InitPriceGrid { .. })
         | Action::Layout(Intent::InitTerms { .. })
         | Action::Layout(Intent::InitOrderPage { .. })
@@ -999,16 +999,16 @@ mod tests {
                     profile: hash(1),
                     realm_nonce: 2,
                     max_outcomes: MAX_OUTCOMES as u8,
-                    profile_version: 1,
+                    profile_version: 2,
                 },
                 Route::Genesis,
             ),
             (
-                Intent::InitProfile {
+                Intent::InitProfileV2 {
                     realm: hash(1),
-                    collateral_policy_digest: hash(2),
-                    subfield_schema_version: 1,
-                    profile_version: 1,
+                    collateral_policy_id: hash(2),
+                    adapter_release_id: hash(3),
+                    profile_version: 2,
                 },
                 Route::Genesis,
             ),

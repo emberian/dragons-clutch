@@ -502,7 +502,7 @@ impl Walk {
                     profile: self.profile_id,
                     realm_nonce: REALM_NONCE,
                     max_outcomes: u8::try_from(MAX_OUTCOMES).expect("outcome bound fits"),
-                    profile_version: 1,
+                    profile_version: 2,
                 },
             ),
             vec![
@@ -520,11 +520,11 @@ impl Walk {
             self.program_id,
             &layout_request(
                 0,
-                Intent::InitProfile {
+                Intent::InitProfileV2 {
                     realm: self.realm_id,
-                    collateral_policy_digest: self.policy_digest,
-                    subfield_schema_version: self.policy.schema_version,
-                    profile_version: 1,
+                    collateral_policy_id: self.policy_digest,
+                    adapter_release_id: Hash32::from_bytes([0x52; 32]),
+                    profile_version: 2,
                 },
             ),
             vec![

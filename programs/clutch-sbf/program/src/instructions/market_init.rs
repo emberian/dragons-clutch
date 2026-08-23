@@ -376,7 +376,7 @@ fn require_canonical_policy_pda(program_id: &Pubkey, accounts: &[AccountInfo]) -
         seeds::policy_pda(
             program_id,
             &profile.profile.bytes(),
-            &profile.collateral_policy_digest.bytes(),
+            &profile.collateral_policy_id.bytes(),
         ),
         None,
     )?;
@@ -627,7 +627,8 @@ struct ProfileInitFacts {
     profile: Hash32,
     realm: Hash32,
     version: u8,
-    collateral_policy_digest: Hash32,
+    collateral_policy_id: Hash32,
+    adapter_release_id: Hash32,
     flags: u8,
 }
 
@@ -723,7 +724,8 @@ fn read_profile_init(data: &[u8]) -> Outcome<ProfileInitFacts> {
         profile: value.profile,
         realm: value.realm,
         version: value.version,
-        collateral_policy_digest: value.collateral_policy_digest,
+        collateral_policy_id: value.collateral_policy_id,
+        adapter_release_id: value.adapter_release_id,
         flags: value.flags,
     })
 }
@@ -972,7 +974,8 @@ pub fn require_creation_sequence(sequence: u64) -> Outcome<()> {
 fn require_frozen_collateral_policy(profile: &ProfileInitFacts) -> Outcome<()> {
     require(
         profile.flags & PROFILE_FLAG_POLICY_FROZEN != 0
-            && profile.collateral_policy_digest != Hash32::ZERO,
+            && profile.collateral_policy_id != Hash32::ZERO
+            && profile.adapter_release_id != Hash32::ZERO,
         ClutchError::CollateralPolicyNotFrozen,
     )
 }
@@ -1888,8 +1891,9 @@ mod tests {
             let profile = ProfileAccount {
                 profile: profile_id,
                 realm: h(0x11),
-                collateral_policy_digest: policy.digest().expect("digest"),
-                version: 1,
+                collateral_policy_id: policy.digest().expect("digest"),
+                adapter_release_id: h(0x52),
+                version: 2,
                 flags: PROFILE_FLAG_POLICY_FROZEN,
             };
             let mut profile_bytes = vec![0_u8; account_len::PROFILE];
@@ -2062,8 +2066,9 @@ mod tests {
         let profile = ProfileAccount {
             profile: parent.identity().expect("the parent identity derives"),
             realm: h(0x11),
-            collateral_policy_digest: policy.digest().expect("digest"),
-            version: 1,
+            collateral_policy_id: policy.digest().expect("digest"),
+            adapter_release_id: h(0x52),
+            version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
         };
         let mut profile_bytes = vec![0_u8; account_len::PROFILE];
@@ -2210,7 +2215,7 @@ mod tests {
             realm: realm_hash(),
             profile: profile_hash(),
             max_outcomes: MAX_OUTCOMES as u8,
-            profile_version: 1,
+            profile_version: 2,
             stored_bump: 200,
             flags: 0,
         }
@@ -2220,8 +2225,9 @@ mod tests {
         ProfileAccount {
             profile: profile_hash(),
             realm: realm_hash(),
-            collateral_policy_digest: h(0xd0),
-            version: 1,
+            collateral_policy_id: h(0xd0),
+            adapter_release_id: h(0x52),
+            version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
         }
     }
@@ -2846,8 +2852,9 @@ mod tests {
         let unfrozen = ProfileAccount {
             profile: profile_hash(),
             realm: realm_hash(),
-            collateral_policy_digest: Hash32::ZERO,
-            version: 1,
+            collateral_policy_id: Hash32::ZERO,
+            adapter_release_id: Hash32::ZERO,
+            version: 2,
             flags: 0,
         };
         founded.profile = encoded(account_len::PROFILE, |out| unfrozen.encode(out));
@@ -2869,7 +2876,7 @@ mod tests {
             realm: realm_hash(),
             profile: profile_hash(),
             max_outcomes: 8,
-            profile_version: 1,
+            profile_version: 2,
             stored_bump: 200,
             flags: 0,
         };

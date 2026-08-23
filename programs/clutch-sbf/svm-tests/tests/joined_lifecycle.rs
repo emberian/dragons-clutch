@@ -1176,7 +1176,7 @@ async fn prepare_founding(
                         profile: profile_id,
                         realm_nonce: REALM_NONCE,
                         max_outcomes: MAX_OUTCOMES as u8,
-                        profile_version: 1,
+                        profile_version: 2,
                     },
                 ),
                 vec![
@@ -1200,11 +1200,11 @@ async fn prepare_founding(
                 PROGRAM_ID,
                 &layout_request(
                     0,
-                    Intent::InitProfile {
+                    Intent::InitProfileV2 {
                         realm: realm_id,
-                        collateral_policy_digest: policy_digest,
-                        subfield_schema_version: policy_value.schema_version,
-                        profile_version: 1,
+                        collateral_policy_id: policy_digest,
+                        adapter_release_id: Hash32::from_bytes([0x52; 32]),
+                        profile_version: 2,
                     },
                 ),
                 vec![

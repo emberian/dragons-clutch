@@ -1422,7 +1422,7 @@ pub fn build_shared() -> Shared {
         realm: realm_hash,
         profile: profile_hash,
         max_outcomes: MAX_OUTCOMES as u8,
-        profile_version: 1,
+        profile_version: 2,
         stored_bump: realm.bump,
         flags: 0,
     };
@@ -1432,8 +1432,9 @@ pub fn build_shared() -> Shared {
     let profile_account = ProfileAccount {
         profile: profile_hash,
         realm: realm_hash,
-        collateral_policy_digest: policy_digest,
-        version: 1,
+        collateral_policy_id: policy_digest,
+        adapter_release_id: Hash32::from_bytes([0x52; 32]),
+        version: 2,
         flags: PROFILE_FLAG_POLICY_FROZEN,
     };
 

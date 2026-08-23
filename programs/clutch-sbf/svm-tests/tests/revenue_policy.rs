@@ -204,7 +204,7 @@ impl Fixture {
                     profile: self.profile_id,
                     realm_nonce: REALM_NONCE,
                     max_outcomes: MAX_OUTCOMES as u8,
-                    profile_version: 1,
+                    profile_version: 2,
                 },
             ),
             metas,

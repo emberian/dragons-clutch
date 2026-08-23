@@ -557,7 +557,7 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                     realm: realm_id,
                     profile: profile_id,
                     max_outcomes: MAX_OUTCOMES as u8,
-                    profile_version: 1,
+                    profile_version: 2,
                     stored_bump: realm.bump,
                     flags: 0,
                 }
@@ -571,8 +571,9 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
                 ProfileAccount {
                     profile: profile_id,
                     realm: realm_id,
-                    collateral_policy_digest: policy_digest,
-                    version: 1,
+                    collateral_policy_id: policy_digest,
+                    adapter_release_id: Hash32::from_bytes([0x52; 32]),
+                    version: 2,
                     flags: PROFILE_FLAG_POLICY_FROZEN,
                 }
                 .encode(out)

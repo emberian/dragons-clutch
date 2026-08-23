@@ -2,11 +2,11 @@
 
 //! Atomic Realm Hoard transfer bridge for canonical General Position V3.
 //!
-//! The base transfer contract retains its small `PositionCashV2` carrier for
-//! legacy callers, but this module is the canonical Position V3 path. It
-//! derives that carrier from an authenticated full Position body, prepares the
-//! exact checked token CPI, and returns the complete Position postimage only
-//! after source, destination, Hoard, and mint-supply reloads all match.
+//! The shared token postcheck retains a crate-private cash carrier. This module
+//! is the sole public Market custody path: it derives that carrier from an
+//! authenticated full Position body, prepares the exact checked token CPI,
+//! and returns the complete Position postimage only after source, destination,
+//! Hoard, and mint-supply reloads all match.
 
 use clutch_retirement::{
     GeneralPositionProjectionV3, PositionAccountV3, PositionLifecycleV3, PositionV3Fields,

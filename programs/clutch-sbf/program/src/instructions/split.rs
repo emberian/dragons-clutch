@@ -2746,9 +2746,10 @@ pub(crate) mod tests {
             realm,
             version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
-            collateral_policy_digest: fixture_policy()
+            collateral_policy_id: fixture_policy()
                 .digest()
                 .expect("the fixture policy digests"),
+            adapter_release_id: h(0x52),
         };
         let market = MarketAccount {
             market: market_id,
