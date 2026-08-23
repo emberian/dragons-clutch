@@ -1,7 +1,25 @@
 # Transferable structured claim: implementation-ready adapter plan
 
-Status: **HOST MODEL AND LIVE-INTERFACE AUDIT, NOT SBF IMPLEMENTATION**
+Status: **PURE STRUCTURED-CLAIM KERNEL IMPLEMENTED; SBF ADAPTER NOT IMPLEMENTED**
 (2026-08-22).
+
+The production-bound, allocation-free `no_std` semantic core now
+lives in `crates/clutch-structured-claim`. It promotes the exact rational
+compiler boundary, canonical backing algebra, flat associative composition,
+deployment-bound identity preimages, supply-sensitive wrap/unwind, direct burn,
+beneficiary-free compaction, exact terminal lots/redemption, and retirement
+into fixed-capacity safe Rust with transactional refusals and frozen vectors.
+It deliberately does not promote any Solana account, Token-2022, hashing, CPI,
+replay, reservation, or deployment-authentication concern into the core.
+Base Hoard/total-supply mutation delegates to general transitions in the
+first-party `clutch-kernel`; the SBF adapter must additionally reconcile its
+authenticated internal/external SupplyLedger closure and enforce the immutable
+collateral cap.
+
+The remaining implementation work in this plan is therefore the adapter and
+bank-evidence boundary, not a redesign of wrapper economics. In particular,
+the base atomic Position transfer, donation transitions, and aggregate-vector
+redemption described below are still absent from the live SBF dispatcher.
 
 This plan names the smallest trustworthy runtime seam for a genuinely
 transferable shaped position without narrowing the protocol's analytic or
@@ -235,7 +253,9 @@ only after all local validation has succeeded.
 
 ### WrapCanonicalBacking
 
-For `q > 0`, compute `q*k` cash and `q*r_i` Eggs with checked arithmetic:
+For `q > 0`, compute `q*k` cash and `q*r_i` Eggs with checked arithmetic. This
+custody move changes neither base supply nor Hoard and is valid while Active or
+Resolved:
 
 1. authenticate actual mint supply `S`, holder destination, source Position,
    descriptor, and empty-reservation wrapper vault;
@@ -246,7 +266,7 @@ For `q > 0`, compute `q*k` cash and `q*r_i` Eggs with checked arithmetic:
 
 ### WrapFullEggVector
 
-While Active only:
+When `k > 0`, while Active only:
 
 1. move `q*p_i` Eggs into the wrapper vault;
 2. invoke existing base `Merge(q*k)` as the vault PDA, leaving `q*r_i` Eggs and
@@ -256,6 +276,8 @@ While Active only:
 
 The initial implementation uses two base CPIs plus the mint. A fused base
 transition is an optimization only after the composed route has bank evidence.
+When `k = 0`, the full vector is already canonical, no Merge CPI exists, and
+the exact route is valid after resolution too.
 
 ### UnwrapCanonicalBacking
 
@@ -272,9 +294,11 @@ complete set.
 
 ### UnwrapFullEggVector
 
-While Active only, burn the wrapper, invoke base `Split(q*k)` in the vault, and
-move `q*p_i` Eggs to the owner. This is a convenience representation change;
-it is not more solvent than canonical backing.
+When `k > 0`, while Active only, burn the wrapper, invoke base `Split(q*k)` in
+the vault, and move `q*p_i` Eggs to the owner. When `k = 0`, full and canonical
+backing are byte-identical and the route remains available after resolution.
+This is a convenience representation change; it is not more solvent than
+canonical backing.
 
 ### Transfer
 

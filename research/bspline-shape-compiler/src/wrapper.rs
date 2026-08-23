@@ -26,9 +26,13 @@ use clutch_solana_layout::{
     portfolio_settlement::{NativePortfolioClaimV1, PortfolioSettlementError},
     Hash32, MarketAccount, TermsAccount, MAX_OUTCOMES,
 };
-use num_bigint::BigInt;
+use clutch_structured_claim::{
+    realize_rational_shape, ClaimVector as CoreClaimVector,
+    DeploymentBinding as CoreDeploymentBinding, Error as CoreError, RationalCoefficient,
+    RationalShape,
+};
 use num_rational::BigRational;
-use num_traits::{Signed, ToPrimitive, Zero};
+use num_traits::{Signed, ToPrimitive};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -98,25 +102,23 @@ pub struct WrapperDeploymentBindingV1 {
 impl WrapperDeploymentBindingV1 {
     /// Refuse absent keys and aliasing between roles with different authority.
     pub fn validate(&self) -> Result<(), WrapperCompilerError> {
-        let keys = [
-            self.wrapper_program,
-            self.wrapper_program_data,
-            self.base_program,
-            self.base_program_data,
-            self.token_2022_program,
-            self.token_2022_program_data,
-        ];
-        if keys.contains(&[0; 32]) {
-            return Err(WrapperCompilerError::InvalidDeployment);
+        self.core()
+            .validate()
+            .map_err(|_| WrapperCompilerError::InvalidDeployment)
+    }
+
+    fn core(&self) -> CoreDeploymentBinding {
+        CoreDeploymentBinding {
+            wrapper_program: self.wrapper_program,
+            wrapper_program_data: self.wrapper_program_data,
+            wrapper_deployment_slot: self.wrapper_deployment_slot,
+            base_program: self.base_program,
+            base_program_data: self.base_program_data,
+            base_deployment_slot: self.base_deployment_slot,
+            token_2022_program: self.token_2022_program,
+            token_2022_program_data: self.token_2022_program_data,
+            token_2022_deployment_slot: self.token_2022_deployment_slot,
         }
-        for left in 0..keys.len() {
-            for right in left + 1..keys.len() {
-                if keys[left] == keys[right] {
-                    return Err(WrapperCompilerError::InvalidDeployment);
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -269,54 +271,32 @@ pub fn realize_native_coefficients_v1(
         return Err(WrapperCompilerError::NoWrapperProductValue);
     }
 
-    let mut common_denominator = BigInt::from(1_u8);
-    for coefficient in coefficients {
-        common_denominator = big_lcm(&common_denominator, coefficient.denom());
+    let mut exact = [RationalCoefficient::ZERO; MAX_OUTCOMES];
+    for (index, coefficient) in coefficients.iter().enumerate() {
+        exact[index] = RationalCoefficient::new(
+            coefficient
+                .numer()
+                .to_u64()
+                .ok_or(WrapperCompilerError::IntegerRealizationOverflow)?,
+            coefficient
+                .denom()
+                .to_u64()
+                .ok_or(WrapperCompilerError::IntegerRealizationOverflow)?,
+        );
     }
-    let mut integerized = Vec::with_capacity(coefficients.len());
-    for coefficient in coefficients {
-        let scale = &common_denominator / coefficient.denom();
-        integerized.push(coefficient.numer() * scale);
-    }
-    let mut coefficient_gcd = BigInt::zero();
-    for coefficient in &integerized {
-        coefficient_gcd = big_gcd(&coefficient_gcd, coefficient);
-    }
-    if coefficient_gcd.is_zero() {
-        return Err(WrapperCompilerError::NoWrapperProductValue);
-    }
-
-    let ratio_gcd = big_gcd(&common_denominator, &coefficient_gcd);
-    let wrapper_atoms = (&coefficient_gcd / &ratio_gcd)
-        .to_u64()
-        .ok_or(WrapperCompilerError::IntegerRealizationOverflow)?;
-    let target_units = (&common_denominator / &ratio_gcd)
-        .to_u64()
-        .ok_or(WrapperCompilerError::IntegerRealizationOverflow)?;
-    let mut primitive = [0_u64; MAX_OUTCOMES];
-    for (index, coefficient) in integerized.iter().enumerate() {
-        primitive[index] = (coefficient / &coefficient_gcd)
-            .to_u64()
-            .ok_or(WrapperCompilerError::IntegerRealizationOverflow)?;
-    }
-    validate_wrapper_product(&primitive, coefficients.len())?;
-    let floor = primitive[..coefficients.len()]
-        .iter()
-        .copied()
-        .min()
-        .ok_or(WrapperCompilerError::PlanMismatch)?;
-    let mut residual = [0_u64; MAX_OUTCOMES];
-    for index in 0..coefficients.len() {
-        residual[index] = primitive[index] - floor;
-    }
-    let realization = IntegerPortfolioRealizationV1 {
+    let core = realize_rational_shape(&RationalShape {
         outcome_count: u8::try_from(coefficients.len())
             .map_err(|_| WrapperCompilerError::PlanMismatch)?,
-        primitive,
-        wrapper_atoms_per_display_lot: wrapper_atoms,
-        target_units_per_display_lot: target_units,
-        complete_set_cash_atoms_per_wrapper: floor,
-        residual_eggs_per_wrapper: residual,
+        coefficients: exact,
+    })
+    .map_err(map_core_realization_error)?;
+    let realization = IntegerPortfolioRealizationV1 {
+        outcome_count: core.claim.outcome_count,
+        primitive: core.claim.coefficients,
+        wrapper_atoms_per_display_lot: core.wrapper_atoms_per_display_lot,
+        target_units_per_display_lot: core.target_units_per_display_lot,
+        complete_set_cash_atoms_per_wrapper: core.backing.cash_per_wrapper,
+        residual_eggs_per_wrapper: core.backing.residual_eggs_per_wrapper,
     };
     realization.validate()?;
     Ok(realization)
@@ -456,19 +436,12 @@ pub fn canonical_wrapper_product_id_v1(
     if native_claim == Hash32::ZERO {
         return Err(WrapperCompilerError::InvalidComposition);
     }
+    let preimage = deployment
+        .core()
+        .product_preimage(native_claim.0)
+        .map_err(|_| WrapperCompilerError::InvalidDeployment)?;
     let mut hasher = Sha256::new();
-    hasher.update(b"dragons-clutch/transferable-wrapper/v1");
-    hasher.update(deployment.wrapper_program);
-    hasher.update(deployment.wrapper_program_data);
-    hasher.update(deployment.wrapper_deployment_slot.to_le_bytes());
-    hasher.update(deployment.base_program);
-    hasher.update(deployment.base_program_data);
-    hasher.update(deployment.base_deployment_slot.to_le_bytes());
-    hasher.update(deployment.token_2022_program);
-    hasher.update(deployment.token_2022_program_data);
-    hasher.update(deployment.token_2022_deployment_slot.to_le_bytes());
-    hasher.update(COMPLETE_SET_COMPRESSED_BACKING_V1.to_le_bytes());
-    hasher.update(native_claim.0);
+    hasher.update(preimage);
     let bytes: [u8; 32] = hasher.finalize().into();
     Hash32::new(bytes).map_err(|_| WrapperCompilerError::PlanMismatch)
 }
@@ -477,35 +450,23 @@ fn validate_wrapper_product(
     coefficients: &[u64; MAX_OUTCOMES],
     count: usize,
 ) -> Result<(), WrapperCompilerError> {
-    let support = coefficients[..count]
-        .iter()
-        .filter(|value| **value != 0)
-        .count();
-    if support < 2
-        || coefficients[..count]
-            .windows(2)
-            .all(|pair| pair[0] == pair[1])
-    {
-        return Err(WrapperCompilerError::NoWrapperProductValue);
+    CoreClaimVector {
+        outcome_count: u8::try_from(count)
+            .map_err(|_| WrapperCompilerError::NoWrapperProductValue)?,
+        coefficients: *coefficients,
     }
-    Ok(())
+    .validate()
+    .map_err(|_| WrapperCompilerError::NoWrapperProductValue)
 }
 
-fn big_gcd(left: &BigInt, right: &BigInt) -> BigInt {
-    let mut a = left.abs();
-    let mut b = right.abs();
-    while !b.is_zero() {
-        let remainder = &a % &b;
-        a = b;
-        b = remainder;
-    }
-    a
-}
-
-fn big_lcm(left: &BigInt, right: &BigInt) -> BigInt {
-    if left.is_zero() || right.is_zero() {
-        BigInt::zero()
-    } else {
-        (left / big_gcd(left, right)) * right
+fn map_core_realization_error(error: CoreError) -> WrapperCompilerError {
+    match error {
+        CoreError::ArithmeticOverflow | CoreError::ArithmeticUnderflow => {
+            WrapperCompilerError::IntegerRealizationOverflow
+        }
+        CoreError::ZeroClaim | CoreError::SingleEggClaim | CoreError::CompleteSetClaim => {
+            WrapperCompilerError::NoWrapperProductValue
+        }
+        _ => WrapperCompilerError::PlanMismatch,
     }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "clutch-structured-claim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Exact allocation-free structured-claim compiler and custody kernel"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+clutch-kernel = { path = "../clutch-kernel" }
+
+[dev-dependencies]
+clutch-solana-layout = { path = "../../programs/solana-layout" }
+sha2 = { version = "=0.10.9", default-features = false }

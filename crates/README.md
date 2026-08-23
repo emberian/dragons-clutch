@@ -1,12 +1,12 @@
 # Rust crates
 
-This directory contains six offline, dependency-free `no_std` crates
+This directory contains seven offline `no_std` crates
 (updated 2026-08-22; none is a deployment or release claim —
 `CURRENT_TRUTH.md` supersedes status language here):
 
 - `clutch-kernel` — pure `no_std` collateral-generic complete-claim transition
   kernel (split/merge, materialize/dematerialize, finite resolution, exact
-  redemption).
+  per-Egg/vector redemption, beneficiary-free claim/collateral donation).
 - `clutch-accumulator` — pure `no_std` interval-summary monoid (coverage,
   extrema, exact price-time integrals, TWAP); unsupported statistics refuse.
 - `clutch-batch` — pure `no_std` fixed-capacity transparent relation
@@ -19,6 +19,9 @@ This directory contains six offline, dependency-free `no_std` crates
 - `clutch-liveness` — the host-side liveness/fee-carry kernels
   (`IntentFeeCarry`, `TreasuryServiceLedger`) backing the liveness policy
   profile and the revenue seams.
+- `clutch-structured-claim` — exact rational coefficient realization,
+  complete-set-compressed native backing, flat wrapper composition, and
+  transactional transferable-claim custody/lifecycle semantics.
 
 New crates record their semantic owner, dependency direction, toolchain
 compatibility, and license/provenance at introduction (each README does).

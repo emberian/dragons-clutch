@@ -10,6 +10,7 @@ license = "AGPL-3.0-or-later"
 clutch-accumulator = { path = "../../crates/clutch-accumulator" }
 clutch-bspline = { path = "../../crates/clutch-bspline" }
 clutch-solana-layout = { path = "../../programs/solana-layout" }
+clutch-structured-claim = { path = "../../crates/clutch-structured-claim" }
 num-bigint = "0.4.6"
 num-rational = "0.4.2"
 num-traits = "0.2.19"

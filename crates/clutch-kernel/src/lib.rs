@@ -957,6 +957,170 @@ impl MarketState {
         Ok(payout)
     }
 
+    /// Donate collateral atoms to the Hoard without minting claims.
+    ///
+    /// This transition cannot create an entitlement, fee, bounty, reserve, or
+    /// caller credit. It exists so another custody kernel can return abandoned
+    /// backing without becoming a second owner of the base collateral
+    /// invariant. Every check completes before the first write.
+    pub fn donate_collateral(&mut self, quantity: Amount) -> Result<()> {
+        self.validate_shape()?;
+        self.check_invariants()?;
+        if quantity == 0 {
+            return Err(Error::ZeroQuantity);
+        }
+        let next_collateral = self
+            .collateral
+            .checked_add(quantity)
+            .ok_or(Error::ArithmeticOverflow)?;
+        self.check_invariants_for(
+            next_collateral,
+            &self.total_supply,
+            self.phase,
+            self.resolved_payout,
+            &self.resolved_vector,
+        )?;
+        self.collateral = next_collateral;
+        Ok(())
+    }
+
+    /// Destroy an exact nonzero vector of internal claims without releasing
+    /// collateral.
+    ///
+    /// This is the claim side of a beneficiary-free donation. Active or
+    /// Resolved claims may be destroyed because reducing liabilities while
+    /// retaining collateral cannot weaken the base invariant. Quantities must
+    /// be canonically padded. On `Err`, market and position are unchanged.
+    pub fn donate_internal_vector(
+        &mut self,
+        position: &mut Position,
+        quantities: [Amount; MAX_OUTCOMES],
+    ) -> Result<()> {
+        self.validate_shape()?;
+        self.check_invariants()?;
+        let count = usize::from(self.outcomes);
+        let mut any = false;
+        let mut index = 0_usize;
+        while index < MAX_OUTCOMES {
+            let quantity = quantities[index];
+            if index < count {
+                any |= quantity != 0;
+                if position.internal[index] < quantity || self.total_supply[index] < quantity {
+                    return Err(Error::InsufficientBalance);
+                }
+            } else if quantity != 0 {
+                return Err(Error::InvalidPayoutWeights);
+            }
+            index += 1;
+        }
+        if !any {
+            return Err(Error::ZeroQuantity);
+        }
+        let mut next_supply = self.total_supply;
+        let mut next_internal = position.internal;
+        index = 0;
+        while index < count {
+            next_supply[index] = next_supply[index]
+                .checked_sub(quantities[index])
+                .ok_or(Error::ArithmeticUnderflow)?;
+            next_internal[index] = next_internal[index]
+                .checked_sub(quantities[index])
+                .ok_or(Error::ArithmeticUnderflow)?;
+            index += 1;
+        }
+        self.check_invariants_for(
+            self.collateral,
+            &next_supply,
+            self.phase,
+            self.resolved_payout,
+            &self.resolved_vector,
+        )?;
+        self.total_supply = next_supply;
+        position.internal = next_internal;
+        Ok(())
+    }
+
+    /// Redeem an aggregate internal vector at its exact terminal value.
+    ///
+    /// Individual legs may have fractional payouts; only the vector's summed
+    /// numerator must divide the resolved denominator. This is the general
+    /// atomic exit needed by nonnegative structured portfolios. It names the
+    /// kernel's existing exactness boundary (`RemainderRequired`) and never
+    /// floors. On `Err`, market and position are unchanged.
+    pub fn redeem_internal_vector_exact(
+        &mut self,
+        position: &mut Position,
+        quantities: [Amount; MAX_OUTCOMES],
+    ) -> Result<Amount> {
+        self.validate_shape()?;
+        if self.phase != Phase::Resolved {
+            return Err(Error::NotResolved);
+        }
+        self.check_invariants()?;
+        let count = usize::from(self.outcomes);
+        let vector = *self.effective_resolved_vector()?;
+        let mut numerator = 0_u128;
+        let mut any = false;
+        let mut index = 0_usize;
+        while index < MAX_OUTCOMES {
+            let quantity = quantities[index];
+            if index < count {
+                any |= quantity != 0;
+                if position.internal[index] < quantity || self.total_supply[index] < quantity {
+                    return Err(Error::InsufficientBalance);
+                }
+                let term = u128::from(quantity)
+                    .checked_mul(u128::from(vector.weights[index]))
+                    .ok_or(Error::ArithmeticOverflow)?;
+                numerator = numerator
+                    .checked_add(term)
+                    .ok_or(Error::ArithmeticOverflow)?;
+            } else if quantity != 0 {
+                return Err(Error::InvalidPayoutWeights);
+            }
+            index += 1;
+        }
+        if !any {
+            return Err(Error::ZeroQuantity);
+        }
+        let denominator = u128::from(vector.denominator);
+        if !numerator.is_multiple_of(denominator) {
+            return Err(Error::RemainderRequired);
+        }
+        let payout =
+            Amount::try_from(numerator / denominator).map_err(|_| Error::ArithmeticOverflow)?;
+        if self.collateral < payout {
+            return Err(Error::InsufficientCollateral);
+        }
+        let mut next_supply = self.total_supply;
+        let mut next_internal = position.internal;
+        index = 0;
+        while index < count {
+            next_supply[index] = next_supply[index]
+                .checked_sub(quantities[index])
+                .ok_or(Error::ArithmeticUnderflow)?;
+            next_internal[index] = next_internal[index]
+                .checked_sub(quantities[index])
+                .ok_or(Error::ArithmeticUnderflow)?;
+            index += 1;
+        }
+        let next_collateral = self
+            .collateral
+            .checked_sub(payout)
+            .ok_or(Error::ArithmeticUnderflow)?;
+        self.check_invariants_for(
+            next_collateral,
+            &next_supply,
+            self.phase,
+            self.resolved_payout,
+            &self.resolved_vector,
+        )?;
+        self.total_supply = next_supply;
+        self.collateral = next_collateral;
+        position.internal = next_internal;
+        Ok(payout)
+    }
+
     /// Move `quantity` of one outcome's internal claims from one position to
     /// another.
     ///
@@ -1798,5 +1962,142 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn donation_transitions_are_beneficiary_free_phase_independent_and_atomic() {
+        let mut market = MarketState::new(2, FinitePreset, binary_set(), 0).unwrap();
+        let mut position = Position::EMPTY;
+        market.split(&mut position, 5).unwrap();
+        market.donate_collateral(2).unwrap();
+        assert_eq!(market.collateral, 7);
+        assert_eq!(market.total_supply[..2], [5, 5]);
+
+        let mut active_donation = [0; MAX_OUTCOMES];
+        active_donation[..2].copy_from_slice(&[2, 1]);
+        market
+            .donate_internal_vector(&mut position, active_donation)
+            .unwrap();
+        assert_eq!(position.internal[..2], [3, 4]);
+        assert_eq!(market.total_supply[..2], [3, 4]);
+        assert_eq!(market.collateral, 7);
+        market.resolve(1).unwrap();
+
+        let mut resolved_donation = [0; MAX_OUTCOMES];
+        resolved_donation[..2].copy_from_slice(&[1, 2]);
+        market
+            .donate_internal_vector(&mut position, resolved_donation)
+            .unwrap();
+        assert_eq!(position.internal[..2], [2, 2]);
+        assert_eq!(market.total_supply[..2], [2, 2]);
+        assert_eq!(market.collateral, 7);
+        market.check_invariants().unwrap();
+
+        for invalid in [
+            [0; MAX_OUTCOMES],
+            {
+                let mut value = [0; MAX_OUTCOMES];
+                value[0] = 3;
+                value
+            },
+            {
+                let mut value = [0; MAX_OUTCOMES];
+                value[2] = 1;
+                value
+            },
+        ] {
+            let before = (market, position);
+            assert!(market
+                .donate_internal_vector(&mut position, invalid)
+                .is_err());
+            assert_eq!((market, position), before);
+        }
+
+        let mut full = MarketState::new(2, FinitePreset, binary_set(), u64::MAX).unwrap();
+        let before = full;
+        assert_eq!(full.donate_collateral(1), Err(Error::ArithmeticOverflow));
+        assert_eq!(full, before);
+        assert_eq!(full.donate_collateral(0), Err(Error::ZeroQuantity));
+        assert_eq!(full, before);
+    }
+
+    fn fractional_market(mode: BasisMode) -> MarketState {
+        let mut vectors = [PayoutVector::ZERO; MAX_PAYOUTS];
+        vectors[0] = PayoutVector::new(7, weights_of(&[5, 2]));
+        MarketState::new(2, mode, PayoutSet::new(1, 2, vectors), 0).unwrap()
+    }
+
+    #[test]
+    fn aggregate_vector_redemption_is_exact_in_both_resolution_modes() {
+        for mode in [FinitePreset, DerivedBasis] {
+            let mut market = fractional_market(mode);
+            let mut position = Position::EMPTY;
+            market.split(&mut position, 14).unwrap();
+            match mode {
+                FinitePreset => market.resolve(0).unwrap(),
+                DerivedBasis => market
+                    .resolve_with_vector(PayoutVector::new(7, weights_of(&[5, 2])))
+                    .unwrap(),
+            }
+
+            let mut inexact = [0; MAX_OUTCOMES];
+            inexact[0] = 1;
+            let before = (market, position);
+            assert_eq!(
+                market.redeem_internal_vector_exact(&mut position, inexact),
+                Err(Error::RemainderRequired)
+            );
+            assert_eq!((market, position), before);
+
+            let mut exact = [0; MAX_OUTCOMES];
+            exact[..2].copy_from_slice(&[1, 1]);
+            assert_eq!(
+                market.redeem_internal_vector_exact(&mut position, exact),
+                Ok(1)
+            );
+            assert_eq!(position.internal[..2], [13, 13]);
+            assert_eq!(market.total_supply[..2], [13, 13]);
+            assert_eq!(market.collateral, 13);
+            market.check_invariants().unwrap();
+
+            for invalid in [
+                [0; MAX_OUTCOMES],
+                {
+                    let mut value = [0; MAX_OUTCOMES];
+                    value[0] = 14;
+                    value
+                },
+                {
+                    let mut value = [0; MAX_OUTCOMES];
+                    value[2] = 1;
+                    value
+                },
+            ] {
+                let before = (market, position);
+                assert!(market
+                    .redeem_internal_vector_exact(&mut position, invalid)
+                    .is_err());
+                assert_eq!((market, position), before);
+            }
+        }
+    }
+
+    #[test]
+    fn aggregate_redemption_refuses_forged_insolvency_without_mutation() {
+        let mut market = fractional_market(DerivedBasis);
+        let mut position = Position::EMPTY;
+        market.split(&mut position, 7).unwrap();
+        market
+            .resolve_with_vector(PayoutVector::new(7, weights_of(&[5, 2])))
+            .unwrap();
+        market.collateral = 0;
+        let mut exact = [0; MAX_OUTCOMES];
+        exact[..2].copy_from_slice(&[1, 1]);
+        let before = (market, position);
+        assert_eq!(
+            market.redeem_internal_vector_exact(&mut position, exact),
+            Err(Error::InvariantViolation)
+        );
+        assert_eq!((market, position), before);
     }
 }
