@@ -32,18 +32,21 @@ use clutch_general_v2_contract::{
     ConsumeDirectReceiptEggsPayloadV1, DeletableRentOwnerV1, EconomicDomainV2AccountV1,
     GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1,
     GeneralReservationSeedTupleV3, Id32, MarketBindingV1, OwnerSettlementSeedTupleV3,
-    SettlementReceiptSeedTupleV3,
+    SettlementReceiptSeedTupleV3, SettlementReceiptSeedTupleV4,
     MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{
     build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v3,
     derive_settlement_receipt_data_id_v2, derive_settlement_receipt_data_id_v3,
+    derive_settlement_receipt_data_id_v4,
     owner_rounding_residue_price_units, prepare_create_owner_settlement_account_v2,
     prepare_create_owner_settlement_account_v3, project_owner_receipt_end_v2,
-    project_owner_receipt_end_v3, project_owner_settlement_account_v2,
+    project_owner_receipt_end_v3, project_owner_receipt_end_v4,
+    project_owner_settlement_account_v2,
     project_owner_settlement_account_v3, AuthenticatedOrderMembershipV2,
     AuthenticatedPositionV3, AuthenticatedReservationHandoffV3,
     AuthenticatedSettlementReceiptEndV2, AuthenticatedSettlementReceiptEndV3,
+    AuthenticatedSettlementReceiptEndV4,
     AuthenticatedSettlementReceiptV2, CandidateSettlementTotalsV2,
     Error as OwnerSettlementError, OrderKindV1, OwnerSettlementAccumulatorV2,
     OwnerSettlementAccountProjectionV2, OwnerSettlementAccountProjectionV3,
@@ -56,8 +59,9 @@ use clutch_owner_settlement::{
     OwnerSettlementPdaProjectionV3, OwnerSettlementStateV3, PositionSettlementPoststateV3,
     SelectedOwnerRowAuthorityV3, SelectedOwnerFeeV1, SelectedOwnerRowAuthorityV2,
     SettlementCashPotExpectationV1,
-    SettlementReceiptDataHashV2, SettlementReceiptDataHashV3, SettlementReceiptDataIdV3,
-    SettlementReceiptRouteV2, SettlementReceiptRouteV3, SettlementSideV1,
+    SettlementReceiptDataHashV2, SettlementReceiptDataHashV3, SettlementReceiptDataHashV4,
+    SettlementReceiptDataIdV3, SettlementReceiptDataIdV4, SettlementReceiptRouteV2,
+    SettlementReceiptRouteV3, SettlementReceiptRouteV4, SettlementSideV1,
     VerifiedSettlementOrderV2, VerifiedSettlementOrderV3, VirtualCashDirectionV1,
     OWNER_SETTLEMENT_BODY_V2_BYTES, OWNER_SETTLEMENT_BODY_V3_BYTES,
 };
@@ -73,6 +77,9 @@ use clutch_solana_layout::reservation::{
 };
 use clutch_solana_layout::settlement_receipt_v3::{
     project_settlement_receipt_evidence_v3, SettlementReceiptAccountV3,
+};
+use clutch_solana_layout::settlement_receipt_v4::{
+    project_settlement_receipt_evidence_v4, SettlementReceiptAccountV4,
 };
 use clutch_solana_layout::order_page_v5::{
     verify_page_v5, OrderSlotCursorV5, VerifiedOrderSlotV5,
@@ -258,6 +265,18 @@ impl SettlementReceiptDataHashV2 for ReceiptDataSha256V2 {
 struct ReceiptDataSha256V3;
 
 impl SettlementReceiptDataHashV3 for ReceiptDataSha256V3 {
+    fn sha256(&self, domain: &[u8], transcript: &[u8]) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(domain);
+        hash.update(transcript);
+        hash.finalize().into()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReceiptDataSha256V4;
+
+impl SettlementReceiptDataHashV4 for ReceiptDataSha256V4 {
     fn sha256(&self, domain: &[u8], transcript: &[u8]) -> [u8; 32] {
         let mut hash = Sha256::new();
         hash.update(domain);
@@ -2367,6 +2386,20 @@ impl FeedSliceRecordV3 {
             _ => Err(SettlementAdapterErrorV1::BindingMismatch),
         }
     }
+
+    fn route_v4(self) -> Result<SettlementReceiptRouteV4, SettlementAdapterErrorV1> {
+        match (
+            self.buy_kind,
+            self.buy_index,
+            self.sell_kind,
+            self.sell_index,
+        ) {
+            (0, _, 0, _) => Ok(SettlementReceiptRouteV4::Direct),
+            (0, _, 1, 0) => Ok(SettlementReceiptRouteV4::SplitToBuy),
+            (2, 0, 0, _) => Ok(SettlementReceiptRouteV4::SellToMerge),
+            _ => Err(SettlementAdapterErrorV1::BindingMismatch),
+        }
+    }
 }
 
 fn read_feed_slice_v3(
@@ -2430,7 +2463,7 @@ pub struct AccountReceiptEndTransitionInputV4<'a> {
     pub market_binding: &'a MarketBindingV1,
     /// Exact Realm-selected collateral policy/release join.
     pub collateral: BoundCollateralProfileV2,
-    /// Exact hostile General SettlementReceipt V3 bytes.
+    /// Exact hostile General SettlementReceipt V4 bytes.
     pub receipt_body: &'a [u8],
     /// Exact authenticated `0x81/3` owner-row prestate.
     pub owner_row: OwnerSettlementAccountProjectionV3,
@@ -2456,7 +2489,7 @@ pub struct AccountReceiptEndTransitionInputV4<'a> {
 
 /// One atomic authoritative action-25 poststate bundle.
 ///
-/// Position is read-only. The exact Receipt V3 latch, OwnerSettlement V3 row,
+/// Position is read-only. The exact Receipt V4 latch, OwnerSettlement V3 row,
 /// optional terminal-buy Reservation ownership handoff, and GEN1 Replay
 /// successor are one indivisible write set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2468,9 +2501,9 @@ pub struct AccountReceiptEndTransitionPlanV4 {
     order_slot_index: u8,
     position_generation: u64,
     receipt_account: Id32,
-    receipt_seed: SettlementReceiptSeedTupleV3,
-    receipt_prestate_data_id: SettlementReceiptDataIdV3,
-    receipt_poststate_body: [u8; account_len::SETTLEMENT_RECEIPT_V3],
+    receipt_seed: SettlementReceiptSeedTupleV4,
+    receipt_prestate_data_id: SettlementReceiptDataIdV4,
+    receipt_poststate_body: [u8; account_len::SETTLEMENT_RECEIPT_V4],
     owner_settlement_account: Id32,
     owner_settlement_poststate_body: [u8; OWNER_SETTLEMENT_BODY_V3_BYTES],
     reservation_account: Id32,
@@ -2514,23 +2547,23 @@ impl AccountReceiptEndTransitionPlanV4 {
         self.position_generation
     }
 
-    /// Canonical SettlementReceipt V3 account to compare-and-write.
+    /// Canonical SettlementReceipt V4 account to compare-and-write.
     pub const fn receipt_account(&self) -> Id32 {
         self.receipt_account
     }
 
-    /// Exact canonical Receipt V3 seed tuple.
-    pub const fn receipt_seed(&self) -> SettlementReceiptSeedTupleV3 {
+    /// Exact canonical Receipt V4 seed tuple.
+    pub const fn receipt_seed(&self) -> SettlementReceiptSeedTupleV4 {
         self.receipt_seed
     }
 
-    /// Typed owner-V3 receipt-prestate data identity used by GEN1.
-    pub const fn receipt_prestate_data_id(&self) -> SettlementReceiptDataIdV3 {
+    /// Typed Receipt V4 prestate data identity used by GEN1.
+    pub const fn receipt_prestate_data_id(&self) -> SettlementReceiptDataIdV4 {
         self.receipt_prestate_data_id
     }
 
-    /// Exact canonical 217-byte Receipt V3 successor.
-    pub const fn receipt_poststate_body(&self) -> &[u8; account_len::SETTLEMENT_RECEIPT_V3] {
+    /// Exact canonical 217-byte Receipt V4 successor.
+    pub const fn receipt_poststate_body(&self) -> &[u8; account_len::SETTLEMENT_RECEIPT_V4] {
         &self.receipt_poststate_body
     }
 
@@ -2599,10 +2632,16 @@ impl AccountReceiptEndTransitionPlanV4 {
 struct FeedReceiptEndV4 {
     order_index: u8,
     side: SettlementSideV1,
-    route: SettlementReceiptRouteV3,
+    route: SettlementReceiptRouteV4,
     entitled_units: u64,
     completes_order: bool,
     expected_end_mask: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeliveryPaymentModeV4 {
+    Settled,
+    MergeEscrowed,
 }
 
 /// Prepare one authoritative account-local action 25 transition.
@@ -2670,12 +2709,12 @@ pub fn prepare_account_receipt_end_transition_v4(
 
     let receipt_pda = LayoutHash32::new(input.payload.receipt.bytes())?;
     let (mut receipt, receipt_evidence) =
-        project_settlement_receipt_evidence_v3(receipt_pda, input.receipt_body)?;
+        project_settlement_receipt_evidence_v4(receipt_pda, input.receipt_body)?;
     let receipt_accounting_id = Id32::new(receipt_evidence.receipt_accounting_id().bytes())?;
-    let receipt_prestate_data_id = derive_settlement_receipt_data_id_v3(
+    let receipt_prestate_data_id = derive_settlement_receipt_data_id_v4(
         input.payload.receipt.bytes(),
         receipt_evidence.exact_body(),
-        &ReceiptDataSha256V3,
+        &ReceiptDataSha256V4,
     )?;
     if receipt_prestate_data_id.bytes() != receipt_evidence.receipt_data_id().bytes()
         || receipt.epoch.bytes() != selected.epoch.bytes()
@@ -2689,7 +2728,7 @@ pub fn prepare_account_receipt_end_transition_v4(
     {
         return Err(SettlementAdapterErrorV1::ReceiptLatchMismatch);
     }
-    let receipt_seed = SettlementReceiptSeedTupleV3::new(
+    let receipt_seed = SettlementReceiptSeedTupleV4::new(
         selected.epoch,
         selected.settlement_candidate_id,
         receipt.slice_index,
@@ -2860,7 +2899,7 @@ pub fn prepare_account_receipt_end_transition_v4(
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
 
-    let receipt_end = AuthenticatedSettlementReceiptEndV3 {
+    let receipt_end = AuthenticatedSettlementReceiptEndV4 {
         receipt: input.payload.receipt.bytes(),
         receipt_data_id: receipt_prestate_data_id,
         receipt_accounting_id: receipt_accounting_id.bytes(),
@@ -2882,7 +2921,7 @@ pub fn prepare_account_receipt_end_transition_v4(
         reservation_handoff,
     };
     receipt_end.validate()?;
-    let owner_projection = project_owner_receipt_end_v3(input.owner_row, receipt_end)?;
+    let owner_projection = project_owner_receipt_end_v4(input.owner_row, receipt_end)?;
     let owner_poststate = clutch_owner_settlement::OwnerSettlementAccumulatorV3::decode_body(
         clutch_owner_settlement::OWNER_SETTLEMENT_OUTER_TAG_V3,
         clutch_owner_settlement::OWNER_SETTLEMENT_OUTER_VERSION_V3,
@@ -3022,11 +3061,11 @@ fn bind_feed_receipt_end_v4(
     feed: CandidateFeedHeaderV2,
     slices: &[u8],
     order_page_body: &[u8],
-    receipt: SettlementReceiptAccountV3,
+    receipt: SettlementReceiptAccountV4,
     owner: [u8; 32],
 ) -> Result<(VerifiedOrderSlotV5, FeedReceiptEndV4), SettlementAdapterErrorV1> {
     let target_slice = read_feed_slice_v3(slices, receipt.slice_index)?;
-    let route = target_slice.route_v3()?;
+    let route = target_slice.route_v4()?;
     if route != receipt_route_v4(receipt.leg_kind)?
         || target_slice.outcome != receipt.outcome
         || target_slice.quantity != receipt.quantity
@@ -3118,11 +3157,11 @@ fn bind_feed_receipt_end_v4(
     ))
 }
 
-fn receipt_route_v4(leg_kind: u8) -> Result<SettlementReceiptRouteV3, SettlementAdapterErrorV1> {
+fn receipt_route_v4(leg_kind: u8) -> Result<SettlementReceiptRouteV4, SettlementAdapterErrorV1> {
     match leg_kind {
-        RECEIPT_LEG_DIRECT => Ok(SettlementReceiptRouteV3::Direct),
-        RECEIPT_LEG_SPLIT => Ok(SettlementReceiptRouteV3::SplitToBuy),
-        RECEIPT_LEG_MERGE => Ok(SettlementReceiptRouteV3::SellToMerge),
+        RECEIPT_LEG_DIRECT => Ok(SettlementReceiptRouteV4::Direct),
+        RECEIPT_LEG_SPLIT => Ok(SettlementReceiptRouteV4::SplitToBuy),
+        RECEIPT_LEG_MERGE => Ok(SettlementReceiptRouteV4::SellToMerge),
         _ => Err(SettlementAdapterErrorV1::ReceiptLatchMismatch),
     }
 }
@@ -3133,7 +3172,7 @@ fn receipt_route_v4(leg_kind: u8) -> Result<SettlementReceiptRouteV3, Settlement
 /// pure input retains the exact bodies needed to rederive the order,
 /// Reservation, Position, owner-row, and purpose-Replay relationship.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectDeliveryEndpointInputV4<'a> {
+pub struct EggDeliveryEndpointInputV4<'a> {
     /// Exact authenticated finalized OwnerSettlement V3 row.
     pub owner_row: OwnerSettlementAccountProjectionV3,
     /// SBF-authenticated frozen OrderPage V5 account identity.
@@ -3173,17 +3212,17 @@ pub struct ConsumeDirectReceiptEggsInputV4<'a> {
     pub market_binding: &'a MarketBindingV1,
     /// Exact Realm-selected collateral policy/release join.
     pub collateral: BoundCollateralProfileV2,
-    /// Exact hostile SettlementReceipt V3 delivery prestate.
+    /// Exact hostile SettlementReceipt V4 delivery prestate.
     pub receipt_body: &'a [u8],
     /// Exact real buyer endpoint.
-    pub buyer: DirectDeliveryEndpointInputV4<'a>,
+    pub buyer: EggDeliveryEndpointInputV4<'a>,
     /// Exact real seller endpoint.
-    pub seller: DirectDeliveryEndpointInputV4<'a>,
+    pub seller: EggDeliveryEndpointInputV4<'a>,
 }
 
 /// One real endpoint in the indivisible action-26 poststate bundle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectDeliveryEndpointPlanV4 {
+pub struct EggDeliveryEndpointPlanV4 {
     owner_settlement_account: Id32,
     owner_settlement_poststate_body: [u8; OWNER_SETTLEMENT_BODY_V3_BYTES],
     order_page_account: Id32,
@@ -3203,7 +3242,7 @@ pub struct DirectDeliveryEndpointPlanV4 {
     returned_internal: [u64; MAX_OUTCOMES],
 }
 
-impl DirectDeliveryEndpointPlanV4 {
+impl EggDeliveryEndpointPlanV4 {
     /// Finalized OwnerSettlement row compared unchanged in this action.
     pub const fn owner_settlement_account(&self) -> Id32 {
         self.owner_settlement_account
@@ -3302,12 +3341,12 @@ pub struct ConsumeDirectReceiptEggsPlanV4 {
     selected_candidate_account: Id32,
     selected_feed_account: Id32,
     receipt_account: Id32,
-    receipt_seed: SettlementReceiptSeedTupleV3,
-    receipt_prestate_data_id: SettlementReceiptDataIdV3,
+    receipt_seed: SettlementReceiptSeedTupleV4,
+    receipt_prestate_data_id: SettlementReceiptDataIdV4,
     delivery_transition_id: Id32,
-    receipt_poststate_body: [u8; account_len::SETTLEMENT_RECEIPT_V3],
-    buyer: DirectDeliveryEndpointPlanV4,
-    seller: DirectDeliveryEndpointPlanV4,
+    receipt_poststate_body: [u8; account_len::SETTLEMENT_RECEIPT_V4],
+    buyer: EggDeliveryEndpointPlanV4,
+    seller: EggDeliveryEndpointPlanV4,
     created_account_count: u8,
     closed_account_count: u8,
     rent_payer_debit_lamports: u64,
@@ -3325,38 +3364,38 @@ impl ConsumeDirectReceiptEggsPlanV4 {
         self.selected_feed_account
     }
 
-    /// Canonical SettlementReceipt V3 account to compare-and-write.
+    /// Canonical SettlementReceipt V4 account to compare-and-write.
     pub const fn receipt_account(&self) -> Id32 {
         self.receipt_account
     }
 
-    /// Canonical Receipt V3 seed tuple.
-    pub const fn receipt_seed(&self) -> SettlementReceiptSeedTupleV3 {
+    /// Canonical Receipt V4 seed tuple.
+    pub const fn receipt_seed(&self) -> SettlementReceiptSeedTupleV4 {
         self.receipt_seed
     }
 
     /// Exact mutable receipt-prestate data identity used as GEN1 evidence.
-    pub const fn receipt_prestate_data_id(&self) -> SettlementReceiptDataIdV3 {
+    pub const fn receipt_prestate_data_id(&self) -> SettlementReceiptDataIdV4 {
         self.receipt_prestate_data_id
     }
 
-    /// Stable action identity derived from the authenticated Receipt V3 PDA.
+    /// Stable action identity derived from the authenticated Receipt V4 PDA.
     pub const fn delivery_transition_id(&self) -> Id32 {
         self.delivery_transition_id
     }
 
-    /// Exact terminal Receipt V3 postimage.
-    pub const fn receipt_poststate_body(&self) -> &[u8; account_len::SETTLEMENT_RECEIPT_V3] {
+    /// Exact terminal Receipt V4 postimage.
+    pub const fn receipt_poststate_body(&self) -> &[u8; account_len::SETTLEMENT_RECEIPT_V4] {
         &self.receipt_poststate_body
     }
 
     /// Real buyer endpoint poststate.
-    pub const fn buyer(&self) -> &DirectDeliveryEndpointPlanV4 {
+    pub const fn buyer(&self) -> &EggDeliveryEndpointPlanV4 {
         &self.buyer
     }
 
     /// Real seller endpoint poststate.
-    pub const fn seller(&self) -> &DirectDeliveryEndpointPlanV4 {
+    pub const fn seller(&self) -> &EggDeliveryEndpointPlanV4 {
         &self.seller
     }
 
@@ -3429,11 +3468,11 @@ pub fn prepare_consume_direct_receipt_eggs_v4(
 
     let receipt_pda = LayoutHash32::new(input.payload.receipt.bytes())?;
     let (mut receipt, receipt_evidence) =
-        project_settlement_receipt_evidence_v3(receipt_pda, input.receipt_body)?;
-    let receipt_prestate_data_id = derive_settlement_receipt_data_id_v3(
+        project_settlement_receipt_evidence_v4(receipt_pda, input.receipt_body)?;
+    let receipt_prestate_data_id = derive_settlement_receipt_data_id_v4(
         input.payload.receipt.bytes(),
         receipt_evidence.exact_body(),
-        &ReceiptDataSha256V3,
+        &ReceiptDataSha256V4,
     )?;
     let delivery_transition_id =
         Id32::new(receipt_evidence.delivery_transition_id().bytes())?;
@@ -3451,7 +3490,7 @@ pub fn prepare_consume_direct_receipt_eggs_v4(
     {
         return Err(SettlementAdapterErrorV1::ReceiptLatchMismatch);
     }
-    let receipt_seed = SettlementReceiptSeedTupleV3::new(
+    let receipt_seed = SettlementReceiptSeedTupleV4::new(
         selected.epoch,
         selected.settlement_candidate_id,
         receipt.slice_index,
@@ -3465,7 +3504,7 @@ pub fn prepare_consume_direct_receipt_eggs_v4(
         input.seller,
     )?;
 
-    let buyer = stage_direct_delivery_endpoint_v4(
+    let buyer = stage_egg_delivery_endpoint_v4(
         selected,
         feed,
         tail.slices_le(),
@@ -3476,8 +3515,12 @@ pub fn prepare_consume_direct_receipt_eggs_v4(
         input.collateral,
         input.buyer,
         SettlementSideV1::Buy,
+        SettlementReceiptRouteV4::Direct,
+        OwnerSettlementStateV3::Finalized,
+        GeneralReplayTransitionKindV1::DirectBuyer,
+        DeliveryPaymentModeV4::Settled,
     )?;
-    let seller = stage_direct_delivery_endpoint_v4(
+    let seller = stage_egg_delivery_endpoint_v4(
         selected,
         feed,
         tail.slices_le(),
@@ -3488,6 +3531,10 @@ pub fn prepare_consume_direct_receipt_eggs_v4(
         input.collateral,
         input.seller,
         SettlementSideV1::Sell,
+        SettlementReceiptRouteV4::Direct,
+        OwnerSettlementStateV3::Finalized,
+        GeneralReplayTransitionKindV1::DirectSeller,
+        DeliveryPaymentModeV4::Settled,
     )?;
     if buyer.position_account == seller.position_account
         || buyer.reservation_account == seller.reservation_account
@@ -3521,21 +3568,55 @@ pub fn prepare_consume_direct_receipt_eggs_v4(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stage_direct_delivery_endpoint_v4(
+fn stage_egg_delivery_endpoint_v4(
     selected: clutch_general_v2_contract::SelectedCandidateV1AccountV1,
     feed: CandidateFeedHeaderV2,
     slices: &[u8],
-    receipt: SettlementReceiptAccountV3,
+    receipt: SettlementReceiptAccountV4,
     delivery_transition_id: Id32,
-    receipt_prestate_data_id: SettlementReceiptDataIdV3,
+    receipt_prestate_data_id: SettlementReceiptDataIdV4,
     market_binding: &MarketBindingV1,
     collateral: BoundCollateralProfileV2,
-    input: DirectDeliveryEndpointInputV4<'_>,
+    input: EggDeliveryEndpointInputV4<'_>,
     side: SettlementSideV1,
-) -> Result<DirectDeliveryEndpointPlanV4, SettlementAdapterErrorV1> {
+    route: SettlementReceiptRouteV4,
+    required_owner_state: OwnerSettlementStateV3,
+    replay_kind: GeneralReplayTransitionKindV1,
+    payment_mode: DeliveryPaymentModeV4,
+) -> Result<EggDeliveryEndpointPlanV4, SettlementAdapterErrorV1> {
+    if !matches!(
+        (side, route, required_owner_state, replay_kind, payment_mode),
+        (
+            SettlementSideV1::Buy,
+            SettlementReceiptRouteV4::Direct,
+            OwnerSettlementStateV3::Finalized,
+            GeneralReplayTransitionKindV1::DirectBuyer,
+            DeliveryPaymentModeV4::Settled
+        ) | (
+            SettlementSideV1::Sell,
+            SettlementReceiptRouteV4::Direct,
+            OwnerSettlementStateV3::Finalized,
+            GeneralReplayTransitionKindV1::DirectSeller,
+            DeliveryPaymentModeV4::Settled
+        ) | (
+            SettlementSideV1::Buy,
+            SettlementReceiptRouteV4::SplitToBuy,
+            OwnerSettlementStateV3::Finalized,
+            GeneralReplayTransitionKindV1::VirtualSplitBuyer,
+            DeliveryPaymentModeV4::Settled
+        ) | (
+            SettlementSideV1::Sell,
+            SettlementReceiptRouteV4::SellToMerge,
+            OwnerSettlementStateV3::AccountingComplete,
+            GeneralReplayTransitionKindV1::VirtualMergeSeller,
+            DeliveryPaymentModeV4::MergeEscrowed
+        )
+    ) {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
     let owner = Id32::new(input.owner_row.accumulator().expectation().owner())?;
     let expectation = input.owner_row.accumulator().expectation();
-    if input.owner_row.accumulator().state() != OwnerSettlementStateV3::Finalized
+    if input.owner_row.accumulator().state() != required_owner_state
         || expectation.market() != selected.market.bytes()
         || expectation.epoch() != selected.epoch.bytes()
         || expectation.candidate() != selected.settlement_candidate_id.bytes()
@@ -3552,7 +3633,7 @@ fn stage_direct_delivery_endpoint_v4(
     }
     let (verified, end) =
         bind_feed_receipt_end_v4(feed, slices, input.order_page_body, receipt, owner.bytes())?;
-    if end.side != side || end.route != SettlementReceiptRouteV3::Direct {
+    if end.side != side || end.route != route {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
     let order_bit = 1u64
@@ -3616,7 +3697,10 @@ fn stage_direct_delivery_endpoint_v4(
         || reservation.state != RESERVATION_STATE_ENTITLED
         || reservation.entitled_units != end.entitled_units
         || reservation.consumed_units >= reservation.entitled_units
-        || reservation.paid_units != reservation.consumed_units
+        || (payment_mode == DeliveryPaymentModeV4::Settled
+            && reservation.paid_units != reservation.consumed_units)
+        || (payment_mode == DeliveryPaymentModeV4::MergeEscrowed
+            && reservation.paid_units > reservation.consumed_units)
         || reservation.initial_cash_atoms != reservation_plan.cash_atoms
         || reservation.max_fee_atoms != reservation_plan.max_fee_atoms
         || reservation.initial_internal != reservation_plan.internal
@@ -3630,10 +3714,11 @@ fn stage_direct_delivery_endpoint_v4(
         return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
     }
 
-    let (completes_order, returned_internal) = advance_direct_reservation_delivery_v4(
+    let (completes_order, returned_internal) = advance_reservation_egg_delivery_v4(
         side,
         receipt.outcome,
         receipt.quantity,
+        payment_mode,
         &mut reservation,
     )?;
 
@@ -3710,14 +3795,10 @@ fn stage_direct_delivery_endpoint_v4(
         position,
         &PositionBodySha256V3,
     )?;
-    let kind = match side {
-        SettlementSideV1::Buy => GeneralReplayTransitionKindV1::DirectBuyer,
-        SettlementSideV1::Sell => GeneralReplayTransitionKindV1::DirectSeller,
-    };
     let replay = project_general_replay_transition_v1(
         replay_prestate,
         position_poststate,
-        kind,
+        replay_kind,
         delivery_transition_id,
         Id32::new(receipt_prestate_data_id.bytes())?,
         &PositionBodySha256V3,
@@ -3726,11 +3807,11 @@ fn stage_direct_delivery_endpoint_v4(
         || replay.position_poststate_semantic_id() != position_poststate_semantic_id
         || replay.transition_id() != delivery_transition_id
         || replay.transition_evidence_id().bytes() != receipt_prestate_data_id.bytes()
-        || replay.kind() != kind
+        || replay.kind() != replay_kind
     {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
-    Ok(DirectDeliveryEndpointPlanV4 {
+    Ok(EggDeliveryEndpointPlanV4 {
         owner_settlement_account: Id32::new(input.owner_row.address())?,
         owner_settlement_poststate_body: input.owner_row.accumulator().encode_body()?,
         order_page_account: input.order_page_account,
@@ -3751,10 +3832,11 @@ fn stage_direct_delivery_endpoint_v4(
     })
 }
 
-fn advance_direct_reservation_delivery_v4(
+fn advance_reservation_egg_delivery_v4(
     side: SettlementSideV1,
     outcome: u8,
     quantity: u64,
+    payment_mode: DeliveryPaymentModeV4,
     reservation: &mut ReservationAccount,
 ) -> Result<(bool, [u64; MAX_OUTCOMES]), SettlementAdapterErrorV1> {
     if quantity == 0
@@ -3765,7 +3847,11 @@ fn advance_direct_reservation_delivery_v4(
                 SettlementSideV1::Buy => 0,
                 SettlementSideV1::Sell => 1,
             }
-        || reservation.paid_units != reservation.consumed_units
+        || (payment_mode == DeliveryPaymentModeV4::Settled
+            && reservation.paid_units != reservation.consumed_units)
+        || (payment_mode == DeliveryPaymentModeV4::MergeEscrowed
+            && (side != SettlementSideV1::Sell
+                || reservation.paid_units > reservation.consumed_units))
     {
         return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
     }
@@ -3777,7 +3863,9 @@ fn advance_direct_reservation_delivery_v4(
         return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
     }
     reservation.consumed_units = next_units;
-    reservation.paid_units = next_units;
+    if payment_mode == DeliveryPaymentModeV4::Settled {
+        reservation.paid_units = next_units;
+    }
     let completes_order = next_units == reservation.entitled_units;
     let mut returned_internal = [0u64; MAX_OUTCOMES];
     match side {
@@ -3799,7 +3887,7 @@ fn advance_direct_reservation_delivery_v4(
             }
         }
     }
-    if completes_order {
+    if completes_order && reservation.paid_units == reservation.consumed_units {
         if !reservation.remaining_is_zero() {
             return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
         }
@@ -3814,8 +3902,8 @@ fn require_direct_endpoint_account_partition_v4(
     selected_candidate: Id32,
     selected_feed: Id32,
     market_binding: Id32,
-    buyer: DirectDeliveryEndpointInputV4<'_>,
-    seller: DirectDeliveryEndpointInputV4<'_>,
+    buyer: EggDeliveryEndpointInputV4<'_>,
+    seller: EggDeliveryEndpointInputV4<'_>,
 ) -> Result<(), SettlementAdapterErrorV1> {
     let base_accounts = [receipt, selected_candidate, selected_feed, market_binding];
     let mut left = 0usize;
@@ -4371,7 +4459,7 @@ pub enum OwnerRowMaterializationInputV3<'a> {
 
 /// Exact receipt-account rent funding and ledger facts for one new slice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReceiptCreateFundingV3 {
+pub struct ReceiptCreateFundingV4 {
     /// Dragon's Clutch program identity assigned after allocation.
     pub program_id: Id32,
     /// Present payer of only the missing rent shortfall.
@@ -4400,12 +4488,12 @@ pub struct ReceiptCreateFundingV3 {
     pub rent_minimum: u64,
 }
 
-/// Rent-safe exact V3 receipt creation output.
+/// Rent-safe exact V4 receipt creation output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReceiptCreatePlanV3 {
+pub struct ReceiptCreatePlanV4 {
     account: Id32,
     program_id: Id32,
-    seed: SettlementReceiptSeedTupleV3,
+    seed: SettlementReceiptSeedTupleV4,
     bump: u8,
     payer: Id32,
     payer_debit_lamports: u64,
@@ -4415,10 +4503,10 @@ pub struct ReceiptCreatePlanV3 {
     payer_rent_principal_lamports: u64,
     prefunded_donation_lamports: u64,
     donation_sink: Id32,
-    body: [u8; account_len::SETTLEMENT_RECEIPT_V3],
+    body: [u8; account_len::SETTLEMENT_RECEIPT_V4],
 }
 
-impl ReceiptCreatePlanV3 {
+impl ReceiptCreatePlanV4 {
     pub const fn account(&self) -> Id32 {
         self.account
     }
@@ -4427,7 +4515,7 @@ impl ReceiptCreatePlanV3 {
         self.program_id
     }
 
-    pub const fn seed(&self) -> SettlementReceiptSeedTupleV3 {
+    pub const fn seed(&self) -> SettlementReceiptSeedTupleV4 {
         self.seed
     }
 
@@ -4467,7 +4555,7 @@ impl ReceiptCreatePlanV3 {
         self.donation_sink
     }
 
-    pub const fn body(&self) -> &[u8; account_len::SETTLEMENT_RECEIPT_V3] {
+    pub const fn body(&self) -> &[u8; account_len::SETTLEMENT_RECEIPT_V4] {
         &self.body
     }
 }
@@ -4518,12 +4606,12 @@ pub struct EntitlementEndpointInputV4<'a> {
 pub struct MaterializeEntitlementSliceInputV4<'a> {
     /// Immutable V5/Feed/policy projection at the current selected cursor.
     pub entitlement: &'a CandidateEntitlementProjectionV4,
-    /// Fresh canonical SettlementReceipt V3 PDA.
+    /// Fresh canonical SettlementReceipt V4 PDA.
     pub receipt_account: Id32,
     /// Stored bump for the fresh receipt PDA.
     pub receipt_bump: u8,
     /// Exact receipt rent creation facts.
-    pub receipt_funding: ReceiptCreateFundingV3,
+    pub receipt_funding: ReceiptCreateFundingV4,
     /// Canonical real endpoints: buy then sell for direct, sole real end otherwise.
     pub endpoints: [Option<EntitlementEndpointInputV4<'a>>; 2],
 }
@@ -4684,7 +4772,7 @@ pub struct CandidateDependencyCreateDeltaV4 {
 }
 
 impl CandidateDependencyCreateDeltaV4 {
-    /// Exactly one SettlementReceipt V3 child created by this slice.
+    /// Exactly one SettlementReceipt V4 child created by this slice.
     pub const fn receipts_created(&self) -> u8 {
         self.receipts_created
     }
@@ -4700,7 +4788,7 @@ impl CandidateDependencyCreateDeltaV4 {
 pub struct MaterializeEntitlementSlicePlanV4 {
     selected_candidate_account: Id32,
     selected_candidate_poststate: clutch_general_v2_contract::SelectedCandidateV1AccountV1,
-    receipt: ReceiptCreatePlanV3,
+    receipt: ReceiptCreatePlanV4,
     endpoints: [Option<EntitlementEndpointPlanV4>; 2],
     endpoint_count: u8,
     dependency_delta: CandidateDependencyCreateDeltaV4,
@@ -4719,8 +4807,8 @@ impl MaterializeEntitlementSlicePlanV4 {
         self.selected_candidate_poststate
     }
 
-    /// Exact fresh SettlementReceipt V3 creation plan.
-    pub const fn receipt(&self) -> &ReceiptCreatePlanV3 {
+    /// Exact fresh SettlementReceipt V4 creation plan.
+    pub const fn receipt(&self) -> &ReceiptCreatePlanV4 {
         &self.receipt
     }
 
@@ -4807,12 +4895,12 @@ pub fn prepare_materialize_entitlement_slice_v4(
         ordinal += 1;
     }
 
-    let receipt_seed = SettlementReceiptSeedTupleV3::new(
+    let receipt_seed = SettlementReceiptSeedTupleV4::new(
         selected.epoch,
         selected.settlement_candidate_id,
         selected.next_slice_index,
     )?;
-    let receipt = SettlementReceiptAccountV3 {
+    let receipt = SettlementReceiptAccountV4 {
         epoch: LayoutHash32(selected.epoch.bytes()),
         market: LayoutHash32(selected.market.bytes()),
         candidate: LayoutHash32(selected.settlement_candidate_id.bytes()),
@@ -4927,10 +5015,10 @@ pub fn prepare_materialize_entitlement_slice_v4(
 
 fn prepare_receipt_creation_v4(
     account: Id32,
-    seed: SettlementReceiptSeedTupleV3,
-    receipt: SettlementReceiptAccountV3,
-    funding: ReceiptCreateFundingV3,
-) -> Result<ReceiptCreatePlanV3, SettlementAdapterErrorV1> {
+    seed: SettlementReceiptSeedTupleV4,
+    receipt: SettlementReceiptAccountV4,
+    funding: ReceiptCreateFundingV4,
+) -> Result<ReceiptCreatePlanV4, SettlementAdapterErrorV1> {
     if account.is_zero()
         || funding.program_id.is_zero()
         || funding.payer.is_zero()
@@ -4964,7 +5052,7 @@ fn prepare_receipt_creation_v4(
     if funding.payer_lamports < payer_debit_lamports {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
-    Ok(ReceiptCreatePlanV3 {
+    Ok(ReceiptCreatePlanV4 {
         account,
         program_id: funding.program_id,
         seed,
@@ -5280,7 +5368,7 @@ fn expectation_matches_basis_v4(
 
 fn validate_materialization_bundle_v4(
     entitlement: &CandidateEntitlementProjectionV4,
-    receipt: &ReceiptCreatePlanV3,
+    receipt: &ReceiptCreatePlanV4,
     endpoints: &[Option<EntitlementEndpointPlanV4>; 2],
     endpoint_count: u8,
     rent_debits: &[Option<RentDebitFactV4>; 3],
@@ -7615,14 +7703,14 @@ mod scalable_receipt_end_tests {
 
     #[test]
     fn action25_v4_has_no_untyped_receipt_route() {
-        assert_eq!(receipt_route_v4(RECEIPT_LEG_DIRECT), Ok(SettlementReceiptRouteV3::Direct));
+        assert_eq!(receipt_route_v4(RECEIPT_LEG_DIRECT), Ok(SettlementReceiptRouteV4::Direct));
         assert_eq!(
             receipt_route_v4(RECEIPT_LEG_SPLIT),
-            Ok(SettlementReceiptRouteV3::SplitToBuy)
+            Ok(SettlementReceiptRouteV4::SplitToBuy)
         );
         assert_eq!(
             receipt_route_v4(RECEIPT_LEG_MERGE),
-            Ok(SettlementReceiptRouteV3::SellToMerge)
+            Ok(SettlementReceiptRouteV4::SellToMerge)
         );
         assert_eq!(
             receipt_route_v4(3),
@@ -7633,7 +7721,7 @@ mod scalable_receipt_end_tests {
     #[test]
     fn action25_v4_receipt_identity_matches_the_layout_prestate_exactly() {
         let receipt_pda = LayoutHash32::from_bytes([9; 32]);
-        let receipt = SettlementReceiptAccountV3 {
+        let receipt = SettlementReceiptAccountV4 {
             epoch: LayoutHash32::from_bytes([1; 32]),
             market: LayoutHash32::from_bytes([2; 32]),
             candidate: LayoutHash32::from_bytes([3; 32]),
@@ -7652,10 +7740,10 @@ mod scalable_receipt_end_tests {
             accounted_end_mask: 0,
         };
         let body = receipt.encode_exact().unwrap();
-        let owner_id = derive_settlement_receipt_data_id_v3(
+        let owner_id = derive_settlement_receipt_data_id_v4(
             receipt_pda.bytes(),
             &body,
-            &ReceiptDataSha256V3,
+            &ReceiptDataSha256V4,
         )
         .unwrap();
         assert_eq!(owner_id.bytes(), receipt.data_id(receipt_pda).unwrap().bytes());
@@ -7663,10 +7751,10 @@ mod scalable_receipt_end_tests {
         let mut stale = body;
         stale[1] = 2;
         assert_eq!(
-            derive_settlement_receipt_data_id_v3(
+            derive_settlement_receipt_data_id_v4(
                 receipt_pda.bytes(),
                 &stale,
-                &ReceiptDataSha256V3,
+                &ReceiptDataSha256V4,
             ),
             Err(OwnerSettlementError::InvalidAccount)
         );
@@ -7732,10 +7820,11 @@ mod scalable_receipt_end_tests {
         .unwrap()
         .entitled(6)
         .unwrap();
-        let first = advance_direct_reservation_delivery_v4(
+        let first = advance_reservation_egg_delivery_v4(
             SettlementSideV1::Sell,
             1,
             2,
+            DeliveryPaymentModeV4::Settled,
             &mut reservation,
         )
         .unwrap();
@@ -7744,10 +7833,11 @@ mod scalable_receipt_end_tests {
         assert_eq!(reservation.consumed_units, 2);
         assert_eq!(reservation.paid_units, 2);
 
-        let second = advance_direct_reservation_delivery_v4(
+        let second = advance_reservation_egg_delivery_v4(
             SettlementSideV1::Sell,
             1,
             4,
+            DeliveryPaymentModeV4::Settled,
             &mut reservation,
         )
         .unwrap();
@@ -7777,20 +7867,22 @@ mod scalable_receipt_end_tests {
         .entitled(5)
         .unwrap();
         assert_eq!(
-            advance_direct_reservation_delivery_v4(
+            advance_reservation_egg_delivery_v4(
                 SettlementSideV1::Buy,
                 1,
                 1,
+                DeliveryPaymentModeV4::Settled,
                 &mut buy,
             ),
             Err(SettlementAdapterErrorV1::ReservationSetMismatch)
         );
         buy.remaining_cash_atoms = 0;
         assert_eq!(
-            advance_direct_reservation_delivery_v4(
+            advance_reservation_egg_delivery_v4(
                 SettlementSideV1::Buy,
                 1,
                 6,
+                DeliveryPaymentModeV4::Settled,
                 &mut buy,
             ),
             Err(SettlementAdapterErrorV1::ReservationSetMismatch)
