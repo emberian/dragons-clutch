@@ -22,6 +22,7 @@ mod payload;
 mod position_replay;
 mod rank;
 mod settlement_root;
+mod settlement_root_indexed;
 mod state;
 mod transition;
 
@@ -42,6 +43,7 @@ pub use rank::{
     SCORE_V2_Q_COST_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
 pub use settlement_root::*;
+pub use settlement_root_indexed::*;
 pub use state::*;
 pub use transition::*;
 

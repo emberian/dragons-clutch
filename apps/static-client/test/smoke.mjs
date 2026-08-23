@@ -131,11 +131,14 @@ test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
   assert.match(html, /compile_production_payoff_v1/);
-  assert.match(html, /canonical Product\/Series bundle assembler/);
+  assert.match(html, /current BundleV5 assembler/);
   assert.match(compiler, /production-payoff-definition\/v1/);
-  assert.match(compiler, /production-payoff-proposal\/v1/);
+  assert.match(compiler, /product-exact-market-request\/v1/);
+  assert.match(compiler, /product-exact-market-proposal\/v1/);
   assert.match(compiler, /exact-categorical.*exact-smooth.*analytic-smooth/s);
-  assert.match(compiler, /Compiled Product\/Series bundle must expose the exact sixteen typed identities/);
+  assert.match(compiler, /Compiled Product\/Series bundle must expose the exact sixteen typed identities owned by CompiledProductSeriesBundleV5/);
+  assert.match(compiler, /completeFullDomainNegative/);
+  assert.match(compiler, /bundleArtifactKind/);
   assert.doesNotMatch(compiler, /Math\.(?:exp|pow|sqrt)|parseFloat|Number\([^)]*(?:numerator|denominator|coordinate|payout)/);
 });
 
@@ -156,21 +159,45 @@ test("compiler_transport_joins_definition_class_terms_bytes_and_sixteen_bundle_i
     const identities = {};
     for (const name of GlassCompilerProposal.bundleIdentityNames) identities[name] = "04".repeat(32);
     identities.nativeClaimBasisId = "05".repeat(32);
+    identities.marketGenesisProfileId = productTermsId;
+    const programId = "11111111111111111111111111111112";
+    const exactMarketSearch = {
+      marketId: "08".repeat(32), priceId: "09".repeat(32), prices: ["1"],
+      coordinates: ["0"], maximumSubsetEvaluationsPerSupport: "1"
+    };
     return GlassCompilerProposal.validateProposal({
-      schema: "dragons-clutch/compiler/production-payoff-proposal/v1",
+      schema: "dragons-clutch/compiler/product-exact-market-proposal/v1",
       authority: "untrusted-compiler-proposal", registrationAuthority: false,
-      compilerReleaseSha256: "03".repeat(32), inputCanonicalSha256: "02".repeat(32),
+      compilerReleaseSha256: "03".repeat(32), programId,
+      requestCanonicalSha256: "02".repeat(32), inputCanonicalSha256: "07".repeat(32),
       productTermsId, classification: "exact-categorical", spanStatus: "exact-in-span",
       nativeClaimBasis: { id: "05".repeat(32), bytesHex: "00".repeat(2352) },
       certificate: null, bounds: [], subdivisionDepth: null,
-      compiledProductSeriesBundle: { id: "06".repeat(32), bytesHex: "00".repeat(528), identities }
-    }, "02".repeat(32), "03".repeat(32), definition);
+      compiledProductSeriesBundleV5: {
+        id: "06".repeat(32), bytesHex: "00".repeat(528),
+        artifact: { kind: "60", context: "0".repeat(64), exactBodyBytes: "528", programId, pda: "11111111111111111111111111111113", bump: "254" },
+        identities
+      },
+      exactMarket: {
+        authority: "untrusted-compiler-sidecar", registrationAuthority: false,
+        outcome: "unsupported", coverage: "declared-coordinate-subset", completeFullDomainNegative: false,
+        claims: { uniquePrice: false, fairValue: false, optimalClearing: false },
+        bindings: { marketId: exactMarketSearch.marketId, productTermsId, nativeClaimBasisId: "05".repeat(32), priceId: exactMarketSearch.priceId, bundleV5Id: "06".repeat(32) },
+        target: { outcomeCount: "1", payoutDenominator: "1", prices: ["1"] },
+        search: { coordinateDomainMin: "0", coordinateDomainMax: "9", coordinates: ["0"], maximumSubsetEvaluationsPerSupport: "1", exhaustedThroughSupport: "1", truncatedSupport: "0", workBySupport: [{ support: "1", evaluations: "1", exactButUnrepresentable: "0" }] },
+        workManifest: { id: "10".repeat(32), bytesHex: "00".repeat(1640) }, certificate: null,
+        bundleV5Sidecar: { id: "11".repeat(32), bytesHex: "00".repeat(176), bundleArtifactKind: "60", bundleArtifactContext: "0".repeat(64) }
+      }
+    }, "02".repeat(32), "07".repeat(32), "03".repeat(32), definition, { programId, exactMarketSearch });
   })()`, context);
   assert.equal(output.productTermsId, "01".repeat(32));
   assert.equal(output.classification, "exact-categorical");
-  assert.equal(Object.keys(output.compiledProductSeriesBundle.identities).length, 16);
+  assert.equal(Object.keys(output.compiledProductSeriesBundleV5.identities).length, 16);
   assert.equal(output.nativeClaimBasis.byteLength, "2352");
-  assert.equal(output.compiledProductSeriesBundle.byteLength, "528");
+  assert.equal(output.compiledProductSeriesBundleV5.byteLength, "528");
+  assert.equal(output.exactMarket.coverage, "declared-coordinate-subset");
+  assert.equal(output.exactMarket.completeFullDomainNegative, false);
+  assert.equal(output.exactMarket.bundleV5Sidecar.bundleArtifactKind, "60");
 });
 
 test("no_shipped_script_contains_wallet_sign_or_submit_capability", () => {
