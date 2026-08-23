@@ -64,7 +64,7 @@ pub enum PositionPurposeV3 {
 }
 
 impl PositionPurposeV3 {
-    fn decode(value: u8) -> Result<Self, RetirementErrorV2> {
+    pub(crate) fn decode(value: u8) -> Result<Self, RetirementErrorV2> {
         match value {
             1 => Ok(Self::General),
             2 => Ok(Self::DealerFacility),
