@@ -142,6 +142,8 @@ pub enum DealerAccountLifetimeV1 {
     CountedChild,
     /// Singleton streamed work child with independently refundable rent.
     CountedWork,
+    /// Deletable immutable evidence referenced by one accepted Replay intent.
+    ReplayReferencedEvidence,
     /// Permanent evidence body.
     Permanent,
 }
@@ -220,6 +222,11 @@ pub const fn persisted_account_contract_v1(
             registry::DEALER_EXIT_TICKET_ACCOUNT_VERSION,
             registry::DEALER_EXIT_TICKET_ACCOUNT_BYTES,
             DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_ACTION_RECEIPT_ACCOUNT_TAG => (
+            registry::DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+            registry::DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::ReplayReferencedEvidence,
         ),
         _ => return None,
     };
