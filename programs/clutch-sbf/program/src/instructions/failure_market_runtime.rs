@@ -18,7 +18,8 @@ use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1;
 use clutch_failure_policy_runtime::market_runtime_v1::{
     admit_failure_market_runtime_v1, AuthenticatedFailureMarketRuntimeAdmissionV1,
     FailureMarketRuntimeAdmissionReceiptV1, FailureMarketRuntimeRootFundingFactsV1,
-    FailureMarketRuntimeStateCommitmentV1, FailureMarketRuntimeV1, FAILURE_MARKET_RUNTIME_BYTES_V1,
+    FailureMarketRuntimeStateCommitmentV1, FailureMarketRuntimeTerminalPlanV2,
+    FailureMarketRuntimeV1, FAILURE_MARKET_RUNTIME_BYTES_V1,
 };
 use clutch_product_series::ContentId as ProductContentId;
 use clutch_solana_layout::failure_recovery::{
@@ -338,4 +339,71 @@ fn persist_failure_market_runtime_root_v1(
         state,
         state_commitment,
     })
+}
+
+/// Persist one exact Recovery-close or final-family runtime transition.
+///
+/// The pure plan has private prestates and can only follow the typed terminal
+/// chain. This writer reopens the live account immediately before mutation,
+/// commits the stale-checked plan, preserves every lamport, and hostile-decodes
+/// the postimage again. It does not route an instruction or construct any
+/// Product, replay, history, or liveness authority.
+pub(crate) fn write_failure_market_runtime_terminal_plan_v2<'a>(
+    program_id: &Pubkey,
+    runtime_root: &AccountInfo<'a>,
+    admission_root: AuthenticatedFailureMarketRootV2,
+    authenticated: AuthenticatedFailureMarketRuntimeRootV1,
+    plan: FailureMarketRuntimeTerminalPlanV2,
+) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
+    require(
+        authenticated.account == *runtime_root.key && runtime_root.is_writable,
+        ClutchError::MismatchedState,
+    )?;
+    let live = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(live == authenticated, ClutchError::MismatchedState)?;
+    let mut after = live.state;
+    after
+        .commit_terminal_plan(plan)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let balance_before = runtime_root.lamports();
+    let mut runtime_body = [0; FAILURE_MARKET_RUNTIME_BYTES_V1];
+    after
+        .encode_into(&mut runtime_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let record = FailureMarketRuntimeRootAccountV1 {
+        bump: live.bump,
+        runtime_body,
+    };
+    {
+        let mut data = runtime_root
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let output: &mut [u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1] = data
+            .as_mut()
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        record
+            .encode_into(output)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    }
+    require(
+        runtime_root.lamports() == balance_before,
+        ClutchError::MismatchedState,
+    )?;
+    let reopened = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(
+        reopened.state == after && reopened.state_commitment != live.state_commitment,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(reopened)
 }

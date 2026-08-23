@@ -41,6 +41,7 @@ pub mod direct_selection_v3;
 pub mod failure_recovery;
 pub mod failure_interval_consensus;
 pub mod failure_market_interval_v2;
+pub mod failure_market_replay_v2;
 pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod order_page_v5;
