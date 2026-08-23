@@ -143,6 +143,14 @@ pub enum SourceHandoffKindV2 {
 }
 
 impl SourceHandoffKindV2 {
+    const fn wire_byte(self) -> u8 {
+        match self {
+            Self::FailureAbsence => 1,
+            Self::FailureResult => 2,
+            Self::SuccessfulEvaluation => 3,
+        }
+    }
+
     fn decode(byte: u8) -> Result<Self> {
         match byte {
             1 => Ok(Self::FailureAbsence),
@@ -181,7 +189,7 @@ impl EmitFailureHandoffIntentV2 {
         require_output(output, EMIT_FAILURE_HANDOFF_PAYLOAD_BYTES_V2)?;
         self.validate()?;
         output.fill(0);
-        output[0] = self.kind as u8;
+        output[0] = self.kind.wire_byte();
         output[8..40].copy_from_slice(&self.handoff_id);
         output[40..72].copy_from_slice(&self.source_work_receipt_id);
         output[72..80].copy_from_slice(&self.valid_before_slot.to_le_bytes());
@@ -218,6 +226,15 @@ pub enum SourceMutableFamilyV2 {
 }
 
 impl SourceMutableFamilyV2 {
+    const fn wire_byte(self) -> u8 {
+        match self {
+            Self::SourceHead => 1,
+            Self::OpenRawPage => 2,
+            Self::WindowWork => 3,
+            Self::StatisticResult => 4,
+        }
+    }
+
     fn decode(byte: u8) -> Result<Self> {
         match byte {
             1 => Ok(Self::SourceHead),
@@ -267,7 +284,7 @@ impl ReopenGenerationIntentV2 {
         require_output(output, REOPEN_GENERATION_PAYLOAD_BYTES_V2)?;
         self.validate()?;
         output.fill(0);
-        output[0] = self.family as u8;
+        output[0] = self.family.wire_byte();
         output[8..40].copy_from_slice(&self.source_release_manifest_id);
         output[40..72].copy_from_slice(&self.expected_lineage_state_id);
         output[72..104].copy_from_slice(&self.semantic_binding_id);
@@ -328,7 +345,7 @@ impl CloseGenerationIntentV2 {
         require_output(output, CLOSE_GENERATION_PAYLOAD_BYTES_V2)?;
         self.validate()?;
         output.fill(0);
-        output[0] = self.family as u8;
+        output[0] = self.family.wire_byte();
         output[8..40].copy_from_slice(&self.source_release_manifest_id);
         output[40..72].copy_from_slice(&self.expected_lineage_state_id);
         output[72..104].copy_from_slice(&self.semantic_terminal_receipt_id);
@@ -1157,7 +1174,8 @@ mod tests {
         for index in 0..contract.len() {
             let required = contract.meta(index).unwrap();
             let mut key = [0_u8; 32];
-            key[..8].copy_from_slice(&(index as u64 + 1).to_le_bytes());
+            let ordinal = u64::try_from(index).unwrap().checked_add(1).unwrap();
+            key[..8].copy_from_slice(&ordinal.to_le_bytes());
             accounts.push(ObservedSourceAccountMetaV2 {
                 key,
                 writable: required.writable,
