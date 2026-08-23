@@ -94,7 +94,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
         self.validate()?;
         output.fill(0);
         output[0] = registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG;
-        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION;
+        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION;
         output[2] = self.bump;
         output[3] = self.phase as u8;
         let mut cursor = 4;
@@ -134,7 +134,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
         if input[0] != registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION {
+        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION {
             return Err(CodecError::WrongVersion);
         }
         let phase = FailureIntervalConsensusPhaseV1::decode(input[3])?;
@@ -289,7 +289,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
         self.validate()?;
         output.fill(0);
         output[0] = registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG;
-        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION;
+        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION;
         output[2] = self.bump;
         output[3] = self.phase as u8;
         let mut cursor = 4;
@@ -329,7 +329,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
         if input[0] != registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION {
+        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION {
             return Err(CodecError::WrongVersion);
         }
         let phase = FailureIntervalConsensusPhaseV1::decode(input[3])?;

@@ -432,15 +432,19 @@ pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
 pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES: usize = 232;
 /// Mutable exhaustive quantized interval-consensus work discriminator.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG: u8 = 0xab;
-/// Interval-consensus work account version.
-pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn one-shot work-account version.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION: u8 = 1;
+/// Reusable Market interval-cell version.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION: u8 = 2;
 /// Exact framed interval-consensus work account bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES: usize = 1_088;
-/// Permanent interval-consensus transition/replay receipt discriminator.
+/// Permanent Market interval-history discriminator.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG: u8 = 0xac;
-/// Permanent interval-consensus replay account version.
-pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 1;
-/// Exact permanent interval-consensus replay account bytes.
+/// Withdrawn one-shot replay-account version.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION: u8 = 1;
+/// Append-only Market interval-history version.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 2;
+/// Exact permanent Market interval-history bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 512;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
@@ -1503,10 +1507,28 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "failure-interval-consensus-work-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "failure-interval-consensus-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
             version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "failure-interval-consensus-work-v1-account",
+        name: "failure-market-interval-work-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1515,7 +1537,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             version: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "failure-interval-consensus-replay-v1-account",
+        name: "failure-market-interval-history-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
