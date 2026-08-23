@@ -106,7 +106,8 @@ fn derive_final(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Address
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
         | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::ProductCapabilityRegistryV2
+        | ArtifactKind::RegistryProgramReleaseV1
+        | ArtifactKind::RegistryCapabilityProfileV2
         | ArtifactKind::CompiledProductSeriesBundleV1) => {
             return Address::find_program_address(
                 &[
