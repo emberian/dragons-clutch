@@ -68,6 +68,7 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.match(chain, /registeredSourceReleaseCount differs from its compiled Source identity/);
   for (const profile of ["production-inert", "non-production-mock-source-lab", "non-production-real-pyth-lab"]) assert.match(chain, new RegExp(`"${profile}"`));
   assert.match(app, /Enabled registry coordinates/);
+  assert.match(app, /family names are release projections, not draft authority/);
   assert.match(app, /Source value routes refuse; no fixture or fallback identity is admitted/);
 });
 

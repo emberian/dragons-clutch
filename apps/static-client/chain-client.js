@@ -169,8 +169,10 @@
       const coordinate = Object.freeze({
         familyTag: positiveDecimal(intent.familyTag, `${name}[${index}].familyTag`, 255n).toString(),
         familyVersion: positiveDecimal(intent.familyVersion, `${name}[${index}].familyVersion`, 255n).toString(),
-        localAction: decimal(intent.localAction, `${name}[${index}].localAction`, 255n).toString()
+        localAction: decimal(intent.localAction, `${name}[${index}].localAction`, 255n).toString(),
+        family: text(intent.family, `${name}[${index}].family`, 40)
       });
+      if (!CANONICAL_FAMILIES.has(coordinate.family)) throw new Error(`${name}[${index}].family is not a current canonical decoder family.`);
       if (index > 0) {
         const previous = raw[index - 1];
         const previousKey = [Number(previous.familyTag), Number(previous.familyVersion), Number(previous.localAction)];
@@ -382,6 +384,7 @@
     if (typeof boundRelease.sourceCommit !== "string" || !COMMIT.test(boundRelease.sourceCommit)) throw new Error("daemon-projected source commit is not a full lowercase Git identity.");
     const families = validateFamilies(boundRelease.families, "transportBinding.release.families");
     const enabledIntents = validateEnabledIntents(boundRelease.enabledIntents, "transportBinding.release.enabledIntents");
+    if (enabledIntents.some((intent) => !families.includes(intent.family))) throw new Error("transportBinding release enables an intent whose canonical family is absent from its decoder set.");
     const source = validateSourceProfile(boundRelease.sourceProfile, boundRelease.registeredSourceReleaseCount, "transportBinding.release");
     const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
     if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
@@ -467,7 +470,7 @@
     if (raw.cluster !== configuration.clusterKey || raw.authorityEligible !== false || !Array.isArray(raw.releases) || raw.releases.length > 256) throw new Error("release response does not match the selected cluster, trust boundary, or bounds.");
     const releases = raw.releases.map((release, index) => {
       requirePlain(release, `releases[${index}]`);
-      return Object.freeze({
+      const projected = {
         releaseKey: text(release.releaseKey, `releases[${index}].releaseKey`, 256),
         programId: address(release.programId, `releases[${index}].programId`),
         programData: address(release.programData, `releases[${index}].programData`),
@@ -479,7 +482,9 @@
         ...validateSourceProfile(release.sourceProfile, release.registeredSourceReleaseCount, `releases[${index}]`),
         enabledIntents: validateEnabledIntents(release.enabledIntents, `releases[${index}].enabledIntents`),
         families: validateFamilies(release.families, `releases[${index}].families`)
-      });
+      };
+      if (projected.enabledIntents.some((intent) => !projected.families.includes(intent.family))) throw new Error(`releases[${index}] enables an intent whose canonical family is absent from its decoder set.`);
+      return Object.freeze(projected);
     });
     if (new Set(releases.map((release) => release.releaseKey)).size !== releases.length) throw new Error("operatord release endpoint repeats a release key.");
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
@@ -630,9 +635,8 @@
     });
     const groups = Object.freeze(Object.fromEntries(GROUP_ORDER.map((name) => [name, Object.freeze(annotated.filter((accountValue) => accountValue.group === name))])));
     const familySet = new Set(releases.selected.families);
-    const familyTags = Object.freeze({ general: "74", "structured-claim": "75", dealer: "76", source: "77", series: "77", failure: "78", fractional: "79" });
     const successorCapabilities = releases.selected.families.map((familyName) => {
-      const coordinates = configuration.release.enabledIntents.filter((intent) => intent.familyTag === familyTags[familyName]);
+      const coordinates = configuration.release.enabledIntents.filter((intent) => intent.family === familyName);
       const compiledSourceUnavailable = familyName === "source" && configuration.release.registeredSourceReleaseCount === "0";
       return Object.freeze({
         surface: "successor-family",

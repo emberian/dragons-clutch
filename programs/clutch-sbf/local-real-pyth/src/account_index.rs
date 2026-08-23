@@ -4,9 +4,9 @@
 //! operator choose work, but never replace onchain account authentication.
 
 use crate::rpc_index::{
-    CanonicalFamily, CompiledSourceProfile, IndexedProgramRelease, ObservedRpcAccount,
-    ObservedRpcAccountRemoval, ObservedSlot, ObservedSlotUpdate, ObservedSlotUpdateKind,
-    RpcAccountRemovalKind, RpcCommitment, RpcIndexPlan,
+    CanonicalFamily, IndexedProgramRelease, ObservedRpcAccount, ObservedRpcAccountRemoval,
+    ObservedSlot, ObservedSlotUpdate, ObservedSlotUpdateKind, RpcAccountRemovalKind, RpcCommitment,
+    RpcIndexPlan,
 };
 use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
 use clutch_collateral_adapter_v2::{
@@ -2987,7 +2987,7 @@ mod processed_fork_tests {
             release_manifest_sha256: [0x34; 32],
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
-            source_profile: CompiledSourceProfile::ProductionInert,
+            source_profile: crate::rpc_index::CompiledSourceProfile::ProductionInert,
             enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         };

@@ -88,6 +88,7 @@ struct IntentWire {
     family_tag: String,
     family_version: String,
     local_action: String,
+    family: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,7 +231,7 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
             .enabled_intents
             .into_iter()
             .map(|intent| {
-                Ok(CanonicalIntentCoordinate {
+                let coordinate = CanonicalIntentCoordinate {
                     family_tag: parse_unsigned(
                         &intent.family_tag,
                         &format!("releases[{index}].enabledIntents.familyTag"),
@@ -243,7 +244,14 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
                         &intent.local_action,
                         &format!("releases[{index}].enabledIntents.localAction"),
                     )?,
-                })
+                };
+                if coordinate.family() != Some(family(&intent.family)?) {
+                    return Err(format!(
+                        "releases[{index}].enabledIntents family differs from the central registry triple"
+                    )
+                    .into());
+                }
+                Ok(coordinate)
             })
             .collect::<Result<Vec<_>>>()?;
         releases.push(IndexedProgramRelease {

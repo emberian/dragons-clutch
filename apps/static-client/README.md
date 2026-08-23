@@ -46,7 +46,8 @@ selected operatord URL and only with sequential `GET` requests to:
 Response bodies are byte-budgeted while streaming and then shape-bounded.
 Account quantities remain canonical decimal strings. The release join requires
 exact program, ProgramData, deployment-slot, ELF, manifest, profile, source,
-enabled-intent, decoder-family, and release-key equality. Duplicate releases,
+enabled-intent (including its registry-owned semantic family), decoder-family,
+and release-key equality. Duplicate releases,
 duplicate selected account addresses, cross-family kind labels, and a release
 or decoder-family change during the acquisition bracket are refused.
 Rows from other releases are counted and ignored rather than blended.

@@ -127,7 +127,7 @@
       definition("Decoded families", release.families.join(", ")),
       definition("Enabled registry coordinates", release.enabledIntents.length === 0
         ? "none — transaction construction refuses every successor coordinate"
-        : release.enabledIntents.map((intent) => `${intent.familyTag}/${intent.familyVersion}/${intent.localAction}`).join(", ")),
+        : release.enabledIntents.map((intent) => `${intent.family}:${intent.familyTag}/${intent.familyVersion}/${intent.localAction}`).join(", ")),
       definition("Manifest/capability authentication", snapshot.release.manifestSourceCapabilityAuthentication)
     );
   };
@@ -357,13 +357,13 @@
     const keeper = keeperForSelection();
     const coordinate = requireKeeperJoin(draft, keeper);
     const transaction = BUILDER.build(draft, state.configuration, $("packet-limit").value.trim());
-    const enabledCoordinates = new Set(state.configuration.release.enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
+    const enabledCoordinates = new Map(state.configuration.release.enabledIntents.map((intent) => [`${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`, intent.family]));
     for (const instruction of transaction.instructionCoordinates) {
       const key = `${instruction.familyTag}:${instruction.familyVersion}:${instruction.localAction}`;
       if (!enabledCoordinates.has(key)) throw new Error(`Successor coordinate ${key} is not enabled by the daemon-projected checked central registry; disabled capabilities are non-actionable.`);
+      if (enabledCoordinates.get(key) !== instruction.family) throw new Error(`Successor coordinate ${key} belongs to ${enabledCoordinates.get(key)}, not caller-labeled family ${instruction.family}; family names are release projections, not draft authority.`);
       if (state.configuration.release.registeredSourceReleaseCount === "0"
-          && instruction.familyTag === "77"
-          && instruction.familyVersion === "2"
+          && instruction.family === "source"
           && BigInt(instruction.localAction) >= 1n
           && BigInt(instruction.localAction) <= 12n) {
         throw new Error(`Source coordinate ${key} is unavailable because this exact checked ELF compiled zero registered Source releases; fixture and mock fallbacks are forbidden.`);

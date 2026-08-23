@@ -580,6 +580,25 @@ pub(crate) fn compose_checked_chain_config(
         expected_genesis.as_bytes(),
         program.as_ref(),
     ]);
+    let projected_intents = intents
+        .iter()
+        .map(|triple| {
+            let coordinate = clutch_local_real_pyth::rpc_index::CanonicalIntentCoordinate {
+                family_tag: triple[0],
+                family_version: triple[1],
+                local_action: triple[2],
+            };
+            let family = coordinate
+                .family()
+                .ok_or("checked profile contains a noncanonical extension action triple")?;
+            Ok(json!({
+                "familyTag": triple[0].to_string(),
+                "familyVersion": triple[1].to_string(),
+                "localAction": triple[2].to_string(),
+                "family": family.name()
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let value = json!({
         "schema": "dragons-clutch/operatord-chain-config/v3",
         "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
@@ -599,11 +618,7 @@ pub(crate) fn compose_checked_chain_config(
             "sourceCommit": checked.source_commit.as_str(),
             "sourceProfile": checked.source_profile.name(),
             "registeredSourceReleaseCount": checked.source_profile.registered_release_count().to_string(),
-            "enabledIntents": intents.iter().map(|triple| json!({
-                "familyTag": triple[0].to_string(),
-                "familyVersion": triple[1].to_string(),
-                "localAction": triple[2].to_string()
-            })).collect::<Vec<_>>(),
+            "enabledIntents": projected_intents,
             "families": families.iter().map(|family| family.name()).collect::<Vec<_>>()
         }],
         "sourceNeutralSink": source_neutral_sink,

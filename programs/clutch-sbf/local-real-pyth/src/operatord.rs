@@ -435,7 +435,8 @@ impl<'index> OperatorJsonApi<'index> {
                     "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
                         "familyTag": intent.family_tag.to_string(),
                         "familyVersion": intent.family_version.to_string(),
-                        "localAction": intent.local_action.to_string()
+                        "localAction": intent.local_action.to_string(),
+                        "family": intent.family().expect("validated canonical intent").name()
                     })).collect::<Vec<_>>(),
                     "families": release.families.iter().map(|family| family.name()).collect::<Vec<_>>()
                 })

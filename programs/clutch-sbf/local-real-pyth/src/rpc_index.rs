@@ -250,6 +250,37 @@ pub struct CanonicalIntentCoordinate {
     pub local_action: u8,
 }
 
+impl CanonicalIntentCoordinate {
+    /// Semantic family owned by the central registry for this exact triple.
+    /// Product and artifact account families have no successor coordinate.
+    #[must_use]
+    pub const fn family(self) -> Option<CanonicalFamily> {
+        use clutch_solana_layout::registry::{
+            ExtensionFamily, RecurringSeriesAction, SourceSeriesAction,
+        };
+        match ExtensionFamily::from_wire(self.family_tag, self.family_version) {
+            Some(ExtensionFamily::GeneralV2) => Some(CanonicalFamily::General),
+            Some(ExtensionFamily::StructuredClaim) => Some(CanonicalFamily::StructuredClaim),
+            Some(ExtensionFamily::Dealer) => Some(CanonicalFamily::Dealer),
+            Some(ExtensionFamily::SourceSeries)
+                if self.local_action >= SourceSeriesAction::FIRST_TAG
+                    && self.local_action <= SourceSeriesAction::LAST_TAG =>
+            {
+                Some(CanonicalFamily::Source)
+            }
+            Some(ExtensionFamily::SourceSeries)
+                if self.local_action >= RecurringSeriesAction::FIRST_TAG
+                    && self.local_action <= RecurringSeriesAction::LAST_TAG =>
+            {
+                Some(CanonicalFamily::Series)
+            }
+            Some(ExtensionFamily::Recovery) => Some(CanonicalFamily::Failure),
+            Some(ExtensionFamily::FractionalRedemption) => Some(CanonicalFamily::Fractional),
+            _ => None,
+        }
+    }
+}
+
 impl IndexedProgramRelease {
     pub fn validate(&self) -> Result<()> {
         if self.program_id == Address::default()
@@ -279,6 +310,9 @@ impl IndexedProgramRelease {
         for intent in &self.enabled_intents {
             if intent.family_tag == 0
                 || intent.family_version == 0
+                || intent
+                    .family()
+                    .is_none_or(|family| self.families.binary_search(&family).is_err())
                 || previous_intent.is_some_and(|value| value >= *intent)
             {
                 return Err(RpcIndexError::InvalidRelease);
@@ -1157,6 +1191,24 @@ mod tests {
             CompiledSourceProfile::parse("fixture-fallback"),
             Err(RpcIndexError::InvalidRelease)
         );
+    }
+
+    #[test]
+    fn intent_family_is_derived_from_the_exact_registry_triple() {
+        let coordinate = |family_tag, family_version, local_action| CanonicalIntentCoordinate {
+            family_tag,
+            family_version,
+            local_action,
+        };
+        assert_eq!(coordinate(74, 1, 1).family(), Some(CanonicalFamily::General));
+        assert_eq!(coordinate(77, 2, 12).family(), Some(CanonicalFamily::Source));
+        assert_eq!(coordinate(77, 2, 13).family(), Some(CanonicalFamily::Series));
+        assert_eq!(coordinate(79, 1, 10).family(), Some(CanonicalFamily::Fractional));
+        assert_eq!(coordinate(77, 2, 19).family(), None);
+
+        let mut value = release();
+        value.enabled_intents = vec![coordinate(77, 2, 1)];
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
     }
 
     #[test]
