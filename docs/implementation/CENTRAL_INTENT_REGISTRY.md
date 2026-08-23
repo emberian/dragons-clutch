@@ -34,7 +34,7 @@ family version creates a new namespace; it does not inherit capability.
 | General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
 | Covered dealer | 76 | `0x4c` | 1 | disabled |
-| Source plane / Series | 77 | `0x4d` | 2 | disabled |
+| Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
@@ -125,11 +125,40 @@ actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
-The Dealer and recovery family action spaces remain empty: every local action
-there is unknown until an atomic design wave fixes its payload and capability
-contract. StructuredClaim payload codecs are owned by its separately integrated
-runtime and adapter; this central allocation does not duplicate or activate
-them.
+The exact recurring-Series laboratory payload codecs live in
+`clutch_solana_layout::product_series`. Allocation still grants no execution
+capability. The program's executable
+Source/Series set remains empty. In particular, a decoded registry release ID
+or capability-profile ID is not authority: registration stays disabled until
+the adapter authenticates the authoritative central release, and every
+value-bearing action stays disabled until its exact source, collateral,
+liveness, and failure receipts are authenticated.
+
+Dealer owns `0x7d/1` for its staged policy and `0x7e/1` for its immutable
+policy. The Source/Series account namespace reserves the disjoint `0x7f/1` for
+the persistent Series registration/replay anchor and `0x80/1` for the mutable
+Series-funding wrapper. Their exact 168-byte and 376-byte codecs are fixed but
+reserved-disabled. The funding wrapper adds tag/version/bump/flags, exact
+refundable account-rent principal, and five release-selected collateral-vault
+rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
+copy its cursor or component-balance facts.
+
+Recovery 78/v1 reserves these local actions, all disabled:
+
+1. `InitializeFailureRoot`
+2. `TriggerSourceFailure`
+3. `TriggerRelationRefusal`
+4. `AdvanceRecoverySchedule`
+5. `AcceptRecoveryWork`
+6. `ResolveCallerFunded`
+7. `ResolvePaidRecovery`
+8. `CloseRecoveryFunding`
+9. `CloseFailureRoot`
+
+The Dealer family action space remains empty. StructuredClaim payload codecs
+are owned by its separately integrated runtime and adapter, while Recovery
+payload/account contracts are owned by its dedicated modules; this central
+allocation duplicates neither contract and activates none of these actions.
 
 ## Coordinated successor account block
 
@@ -161,6 +190,16 @@ or pure runtime elsewhere does not make a route executable.
 | `0x90/1` | SourcePlane V3 | window seal |
 | `0x91/1` | SourcePlane V3 | statistic result |
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
+| `0xa0/1` | Failure | external semantic root; root rent only |
+| `0xa1/1` | Liveness | immutable runtime policy |
+| `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
+| `0xa3/1` | Terminal/replay | failure-generation tombstone |
+
+Tags `0x93..=0x9e` remain outside this wave's ownership for the coordinated
+Dealer design, and `0x9f` deliberately remains unallocated. The failure root
+never aliases `0xa2`, holds recovery work principal, or emits a keeper transfer.
+Accepted work rewrites the failure root and Recovery compartment atomically;
+only the latter is debited for the keeper payment and payer headroom refund.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -189,8 +228,10 @@ The source-only
 `profile-non-production-general-v2-empty-book-identity-lab` enables only the
 actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
 General actions return `UnsupportedInstruction` before their handlers read
-accounts. Unknown family versions and unknown local actions fail strict
-decoding and cannot fall into a legacy handler.
+accounts. Every allocated Source/Series action also returns
+`UnsupportedInstruction` before account reads. Unknown family versions and
+unknown local actions fail strict decoding and cannot fall into a legacy
+handler.
 
 A later activation must change the following atomically:
 
@@ -208,4 +249,6 @@ confined to the named non-production profile. Actions 35 through 38 have
 frozen canonical payload contracts but remain `ReservedDisabled`. Every other
 General V2 action remains allocation-only. Unlisted future local-action proposals, and
 every proposed account shape, stay outside the central ledger until their
-atomic review is complete.
+atomic review is complete. Source/Series V2 local actions 1 through 18 are
+likewise reserved-disabled allocations; a frozen laboratory payload codec does
+not grant execution capability.

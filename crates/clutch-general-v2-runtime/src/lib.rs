@@ -20,10 +20,12 @@
 //! - This join owns only the canonical fixed policy identities selecting those
 //!   already-owned semantics for General V2.
 //!
-//! [`verify_smooth_direct_candidate_v1`] admits only smooth degrees two and
-//! three. It verifies one already-submitted candidate and returns a canonical
-//! rank. It does not find a candidate, establish global optimality, authorize
-//! settlement, authenticate a Solana account owner/PDA, or move assets.
+//! [`verify_smooth_direct_candidate_v1`] retains its original API name but now
+//! admits the complete Product-selected V3 quantized family: mapped degree
+//! zero and smooth degrees one through three. It verifies one already-submitted
+//! candidate and returns a canonical rank. It does not establish global
+//! optimality, authorize settlement, authenticate a Solana account owner/PDA,
+//! or move assets.
 //!
 //! There is exactly one payout rounding boundary: the Product-selected
 //! largest-remainder/lowest-outcome-index quantizer executed by the immutable
@@ -35,35 +37,39 @@ use clutch_batch::relation_v2::{
     EconomicDomainV2, EconomicErrorV2, PricePreconditionV2, VerifiedEconomicsV2,
 };
 use clutch_general_v2_contract::{
-    economic_domain_digest_v2, encode_score_v2_q_first_admitted_tie_v1, AdmissionNodeStatusV1,
+    candidate_bundle_digest_v1, candidate_feed_tail_v2, economic_domain_digest_v2,
+    encode_score_v2_q_first_admitted_tie_v1, quantized_witness_body_digest_v3,
+    quantized_witness_parts_digest_v3, settlement_witness_digest_v1, AdmissionNodeStatusV1,
     AdmissionNodeV3AccountV1, CandidateFeedHeaderV2, CodecError, EconomicDomainV2AccountV1,
     FirstAdmittedTieV1, Id32, MarketBindingV1, ScoreV2QComponentsV1, SettlementCandidateKindV1,
     Sha256BackendV1, CANDIDATE_FEED_HEADER_BYTES, MAX_ORDERS, MAX_OUTCOMES, MAX_QUANTIZED_ATOMS,
     PRICE_MEASURE_WITNESS_SCHEMA_V3, QUANTIZED_ATOM_BYTES, QUANTIZED_PRICE_MEASURE_SEMANTICS_V1,
-    SCORE_V2_Q_RANK_CAPACITY,
+    QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
 use clutch_price_measure::{
-    verify_quantized_price_measure_v3_smooth, AdapterBindingsV3, ErrorV3, PriceVectorV3,
-    QuantizedAtomWitnessV3, VerifiedPriceMeasureV3, PRICE_MEASURE_WITNESS_VERSION_V3,
+    verify_quantized_price_measure_v3_degree_zero, verify_quantized_price_measure_v3_smooth,
+    AdapterBindingsV3, DegreeZeroPayoutTableV3, ErrorV3, PriceVectorV3, QuantizedAtomWitnessV3,
+    VerifiedPriceMeasureV3, PRICE_MEASURE_WITNESS_VERSION_V3,
     QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1,
 };
 use clutch_product_series::{
     Error as ProductError, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1,
+    PriceMeasurePolicyV1, ProductTemplateV4, QuantizedBasisSpecV1, QuantizedEdgePolicyV1,
 };
 use clutch_solana_layout::{CodecError as LayoutError, PriceGridAccount};
 use sha2::{Digest, Sha256};
 
 mod builder;
+mod settlement;
 
 pub use builder::*;
+pub use settlement::*;
 
-/// SHA-256 domain for the canonical V3 quantized witness body.
-///
-/// The terminating zero is part of the preimage. A future field or encoding
-/// change requires a new domain and schema rather than reinterpretation.
-pub const QUANTIZED_WITNESS_BODY_DIGEST_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/quantized-price-measure-witness/v3\0";
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QuantizedBasisProjectionV1 {
+    DegreeZero(DegreeZeroPayoutTableV3),
+    Smooth(QuantizedBasisSpecV1),
+}
 
 /// SHA-256 domain for General V2's canonical owner-blind RelationV2 policy.
 pub const RELATION_V2_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/relation-v2-policy/v1\0";
@@ -90,26 +96,15 @@ pub const SCORE_V2_Q_POLICY_BODY_V1: [u8; 16] = [
     b'D', b'C', b'S', b'V', b'2', b'Q', b'1', 0, 1, 2, 0, 0, 0, 0, 0, 0,
 ];
 
-/// Exact body bytes excluding the digest field itself.
-///
-/// Layout, in order:
-///
-/// ```text
-/// schema:u8 || quantized_semantics:u8
-/// || candidate_feed[32] || relation_domain_digest[32]
-/// || basis_digest[32] || candidate_price_digest[32]
-/// || basis_degree:u8 || outcome_count:u8 || atom_count:u8
-/// || common_denominator_le:u64
-/// || 16 * atom_coordinate_le:u128
-/// || 16 * atom_mass_le:u64
-/// ```
-pub const QUANTIZED_WITNESS_BODY_BYTES_V1: usize =
-    2 + (4 * 32) + 3 + 8 + (MAX_QUANTIZED_ATOMS * 16) + (MAX_QUANTIZED_ATOMS * 8);
+/// Maximum exact active-width bytes in the contract-owned V3 witness body.
+pub const QUANTIZED_WITNESS_BODY_MAX_BYTES_V1: usize = QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES
+    + (MAX_OUTCOMES * 8)
+    + (MAX_QUANTIZED_ATOMS * QUANTIZED_ATOM_BYTES);
 
 const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_ORDERS == 64);
 const _: () = assert!(MAX_QUANTIZED_ATOMS == 16);
-const _: () = assert!(QUANTIZED_WITNESS_BODY_BYTES_V1 == 525);
+const _: () = assert!(QUANTIZED_WITNESS_BODY_MAX_BYTES_V1 == 661);
 const _: () = assert!(RELATION_V2_POLICY_BODY_V1.len() == 24);
 const _: () = assert!(SCORE_V2_Q_POLICY_BODY_V1.len() == 16);
 const _: () = assert!(PRICE_MEASURE_WITNESS_SCHEMA_V3 == PRICE_MEASURE_WITNESS_VERSION_V3);
@@ -151,10 +146,12 @@ pub struct CandidateFeedEconomicsV1 {
     pub atom_masses: [u64; MAX_QUANTIZED_ATOMS],
 }
 
-/// Canonical quantized price-measure witness body before hashing.
+/// Typed canonical quantized price-measure witness body before hashing.
 ///
-/// The body binds one nonunique coherence certificate. Its digest authenticates
-/// the retained sidecar but never enters RelationV2's economic candidate
+/// The contract owns its active-width transcript. This runtime retains typed
+/// fixed-capacity fields while the exact serialization remains the price and
+/// atom tails of `CandidateFeedV2`. Its digest authenticates one nonunique
+/// coherence certificate but never enters RelationV2's economic candidate
 /// digest or ScoreV2-Q rank.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuantizedWitnessBodyV1 {
@@ -165,12 +162,14 @@ pub struct QuantizedWitnessBodyV1 {
     /// Authenticated sealed candidate-feed identity.
     pub candidate_feed: Id32,
     /// Canonical EconomicDomainV2 artifact digest.
-    pub relation_domain_digest: Id32,
+    pub economic_domain_digest: Id32,
     /// Canonical NativeClaimBasisV1 body identity.
     pub basis_digest: Id32,
     /// Canonical exact candidate-price identity.
     pub candidate_price_digest: Id32,
-    /// Smooth basis degree, exactly two or three in this runtime path.
+    /// Exact integer simplex scale.
+    pub price_scale: u64,
+    /// Quantized basis degree, zero through three.
     pub basis_degree: u8,
     /// Active native outcome width.
     pub outcome_count: u8,
@@ -178,6 +177,8 @@ pub struct QuantizedWitnessBodyV1 {
     pub atom_count: u8,
     /// Primitive positive atom-mass denominator.
     pub common_denominator: u64,
+    /// Active exact prices followed by canonical zero padding.
+    pub prices: [u64; MAX_OUTCOMES],
     /// Active sorted coordinates followed by canonical zero padding.
     pub atom_coordinates: [u128; MAX_QUANTIZED_ATOMS],
     /// Active positive masses followed by canonical zero padding.
@@ -185,7 +186,7 @@ pub struct QuantizedWitnessBodyV1 {
 }
 
 impl QuantizedWitnessBodyV1 {
-    /// Validate version, smooth shape, support order, primitive mass, and
+    /// Validate version, quantized basis shape, support order, primitive mass, and
     /// canonical padding before encoding or hashing.
     pub fn validate(self) -> Result<(), GeneralV2RuntimeError> {
         if self.schema_version != PRICE_MEASURE_WITNESS_VERSION_V3
@@ -193,21 +194,39 @@ impl QuantizedWitnessBodyV1 {
         {
             return Err(GeneralV2RuntimeError::UnsupportedWitnessVersion);
         }
-        if !(2..=3).contains(&self.basis_degree)
-            || !(self.basis_degree + 1..=16).contains(&self.outcome_count)
+        if self.basis_degree > 3
+            || !(2..=16).contains(&self.outcome_count)
+            || self.outcome_count <= self.basis_degree
             || self.atom_count == 0
             || self.atom_count > self.outcome_count
             || usize::from(self.atom_count) > MAX_QUANTIZED_ATOMS
+            || self.price_scale == 0
             || self.common_denominator == 0
         {
             return Err(GeneralV2RuntimeError::InvalidWitnessShape);
         }
         if self.candidate_feed.is_zero()
-            || self.relation_domain_digest.is_zero()
+            || self.economic_domain_digest.is_zero()
             || self.basis_digest.is_zero()
             || self.candidate_price_digest.is_zero()
         {
             return Err(GeneralV2RuntimeError::BindingMismatch);
+        }
+        let mut price_sum = 0u64;
+        let mut outcome = 0usize;
+        while outcome < MAX_OUTCOMES {
+            let price = self.prices[outcome];
+            if outcome < usize::from(self.outcome_count) {
+                price_sum = price_sum
+                    .checked_add(price)
+                    .ok_or(GeneralV2RuntimeError::ArithmeticOverflow)?;
+            } else if price != 0 {
+                return Err(GeneralV2RuntimeError::NonCanonicalWitnessPadding);
+            }
+            outcome += 1;
+        }
+        if price_sum != self.price_scale {
+            return Err(GeneralV2RuntimeError::InvalidWitnessShape);
         }
         let mut prior = 0u128;
         let mut mass_sum = 0u64;
@@ -236,66 +255,101 @@ impl QuantizedWitnessBodyV1 {
         Ok(())
     }
 
-    /// Encode the exact fixed-width canonical body.
-    pub fn encode(self) -> Result<[u8; QUANTIZED_WITNESS_BODY_BYTES_V1], GeneralV2RuntimeError> {
+    /// Return the exact active-width contract transcript length.
+    pub fn encoded_len(self) -> Result<usize, GeneralV2RuntimeError> {
         self.validate()?;
-        let mut output = [0u8; QUANTIZED_WITNESS_BODY_BYTES_V1];
+        QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES
+            .checked_add(
+                usize::from(self.outcome_count)
+                    .checked_mul(8)
+                    .ok_or(GeneralV2RuntimeError::ArithmeticOverflow)?,
+            )
+            .and_then(|value| {
+                usize::from(self.atom_count)
+                    .checked_mul(QUANTIZED_ATOM_BYTES)
+                    .and_then(|atom_bytes| value.checked_add(atom_bytes))
+            })
+            .ok_or(GeneralV2RuntimeError::ArithmeticOverflow)
+    }
+
+    /// Encode the exact active-width contract transcript into caller storage.
+    pub fn encode(self, output: &mut [u8]) -> Result<(), GeneralV2RuntimeError> {
+        let expected = self.encoded_len()?;
+        if output.len() != expected {
+            return Err(GeneralV2RuntimeError::InvalidWitnessShape);
+        }
         let mut cursor = 0usize;
-        put(&mut output, &mut cursor, &[self.schema_version])?;
-        put(
-            &mut output,
-            &mut cursor,
-            &[self.quantized_semantics_version],
-        )?;
         for id in [
             self.candidate_feed,
-            self.relation_domain_digest,
+            self.economic_domain_digest,
             self.basis_digest,
             self.candidate_price_digest,
         ] {
-            put(&mut output, &mut cursor, &id.bytes())?;
+            put(output, &mut cursor, &id.bytes())?;
         }
-        put(
-            &mut output,
-            &mut cursor,
-            &[self.basis_degree, self.outcome_count, self.atom_count],
-        )?;
-        put(
-            &mut output,
-            &mut cursor,
-            &self.common_denominator.to_le_bytes(),
-        )?;
+        put(output, &mut cursor, &self.price_scale.to_le_bytes())?;
+        put(output, &mut cursor, &self.common_denominator.to_le_bytes())?;
+        put(output, &mut cursor, &[self.schema_version])?;
+        put(output, &mut cursor, &[self.quantized_semantics_version])?;
+        put(output, &mut cursor, &[self.basis_degree])?;
+        put(output, &mut cursor, &[self.outcome_count])?;
+        put(output, &mut cursor, &[self.atom_count])?;
+        let mut outcome = 0usize;
+        while outcome < usize::from(self.outcome_count) {
+            put(output, &mut cursor, &self.prices[outcome].to_le_bytes())?;
+            outcome += 1;
+        }
         let mut atom = 0usize;
-        while atom < MAX_QUANTIZED_ATOMS {
+        while atom < usize::from(self.atom_count) {
             put(
-                &mut output,
+                output,
                 &mut cursor,
                 &self.atom_coordinates[atom].to_le_bytes(),
             )?;
+            put(output, &mut cursor, &self.atom_masses[atom].to_le_bytes())?;
             atom += 1;
         }
-        atom = 0;
-        while atom < MAX_QUANTIZED_ATOMS {
-            put(
-                &mut output,
-                &mut cursor,
-                &self.atom_masses[atom].to_le_bytes(),
-            )?;
-            atom += 1;
-        }
-        if cursor != QUANTIZED_WITNESS_BODY_BYTES_V1 {
+        if cursor != expected {
             return Err(GeneralV2RuntimeError::ArithmeticOverflow);
         }
-        Ok(output)
+        Ok(())
     }
 
-    /// Derive the canonical SHA-256 body identity.
+    /// Derive the contract-owned canonical SHA-256 body identity.
     pub fn digest(self) -> Result<Id32, GeneralV2RuntimeError> {
-        let encoded = self.encode()?;
-        Id32::new(hash_parts(&[
-            QUANTIZED_WITNESS_BODY_DIGEST_DOMAIN_V1,
-            &encoded,
-        ]))
+        self.validate()?;
+        let mut prices_le = [0u8; MAX_OUTCOMES * 8];
+        let mut atoms_le = [0u8; MAX_QUANTIZED_ATOMS * QUANTIZED_ATOM_BYTES];
+        let mut outcome = 0usize;
+        while outcome < usize::from(self.outcome_count) {
+            let at = outcome * 8;
+            prices_le[at..at + 8].copy_from_slice(&self.prices[outcome].to_le_bytes());
+            outcome += 1;
+        }
+        let mut atom = 0usize;
+        while atom < usize::from(self.atom_count) {
+            let at = atom * QUANTIZED_ATOM_BYTES;
+            atoms_le[at..at + 16].copy_from_slice(&self.atom_coordinates[atom].to_le_bytes());
+            atoms_le[at + 16..at + QUANTIZED_ATOM_BYTES]
+                .copy_from_slice(&self.atom_masses[atom].to_le_bytes());
+            atom += 1;
+        }
+        quantized_witness_parts_digest_v3(
+            &CanonicalSha256,
+            self.candidate_feed,
+            self.economic_domain_digest,
+            self.basis_digest,
+            self.candidate_price_digest,
+            self.price_scale,
+            self.common_denominator,
+            self.schema_version,
+            self.quantized_semantics_version,
+            self.basis_degree,
+            self.outcome_count,
+            self.atom_count,
+            &prices_le[..usize::from(self.outcome_count) * 8],
+            &atoms_le[..usize::from(self.atom_count) * QUANTIZED_ATOM_BYTES],
+        )
         .map_err(GeneralV2RuntimeError::Contract)
     }
 }
@@ -358,7 +412,7 @@ pub enum GeneralV2RuntimeError {
     InvalidAdmissionState,
     /// A Product, Market, Epoch, domain, feed, or policy identity disagreed.
     BindingMismatch,
-    /// This path is deliberately restricted to smooth degree two or three.
+    /// An authenticated basis was outside the V3 degree-zero-through-three domain.
     UnsupportedSmoothDegree,
     /// Witness schema or quantized semantic version was not the frozen pair.
     UnsupportedWitnessVersion,
@@ -480,7 +534,7 @@ pub fn decode_sealed_candidate_feed_v1(
     Ok((header, body))
 }
 
-/// Verify one submitted direct General V2 candidate end to end in pure core.
+/// Verify one submitted quantized Direct General V2 candidate end to end.
 ///
 /// Refusal order is: sealed-feed codec; contract/Product/grid/domain bindings;
 /// canonical witness-body identity; exact quantized price coherence; owner-
@@ -517,21 +571,38 @@ pub fn verify_smooth_direct_candidate_v1(
     if admission_node.status != AdmissionNodeStatusV1::Revealed {
         return Err(GeneralV2RuntimeError::InvalidAdmissionState);
     }
-    if !(2..=3).contains(&header.basis_degree) {
-        return Err(GeneralV2RuntimeError::UnsupportedSmoothDegree);
+    let tail = candidate_feed_tail_v2(sealed_candidate_feed, header)?;
+    let observed_settlement_witness = settlement_witness_digest_v1(
+        &CanonicalSha256,
+        header.base_relation_candidate_id,
+        header.slice_count,
+        tail.slices_le(),
+    )?;
+    let observed_candidate_bundle =
+        candidate_bundle_digest_v1(&CanonicalSha256, sealed_candidate_feed, true)?;
+    if observed_settlement_witness != header.settlement_witness_digest
+        || observed_settlement_witness != admission_node.settlement_witness_digest
+        || observed_candidate_bundle != admission_node.candidate_bundle_digest
+    {
+        return Err(GeneralV2RuntimeError::BindingMismatch);
     }
-
     market_instance.validate_bindings(
         product_template,
         native_basis,
         price_measure_policy,
         genesis,
     )?;
-    let projected_basis = price_measure_policy.project_smooth_basis(
-        native_basis,
-        genesis,
-        authenticated_edge_policy,
-    )?;
+    let projected_basis = if native_basis.basis_degree == 0 {
+        QuantizedBasisProjectionV1::DegreeZero(
+            price_measure_policy.project_degree_zero_table(native_basis, genesis)?,
+        )
+    } else {
+        QuantizedBasisProjectionV1::Smooth(price_measure_policy.project_smooth_basis(
+            native_basis,
+            genesis,
+            authenticated_edge_policy,
+        )?)
+    };
 
     let basis_id = native_basis.id()?.bytes();
     let price_policy_id = price_measure_policy.id()?.bytes();
@@ -613,21 +684,12 @@ pub fn verify_smooth_direct_candidate_v1(
         return Err(GeneralV2RuntimeError::BindingMismatch);
     }
 
-    let witness_body = QuantizedWitnessBodyV1 {
-        schema_version: header.price_witness_schema,
-        quantized_semantics_version: header.quantized_semantics_version,
-        candidate_feed: candidate_feed_identity,
-        relation_domain_digest: domain_digest,
-        basis_digest: header.native_claim_basis_id,
-        candidate_price_digest: header.candidate_price_digest,
-        basis_degree: header.basis_degree,
-        outcome_count: header.outcome_count,
-        atom_count: header.atom_count,
-        common_denominator: header.common_denominator,
-        atom_coordinates: feed.atom_coordinates,
-        atom_masses: feed.atom_masses,
-    };
-    let observed_body_digest = witness_body.digest()?;
+    let observed_body_digest = quantized_witness_body_digest_v3(
+        &CanonicalSha256,
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        true,
+    )?;
     if observed_body_digest != header.price_body_digest {
         return Err(GeneralV2RuntimeError::WitnessBodyDigestMismatch);
     }
@@ -666,8 +728,14 @@ pub fn verify_smooth_direct_candidate_v1(
         &witness,
         price_grid.price_scale,
     )?;
-    let price_measure =
-        verify_quantized_price_measure_v3_smooth(&bindings, &projected_basis, &prices, &witness)?;
+    let price_measure = match &projected_basis {
+        QuantizedBasisProjectionV1::DegreeZero(table) => {
+            verify_quantized_price_measure_v3_degree_zero(&bindings, table, &prices, &witness)?
+        }
+        QuantizedBasisProjectionV1::Smooth(basis) => {
+            verify_quantized_price_measure_v3_smooth(&bindings, basis, &prices, &witness)?
+        }
+    };
 
     let price_precondition = PricePreconditionV2 {
         policy_digest: transcript.price_measure_policy_v1_id.bytes(),

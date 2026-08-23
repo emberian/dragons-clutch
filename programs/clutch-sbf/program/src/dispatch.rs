@@ -361,7 +361,10 @@ fn process_general_v2(
             action,
             request.envelope.payload,
         ),
-        _ => Err(ClutchError::UnsupportedInstruction.into()),
+        ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
     }
 }
 
@@ -1766,6 +1769,24 @@ mod extension_registry_tests {
                 "structured-claim action {local_action}"
             );
         }
+        for local_action in clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::RECOVERY_FAMILY_TAG,
+                clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "recovery action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "recovery action {local_action}"
+            );
+        }
     }
 
     #[test]
@@ -1778,6 +1799,8 @@ mod extension_registry_tests {
             (75, 1, 9),
             (77, 2, 0),
             (77, 2, 19),
+            (78, 1, 0),
+            (78, 1, 10),
             (79, 1, 1),
         ] {
             let bytes = extension_request(family_tag, family_version, local_action);

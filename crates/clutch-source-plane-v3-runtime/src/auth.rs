@@ -1,5 +1,6 @@
 use clutch_source_plane_v3::{
-    ContentId, RawRecordV3, SourcePlaneProgramV3, MAX_SOURCE_VALUE, SOURCE_PLANE_PROGRAM_BYTES,
+    ContentId, FixedCodec, RawRecordV3, SourcePlaneProgramV3, MAX_SOURCE_VALUE,
+    SOURCE_PLANE_PROGRAM_BYTES,
 };
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 use sha2::{Digest, Sha256};
@@ -23,10 +24,8 @@ const SCHEMA_V1: u16 = 1;
 
 /// Exact canonical bytes in [`ClockPolicyV1`].
 pub const CLOCK_POLICY_BYTES: usize = 64;
-/// Exact canonical bytes in one reviewed parser return payload.
-pub const PARSER_OUTPUT_BYTES: usize = 120;
 /// Exact canonical bytes in [`SourceReleaseManifestV1`].
-pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 976;
+pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 1_008;
 
 /// A runtime account/program address, kept distinct from a content digest.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -267,27 +266,6 @@ impl ClockPolicyV1 {
         Ok(out)
     }
 
-    /// Hostile-decode one exact Clock policy account body.
-    pub fn decode(input: &[u8]) -> Result<Self> {
-        if input.len() != CLOCK_POLICY_BYTES
-            || input[..8] != CLOCK_POLICY_MAGIC
-            || le_u16(&input[8..10]) != SCHEMA_V1
-            || input[10..16].iter().any(|byte| *byte != 0)
-            || input[40..].iter().any(|byte| *byte != 0)
-        {
-            return Err(Error::InvalidCodec);
-        }
-        let value = Self {
-            anchor_unix_timestamp: le_u64(&input[16..24]),
-            bucket_seconds: le_u32(&input[24..28]),
-            maximum_boundary_lateness_seconds: le_u32(&input[28..32]),
-            maximum_source_age_seconds: le_u32(&input[32..36]),
-            maximum_source_slot_lag: le_u32(&input[36..40]),
-        };
-        value.validate()?;
-        Ok(value)
-    }
-
     /// Content identity of the exact time/bucket policy.
     pub fn id(&self) -> Result<ContentId> {
         let bytes = self.encode()?;
@@ -389,8 +367,8 @@ impl AuthenticatedClockBucketV1 {
 /// Immutable complete source-release manifest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceReleaseManifestV1 {
-    /// Exact semantic SourcePlane core content identity.
-    pub source_plane_contract_id: ContentId,
+    /// Sole exact semantic SourcePlane core compatibility contract body.
+    pub source_plane: SourcePlaneProgramV3,
     /// Existing SourceSpec semantic identity.
     pub source_spec_id: ContentId,
     /// Existing immutable SourceSpec account address.
@@ -434,7 +412,7 @@ pub struct SourceReleaseManifestV1 {
 impl SourceReleaseManifestV1 {
     /// Validate all immutable identities and role separation.
     pub fn validate(&self) -> Result<()> {
-        live_id(self.source_plane_contract_id)?;
+        self.source_plane.validate()?;
         live_id(self.source_spec_id)?;
         self.source_spec_account.validate()?;
         self.source_spec_owner.validate()?;
@@ -474,7 +452,15 @@ impl SourceReleaseManifestV1 {
         out[..8].copy_from_slice(&SOURCE_RELEASE_MAGIC);
         out[8..10].copy_from_slice(&SCHEMA_V1.to_le_bytes());
         let mut at = 16;
-        put_id(&mut out, &mut at, self.source_plane_contract_id);
+        let source_plane_end = at
+            .checked_add(SOURCE_PLANE_PROGRAM_BYTES)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if source_plane_end > out.len() {
+            return Err(Error::InvalidCodec);
+        }
+        self.source_plane
+            .encode_into(&mut out[at..source_plane_end])?;
+        at = source_plane_end;
         put_id(&mut out, &mut at, self.source_spec_id);
         encode_deployment(&self.adapter, &mut out, &mut at);
         encode_deployment(&self.parser, &mut out, &mut at);
@@ -526,7 +512,14 @@ impl SourceReleaseManifestV1 {
             return Err(Error::InvalidCodec);
         }
         let mut at = 16_usize;
-        let source_plane_contract_id = take_id(input, &mut at);
+        let source_plane_end = at
+            .checked_add(SOURCE_PLANE_PROGRAM_BYTES)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if source_plane_end > input.len() {
+            return Err(Error::InvalidCodec);
+        }
+        let source_plane = SourcePlaneProgramV3::decode(&input[at..source_plane_end])?;
+        at = source_plane_end;
         let source_spec_id = take_id(input, &mut at);
         let adapter = decode_deployment(input, &mut at)?;
         let parser = decode_deployment(input, &mut at)?;
@@ -557,7 +550,7 @@ impl SourceReleaseManifestV1 {
             return Err(Error::InvalidCodec);
         }
         let value = Self {
-            source_plane_contract_id,
+            source_plane,
             source_spec_id,
             source_spec_account,
             source_spec_owner,
@@ -619,6 +612,11 @@ impl AuthenticatedSourceReleaseV1 {
         self.manifest_id
     }
 
+    /// Sole SourcePlane compatibility contract embedded in the release.
+    pub const fn source_plane(self) -> SourcePlaneProgramV3 {
+        self.manifest.source_plane
+    }
+
     /// Sole Clock policy embedded in the canonical release.
     pub const fn clock_policy(self) -> ClockPolicyV1 {
         self.manifest.clock_policy
@@ -678,6 +676,7 @@ pub struct AuthenticatedSourceRouteV1 {
     release_manifest_id: ContentId,
     release_authentication_id: ContentId,
     route_id: ContentId,
+    source_plane_contract_id: ContentId,
     adapter_deployment_id: ContentId,
     parser_deployment_id: ContentId,
     clock_policy_id: ContentId,
@@ -706,7 +705,7 @@ impl AuthenticatedSourceRouteV1 {
 
     /// Exact semantic SourcePlane contract identity.
     pub const fn source_plane_contract_id(self) -> ContentId {
-        self.manifest.source_plane_contract_id
+        self.source_plane_contract_id
     }
 
     /// Existing SourceSpec identity.
@@ -796,7 +795,6 @@ impl AuthenticatedSourceRouteV1 {
 #[allow(clippy::too_many_arguments)]
 pub fn authenticate_source_route(
     release: AuthenticatedSourceReleaseV1,
-    source_plane: &SourcePlaneProgramV3,
     adapter_program: RuntimeAccountViewV1<'_>,
     adapter_programdata: RuntimeAccountViewV1<'_>,
     parser_program: RuntimeAccountViewV1<'_>,
@@ -806,10 +804,7 @@ pub fn authenticate_source_route(
 ) -> Result<AuthenticatedSourceRouteV1> {
     let manifest = release.manifest();
     manifest.validate()?;
-    source_plane.validate()?;
-    if source_plane.id()? != manifest.source_plane_contract_id {
-        return Err(Error::MismatchedBinding);
-    }
+    let source_plane_contract_id = manifest.source_plane.id()?;
     let adapter_deployment_id = manifest
         .adapter
         .authenticate(adapter_program, adapter_programdata)?;
@@ -855,6 +850,7 @@ pub fn authenticate_source_route(
         release_manifest_id: release.manifest_id(),
         release_authentication_id: release.id(),
         route_id: domain_id(SOURCE_ROUTE_AUTH_DOMAIN, &route_bytes),
+        source_plane_contract_id,
         clock_policy_id: manifest.clock_policy.id()?,
         manifest,
         adapter_deployment_id,
@@ -892,10 +888,10 @@ impl ParserOutputV1 {
         Ok(())
     }
 
-    /// Canonical reviewed-parser return bytes.
-    pub fn encode(&self) -> Result<[u8; PARSER_OUTPUT_BYTES]> {
+    /// Canonical return-data digest.
+    pub fn id(&self) -> Result<ContentId> {
         self.validate()?;
-        let mut bytes = [0; PARSER_OUTPUT_BYTES];
+        let mut bytes = [0; 120];
         bytes[..32].copy_from_slice(&self.source_spec_id.bytes());
         bytes[32..48].copy_from_slice(&self.low.to_le_bytes());
         bytes[48..64].copy_from_slice(&self.high.to_le_bytes());
@@ -903,30 +899,7 @@ impl ParserOutputV1 {
         bytes[72..80].copy_from_slice(&self.publish_slot.to_le_bytes());
         bytes[80..88].copy_from_slice(&self.publish_time.to_le_bytes());
         bytes[88..].copy_from_slice(&self.feed_account_data_id.bytes());
-        Ok(bytes)
-    }
-
-    /// Hostile-decode exact return data from the reviewed parser program.
-    pub fn decode(input: &[u8]) -> Result<Self> {
-        if input.len() != PARSER_OUTPUT_BYTES {
-            return Err(Error::InvalidCodec);
-        }
-        let value = Self {
-            source_spec_id: id_at(input, 0),
-            low: le_u128(&input[32..48]),
-            high: le_u128(&input[48..64]),
-            source_sequence: le_u64(&input[64..72]),
-            publish_slot: le_u64(&input[72..80]),
-            publish_time: le_u64(&input[80..88]),
-            feed_account_data_id: id_at(input, 88),
-        };
-        value.validate()?;
-        Ok(value)
-    }
-
-    /// Canonical return-data digest.
-    pub fn id(&self) -> Result<ContentId> {
-        Ok(domain_id(PARSER_OUTPUT_DOMAIN, &self.encode()?))
+        Ok(domain_id(PARSER_OUTPUT_DOMAIN, &bytes))
     }
 }
 
@@ -1226,72 +1199,10 @@ fn encode_deployment(value: &DeploymentBindingV1, out: &mut [u8], at: &mut usize
     *at = end;
 }
 
-fn decode_deployment(input: &[u8], at: &mut usize) -> Result<DeploymentBindingV1> {
-    let program = take_key(input, at);
-    let program_account_data_id = take_id(input, at);
-    let programdata = take_key(input, at);
-    let programdata_account_data_id = take_id(input, at);
-    let loader = take_key(input, at);
-    let end = (*at).checked_add(16).ok_or(Error::ArithmeticOverflow)?;
-    if end > input.len() || input[*at + 4..*at + 8].iter().any(|byte| *byte != 0) {
-        return Err(Error::InvalidCodec);
-    }
-    let value = DeploymentBindingV1 {
-        program,
-        program_account_data_id,
-        programdata,
-        programdata_account_data_id,
-        loader,
-        programdata_link_offset: le_u16(&input[*at..*at + 2]),
-        deployment_slot_offset: le_u16(&input[*at + 2..*at + 4]),
-        deployment_slot: le_u64(&input[*at + 8..end]),
-    };
-    *at = end;
-    value.validate()?;
-    Ok(value)
-}
-
-fn take_id(input: &[u8], at: &mut usize) -> ContentId {
-    let value = id_at(input, *at);
-    *at += 32;
-    value
-}
-
-fn take_key(input: &[u8], at: &mut usize) -> RuntimeKey {
-    let mut bytes = [0; 32];
-    bytes.copy_from_slice(&input[*at..*at + 32]);
-    *at += 32;
-    RuntimeKey::from_bytes(bytes)
-}
-
-fn id_at(input: &[u8], at: usize) -> ContentId {
-    let mut bytes = [0; 32];
-    bytes.copy_from_slice(&input[at..at + 32]);
-    ContentId::from_bytes(bytes)
-}
-
-fn le_u16(input: &[u8]) -> u16 {
-    let mut word = [0; 2];
-    word.copy_from_slice(input);
-    u16::from_le_bytes(word)
-}
-
-fn le_u32(input: &[u8]) -> u32 {
-    let mut word = [0; 4];
-    word.copy_from_slice(input);
-    u32::from_le_bytes(word)
-}
-
 fn le_u64(input: &[u8]) -> u64 {
     let mut word = [0; 8];
     word.copy_from_slice(input);
     u64::from_le_bytes(word)
-}
-
-fn le_u128(input: &[u8]) -> u128 {
-    let mut word = [0; 16];
-    word.copy_from_slice(input);
-    u128::from_le_bytes(word)
 }
 
 const _: () = assert!(SOURCE_PLANE_PROGRAM_BYTES == 64);

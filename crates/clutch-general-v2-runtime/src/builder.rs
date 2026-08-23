@@ -23,18 +23,19 @@ use clutch_general_v2_contract::{
     PRICE_MEASURE_WITNESS_SCHEMA_V3, QUANTIZED_PRICE_MEASURE_SEMANTICS_V1, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_price_measure::{
-    verify_quantized_price_measure_v3_smooth, AdapterBindingsV3, ErrorV3, PriceVectorV3,
-    QuantizedAtomWitnessV3, VerifiedPriceMeasureV3, QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1,
+    verify_quantized_price_measure_v3_degree_zero, verify_quantized_price_measure_v3_smooth,
+    AdapterBindingsV3, ErrorV3, PriceVectorV3, QuantizedAtomWitnessV3, VerifiedPriceMeasureV3,
+    QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1,
 };
 use clutch_product_series::{
     Error as ProductError, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductTemplateV4, QuantizedBasisSpecV1, QuantizedEdgePolicyV1,
+    PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1,
 };
 use clutch_solana_layout::{stream, CodecError as LayoutError, OrderSlot, PriceGridAccount};
 
 use crate::{
     relation_v2_policy_id_v1, score_v2_q_policy_id_v1, CanonicalSha256, GeneralV2RuntimeError,
-    QuantizedWitnessBodyV1,
+    QuantizedBasisProjectionV1, QuantizedWitnessBodyV1,
 };
 
 /// Largest coordinate sample retained by the fixed-memory searcher.
@@ -493,6 +494,15 @@ impl BuiltDirectCandidateV1 {
         if decoded != header {
             return Err(CandidateBuilderErrorV1::BindingMismatch);
         }
+        let observed_body_digest = clutch_general_v2_contract::quantized_witness_body_digest_v3(
+            &CanonicalSha256,
+            candidate_feed_identity,
+            output,
+            true,
+        )?;
+        if observed_body_digest != header.price_body_digest {
+            return Err(CandidateBuilderErrorV1::BindingMismatch);
+        }
         Ok(header)
     }
 }
@@ -626,6 +636,71 @@ pub struct OwnerBlindBookProjectionV1 {
     price_grid_id: Id32,
     realm: Id32,
     book: EconomicBookV2,
+    order_membership: [FrozenOrderMembershipV1; MAX_ORDERS],
+}
+
+/// Original frozen order family retained for reservation authentication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FrozenOrderKindV1 {
+    /// One sparse single-outcome order.
+    Single = 1,
+    /// One coefficient-vector portfolio order.
+    Portfolio = 2,
+}
+
+impl FrozenOrderKindV1 {
+    /// Frozen wire discriminator retained in owner/order-set transcripts.
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Single => 1,
+            Self::Portfolio => 2,
+        }
+    }
+}
+
+/// Checked ownership and replay identity of one live projected order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrozenOrderMembershipV1 {
+    owner: Id32,
+    order_id: Id32,
+    generation: u64,
+    kind: FrozenOrderKindV1,
+    slot: OrderSlot,
+}
+
+impl FrozenOrderMembershipV1 {
+    const EMPTY: Self = Self {
+        owner: Id32::ZERO,
+        order_id: Id32::ZERO,
+        generation: 0,
+        kind: FrozenOrderKindV1::Single,
+        slot: OrderSlot::Empty,
+    };
+
+    /// Semantic Position owner retained from the authenticated page record.
+    pub const fn owner(&self) -> Id32 {
+        self.owner
+    }
+
+    /// Canonical positional order identity retained from the page record.
+    pub const fn order_id(&self) -> Id32 {
+        self.order_id
+    }
+
+    /// Replay generation retained from the page record.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Original single or portfolio family.
+    pub const fn kind(&self) -> FrozenOrderKindV1 {
+        self.kind
+    }
+
+    pub(crate) const fn slot(&self) -> &OrderSlot {
+        &self.slot
+    }
 }
 
 impl OwnerBlindBookProjectionV1 {
@@ -673,16 +748,27 @@ impl OwnerBlindBookProjectionV1 {
     pub const fn book(&self) -> &EconomicBookV2 {
         &self.book
     }
+
+    /// Checked membership row at one dense live-order index.
+    pub fn order_membership(&self, index: u8) -> Option<&FrozenOrderMembershipV1> {
+        if index < self.book.len {
+            Some(&self.order_membership[usize::from(index)])
+        } else {
+            None
+        }
+    }
 }
 
 /// Project a structurally authenticated frozen page set into RelationV2's one
 /// owner-blind economic book and retain its checked General identities.
 ///
-/// Owner and replay-generation bytes are deliberately absent from the output.
-/// Stored positional order IDs remain the canonical sorted identities, so
-/// tombstones leave gaps without renumbering live records. Single-Egg orders
-/// become sparse coefficient vectors; portfolio cash bounds are converted once
-/// to exact price units by checked multiplication with the domain scale.
+/// Owner and replay-generation bytes are excluded from the RelationV2 book but
+/// retained behind the projection's private membership table for the separate
+/// owner-aware settlement join. Stored positional order IDs remain the
+/// canonical sorted identities, so tombstones leave gaps without renumbering
+/// live records. Single-Egg orders become sparse coefficient vectors;
+/// portfolio cash bounds are converted once to exact price units by checked
+/// multiplication with the domain scale.
 #[allow(clippy::too_many_arguments)]
 pub fn project_owner_blind_book_v2(
     pages: &[&[u8]],
@@ -730,6 +816,7 @@ pub fn project_owner_blind_book_v2(
     }
 
     let mut book = EconomicBookV2::empty();
+    let mut order_membership = [FrozenOrderMembershipV1::EMPTY; MAX_ORDERS];
     page = 0;
     while page < pages.len() {
         let header = stream::OrderPageHeader::decode(pages[page])?;
@@ -739,7 +826,7 @@ pub fn project_owner_blind_book_v2(
             let slot = cursor
                 .next_slot()
                 .ok_or(CandidateBuilderErrorV1::Layout(LayoutError::Truncated))??;
-            if let Some(order) = project_owner_blind_slot(slot, &domain)? {
+            if let Some((order, membership)) = project_owner_blind_slot(slot, &domain)? {
                 let at = usize::from(book.len);
                 if at >= MAX_ORDERS {
                     return Err(CandidateBuilderErrorV1::Relation(
@@ -747,6 +834,7 @@ pub fn project_owner_blind_book_v2(
                     ));
                 }
                 book.orders[at] = order;
+                order_membership[at] = membership;
                 book.len = book
                     .len
                     .checked_add(1)
@@ -767,6 +855,7 @@ pub fn project_owner_blind_book_v2(
         price_grid_id: Id32::new(price_grid.grid.bytes())?,
         realm: Id32::new(price_grid.realm.bytes())?,
         book,
+        order_membership,
     })
 }
 
@@ -898,11 +987,47 @@ struct PreparedBuilderContextV1<'a> {
     domain_digest: Id32,
     basis_digest: Id32,
     price_measure_policy_id: Id32,
-    basis: QuantizedBasisSpecV1,
+    basis: QuantizedBasisProjectionV1,
     native_basis: &'a NativeClaimBasisV1,
     price_measure_policy: &'a PriceMeasurePolicyV1,
     price_grid: &'a PriceGridAccount,
     book: &'a EconomicBookV2,
+}
+
+impl QuantizedBasisProjectionV1 {
+    fn coordinate_bounds(&self) -> (u128, u128) {
+        match self {
+            Self::DegreeZero(table) => (table.domain_min, table.domain_max),
+            Self::Smooth(basis) => (
+                basis.knots[0],
+                basis.knots[usize::from(basis.knot_count) - 1],
+            ),
+        }
+    }
+
+    const fn degree(&self) -> u8 {
+        match self {
+            Self::DegreeZero(_) => 0,
+            Self::Smooth(basis) => basis.degree,
+        }
+    }
+
+    const fn payout_denominator(&self) -> u64 {
+        match self {
+            Self::DegreeZero(table) => table.payout_denominator,
+            Self::Smooth(basis) => basis.denominator,
+        }
+    }
+
+    fn evaluate(&self, coordinate: u128) -> Result<[u64; MAX_OUTCOMES], CandidateBuilderErrorV1> {
+        match self {
+            Self::DegreeZero(table) => Ok(table.evaluate(coordinate)?.weights),
+            Self::Smooth(basis) => basis
+                .evaluate(coordinate)
+                .map(|weights| weights.weights)
+                .map_err(|_| CandidateBuilderErrorV1::InvalidAtomProposal),
+        }
+    }
 }
 
 impl<'a> PreparedBuilderContextV1<'a> {
@@ -919,16 +1044,19 @@ impl<'a> PreparedBuilderContextV1<'a> {
             inputs.price_measure_policy,
             inputs.genesis,
         )?;
-        if !(2..=3).contains(&inputs.native_basis.basis_degree) {
-            return Err(CandidateBuilderErrorV1::Runtime(
-                GeneralV2RuntimeError::UnsupportedSmoothDegree,
-            ));
-        }
-        let basis = inputs.price_measure_policy.project_smooth_basis(
-            inputs.native_basis,
-            inputs.genesis,
-            inputs.authenticated_edge_policy,
-        )?;
+        let basis = if inputs.native_basis.basis_degree == 0 {
+            QuantizedBasisProjectionV1::DegreeZero(
+                inputs
+                    .price_measure_policy
+                    .project_degree_zero_table(inputs.native_basis, inputs.genesis)?,
+            )
+        } else {
+            QuantizedBasisProjectionV1::Smooth(inputs.price_measure_policy.project_smooth_basis(
+                inputs.native_basis,
+                inputs.genesis,
+                inputs.authenticated_edge_policy,
+            )?)
+        };
         let basis_digest = Id32::new(inputs.native_basis.id()?.bytes())?;
         let price_measure_policy_id = Id32::new(inputs.price_measure_policy.id()?.bytes())?;
         let market_instance_id = inputs.market_instance.id()?.bytes();
@@ -994,9 +1122,9 @@ impl<'a> PreparedBuilderContextV1<'a> {
 fn project_owner_blind_slot(
     slot: OrderSlot,
     domain: &EconomicDomainV2,
-) -> Result<Option<EconomicOrderV2>, CandidateBuilderErrorV1> {
+) -> Result<Option<(EconomicOrderV2, FrozenOrderMembershipV1)>, CandidateBuilderErrorV1> {
     let mut coefficients = [0u64; MAX_OUTCOMES];
-    let order = match slot {
+    let (order, membership) = match slot {
         OrderSlot::Empty => return Err(CandidateBuilderErrorV1::Layout(LayoutError::ZeroIdentity)),
         OrderSlot::Tombstone(_) => return Ok(None),
         OrderSlot::Single(record) => {
@@ -1004,16 +1132,25 @@ fn project_owner_blind_slot(
                 return Err(CandidateBuilderErrorV1::BindingMismatch);
             }
             coefficients[usize::from(record.outcome)] = 1;
-            EconomicOrderV2 {
-                order_id: record.order_id.bytes(),
-                side: side(record.side)?,
-                coefficients,
-                quantity: record.quantity,
-                minimum_fill: record.minimum_fill,
-                partial_policy: partial(record.flags)?,
-                expiry_epoch: record.expiry_epoch,
-                limit_value_price_units_per_unit: u128::from(record.limit),
-            }
+            (
+                EconomicOrderV2 {
+                    order_id: record.order_id.bytes(),
+                    side: side(record.side)?,
+                    coefficients,
+                    quantity: record.quantity,
+                    minimum_fill: record.minimum_fill,
+                    partial_policy: partial(record.flags)?,
+                    expiry_epoch: record.expiry_epoch,
+                    limit_value_price_units_per_unit: u128::from(record.limit),
+                },
+                FrozenOrderMembershipV1 {
+                    owner: Id32::new(record.owner.bytes())?,
+                    order_id: Id32::new(record.order_id.bytes())?,
+                    generation: record.generation,
+                    kind: FrozenOrderKindV1::Single,
+                    slot,
+                },
+            )
         }
         OrderSlot::Portfolio(record) => {
             if record.active_len > domain.outcome_count {
@@ -1022,19 +1159,28 @@ fn project_owner_blind_slot(
             let limit = u128::from(record.limit_collateral_per_lot)
                 .checked_mul(u128::from(domain.price_scale))
                 .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
-            EconomicOrderV2 {
-                order_id: record.order_id.bytes(),
-                side: side(record.side)?,
-                coefficients: record.coefficients,
-                quantity: record.lots,
-                minimum_fill: record.minimum_fill_lots,
-                partial_policy: partial(record.flags)?,
-                expiry_epoch: record.expiry_epoch,
-                limit_value_price_units_per_unit: limit,
-            }
+            (
+                EconomicOrderV2 {
+                    order_id: record.order_id.bytes(),
+                    side: side(record.side)?,
+                    coefficients: record.coefficients,
+                    quantity: record.lots,
+                    minimum_fill: record.minimum_fill_lots,
+                    partial_policy: partial(record.flags)?,
+                    expiry_epoch: record.expiry_epoch,
+                    limit_value_price_units_per_unit: limit,
+                },
+                FrozenOrderMembershipV1 {
+                    owner: Id32::new(record.owner.bytes())?,
+                    order_id: Id32::new(record.order_id.bytes())?,
+                    generation: record.generation,
+                    kind: FrozenOrderKindV1::Portfolio,
+                    slot,
+                },
+            )
         }
     };
-    Ok(Some(order))
+    Ok(Some((order, membership)))
 }
 
 fn side(value: u8) -> Result<Side, CandidateBuilderErrorV1> {
@@ -1054,11 +1200,10 @@ fn partial(flags: u8) -> Result<PartialPolicy, CandidateBuilderErrorV1> {
 }
 
 fn sample_coordinates(
-    basis: &QuantizedBasisSpecV1,
+    basis: &QuantizedBasisProjectionV1,
     plan: BoundedSearchPlanV1,
 ) -> Result<([u128; MAX_BUILDER_COORDINATES_V1], u8, bool), CandidateBuilderErrorV1> {
-    let first = basis.knots[0];
-    let last = basis.knots[usize::from(basis.knot_count) - 1];
+    let (first, last) = basis.coordinate_bounds();
     let capacity = usize::from(plan.maximum_coordinates);
     let mut output = [0u128; MAX_BUILDER_COORDINATES_V1];
     let mut count = 0usize;
@@ -1128,13 +1273,15 @@ fn consider_atom_measure(
         schema_version: PRICE_MEASURE_WITNESS_SCHEMA_V3,
         quantized_semantics_version: QUANTIZED_PRICE_MEASURE_SEMANTICS_V1,
         candidate_feed: context.candidate_feed_identity,
-        relation_domain_digest: context.domain_digest,
+        economic_domain_digest: context.domain_digest,
         basis_digest: context.basis_digest,
         candidate_price_digest: Id32::new(candidate_price_digest)?,
+        price_scale: price.price_scale,
         basis_degree: price.basis_degree,
         outcome_count: price.native_outcome_count,
         atom_count: atoms.atom_count,
         common_denominator: atoms.common_denominator,
+        prices: price.prices,
         atom_coordinates: atoms.atom_coordinates,
         atom_masses: atoms.atom_masses,
     };
@@ -1167,8 +1314,14 @@ fn consider_atom_measure(
         &witness,
         context.price_grid.price_scale,
     )?;
-    let price_measure =
-        verify_quantized_price_measure_v3_smooth(&bindings, &context.basis, &price, &witness)?;
+    let price_measure = match &context.basis {
+        QuantizedBasisProjectionV1::DegreeZero(table) => {
+            verify_quantized_price_measure_v3_degree_zero(&bindings, table, &price, &witness)?
+        }
+        QuantizedBasisProjectionV1::Smooth(basis) => {
+            verify_quantized_price_measure_v3_smooth(&bindings, basis, &price, &witness)?
+        }
+    };
     search_fills(
         context,
         price,
@@ -1194,8 +1347,7 @@ fn validate_atom_proposal(
     {
         return Err(CandidateBuilderErrorV1::InvalidAtomProposal);
     }
-    let first = context.basis.knots[0];
-    let last = context.basis.knots[usize::from(context.basis.knot_count) - 1];
+    let (first, last) = context.basis.coordinate_bounds();
     let mut sum = 0u64;
     let mut divisor = atoms.common_denominator;
     let mut atom = 0usize;
@@ -1230,13 +1382,10 @@ fn derive_exact_price(
     let mut accumulators = [0u128; MAX_OUTCOMES];
     let mut atom = 0usize;
     while atom < usize::from(atoms.atom_count) {
-        let weights = context
-            .basis
-            .evaluate(atoms.atom_coordinates[atom])
-            .map_err(|_| CandidateBuilderErrorV1::InvalidAtomProposal)?;
+        let weights = context.basis.evaluate(atoms.atom_coordinates[atom])?;
         let mut outcome = 0usize;
         while outcome < usize::from(context.domain.outcome_count) {
-            let term = u128::from(weights.weights[outcome])
+            let term = u128::from(weights[outcome])
                 .checked_mul(u128::from(atoms.atom_masses[atom]))
                 .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
             accumulators[outcome] = accumulators[outcome]
@@ -1246,7 +1395,7 @@ fn derive_exact_price(
         }
         atom += 1;
     }
-    let denominator = u128::from(context.basis.denominator)
+    let denominator = u128::from(context.basis.payout_denominator())
         .checked_mul(u128::from(atoms.common_denominator))
         .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
     let mut prices = [0u64; MAX_OUTCOMES];
@@ -1264,8 +1413,8 @@ fn derive_exact_price(
         outcome += 1;
     }
     Ok(Some(PriceVectorV3 {
-        basis_degree: context.basis.degree,
-        native_outcome_count: context.basis.outcome_count,
+        basis_degree: context.basis.degree(),
+        native_outcome_count: context.domain.outcome_count,
         price_scale: context.domain.price_scale,
         prices,
     }))

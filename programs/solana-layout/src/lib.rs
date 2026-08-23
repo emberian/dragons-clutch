@@ -37,9 +37,12 @@ pub mod clearing;
 pub mod collateral;
 pub mod direct_selection;
 pub mod direct_selection_v3;
+pub mod failure_recovery;
 pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod portfolio_settlement;
+#[cfg(feature = "non-production-product-series-lab")]
+pub mod product_series;
 pub mod projection;
 pub mod registry;
 pub mod reservation;

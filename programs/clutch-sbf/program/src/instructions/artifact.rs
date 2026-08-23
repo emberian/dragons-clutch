@@ -5,8 +5,9 @@
 //! size, accepts only the next 192-byte chunk, and seals only after the whole
 //! body passes its pre-existing hostile-byte codec and semantic digest check.
 //! The final account contains the exact historical raw Policy, PriceGrid, or
-//! Terms bytes at its content-derived PDA; it never contains a generic blob
-//! wrapper and consumers never read the staging account.
+//! Terms bytes—or, only in the explicit non-production laboratory, one frozen
+//! Product/Series codec body—at its content-derived PDA. It never contains a
+//! generic blob wrapper and consumers never read the staging account.
 //!
 //! The stage's funder is its sole writer and sealer.  It may abort at any
 //! time.  After the frozen expiry slot any signer may reap the abandoned stage,
@@ -28,6 +29,16 @@ use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+#[cfg(all(target_os = "solana", feature = "non-production-product-series-lab"))]
+use clutch_product_series::{
+    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
+    PriceMeasurePolicyV1, ProductTemplateV4, SeriesAttachmentPlanV1, SeriesFundingQuoteV1,
+    SeriesFundingTermsV2, SeriesPlanV5, MARKET_GENESIS_PROFILE_V2_DOMAIN,
+    NATIVE_CLAIM_BASIS_DOMAIN, PRICE_MEASURE_POLICY_DOMAIN, PRODUCT_TEMPLATE_DOMAIN,
+    RECOVERY_POLICY_DOMAIN, SERIES_ATTACHMENT_PLAN_DOMAIN, SERIES_FUNDING_QUOTE_DOMAIN,
+    SERIES_FUNDING_TERMS_V2_DOMAIN, SERIES_PLAN_V5_DOMAIN,
+};
 
 use super::genesis::{
     read_rent, require_system_program, RentParameters, MAX_PERMITTED_DATA_INCREASE,
@@ -395,6 +406,17 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         ArtifactKind::DirectBatchPolicyV3 => {
             seeds::direct_batch_policy_v3_pda(program_id, &context, &digest)
         }
+        kind @ (ArtifactKind::NativeClaimBasisV1
+        | ArtifactKind::EvidenceOnlyRecoveryPolicyV1
+        | ArtifactKind::ProductTemplateV4
+        | ArtifactKind::PriceMeasurePolicyV1
+        | ArtifactKind::MarketGenesisProfileV2
+        | ArtifactKind::SeriesFundingQuoteV1
+        | ArtifactKind::SeriesAttachmentPlanV1
+        | ArtifactKind::SeriesPlanV5
+        | ArtifactKind::SeriesFundingTermsV2) => {
+            seeds::product_artifact_pda(program_id, kind.byte(), &digest)
+        }
     }
 }
 
@@ -403,14 +425,115 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
 ///
 /// `clutch-solana-layout` deliberately stays dependency-free and implements
 /// SHA-256 in fixed-array Rust.  That is the correct portable reference, but a
-/// full 1,620-byte Terms preimage consumes more than the default Solana
+/// full Terms preimage consumes more than the default Solana
 /// transaction budget when interpreted as SBF instructions.  The adapter can
 /// use Solana's authenticated SHA-256 syscall for the *same exact preimage*.
 /// Every hostile-byte and semantic check still comes from the owning Terms
 /// codec through `decode_unchecked_into`; "unchecked" here means only that the
-/// portable digest recomputation is replaced immediately below.
+/// portable digest recomputation is replaced immediately below. The
+/// non-production Product/Series catalog uses the same native primitive after
+/// the owning core codec has accepted every byte.
 #[inline(never)]
 fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
+    #[cfg(all(target_os = "solana", feature = "non-production-product-series-lab"))]
+    {
+        if binding.kind == ArtifactKind::NativeClaimBasisV1 {
+            binding.validate()?;
+            require(
+                binding.context == Hash32::ZERO && body.len() == usize::from(binding.exact_len),
+                ClutchError::EvidenceBufferMismatch,
+            )?;
+            let mut basis = Box::new(NativeClaimBasisV1::ZEROED);
+            NativeClaimBasisV1::decode_into(body, &mut basis)
+                .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+            let observed = solana_sha256_hasher::hashv(&[NATIVE_CLAIM_BASIS_DOMAIN, body]);
+            require(
+                observed.to_bytes() == binding.digest.bytes(),
+                ClutchError::EvidenceBufferMismatch,
+            )?;
+            return Ok(0);
+        }
+
+        #[inline(never)]
+        fn validate_product<T: FixedCodec>(
+            binding: ArtifactBinding,
+            body: &[u8],
+            domain: &[u8],
+        ) -> Outcome<u8> {
+            binding.validate()?;
+            require(
+                binding.context == Hash32::ZERO && body.len() == usize::from(binding.exact_len),
+                ClutchError::EvidenceBufferMismatch,
+            )?;
+            T::decode(body).map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+            let observed = solana_sha256_hasher::hashv(&[domain, body]);
+            require(
+                observed.to_bytes() == binding.digest.bytes(),
+                ClutchError::EvidenceBufferMismatch,
+            )?;
+            Ok(0)
+        }
+
+        match binding.kind {
+            ArtifactKind::NativeClaimBasisV1 => {
+                return Err(ClutchError::MismatchedState.into());
+            }
+            ArtifactKind::EvidenceOnlyRecoveryPolicyV1 => {
+                return validate_product::<EvidenceOnlyRecoveryPolicyV1>(
+                    binding,
+                    body,
+                    RECOVERY_POLICY_DOMAIN,
+                );
+            }
+            ArtifactKind::ProductTemplateV4 => {
+                return validate_product::<ProductTemplateV4>(
+                    binding,
+                    body,
+                    PRODUCT_TEMPLATE_DOMAIN,
+                );
+            }
+            ArtifactKind::PriceMeasurePolicyV1 => {
+                return validate_product::<PriceMeasurePolicyV1>(
+                    binding,
+                    body,
+                    PRICE_MEASURE_POLICY_DOMAIN,
+                );
+            }
+            ArtifactKind::MarketGenesisProfileV2 => {
+                return validate_product::<MarketGenesisProfileV2>(
+                    binding,
+                    body,
+                    MARKET_GENESIS_PROFILE_V2_DOMAIN,
+                );
+            }
+            ArtifactKind::SeriesFundingQuoteV1 => {
+                return validate_product::<SeriesFundingQuoteV1>(
+                    binding,
+                    body,
+                    SERIES_FUNDING_QUOTE_DOMAIN,
+                );
+            }
+            ArtifactKind::SeriesAttachmentPlanV1 => {
+                return validate_product::<SeriesAttachmentPlanV1>(
+                    binding,
+                    body,
+                    SERIES_ATTACHMENT_PLAN_DOMAIN,
+                );
+            }
+            ArtifactKind::SeriesPlanV5 => {
+                return validate_product::<SeriesPlanV5>(binding, body, SERIES_PLAN_V5_DOMAIN);
+            }
+            ArtifactKind::SeriesFundingTermsV2 => {
+                return validate_product::<SeriesFundingTermsV2>(
+                    binding,
+                    body,
+                    SERIES_FUNDING_TERMS_V2_DOMAIN,
+                );
+            }
+            _ => {}
+        }
+    }
+
     #[cfg(target_os = "solana")]
     if matches!(binding.kind, ArtifactKind::Terms) {
         const TERMS_DOMAIN: &[u8] = b"dragons-clutch/terms/v2";
@@ -509,6 +632,31 @@ fn create_final<'a>(
                 &[bump],
             ],
         ),
+        kind @ (ArtifactKind::NativeClaimBasisV1
+        | ArtifactKind::EvidenceOnlyRecoveryPolicyV1
+        | ArtifactKind::ProductTemplateV4
+        | ArtifactKind::PriceMeasurePolicyV1
+        | ArtifactKind::MarketGenesisProfileV2
+        | ArtifactKind::SeriesFundingQuoteV1
+        | ArtifactKind::SeriesAttachmentPlanV1
+        | ArtifactKind::SeriesPlanV5
+        | ArtifactKind::SeriesFundingTermsV2) => {
+            let kind_byte = [kind.byte()];
+            create_artifact_pda(
+                program_id,
+                payer,
+                final_account,
+                system,
+                rent,
+                usize::from(binding.exact_len),
+                &[
+                    seeds::SEED_PRODUCT_ARTIFACT_V1,
+                    &kind_byte,
+                    &digest,
+                    &[bump],
+                ],
+            )
+        }
     }
 }
 
@@ -579,12 +727,14 @@ fn seal(
     let encoded_bump = validate_for_runtime(binding, body)?;
     let (final_address, final_bump) = expected_final_pda(program_id, binding);
     expect_pda(accounts[IX_FINAL].key, (final_address, final_bump), None)?;
-    if !matches!(
-        binding.kind,
-        ArtifactKind::CollateralPolicy
-            | ArtifactKind::BatchPolicy
-            | ArtifactKind::DirectBatchPolicyV3
-    ) {
+    if !binding.kind.is_product_series()
+        && !matches!(
+            binding.kind,
+            ArtifactKind::CollateralPolicy
+                | ArtifactKind::BatchPolicy
+                | ArtifactKind::DirectBatchPolicyV3
+        )
+    {
         require(encoded_bump == final_bump, ClutchError::WrongBump)?;
     }
 

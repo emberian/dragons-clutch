@@ -52,6 +52,12 @@ non-production-mock-source = ["clutch-sbf/non-production-mock-source"]
 # Compiles the explicit local-real Pyth release row and its SVM campaign. This
 # is a different, non-production ELF identity; the default registry is unchanged.
 non-production-real-pyth-lab = ["clutch-sbf/non-production-real-pyth-lab"]
+# Builds the separate Product/Series account-boundary ELF. All recurring-Series
+# extension actions remain capability-disabled.
+non-production-product-series-lab = [
+    "clutch-sbf/non-production-product-series-lab",
+    "clutch-solana-layout/non-production-product-series-lab",
+]
 
 [dependencies]
 # The frozen byte layouts and the reference-only codecs.  Both are

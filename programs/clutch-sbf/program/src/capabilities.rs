@@ -8,8 +8,18 @@
 //! the label therefore creates a different release identity.
 
 /// Full research/runtime surface retained by the historical default build.
-#[cfg(feature = "profile-full")]
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "non-production-product-series-lab")
+))]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v1";
+/// Explicit local-only artifact catalog containing successor Product/Series kinds.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-product-series-lab"
+))]
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v1";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
@@ -22,10 +32,22 @@ pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v5";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
-#[cfg(feature = "profile-full")]
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "non-production-product-series-lab")
+))]
 pub const PROFILE_ID: [u8; 32] = [
     0xf2, 0x06, 0x66, 0x13, 0x61, 0x0b, 0x8e, 0x3c, 0xff, 0x18, 0x48, 0x5d, 0x2e, 0x6f, 0x3e, 0x3c,
     0x9f, 0xdc, 0xfc, 0xbb, 0x75, 0x7b, 0x46, 0xb4, 0x07, 0x73, 0x3e, 0xa1, 0x5c, 0x5e, 0x9a, 0xc8,
+];
+/// SHA-256 of the local-only Product/Series artifact catalog profile label.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-product-series-lab"
+))]
+pub const PROFILE_ID: [u8; 32] = [
+    0x64, 0xa6, 0x52, 0x0b, 0xf9, 0x7a, 0xca, 0xba, 0xe3, 0x3e, 0xec, 0xf4, 0xe2, 0x90, 0xf9, 0xe3,
+    0x6a, 0xb0, 0xce, 0xbe, 0x6d, 0x7f, 0xe9, 0xd0, 0x82, 0xf0, 0x6d, 0x87, 0x61, 0x1c, 0xca, 0x60,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
@@ -115,9 +137,10 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 /// Return whether a family-local action has an allocation in the central registry.
 ///
 /// Allocation does not imply execution capability. General V2,
-/// StructuredClaim, SourcePlane V3, and recurring-Series actions have
-/// registered local actions; every exact tuple remains separately disabled
-/// until its handler is admitted.
+/// StructuredClaim, SourcePlane V3, recurring-Series, and Recovery actions
+/// have registered local actions; every exact tuple remains separately
+/// disabled until its handler is admitted. Frozen payload and account codecs
+/// do not activate any runtime tuple.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
@@ -134,6 +157,7 @@ pub const fn extension_intent_action_allocated(
                 | clutch_solana_layout::registry::ExtensionAction::StructuredClaim(_)
                 | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
                 | clutch_solana_layout::registry::ExtensionAction::RecurringSeries(_)
+                | clutch_solana_layout::registry::ExtensionAction::Recovery(_)
         )
     )
 }
@@ -228,7 +252,7 @@ mod tests {
                         && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
                             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
                             .contains(&local_action);
-                    let source = family_tag
+                    let source_or_series = family_tag
                         == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION
@@ -245,7 +269,14 @@ mod tests {
                         && (clutch_solana_layout::registry::StructuredClaimAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::StructuredClaimAction::LAST_TAG)
                             .contains(&local_action);
-                    let expected_allocated = general || structured || source;
+                    let recovery = family_tag
+                        == clutch_solana_layout::registry::RECOVERY_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general || structured || source_or_series || recovery;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,

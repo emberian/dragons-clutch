@@ -7,7 +7,7 @@ facts remain owned by `clutch-solana-layout`; relation values remain owned by
 `clutch-batch`; intent allocations remain owned by the central registry in
 `clutch-solana-layout::registry`.
 
-This first wave centralizes three seams used by current local infrastructure:
+This first wave centralizes four seams used by current local infrastructure:
 
 - exact provenance labels, separate from claim-strength labels such as
   `SBF-EXECUTED`;
@@ -17,13 +17,24 @@ This first wave centralizes three seams used by current local infrastructure:
   admits only an exact direct single-Egg settlement that the current Operator
   can construct completely. Extra pages, churned pages, virtual legs, potted
   conversion, mixed or portfolio pairs, duplicate receipts, and incomplete
-  coverage all refuse before candidate submission.
+  coverage all refuse before candidate submission;
+- the General V2 chain-derived owner projection. It consumes exact verified
+  order rows, one explicit fee row per owner (including zero), selected
+  candidate owner count, buy/sell price units, selected fee atoms, rounding
+  pot, receipt-end count, and current Position cash. It emits lexicographically
+  owner-sorted 288-byte open bodies and preserves the canonical book totals.
+  It deliberately does not reproduce a prospective terminal cash
+  disposition: that stays with the canonical authenticated receipt/pot adapter.
+  Many filled orders may aggregate into one owner row; owner count is not
+  equated with filled order count.
 
 The settlement input borrows the authoritative layout and relation types. The
 returned plan is an ephemeral instruction projection, never onchain state and
 never evidence that an instruction executed. A fresh chain snapshot cannot be
 promoted to evidence of historical completion; the evidence API makes that
-specific promotion unavailable.
+specific promotion unavailable. The General V2 projection likewise does not
+claim that the current General V1 runtime created an owner row, authenticated
+every receipt, or executed a terminal disposition.
 
 ## Duplication audit, 2026-08-23
 
@@ -48,10 +59,12 @@ coordinates.
 
 ## Dependency and provenance boundary
 
-There are no new external dependencies. Both dependencies are first-party path
+There are no new external dependencies. All three dependencies are first-party path
 dependencies:
 
 - `clutch-batch`: authoritative V1 relation types;
+- `clutch-owner-settlement`: authoritative owner aggregation, 288-byte semantic
+  body, authenticated receipt/pot join, terminal rounding, and disposition;
 - `clutch-solana-layout`: authoritative persisted-layout types and central
   intent registry.
 
@@ -61,7 +74,7 @@ classification code rather than proof or deployment code. This records the
 dependency decision required by `docs/PROVENANCE.md`; transitive external
 packages are unchanged from the existing layout graph and pinned by each
 consumer's lockfile. This crate's lock digest is
-`5cfab61b36d2c02cbbede4d45647209375c09f2a2c8014993adb249fcc66f961`.
+`1a1a0ccfa630db5cf247cdb2983bf26c1beb4e7922d17bbe46b206d81aaeb699`.
 
 ## Checks
 
