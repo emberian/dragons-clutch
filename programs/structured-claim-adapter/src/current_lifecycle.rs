@@ -24,12 +24,16 @@ use crate::{is_zero, BoundDescriptorV1, Error, Key, Result};
 /// Exact receipt domain for one current full-width Structured transition.
 pub const CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/current-transition/v1\0";
+/// Successor transition receipt domain that additionally commits the exact
+/// collateral ProgramData/ELF value-route receipt.
+pub const CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/structured-claim/current-transition/v2\0";
 /// Exact projection domain used inside the transition receipt.
 pub const CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/current-position-projection/v1\0";
 
 const POSITION_PROJECTION_PREIMAGE_BYTES: usize = 232;
-const TRANSITION_PREIMAGE_BYTES: usize = 808;
+const TRANSITION_PREIMAGE_BYTES_V2: usize = 840;
 
 /// Current physical accounts bound by a quantity-changing Structured route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,6 +125,8 @@ pub struct CurrentStructuredTransitionPlanV1 {
     pub resolution_semantic_id: Key,
     /// Existing complete-set receipt incorporated by full wrap/unwind.
     pub liability_receipt_id: Key,
+    /// Exact per-instruction collateral ProgramData/ELF value-route receipt.
+    pub collateral_value_receipt_id: Key,
     /// Receipt committing every account, projection, owner, and integer above.
     pub transition_id: Key,
 }
@@ -132,6 +138,7 @@ pub fn prepare_current_wrap_full_v1<B: PositionV3Sha256Backend>(
     collateral: BoundCollateralProfileV2,
     accounts: CurrentStructuredQuantityAccountsV1,
     liabilities: CurrentStructuredLiabilitiesV1,
+    collateral_value_receipt_id: Key,
     mint: WrapperMintProjectionV1,
     holder: WrapperTokenProjectionV1,
     user: PositionProjectionV1,
@@ -139,6 +146,7 @@ pub fn prepare_current_wrap_full_v1<B: PositionV3Sha256Backend>(
     request: WrapperQuantityPayloadV1,
     backend: &B,
 ) -> Result<CurrentStructuredTransitionPlanV1> {
+    require_collateral_value_receipt(collateral_value_receipt_id)?;
     let quantity = request.quantity;
     let backing = preflight_quantity(
         descriptor,
@@ -230,6 +238,7 @@ pub fn prepare_current_wrap_full_v1<B: PositionV3Sha256Backend>(
         [0; MAX_OUTCOMES],
         [0; 32],
         liability_receipt_id,
+        collateral_value_receipt_id,
         backend,
     )
 }
@@ -241,6 +250,7 @@ pub fn prepare_current_unwrap_full_v1<B: PositionV3Sha256Backend>(
     collateral: BoundCollateralProfileV2,
     accounts: CurrentStructuredQuantityAccountsV1,
     liabilities: CurrentStructuredLiabilitiesV1,
+    collateral_value_receipt_id: Key,
     mint: WrapperMintProjectionV1,
     holder: WrapperTokenProjectionV1,
     user: PositionProjectionV1,
@@ -248,6 +258,7 @@ pub fn prepare_current_unwrap_full_v1<B: PositionV3Sha256Backend>(
     request: WrapperQuantityPayloadV1,
     backend: &B,
 ) -> Result<CurrentStructuredTransitionPlanV1> {
+    require_collateral_value_receipt(collateral_value_receipt_id)?;
     let quantity = request.quantity;
     let backing = preflight_quantity(
         descriptor,
@@ -341,6 +352,7 @@ pub fn prepare_current_unwrap_full_v1<B: PositionV3Sha256Backend>(
         [0; MAX_OUTCOMES],
         [0; 32],
         liability_receipt_id,
+        collateral_value_receipt_id,
         backend,
     )
 }
@@ -352,10 +364,12 @@ pub fn prepare_current_compact_donation_v1<B: PositionV3Sha256Backend>(
     collateral: BoundCollateralProfileV2,
     accounts: CurrentStructuredVaultAccountsV1,
     liabilities: CurrentStructuredLiabilitiesV1,
+    collateral_value_receipt_id: Key,
     mint: WrapperMintProjectionV1,
     vault: PositionProjectionV1,
     backend: &B,
 ) -> Result<CurrentStructuredTransitionPlanV1> {
+    require_collateral_value_receipt(collateral_value_receipt_id)?;
     let backing = preflight_vault(
         descriptor,
         collateral,
@@ -453,6 +467,7 @@ pub fn prepare_current_compact_donation_v1<B: PositionV3Sha256Backend>(
         donated_internal,
         [0; 32],
         [0; 32],
+        collateral_value_receipt_id,
         backend,
     )
 }
@@ -464,6 +479,7 @@ pub fn prepare_current_redeem_terminal_v1<B: PositionV3Sha256Backend>(
     collateral: BoundCollateralProfileV2,
     accounts: CurrentStructuredQuantityAccountsV1,
     liabilities: CurrentStructuredLiabilitiesV1,
+    collateral_value_receipt_id: Key,
     resolution_account: Key,
     resolution: ResolutionV5,
     mint: WrapperMintProjectionV1,
@@ -473,6 +489,7 @@ pub fn prepare_current_redeem_terminal_v1<B: PositionV3Sha256Backend>(
     request: WrapperQuantityPayloadV1,
     backend: &B,
 ) -> Result<CurrentStructuredTransitionPlanV1> {
+    require_collateral_value_receipt(collateral_value_receipt_id)?;
     let quantity = request.quantity;
     let backing = preflight_quantity(
         descriptor,
@@ -607,6 +624,7 @@ pub fn prepare_current_redeem_terminal_v1<B: PositionV3Sha256Backend>(
         [0; MAX_OUTCOMES],
         resolution_semantic_id,
         [0; 32],
+        collateral_value_receipt_id,
         backend,
     )
 }
@@ -921,6 +939,7 @@ fn finish_quantity_plan<B: PositionV3Sha256Backend>(
     donated_internal: [u64; MAX_OUTCOMES],
     resolution_semantic_id: Key,
     liability_receipt_id: Key,
+    collateral_value_receipt_id: Key,
     backend: &B,
 ) -> Result<CurrentStructuredTransitionPlanV1> {
     finish_plan(
@@ -945,6 +964,7 @@ fn finish_quantity_plan<B: PositionV3Sha256Backend>(
         donated_internal,
         resolution_semantic_id,
         liability_receipt_id,
+        collateral_value_receipt_id,
         backend,
     )
 }
@@ -972,8 +992,10 @@ fn finish_plan<B: PositionV3Sha256Backend>(
     donated_internal: [u64; MAX_OUTCOMES],
     resolution_semantic_id: Key,
     liability_receipt_id: Key,
+    collateral_value_receipt_id: Key,
     backend: &B,
 ) -> Result<CurrentStructuredTransitionPlanV1> {
+    require_collateral_value_receipt(collateral_value_receipt_id)?;
     validate_liability_successors(hoard_after, claim_ledger_after)?;
     let hoard_before_id = liabilities
         .hoard
@@ -1028,6 +1050,7 @@ fn finish_plan<B: PositionV3Sha256Backend>(
         claim_ledger_after_id,
         resolution_semantic_id,
         liability_receipt_id,
+        collateral_value_receipt_id,
         donated_internal,
         backend,
     )?;
@@ -1052,6 +1075,7 @@ fn finish_plan<B: PositionV3Sha256Backend>(
         claim_ledger_after_id,
         resolution_semantic_id,
         liability_receipt_id,
+        collateral_value_receipt_id,
         transition_id,
     })
 }
@@ -1119,10 +1143,11 @@ fn transition_id<B: PositionV3Sha256Backend>(
     ledger_after_id: Key,
     resolution_id: Key,
     liability_receipt_id: Key,
+    collateral_value_receipt_id: Key,
     donated_internal: [u64; MAX_OUTCOMES],
     backend: &B,
 ) -> Result<Key> {
-    let mut body = [0_u8; TRANSITION_PREIMAGE_BYTES];
+    let mut body = [0_u8; TRANSITION_PREIMAGE_BYTES_V2];
     let mut cursor = 0usize;
     put(&mut body, &mut cursor, &[action.tag()])?;
     put(&mut body, &mut cursor, &[0; 7])?;
@@ -1146,6 +1171,7 @@ fn transition_id<B: PositionV3Sha256Backend>(
         ledger_after_id,
         resolution_id,
         liability_receipt_id,
+        collateral_value_receipt_id,
     ] {
         put(&mut body, &mut cursor, &id)?;
     }
@@ -1164,14 +1190,22 @@ fn transition_id<B: PositionV3Sha256Backend>(
     for value in donated_internal {
         put(&mut body, &mut cursor, &value.to_le_bytes())?;
     }
-    if cursor != TRANSITION_PREIMAGE_BYTES {
+    if cursor != TRANSITION_PREIMAGE_BYTES_V2 {
         return Err(Error::Arithmetic);
     }
-    let id = backend.sha256(CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1, &body);
+    let id = backend.sha256(CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2, &body);
     if is_zero(&id) {
         return Err(Error::DigestMismatch);
     }
     Ok(id)
+}
+
+fn require_collateral_value_receipt(receipt_id: Key) -> Result<()> {
+    if is_zero(&receipt_id) {
+        Err(Error::BaseClosureMismatch)
+    } else {
+        Ok(())
+    }
 }
 
 fn put<const N: usize>(output: &mut [u8; N], cursor: &mut usize, input: &[u8]) -> Result<()> {
@@ -1354,6 +1388,7 @@ mod tests {
             [17; 32],
             [0; 32],
             [0; 32],
+            [18; 32],
             donation,
             &Hash,
         )
@@ -1380,10 +1415,39 @@ mod tests {
             [17; 32],
             [0; 32],
             [0; 32],
+            [18; 32],
             donation,
             &Hash,
         )
         .expect("second receipt");
         assert_ne!(first, second);
+        let changed_collateral_receipt = transition_id(
+            StructuredClaimActionV1::CompactDonation,
+            accounts,
+            0,
+            10,
+            10,
+            0,
+            0,
+            0,
+            3,
+            4,
+            [10; 32],
+            [11; 32],
+            [12; 32],
+            [13; 32],
+            [14; 32],
+            [15; 32],
+            [16; 32],
+            [17; 32],
+            [0; 32],
+            [0; 32],
+            [19; 32],
+            [0; MAX_OUTCOMES],
+            &Hash,
+        )
+        .expect("changed collateral receipt");
+        assert_ne!(first, changed_collateral_receipt);
+        assert!(require_collateral_value_receipt([0; 32]).is_err());
     }
 }

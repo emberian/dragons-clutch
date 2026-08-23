@@ -50,6 +50,7 @@ pub use current_lifecycle::{
     CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
     CurrentStructuredTransitionPlanV1, CurrentStructuredVaultAccountsV1,
     CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1, CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1,
+    CURRENT_STRUCTURED_TRANSITION_DOMAIN_V2,
 };
 pub use envelope::{
     admit_runtime_envelope_v1, decode_instruction_v1, StructuredClaimEnvelopeV1,
