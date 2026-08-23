@@ -39,10 +39,14 @@ pub use auth::{
     PARSER_OUTPUT_BYTES, SOURCE_RELEASE_MANIFEST_BYTES,
 };
 pub use funding::{
-    plan_source_account_close, plan_source_account_creation, AccountCloseFundingV1,
-    AccountCreationFundingV1, RentExemptionQuoteV1, SourceAccountFundingLedgerV1,
-    SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1, SourceWorkAuthorizationV1,
-    SourceWorkKindV1, SourceWorkScheduleBindingV1,
+    authenticate_source_work_receipt_account, plan_source_account_close,
+    plan_source_account_creation, AccountCloseFundingV1, AccountCreationFundingV1,
+    AuthenticatedSourceWorkReceiptV1, RentExemptionQuoteV1, SourceAccountFundingLedgerV1,
+    SourceReceiptDispositionV1, SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
+    SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccountV1,
+    SourceWorkScheduleBindingV1, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
+    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
+    SOURCE_WORK_SCHEDULE_BYTES,
 };
 pub use ingest::{
     authenticate_open_raw_page_account, authenticate_source_generation_request,

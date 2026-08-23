@@ -11,17 +11,28 @@
 //! functions are the typed trust-boundary seam a later activation must call;
 //! their existence does not make any instruction executable.
 
+use clutch_liveness::{
+    runtime_adapter_v1::{
+        RuntimeAdapterErrorV1, RuntimeReceiptKindV1, RuntimeReceiptObservationV1,
+        RuntimeTransitionActionV1, RuntimeTransitionIntentV1,
+    },
+    runtime_v1::RuntimeCompartmentKindV1,
+    Id as LivenessId,
+};
 use clutch_source_plane_v3::{ContentId, StatisticKeyV3, WindowSpecV3};
 use clutch_source_plane_v3_adapter::{PdaRecipeV3, MAX_PDA_SEEDS};
 use clutch_source_plane_v3_runtime::{
     account_data_id, authenticate_boundary, authenticate_source_release_account,
-    authenticate_source_route, join_source_occurrence, source_occurrence_record_id,
-    AdapterInvocationV1, AuthenticatedBoundaryV1, AuthenticatedClockBucketV1,
-    AuthenticatedEvaluationV1, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
+    authenticate_source_route, authenticate_source_work_receipt_account, join_source_occurrence,
+    source_occurrence_record_id, AdapterInvocationV1, AuthenticatedBoundaryV1,
+    AuthenticatedClockBucketV1, AuthenticatedEvaluationV1, AuthenticatedSourceReleaseV1,
+    AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedWindowEvidenceV1, ClockSnapshotV1,
     FailurePolicySourceHandoffV1, OccurrenceDispositionV1, OccurrenceSourceReceiptV1,
-    ParserOutputV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey, SourceReleaseManifestV1,
-    SuccessfulEvaluationHandoffV1,
+    ParserOutputV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
+    SourceReceiptDispositionV1, SourceReleaseManifestV1, SourceWorkReceiptAccountV1,
+    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
+    SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
 };
 use solana_account_info::AccountInfo;
 use solana_instruction::Instruction;
@@ -35,6 +46,15 @@ const ACCOUNT_VECTOR_DOMAIN: &[u8] = b"dragons-clutch/sbf-account-vector/v1";
 const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
+
+const _: () = assert!(
+    SOURCE_WORK_RECEIPT_ACCOUNT_TAG
+        == clutch_solana_layout::registry::SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG
+);
+const _: () = assert!(
+    SOURCE_WORK_RECEIPT_ACCOUNT_VERSION
+        == clutch_solana_layout::registry::SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION
+);
 
 /// Fail-closed SourcePlane V3 refusal at the real SBF boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +79,10 @@ pub enum SourceV3SbfError {
     ParserAccountCount,
     /// The ordered parser accounts omitted, aliased, or widened feed/config roles.
     ParserAccountVector,
+    /// An authenticated receipt disposition did not match the requested liveness action.
+    WrongReceiptDisposition,
+    /// The single-custody liveness runtime refused the projected intent.
+    Liveness(RuntimeAdapterErrorV1),
 }
 
 impl From<clutch_source_plane_v3_runtime::Error> for SourceV3SbfError {
@@ -70,6 +94,12 @@ impl From<clutch_source_plane_v3_runtime::Error> for SourceV3SbfError {
 impl From<clutch_source_plane_v3_adapter::Error> for SourceV3SbfError {
     fn from(value: clutch_source_plane_v3_adapter::Error) -> Self {
         Self::Pda(value)
+    }
+}
+
+impl From<RuntimeAdapterErrorV1> for SourceV3SbfError {
+    fn from(value: RuntimeAdapterErrorV1) -> Self {
+        Self::Liveness(value)
     }
 }
 
@@ -228,6 +258,120 @@ pub fn authenticate_occurrence(
         key,
     )
     .map_err(Into::into)
+}
+
+/// Authenticate the exact globally tagged Source work/terminal receipt PDA.
+pub fn authenticate_work_receipt(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    receipt_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedSourceWorkReceiptV1> {
+    let data = receipt_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let receipt = SourceWorkReceiptAccountV1::decode(&data)?;
+    let recipe = PdaRecipeV3::source_work_receipt(receipt.receipt_id())?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_source_work_receipt_account(
+        route,
+        schedule,
+        runtime_account_view(receipt_account, &data),
+        derived,
+    )
+    .map_err(Into::into)
+}
+
+/// Project only an authenticated persisted Source receipt into liveness.
+///
+/// The liveness runtime remains the sole lamport custodian and performs the
+/// keeper debit/refund. This projection contains no transfer instruction and
+/// therefore cannot create a second payment path.
+pub fn project_liveness_receipt(
+    authenticated: AuthenticatedSourceWorkReceiptV1,
+) -> RuntimeReceiptObservationV1 {
+    let receipt = authenticated.receipt();
+    RuntimeReceiptObservationV1 {
+        receipt_account_id: LivenessId::from_bytes(authenticated.account().bytes()),
+        receipt_account_owner_program_id: LivenessId::from_bytes(
+            receipt.receipt_account_owner_program_id().bytes(),
+        ),
+        receipt_id: LivenessId::from_bytes(receipt.receipt_id().bytes()),
+        receipt_kind: match receipt.disposition() {
+            SourceReceiptDispositionV1::Work => RuntimeReceiptKindV1::WorkCompleted,
+            SourceReceiptDispositionV1::TerminalSuccess => RuntimeReceiptKindV1::TerminalSuccess,
+            SourceReceiptDispositionV1::TerminalFailure => RuntimeReceiptKindV1::TerminalFailure,
+        },
+        compartment_kind: RuntimeCompartmentKindV1::Source,
+        semantic_owner: LivenessId::from_bytes(receipt.source_compartment_owner().bytes()),
+        lifecycle_id: LivenessId::from_bytes(receipt.lifecycle_id().bytes()),
+        quote_schedule_id: LivenessId::from_bytes(receipt.source_work_schedule_id().bytes()),
+        generation: receipt.generation(),
+        call_ordinal: receipt.call_ordinal(),
+        call_ceiling_lamports: receipt.call_ceiling_lamports(),
+    }
+}
+
+/// Construct the sole liveness spend intent for authenticated Source work.
+pub fn project_liveness_work_intent(
+    authenticated: AuthenticatedSourceWorkReceiptV1,
+    keeper: &Pubkey,
+    keeper_payment_lamports: u64,
+) -> SourceV3SbfResult<RuntimeTransitionIntentV1> {
+    let receipt = authenticated.receipt();
+    if receipt.disposition() != SourceReceiptDispositionV1::Work {
+        return Err(SourceV3SbfError::WrongReceiptDisposition);
+    }
+    let schedule = authenticated.schedule();
+    let intent = RuntimeTransitionIntentV1 {
+        action: RuntimeTransitionActionV1::SpendWork,
+        kind: RuntimeCompartmentKindV1::Source,
+        policy_id: LivenessId::from_bytes(schedule.liveness_policy_id().bytes()),
+        lifecycle_id: LivenessId::from_bytes(receipt.lifecycle_id().bytes()),
+        account_id: LivenessId::from_bytes(receipt.source_compartment_account().bytes()),
+        semantic_owner: LivenessId::from_bytes(receipt.source_compartment_owner().bytes()),
+        quote_schedule_id: LivenessId::from_bytes(receipt.source_work_schedule_id().bytes()),
+        receipt_id: LivenessId::from_bytes(receipt.receipt_id().bytes()),
+        keeper: LivenessId::from_bytes(keeper.to_bytes()),
+        generation: receipt.generation(),
+        call_ordinal: receipt.call_ordinal(),
+        call_ceiling_lamports: receipt.call_ceiling_lamports(),
+        keeper_payment_lamports,
+        flags: 0,
+    };
+    intent.validate()?;
+    Ok(intent)
+}
+
+/// Construct the sole liveness terminal intent for an authenticated receipt.
+pub fn project_liveness_terminal_intent(
+    authenticated: AuthenticatedSourceWorkReceiptV1,
+) -> SourceV3SbfResult<RuntimeTransitionIntentV1> {
+    let receipt = authenticated.receipt();
+    let action = match receipt.disposition() {
+        SourceReceiptDispositionV1::TerminalSuccess => RuntimeTransitionActionV1::CloseSuccess,
+        SourceReceiptDispositionV1::TerminalFailure => RuntimeTransitionActionV1::CloseFailure,
+        SourceReceiptDispositionV1::Work => return Err(SourceV3SbfError::WrongReceiptDisposition),
+    };
+    let schedule = authenticated.schedule();
+    let intent = RuntimeTransitionIntentV1 {
+        action,
+        kind: RuntimeCompartmentKindV1::Source,
+        policy_id: LivenessId::from_bytes(schedule.liveness_policy_id().bytes()),
+        lifecycle_id: LivenessId::from_bytes(receipt.lifecycle_id().bytes()),
+        account_id: LivenessId::from_bytes(receipt.source_compartment_account().bytes()),
+        semantic_owner: LivenessId::from_bytes(receipt.source_compartment_owner().bytes()),
+        quote_schedule_id: LivenessId::from_bytes(receipt.source_work_schedule_id().bytes()),
+        receipt_id: LivenessId::from_bytes(receipt.receipt_id().bytes()),
+        keeper: LivenessId::ZERO,
+        generation: receipt.generation(),
+        call_ordinal: 0,
+        call_ceiling_lamports: 0,
+        keeper_payment_lamports: 0,
+        flags: 0,
+    };
+    intent.validate()?;
+    Ok(intent)
 }
 
 /// Project exact mature result absence into the failure/recovery boundary.
