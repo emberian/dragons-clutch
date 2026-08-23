@@ -1,9 +1,9 @@
 # Structured-claim SBF successor adapter
 
-Status: **a separately deployable non-production wrapper profile admits only
-actions 1, 2, and 4; the base create/action-35 handlers and their central tuple
-cutover still require integration; no artifact has been built, measured,
-deployed, or validated** (2026-08-23).
+Status: **a separately deployable non-production wrapper profile admits actions
+1 through 5; the matching laboratory base profile admits creation, canonical
+custody, and atomic full-vector wrap/unwind over current liability owners; no
+artifact has been built, measured, deployed, or validated** (2026-08-23).
 
 This crate consumes `clutch-structured-claim-runtime-contract` as the only
 owner of structured-claim descriptor bytes, family-local payload codecs, and
@@ -42,10 +42,10 @@ The structured family is `75/v1`, with eight runtime-contract actions:
 8. permanent descriptor retirement.
 
 The adapter default remains fail-closed. Its explicit
-`live-canonical-wrapper` profile admits exactly actions 1, 2, and 4; the
-standalone wrapper artifact selects that profile. Actions 3, 5, 6, 7, and 8
-still refuse before account loading. This does not independently activate the
-base program's central capability/dispatch tuples.
+`live-current-wrapper` profile admits exactly actions 1 through 5; the
+standalone wrapper artifact selects that profile. Actions 6, 7, and 8 still
+refuse before account loading. The base program enables only the matching
+non-production central capability/dispatch tuples.
 
 Activation must be atomic with all of the following:
 
@@ -83,8 +83,8 @@ The adapter owns only facts that cannot live in the pure runtime contract:
   nonaliasing;
 - hostile decoding of the current Realm/Profile/policy, MarketBinding/runtime,
   MarketInstance, Hoard V2, ClaimLedger V3, Position V3, and purpose-owned
-  Replay accounts on canonical custody routes (the still-disabled full-vector
-  and terminal planners retain their explicitly named legacy closure blocker);
+  Replay accounts on canonical and full-vector custody routes, with current
+  Hoard V2 and ClaimLedger V3 successors for the full-vector routes;
 - projection through a named base-PDA verifier;
 - projection through a named pinned Token-2022 parser; and
 - exact ordered outer CPI/write plans plus receipt reconciliation.
@@ -221,17 +221,17 @@ donation to the sink. The wrapper cannot mint this authority from caller fields.
 
 The adapter implementation is intentionally honest about work owned elsewhere:
 
-- General must integrate the exact base tuples without widening the central
-  account-count/profile cutover: Structured `(75,1,1)` uses 28 accounts and
-  General `(74,1,35)` uses 23;
+- any release must keep the exact base tuples and account counts without
+  widening the laboratory profile: Structured `(75,1,1)` uses 28 accounts,
+  General `(74,1,35)` uses 23, and Structured `(75,1,3|5)` uses 28;
 - Product semantic commit `16b50c46` (integrated by `c531524a`) supplies the
   current BundleV4/AttachmentV4 and frame-bounded Series-link authority this
   lane consumes. The base uses Product's private authenticated wrapper
   authorization and first-admission mutation rather than a caller DTO;
   withdrawn Bundle/Attachment V2 and V3 bodies never authorize Structured
   creation;
-- full-vector wrap/unwind, compaction, terminal redemption, Product terminal
-  promotion, and root/Position close remain deliberately disabled; and
+- compaction, terminal redemption, Product terminal promotion, and
+  root/Position close remain deliberately disabled; and
 - no successor build, measurement, bank, SVM, local-validator, or rollback
   campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.
 

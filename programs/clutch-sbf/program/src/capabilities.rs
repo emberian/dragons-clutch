@@ -204,11 +204,33 @@ pub const fn extension_intent_action_allocated(
     feature = "profile-full",
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
-        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+        feature = "profile-non-production-general-v2-empty-book-identity-lab",
+        feature = "non-production-structured-custody-lab"
     ))
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
+
+/// Structured laboratory: current vault founding, canonical custody, and
+/// atomic full-vector compression/expansion over the V3 liability owners.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-structured-custody-lab",
+    not(any(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ))
+))]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (77, 2, 1),
+    (77, 2, 2),
+    (77, 2, 3),
+    (77, 2, 4),
+    (74, 1, 35),
+    (75, 1, 1),
+    (75, 1, 3),
+    (75, 1, 5),
+];
 
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(
@@ -392,9 +414,21 @@ mod tests {
                         && family_tag == 77
                         && family_version == 2
                         && matches!(local_action, 1 | 2 | 3 | 4);
+                    let structured_runtime_enabled = cfg!(all(
+                        feature = "profile-full",
+                        feature = "non-production-structured-custody-lab"
+                    )) && !DEALER_POLICY_CATALOG_LAB
+                        && !GENERAL_V2_IDENTITY_LAB
+                        && ((family_tag == 74
+                            && family_version == 1
+                            && local_action == 35)
+                            || (family_tag == 75
+                                && family_version == 1
+                                && matches!(local_action, 1 | 3 | 5)));
                     let expected_enabled = dealer_enabled
                         || general_enabled
-                        || source_runtime_enabled;
+                        || source_runtime_enabled
+                        || structured_runtime_enabled;
                     assert_eq!(
                         extension_intent_action_enabled(family_tag, family_version, local_action,),
                         expected_enabled,

@@ -15,14 +15,13 @@ pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
 /// Runtime actions admitted by this adapter artifact.
 ///
 /// The default is empty. The separately deployed wrapper feature admits only
-/// create and the two canonical supply-neutral routes.
-#[cfg(not(feature = "live-canonical-wrapper"))]
+/// construction plus canonical and full-vector wrap/unwind.
+#[cfg(not(feature = "live-current-wrapper"))]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
-/// Exact create/canonical-wrap/canonical-unwind capability set of the
-/// separately deployed wrapper artifact.
-#[cfg(feature = "live-canonical-wrapper")]
+/// Exact actions 1 through 5 of the separately deployed wrapper artifact.
+#[cfg(feature = "live-current-wrapper")]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
-    (1_u16 << 1) | (1_u16 << 2) | (1_u16 << 4);
+    (1_u16 << 1) | (1_u16 << 2) | (1_u16 << 3) | (1_u16 << 4) | (1_u16 << 5);
 
 const _: () = assert!(StructuredClaimActionV1::LAST_TAG < 16);
 const _: () = assert!(
@@ -32,10 +31,10 @@ const _: () = assert!(
     STRUCTURED_CLAIM_FAMILY_VERSION
         == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION
 );
-#[cfg(not(feature = "live-canonical-wrapper"))]
+#[cfg(not(feature = "live-current-wrapper"))]
 const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
-#[cfg(feature = "live-canonical-wrapper")]
-const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0b1_0110);
+#[cfg(feature = "live-current-wrapper")]
+const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0b11_1110);
 const _: () =
     assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () = assert!(

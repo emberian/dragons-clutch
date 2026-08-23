@@ -1,5 +1,6 @@
 //! Exact account loading, CPI execution, and authoritative post-reconciliation.
 
+use clutch_collateral_adapter_v2::{ClaimLedgerV3, HoardV2};
 use clutch_product_series::{
     CompiledProductSeriesBundleV4, ContentId, FixedCodec, MarketInstancePreimageV2,
     NativeClaimBasisV1, SeriesAttachmentPlanV4, SeriesLinkObligationStatusV1,
@@ -56,6 +57,7 @@ use crate::system::{create_permanent_pda, rent};
 
 const CREATE_ACCOUNT_COUNT: usize = 28;
 const CANONICAL_ACCOUNT_COUNT: usize = 26;
+const FULL_VECTOR_ACCOUNT_COUNT: usize = 28;
 
 const VAULT_AUTHORITY: usize = 0;
 const PAYER: usize = 1;
@@ -100,6 +102,8 @@ const C_MINT: usize = 23;
 const C_HOLDER: usize = 24;
 const C_MINT_AUTHORITY: usize = 25;
 const C_ACTOR: usize = 11;
+const C_COLLATERAL_MINT: usize = 26;
+const C_HOARD_TOKEN: usize = 27;
 
 /// Process the exact enabled wrapper profile.
 pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) -> Result<()> {
@@ -118,6 +122,15 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) 
             program_id,
             accounts,
             StructuredClaimActionV1::UnwrapCanonical,
+            value,
+        ),
+        StructuredClaimPayloadV1::WrapFull(value) => {
+            full_vector(program_id, accounts, StructuredClaimActionV1::WrapFull, value)
+        }
+        StructuredClaimPayloadV1::UnwrapFull(value) => full_vector(
+            program_id,
+            accounts,
+            StructuredClaimActionV1::UnwrapFull,
             value,
         ),
         _ => Err(WrapperError::Instruction),
@@ -463,6 +476,292 @@ fn canonical(
     Ok(())
 }
 
+fn full_vector(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    action: StructuredClaimActionV1,
+    payload: WrapperQuantityPayloadV1,
+) -> Result<()> {
+    validate_full_vector_accounts(program_id, accounts)?;
+    if !matches!(
+        action,
+        StructuredClaimActionV1::WrapFull | StructuredClaimActionV1::UnwrapFull
+    ) {
+        return Err(WrapperError::Instruction);
+    }
+    let (bound, descriptor) =
+        load_bound_descriptor(program_id, accounts, payload.wrapper_product_id)?;
+    let source_before = decode_position(&accounts[7])?;
+    let destination_before = decode_position(&accounts[9])?;
+    let source_replay_before = decode_replay(&accounts[8])?;
+    let destination_replay_before = decode_replay(&accounts[10])?;
+    let (user_before, user_replay_before, vault_before, vault_replay_before) = match action {
+        StructuredClaimActionV1::WrapFull => (
+            source_before,
+            source_replay_before,
+            destination_before,
+            destination_replay_before,
+        ),
+        StructuredClaimActionV1::UnwrapFull => (
+            destination_before,
+            destination_replay_before,
+            source_before,
+            source_replay_before,
+        ),
+        _ => return Err(WrapperError::Instruction),
+    };
+    if user_before.purpose() != PositionPurposeV3::General
+        || vault_before.purpose() != PositionPurposeV3::StructuredClaim
+        || user_before.owner().bytes() != accounts[C_ACTOR].key.to_bytes()
+        || vault_before.owner().bytes() != accounts[VAULT_AUTHORITY].key.to_bytes()
+        || vault_before.purpose_binding_id().bytes() != payload.wrapper_product_id
+        || user_before.market_instance_id().bytes() != descriptor.market
+        || vault_before.market_instance_id().bytes() != descriptor.market
+        || user_before.generation() != payload.user_generation
+        || vault_before.generation() != payload.vault_generation
+        || user_replay_before.header.next_sequence() != payload.user_replay_sequence
+        || vault_replay_before.header.next_sequence() != payload.vault_replay_sequence
+    {
+        return Err(WrapperError::Identity);
+    }
+    let backing = ClaimVector {
+        outcome_count: user_before.outcome_count(),
+        coefficients: descriptor.primitive,
+    }
+    .backing_plan()
+    .map_err(|_| WrapperError::Identity)?;
+    let complete_set_atoms = payload
+        .quantity
+        .checked_mul(backing.cash_per_wrapper)
+        .ok_or(WrapperError::Arithmetic)?;
+    let mut full = [0_u64; clutch_structured_claim::MAX_OUTCOMES];
+    let mut residual = [0_u64; clutch_structured_claim::MAX_OUTCOMES];
+    let mut index = 0usize;
+    while index < usize::from(backing.outcome_count) {
+        full[index] = payload
+            .quantity
+            .checked_mul(descriptor.primitive[index])
+            .ok_or(WrapperError::Arithmetic)?;
+        residual[index] = payload
+            .quantity
+            .checked_mul(backing.residual_eggs_per_wrapper[index])
+            .ok_or(WrapperError::Arithmetic)?;
+        index += 1;
+    }
+    let hoard_before = decode_hoard(accounts)?;
+    let claim_ledger_before = decode_claim_ledger(accounts)?;
+    let (expected_user, expected_vault, expected_hoard, expected_claim_ledger) =
+        expected_full_vector_successors(
+            action,
+            user_before,
+            vault_before,
+            hoard_before,
+            claim_ledger_before,
+            complete_set_atoms,
+            full,
+            residual,
+        )?;
+    let mint_before = decode_mint(accounts, &bound)?;
+    let holder_before = decode_holder(accounts, &bound)?;
+    let supply_after = match action {
+        StructuredClaimActionV1::WrapFull => mint_before
+            .supply
+            .checked_add(payload.quantity)
+            .ok_or(WrapperError::Arithmetic)?,
+        StructuredClaimActionV1::UnwrapFull => mint_before
+            .supply
+            .checked_sub(payload.quantity)
+            .ok_or(WrapperError::Arithmetic)?,
+        _ => return Err(WrapperError::Instruction),
+    };
+    let holder_after = match action {
+        StructuredClaimActionV1::WrapFull => holder_before
+            .amount
+            .checked_add(payload.quantity)
+            .ok_or(WrapperError::Arithmetic)?,
+        StructuredClaimActionV1::UnwrapFull => holder_before
+            .amount
+            .checked_sub(payload.quantity)
+            .ok_or(WrapperError::Arithmetic)?,
+        _ => return Err(WrapperError::Instruction),
+    };
+    let token_operation = match action {
+        StructuredClaimActionV1::WrapFull => Token2022CpiV1::MintChecked {
+            mint: accounts[C_MINT].key.to_bytes(),
+            token: accounts[C_HOLDER].key.to_bytes(),
+            authority: accounts[C_MINT_AUTHORITY].key.to_bytes(),
+            quantity: payload.quantity,
+            supply_before: mint_before.supply,
+            supply_after,
+            holder_before: holder_before.amount,
+            holder_after,
+        },
+        StructuredClaimActionV1::UnwrapFull => Token2022CpiV1::BurnChecked {
+            mint: accounts[C_MINT].key.to_bytes(),
+            token: accounts[C_HOLDER].key.to_bytes(),
+            authority: accounts[C_ACTOR].key.to_bytes(),
+            quantity: payload.quantity,
+            supply_before: mint_before.supply,
+            supply_after,
+            holder_before: holder_before.amount,
+            holder_after,
+        },
+        _ => return Err(WrapperError::Instruction),
+    };
+    let token_plan = plan_token_2022_cpi_v1(
+        accounts[C_TOKEN_PROGRAM].key.to_bytes(),
+        token_operation,
+    )
+    .map_err(|_| WrapperError::Token2022)?;
+    match action {
+        StructuredClaimActionV1::WrapFull => {
+            invoke_base_full_vector(accounts, action, payload)?;
+            reconcile_full_vector_base(
+                accounts,
+                action,
+                source_before,
+                source_replay_before,
+                destination_before,
+                destination_replay_before,
+                expected_user,
+                expected_vault,
+                expected_hoard,
+                expected_claim_ledger,
+            )?;
+            let bump = [descriptor.mint_authority_bump];
+            let signer: [&[u8]; 3] = [MINT_AUTHORITY_SEED, &payload.wrapper_product_id, &bump];
+            invoke_token_plan(&token_plan, accounts, &[&signer])?;
+        }
+        StructuredClaimActionV1::UnwrapFull => {
+            invoke_token_plan(&token_plan, accounts, &[])?;
+            invoke_base_full_vector(accounts, action, payload)?;
+            reconcile_full_vector_base(
+                accounts,
+                action,
+                source_before,
+                source_replay_before,
+                destination_before,
+                destination_replay_before,
+                expected_user,
+                expected_vault,
+                expected_hoard,
+                expected_claim_ledger,
+            )?;
+        }
+        _ => return Err(WrapperError::Instruction),
+    }
+    let mint_observed = decode_mint(accounts, &bound)?;
+    let holder_observed = decode_holder(accounts, &bound)?;
+    if mint_observed.supply != supply_after
+        || holder_observed.amount != holder_after
+        || mint_observed.mint_authority != mint_before.mint_authority
+        || holder_observed.mint != holder_before.mint
+        || holder_observed.owner != holder_before.owner
+    {
+        return Err(WrapperError::Token2022);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expected_full_vector_successors(
+    action: StructuredClaimActionV1,
+    user_before: PositionAccountV3,
+    vault_before: PositionAccountV3,
+    hoard_before: HoardV2,
+    claim_ledger_before: ClaimLedgerV3,
+    complete_set_atoms: u64,
+    full: [u64; clutch_structured_claim::MAX_OUTCOMES],
+    residual: [u64; clutch_structured_claim::MAX_OUTCOMES],
+) -> Result<(PositionAccountV3, PositionAccountV3, HoardV2, ClaimLedgerV3)> {
+    let mut user_fields = user_before.fields();
+    let mut vault_fields = vault_before.fields();
+    let mut aggregate_internal_supply = claim_ledger_before.aggregate_internal_supply;
+    let mut index = 0usize;
+    while index < usize::from(user_before.outcome_count()) {
+        match action {
+            StructuredClaimActionV1::WrapFull => {
+                user_fields.native_eggs[index] = user_fields.native_eggs[index]
+                    .checked_sub(full[index])
+                    .ok_or(WrapperError::BaseCustody)?;
+                vault_fields.native_eggs[index] = vault_fields.native_eggs[index]
+                    .checked_add(residual[index])
+                    .ok_or(WrapperError::Arithmetic)?;
+                aggregate_internal_supply[index] = aggregate_internal_supply[index]
+                    .checked_sub(complete_set_atoms)
+                    .ok_or(WrapperError::BaseCustody)?;
+            }
+            StructuredClaimActionV1::UnwrapFull => {
+                user_fields.native_eggs[index] = user_fields.native_eggs[index]
+                    .checked_add(full[index])
+                    .ok_or(WrapperError::Arithmetic)?;
+                vault_fields.native_eggs[index] = vault_fields.native_eggs[index]
+                    .checked_sub(residual[index])
+                    .ok_or(WrapperError::BaseCustody)?;
+                aggregate_internal_supply[index] = aggregate_internal_supply[index]
+                    .checked_add(complete_set_atoms)
+                    .ok_or(WrapperError::Arithmetic)?;
+            }
+            _ => return Err(WrapperError::Instruction),
+        }
+        index += 1;
+    }
+    let (cash_liability_atoms, locked_claim_principal_atoms) = match action {
+        StructuredClaimActionV1::WrapFull => {
+            vault_fields.cash_atoms = vault_fields
+                .cash_atoms
+                .checked_add(complete_set_atoms)
+                .ok_or(WrapperError::Arithmetic)?;
+            (
+                hoard_before
+                    .cash_liability_atoms
+                    .checked_add(complete_set_atoms)
+                    .ok_or(WrapperError::Arithmetic)?,
+                hoard_before
+                    .locked_claim_principal_atoms
+                    .checked_sub(complete_set_atoms)
+                    .ok_or(WrapperError::BaseCustody)?,
+            )
+        }
+        StructuredClaimActionV1::UnwrapFull => {
+            vault_fields.cash_atoms = vault_fields
+                .cash_atoms
+                .checked_sub(complete_set_atoms)
+                .ok_or(WrapperError::BaseCustody)?;
+            (
+                hoard_before
+                    .cash_liability_atoms
+                    .checked_sub(complete_set_atoms)
+                    .ok_or(WrapperError::BaseCustody)?,
+                hoard_before
+                    .locked_claim_principal_atoms
+                    .checked_add(complete_set_atoms)
+                    .ok_or(WrapperError::Arithmetic)?,
+            )
+        }
+        _ => return Err(WrapperError::Instruction),
+    };
+    let user_after = PositionAccountV3::new(user_fields).map_err(|_| WrapperError::BaseCustody)?;
+    let vault_after =
+        PositionAccountV3::new(vault_fields).map_err(|_| WrapperError::BaseCustody)?;
+    let hoard_after = HoardV2 {
+        cash_liability_atoms,
+        locked_claim_principal_atoms,
+        ..hoard_before
+    };
+    let claim_ledger_after = ClaimLedgerV3 {
+        aggregate_internal_supply,
+        ..claim_ledger_before
+    };
+    hoard_after
+        .validate()
+        .map_err(|_| WrapperError::BaseCustody)?;
+    claim_ledger_after
+        .validate()
+        .map_err(|_| WrapperError::BaseCustody)?;
+    Ok((user_after, vault_after, hoard_after, claim_ledger_after))
+}
+
 fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Result<()> {
     if accounts.len() != CREATE_ACCOUNT_COUNT {
         return Err(WrapperError::Accounts);
@@ -532,6 +831,54 @@ fn validate_canonical_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]
         return Err(WrapperError::Accounts);
     }
     let mut left = 0_usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            let token_program_alias = left == 4 && right == C_TOKEN_PROGRAM;
+            if accounts[left].key == accounts[right].key && !token_program_alias {
+                return Err(WrapperError::Accounts);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+fn validate_full_vector_accounts(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+) -> Result<()> {
+    if accounts.len() != FULL_VECTOR_ACCOUNT_COUNT {
+        return Err(WrapperError::Accounts);
+    }
+    let signer = [
+        false, false, false, false, false, false, false, false, false, false, false, true, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false,
+    ];
+    let writable = [
+        false, false, false, false, false, false, false, true, true, true, true, false, false,
+        false, false, false, false, false, false, false, false, true, true, true, true, false,
+        false, false,
+    ];
+    let executable = [
+        false, false, false, false, true, false, false, false, false, false, false, false, false,
+        true, false, true, false, true, false, false, false, false, false, false, false, false,
+        false, false,
+    ];
+    validate_privileges(accounts, &signer, &writable, &executable)?;
+    if *accounts[C_WRAPPER_PROGRAM].key != *program_id
+        || accounts[C_MINT].owner != accounts[C_TOKEN_PROGRAM].key
+        || accounts[C_HOLDER].owner != accounts[C_TOKEN_PROGRAM].key
+        || accounts[C_COLLATERAL_MINT].owner != accounts[4].key
+        || accounts[C_HOARD_TOKEN].owner != accounts[4].key
+        || accounts[C_MINT].key == accounts[C_HOLDER].key
+        || accounts[VAULT_AUTHORITY].key == accounts[C_ACTOR].key
+    {
+        return Err(WrapperError::Accounts);
+    }
+    let mut left = 0usize;
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
@@ -849,6 +1196,20 @@ fn decode_position(account: &AccountInfo<'_>) -> Result<PositionAccountV3> {
     PositionAccountV3::decode(&data).map_err(|_| WrapperError::Identity)
 }
 
+fn decode_hoard(accounts: &[AccountInfo<'_>]) -> Result<HoardV2> {
+    let data = accounts[C_HOARD]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    HoardV2::decode(&data).map_err(|_| WrapperError::BaseCustody)
+}
+
+fn decode_claim_ledger(accounts: &[AccountInfo<'_>]) -> Result<ClaimLedgerV3> {
+    let data = accounts[C_LEDGER]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    ClaimLedgerV3::decode(&data).map_err(|_| WrapperError::BaseCustody)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplaySnapshot {
     header: clutch_retirement::ReplayV3EnvelopeHeader,
@@ -1071,6 +1432,62 @@ fn reconcile_base_delta(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn reconcile_full_vector_base(
+    accounts: &[AccountInfo<'_>],
+    action: StructuredClaimActionV1,
+    source_before: PositionAccountV3,
+    source_replay_before: ReplaySnapshot,
+    destination_before: PositionAccountV3,
+    destination_replay_before: ReplaySnapshot,
+    expected_user: PositionAccountV3,
+    expected_vault: PositionAccountV3,
+    expected_hoard: HoardV2,
+    expected_claim_ledger: ClaimLedgerV3,
+) -> Result<()> {
+    let source_after = decode_position(&accounts[7])?;
+    let destination_after = decode_position(&accounts[9])?;
+    let source_replay_after = decode_replay(&accounts[8])?;
+    let destination_replay_after = decode_replay(&accounts[10])?;
+    let hoard_after = decode_hoard(accounts)?;
+    let claim_ledger_after = decode_claim_ledger(accounts)?;
+    let (expected_source, expected_destination) = match action {
+        StructuredClaimActionV1::WrapFull => (expected_user, expected_vault),
+        StructuredClaimActionV1::UnwrapFull => (expected_vault, expected_user),
+        _ => return Err(WrapperError::Instruction),
+    };
+    if source_after != expected_source
+        || destination_after != expected_destination
+        || hoard_after != expected_hoard
+        || claim_ledger_after != expected_claim_ledger
+        || immutable_position_fields(source_before, source_after).is_err()
+        || immutable_position_fields(destination_before, destination_after).is_err()
+        || source_before.rent() != source_after.rent()
+        || destination_before.rent() != destination_after.rent()
+        || source_replay_after.header.next_sequence()
+            != source_replay_before
+                .header
+                .next_sequence()
+                .checked_add(1)
+                .ok_or(WrapperError::Arithmetic)?
+        || destination_replay_after.header.next_sequence()
+            != destination_replay_before
+                .header
+                .next_sequence()
+                .checked_add(1)
+                .ok_or(WrapperError::Arithmetic)?
+        || !immutable_replay_fields(source_replay_before, source_replay_after)
+        || !immutable_replay_fields(destination_replay_before, destination_replay_after)
+        || source_replay_after.header.rent() != source_replay_before.header.rent()
+        || destination_replay_after.header.rent() != destination_replay_before.header.rent()
+        || source_replay_after.semantic_id == source_replay_before.semantic_id
+        || destination_replay_after.semantic_id == destination_replay_before.semantic_id
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    Ok(())
+}
+
 fn immutable_replay_fields(before: ReplaySnapshot, after: ReplaySnapshot) -> bool {
     before.header.position_account() == after.header.position_account()
         && before.header.replay_account() == after.header.replay_account()
@@ -1193,6 +1610,55 @@ fn invoke_base_transfer(
     )
     .1];
     let signer: [&[u8]; 3] = [VAULT_OWNER_SEED, &product, &bump];
+    invoke_signed(&instruction, &infos, &[&signer]).map_err(|_| WrapperError::BaseCustody)
+}
+
+fn invoke_base_full_vector(
+    accounts: &[AccountInfo<'_>],
+    action: StructuredClaimActionV1,
+    payload: WrapperQuantityPayloadV1,
+) -> Result<()> {
+    let payload_body = payload.encode().map_err(|_| WrapperError::Instruction)?;
+    let base_action = match action {
+        StructuredClaimActionV1::WrapFull => StructuredClaimAction::WrapFull,
+        StructuredClaimActionV1::UnwrapFull => StructuredClaimAction::UnwrapFull,
+        _ => return Err(WrapperError::Instruction),
+    };
+    let request = ExtensionRequest {
+        sequence: 0,
+        envelope: ExtensionEnvelope {
+            family: ExtensionFamily::StructuredClaim,
+            action: ExtensionAction::StructuredClaim(base_action),
+            payload: &payload_body,
+        },
+    };
+    let mut data = vec![0_u8; 13 + 3 + payload_body.len()];
+    let written = request
+        .encode(&mut data)
+        .map_err(|_| WrapperError::Instruction)?;
+    if written != data.len() {
+        return Err(WrapperError::Instruction);
+    }
+    let mut metas = Vec::with_capacity(FULL_VECTOR_ACCOUNT_COUNT);
+    let mut infos = Vec::with_capacity(FULL_VECTOR_ACCOUNT_COUNT + 1);
+    let mut index = 0usize;
+    while index < FULL_VECTOR_ACCOUNT_COUNT {
+        metas.push(AccountMeta {
+            pubkey: *accounts[index].key,
+            is_signer: index == VAULT_AUTHORITY || index == C_ACTOR,
+            is_writable: matches!(index, 7..=10 | C_HOARD | C_LEDGER | C_MINT | C_HOLDER),
+        });
+        infos.push(accounts[index].clone());
+        index += 1;
+    }
+    infos.push(accounts[C_BASE_PROGRAM].clone());
+    let instruction = Instruction::new_with_bytes(*accounts[C_BASE_PROGRAM].key, &data, metas);
+    let bump = [Pubkey::find_program_address(
+        &[VAULT_OWNER_SEED, &payload.wrapper_product_id],
+        accounts[C_WRAPPER_PROGRAM].key,
+    )
+    .1];
+    let signer: [&[u8]; 3] = [VAULT_OWNER_SEED, &payload.wrapper_product_id, &bump];
     invoke_signed(&instruction, &infos, &[&signer]).map_err(|_| WrapperError::BaseCustody)
 }
 
