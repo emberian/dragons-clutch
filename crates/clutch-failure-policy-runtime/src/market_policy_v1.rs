@@ -8,6 +8,10 @@
 //! operation must join one such link without changing this shared identity.
 
 use clutch_evidence_recovery::Identity as RecoveryIdentity;
+use clutch_liveness::runtime_v1::{
+    PresentFundingSourceV1, RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1,
+    RuntimeCompartmentV1, RuntimeLivenessPolicyV1,
+};
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
     ContentId as ProductContentId, EvidenceOnlyRecoveryPolicyId, MarketGenesisProfileV2Id,
@@ -250,6 +254,94 @@ pub fn admit_failure_market_recovery_funding_v1<
     binding: FailureMarketPolicyBindingV1,
     facts: FailureMarketRecoveryFundingFactsV1,
 ) -> Result<FailureMarketRecoveryFundingReceiptV1> {
+    validate_recovery_funding(binding, facts)?;
+    authority.authenticate_failure_market_recovery_funding(facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(MARKET_RECOVERY_FUNDING_DOMAIN_V1);
+    hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.recovery_compartment_account_id.bytes());
+    hasher.update(facts.liveness_policy_id.bytes());
+    hasher.update(facts.liveness_lifecycle_id.bytes());
+    hasher.update(facts.recovery_quote_schedule_id.bytes());
+    hasher.update(facts.generation.to_le_bytes());
+    hasher.update(facts.work_principal_lamports.to_le_bytes());
+    hasher.update(facts.rent_principal_lamports.to_le_bytes());
+    hasher.update(facts.donation_lamports.to_le_bytes());
+    hasher.update(facts.observed_balance_lamports.to_le_bytes());
+    hasher.update(facts.maximum_calls.to_le_bytes());
+    hasher.update(facts.maximum_lamports_per_call.to_le_bytes());
+    let id = FailureMarketRecoveryFundingReceiptIdV1::from_bytes(hasher.finalize().into());
+    if id.bytes().iter().all(|byte| *byte == 0) {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(FailureMarketRecoveryFundingReceiptV1 { id, facts })
+}
+
+/// Project exact expected facts from a fully validated initial liveness body.
+///
+/// This is not an authentication receipt. It rejects post-work state and the
+/// external-signer funding class: shared Market Recovery must originate in the
+/// typed prepaid endowment debited by Product's founding transaction.
+pub fn project_initial_market_recovery_funding_v1(
+    binding: FailureMarketPolicyBindingV1,
+    policy: RuntimeLivenessPolicyV1,
+    recovery: RuntimeCompartmentV1,
+    observed_balance_lamports: u64,
+) -> Result<FailureMarketRecoveryFundingFactsV1> {
+    let market_policy = binding.facts;
+    policy.validate().map_err(|_| Error::BindingMismatch)?;
+    recovery
+        .validate_against_policy(policy)
+        .map_err(|_| Error::BindingMismatch)?;
+    if recovery.kind != RuntimeCompartmentKindV1::Recovery
+        || recovery.phase != RuntimeCompartmentPhaseV1::Active
+        || recovery.funding_source != PresentFundingSourceV1::PrecapitalizedLivenessEndowment
+        || recovery.remaining_calls != recovery.maximum_calls
+        || recovery.completed_calls != 0
+        || recovery.completed_work_ceiling_lamports != 0
+        || recovery.remaining_work_lamports != recovery.capitalized_work_lamports
+        || recovery.keeper_paid_lamports != 0
+        || recovery.payer_refunded_work_lamports != 0
+        || recovery.neutral_sinked_work_lamports != 0
+        || recovery.rent_locked_lamports != recovery.rent_principal_lamports
+        || recovery.rent_refunded_lamports != 0
+        || recovery.donation_remaining_lamports != recovery.donation_received_lamports
+        || recovery.donation_sinked_lamports != 0
+        || recovery.last_work_receipt_id != LivenessId::ZERO
+        || recovery.terminal_receipt_id != LivenessId::ZERO
+        || recovery.identity.owner != recovery.receipt_program_id
+        || recovery.identity.owner != market_policy.recovery_receipt_program_id
+        || recovery.identity.payer != market_policy.recovery_refund_owner
+        || recovery.identity.neutral_sink != market_policy.neutral_sink
+        || recovery
+            .expected_account_balance_lamports()
+            .map_err(|_| Error::BindingMismatch)?
+            != observed_balance_lamports
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let facts = FailureMarketRecoveryFundingFactsV1 {
+        failure_policy_binding_id: binding.id,
+        recovery_compartment_account_id: recovery.identity.account_id,
+        liveness_policy_id: recovery.identity.policy_id,
+        liveness_lifecycle_id: recovery.identity.lifecycle_id,
+        recovery_quote_schedule_id: recovery.quote_schedule_id,
+        generation: recovery.identity.generation,
+        work_principal_lamports: recovery.capitalized_work_lamports,
+        rent_principal_lamports: recovery.rent_principal_lamports,
+        donation_lamports: recovery.donation_remaining_lamports,
+        observed_balance_lamports,
+        maximum_calls: recovery.maximum_calls,
+        maximum_lamports_per_call: recovery.maximum_lamports_per_call,
+    };
+    validate_recovery_funding(binding, facts)?;
+    Ok(facts)
+}
+
+fn validate_recovery_funding(
+    binding: FailureMarketPolicyBindingV1,
+    facts: FailureMarketRecoveryFundingFactsV1,
+) -> Result<()> {
     let policy = binding.facts;
     let expected_balance = facts
         .work_principal_lamports
@@ -274,26 +366,7 @@ pub fn admit_failure_market_recovery_funding_v1<
     {
         return Err(Error::BindingMismatch);
     }
-    authority.authenticate_failure_market_recovery_funding(facts)?;
-    let mut hasher = Sha256::new();
-    hasher.update(MARKET_RECOVERY_FUNDING_DOMAIN_V1);
-    hasher.update(facts.failure_policy_binding_id.bytes());
-    hasher.update(facts.recovery_compartment_account_id.bytes());
-    hasher.update(facts.liveness_policy_id.bytes());
-    hasher.update(facts.liveness_lifecycle_id.bytes());
-    hasher.update(facts.recovery_quote_schedule_id.bytes());
-    hasher.update(facts.generation.to_le_bytes());
-    hasher.update(facts.work_principal_lamports.to_le_bytes());
-    hasher.update(facts.rent_principal_lamports.to_le_bytes());
-    hasher.update(facts.donation_lamports.to_le_bytes());
-    hasher.update(facts.observed_balance_lamports.to_le_bytes());
-    hasher.update(facts.maximum_calls.to_le_bytes());
-    hasher.update(facts.maximum_lamports_per_call.to_le_bytes());
-    let id = FailureMarketRecoveryFundingReceiptIdV1::from_bytes(hasher.finalize().into());
-    if id.bytes().iter().all(|byte| *byte == 0) {
-        return Err(Error::BindingMismatch);
-    }
-    Ok(FailureMarketRecoveryFundingReceiptV1 { id, facts })
+    Ok(())
 }
 
 fn validate_facts(facts: FailureMarketPolicyFactsV1) -> Result<()> {
@@ -401,6 +474,12 @@ fn hash_facts(facts: FailureMarketPolicyFactsV1) -> FailurePolicyBindingId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_liveness::runtime_v1::{
+        PresentFundingV1, RuntimeCompartmentAdmissionV1, RuntimeCompartmentIdentityV1,
+        RuntimeCompartmentPolicyV1, RuntimeTerminalPathV1, RUNTIME_COMPARTMENT_COUNT_V1,
+        RUNTIME_COMPARTMENT_ORDER_V1, RUNTIME_TERMINAL_PATH_COUNT_V1,
+        RUNTIME_TERMINAL_PATH_ORDER_V1,
+    };
 
     #[derive(Clone, Copy, Debug)]
     struct Exact(FailureMarketPolicyFactsV1);
@@ -500,6 +579,88 @@ mod tests {
         }
     }
 
+    fn initial_recovery(
+        binding: FailureMarketPolicyBindingV1,
+    ) -> (RuntimeLivenessPolicyV1, RuntimeCompartmentV1) {
+        let facts = binding.facts();
+        let empty = RuntimeCompartmentPolicyV1 {
+            kind: RuntimeCompartmentKindV1::Source,
+            quote_schedule_id: LivenessId::from_bytes([80; 32]),
+            receipt_program_id: facts.recovery_receipt_program_id,
+            maximum_calls: 1,
+            maximum_lamports_per_call: 1,
+            work_capital_lamports: 1,
+            account_rent_principal_lamports: 1,
+        };
+        let mut compartments = [empty; RUNTIME_COMPARTMENT_COUNT_V1];
+        let mut index = 0usize;
+        while index < RUNTIME_COMPARTMENT_COUNT_V1 {
+            compartments[index] = RuntimeCompartmentPolicyV1 {
+                kind: RUNTIME_COMPARTMENT_ORDER_V1[index],
+                quote_schedule_id: LivenessId::from_bytes([80 + index as u8; 32]),
+                receipt_program_id: facts.recovery_receipt_program_id,
+                maximum_calls: 1,
+                maximum_lamports_per_call: 1,
+                work_capital_lamports: 1,
+                account_rent_principal_lamports: 1,
+            };
+            index += 1;
+        }
+        compartments[RuntimeCompartmentKindV1::Recovery.index()] = RuntimeCompartmentPolicyV1 {
+            kind: RuntimeCompartmentKindV1::Recovery,
+            quote_schedule_id: facts.recovery_quote_schedule_id,
+            receipt_program_id: facts.recovery_receipt_program_id,
+            maximum_calls: 10,
+            maximum_lamports_per_call: 100,
+            work_capital_lamports: 1_000,
+            account_rent_principal_lamports: 200,
+        };
+        let empty_path = RuntimeTerminalPathV1 {
+            kind: RUNTIME_TERMINAL_PATH_ORDER_V1[0],
+            calls: [1; RUNTIME_COMPARTMENT_COUNT_V1],
+            work_lamports: [1; RUNTIME_COMPARTMENT_COUNT_V1],
+        };
+        let mut terminal_paths = [empty_path; RUNTIME_TERMINAL_PATH_COUNT_V1];
+        index = 0;
+        while index < RUNTIME_TERMINAL_PATH_COUNT_V1 {
+            terminal_paths[index].kind = RUNTIME_TERMINAL_PATH_ORDER_V1[index];
+            terminal_paths[index].work_lamports[RuntimeCompartmentKindV1::Recovery.index()] = 100;
+            index += 1;
+        }
+        let policy = RuntimeLivenessPolicyV1 {
+            policy_id: facts.liveness_policy_id,
+            realm_id: LivenessId::from_bytes([90; 32]),
+            neutral_sink: facts.neutral_sink,
+            compartments,
+            terminal_paths,
+            flags: 0,
+        };
+        let recovery = RuntimeCompartmentV1::admit(
+            policy,
+            RuntimeCompartmentAdmissionV1 {
+                kind: RuntimeCompartmentKindV1::Recovery,
+                identity: RuntimeCompartmentIdentityV1 {
+                    policy_id: facts.liveness_policy_id,
+                    lifecycle_id: facts.liveness_lifecycle_id,
+                    account_id: facts.recovery_compartment_account_id,
+                    owner: facts.recovery_receipt_program_id,
+                    payer: facts.recovery_refund_owner,
+                    neutral_sink: facts.neutral_sink,
+                    generation: facts.generation,
+                },
+                funding: PresentFundingV1 {
+                    payer: facts.recovery_refund_owner,
+                    source: PresentFundingSourceV1::PrecapitalizedLivenessEndowment,
+                    payer_debit_lamports: 1_200,
+                    account_balance_before: 7,
+                    account_balance_after: 1_207,
+                },
+            },
+        )
+        .unwrap();
+        (policy, recovery)
+    }
+
     #[test]
     fn default_authority_cannot_mint_a_market_policy() {
         assert_eq!(
@@ -573,6 +734,28 @@ mod tests {
                 binding,
                 underprovisioned,
             ),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn initial_projection_requires_prepaid_zero_progress_liveness() {
+        let policy_facts = facts();
+        let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
+        let (policy, recovery) = initial_recovery(binding);
+        assert_eq!(
+            project_initial_market_recovery_funding_v1(binding, policy, recovery, 1_207),
+            Ok(funding(binding))
+        );
+
+        let mut signer_funded = recovery;
+        signer_funded.funding_source = PresentFundingSourceV1::ExternalSignerNativeLamports;
+        assert_eq!(
+            project_initial_market_recovery_funding_v1(binding, policy, signer_funded, 1_207,),
+            Err(Error::BindingMismatch)
+        );
+        assert_eq!(
+            project_initial_market_recovery_funding_v1(binding, policy, recovery, 1_206),
             Err(Error::BindingMismatch)
         );
     }
