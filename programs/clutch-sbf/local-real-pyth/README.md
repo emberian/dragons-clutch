@@ -74,19 +74,21 @@ result. The final Clock may be later than that live-update window because the
 transcript assembly requires the Clock to remain authentic and monotone, but
 does not pretend that the original update was posted again.
 
-The public-safe transcript from the first, pre-trading run of this mode is
-retained at
-`docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22`. It carries
-repository HEAD `04795af507f191e51d9cae094867ec43aabd65b9`; retaining the evidence itself
-is necessarily a later repository commit. Operator consumes only its
-`campaign.json`, `result.json`, and `probe-evidence.json` files.
+The current public-safe 52-step transcript is retained at
+`docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23`. It pins
+repository HEAD `4e83648479db33ca8f50798126141ab2fa262d8b`; retaining the evidence itself
+is necessarily a later repository commit. The strict Operator reader consumes
+only its `campaign.json`, `result.json`, and `probe-evidence.json` files. It
+accepts the artifact as joined-v4 and renders the settled trade, authenticated
+source resolution, redemptions, and exact terminal conservation.
 
-That retained predecessor transcript truthfully reports trading as
-`BLOCKED / NOT SUBSTITUTED`; it is not evidence for the extension described
-above. The extension is implemented in the driver, but must not be described as
-an end-to-end pass until a new public-safe transcript is retained from a clean
-repository HEAD. The runner never replaces a missing signed lifecycle step
-with mocked or genesis-injected protocol state.
+The historical predecessor at
+`docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22` truthfully
+reports trading as `BLOCKED / NOT SUBSTITUTED`. It remains evidence only for its
+older joined-v2 schema and is never reinterpreted as the current pass. Neither
+transcript is devnet, mainnet, deployment, or economic-demand evidence. The
+runner never replaces a missing signed lifecycle step with mocked or
+genesis-injected protocol state.
 
 The selected validator must bind RPC, WebSocket (`RPC+1`), and faucet
 listeners exclusively to `127.0.0.1`. The runner inspects the child process's

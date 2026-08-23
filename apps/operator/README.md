@@ -48,11 +48,11 @@ CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
   --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22
-# current joined-v4 lifecycle: point at a freshly retained 52-step transcript
+# current joined-v4 settled trading lifecycle
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
-  --transcript /absolute/path/to/current-joined-v4-transcript
+  --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23
 # then open 127.0.0.1:9130 in a browser
 ```
 
