@@ -48,7 +48,8 @@ pub use custody::{
 };
 pub use current_lifecycle::{
     prepare_current_compact_donation_v1, prepare_current_redeem_terminal_v1,
-    prepare_current_unwrap_full_v1, prepare_current_wrap_full_v1,
+    prepare_current_retire_descriptor_v1, prepare_current_unwrap_full_v1,
+    prepare_current_wrap_full_v1,
     CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
     CurrentStructuredTransitionPlanV1, CurrentStructuredVaultAccountsV1,
     CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1, CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1,
@@ -75,9 +76,10 @@ pub use identity::{
 };
 pub use token2022_wire::{
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
-    plan_token_2022_cpi_v1, wrapper_mint_parser_plan_v1, wrapper_token_parser_plan_v1,
-    CanonicalToken2022DecoderV1, Token2022InstructionPlanV1, WrapperMintParserPlanV1,
-    WrapperTokenParserPlanV1, TOKEN_2022_BASE_ACCOUNT_BYTES,
+    decode_retired_canonical_wrapper_mint_v1, plan_token_2022_cpi_v1,
+    wrapper_mint_parser_plan_v1, wrapper_token_parser_plan_v1, CanonicalToken2022DecoderV1,
+    Token2022InstructionPlanV1, WrapperMintParserPlanV1, WrapperTokenParserPlanV1,
+    TOKEN_2022_BASE_ACCOUNT_BYTES,
     TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES, TOKEN_2022_INSTRUCTION_DATA_CAPACITY,
 };
 

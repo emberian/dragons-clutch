@@ -16,8 +16,9 @@ use clutch_collateral_adapter_v2::{
 use clutch_structured_claim::BackingPlan;
 
 use crate::runtime_contract::{
-    DescriptorStateV1, PositionProjectionV1, StructuredClaimActionV1, WrapperMintProjectionV1,
-    WrapperQuantityPayloadV1, WrapperTokenProjectionV1, MAX_OUTCOMES,
+    AuthenticatedVaultRetirementV1, DescriptorRetirementPlanV1, DescriptorStateV1,
+    PositionProjectionV1, StructuredClaimActionV1, VaultMutationPayloadV1,
+    WrapperMintProjectionV1, WrapperQuantityPayloadV1, WrapperTokenProjectionV1, MAX_OUTCOMES,
 };
 use crate::{is_zero, BoundDescriptorV1, Error, Key, Result};
 
@@ -129,6 +130,115 @@ pub struct CurrentStructuredTransitionPlanV1 {
     pub collateral_value_receipt_id: Key,
     /// Receipt committing every account, projection, owner, and integer above.
     pub transition_id: Key,
+}
+
+/// Prepare current descriptor retirement without consulting the withdrawn
+/// modeled MarketLedger. The current Hoard/Claim owners are authenticated only
+/// to prove this descriptor still belongs to the exact live Market/Realm
+/// liability domain; retirement itself moves no economic atom in either owner.
+/// The base adapter must construct `vault_retirement` from the canonical
+/// PositionV3/ReplayV3 close planner and exact observed lamport balances.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_current_retire_descriptor_v1(
+    descriptor: &BoundDescriptorV1,
+    collateral: BoundCollateralProfileV2,
+    accounts: CurrentStructuredVaultAccountsV1,
+    liabilities: CurrentStructuredLiabilitiesV1,
+    collateral_value_receipt_id: Key,
+    retired_mint: WrapperMintProjectionV1,
+    vault: PositionProjectionV1,
+    request: VaultMutationPayloadV1,
+    vault_retirement: AuthenticatedVaultRetirementV1,
+) -> Result<DescriptorRetirementPlanV1> {
+    require_collateral_value_receipt(collateral_value_receipt_id)?;
+    validate_descriptor_and_liabilities(descriptor, collateral, liabilities)?;
+    let addresses = descriptor.addresses();
+    require_distinct_live(&[
+        accounts.descriptor,
+        accounts.wrapper_product_id,
+        accounts.vault_position,
+        accounts.vault_replay,
+        accounts.mint,
+    ])?;
+    if accounts.descriptor != addresses.descriptor
+        || accounts.wrapper_product_id != descriptor.wrapper_product_id()
+        || accounts.mint != addresses.mint
+        || request.wrapper_product_id != accounts.wrapper_product_id
+        || retired_mint.address != accounts.mint
+        || !retired_mint.initialized
+        || retired_mint.supply != 0
+        || retired_mint.mint_authority != [0; 32]
+        || retired_mint.decimals != 0
+        || retired_mint.freeze_authority != [0; 32]
+        || retired_mint.extension_mask != 0
+    {
+        return Err(Error::Token2022Boundary);
+    }
+    validate_position(descriptor, vault)?;
+    if vault.owner != addresses.vault_owner
+        || vault.generation != request.vault_generation
+        || vault.replay_sequence != request.vault_replay_sequence
+        || vault.cash_atoms != 0
+        || vault.reserved_cash_atoms != 0
+        || vault.internal != [0; MAX_OUTCOMES]
+        || vault_retirement.market != descriptor.identity().claim.basis.market
+        || vault_retirement.vault_owner != addresses.vault_owner
+        || vault_retirement.position_account != accounts.vault_position
+        || vault_retirement.replay_account != accounts.vault_replay
+        || vault_retirement.generation != request.vault_generation
+        || vault_retirement.replay_sequence != request.vault_replay_sequence
+        || vault_retirement.close_receipt == [0; 32]
+        || vault_retirement.tombstone == [0; 32]
+        || vault_retirement.terminal_replay_semantic_id == [0; 32]
+        || vault_retirement.rent_transition_id == [0; 32]
+        || vault_retirement.rent_refund_owner == [0; 32]
+        || vault_retirement.neutral_lamport_sink == [0; 32]
+        || vault_retirement.rent_refund_owner == vault_retirement.neutral_lamport_sink
+        || vault_retirement.position_tombstone_principal_lamports == 0
+        || vault_retirement
+            .position_tombstone_principal_lamports
+            .checked_add(vault_retirement.position_refund_lamports)
+            .and_then(|value| value.checked_add(vault_retirement.position_donation_lamports))
+            .is_none()
+        || vault_retirement
+            .replay_refund_lamports
+            .checked_add(vault_retirement.replay_donation_lamports)
+            .is_none()
+    {
+        return Err(Error::BaseClosureMismatch);
+    }
+    let mut retired_descriptor = *descriptor.descriptor();
+    if retired_descriptor.state != DescriptorStateV1::Active {
+        return Err(Error::ProductBoundary);
+    }
+    retired_descriptor.state = DescriptorStateV1::Retired;
+    retired_descriptor
+        .validate_persisted()
+        .map_err(Error::Runtime)?;
+    Ok(DescriptorRetirementPlanV1 {
+        descriptor: retired_descriptor,
+        mint_supply: 0,
+        mint_authority_before: addresses.mint_authority,
+        mint_authority_after: [0; 32],
+        vault_close_receipt: vault_retirement.close_receipt,
+        vault_tombstone: vault_retirement.tombstone,
+        vault_position_account: vault_retirement.position_account,
+        vault_replay_account: vault_retirement.replay_account,
+        vault_owner: vault_retirement.vault_owner,
+        terminal_replay_semantic_id: vault_retirement.terminal_replay_semantic_id,
+        vault_tombstone_principal_lamports: vault_retirement
+            .position_tombstone_principal_lamports,
+        vault_refund_lamports: vault_retirement
+            .position_refund_lamports
+            .checked_add(vault_retirement.replay_refund_lamports)
+            .ok_or(Error::Arithmetic)?,
+        vault_donation_lamports: vault_retirement
+            .position_donation_lamports
+            .checked_add(vault_retirement.replay_donation_lamports)
+            .ok_or(Error::Arithmetic)?,
+        rent_refund_owner: vault_retirement.rent_refund_owner,
+        neutral_lamport_sink: vault_retirement.neutral_lamport_sink,
+    })
 }
 
 /// Prepare full-vector custody followed by current complete-set compression.

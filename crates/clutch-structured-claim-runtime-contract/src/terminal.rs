@@ -89,10 +89,25 @@ pub struct StructuredDescriptorTerminalPlanV1 {
     pub root_close: Option<StructuredRootCloseDispositionV1>,
 }
 
-/// Prepare one atomic descriptor retirement and, for the last live descriptor,
-/// the matching Product Wrapper-obligation transition plus root deletion.
+/// Descriptor/vault/root postimage prepared before the Product-owned Wrapper
+/// latch is consumed. A live adapter must persist and hostile-reauthenticate
+/// these exact postimages before this becomes Product authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredDescriptorTerminalOwnerPlanV1 {
+    /// Exact descriptor/mint/base-vault retirement plan.
+    pub descriptor_retirement: DescriptorRetirementPlanV1,
+    /// Receipt inserted into the ordered Structured terminal transcript.
+    pub descriptor_terminal_receipt_id: ContentId,
+    /// Exact successor root exposed to Product as private postwrite evidence.
+    pub root_after: StructuredMarketRootV1,
+}
+
+/// Prepare the complete Structured-owned retirement postimage without
+/// accepting caller-shaped Product terminal facts.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized>(
+pub fn prepare_structured_descriptor_terminal_owner_v1<
+    H: WrapperRecipeHashV1 + ?Sized,
+>(
     root_before: StructuredMarketRootV1,
     observed_root_lamports: u64,
     root_account: [u8; 32],
@@ -101,9 +116,8 @@ pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized
     descriptor_account: [u8; 32],
     descriptor_before: StructuredClaimDescriptorV2,
     descriptor_retirement: DescriptorRetirementPlanV1,
-    product_terminal: Option<StructuredProductWrapperTerminalProjectionV1>,
     hasher: &H,
-) -> Result<StructuredDescriptorTerminalPlanV1> {
+) -> Result<StructuredDescriptorTerminalOwnerPlanV1> {
     descriptor_before.validate_persisted()?;
     descriptor_retirement.descriptor.validate_persisted()?;
     if descriptor_before.state != DescriptorStateV1::Active
@@ -117,8 +131,7 @@ pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized
     let mut expected_retired = descriptor_before;
     expected_retired.state = DescriptorStateV1::Retired;
     if descriptor_retirement.descriptor != expected_retired
-        || descriptor_before.structured_root_id
-            != root_before.binding.id(hasher)?.bytes()
+        || descriptor_before.structured_root_id != root_before.binding.id(hasher)?.bytes()
         || descriptor_retirement.rent_refund_owner
             != root_before.binding.rent_refund_owner.bytes()
         || descriptor_retirement.neutral_lamport_sink
@@ -170,6 +183,41 @@ pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized
         descriptor_terminal_receipt_id,
         hasher,
     )?;
+    Ok(StructuredDescriptorTerminalOwnerPlanV1 {
+        descriptor_retirement,
+        descriptor_terminal_receipt_id,
+        root_after,
+    })
+}
+
+/// Prepare one atomic descriptor retirement and, for the last live descriptor,
+/// the matching Product Wrapper-obligation transition plus root deletion.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized>(
+    root_before: StructuredMarketRootV1,
+    observed_root_lamports: u64,
+    root_account: [u8; 32],
+    wrapper_product_id: [u8; 32],
+    wrapper_mint: [u8; 32],
+    descriptor_account: [u8; 32],
+    descriptor_before: StructuredClaimDescriptorV2,
+    descriptor_retirement: DescriptorRetirementPlanV1,
+    product_terminal: Option<StructuredProductWrapperTerminalProjectionV1>,
+    hasher: &H,
+) -> Result<StructuredDescriptorTerminalPlanV1> {
+    let synchronized_root = root_before.observe_lamport_balance(observed_root_lamports)?;
+    let owner = prepare_structured_descriptor_terminal_owner_v1(
+        root_before,
+        observed_root_lamports,
+        root_account,
+        wrapper_product_id,
+        wrapper_mint,
+        descriptor_account,
+        descriptor_before,
+        descriptor_retirement,
+        hasher,
+    )?;
+    let root_after = owner.root_after;
     let family_terminal = root_after.live_descriptor_count == 0;
     if family_terminal != product_terminal.is_some() {
         return Err(Error::AuthorityUnavailable);
@@ -200,8 +248,8 @@ pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized
         }
     }
     Ok(StructuredDescriptorTerminalPlanV1 {
-        descriptor_retirement,
-        descriptor_terminal_receipt_id,
+        descriptor_retirement: owner.descriptor_retirement,
+        descriptor_terminal_receipt_id: owner.descriptor_terminal_receipt_id,
         root_after,
         product_terminal,
         root_close,
@@ -421,8 +469,8 @@ mod tests {
             vault_tombstone_principal_lamports: 11,
             vault_refund_lamports: 17,
             vault_donation_lamports: 19,
-            rent_refund_owner: [12; 32],
-            neutral_lamport_sink: [13; 32],
+            rent_refund_owner: [13; 32],
+            neutral_lamport_sink: [14; 32],
         }
     }
 

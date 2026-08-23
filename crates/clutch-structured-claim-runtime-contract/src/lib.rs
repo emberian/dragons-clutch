@@ -74,9 +74,11 @@ pub use recipe::{
 pub use replay_v3::{
     StructuredClaimReplayDeltaV1, StructuredClaimReplayExtensionStateV1,
     StructuredClaimReplayExtensionV1, StructuredClaimReplayTransitionV1,
-    StructuredClaimVaultReplayDeltaV1,
+    StructuredClaimTerminalReplayDeltaV1, StructuredClaimVaultReplayDeltaV1,
     STRUCTURED_CLAIM_REPLAY_DELTA_BYTES_V1, STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_BYTES_V1, STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1,
+    STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_BYTES_V1,
+    STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_DOMAIN_V1,
     STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1,
     STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
 };
@@ -90,7 +92,8 @@ pub use runtime::{
     WrapperTokenProjectionV1, WrapperTransitionPlanV1,
 };
 pub use terminal::{
-    prepare_structured_descriptor_terminal_v1, StructuredDescriptorTerminalPlanV1,
+    prepare_structured_descriptor_terminal_owner_v1, prepare_structured_descriptor_terminal_v1,
+    StructuredDescriptorTerminalOwnerPlanV1, StructuredDescriptorTerminalPlanV1,
     StructuredProductWrapperTerminalProjectionV1, StructuredRootCloseDispositionV1,
     STRUCTURED_DESCRIPTOR_ACTIVE_BODY_DOMAIN_V1, STRUCTURED_DESCRIPTOR_CLOSE_RECEIPT_DOMAIN_V1,
     STRUCTURED_DESCRIPTOR_RETIRED_BODY_DOMAIN_V1,
