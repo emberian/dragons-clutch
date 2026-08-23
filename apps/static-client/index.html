@@ -138,18 +138,19 @@
             <p class="eyebrow">Exact rational definition · Rust compiler boundary</p>
             <h2 id="compiler-title">Inspect a canonical Product proposal</h2>
           </div>
-          <p>The browser performs no spline, approximation, payout, or bundle math. It binds the definition's canonical UTF-8 SHA-256 to output from an external operatord/CLI that calls <code>compile_production_payoff_v1</code> and the canonical Product/Series bundle assembler.</p>
+          <p>The browser performs no spline, approximation, payout, inverse-price, or bundle math. It binds the definition and optional exact search to output from an external operatord/CLI that calls <code>compile_production_payoff_v1</code>, the all-support exact atom solver, and the current BundleV5 assembler.</p>
         </div>
 
         <div class="compiler-layout">
           <form id="compiler-form" class="compiler-form">
             <label class="field"><span>Compiler release SHA-256</span><input id="compiler-release-sha256" class="mono" autocomplete="off" placeholder="Exact external compiler build/release identity" required></label>
             <label class="field"><span>Exact rational payoff definition JSON</span><textarea id="compiler-definition" class="mono" spellcheck="false" placeholder="production-payoff-definition/v1 with productTermsId, kind, and the exact categorical, smooth-control, or analytic definition. Every integer and rational component must use canonical decimal strings." required></textarea><small>JavaScript numbers are refused; this page validates transport shape but leaves payout math to Rust.</small></label>
-            <label class="field"><span>Canonical Product/Series bundle inputs JSON</span><textarea id="compiler-bundle-inputs" class="mono" spellcheck="false" placeholder="Exact fixed-codec hex bodies for registryCapabilityProfileV2, recovery, Product template, price policy, Genesis, funding quote, attachment, Series, funding terms, plus sourceReleaseManifestId." required></textarea><small>The compiled basis is deliberately absent: Rust derives it, then the canonical bundle assembler requires every supplied artifact to join it.</small></label>
-            <button id="compile-payoff" class="primary-button" type="submit">Compile through selected operatord</button>
+            <label class="field"><span>Current Product/Series BundleV5 inputs JSON</span><textarea id="compiler-bundle-inputs" class="mono" spellcheck="false" placeholder="Exact fixed-codec hex bodies for RegistryProgramReleaseV2, RegistryCapabilityProfileV4, recovery, Product template, price policy, Genesis, QuoteV4, AttachmentV4, Series, funding terms, plus sourceReleaseManifestId." required></textarea><small>The compiled basis is deliberately absent: Rust derives it, then the BundleV5 assembler requires every current artifact to join it.</small></label>
+            <label class="field"><span>Exact market search JSON (optional)</span><textarea id="compiler-exact-market-search" class="mono" spellcheck="false" placeholder="marketId, priceId, exact payout-denominator prices, strictly increasing integer coordinates, and maximumSubsetEvaluationsPerSupport — all integers as decimal strings."></textarea><small>A solved search emits a bounded hostile-verifier certificate. Every outcome emits a canonical work manifest and BundleV5 sidecar; partial and truncated searches never claim full-domain exhaustion.</small></label>
+            <button id="compile-product-exact-market" class="primary-button" type="submit">Compile through selected operatord</button>
             <details>
               <summary>Bind output from the stdin/stdout CLI instead</summary>
-              <label class="field"><span>CLI compiler proposal JSON</span><textarea id="compiler-proposal" class="mono" spellcheck="false" placeholder="Output from operatord compile-payoff --compiler-release-sha256 HASH."></textarea><small>The same definition digest, configured compiler release, basis, certificate, and bundle joins are checked before display.</small></label>
+              <label class="field"><span>CLI compiler proposal JSON</span><textarea id="compiler-proposal" class="mono" spellcheck="false" placeholder="Output from operatord compile-product-exact-market --compiler-release-sha256 HASH."></textarea><small>The same definition digest, configured compiler release, BundleV5 artifact coordinate, basis, exact certificate, work manifest, and sidecar joins are checked before display.</small></label>
               <button id="bind-compiler-proposal" class="quiet-button" type="button">Bind CLI proposal</button>
             </details>
             <p id="compiler-error" class="form-error" role="alert" hidden></p>
