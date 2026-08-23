@@ -30,8 +30,7 @@ use clutch_general_v2_runtime::{
 use clutch_product_series::{
     FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1, BASIS_BYTES,
-    MARKET_GENESIS_PROFILE_V2_BYTES, MARKET_INSTANCE_PREIMAGE_V2_BYTES, PRICE_MEASURE_POLICY_BYTES,
-    PRODUCT_TEMPLATE_BYTES,
+    MARKET_GENESIS_PROFILE_V2_BYTES, PRICE_MEASURE_POLICY_BYTES, PRODUCT_TEMPLATE_BYTES,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
 use clutch_solana_layout::{account_len, PriceGridAccount};
@@ -39,6 +38,8 @@ use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+use super::product_artifact::authenticate_product_artifact_v1;
 
 /// Native Solana SHA-256 adapter for the pure contract's byte-exact backend seam.
 #[derive(Clone, Copy, Debug)]
@@ -1595,11 +1596,6 @@ fn checked_empty_book_verdict(
     require_readonly_artifact(program_id, basis_account, BASIS_BYTES)?;
     require_readonly_artifact(program_id, genesis_account, MARKET_GENESIS_PROFILE_V2_BYTES)?;
     require_readonly_artifact(program_id, policy_account, PRICE_MEASURE_POLICY_BYTES)?;
-    require_readonly_artifact(
-        program_id,
-        market_instance_account,
-        MARKET_INSTANCE_PREIMAGE_V2_BYTES,
-    )?;
     let price_grid = PriceGridAccount::decode(&borrow_data(price_grid_account)?)
         .map_err(|_| ClutchError::NonCanonical)?;
     let price_grid_pda = seeds::grid_pda(
@@ -1619,8 +1615,12 @@ fn checked_empty_book_verdict(
         .map_err(|_| ClutchError::NonCanonical)?;
     let policy = PriceMeasurePolicyV1::decode(&borrow_data(policy_account)?)
         .map_err(|_| ClutchError::NonCanonical)?;
-    let market_instance = MarketInstancePreimageV2::decode(&borrow_data(market_instance_account)?)
-        .map_err(|_| ClutchError::NonCanonical)?;
+    let market_instance_artifact = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        market_instance_account,
+        binding.market_instance_v2_id.content_id(),
+    )?;
+    let market_instance = *market_instance_artifact.value();
     require(
         genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID
             && basis.edge_policy_registry_value == 1,
