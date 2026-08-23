@@ -472,6 +472,7 @@ where
     let expectation = realization.expectation();
     let position_after = realization.position();
     let position_after_fields = position_after.semantic.fields();
+    let finalized_owner_row_data_id = Id32::new(realization.finalized_row_data_id())?;
     let payer_allocation_data_id =
         payer_allocation_account_data_id_v1(payer_allocation_outer_bytes, backend)?;
     let pot_poststate_data_id = settlement_cash_pot_poststate_data_id_v1(
@@ -483,7 +484,7 @@ where
         position_replay_before,
         position_after,
         GeneralReplayTransitionKindV1::FinalizeOwnerSettlement,
-        request.finalized_owner_row_data_id,
+        finalized_owner_row_data_id,
         payer_allocation_data_id,
         backend,
     )?;
@@ -491,9 +492,7 @@ where
         || request.owner_settlement != accounts.owner_settlement_account
         || request.position != accounts.position_account
         || request.settlement_cash_pot != accounts.settlement_cash_pot_account
-        || request.finalized_owner_row_data_id.bytes() != realization.finalized_row_data_id()
-        || request.finalized_owner_row_data_id.bytes()
-            != bindings.owner_settlement_final_data_id.0
+        || finalized_owner_row_data_id.bytes() != bindings.owner_settlement_final_data_id.0
         || request.epoch.bytes() != expectation.epoch
         || expectation.owner != accounts.owner.bytes()
         || expectation.candidate != selected.selected_candidate().0
@@ -513,7 +512,7 @@ where
             != bindings.settlement_cash_pot_poststate_data_id.0
         || rent_disposition_data_id.bytes() != rent.data_id.0
         || replay.kind() != GeneralReplayTransitionKindV1::FinalizeOwnerSettlement
-        || replay.transition_id() != request.finalized_owner_row_data_id
+        || replay.transition_id() != finalized_owner_row_data_id
         || replay.transition_evidence_id() != payer_allocation_data_id
         || replay.position_poststate_semantic_id().bytes()
             != bindings.position_poststate_semantic_id.0

@@ -38,7 +38,7 @@ pub const CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
 /// Exact action-37 disabled virtual-merge receipt selector bytes.
 pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
 /// Exact action-38 disabled owner-finalization selector bytes.
-pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 192;
+pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 160;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -684,10 +684,9 @@ impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
 
 /// Action-38 `FinalizeOwnerSettlement` immutable selector.
 ///
-/// The sixth identity is the SHA-256 data ID of the exact finalized V2 owner
-/// row. The live composer rederives it together with Position, Replay, and
-/// candidate cash-pot successors before any atomic write. It is distinct from
-/// receipt-accounting and Egg-delivery transition identities.
+/// The finalized V2 owner-row data ID is not caller-owned. The live composer
+/// rederives it together with Position, Replay, and candidate cash-pot
+/// successors before any atomic write.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeOwnerSettlementPayloadV1 {
     /// Counted parent Epoch PDA.
@@ -700,12 +699,10 @@ pub struct FinalizeOwnerSettlementPayloadV1 {
     pub position: Id32,
     /// Candidate-wide directional settlement cash-pot PDA.
     pub settlement_cash_pot: Id32,
-    /// Data ID of the exact canonical finalized 288-byte V2 owner row.
-    pub finalized_owner_row_data_id: Id32,
 }
 
 impl FinalizeOwnerSettlementPayloadV1 {
-    /// Decode exactly 192 hostile selector bytes.
+    /// Decode exactly 160 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES)?;
         let value = Self {
@@ -714,7 +711,6 @@ impl FinalizeOwnerSettlementPayloadV1 {
             owner_settlement: live_id(&mut reader)?,
             position: live_id(&mut reader)?,
             settlement_cash_pot: live_id(&mut reader)?,
-            finalized_owner_row_data_id: live_id(&mut reader)?,
         };
         reader.finish()?;
         let identities = [
@@ -723,7 +719,6 @@ impl FinalizeOwnerSettlementPayloadV1 {
             value.owner_settlement,
             value.position,
             value.settlement_cash_pot,
-            value.finalized_owner_row_data_id,
         ];
         let mut left = 0usize;
         while left < identities.len() {
@@ -1027,26 +1022,22 @@ mod tests {
     }
 
     #[test]
-    fn owner_finalization_selector_binds_six_distinct_identities() {
+    fn owner_finalization_selector_derives_finalized_row_data_id() {
         let mut selector = [0u8; FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES];
-        for (index, byte) in (1_u8..=6).enumerate() {
+        for (index, byte) in (1_u8..=5).enumerate() {
             let start = index * ID_BYTES;
             selector[start..start + ID_BYTES].copy_from_slice(&live(byte));
         }
-        let decoded = FinalizeOwnerSettlementPayloadV1::decode(&selector).unwrap();
-        assert_eq!(
-            decoded.finalized_owner_row_data_id,
-            Id32::new(live(6)).unwrap()
-        );
+        FinalizeOwnerSettlementPayloadV1::decode(&selector).unwrap();
         assert!(matches!(
             decode_owner_settlement_payload_v1(38, &selector),
             Ok(OwnerSettlementPayloadV1::FinalizeOwnerSettlement(_))
         ));
         assert_eq!(
-            decode_owner_settlement_payload_v1(38, &selector[..191]),
+            decode_owner_settlement_payload_v1(38, &selector[..159]),
             Err(CodecError::WrongLength)
         );
-        selector[5 * ID_BYTES..6 * ID_BYTES].copy_from_slice(&live(3));
+        selector[4 * ID_BYTES..5 * ID_BYTES].copy_from_slice(&live(3));
         assert_eq!(
             decode_owner_settlement_payload_v1(38, &selector),
             Err(CodecError::MismatchedBinding)

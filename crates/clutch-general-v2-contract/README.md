@@ -207,15 +207,15 @@ solely by the authenticated receipt and selected-order projection, never by
 caller bytes. The accounting ID is persisted and replay-checked separately
 from every later Egg-delivery transition ID.
 
-Action 38 `FinalizeOwnerSettlement` has a strict disabled 192-byte selector
+Action 38 `FinalizeOwnerSettlement` has a strict disabled 160-byte selector
 `epoch || selected_candidate || owner_settlement || position ||
-settlement_cash_pot || finalized_owner_row_data_id`. It exists separately because a
-last receipt fragment may leave a credit-bearing owner waiting for earlier
+settlement_cash_pot`. It exists separately because a last receipt fragment may
+leave a credit-bearing owner waiting for earlier
 buyer or merge liquidity. Net owner debits are admitted into the pot first;
 credits refuse and retry without consuming replay or liveness when liquidity
-is absent. The request identity must equal the adapter-authenticated data ID of
-the canonical finalized 288-byte row; it is not copied into the row. The
-one-way row state and in-place fee finalization receipt own persistent replay.
+is absent. The composer derives the data ID of the canonical finalized
+288-byte row; caller bytes cannot select it. The one-way row state and in-place
+fee finalization receipt own persistent replay.
 No live SBF success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per
 participating owner, checked candidate totals, and a canonically derived owner
