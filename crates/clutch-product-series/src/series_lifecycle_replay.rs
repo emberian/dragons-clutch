@@ -71,8 +71,8 @@ pub struct SeriesLifecycleReplayBindingV1 {
     pub funding_account_id: ContentId,
     /// Permanent counted lifecycle replay account.
     pub lifecycle_replay_account_id: ContentId,
-    /// Exact payer-owned permanent rent refund identity.
-    pub rent_refund_owner: ContentId,
+    /// Exact payer identity that supplied the permanently retained rent.
+    pub permanent_rent_funder: ContentId,
     /// Exact neutral lamport sink.
     pub neutral_lamport_sink: ContentId,
     /// Finite Series cardinality.
@@ -122,7 +122,7 @@ impl SeriesLifecycleReplayBindingV1 {
             self.registry_account_id,
             self.funding_account_id,
             self.lifecycle_replay_account_id,
-            self.rent_refund_owner,
+            self.permanent_rent_funder,
             self.neutral_lamport_sink,
         ]
     }
@@ -164,7 +164,7 @@ impl FixedCodec for SeriesLifecycleReplayBindingV1 {
             registry_account_id: ids[7],
             funding_account_id: ids[8],
             lifecycle_replay_account_id: ids[9],
-            rent_refund_owner: ids[10],
+            permanent_rent_funder: ids[10],
             neutral_lamport_sink: ids[11],
             instance_count: reader.u32(),
         };
@@ -990,7 +990,7 @@ mod tests {
             registry_account_id: id(8),
             funding_account_id: id(9),
             lifecycle_replay_account_id: id(10),
-            rent_refund_owner: id(11),
+            permanent_rent_funder: id(11),
             neutral_lamport_sink: id(12),
             instance_count: 3,
         }
@@ -1118,7 +1118,7 @@ mod tests {
         assert!(SeriesLifecycleReplayBindingV1::decode(&binding_bytes[..397]).is_err());
 
         let mut aliased = binding;
-        aliased.neutral_lamport_sink = aliased.rent_refund_owner;
+        aliased.neutral_lamport_sink = aliased.permanent_rent_funder;
         assert!(aliased.validate().is_err());
 
         let state = SeriesLifecycleReplayV1::initialize(binding).unwrap();

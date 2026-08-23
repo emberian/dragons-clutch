@@ -1267,6 +1267,7 @@ pub(crate) struct AuthenticatedSeriesOccurrenceCompletionV2 {
     funding_state_before_id: ContentId,
     funding_state_after_id: ContentId,
     link_activation_id: ContentId,
+    root_account: Pubkey,
     link_account: Pubkey,
     link_semantic_before_id: ContentId,
     market_instance_id: MarketInstanceV2Id,
@@ -1277,6 +1278,7 @@ pub(crate) struct AuthenticatedSeriesOccurrenceCompletionV2 {
     disposition: clutch_product_series::SeriesMarketDispositionV1,
     reservation_receipt_id: ContentId,
     market_admission_receipt_id: ContentId,
+    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
 }
 
 /// Private exact FundingV2 lapse postwrite consumed only by the permanent
@@ -1323,8 +1325,16 @@ impl AuthenticatedSeriesOccurrenceCompletionV2 {
         self.link_activation_id
     }
 
+    pub(crate) const fn root_account(self) -> Pubkey {
+        self.root_account
+    }
+
     pub(crate) const fn link_account(self) -> Pubkey {
         self.link_account
+    }
+
+    pub(crate) const fn link_semantic_before_id(self) -> ContentId {
+        self.link_semantic_before_id
     }
 
     pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
@@ -1347,6 +1357,12 @@ impl AuthenticatedSeriesOccurrenceCompletionV2 {
         self.ordinal
     }
 
+    pub(crate) const fn disposition(
+        self,
+    ) -> clutch_product_series::SeriesMarketDispositionV1 {
+        self.disposition
+    }
+
     pub(crate) const fn reservation_receipt_id(self) -> ContentId {
         self.reservation_receipt_id
     }
@@ -1354,11 +1370,16 @@ impl AuthenticatedSeriesOccurrenceCompletionV2 {
     pub(crate) const fn market_admission_receipt_id(self) -> ContentId {
         self.market_admission_receipt_id
     }
+
+    pub(crate) const fn compiler_bundle_id(self) -> CompiledProductSeriesBundleV5Id {
+        self.compiler_bundle_id
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SeriesOccurrenceCompletionFactsV2 {
     link_activation_id: ContentId,
+    root_account: Pubkey,
     link_account: Pubkey,
     link_semantic_before_id: ContentId,
     market_instance_id: MarketInstanceV2Id,
@@ -1376,6 +1397,7 @@ impl SeriesOccurrenceCompletionFactsV2 {
     fn from_link_activation(activation: AuthenticatedSeriesMarketLinkActivationV1) -> Self {
         Self {
             link_activation_id: activation.id(),
+            root_account: activation.root_account(),
             link_account: activation.link_account(),
             link_semantic_before_id: activation.link_semantic_before().content_id(),
             market_instance_id: activation.market_instance_id(),
@@ -1399,6 +1421,9 @@ fn require_series_occurrence_completion_join_v2(
     if facts.link_activation_id.is_zero()
         || facts.market_admission_receipt_id.is_zero()
         || facts.generation == 0
+        || facts.root_account == Pubkey::default()
+        || facts.link_account == Pubkey::default()
+        || facts.root_account == facts.link_account
         || completion_receipt_id != facts.link_activation_id
         || state.phase != clutch_product_series::SeriesFundingPhaseV2::Pending
         || state.series_plan_id != facts.series_plan_id
@@ -6130,6 +6155,7 @@ pub(crate) fn complete_series_occurrence_from_market_link_v2(
             &funding_state_before_id.bytes(),
             &funding_state_after_id.bytes(),
             &facts.link_activation_id.bytes(),
+            facts.root_account.as_ref(),
             facts.link_account.as_ref(),
             &facts.link_semantic_before_id.bytes(),
             &facts.market_instance_id.bytes(),
@@ -6153,6 +6179,7 @@ pub(crate) fn complete_series_occurrence_from_market_link_v2(
             funding_state_before_id,
             funding_state_after_id,
             link_activation_id: facts.link_activation_id,
+            root_account: facts.root_account,
             link_account: facts.link_account,
             link_semantic_before_id: facts.link_semantic_before_id,
             market_instance_id: facts.market_instance_id,
@@ -6163,6 +6190,9 @@ pub(crate) fn complete_series_occurrence_from_market_link_v2(
             disposition: facts.disposition,
             reservation_receipt_id: facts.reservation_receipt_id,
             market_admission_receipt_id: facts.market_admission_receipt_id,
+            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes(
+                facts.compiler_bundle_id.bytes(),
+            ),
         },
     ))
 }
@@ -7891,6 +7921,7 @@ mod occurrence_completion_v2_adversarial_tests {
     fn facts() -> SeriesOccurrenceCompletionFactsV2 {
         SeriesOccurrenceCompletionFactsV2 {
             link_activation_id: id(1),
+            root_account: Pubkey::new_from_array([21; 32]),
             link_account: Pubkey::new_from_array([2; 32]),
             link_semantic_before_id: id(3),
             market_instance_id: MarketInstanceV2Id::from_bytes([4; 32]),
