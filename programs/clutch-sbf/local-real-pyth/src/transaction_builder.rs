@@ -378,7 +378,9 @@ impl OwnedInstructionDraft {
 
     /// Assemble an enabled SourceSeries request through the exact outer
     /// Clutch replay codec. Only coordinates whose dispatcher implementation
-    /// is complete may be admitted here.
+    /// is complete may be admitted here. Immutable release registration is
+    /// the unique founding request and therefore requires ordinal zero;
+    /// stateful work actions require a nonzero call ordinal.
     pub fn enabled_source_successor(
         action_name: impl Into<String>,
         semantic_owner: SemanticOwner,
@@ -392,14 +394,14 @@ impl OwnedInstructionDraft {
     ) -> Result<Self> {
         use clutch_solana_layout::registry::SourceSeriesAction;
 
-        if call_ordinal == 0
-            || !matches!(
-                action,
-                SourceSeriesAction::InitializeHead
-                    | SourceSeriesAction::OpenRawPage
-                    | SourceSeriesAction::IngestBoundaryBatch
-            )
-        {
+        let valid_ordinal = match action {
+            SourceSeriesAction::RegisterRelease => call_ordinal == 0,
+            SourceSeriesAction::InitializeHead
+            | SourceSeriesAction::OpenRawPage
+            | SourceSeriesAction::IngestBoundaryBatch => call_ordinal != 0,
+            _ => false,
+        };
+        if !valid_ordinal {
             return Err(ConstructionError::UnallocatedRegistryCoordinate);
         }
         let central_action = ExtensionAction::SourceV3(action);
@@ -620,7 +622,21 @@ impl OwnedInstructionDraft {
             OwnedWireContract::MainSuccessorRequest { binding, sequence } => {
                 let request = ExtensionRequest::decode(&self.data)
                     .map_err(|_| ConstructionError::WrongWirePrefix)?;
-                if sequence == 0
+                let ExtensionAction::SourceV3(action) = request.envelope.action else {
+                    return Err(ConstructionError::WrongFlow);
+                };
+                let valid_sequence = match action {
+                    clutch_solana_layout::registry::SourceSeriesAction::RegisterRelease => {
+                        sequence == 0
+                    }
+                    clutch_solana_layout::registry::SourceSeriesAction::InitializeHead
+                    | clutch_solana_layout::registry::SourceSeriesAction::OpenRawPage
+                    | clutch_solana_layout::registry::SourceSeriesAction::IngestBoundaryBatch => {
+                        sequence != 0
+                    }
+                    _ => false,
+                };
+                if !valid_sequence
                     || request.sequence != sequence
                     || request.envelope.family != binding.family
                     || request.envelope.action.local_tag() != binding.local_action
@@ -637,13 +653,12 @@ impl OwnedInstructionDraft {
                 {
                     return Err(ConstructionError::UnallocatedRegistryCoordinate);
                 }
-                let ExtensionAction::SourceV3(action) = request.envelope.action else {
-                    return Err(ConstructionError::WrongFlow);
-                };
                 if !matches!(
                     action,
-                    clutch_solana_layout::registry::SourceSeriesAction::InitializeHead
+                    clutch_solana_layout::registry::SourceSeriesAction::RegisterRelease
+                        | clutch_solana_layout::registry::SourceSeriesAction::InitializeHead
                         | clutch_solana_layout::registry::SourceSeriesAction::OpenRawPage
+                        | clutch_solana_layout::registry::SourceSeriesAction::IngestBoundaryBatch
                 ) {
                     return Err(ConstructionError::UnallocatedRegistryCoordinate);
                 }
@@ -1059,20 +1074,23 @@ mod tests {
         coalesce_payer_keeper: bool,
     ) -> Vec<AccountMeta> {
         let contract = account_contract_v2(action);
-        let keeper_index = match action {
-            SourceSeriesAction::InitializeHead => 14,
-            SourceSeriesAction::OpenRawPage => 15,
-            SourceSeriesAction::IngestBoundaryBatch => 20,
+        let alias_indexes = match action {
+            SourceSeriesAction::RegisterRelease => None,
+            SourceSeriesAction::InitializeHead => Some((14, 15)),
+            SourceSeriesAction::OpenRawPage => Some((15, 16)),
+            SourceSeriesAction::IngestBoundaryBatch => Some((20, 21)),
             _ => unreachable!(),
         };
-        let payer_index = keeper_index + 1;
         (0..contract.len())
             .map(|index| {
                 let required = contract.meta(index).unwrap();
-                let identity_index = if coalesce_payer_keeper && index == payer_index {
-                    keeper_index
-                } else {
-                    index
+                let identity_index = match alias_indexes {
+                    Some((keeper_index, payer_index))
+                        if coalesce_payer_keeper && index == payer_index =>
+                    {
+                        keeper_index
+                    }
+                    _ => index,
                 };
                 AccountMeta {
                     pubkey: Address::new_from_array(
@@ -1257,6 +1275,53 @@ mod tests {
         assert_eq!(
             draft.runtime_admission,
             RuntimeAdmission::ReleaseBoundEnabled
+        );
+    }
+
+    #[test]
+    fn enabled_release_registration_uses_zero_sequence_and_exact_roles() {
+        let action = SourceSeriesAction::RegisterRelease;
+        let draft = OwnedInstructionDraft::enabled_source_successor(
+            "register-source-release",
+            owner(),
+            Address::new_from_array([2; 32]),
+            source_accounts(action, false),
+            vec![Address::new_from_array([12; 32])],
+            vec![ExactEquation {
+                name: "release account rent principal".into(),
+                unit: IntegerUnit::Lamports,
+                left: 13,
+                right: 13,
+            }],
+            action,
+            0,
+            &[8; 32],
+        )
+        .unwrap();
+        let decoded = ExtensionRequest::decode(draft.data()).unwrap();
+        assert_eq!(decoded.sequence, 0);
+        assert_eq!(decoded.envelope.action, ExtensionAction::SourceV3(action));
+        assert_eq!(draft.accounts.len(), 5);
+        assert_eq!(draft.runtime_admission, RuntimeAdmission::ReleaseBoundEnabled);
+
+        assert_eq!(
+            OwnedInstructionDraft::enabled_source_successor(
+                "register-source-release",
+                owner(),
+                Address::new_from_array([2; 32]),
+                source_accounts(action, false),
+                vec![Address::new_from_array([12; 32])],
+                vec![ExactEquation {
+                    name: "release account rent principal".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 13,
+                    right: 13,
+                }],
+                action,
+                1,
+                &[8; 32],
+            ),
+            Err(ConstructionError::UnallocatedRegistryCoordinate)
         );
     }
 
