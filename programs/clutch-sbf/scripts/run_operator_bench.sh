@@ -21,7 +21,8 @@ root="$(cd "$here/.." && pwd)"
 
 http_port="${CLUTCH_OPERATOR_PORT:-9130}"
 rpc_port="${CLUTCH_OPERATOR_RPC_PORT:-9137}"
-faucet_port="${CLUTCH_OPERATOR_FAUCET_PORT:-9138}"
+# Agave reserves rpc_port + 1 (9138) for RPC WebSocket.
+faucet_port="${CLUTCH_OPERATOR_FAUCET_PORT:-9139}"
 gossip_port="${CLUTCH_OPERATOR_GOSSIP_PORT:-9200}"
 dynamic_port_range="${CLUTCH_OPERATOR_DYNAMIC_PORT_RANGE:-9201-9250}"
 
@@ -49,6 +50,7 @@ echo "== source =="
 (cd "$root/../.." && git rev-parse HEAD)
 echo "operator_http_port=$http_port"
 echo "operator_rpc_port=$rpc_port"
+echo "operator_rpc_websocket_port=$((rpc_port + 1))"
 echo "operator_faucet_port=$faucet_port"
 echo "operator_gossip_port=$gossip_port"
 echo "operator_dynamic_port_range=$dynamic_port_range"

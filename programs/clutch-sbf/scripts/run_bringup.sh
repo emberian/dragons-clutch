@@ -216,8 +216,10 @@ run_profile() {
   lifecycle="$5"
   program_id="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["program_id"])' "$plan/plan.json")"
   payer="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["payer"])' "$plan/plan.json")"
+  # Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
   validator_args=(
     --ledger "$work/ledger-$profile" --reset --quiet
+    --bind-address 127.0.0.1
     --rpc-port "$rpc_port" --faucet-port "$faucet_port"
     --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range"
     --mint "$payer"

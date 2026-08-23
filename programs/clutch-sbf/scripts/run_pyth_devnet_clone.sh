@@ -13,6 +13,7 @@ PUSH_ORACLE="pyt2F414BA6dPttK6RddPZUdHfapoBN24GL5wbrPCou"
 CONFIG="H3R4M45f2gyqp6geVUruapzZdyxpgGZ96UnWkDM3ndye"
 
 RPC_PORT="${DC_PYTH_CLONE_RPC_PORT:-9147}"
+# Agave reserves RPC_PORT + 1 (9148) for RPC WebSocket.
 FAUCET_PORT="${DC_PYTH_CLONE_FAUCET_PORT:-9149}"
 GOSSIP_PORT="${DC_PYTH_CLONE_GOSSIP_PORT:-9150}"
 DYNAMIC_PORT_RANGE="${DC_PYTH_CLONE_DYNAMIC_PORT_RANGE:-9151-9199}"
@@ -42,11 +43,14 @@ clone_ledger=$(mktemp -d "${TMPDIR:-/tmp}/dragons-clutch-pyth-clone.XXXXXX")
 echo "canonical devnet genesis: $genesis_hash"
 echo "fresh clone ledger: $clone_ledger"
 echo "local RPC after boot: http://127.0.0.1:$RPC_PORT"
+echo "local RPC WebSocket port: $((RPC_PORT + 1))"
 echo "the ledger is retained after exit for inspection"
 
+# Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
 exec solana-test-validator \
     --ledger "$clone_ledger" \
     --quiet \
+    --bind-address 127.0.0.1 \
     --url "$RPC_URL" \
     --clone-feature-set \
     --clone-upgradeable-program "$RECEIVER" \

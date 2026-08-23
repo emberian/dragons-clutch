@@ -348,8 +348,10 @@ wait_for_log() {
 }
 
 start_validator() {
+  # Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
   local validator_args=(
     --ledger "$work/ledger" --reset --quiet
+    --bind-address 127.0.0.1
     --rpc-port "$rpc_port" --faucet-port "$faucet_port" --mint "${pub[payer]}"
     --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range"
     --bpf-program "$program_id" "$elf"
@@ -832,5 +834,5 @@ echo "fold_wire_largest_fitting_folds=$fitting"
 grep -m1 'fold_wire_plan' "$log/fold-wire.log" || true
 echo "sbf_elf_sha256=$elf_sha256"
 echo "gate_wall_seconds=$walk_seconds"
-echo "rpc_port=$rpc_port faucet_port=$faucet_port gossip_port=$gossip_port dynamic_port_range=$dynamic_port_range"
+echo "rpc_port=$rpc_port rpc_websocket_port=$((rpc_port + 1)) faucet_port=$faucet_port gossip_port=$gossip_port dynamic_port_range=$dynamic_port_range"
 echo "work_dir=$work"

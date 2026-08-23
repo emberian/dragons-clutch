@@ -1,6 +1,6 @@
 //! `operatord` — the Operator Bench daemon.
 //!
-//! A loopback-only Rust daemon that boots a local `solana-test-validator`
+//! A loopback-only Operator HTTP daemon that boots a local `solana-test-validator`
 //! exactly as `scripts/run_general_committed.sh` does, drives the
 //! forty-four-step general-clearing walk through the committed-harness code
 //! path, and publishes every transition to a zero-dependency static page.
@@ -83,7 +83,8 @@ impl Default for Options {
             mode: "watch".to_string(),
             port: 9130,
             rpc_port: 9137,
-            faucet_port: 9138,
+            // Agave reserves rpc_port + 1 (9138) for RPC WebSocket.
+            faucet_port: 9139,
             // The active local Pyth clone owns gossip 9150 and 9151-9199.
             gossip_port: 9200,
             dynamic_port_range: "9201-9250".to_string(),
@@ -173,7 +174,7 @@ fn banner(
         "precreated": plan.precreated_program_accounts,
         "evidence_scope": "SBF_EXECUTED",
         "promotion": "unpromoted",
-        "network": "LOCAL 127.0.0.1 ONLY",
+        "network": "LOCAL; OPERATOR HTTP LOOPBACK; VALIDATOR RPC/Faucet BIND AUDITED SEPARATELY",
         "value": "no value",
     })
 }
@@ -418,18 +419,18 @@ mod option_tests {
                 "--rpc-port",
                 "9567",
                 "--faucet-port",
-                "9568",
-                "--gossip-port",
                 "9569",
+                "--gossip-port",
+                "9570",
                 "--dynamic-port-range",
-                "9570-9619",
+                "9571-9620",
             ]
             .into_iter()
             .map(str::to_string),
         )
         .unwrap();
-        assert_eq!(options.gossip_port, 9569);
-        assert_eq!(options.dynamic_port_range, "9570-9619");
+        assert_eq!(options.gossip_port, 9570);
+        assert_eq!(options.dynamic_port_range, "9571-9620");
         toolchain::validate_validator_network(
             Some(options.port),
             options.rpc_port,

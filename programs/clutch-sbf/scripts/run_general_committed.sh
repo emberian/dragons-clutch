@@ -62,8 +62,9 @@ build_sbf="${CARGO_BUILD_SBF:-$solana_home/cargo-build-sbf}"
 test_validator="${SOLANA_TEST_VALIDATOR:-$solana_home/solana-test-validator}"
 rpc_port="${CLUTCH_GENERAL_RPC_PORT:-18949}"
 faucet_port="${CLUTCH_GENERAL_FAUCET_PORT:-19950}"
-gossip_port="${CLUTCH_GENERAL_GOSSIP_PORT:-18950}"
-dynamic_port_range="${CLUTCH_GENERAL_DYNAMIC_PORT_RANGE:-18951-19050}"
+# Agave reserves rpc_port + 1 (18950) for RPC WebSocket.
+gossip_port="${CLUTCH_GENERAL_GOSSIP_PORT:-18951}"
+dynamic_port_range="${CLUTCH_GENERAL_DYNAMIC_PORT_RANGE:-18952-19051}"
 url="http://127.0.0.1:${rpc_port}"
 validator_pid=""
 victim=""
@@ -162,8 +163,10 @@ PY
 )
 EOF
 
+# Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
 validator_args=(
   --ledger "$work/ledger" --reset --quiet
+  --bind-address 127.0.0.1
   --rpc-port "$rpc_port" --faucet-port "$faucet_port" --mint "${pub[payer]}"
   --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range"
   --bpf-program "$program_id" "$elf"

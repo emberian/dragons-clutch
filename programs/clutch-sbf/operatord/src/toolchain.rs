@@ -316,10 +316,14 @@ impl Drop for Validator {
     }
 }
 
-/// Validate the complete loopback listener plan before starting a validator.
+/// Validate the complete explicit listener plan before starting a validator.
 ///
 /// `solana-test-validator` otherwise chooses a broad implicit dynamic range,
 /// which makes independently configured local lanes steal one another's ports.
+/// Agave also reserves `rpc_port + 1` for RPC WebSocket without exposing a
+/// separate CLI flag, so that derived listener participates in every overlap
+/// check.  `--bind-address` only scopes gossip and the validator node sockets
+/// in stock Agave 4.0.2; RPC/faucet isolation is a separate launch-time gate.
 pub fn validate_validator_network(
     http_port: Option<u16>,
     rpc_port: u16,
@@ -327,6 +331,9 @@ pub fn validate_validator_network(
     gossip_port: u16,
     dynamic_port_range: &str,
 ) -> Result<()> {
+    let rpc_websocket_port = rpc_port
+        .checked_add(1)
+        .ok_or("rpc port 65535 leaves no port for RPC WebSocket")?;
     let (dynamic_start, dynamic_end) = dynamic_port_range.split_once('-').ok_or_else(|| {
         format!("invalid dynamic port range {dynamic_port_range:?}; expected START-END")
     })?;
@@ -341,6 +348,7 @@ pub fn validate_validator_network(
 
     let mut fixed = vec![
         ("rpc", rpc_port),
+        ("rpc websocket", rpc_websocket_port),
         ("faucet", faucet_port),
         ("gossip", gossip_port),
     ];
@@ -381,6 +389,8 @@ fn append_validator_network_args(
 ) -> Result<()> {
     validate_validator_network(None, rpc_port, faucet_port, gossip_port, dynamic_port_range)?;
     command
+        // Stock Agave applies this flag to gossip/node sockets, not RPC or faucet.
+        .args(["--bind-address", "127.0.0.1"])
         .arg("--rpc-port")
         .arg(rpc_port.to_string())
         .arg("--faucet-port")
@@ -407,15 +417,15 @@ mod network_tests {
 
     #[test]
     fn accepts_disjoint_explicit_loopback_ports() {
-        validate_validator_network(Some(9130), 9137, 9138, 9200, "9201-9250").unwrap();
+        validate_validator_network(Some(9130), 9137, 9139, 9200, "9201-9250").unwrap();
     }
 
     #[test]
     fn refuses_malformed_reversed_and_overlapping_ranges() {
-        assert!(validate_validator_network(None, 9137, 9138, 9200, "9201").is_err());
-        assert!(validate_validator_network(None, 9137, 9138, 9200, "9250-9201").is_err());
-        assert!(validate_validator_network(None, 9137, 9138, 9200, "9199-9201").is_err());
-        assert!(validate_validator_network(Some(9201), 9137, 9138, 9200, "9201-9250").is_err());
+        assert!(validate_validator_network(None, 9137, 9139, 9200, "9201").is_err());
+        assert!(validate_validator_network(None, 9137, 9139, 9200, "9250-9201").is_err());
+        assert!(validate_validator_network(None, 9137, 9139, 9200, "9199-9201").is_err());
+        assert!(validate_validator_network(Some(9201), 9137, 9139, 9200, "9201-9250").is_err());
     }
 
     #[test]
@@ -424,9 +434,18 @@ mod network_tests {
     }
 
     #[test]
+    fn reserves_the_implicit_rpc_websocket_port() {
+        assert!(validate_validator_network(Some(9130), 9137, 9138, 9200, "9201-9250").is_err());
+        assert!(validate_validator_network(Some(9130), 9137, 9139, 9138, "9201-9250").is_err());
+        assert!(validate_validator_network(Some(9138), 9137, 9139, 9200, "9201-9250").is_err());
+        assert!(validate_validator_network(Some(9130), 9137, 9139, 9200, "9138-9199").is_err());
+        assert!(validate_validator_network(None, u16::MAX, 9139, 9200, "9201-9250").is_err());
+    }
+
+    #[test]
     fn emits_every_validator_network_flag_explicitly() {
         let mut command = Command::new("solana-test-validator");
-        append_validator_network_args(&mut command, 9137, 9138, 9200, "9201-9250").unwrap();
+        append_validator_network_args(&mut command, 9137, 9139, 9200, "9201-9250").unwrap();
         let args: Vec<_> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -434,10 +453,12 @@ mod network_tests {
         assert_eq!(
             args,
             [
+                "--bind-address",
+                "127.0.0.1",
                 "--rpc-port",
                 "9137",
                 "--faucet-port",
-                "9138",
+                "9139",
                 "--gossip-port",
                 "9200",
                 "--dynamic-port-range",

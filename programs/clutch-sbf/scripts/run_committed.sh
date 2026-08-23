@@ -160,8 +160,10 @@ PY
 )
 EOF
 
+# Stock Agave applies --bind-address to gossip/node sockets, not RPC/faucet.
 validator_args=(
   --ledger "$work/ledger" --reset --quiet
+  --bind-address 127.0.0.1
   --rpc-port "$rpc_port" --faucet-port "$faucet_port" --mint "$payer"
   --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range"
   --bpf-program "$program_id" "$elf"

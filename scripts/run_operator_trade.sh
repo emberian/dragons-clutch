@@ -21,9 +21,10 @@ root="$(cd "$here/.." && pwd)"
 
 http_port="${CLUTCH_OPERATOR_TRADE_PORT:-9560}"
 rpc_port="${CLUTCH_OPERATOR_TRADE_RPC_PORT:-9567}"
-faucet_port="${CLUTCH_OPERATOR_TRADE_FAUCET_PORT:-9568}"
-gossip_port="${CLUTCH_OPERATOR_TRADE_GOSSIP_PORT:-9569}"
-dynamic_port_range="${CLUTCH_OPERATOR_TRADE_DYNAMIC_PORT_RANGE:-9570-9619}"
+# Agave reserves rpc_port + 1 (9568) for RPC WebSocket.
+faucet_port="${CLUTCH_OPERATOR_TRADE_FAUCET_PORT:-9569}"
+gossip_port="${CLUTCH_OPERATOR_TRADE_GOSSIP_PORT:-9570}"
+dynamic_port_range="${CLUTCH_OPERATOR_TRADE_DYNAMIC_PORT_RANGE:-9571-9620}"
 # Slots between the epoch opening and its freeze deadline.  Long enough for the
 # scripted flow below to place its book on a real clock, short enough that the
 # gate is not dominated by waiting for a deadline nobody is using.
@@ -64,6 +65,7 @@ echo "== source =="
 (cd "$root" && git rev-parse HEAD)
 echo "operator_http_port=$http_port"
 echo "operator_rpc_port=$rpc_port"
+echo "operator_rpc_websocket_port=$((rpc_port + 1))"
 echo "operator_faucet_port=$faucet_port"
 echo "operator_gossip_port=$gossip_port"
 echo "operator_dynamic_port_range=$dynamic_port_range"
