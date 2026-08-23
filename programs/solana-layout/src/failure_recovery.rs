@@ -446,6 +446,8 @@ pub enum RecoveryAccountRoleV1 {
     RecoveryCompartment,
     SeriesRegistry,
     SeriesFunding,
+    RegistryProgram,
+    RegistryProgramData,
     RegistryRelease,
     CapabilityProfile,
     SeriesArtifact,
@@ -497,6 +499,8 @@ pub const INITIALIZE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::NeutralSink, false, false),
     meta(RecoveryAccountRoleV1::SeriesRegistry, false, false),
     meta(RecoveryAccountRoleV1::SeriesFunding, false, false),
+    meta(RecoveryAccountRoleV1::RegistryProgram, false, false),
+    meta(RecoveryAccountRoleV1::RegistryProgramData, false, false),
     meta(RecoveryAccountRoleV1::RegistryRelease, false, false),
     meta(RecoveryAccountRoleV1::CapabilityProfile, false, false),
     meta(RecoveryAccountRoleV1::SeriesArtifact, false, false),
@@ -543,6 +547,8 @@ pub const TRIGGER_SOURCE_FAILURE_METAS_V1: &[RecoveryAccountMetaV1] = SOURCE_FAI
 pub const TRIGGER_RELATION_REFUSAL_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
     meta(RecoveryAccountRoleV1::SeriesRegistry, false, false),
+    meta(RecoveryAccountRoleV1::RegistryProgram, false, false),
+    meta(RecoveryAccountRoleV1::RegistryProgramData, false, false),
     meta(RecoveryAccountRoleV1::RegistryRelease, false, false),
     meta(RecoveryAccountRoleV1::CapabilityProfile, false, false),
     meta(RecoveryAccountRoleV1::SeriesArtifact, false, false),
@@ -591,6 +597,8 @@ pub const RESOLVE_CALLER_FUNDED_METAS_V1: &[RecoveryAccountMetaV1] = &[
     TRIGGER_RELATION_REFUSAL_METAS_V1[11],
     TRIGGER_RELATION_REFUSAL_METAS_V1[12],
     TRIGGER_RELATION_REFUSAL_METAS_V1[13],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[14],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[15],
 ];
 /// Exact ordered account contract for paid resolution.
 pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
@@ -605,6 +613,8 @@ pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
     TRIGGER_RELATION_REFUSAL_METAS_V1[6],
     TRIGGER_RELATION_REFUSAL_METAS_V1[7],
     TRIGGER_RELATION_REFUSAL_METAS_V1[8],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[9],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[10],
     ACCEPT_RECOVERY_WORK_METAS_V1[3],
     ACCEPT_RECOVERY_WORK_METAS_V1[4],
     ACCEPT_RECOVERY_WORK_METAS_V1[5],

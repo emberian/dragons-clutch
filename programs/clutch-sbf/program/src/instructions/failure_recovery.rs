@@ -204,7 +204,7 @@ impl AuthenticatedSourceSuccessJoinV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedFailureRelationExecutionV1 {
     relation: ExecutedFailureRelationV1,
-    relation_accounts: [Pubkey; 8],
+    relation_accounts: [Pubkey; 10],
 }
 
 impl AuthenticatedFailureRelationExecutionV1 {
@@ -282,7 +282,8 @@ pub fn authenticate_ordered_metas_v1(
         )?;
         let executable = matches!(
             expected.role,
-            RecoveryAccountRoleV1::SourceAdapterProgram
+            RecoveryAccountRoleV1::RegistryProgram
+                | RecoveryAccountRoleV1::SourceAdapterProgram
                 | RecoveryAccountRoleV1::ParserProgram
                 | RecoveryAccountRoleV1::SystemProgram
         );
@@ -450,7 +451,7 @@ pub struct FailureRootActivationV1 {
 
 /// Execute root and replay initialization after the caller has constructed
 /// the typed successor runtime and Series funding receipt from the exact
-/// accounts in the frozen 32-role list.
+/// accounts in the frozen 34-role list.
 pub fn handle_initialize_failure_root_v1<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],
@@ -461,7 +462,7 @@ pub fn handle_initialize_failure_root_v1<'a>(
     market_core_funding: SeriesMarketCoreFundingReceiptV1,
 ) -> Outcome<FailureRootActivationV1> {
     authenticate_ordered_metas_v1(RecoveryAction::InitializeFailureRoot, accounts)?;
-    require_source_release_account(source_release, &accounts[18])?;
+    require_source_release_account(source_release, &accounts[20])?;
     runtime
         .authenticate_source_release(source_release)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -478,9 +479,9 @@ pub fn handle_initialize_failure_root_v1<'a>(
         &accounts[1],
         &accounts[6],
         &accounts[4],
-        &accounts[29],
         &accounts[31],
-        &accounts[30],
+        &accounts[33],
+        &accounts[32],
         payload,
         runtime,
         receipt,
@@ -886,15 +887,15 @@ pub fn handle_relation_refusal_v1<'a>(
         payload.relation_execution_id,
         Some(payload.refusal_code),
     )?;
-    execution.require_accounts(&accounts[1..9])?;
+    execution.require_accounts(&accounts[1..11])?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_success_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_success_source_accounts(source, &accounts[9..13])?;
-    require_current_after(accounts, 13, source.handoff.clock())?;
+    require_success_source_accounts(source, &accounts[11..15])?;
+    require_current_after(accounts, 15, source.handoff.clock())?;
     let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
     let plan = plan_relation_refusal_v1(root, source, execution)?;
     apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
@@ -918,15 +919,15 @@ pub fn handle_caller_funded_resolution_v1<'a>(
         payload.relation_execution_id,
         None,
     )?;
-    execution.require_accounts(&accounts[1..9])?;
+    execution.require_accounts(&accounts[1..11])?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_success_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_success_source_accounts(source, &accounts[9..13])?;
-    require_current_after(accounts, 13, source.handoff.clock())?;
+    require_success_source_accounts(source, &accounts[11..15])?;
+    require_current_after(accounts, 15, source.handoff.clock())?;
     let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
     let plan = plan_caller_funded_resolution_v1(root, source, execution)?;
     apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
@@ -950,17 +951,17 @@ pub fn handle_paid_resolution_v1<'a>(
         payload.relation_execution_id,
         None,
     )?;
-    execution.require_accounts(&accounts[3..11])?;
+    execution.require_accounts(&accounts[3..13])?;
     require_source_action(
         source.source,
         payload.common,
         payload.source_success_handoff_id,
         source.handoff.occurrence().market_instance_id().bytes(),
     )?;
-    require_success_source_accounts(source, &accounts[11..15])?;
-    require_current_after(accounts, 17, source.handoff.clock())?;
+    require_success_source_accounts(source, &accounts[13..17])?;
+    require_current_after(accounts, 19, source.handoff.clock())?;
     require(
-        accounts[15].key.to_bytes() == payload.reward_recipient,
+        accounts[17].key.to_bytes() == payload.reward_recipient,
         ClutchError::MismatchedState,
     )?;
     let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
@@ -968,7 +969,7 @@ pub fn handle_paid_resolution_v1<'a>(
         root,
         source,
         execution,
-        accounts[15].key,
+        accounts[17].key,
         payload.scheduled_ceiling_lamports,
     )?;
     apply_work_transition_v1(
@@ -1081,8 +1082,8 @@ fn apply_work_transition_v1<'a>(
                 FailureRecoveryPayloadV1::ResolvePaidRecovery(value),
             ) => (
                 RESOLVE_PAID_RECOVERY_METAS_V1,
-                15usize,
-                16usize,
+                17usize,
+                18usize,
                 value.common,
                 value.source_success_handoff_id,
                 value.reward_recipient,
@@ -1849,4 +1850,4 @@ const _: () =
     assert!(FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1 > FAILURE_LIVENESS_POLICY_BODY_BYTES_V1);
 const _: () =
     assert!(FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1 > FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1);
-const _: () = assert!(INITIALIZE_FAILURE_ROOT_METAS_V1.len() <= 32);
+const _: () = assert!(INITIALIZE_FAILURE_ROOT_METAS_V1.len() == 34);
