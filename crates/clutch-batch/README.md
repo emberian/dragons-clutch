@@ -101,11 +101,15 @@ continues to refuse flows that need this counterparty.
 
 `MinimumGrossHamiltonV1` derives per-order cash from immutable sorted order IDs,
 dealer-filled units, residual buyer maxima, residual seller minima, and one net
-aggregate receipt. Buyer cash is Hamilton-allocated by residual capacity;
+aggregate dealer cash transition. Gross user cash and the net transition obey
+`user_in + dealer_net_out = user_out + dealer_net_in`. Buyer cash is
+Hamilton-allocated by residual capacity;
 seller excess above exact minima is Hamilton-allocated by native Egg atoms.
 Equal remainders prefer the smaller order ID. Candidate-supplied per-user cash
 does not exist, and any settlement copy can be checked against recomputation.
 Fees are summed and digest-bound separately and never enter dealer cash.
+The pure relation admits the full 64-order RelationV2 book; any smaller runtime
+chunk or LP-roster width is an adapter concern, not a market restriction.
 
 The joined digest commits the RelationV2 semantic digest, immutable facility
 and policy identities, pre-generation, policy version, receipt, derived trade,

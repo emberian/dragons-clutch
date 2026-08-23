@@ -13,7 +13,7 @@ use crate::relation_v2::{
     EconomicDomainV2, EconomicErrorV2, EconomicOrderV2, PricePreconditionV2,
     ECONOMIC_RELATION_VERSION_V2,
 };
-use crate::{PartialPolicy, Side};
+use crate::{PartialPolicy, Side, MAX_ORDERS};
 
 const SCALE: u64 = 10_000;
 
@@ -115,8 +115,8 @@ fn dealer_of(rows: &[DealerOrderRowV2], cash_in: u64, cash_out: u64) -> DealerLe
         },
         cash_policy: DealerCashPolicyV2::MinimumGrossHamiltonV1,
         receipt: DealerReceiptV2 {
-            trader_cash_in_atoms: cash_in,
-            trader_cash_out_atoms: cash_out,
+            dealer_net_cash_in_atoms: cash_in,
+            dealer_net_cash_out_atoms: cash_out,
         },
         rows: padded,
         row_count: u8::try_from(rows.len()).expect("fixture rows fit"),
@@ -160,7 +160,12 @@ fn mixed_sign_outcomes_and_net_cash_close_exactly() {
     assert_eq!(verified.allocations[0].user_cash_in_atoms, 11);
     assert_eq!(verified.allocations[1].user_cash_out_atoms, 7);
     assert_eq!(verified.total_external_fee_atoms, 5);
-    assert_eq!(11u128, 7u128 + 4u128);
+    let user_cash_in = u128::from(verified.allocations[0].user_cash_in_atoms);
+    let user_cash_out = u128::from(verified.allocations[1].user_cash_out_atoms);
+    assert_eq!(
+        user_cash_in + u128::from(dealer.receipt.dealer_net_cash_out_atoms),
+        user_cash_out + u128::from(dealer.receipt.dealer_net_cash_in_atoms)
+    );
 }
 
 #[test]
@@ -192,6 +197,38 @@ fn buyer_and_seller_hamilton_ties_prefer_smaller_immutable_id() {
     .unwrap();
     assert_eq!(sold.allocations[0].user_cash_out_atoms, 3);
     assert_eq!(sold.allocations[1].user_cash_out_atoms, 2);
+}
+
+#[test]
+fn full_relation_book_width_is_not_confused_with_an_lp_roster() {
+    let mut book = EconomicBookV2::empty();
+    let mut economic = EconomicCandidateV2::EMPTY;
+    let mut rows = [EMPTY_DEALER_ORDER_ROW_V2; MAX_DEALER_ROWS_V2];
+    let mut index = 0usize;
+    while index < MAX_ORDERS {
+        let order_id = u8::try_from(index + 1).expect("RelationV2 capacity fits an identity byte");
+        book.orders[index] = order(order_id, Side::Buy, 1, 0, 1);
+        economic.fills[index] = 1;
+        rows[index] = row(order_id, 1, 1, 0, 0);
+        index += 1;
+    }
+    book.len = u8::try_from(MAX_ORDERS).expect("RelationV2 capacity fits its length field");
+    let dealer = dealer_of(
+        &rows,
+        u64::try_from(MAX_ORDERS).expect("RelationV2 capacity fits cash atoms"),
+        0,
+    );
+    let verified =
+        verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &dealer)
+            .unwrap();
+
+    assert_eq!(verified.allocation_count, book.len);
+    assert_eq!(
+        verified.trade.sell_to_users[0],
+        u64::try_from(MAX_ORDERS).expect("RelationV2 capacity fits Egg atoms")
+    );
+    assert_eq!(verified.allocations[MAX_ORDERS - 1].order_id, id(64));
+    assert_eq!(verified.allocations[MAX_ORDERS - 1].user_cash_in_atoms, 1);
 }
 
 #[test]

@@ -28,7 +28,10 @@ use crate::{Side, MAX_ORDERS};
 /// Semantic version of the first RelationV2 covered-dealer join.
 pub const DEALER_LEG_VERSION_V2: u8 = 2;
 /// Maximum immutable order rows in one aggregate dealer leg.
-pub const MAX_DEALER_ROWS_V2: usize = 8;
+///
+/// This is the RelationV2 order capacity, not a facility LP-roster bound.
+/// Runtime adapters may stream the rows without narrowing this pure relation.
+pub const MAX_DEALER_ROWS_V2: usize = MAX_ORDERS;
 
 const DEALER_ECONOMIC_DIGEST_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-economic-candidate/v2\0";
 
@@ -56,13 +59,19 @@ pub struct DealerFacilityBindingV2 {
     pub pre_generation: u64,
 }
 
-/// Exact aggregate endpoint cash quoted by the covered-dealer kernel.
+/// Exact net cash transition quoted by the covered-dealer kernel.
+///
+/// These are not gross user transfers. After offsetting all derived user cash
+/// in against all derived user cash out, exactly one direction may be nonzero:
+///
+/// `sum(user cash in) + dealer net cash out`
+/// `= sum(user cash out) + dealer net cash in`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerReceiptV2 {
-    /// Cash paid by users into the dealer pool.
-    pub trader_cash_in_atoms: u64,
-    /// Cash paid by the dealer pool to users.
-    pub trader_cash_out_atoms: u64,
+    /// Net cash retained by the dealer after offsetting user payouts.
+    pub dealer_net_cash_in_atoms: u64,
+    /// Net cash supplied by the dealer after offsetting user payments.
+    pub dealer_net_cash_out_atoms: u64,
 }
 
 /// One immutable order's dealer-filled units and residual all-in envelope.
@@ -105,7 +114,7 @@ pub struct DealerLegCandidateV2 {
     pub receipt: DealerReceiptV2,
     /// Strictly order-ID-sorted active rows followed by exact padding.
     pub rows: [DealerOrderRowV2; MAX_DEALER_ROWS_V2],
-    /// Active row prefix in `1..=8`.
+    /// Active row prefix in `1..=64`.
     pub row_count: u8,
 }
 
@@ -180,7 +189,7 @@ pub enum DealerErrorV2 {
     NonCanonicalReceipt,
     /// RelationV2 already balanced without a dealer.
     ZeroDealerFlow,
-    /// Active row count was zero or exceeded eight.
+    /// Active row count was zero or exceeded the RelationV2 order capacity.
     InvalidRowCount,
     /// Row identities were zero, duplicated, or unordered.
     NonCanonicalRowOrder { row: u8 },
@@ -342,7 +351,8 @@ fn validate_facility(dealer: &DealerLegCandidateV2) -> Result<(), DealerErrorV2>
     {
         return Err(DealerErrorV2::ZeroSemanticDigest);
     }
-    if dealer.receipt.trader_cash_in_atoms != 0 && dealer.receipt.trader_cash_out_atoms != 0 {
+    if dealer.receipt.dealer_net_cash_in_atoms != 0 && dealer.receipt.dealer_net_cash_out_atoms != 0
+    {
         return Err(DealerErrorV2::NonCanonicalReceipt);
     }
     Ok(())
@@ -524,8 +534,8 @@ fn allocate_cash(
     dealer: &DealerLegCandidateV2,
     economics: &RowEconomicsV2,
 ) -> Result<CashResultV2, DealerErrorV2> {
-    let receipt_in = u128::from(dealer.receipt.trader_cash_in_atoms);
-    let receipt_out = u128::from(dealer.receipt.trader_cash_out_atoms);
+    let receipt_in = u128::from(dealer.receipt.dealer_net_cash_in_atoms);
+    let receipt_out = u128::from(dealer.receipt.dealer_net_cash_out_atoms);
     let minimum_receivers = u128::from(economics.total_receiver_minimum);
     let receipt_shortfall = receipt_out.saturating_sub(receipt_in);
     let receiver_total_u128 = if minimum_receivers > receipt_shortfall {
@@ -694,8 +704,8 @@ fn dealer_economic_digest(
     hash.update(&dealer.facility.policy_semantics_digest)?;
     hash.update(&dealer.facility.pre_generation.to_le_bytes())?;
     hash.update(&[cash_policy_byte(dealer.cash_policy)])?;
-    hash.update(&dealer.receipt.trader_cash_in_atoms.to_le_bytes())?;
-    hash.update(&dealer.receipt.trader_cash_out_atoms.to_le_bytes())?;
+    hash.update(&dealer.receipt.dealer_net_cash_in_atoms.to_le_bytes())?;
+    hash.update(&dealer.receipt.dealer_net_cash_out_atoms.to_le_bytes())?;
     hash.update(&[domain.outcome_count])?;
     let mut outcome = 0usize;
     while outcome < MAX_OUTCOMES {
