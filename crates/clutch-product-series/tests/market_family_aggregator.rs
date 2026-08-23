@@ -1,12 +1,10 @@
 use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, ContentId, Error, FixedCodec,
-    MarketFamilyAggregatorBindingV1, MarketFamilyAggregatorPhaseV1,
-    MarketFamilyAggregatorV1, MarketFamilyExhaustiveSummaryV1, MarketFamilyStatusV1,
-    MarketFamilyV1, MarketInstanceV2Id, NoMarketFamilyAuthorityV1,
-    RegistryCapabilityProfileV2Id, RegistryProgramReleaseV1Id,
+    MarketFamilyAggregatorBindingV1, MarketFamilyAggregatorPhaseV1, MarketFamilyAggregatorV1,
+    MarketFamilyExhaustiveSummaryV1, MarketFamilyStatusV1, MarketFamilyV1, MarketInstanceV2Id,
+    NoMarketFamilyAuthorityV1, RegistryCapabilityProfileV3Id, RegistryProgramReleaseV1Id,
     MARKET_FAMILIES_V1, MARKET_FAMILY_AGGREGATOR_BYTES_V1,
-    MARKET_FAMILY_EXHAUSTIVE_SUMMARY_BYTES_V1,
-    MARKET_FAMILY_TERMINAL_PROJECTION_BYTES_V1,
+    MARKET_FAMILY_EXHAUSTIVE_SUMMARY_BYTES_V1, MARKET_FAMILY_TERMINAL_PROJECTION_BYTES_V1,
 };
 
 #[derive(Debug)]
@@ -59,7 +57,7 @@ fn binding(enabled_family_mask: u8) -> MarketFamilyAggregatorBindingV1 {
         market_instance_id: MarketInstanceV2Id::from_bytes([1; 32]),
         generation: 7,
         registry_release_id: RegistryProgramReleaseV1Id::from_bytes([2; 32]),
-        capability_profile_id: RegistryCapabilityProfileV2Id::from_bytes([3; 32]),
+        capability_profile_id: RegistryCapabilityProfileV3Id::from_bytes([3; 32]),
         enabled_family_mask,
         family_root_ids: [id(4), id(5), id(6), id(7), id(8)],
     }
@@ -323,7 +321,10 @@ fn aggregator_codec_is_exact_and_refuses_hostile_states() {
     assert_eq!(MarketFamilyAggregatorV1::decode(&bad), Err(Error::BadMagic));
     bad = bytes;
     bad[8] = 2;
-    assert_eq!(MarketFamilyAggregatorV1::decode(&bad), Err(Error::BadVersion));
+    assert_eq!(
+        MarketFamilyAggregatorV1::decode(&bad),
+        Err(Error::BadVersion)
+    );
     bad = bytes;
     bad[12] = 1;
     assert_eq!(

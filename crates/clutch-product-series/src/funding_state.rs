@@ -36,7 +36,24 @@ pub enum SeriesFundingComponentV1 {
 impl SeriesFundingComponentV1 {
     /// Stable array index.
     pub const fn index(self) -> usize {
-        self as usize
+        match self {
+            Self::MarketCore => 0,
+            Self::RecoveryReserve => 1,
+            Self::SourceWork => 2,
+            Self::LiquidityFacility => 3,
+            Self::WrapperSet => 4,
+        }
+    }
+
+    /// Stable hostile-wire/PDA byte without an unchecked enum cast.
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::MarketCore => 0,
+            Self::RecoveryReserve => 1,
+            Self::SourceWork => 2,
+            Self::LiquidityFacility => 3,
+            Self::WrapperSet => 4,
+        }
     }
 }
 

@@ -14,8 +14,8 @@ use crate::instructions::genesis::{
     transfer_data, SYSTEM_PROGRAM_ID,
 };
 use crate::instructions::product_artifact::{
-    authenticate_product_artifact_v1, authenticate_registry_capability_v2,
-    authenticate_series_registry_capability_refs_v1, AuthenticatedRegistryCapabilityV2,
+    authenticate_product_artifact_v1, authenticate_registry_capability_v3,
+    authenticate_series_registry_capability_refs_v2, AuthenticatedRegistryCapabilityV3,
 };
 use crate::instructions::series_failure_funding::{
     fund_series_failure_accounts_v1, SeriesMarketCoreFundingReceiptV1,
@@ -55,6 +55,7 @@ use clutch_liveness::runtime_adapter_v1::{
 use clutch_liveness::runtime_v1::{RuntimeCompartmentKindV1, RuntimeCompartmentV1};
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
+    CompiledProductSeriesBundleV5,
     ContentId as ProductContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
     NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, SeriesPlanV5,
 };
@@ -219,7 +220,7 @@ impl AuthenticatedSourceSuccessJoinV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedFailureRelationExecutionV1 {
     relation: ExecutedFailureRelationV1,
-    relation_accounts: [Pubkey; 10],
+    relation_accounts: [Pubkey; 11],
 }
 
 impl AuthenticatedFailureRelationExecutionV1 {
@@ -257,7 +258,7 @@ impl AuthenticatedFailureRelationExecutionV1 {
 }
 
 /// Freshly authenticate and execute the complete Product/Source relation over
-/// the ten immutable accounts carried by every Recovery relation action.
+/// the eleven immutable accounts carried by every Recovery relation action.
 ///
 /// The returned capability has no byte codec or account representation. It is
 /// bound to these exact account keys and can only be consumed by a handler in
@@ -270,24 +271,30 @@ pub fn authenticate_failure_relation_execution_v1(
     source: AuthenticatedSourceSuccessJoinV1,
     accounts: &[AccountInfo<'_>],
 ) -> Outcome<AuthenticatedFailureRelationExecutionV1> {
-    let [series_registry, registry_program, registry_programdata, registry_release, capability_profile, series_artifact, product_template, claim_basis, price_policy, genesis] =
+    let [series_registry, registry_program, registry_programdata, registry_release, capability_profile, compiler_bundle, series_artifact, product_template, claim_basis, price_policy, genesis] =
         accounts
     else {
         return Err(ClutchError::AccountCount.into());
     };
     let binding = root.runtime().binding();
-    let registry_refs = authenticate_series_registry_capability_refs_v1(
+    let registry_refs = authenticate_series_registry_capability_refs_v2(
         program_id,
         series_registry,
         binding.series_plan_id(),
     )?;
-    let registry = authenticate_registry_capability_v2(
+    let compiler_bundle_id = registry_refs.compiler_bundle_id();
+    let registry = authenticate_registry_capability_v3(
         program_id,
         registry_refs,
         registry_program,
         registry_programdata,
         registry_release,
         capability_profile,
+    )?;
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
+        program_id,
+        compiler_bundle,
+        compiler_bundle_id,
     )?;
     let series = authenticate_product_artifact_v1::<SeriesPlanV5>(
         program_id,
@@ -313,6 +320,27 @@ pub fn authenticate_failure_relation_execution_v1(
         program_id,
         price_policy,
         genesis.value().price_measure_policy_id.content_id(),
+    )?;
+    require(
+        bundle.value().series_plan_id == binding.series_plan_id()
+            && bundle.value().registry_release_id == registry.registry_release_id()
+            && bundle.value().capability_profile_id.content_id()
+                == registry.capability_profile_id()
+            && bundle.value().source_release_manifest_id.bytes()
+                == source.release.manifest_id().bytes()
+            && bundle.value().product_template_id == template.value().id().map_err(|_| {
+                Refusal::Adapter(ClutchError::MismatchedState)
+            })?
+            && bundle.value().native_claim_basis_id == basis.value().id().map_err(|_| {
+                Refusal::Adapter(ClutchError::MismatchedState)
+            })?
+            && bundle.value().price_measure_policy_id == price_policy.value().id().map_err(|_| {
+                Refusal::Adapter(ClutchError::MismatchedState)
+            })?
+            && bundle.value().market_genesis_profile_id == genesis.value().id().map_err(|_| {
+                Refusal::Adapter(ClutchError::MismatchedState)
+            })?,
+        ClutchError::MismatchedState,
     )?;
 
     let market = MarketInstancePreimageV2 {
@@ -363,6 +391,7 @@ pub fn authenticate_failure_relation_execution_v1(
             registry.programdata_account(),
             registry.release_artifact_account(),
             registry.profile_artifact_account(),
+            bundle.account(),
             series.account(),
             template.account(),
             basis.account(),
@@ -618,7 +647,7 @@ pub fn handle_initialize_failure_root_v1<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],
     payload: &clutch_solana_layout::failure_recovery::InitializeFailureRootV1,
-    registry_capability: AuthenticatedRegistryCapabilityV2,
+    registry_capability: AuthenticatedRegistryCapabilityV3,
     source_release: AuthenticatedSourceReleaseV1,
     runtime: FailureRuntimeExternalV2,
     receipt: FailureExternalAdmissionReceiptV2,
