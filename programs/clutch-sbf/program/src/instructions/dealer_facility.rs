@@ -45,7 +45,7 @@ use clutch_batch::portfolio_book_v2::{
     PortfolioCompleteBookProjectionExpectationV2,
     PORTFOLIO_BOOK_AUTHORITY_VERSION_V2, PORTFOLIO_BOOK_MAX_PAGES_V2,
 };
-use clutch_batch::relation_v2::{EconomicBookV2, EconomicDomainV2, EMPTY_ECONOMIC_ORDER_V2};
+use clutch_batch::relation_v2::{EconomicBookV2, EconomicDomainV2};
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, revenue_policy_digest, REVENUE_POLICY_BYTES,
 };
@@ -96,7 +96,7 @@ use clutch_solana_layout::registry::{
     DEALER_STATE_V2_ACCOUNT_TAG, DEALER_STATE_V2_ACCOUNT_VERSION,
 };
 use clutch_solana_layout::order_page_v5::{
-    verify_page_set_v5, OrderPageAccountV5, ORDER_PAGE_V5_BYTES,
+    verify_page_set_v5_streaming, OrderPageHeaderV5, OrderSlotCursorV5, ORDER_PAGE_V5_BYTES,
 };
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use clutch_solana_layout::{account_len, PriceGridAccount};
@@ -127,6 +127,17 @@ const CANCEL_FUNDING_ACCOUNT_COUNT: usize = 20;
 const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize = 20;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
+
+/// Static source for the adapter's heap-resident complete RelationV2 book.
+///
+/// Copying this through `boxed_copy_of` avoids materializing the 12-KiB-plus
+/// fixed book in any SBF call frame before the streaming page cursor fills it.
+static EMPTY_DEALER_ECONOMIC_BOOK_V2: EconomicBookV2 = EconomicBookV2::empty();
+
+/// Static source for heap-first hostile decoding of one signed Dealer quote.
+static EMPTY_DEALER_QUOTE_ADMISSION_V1:
+    clutch_dealer_runtime_contract::DealerQuoteAdmissionV1 =
+    clutch_dealer_runtime_contract::DealerQuoteAdmissionV1::ZEROED;
 
 fn id(key: &Pubkey) -> Id {
     Id::from_bytes(key.to_bytes())
@@ -760,7 +771,7 @@ struct DealerCompleteBookAdapterV2 {
     page_account_ids: [[u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2],
     page_data_ids: [[u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2],
     page_count: u8,
-    book: EconomicBookV2,
+    book: Box<EconomicBookV2>,
 }
 
 impl PortfolioBookAdapterV2 for DealerCompleteBookAdapterV2 {
@@ -807,7 +818,7 @@ impl PortfolioBookAdapterV2 for DealerCompleteBookAdapterV2 {
         {
             return None;
         }
-        Some(self.book)
+        Some(*self.book)
     }
 }
 
@@ -876,16 +887,39 @@ fn authenticate_complete_dealer_book_v2(
         ClutchError::AccountCount,
     )?;
 
-    let first_data = page_accounts[0]
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let first_page = OrderPageAccountV5::decode(&first_data)
+    // Never materialize even one 4,140-byte OrderPageV5, much less the
+    // four-page maximum, in an SBF frame. The streaming layout verifier folds
+    // the exact raw account bytes and the cursor exposes one authenticated
+    // slot at a time.
+    let mut page_data = Vec::with_capacity(page_accounts.len());
+    let mut page = 0usize;
+    while page < page_accounts.len() {
+        page_data.push(
+            page_accounts[page]
+                .try_borrow_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+        );
+        page += 1;
+    }
+    let mut raw_pages = Vec::with_capacity(page_data.len());
+    page = 0;
+    while page < page_data.len() {
+        raw_pages.push(&page_data[page][..]);
+        page += 1;
+    }
+    let observed_order_set = verify_page_set_v5_streaming(&raw_pages)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    drop(first_data);
-    let mut pages = [first_page; PORTFOLIO_BOOK_MAX_PAGES_V2];
+    require(
+        observed_order_set.bytes() == root.order_set().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
     let mut page_account_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
     let mut page_data_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
-    let mut page = 0usize;
+    let mut headers = [OrderPageHeaderV5::decode(&raw_pages[0])
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        PORTFOLIO_BOOK_MAX_PAGES_V2];
+    page = 0;
     while page < page_accounts.len() {
         let account = &page_accounts[page];
         require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
@@ -894,38 +928,28 @@ fn authenticate_complete_dealer_book_v2(
             !account.is_signer && !account.executable && account.data_len() == ORDER_PAGE_V5_BYTES,
             ClutchError::MismatchedState,
         )?;
-        let data = account
-            .try_borrow_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let decoded = OrderPageAccountV5::decode(&data)
+        let header = OrderPageHeaderV5::decode(&raw_pages[page])
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        drop(data);
         let page_index = u16::try_from(page).map_err(|_| ClutchError::Arithmetic)?;
         expect_pda(
             account.key,
             seeds::general_v2_order_page_v5_pda(program_id, &root.epoch().bytes(), page_index),
-            Some(decoded.page.stored_bump),
+            Some(header.stored_bump),
         )?;
         require(
-            decoded.page.page_index == page_index
-                && usize::from(decoded.page.page_count) == page_accounts.len()
-                && decoded.page.set_order_count == u16::from(root.order_count())
-                && decoded.page.epoch.bytes() == root.epoch().bytes()
-                && decoded.page.order_set.bytes() == root.order_set().bytes()
-                && decoded.page.frozen != 0,
+            header.page_index == page_index
+                && usize::from(header.page_count) == page_accounts.len()
+                && header.set_order_count == u16::from(root.order_count())
+                && header.epoch.bytes() == root.epoch().bytes()
+                && header.order_set.bytes() == root.order_set().bytes()
+                && header.frozen != 0,
             ClutchError::MismatchedState,
         )?;
         page_account_ids[page] = account.key.to_bytes();
-        page_data_ids[page] = decoded.page.page_digest.bytes();
-        pages[page] = decoded;
+        page_data_ids[page] = header.page_digest.bytes();
+        headers[page] = header;
         page += 1;
     }
-    let observed_order_set = verify_page_set_v5(&pages[..page_accounts.len()])
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        observed_order_set.bytes() == root.order_set().bytes(),
-        ClutchError::MismatchedState,
-    )?;
 
     let transcript = domain.transcript;
     let relation_domain = EconomicDomainV2 {
@@ -938,16 +962,19 @@ fn authenticate_complete_dealer_book_v2(
         outcome_count: transcript.outcome_count,
         price_scale: transcript.price_scale,
     };
-    let mut book = EconomicBookV2 {
-        orders: [EMPTY_ECONOMIC_ORDER_V2; clutch_batch::MAX_ORDERS],
-        len: 0,
-    };
+    let mut book = super::orders_batch::boxed_copy_of(&EMPTY_DEALER_ECONOMIC_BOOK_V2)?;
     page = 0;
     while page < page_accounts.len() {
+        let mut cursor = OrderSlotCursorV5::new(&raw_pages[page])
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         let mut slot = 0usize;
-        while slot < usize::from(pages[page].page.order_count) {
+        while slot < usize::from(headers[page].order_count) {
+            let verified = cursor
+                .next_slot()
+                .ok_or(ClutchError::MismatchedState)?
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
             if let Some((order, _membership)) = project_owner_blind_slot(
-                pages[page].page.orders[slot],
+                verified.slot,
                 &relation_domain,
             )
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
@@ -1012,7 +1039,7 @@ fn authenticate_signed_dealer_quote_v1(
     quote_account: &AccountInfo<'_>,
     instructions_account: &AccountInfo<'_>,
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
-) -> Outcome<clutch_dealer_runtime_contract::DealerQuoteAdmissionV1> {
+) -> Outcome<Box<clutch_dealer_runtime_contract::DealerQuoteAdmissionV1>> {
     require(
         !quote_account.is_writable && !quote_account.is_signer && !quote_account.executable,
         ClutchError::MismatchedState,
@@ -1022,8 +1049,10 @@ fn authenticate_signed_dealer_quote_v1(
             == clutch_dealer_runtime_contract::DEALER_QUOTE_ADMISSION_BYTES_V1,
         ClutchError::WrongDataLength,
     )?;
-    let quote = clutch_dealer_runtime_contract::DealerQuoteAdmissionV1::decode(
+    let mut quote = super::orders_batch::boxed_copy_of(&EMPTY_DEALER_QUOTE_ADMISSION_V1)?;
+    clutch_dealer_runtime_contract::DealerQuoteAdmissionV1::decode_into(
         &quote_account.data.borrow(),
+        &mut quote,
     )
     .map_err(dealer_fault)?;
     let instructions_data = instructions_account
