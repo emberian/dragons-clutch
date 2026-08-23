@@ -110,6 +110,18 @@ pub fn process(
         ) => super::source_series_successor::process_emit_successful_handoff(
             program_id, accounts, sequence, intent,
         ),
+        (
+            SourceSeriesAction::ReopenGeneration,
+            SourceSeriesPayloadV2::ReopenGeneration(intent),
+        ) => super::source_series_successor::process_reopen_generation(
+            program_id, accounts, sequence, intent,
+        ),
+        (
+            SourceSeriesAction::CloseGeneration,
+            SourceSeriesPayloadV2::CloseGeneration(intent),
+        ) => super::source_series_successor::process_close_generation(
+            program_id, accounts, sequence, intent,
+        ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }

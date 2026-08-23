@@ -23,6 +23,7 @@ mod auth;
 mod funding;
 mod ingest;
 mod lineage;
+mod reopen;
 mod window;
 
 pub use account::{
@@ -67,6 +68,11 @@ pub use lineage::{
     LineageAccessV1, LineageFamilyV1, ReopenAuthorizationV1, ReopenLineageV1, ReopenLineageV2,
     REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, REOPEN_LINEAGE_BYTES,
     REOPEN_LINEAGE_V2_BYTES,
+};
+pub use reopen::{
+    authenticate_source_reopen_generation_request, AuthenticatedSourceReopenGenerationV1,
+    SourceReopenFamilyV1, SourceReopenGenerationRequestV1, SourceReopenTargetV1,
+    SOURCE_REOPEN_GENERATION_REQUEST_BYTES, SOURCE_REOPEN_TARGET_BODY_BYTES,
 };
 pub use window::{
     authenticate_evaluation_authority, authenticate_persisted_source_policy_handoff,

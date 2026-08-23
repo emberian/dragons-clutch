@@ -41,6 +41,7 @@ use clutch_source_plane_v3_runtime::{
     LineageFamilyV1, RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1,
     RuntimeAccountHeaderV1, RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1,
     SourcePolicyHandoffAccessV1, SourcePolicyHandoffAccountV1, SourceReleaseManifestV2,
+    SourceReceiptDispositionV1,
     SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
     SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccessV1,
     SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
@@ -2053,9 +2054,9 @@ pub fn close_head_generation(
     lineage_account: &AccountInfo<'_>,
     principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
-    semantic_terminal_receipt_id: ContentId,
+    terminal_receipt: AuthenticatedSourceWorkReceiptV1,
 ) -> Outcome<CloseRuntimeAccountResultV1> {
-    close_runtime_account::<SourceHeadV3>(
+    close_terminal_runtime_account::<SourceHeadV3>(
         program_id,
         route,
         lineage,
@@ -2063,7 +2064,7 @@ pub fn close_head_generation(
         lineage_account,
         principal_refund,
         neutral_sink,
-        semantic_terminal_receipt_id,
+        terminal_receipt,
     )
 }
 
@@ -2077,9 +2078,9 @@ pub fn close_open_page_generation(
     lineage_account: &AccountInfo<'_>,
     principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
-    semantic_terminal_receipt_id: ContentId,
+    terminal_receipt: AuthenticatedSourceWorkReceiptV1,
 ) -> Outcome<CloseRuntimeAccountResultV1> {
-    close_runtime_account::<OpenRawPageV3>(
+    close_terminal_runtime_account::<OpenRawPageV3>(
         program_id,
         route,
         lineage,
@@ -2087,7 +2088,7 @@ pub fn close_open_page_generation(
         lineage_account,
         principal_refund,
         neutral_sink,
-        semantic_terminal_receipt_id,
+        terminal_receipt,
     )
 }
 
@@ -2101,9 +2102,9 @@ pub fn close_window_work_generation(
     lineage_account: &AccountInfo<'_>,
     principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
-    semantic_terminal_receipt_id: ContentId,
+    terminal_receipt: AuthenticatedSourceWorkReceiptV1,
 ) -> Outcome<CloseRuntimeAccountResultV1> {
-    close_runtime_account::<WindowWorkV3>(
+    close_terminal_runtime_account::<WindowWorkV3>(
         program_id,
         route,
         lineage,
@@ -2111,7 +2112,7 @@ pub fn close_window_work_generation(
         lineage_account,
         principal_refund,
         neutral_sink,
-        semantic_terminal_receipt_id,
+        terminal_receipt,
     )
 }
 
@@ -2125,9 +2126,9 @@ pub fn close_statistic_result_generation(
     lineage_account: &AccountInfo<'_>,
     principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
-    semantic_terminal_receipt_id: ContentId,
+    terminal_receipt: AuthenticatedSourceWorkReceiptV1,
 ) -> Outcome<CloseRuntimeAccountResultV1> {
-    close_runtime_account::<StatisticResultV3>(
+    close_terminal_runtime_account::<StatisticResultV3>(
         program_id,
         route,
         lineage,
@@ -2135,7 +2136,42 @@ pub fn close_statistic_result_generation(
         lineage_account,
         principal_refund,
         neutral_sink,
-        semantic_terminal_receipt_id,
+        terminal_receipt,
+    )
+}
+
+/// Consume only the authenticated terminal-success receipt minted after the
+/// shared Product ResolutionV5 write. Caller-supplied terminal IDs never enter
+/// the close engine as authority.
+#[allow(clippy::too_many_arguments)]
+fn close_terminal_runtime_account<T: RuntimeAccountBodyV1>(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    lineage: AuthenticatedReopenLineageV1,
+    account: &AccountInfo<'_>,
+    lineage_account: &AccountInfo<'_>,
+    principal_refund: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+    terminal_receipt: AuthenticatedSourceWorkReceiptV1,
+) -> Outcome<CloseRuntimeAccountResultV1> {
+    let receipt = terminal_receipt.receipt();
+    require(
+        receipt.route_id() == route.route_id()
+            && receipt.disposition() == SourceReceiptDispositionV1::TerminalSuccess
+            && receipt.work_kind().is_none()
+            && receipt.call_ordinal() == 0
+            && receipt.call_ceiling_lamports() == 0,
+        ClutchError::MismatchedState,
+    )?;
+    close_runtime_account::<T>(
+        program_id,
+        route,
+        lineage,
+        account,
+        lineage_account,
+        principal_refund,
+        neutral_sink,
+        receipt.semantic_receipt_id(),
     )
 }
 

@@ -32,6 +32,7 @@ use clutch_source_plane_v3_runtime::{
     authenticate_open_raw_page_account, authenticate_raw_page_account,
     authenticate_receiver_route_v2, authenticate_reopen_lineage_account,
     authenticate_source_generation_request, authenticate_source_head_account,
+    authenticate_source_reopen_generation_request,
     authenticate_source_release_account, authenticate_source_route,
     authenticate_source_work_receipt_account, authenticate_statistic_result,
     authenticate_statistic_result_absence, authenticate_statistic_result_account,
@@ -40,7 +41,8 @@ use clutch_source_plane_v3_runtime::{
     AuthenticatedBoundaryV1,
     AuthenticatedClockBucketV1, AuthenticatedEvaluationV1, AuthenticatedOpenRawPageV1,
     AuthenticatedRawPageV1, AuthenticatedReceiverRouteV2, AuthenticatedReopenLineageV1,
-    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1, AuthenticatedSourceReleaseV1,
+    AuthenticatedSourceGenerationV1, AuthenticatedSourceHeadV1,
+    AuthenticatedSourceReleaseV1, AuthenticatedSourceReopenGenerationV1,
     AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
     AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
@@ -48,7 +50,7 @@ use clutch_source_plane_v3_runtime::{
     FailurePolicySourceHandoffV1, LineageAccessV1, OccurrenceDispositionV1,
     OccurrenceSourceReceiptV1, OccurrenceWindowReceiptV1,
     ParserOutputV1, ReopenLineageV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
-    SourceGenerationRequestV1,
+    SourceGenerationRequestV1, SourceReopenGenerationRequestV1,
     SourceReceiptDispositionV1, SourceReleaseManifestV2, SourceWorkReceiptAccessV1,
     SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
     OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
@@ -78,6 +80,7 @@ const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 const SOURCE_GENERATION_REQUEST_SEED_V1: &[u8] = b"dc-sp3-generation-request";
+const SOURCE_REOPEN_REQUEST_SEED_V1: &[u8] = b"dc-sp3-reopen-request";
 
 /// Route one centrally allocated but disabled SourcePlane action to refusal.
 ///
@@ -1010,6 +1013,38 @@ pub fn authenticate_generation_request(
             address: runtime_key(&address),
             bump,
         },
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate action 11's immutable typed target under the exact
+/// generation-authority program selected by the current Source release, then
+/// join it to the complete closed-lineage preimage.
+pub fn authenticate_reopen_generation_request(
+    route: AuthenticatedSourceRouteV1,
+    request_account: &AccountInfo<'_>,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedSourceReopenGenerationV1> {
+    let data = request_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let request = SourceReopenGenerationRequestV1::decode(&data)?;
+    let request_id = request.id()?;
+    let authority = Pubkey::new_from_array(route.generation_authority_program().bytes());
+    let (address, bump) = crate::seeds::find(
+        &authority,
+        &[SOURCE_REOPEN_REQUEST_SEED_V1, &request_id.bytes()],
+    );
+    authenticate_source_reopen_generation_request(
+        route,
+        runtime_account_view(request_account, &data),
+        RuntimeDerivedPdaV1 {
+            program_id: route.generation_authority_program(),
+            recipe_id: request_id,
+            address: runtime_key(&address),
+            bump,
+        },
+        lineage,
     )
     .map_err(Into::into)
 }

@@ -13,6 +13,7 @@ use crate::source_plane_v3::{
     authenticate_occurrence, authenticate_occurrence_window, authenticate_open_page,
     authenticate_persisted_window_evidence_account, authenticate_raw_page, authenticate_route,
     authenticate_persisted_result_account, authenticate_route_clock_bucket,
+    authenticate_reopen_generation_request,
     authenticate_statistic_key_input, authenticate_statistic_key_policy_input,
     authenticate_summary_program_input, authenticate_window_spec_input, authenticate_window_work,
     authenticate_work_receipt, invoke_statistic_evaluator, runtime_key,
@@ -20,8 +21,11 @@ use crate::source_plane_v3::{
 };
 use crate::source_plane_v3_actions::{
     apply_source_work_liveness, authenticate_source_work_schedule_artifact, bind_work_execution,
+    close_head_generation, close_open_page_generation, close_statistic_result_generation,
+    close_window_work_generation,
     fold_window_pages, initialize_window_work, join_successful_evaluation_handoff,
-    persist_evaluation_result, persist_source_policy_handoff, seal_raw_page, seal_window,
+    persist_evaluation_result, persist_source_policy_handoff, reopen_runtime_account,
+    seal_raw_page, seal_window,
 };
 use crate::instructions::failure_market_admission::authenticate_failure_market_root_v2;
 use clutch_source_plane_v3::ContentId;
@@ -32,11 +36,16 @@ use clutch_source_plane_v3_adapter::{
     RuntimeCreationProjectionV1, RuntimeMutationProjectionV1,
 };
 use clutch_source_plane_v3_runtime::{
-    LineageAccessV1, OccurrenceDispositionV1, SourceWorkKindV1,
+    LineageAccessV1, OccurrenceDispositionV1, SourceReopenTargetV1, SourceWorkKindV1,
 };
-use clutch_solana_layout::source_series::{EmitFailureHandoffIntentV2, SourceHandoffKindV2};
+use clutch_solana_layout::source_series::{
+    CloseGenerationIntentV2, EmitFailureHandoffIntentV2, ReopenGenerationIntentV2,
+    SourceHandoffKindV2, SourceMutableFamilyV2,
+};
 use clutch_source_plane_v3::StatisticResultStatusV3;
 use solana_account_info::AccountInfo;
+use solana_clock::Clock;
+use solana_get_sysvar::GetSysvar;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
@@ -937,6 +946,298 @@ pub(super) fn process_emit_successful_handoff(
     require(
         persisted.authenticated().source_policy_handoff_join_id() == joined.id(),
         ClutchError::MismatchedState,
+    )?;
+    Ok(())
+}
+
+/// Retire one exact mutable Source generation only after the shared Product
+/// writer has minted the route/schedule/generation-bound terminal-success
+/// receipt. The payload terminal digest is comparison-only.
+pub(super) fn process_close_generation(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    intent: CloseGenerationIntentV2,
+) -> Outcome<()> {
+    require(sequence == 0, ClutchError::Replay)?;
+    let route = authenticate_route(
+        program_id,
+        &accounts[0],
+        &accounts[1],
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &accounts[5],
+        &accounts[6],
+    )
+    .map_err(Refusal::from)?;
+    let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
+    let clock = Clock::get().map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
+    require(
+        clock.slot < intent.valid_before_slot
+            && route.release_manifest_id().bytes() == intent.source_release_manifest_id,
+        ClutchError::MismatchedState,
+    )?;
+    let lineage = authenticate_lineage(program_id, route, &accounts[9], LineageAccessV1::Mutable)
+        .map_err(Refusal::from)?;
+    let expected_family = match intent.family {
+        SourceMutableFamilyV2::SourceHead => {
+            clutch_source_plane_v3_runtime::LineageFamilyV1::SourceHead
+        }
+        SourceMutableFamilyV2::OpenRawPage => {
+            clutch_source_plane_v3_runtime::LineageFamilyV1::OpenRawPage
+        }
+        SourceMutableFamilyV2::WindowWork => {
+            clutch_source_plane_v3_runtime::LineageFamilyV1::WindowWork
+        }
+        SourceMutableFamilyV2::StatisticResult => {
+            clutch_source_plane_v3_runtime::LineageFamilyV1::StatisticResult
+        }
+    };
+    require(
+        lineage.account_data_id().bytes() == intent.expected_lineage_state_id
+            && lineage.lineage().family == expected_family
+            && lineage.lineage().is_open
+            && lineage.lineage().active_account == runtime_key(accounts[8].key),
+        ClutchError::MismatchedState,
+    )?;
+    let terminal = authenticate_work_receipt(program_id, route, schedule, &accounts[10])
+        .map_err(Refusal::from)?;
+    require(
+        terminal.receipt().semantic_receipt_id().bytes()
+            == intent.semantic_terminal_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    let target_generation = lineage.lineage().latest_generation;
+    let close = match intent.family {
+        SourceMutableFamilyV2::SourceHead => close_head_generation(
+            program_id,
+            route,
+            lineage,
+            &accounts[8],
+            &accounts[9],
+            &accounts[11],
+            &accounts[12],
+            terminal,
+        ),
+        SourceMutableFamilyV2::OpenRawPage => close_open_page_generation(
+            program_id,
+            route,
+            lineage,
+            &accounts[8],
+            &accounts[9],
+            &accounts[11],
+            &accounts[12],
+            terminal,
+        ),
+        SourceMutableFamilyV2::WindowWork => close_window_work_generation(
+            program_id,
+            route,
+            lineage,
+            &accounts[8],
+            &accounts[9],
+            &accounts[11],
+            &accounts[12],
+            terminal,
+        ),
+        SourceMutableFamilyV2::StatisticResult => close_statistic_result_generation(
+            program_id,
+            route,
+            lineage,
+            &accounts[8],
+            &accounts[9],
+            &accounts[11],
+            &accounts[12],
+            terminal,
+        ),
+    }?;
+    require(
+        !close.lineage_after.is_open
+            && close.funding.generation == target_generation
+            && close.funding.terminal_receipt_id.bytes()
+                == intent.semantic_terminal_receipt_id
+            && close.lineage_after.last_close_receipt_id == close.funding.close_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(())
+}
+
+/// Reopen one exact closed Source generation from the immutable typed target
+/// persisted by the release-selected Product/Failure generation owner. The
+/// payload supplies only comparison digests and never supplies body bytes.
+pub(super) fn process_reopen_generation(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    intent: ReopenGenerationIntentV2,
+) -> Outcome<()> {
+    require(sequence != 0, ClutchError::Replay)?;
+    let call_ordinal =
+        u32::try_from(sequence).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let route = authenticate_route(
+        program_id,
+        &accounts[0],
+        &accounts[1],
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &accounts[5],
+        &accounts[6],
+    )
+    .map_err(Refusal::from)?;
+    let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
+    require(
+        runtime_key(accounts[15].key) == schedule.payer(),
+        ClutchError::MismatchedState,
+    )?;
+    let clock = Clock::get().map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
+    require(
+        clock.slot < intent.valid_before_slot
+            && route.release_manifest_id().bytes() == intent.source_release_manifest_id,
+        ClutchError::MismatchedState,
+    )?;
+    let lineage = authenticate_lineage(program_id, route, &accounts[10], LineageAccessV1::Mutable)
+        .map_err(Refusal::from)?;
+    let authorization = authenticate_reopen_generation_request(route, &accounts[8], lineage)
+        .map_err(Refusal::from)?;
+    let target = authorization.target();
+    let requested_family = match intent.family {
+        SourceMutableFamilyV2::SourceHead => {
+            clutch_source_plane_v3_runtime::SourceReopenFamilyV1::SourceHead
+        }
+        SourceMutableFamilyV2::OpenRawPage => {
+            clutch_source_plane_v3_runtime::SourceReopenFamilyV1::OpenRawPage
+        }
+        SourceMutableFamilyV2::WindowWork => {
+            clutch_source_plane_v3_runtime::SourceReopenFamilyV1::WindowWork
+        }
+        SourceMutableFamilyV2::StatisticResult => {
+            clutch_source_plane_v3_runtime::SourceReopenFamilyV1::StatisticResult
+        }
+    };
+    let recipe = target
+        .recipe(route)
+        .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?;
+    let recipe_id = recipe
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongPda))?;
+    let target_body_id = target
+        .body_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?;
+    require(
+        target.family() == requested_family
+            && authorization.expected_lineage_state_id().bytes()
+                == intent.expected_lineage_state_id
+            && lineage.account_data_id().bytes() == intent.expected_lineage_state_id
+            && lineage.lineage().semantic_binding_id == recipe_id
+            && recipe_id.bytes() == intent.semantic_binding_id
+            && target_body_id.bytes() == intent.target_body_id,
+        ClutchError::MismatchedState,
+    )?;
+    let opened = match target {
+        SourceReopenTargetV1::SourceHead(body) => reopen_runtime_account(
+            program_id,
+            route,
+            lineage,
+            clutch_source_plane_v3_runtime::LineageFamilyV1::SourceHead,
+            recipe_id,
+            &recipe,
+            body,
+            &accounts[15],
+            &accounts[9],
+            &accounts[10],
+            &accounts[16],
+            &accounts[17],
+        ),
+        SourceReopenTargetV1::OpenRawPage(body) => reopen_runtime_account(
+            program_id,
+            route,
+            lineage,
+            clutch_source_plane_v3_runtime::LineageFamilyV1::OpenRawPage,
+            recipe_id,
+            &recipe,
+            body,
+            &accounts[15],
+            &accounts[9],
+            &accounts[10],
+            &accounts[16],
+            &accounts[17],
+        ),
+        SourceReopenTargetV1::WindowWork(body) => reopen_runtime_account(
+            program_id,
+            route,
+            lineage,
+            clutch_source_plane_v3_runtime::LineageFamilyV1::WindowWork,
+            recipe_id,
+            &recipe,
+            body,
+            &accounts[15],
+            &accounts[9],
+            &accounts[10],
+            &accounts[16],
+            &accounts[17],
+        ),
+        SourceReopenTargetV1::StatisticResult(body) => reopen_runtime_account(
+            program_id,
+            route,
+            lineage,
+            clutch_source_plane_v3_runtime::LineageFamilyV1::StatisticResult,
+            recipe_id,
+            &recipe,
+            body,
+            &accounts[15],
+            &accounts[9],
+            &accounts[10],
+            &accounts[16],
+            &accounts[17],
+        ),
+    }?;
+    let lineage_after_id = opened
+        .lineage_after
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::SourceAdmissionFailed))?;
+    let semantic_receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/source-reopen-execution/v1",
+            &authorization.id().bytes(),
+            &authorization.generation_policy_id().bytes(),
+            &recipe_id.bytes(),
+            &target_body_id.bytes(),
+            &opened.account_data_id.bytes(),
+            &opened.header.generation.to_le_bytes(),
+            &lineage_after_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(
+        !semantic_receipt_id.is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    let kind = SourceWorkKindV1::TerminalLifecycle;
+    let ceiling = schedule.ceiling_for(kind);
+    let work = bind_work_execution(
+        program_id,
+        route,
+        schedule,
+        kind,
+        semantic_receipt_id,
+        &accounts[11],
+        call_ordinal,
+        ceiling,
+        accounts[14].key,
+        ceiling,
+        &accounts[15],
+        &accounts[16],
+        &accounts[17],
+    )?;
+    apply_source_work_liveness(
+        program_id,
+        route,
+        work,
+        &accounts[12],
+        &accounts[13],
+        &accounts[14],
+        &accounts[15],
     )?;
     Ok(())
 }

@@ -1035,6 +1035,11 @@ pub struct WindowWorkV3 {
 }
 
 impl WindowWorkV3 {
+    /// Predictable immutable Window identity governing this work generation.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
     /// Start the canonical rolling root from one exact WindowKey.
     pub fn new(window: &WindowSpecV3) -> Result<Self> {
         window.validate()?;
