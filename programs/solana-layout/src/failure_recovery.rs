@@ -563,7 +563,8 @@ pub enum RecoveryAccountRoleV1 {
     NeutralSink,
     RetirementRoot,
     ReplayTombstone,
-    ProductOccurrenceRoot,
+    MarketLifecycleRoot,
+    SeriesMarketLink,
     IntervalConsensusWork,
     IntervalConsensusReplay,
     ResolutionV5,
@@ -748,10 +749,12 @@ const INTERVAL_PRODUCT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::GenesisArtifact, false, false),
 ];
 
-/// Exact ordered contract for creating ab work and permanent ac replay.
+/// Exact ordered contract for pinning one initiating Series link and creating
+/// ab work plus permanent ac replay against the shared Market root.
 pub const BEGIN_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
-    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, false, false),
+    meta(RecoveryAccountRoleV1::MarketLifecycleRoot, false, false),
+    meta(RecoveryAccountRoleV1::SeriesMarketLink, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
@@ -778,9 +781,12 @@ pub const BEGIN_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SystemProgram, false, false),
 ];
 
-/// Exact ordered contract for one bounded paid ab/ac transition.
+/// Exact ordered contract for one bounded paid ab/ac transition. The shared
+/// Market root and pinned initiating link are both immutable inputs.
 pub const ADVANCE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
+    meta(RecoveryAccountRoleV1::MarketLifecycleRoot, false, false),
+    meta(RecoveryAccountRoleV1::SeriesMarketLink, false, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
@@ -807,10 +813,13 @@ pub const ADVANCE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
 ];
 
 /// Exact ordered contract for private Product capability restoration and the
-/// atomic full-width Resolution V5/Hoard V2/ClaimLedger V3 postimage.
+/// atomic full-width Resolution V5/Hoard V2/ClaimLedger V3 postimage. Resolve
+/// records the once-only V5 activation in the shared Market root but leaves the
+/// initiating Series link pinned until the work account closes.
 pub const RESOLVE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
-    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, true, false),
+    meta(RecoveryAccountRoleV1::MarketLifecycleRoot, true, false),
+    meta(RecoveryAccountRoleV1::SeriesMarketLink, false, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
     meta(RecoveryAccountRoleV1::ResolutionV5, true, false),
@@ -836,10 +845,13 @@ pub const RESOLVE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SystemProgram, false, false),
 ];
 
-/// Exact ordered contract for closing only deletable ab work.
+/// Exact ordered contract for closing only deletable ab work and atomically
+/// releasing its initiating Series link. This does not discharge the
+/// market-scoped Failure family from the shared Market root.
 pub const CLOSE_INTERVAL_CONSENSUS_WORK_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, false, false),
-    meta(RecoveryAccountRoleV1::ProductOccurrenceRoot, true, false),
+    meta(RecoveryAccountRoleV1::MarketLifecycleRoot, false, false),
+    meta(RecoveryAccountRoleV1::SeriesMarketLink, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
     meta(RecoveryAccountRoleV1::RootRentPayer, true, false),
@@ -1533,21 +1545,44 @@ mod tests {
     #[test]
     fn interval_resolution_requires_the_atomic_liability_postimage() {
         let metas = account_metas_v1(registry::RecoveryAction::ResolveIntervalConsensus);
-        assert_eq!(metas.len(), 25);
-        assert_eq!(metas[1].role, RecoveryAccountRoleV1::ProductOccurrenceRoot);
+        assert_eq!(metas.len(), 26);
+        assert_eq!(metas[1].role, RecoveryAccountRoleV1::MarketLifecycleRoot);
         assert!(metas[1].writable);
-        assert_eq!(metas[4].role, RecoveryAccountRoleV1::ResolutionV5);
-        assert!(metas[4].writable);
-        assert_eq!(metas[5].role, RecoveryAccountRoleV1::HoardV2);
+        assert_eq!(metas[2].role, RecoveryAccountRoleV1::SeriesMarketLink);
+        assert!(!metas[2].writable);
+        assert_eq!(metas[5].role, RecoveryAccountRoleV1::ResolutionV5);
         assert!(metas[5].writable);
-        assert_eq!(metas[6].role, RecoveryAccountRoleV1::ClaimLedgerV3);
+        assert_eq!(metas[6].role, RecoveryAccountRoleV1::HoardV2);
         assert!(metas[6].writable);
-        assert_eq!(metas[24].role, RecoveryAccountRoleV1::SystemProgram);
+        assert_eq!(metas[7].role, RecoveryAccountRoleV1::ClaimLedgerV3);
+        assert!(metas[7].writable);
+        assert_eq!(metas[25].role, RecoveryAccountRoleV1::SystemProgram);
         assert!(!metas.iter().any(|meta| matches!(
             meta.role,
             RecoveryAccountRoleV1::RecoveryCompartment
                 | RecoveryAccountRoleV1::RootRentPayer
                 | RecoveryAccountRoleV1::NeutralSink
         )));
+    }
+
+    #[test]
+    fn interval_actions_pin_exactly_one_initiating_series_link() {
+        let begin = account_metas_v1(registry::RecoveryAction::BeginIntervalConsensus);
+        assert_eq!(begin[1].role, RecoveryAccountRoleV1::MarketLifecycleRoot);
+        assert!(!begin[1].writable);
+        assert_eq!(begin[2].role, RecoveryAccountRoleV1::SeriesMarketLink);
+        assert!(begin[2].writable);
+
+        let advance = account_metas_v1(registry::RecoveryAction::AdvanceIntervalConsensus);
+        assert_eq!(advance[1].role, RecoveryAccountRoleV1::MarketLifecycleRoot);
+        assert!(!advance[1].writable);
+        assert_eq!(advance[2].role, RecoveryAccountRoleV1::SeriesMarketLink);
+        assert!(!advance[2].writable);
+
+        let close = account_metas_v1(registry::RecoveryAction::CloseIntervalConsensusWork);
+        assert_eq!(close[1].role, RecoveryAccountRoleV1::MarketLifecycleRoot);
+        assert!(!close[1].writable);
+        assert_eq!(close[2].role, RecoveryAccountRoleV1::SeriesMarketLink);
+        assert!(close[2].writable);
     }
 }
