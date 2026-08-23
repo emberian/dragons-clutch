@@ -44,6 +44,7 @@ const DIRECT_SELLER_ROLE: u8 = 4;
 const VIRTUAL_SPLIT_BUYER_ROLE: u8 = 5;
 const VIRTUAL_MERGE_SELLER_ROLE: u8 = 6;
 const STRUCTURED_GENERAL_ROLE: u8 = 7;
+const UNFILLED_RESERVATION_OWNER_ROLE: u8 = 8;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
@@ -69,6 +70,8 @@ pub enum GeneralReplayTransitionKindV1 {
     VirtualSplitBuyer,
     /// Action 37 real seller Position endpoint.
     VirtualMergeSeller,
+    /// Action 41 zero-fill Reservation release and co-close endpoint.
+    ReleaseUnfilledReservation,
     /// Action 35 General Position endpoint of a structured exchange.
     StructuredGeneral,
     /// FractionalRedemption action 2 internal exact-lot endpoint.
@@ -143,6 +146,12 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 37,
                 VIRTUAL_MERGE_SELLER_ROLE,
+            ),
+            Self::ReleaseUnfilledReservation => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                41,
+                UNFILLED_RESERVATION_OWNER_ROLE,
             ),
             Self::StructuredGeneral => (
                 STRUCTURED_EXCHANGE_FAMILY,
@@ -221,6 +230,12 @@ impl GeneralReplayTransitionKindV1 {
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 37, VIRTUAL_MERGE_SELLER_ROLE) => {
                 Ok(Self::VirtualMergeSeller)
             }
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                41,
+                UNFILLED_RESERVATION_OWNER_ROLE,
+            ) => Ok(Self::ReleaseUnfilledReservation),
             (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
                 Ok(Self::StructuredGeneral)
             }
@@ -790,10 +805,21 @@ where
     {
         return Err(CodecError::MismatchedBinding);
     }
+    let expected_outstanding_reservations = if kind
+        == GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
+    {
+        pre_fields
+            .outstanding_reservations
+            .checked_sub(1)
+            .ok_or(CodecError::InvalidState)?
+    } else {
+        pre_fields.outstanding_reservations
+    };
     let expected_poststate = PositionAccountV3::new(PositionV3Fields {
         cash_atoms: post_fields.cash_atoms,
         reserved_cash_atoms: post_fields.reserved_cash_atoms,
         native_eggs: post_fields.native_eggs,
+        outstanding_reservations: expected_outstanding_reservations,
         ..pre_fields
     })
     .map_err(|_| CodecError::InvalidState)?;
@@ -821,6 +847,7 @@ where
             | GeneralReplayTransitionKindV1::Merge
             | GeneralReplayTransitionKindV1::DirectBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
+            | GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
             | GeneralReplayTransitionKindV1::StructuredGeneral
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalExact
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit

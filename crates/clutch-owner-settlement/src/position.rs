@@ -100,6 +100,49 @@ impl AuthenticatedPositionV3 {
             semantic,
         })
     }
+
+    /// Return the exact Position successor for one atomically closed active
+    /// Reservation. Cash remains in the Position's total cash compartment
+    /// while the released amount leaves `reserved_cash`; the Reservation's
+    /// remaining Eggs return to `native_eggs`; and the authoritative live-child
+    /// count decreases exactly once.
+    pub fn release_reservation_poststate(
+        self,
+        released_reserved_cash_atoms: u64,
+        released_internal: [u64; MAX_OUTCOMES],
+    ) -> Result<PositionSettlementPoststateV3> {
+        self.validate_writable()?;
+        let old = self.semantic.fields();
+        let reserved_cash_atoms = old
+            .reserved_cash_atoms
+            .checked_sub(released_reserved_cash_atoms)
+            .ok_or(Error::InsufficientCash)?;
+        let outstanding_reservations = old
+            .outstanding_reservations
+            .checked_sub(1)
+            .ok_or(Error::InvalidAccount)?;
+        let mut native_eggs = old.native_eggs;
+        let mut outcome = 0usize;
+        while outcome < MAX_OUTCOMES {
+            native_eggs[outcome] = native_eggs[outcome]
+                .checked_add(released_internal[outcome])
+                .ok_or(Error::ArithmeticOverflow)?;
+            outcome += 1;
+        }
+        let semantic = PositionAccountV3::new(PositionV3Fields {
+            reserved_cash_atoms,
+            native_eggs,
+            outstanding_reservations,
+            ..old
+        })
+        .map_err(|_| Error::InvalidAccount)?;
+        Ok(PositionSettlementPoststateV3 {
+            account: self.account,
+            general_market_runtime: self.general_market_runtime,
+            prestate_semantic_id: self.semantic_id,
+            semantic,
+        })
+    }
 }
 
 /// Canonical Position V3 poststate awaiting adapter semantic-ID derivation.
