@@ -526,7 +526,7 @@ pub struct RecoveryAccountMetaV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecoveryAccountRoleV1 {
     MarketCoreLamportVault,
-    RootRentPayer,
+    RootRentRefundOwner,
     FailureRoot,
     LivenessPolicy,
     RecoveryCompartment,
@@ -559,7 +559,7 @@ pub enum RecoveryAccountRoleV1 {
     SourceResult,
     SourceWorkReceipt,
     Keeper,
-    RecoveryPayer,
+    RecoveryRefundOwner,
     NeutralSink,
     RetirementRoot,
     ReplayTombstone,
@@ -671,7 +671,7 @@ pub const ACCEPT_RECOVERY_WORK_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SourceResult, false, false),
     meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
     meta(RecoveryAccountRoleV1::Keeper, true, false),
-    meta(RecoveryAccountRoleV1::RecoveryPayer, true, false),
+    meta(RecoveryAccountRoleV1::RecoveryRefundOwner, true, false),
     meta(RecoveryAccountRoleV1::ClockSysvar, false, false),
 ];
 /// Exact ordered account contract for caller-funded resolution.
@@ -721,13 +721,13 @@ pub const CLOSE_RECOVERY_FUNDING_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, false, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
     meta(RecoveryAccountRoleV1::RecoveryCompartment, true, false),
-    meta(RecoveryAccountRoleV1::RecoveryPayer, true, false),
+    meta(RecoveryAccountRoleV1::RecoveryRefundOwner, true, false),
     meta(RecoveryAccountRoleV1::NeutralSink, true, false),
 ];
 /// Exact ordered account contract for closing only the resolved root.
 pub const CLOSE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::FailureRoot, true, false),
-    meta(RecoveryAccountRoleV1::RootRentPayer, true, false),
+    meta(RecoveryAccountRoleV1::RootRentRefundOwner, true, false),
     meta(RecoveryAccountRoleV1::NeutralSink, true, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
     meta(RecoveryAccountRoleV1::RecoveryCompartment, true, false),
@@ -775,7 +775,7 @@ pub const BEGIN_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::StatisticKey, false, false),
     meta(RecoveryAccountRoleV1::SourceResult, false, false),
     meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
-    meta(RecoveryAccountRoleV1::RootRentPayer, false, false),
+    meta(RecoveryAccountRoleV1::RootRentRefundOwner, false, false),
     meta(RecoveryAccountRoleV1::NeutralSink, false, false),
     meta(RecoveryAccountRoleV1::RentSysvar, false, false),
     meta(RecoveryAccountRoleV1::SystemProgram, false, false),
@@ -792,7 +792,7 @@ pub const ADVANCE_INTERVAL_CONSENSUS_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
     meta(RecoveryAccountRoleV1::RecoveryCompartment, true, false),
     meta(RecoveryAccountRoleV1::Keeper, true, false),
-    meta(RecoveryAccountRoleV1::RecoveryPayer, true, false),
+    meta(RecoveryAccountRoleV1::RecoveryRefundOwner, true, false),
     INTERVAL_PRODUCT_METAS_V1[0],
     INTERVAL_PRODUCT_METAS_V1[1],
     INTERVAL_PRODUCT_METAS_V1[2],
@@ -854,7 +854,7 @@ pub const CLOSE_INTERVAL_CONSENSUS_WORK_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::SeriesMarketLink, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusWork, true, false),
     meta(RecoveryAccountRoleV1::IntervalConsensusReplay, true, false),
-    meta(RecoveryAccountRoleV1::RootRentPayer, true, false),
+    meta(RecoveryAccountRoleV1::RootRentRefundOwner, true, false),
     meta(RecoveryAccountRoleV1::NeutralSink, true, false),
 ];
 
@@ -1560,7 +1560,7 @@ mod tests {
         assert!(!metas.iter().any(|meta| matches!(
             meta.role,
             RecoveryAccountRoleV1::RecoveryCompartment
-                | RecoveryAccountRoleV1::RootRentPayer
+                | RecoveryAccountRoleV1::RootRentRefundOwner
                 | RecoveryAccountRoleV1::NeutralSink
         )));
     }
@@ -1572,17 +1572,26 @@ mod tests {
         assert!(!begin[1].writable);
         assert_eq!(begin[2].role, RecoveryAccountRoleV1::SeriesMarketLink);
         assert!(begin[2].writable);
+        assert_eq!(begin[23].role, RecoveryAccountRoleV1::RootRentRefundOwner);
+        assert!(!begin[23].writable);
+        assert!(!begin[23].signer);
 
         let advance = account_metas_v1(registry::RecoveryAction::AdvanceIntervalConsensus);
         assert_eq!(advance[1].role, RecoveryAccountRoleV1::MarketLifecycleRoot);
         assert!(!advance[1].writable);
         assert_eq!(advance[2].role, RecoveryAccountRoleV1::SeriesMarketLink);
         assert!(!advance[2].writable);
+        assert_eq!(advance[8].role, RecoveryAccountRoleV1::RecoveryRefundOwner);
+        assert!(advance[8].writable);
+        assert!(!advance[8].signer);
 
         let close = account_metas_v1(registry::RecoveryAction::CloseIntervalConsensusWork);
         assert_eq!(close[1].role, RecoveryAccountRoleV1::MarketLifecycleRoot);
         assert!(!close[1].writable);
         assert_eq!(close[2].role, RecoveryAccountRoleV1::SeriesMarketLink);
         assert!(close[2].writable);
+        assert_eq!(close[5].role, RecoveryAccountRoleV1::RootRentRefundOwner);
+        assert!(close[5].writable);
+        assert!(!close[5].signer);
     }
 }
