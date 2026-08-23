@@ -15,7 +15,7 @@
 #   ./run_svm_tests.sh --non-production-mock-source [test filters ...]
 # The deployed-Pyth local campaign is a separate, explicit test-only ELF:
 #   ./run_svm_tests.sh --non-production-real-pyth-lab real_pyth_router_verifies_then_post_update
-# The successor identity-only campaign is a mutually exclusive SBF product:
+# The successor identity/solver-claim campaign is a mutually exclusive SBF product:
 #   ./run_svm_tests.sh --general-v2-identity-lab general_v2_identity
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

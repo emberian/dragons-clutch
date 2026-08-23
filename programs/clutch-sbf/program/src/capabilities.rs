@@ -19,7 +19,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v1";
+    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v2";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-full")]
@@ -42,8 +42,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x87, 0xcc, 0x7e, 0x97, 0x97, 0x5e, 0x3d, 0x52, 0x59, 0xca, 0xf9, 0x2f, 0x20, 0x57, 0xca, 0x1b,
-    0x0a, 0xeb, 0xf8, 0xf6, 0x20, 0x96, 0x9b, 0xd8, 0xf7, 0x77, 0x75, 0x30, 0xec, 0xdf, 0xfb, 0xdb,
+    0x08, 0xe8, 0x75, 0x77, 0x90, 0x1a, 0xc8, 0xd4, 0x5f, 0x43, 0xce, 0x46, 0x6c, 0xe4, 0x6a, 0x56,
+    0x83, 0x9e, 0x9d, 0x9e, 0xf3, 0x0f, 0x90, 0xc5, 0x15, 0x29, 0xd6, 0x51, 0xe0, 0x90, 0x6a, 0x48,
 ];
 
 /// Whether this artifact is the explicitly non-production identity lab.
@@ -142,7 +142,7 @@ pub const fn extension_intent_action_allocated(
 #[cfg(not(feature = "profile-non-production-general-v2-empty-book-identity-lab"))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
-/// Exact identity-only action set; allocation is not enough to enter it.
+/// Exact identity-and-solver-claim action set; allocation is not enough to enter it.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 2),
@@ -153,6 +153,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 10),
     (74, 1, 14),
     (74, 1, 15),
+    (74, 1, 21),
 ];
 
 /// Return whether an exact versioned extension action belongs to this product.

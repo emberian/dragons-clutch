@@ -153,7 +153,8 @@ be synchronized before activation.
 
 General family `74/1` retains local action names `1..=34`. Strict allocation-free
 payload decoders and pure poststate owners now exist for the identity-lab spine
-at actions 2, 6, 7, 8, 9, 10, 14, and 15. This pure crate does not provide an
+at actions 2, 6, 7, 8, 9, 10, 14, and 15, plus the separately authenticated
+one-way solver-prize claim at action 21. This pure crate does not provide an
 account-meta handler or itself activate a runtime route; those remain separate
 adapter and release obligations.
 The intended phases are:

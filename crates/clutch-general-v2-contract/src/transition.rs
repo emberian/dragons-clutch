@@ -1429,6 +1429,94 @@ pub fn finalize_selection_poststate_v1(
     })
 }
 
+/// Authenticated action-21 inputs for the unique solver-prize claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimSolverTransitionV1<'a> {
+    /// Actual finalized Epoch PDA.
+    pub epoch_id: Id32,
+    /// Actual Window PDA stored by the Epoch and selected artifact.
+    pub window_id: Id32,
+    /// Actual Budget PDA stored by the Epoch.
+    pub budget_id: Id32,
+    /// Actual counted SelectedCandidate PDA stored by the Window.
+    pub selected_candidate_id: Id32,
+    /// Actual writable solver-reward destination account.
+    pub solver_destination_id: Id32,
+    /// Strict action-21 payload.
+    pub payload: ClaimSolverPayloadV1,
+    /// Finalized Epoch prestate.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Finalized Window prestate.
+    pub window: &'a CandidateWindowV4AccountV1,
+    /// Present-funded Budget prestate.
+    pub budget: &'a EpochBudgetV2AccountV1,
+    /// Authenticated selected settlement authority.
+    pub selected_candidate: &'a SelectedCandidateV1AccountV1,
+}
+
+/// Exact action-21 Budget poststate and authorized solver prize.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimSolverPoststateV1 {
+    /// Budget after its one-way solver-prize claim.
+    pub budget: EpochBudgetV2AccountV1,
+    /// Exact present-funded lamports authorized to the selected destination.
+    pub solver_prize: u64,
+}
+
+/// Consume the unique solver-prize compartment after authenticated selection.
+pub fn claim_solver_poststate_v1(
+    request: ClaimSolverTransitionV1<'_>,
+) -> Result<ClaimSolverPoststateV1, CodecError> {
+    request.epoch.validate()?;
+    request.window.validate()?;
+    request.budget.validate()?;
+    request.selected_candidate.validate()?;
+    for id in [
+        request.epoch_id,
+        request.window_id,
+        request.budget_id,
+        request.selected_candidate_id,
+        request.solver_destination_id,
+        request.payload.epoch,
+    ] {
+        require_live(id)?;
+    }
+    if request.payload.epoch != request.epoch_id
+        || request.epoch.phase != GeneralEpochPhaseV1::Finalized
+        || request.epoch.selected_candidate_count != 1
+        || request.epoch.window != request.window_id
+        || request.epoch.budget != request.budget_id
+        || request.window.epoch != request.epoch_id
+        || request.window.market != request.epoch.market_runtime
+        || request.window.epoch_generation != request.epoch.generation
+        || request.window.selected_candidate_artifact != request.selected_candidate_id
+        || request.budget.epoch != request.epoch_id
+        || request.budget.market != request.epoch.market_runtime
+        || request.budget.epoch_generation != request.epoch.generation
+        || request.selected_candidate.epoch != request.epoch_id
+        || request.selected_candidate.window != request.window_id
+        || request.selected_candidate.market != request.epoch.market_runtime
+        || request.selected_candidate.market_binding != request.epoch.market_binding
+        || request.selected_candidate.epoch_generation != request.epoch.generation
+        || request.selected_candidate.solver_reward_destination != request.solver_destination_id
+        || request.budget.solver_state != 0
+        || request.budget.solver_initial == 0
+        || request.budget.solver_remaining != request.budget.solver_initial
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let budget = EpochBudgetV2AccountV1 {
+        solver_remaining: 0,
+        solver_state: 1,
+        ..*request.budget
+    };
+    budget.validate()?;
+    Ok(ClaimSolverPoststateV1 {
+        budget,
+        solver_prize: request.budget.solver_initial,
+    })
+}
+
 fn require_live(id: Id32) -> Result<(), CodecError> {
     if id.is_zero() {
         Err(CodecError::ZeroIdentity)

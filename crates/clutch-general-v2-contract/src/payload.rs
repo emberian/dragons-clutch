@@ -23,6 +23,8 @@ pub const WRITE_CANDIDATE_FEED_FIXED_BYTES: usize = 69;
 pub const EPOCH_NODE_PAYLOAD_BYTES: usize = 64;
 /// Exact action-15 payload bytes.
 pub const FINALIZE_SELECTION_PAYLOAD_BYTES: usize = 32;
+/// Exact action-21 payload bytes.
+pub const CLAIM_SOLVER_PAYLOAD_BYTES: usize = 32;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -408,6 +410,25 @@ pub struct FinalizeSelectionPayloadV1 {
     pub epoch: Id32,
 }
 
+/// Action-21 `ClaimSolver` payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimSolverPayloadV1 {
+    /// Finalized parent Epoch PDA.
+    pub epoch: Id32,
+}
+
+impl ClaimSolverPayloadV1 {
+    /// Decode exactly 32 hostile bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::exact(input, CLAIM_SOLVER_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut r)?,
+        };
+        r.finish()?;
+        Ok(value)
+    }
+}
+
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -440,6 +461,8 @@ pub enum IdentityLabPayloadV1<'a> {
     CompleteCandidateVerification(EpochNodePayloadV1),
     /// Action 15.
     FinalizeSelection(FinalizeSelectionPayloadV1),
+    /// Action 21.
+    ClaimSolver(ClaimSolverPayloadV1),
 }
 
 /// Decode only an enabled empty-book identity-lab action payload.
@@ -474,6 +497,9 @@ pub fn decode_identity_lab_payload_v1(
         )),
         15 => Ok(IdentityLabPayloadV1::FinalizeSelection(
             FinalizeSelectionPayloadV1::decode(payload)?,
+        )),
+        21 => Ok(IdentityLabPayloadV1::ClaimSolver(
+            ClaimSolverPayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }

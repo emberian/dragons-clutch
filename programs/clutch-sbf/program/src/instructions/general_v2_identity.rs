@@ -1,10 +1,12 @@
 //! Non-production General V2 empty-book candidate-identity laboratory.
 //!
-//! This module deliberately exposes only the eight extension actions admitted
+//! This module deliberately exposes only the nine extension actions admitted
 //! by its mutually exclusive capability profile. It proves a signed,
 //! committing local-SBF identity lifecycle over one genesis-assisted Product
 //! market and an empty RelationV2 book. It creates no orders, positions,
-//! entitlements, receipts, pots, token accounts, trades, or settlement.
+//! entitlements, receipts, pots, token accounts, trades, or settlement. The
+//! ninth action pays only the present-funded solver prize to the destination
+//! already selected by that lifecycle.
 
 use crate::accounts::{require, require_count, require_signer, Outcome};
 use crate::capabilities;
@@ -86,6 +88,7 @@ pub fn process(
         IdentityLabPayloadV1::FinalizeSelection(request) => {
             finalize_selection(program_id, accounts, request)
         }
+        IdentityLabPayloadV1::ClaimSolver(request) => claim_solver(program_id, accounts, request),
     }
 }
 
@@ -294,6 +297,23 @@ fn move_lamports(source: &AccountInfo, destination: &AccountInfo, amount: u64) -
         .try_borrow_mut_lamports()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? = destination_after;
     Ok(())
+}
+
+fn require_compartment_balance(
+    account: &AccountInfo,
+    rent: DeletableRentOwnerV1,
+    live_compartments: &[u64],
+) -> Outcome<()> {
+    let mut expected = rent
+        .refundable_principal
+        .checked_add(rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    for amount in live_compartments {
+        expected = expected
+            .checked_add(*amount)
+            .ok_or(ClutchError::Arithmetic)?;
+    }
+    require(account.lamports() == expected, ClutchError::MismatchedState)
 }
 
 fn transfer_from_signer<'a>(
@@ -698,6 +718,17 @@ fn freeze_epoch(
     let window = contract::CandidateWindowV4AccountV1::decode(&borrow_data(&accounts[2])?)?;
     let budget = contract::EpochBudgetV2AccountV1::decode(&borrow_data(&accounts[3])?)?;
     let binding = contract::MarketBindingV1::decode(&borrow_data(&accounts[4])?)?;
+    require_compartment_balance(
+        &accounts[3],
+        budget.rent,
+        &[
+            budget.freeze_remaining,
+            budget.finalize_remaining,
+            budget.solver_remaining,
+            budget.root_close_remaining,
+            budget.selected_rent_remaining,
+        ],
+    )?;
     require(
         epoch.economic_domain == id(accounts[1].key)
             && epoch.window == id(accounts[2].key)
@@ -933,6 +964,15 @@ fn open_candidate_feed(
     let binding = contract::MarketBindingV1::decode(&borrow_data(&accounts[4])?)?;
     let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[5])?)?;
     let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[6])?)?;
+    require_compartment_balance(
+        &accounts[6],
+        node.rent,
+        &[
+            node.bond_lamports,
+            node.cleanup_reward,
+            node.work_escrow_lamports,
+        ],
+    )?;
     require(
         request.epoch == id(accounts[2].key)
             && request.node == id(accounts[6].key)
@@ -1093,6 +1133,7 @@ fn write_candidate_feed_segment(
     let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[3])?)?;
     let header =
         contract::CandidateFeedHeaderV2::decode_account(&borrow_data(&accounts[4])?, false)?;
+    require_compartment_balance(&accounts[4], header.rent, &[header.close_reward_lamports])?;
     require(
         request.epoch == id(accounts[1].key)
             && request.node == id(accounts[3].key)
@@ -1180,6 +1221,7 @@ fn seal_candidate(
     let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[6])?)?;
     let feed_data = borrow_data(&accounts[4])?;
     let header = contract::CandidateFeedHeaderV2::decode_account(&feed_data, false)?;
+    require_compartment_balance(&accounts[4], header.rent, &[header.close_reward_lamports])?;
     require(
         request.epoch == id(accounts[1].key)
             && request.node == id(accounts[3].key)
@@ -1300,6 +1342,16 @@ fn init_clear_work(
     let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[4])?)?;
     let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[5])?)?;
     let feed = contract::CandidateFeedHeaderV2::decode_account(&borrow_data(&accounts[6])?, true)?;
+    require_compartment_balance(
+        &accounts[5],
+        node.rent,
+        &[
+            node.bond_lamports,
+            node.cleanup_reward,
+            node.work_escrow_lamports,
+        ],
+    )?;
+    require_compartment_balance(&accounts[6], feed.rent, &[feed.close_reward_lamports])?;
     let basis = NativeClaimBasisV1::decode(&borrow_data(&accounts[7])?)
         .map_err(|_| ClutchError::NonCanonical)?;
     require(
@@ -1640,6 +1692,8 @@ fn complete_candidate_verification(
     let feed_data = borrow_data(&accounts[6])?;
     let feed = contract::CandidateFeedHeaderV2::decode_account(&feed_data, true)?;
     let work = contract::ClearWorkHeaderV2::decode_account(&borrow_data(&accounts[10])?)?;
+    require_compartment_balance(&accounts[6], feed.rent, &[feed.close_reward_lamports])?;
+    require_compartment_balance(&accounts[10], work.rent, &[work.reward_remaining])?;
     require(
         request.epoch == id(accounts[1].key)
             && request.node == id(accounts[5].key)
@@ -1798,6 +1852,18 @@ fn finalize_selection(
     let feed = contract::CandidateFeedHeaderV2::decode_account(&borrow_data(&accounts[4])?, true)?;
     let binding = contract::MarketBindingV1::decode(&borrow_data(&accounts[5])?)?;
     let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[6])?)?;
+    require_compartment_balance(
+        &accounts[2],
+        budget.rent,
+        &[
+            budget.freeze_remaining,
+            budget.finalize_remaining,
+            budget.solver_remaining,
+            budget.root_close_remaining,
+            budget.selected_rent_remaining,
+        ],
+    )?;
+    require_compartment_balance(&accounts[4], feed.rent, &[feed.close_reward_lamports])?;
     require(
         request.epoch == id(accounts[0].key)
             && epoch.window == id(accounts[1].key)
@@ -1870,5 +1936,114 @@ fn finalize_selection(
     encode_account(&accounts[7], |out| post.selected_candidate.encode(out))?;
     encode_account(&accounts[0], |out| post.epoch.encode(out))?;
     encode_account(&accounts[1], |out| post.window.encode(out))?;
+    encode_account(&accounts[2], |out| post.budget.encode(out))
+}
+
+/// Claim the one selected solver prize. This action is permissionless: the
+/// authenticated SelectedCandidate, rather than a caller signature, owns the
+/// immutable destination.
+#[inline(never)]
+fn claim_solver(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    request: contract::ClaimSolverPayloadV1,
+) -> Outcome<()> {
+    require_count(accounts, 5)?;
+    require_role(
+        program_id,
+        &accounts[0],
+        false,
+        contract::GENERAL_EPOCH_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[1],
+        false,
+        contract::WINDOW_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[2],
+        true,
+        contract::EPOCH_BUDGET_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[3],
+        false,
+        contract::SELECTED_CANDIDATE_ACCOUNT_BYTES,
+    )?;
+    require_writable_destination(&accounts[4])?;
+    require_distinct_pairs(
+        accounts,
+        &[
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (0, 4),
+            (1, 2),
+            (1, 3),
+            (1, 4),
+            (2, 3),
+            (2, 4),
+            (3, 4),
+        ],
+    )?;
+
+    let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[0])?)?;
+    let window = contract::CandidateWindowV4AccountV1::decode(&borrow_data(&accounts[1])?)?;
+    let budget = contract::EpochBudgetV2AccountV1::decode(&borrow_data(&accounts[2])?)?;
+    let selected = contract::SelectedCandidateV1AccountV1::decode(&borrow_data(&accounts[3])?)?;
+
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &epoch.market_binding.bytes(), epoch.epoch_index);
+    require(
+        *accounts[0].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let window_pda = seeds::general_v2_window_pda(program_id, &accounts[0].key.to_bytes());
+    let budget_pda = seeds::general_v2_budget_pda(program_id, &accounts[0].key.to_bytes());
+    let selected_pda = seeds::general_v2_selected_pda(
+        program_id,
+        &accounts[0].key.to_bytes(),
+        &selected.settlement_candidate_id.bytes(),
+    );
+    require(
+        *accounts[1].key == window_pda.0 && window.stored_bump == window_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    require(
+        *accounts[2].key == budget_pda.0 && budget.stored_bump == budget_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    require(
+        *accounts[3].key == selected_pda.0 && selected.stored_bump == selected_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    require_compartment_balance(
+        &accounts[2],
+        budget.rent,
+        &[
+            budget.freeze_remaining,
+            budget.finalize_remaining,
+            budget.solver_remaining,
+            budget.root_close_remaining,
+            budget.selected_rent_remaining,
+        ],
+    )?;
+
+    let post = contract::claim_solver_poststate_v1(contract::ClaimSolverTransitionV1 {
+        epoch_id: id(accounts[0].key),
+        window_id: id(accounts[1].key),
+        budget_id: id(accounts[2].key),
+        selected_candidate_id: id(accounts[3].key),
+        solver_destination_id: id(accounts[4].key),
+        payload: request,
+        epoch: &epoch,
+        window: &window,
+        budget: &budget,
+        selected_candidate: &selected,
+    })?;
+    move_lamports(&accounts[2], &accounts[4], post.solver_prize)?;
     encode_account(&accounts[2], |out| post.budget.encode(out))
 }
