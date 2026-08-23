@@ -2463,6 +2463,20 @@ pub fn prepare_realize_owner_cash_v5(
     })
 }
 
+/// Structurally compare one counted SettlementRoot to an exhaustive V4
+/// settlement traversal.
+///
+/// This authenticates no program owner, PDA, account body, meta privilege, or
+/// traversal provenance. A live adapter must establish all of those facts
+/// before promoting a successful equality bind into an execution seam.
+pub fn bind_settlement_root_traversal_v4(
+    settlement_root_account: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    traversal: &SettlementTraversalProjectionV4,
+) -> Result<(), SettlementAdapterErrorV1> {
+    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)
+}
+
 fn require_root_traversal_binding_v4(
     settlement_root_account: Id32,
     settlement_root: &SettlementRootV1AccountV1,
