@@ -9,8 +9,8 @@ use crate::relation_v1::{
     SelfCrossPolicyV1, SingleEggOrderV1, TransferPhaseV1, RELATION_VERSION_V1,
 };
 use crate::relation_v2::{
-    sha256_test_vector, verify_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2,
-    EconomicDomainV2, EconomicErrorV2, EconomicOrderV2, PricePreconditionV2,
+    price_semantics_digest_v2, sha256_test_vector, verify_economic_candidate_v2, EconomicBookV2,
+    EconomicCandidateV2, EconomicDomainV2, EconomicErrorV2, EconomicOrderV2, PricePreconditionV2,
     ECONOMIC_RELATION_VERSION_V2, EMPTY_ECONOMIC_ORDER_V2,
 };
 use crate::score_v2::RiskObjectiveV2;
@@ -36,11 +36,17 @@ fn domain() -> EconomicDomainV2 {
 }
 
 fn price() -> PricePreconditionV2 {
+    price_for(&domain())
+}
+
+fn price_for(domain: &EconomicDomainV2) -> PricePreconditionV2 {
     let mut prices = [0u64; 16];
     prices[..2].copy_from_slice(&[SCALE / 2, SCALE / 2]);
+    let semantic_price_digest =
+        price_semantics_digest_v2(domain, &prices).expect("fixture prices are canonical");
     PricePreconditionV2 {
         policy_digest: id(4),
-        evidence_digest: id(5),
+        semantic_price_digest,
         prices,
     }
 }
@@ -75,7 +81,7 @@ fn order(
 fn book_of(orders: &[EconomicOrderV2]) -> EconomicBookV2 {
     let mut book = EconomicBookV2::empty();
     book.orders[..orders.len()].copy_from_slice(orders);
-    book.len = orders.len() as u8;
+    book.len = u8::try_from(orders.len()).expect("fixture fits the fixed book");
     book
 }
 
@@ -94,7 +100,7 @@ fn simple_cross(quantity: u64) -> EconomicBookV2 {
             quantity,
             0,
             PartialPolicy::Allow,
-            SCALE as u128,
+            u128::from(SCALE),
         ),
         order(2, Side::Sell, &[1, 0], quantity, 0, PartialPolicy::Allow, 0),
     ])
@@ -178,7 +184,7 @@ fn complete_set_direct_flow_and_virtual_churn_cannot_improve_score() {
             7,
             0,
             PartialPolicy::Allow,
-            SCALE as u128,
+            u128::from(SCALE),
         ),
         order(
             2,
@@ -187,7 +193,7 @@ fn complete_set_direct_flow_and_virtual_churn_cannot_improve_score() {
             7,
             0,
             PartialPolicy::Allow,
-            SCALE as u128,
+            u128::from(SCALE),
         ),
     ]);
     let wash =
@@ -217,7 +223,7 @@ fn complete_set_direct_flow_and_virtual_churn_cannot_improve_score() {
         5,
         0,
         PartialPolicy::Allow,
-        SCALE as u128,
+        u128::from(SCALE),
     )]);
     let mut split = candidate(&[5]);
     split.virtual_split = 5;
@@ -265,7 +271,7 @@ fn price_book_fill_and_mask_padding_refuse_exactly() {
         1,
         0,
         PartialPolicy::Allow,
-        SCALE as u128,
+        u128::from(SCALE),
     );
     assert_eq!(
         verify_economic_candidate_v2(&domain(), &bad_order_padding, &price(), &economic),
@@ -285,6 +291,13 @@ fn price_book_fill_and_mask_padding_refuse_exactly() {
         verify_economic_candidate_v2(&domain(), &book, &price(), &bad_mask),
         Err(EconomicErrorV2::AonMaskNotApplicable { order: 2 })
     );
+
+    let mut oversized_domain = domain();
+    oversized_domain.outcome_count = u8::MAX;
+    assert_eq!(
+        price().validate(&oversized_domain),
+        Err(EconomicErrorV2::InvalidOutcomeCount)
+    );
 }
 
 #[test]
@@ -297,7 +310,7 @@ fn aon_minimum_limit_and_order_canonicality_are_enforced() {
             7,
             3,
             PartialPolicy::Allow,
-            SCALE as u128,
+            u128::from(SCALE),
         ),
         order(2, Side::Sell, &[1, 0], 7, 3, PartialPolicy::Allow, 0),
     ]);
@@ -314,7 +327,7 @@ fn aon_minimum_limit_and_order_canonicality_are_enforced() {
             7,
             7,
             PartialPolicy::AllOrNone,
-            SCALE as u128,
+            u128::from(SCALE),
         ),
         order(2, Side::Sell, &[1, 0], 7, 7, PartialPolicy::AllOrNone, 0),
     ]);
@@ -396,7 +409,7 @@ fn flow_overflow_and_every_virtual_conservation_failure_refuse() {
         1,
         0,
         PartialPolicy::Allow,
-        SCALE as u128,
+        u128::from(SCALE),
     )]);
     assert_eq!(
         verify_economic_candidate_v2(&domain(), &buy_only, &price(), &candidate(&[1])),
@@ -423,31 +436,60 @@ fn flow_overflow_and_every_virtual_conservation_failure_refuse() {
 fn semantic_price_binding_and_full_digest_are_not_claimed_or_truncated() {
     let book = simple_cross(7);
     let economic = candidate(&[7, 7]);
-    let baseline = verify_economic_candidate_v2(&domain(), &book, &price(), &economic).unwrap();
+    let baseline_price = price();
+    assert_eq!(
+        baseline_price.semantic_price_digest,
+        [
+            0xf3, 0xf8, 0x73, 0x7e, 0xb1, 0xc5, 0x92, 0x14, 0xf1, 0x21, 0x7e, 0x37, 0x27, 0xf0,
+            0x06, 0xb8, 0x6f, 0x30, 0xb2, 0xe9, 0x0a, 0x99, 0xa0, 0xb6, 0x67, 0x46, 0xae, 0x4d,
+            0xaf, 0xae, 0xde, 0xb6,
+        ]
+    );
+    let baseline =
+        verify_economic_candidate_v2(&domain(), &book, &baseline_price, &economic).unwrap();
     assert_eq!(
         baseline.economic_candidate_digest,
         [
-            0xfa, 0x6b, 0xf4, 0x79, 0xca, 0xcb, 0xce, 0x5e, 0xba, 0x5d, 0x2e, 0xd3, 0xee, 0x5b,
-            0x96, 0x09, 0x1a, 0x8e, 0x45, 0x55, 0x33, 0x80, 0x97, 0x8c, 0xcc, 0x93, 0x55, 0x44,
-            0x5f, 0x95, 0x36, 0xfd,
+            0x4b, 0x9e, 0x46, 0x17, 0xf6, 0xe2, 0x55, 0x03, 0x99, 0x29, 0x81, 0x8c, 0x26, 0xb3,
+            0xac, 0x39, 0x24, 0x9a, 0xf5, 0x3d, 0x3b, 0x3b, 0x51, 0x82, 0xa1, 0xf8, 0xa4, 0xe8,
+            0x58, 0xc9, 0x98, 0x87,
         ]
     );
     assert_eq!(baseline.score.digest, baseline.economic_candidate_digest);
 
-    let mut other_evidence = price();
-    other_evidence.evidence_digest = id(6);
-    let changed_evidence =
-        verify_economic_candidate_v2(&domain(), &book, &other_evidence, &economic).unwrap();
-    assert_ne!(
-        baseline.economic_candidate_digest,
-        changed_evidence.economic_candidate_digest
+    let mut forged_semantics = price();
+    forged_semantics.semantic_price_digest = id(6);
+    assert_eq!(
+        verify_economic_candidate_v2(&domain(), &book, &forged_semantics, &economic),
+        Err(EconomicErrorV2::PriceSemanticDigestMismatch)
     );
-    assert_eq!(baseline.direct_flow, changed_evidence.direct_flow);
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct AuthenticatedPriceProofSidecar {
+        representation_digest: [u8; 32],
+    }
+    let proof_a = AuthenticatedPriceProofSidecar {
+        representation_digest: id(90),
+    };
+    let proof_b = AuthenticatedPriceProofSidecar {
+        representation_digest: id(91),
+    };
+    assert_ne!(proof_a, proof_b);
+    let project_semantics = |_proof: &AuthenticatedPriceProofSidecar| price();
+    let proof_a_projection =
+        verify_economic_candidate_v2(&domain(), &book, &project_semantics(&proof_a), &economic)
+            .unwrap();
+    let proof_b_projection =
+        verify_economic_candidate_v2(&domain(), &book, &project_semantics(&proof_b), &economic)
+            .unwrap();
+    assert_eq!(proof_a_projection, proof_b_projection);
+    assert_eq!(baseline.score, proof_b_projection.score);
 
     let mut other_domain = domain();
     other_domain.market_semantics_digest = id(7);
     let changed_domain =
-        verify_economic_candidate_v2(&other_domain, &book, &price(), &economic).unwrap();
+        verify_economic_candidate_v2(&other_domain, &book, &price_for(&other_domain), &economic)
+            .unwrap();
     assert_ne!(
         baseline.economic_candidate_digest,
         changed_domain.economic_candidate_digest
@@ -561,7 +603,7 @@ fn overlap_free_single_and_portfolio_fixtures_match_relation_v1_flows() {
             4,
             0,
             PartialPolicy::Allow,
-            2 * SCALE as u128,
+            2 * u128::from(SCALE),
         ),
         order(2, Side::Sell, &[1, 1], 4, 0, PartialPolicy::Allow, 0),
     ]);

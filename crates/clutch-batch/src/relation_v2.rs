@@ -9,10 +9,10 @@
 //!
 //! This first core is not a matching allocator, price-coherence verifier,
 //! settlement authorization, fee transition, dealer transition, or SBF
-//! profile. In particular, the price-evidence digest is an authenticated
-//! semantic precondition supplied by a later adapter. This module checks its
-//! exact policy binding and the integer simplex, but does not restate V1's
-//! partial moment-cone gate or trust an account projection.
+//! profile. In particular, proof or certificate bytes are not relation inputs.
+//! This module recomputes a proof-independent semantic price digest, checks its
+//! exact policy binding and integer simplex, but does not restate V1's partial
+//! moment-cone gate or trust an account projection.
 
 use crate::relation_v1::MAX_OUTCOMES;
 use crate::score_v2::{
@@ -24,6 +24,7 @@ use crate::{PartialPolicy, Side, MAX_ORDERS};
 pub const ECONOMIC_RELATION_VERSION_V2: u32 = 2;
 
 const ECONOMIC_CANDIDATE_DIGEST_DOMAIN_V2: &[u8] = b"dragons-clutch/economic-candidate/v2\0";
+const PRICE_SEMANTICS_DIGEST_DOMAIN_V2: &[u8] = b"dragons-clutch/price-semantics/v2\0";
 
 const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_ORDERS == 64);
@@ -74,23 +75,24 @@ impl EconomicDomainV2 {
         Ok(())
     }
 
-    const fn outcomes(&self) -> usize {
-        self.outcome_count as usize
+    fn outcomes(&self) -> usize {
+        usize::from(self.outcome_count)
     }
 }
 
 /// Upstream price-policy decision consumed as a semantic precondition.
 ///
-/// The adapter must authenticate `evidence_digest` under `policy_digest` before
-/// invoking this pure relation. The relation independently checks the policy
-/// identity, active width, exact simplex, and canonical padding. It does not
-/// infer what theorem or source produced the evidence.
+/// The adapter must authenticate its proof under `policy_digest` before
+/// invoking this pure relation. Proof and certificate representations are not
+/// fields here. The relation independently checks the policy identity, active
+/// width, exact simplex, canonical padding, and proof-independent semantic
+/// price digest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PricePreconditionV2 {
     /// Must equal [`EconomicDomainV2::price_policy_digest`].
     pub policy_digest: [u8; 32],
-    /// Nonzero content identity of the authenticated price decision.
-    pub evidence_digest: [u8; 32],
+    /// Recomputed content identity of the exact price semantics.
+    pub semantic_price_digest: [u8; 32],
     /// Exact state-price vector followed by canonical zero padding.
     pub prices: [u64; MAX_OUTCOMES],
 }
@@ -98,39 +100,76 @@ pub struct PricePreconditionV2 {
 impl PricePreconditionV2 {
     /// Check binding, simplex membership, and inactive padding.
     pub fn validate(&self, domain: &EconomicDomainV2) -> Result<(), EconomicErrorV2> {
+        domain.validate()?;
         if self.policy_digest != domain.price_policy_digest {
             return Err(EconomicErrorV2::PricePolicyMismatch);
         }
-        if is_zero_digest(&self.evidence_digest) {
-            return Err(EconomicErrorV2::ZeroSemanticDigest);
-        }
-        let mut sum = 0u128;
-        let mut outcome = 0usize;
-        while outcome < domain.outcomes() {
-            let price = self.prices[outcome];
-            if price > domain.price_scale {
-                return Err(EconomicErrorV2::PriceOutOfRange {
-                    outcome: outcome as u8,
-                });
-            }
-            sum = sum
-                .checked_add(price as u128)
-                .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
-            outcome += 1;
-        }
-        if sum != domain.price_scale as u128 {
-            return Err(EconomicErrorV2::SimplexSumMismatch);
-        }
-        while outcome < MAX_OUTCOMES {
-            if self.prices[outcome] != 0 {
-                return Err(EconomicErrorV2::NonCanonicalPricePadding {
-                    outcome: outcome as u8,
-                });
-            }
-            outcome += 1;
+        validate_price_vector(domain, &self.prices)?;
+        if self.semantic_price_digest != price_semantics_digest_v2(domain, &self.prices)? {
+            return Err(EconomicErrorV2::PriceSemanticDigestMismatch);
         }
         Ok(())
     }
+}
+
+fn validate_price_vector(
+    domain: &EconomicDomainV2,
+    prices: &[u64; MAX_OUTCOMES],
+) -> Result<(), EconomicErrorV2> {
+    let mut sum = 0u128;
+    let mut outcome = 0usize;
+    while outcome < domain.outcomes() {
+        let price = prices[outcome];
+        if price > domain.price_scale {
+            return Err(EconomicErrorV2::PriceOutOfRange {
+                outcome: bounded_index(outcome)?,
+            });
+        }
+        sum = sum
+            .checked_add(u128::from(price))
+            .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
+        outcome += 1;
+    }
+    if sum != u128::from(domain.price_scale) {
+        return Err(EconomicErrorV2::SimplexSumMismatch);
+    }
+    while outcome < MAX_OUTCOMES {
+        if prices[outcome] != 0 {
+            return Err(EconomicErrorV2::NonCanonicalPricePadding {
+                outcome: bounded_index(outcome)?,
+            });
+        }
+        outcome += 1;
+    }
+    Ok(())
+}
+
+/// Recompute the proof-independent semantic identity of an exact price vector.
+///
+/// No proof, certificate, signer, transport, or account bytes enter this
+/// digest. Adapters may authenticate nonunique proofs, but must project them to
+/// this single canonical semantic identity before invoking RelationV2.
+pub fn price_semantics_digest_v2(
+    domain: &EconomicDomainV2,
+    prices: &[u64; MAX_OUTCOMES],
+) -> Result<[u8; 32], EconomicErrorV2> {
+    domain.validate()?;
+    validate_price_vector(domain, prices)?;
+    let mut hash = Sha256V2::new();
+    hash.update(PRICE_SEMANTICS_DIGEST_DOMAIN_V2)?;
+    hash.update(&domain.relation_version.to_le_bytes())?;
+    hash.update(&domain.market_semantics_digest)?;
+    hash.update(&domain.epoch_semantics_digest)?;
+    hash.update(&domain.price_policy_digest)?;
+    hash.update(&domain.epoch_index.to_le_bytes())?;
+    hash.update(&[domain.outcome_count])?;
+    hash.update(&domain.price_scale.to_le_bytes())?;
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        hash.update(&prices[outcome].to_le_bytes())?;
+        outcome += 1;
+    }
+    hash.finalize()
 }
 
 /// One ownerless nonnegative coefficient-vector order.
@@ -204,25 +243,25 @@ impl EconomicBookV2 {
             let order = self.orders[order_index];
             if is_zero_digest(&order.order_id) || (order_index != 0 && previous >= order.order_id) {
                 return Err(EconomicErrorV2::NonCanonicalOrderOrder {
-                    order: order_index as u8,
+                    order: bounded_index(order_index)?,
                 });
             }
             previous = order.order_id;
             if order.quantity == 0 || order.minimum_fill > order.quantity {
                 return Err(EconomicErrorV2::InvalidQuantity {
-                    order: order_index as u8,
+                    order: bounded_index(order_index)?,
                 });
             }
             if order.partial_policy == PartialPolicy::AllOrNone
                 && order.minimum_fill != order.quantity
             {
                 return Err(EconomicErrorV2::InvalidMinimumFill {
-                    order: order_index as u8,
+                    order: bounded_index(order_index)?,
                 });
             }
             if order.expiry_epoch < domain.epoch_index {
                 return Err(EconomicErrorV2::ExpiredOrder {
-                    order: order_index as u8,
+                    order: bounded_index(order_index)?,
                 });
             }
             let mut nonzero = false;
@@ -233,21 +272,21 @@ impl EconomicBookV2 {
                 coefficient
                     .checked_mul(order.quantity)
                     .ok_or(EconomicErrorV2::FlowOverflow {
-                        order: order_index as u8,
-                        outcome: outcome as u8,
+                        order: bounded_index(order_index)?,
+                        outcome: bounded_index(outcome)?,
                     })?;
                 outcome += 1;
             }
             if !nonzero {
                 return Err(EconomicErrorV2::InvalidQuantity {
-                    order: order_index as u8,
+                    order: bounded_index(order_index)?,
                 });
             }
             while outcome < MAX_OUTCOMES {
                 if order.coefficients[outcome] != 0 {
                     return Err(EconomicErrorV2::NonCanonicalCoefficientPadding {
-                        order: order_index as u8,
-                        outcome: outcome as u8,
+                        order: bounded_index(order_index)?,
+                        outcome: bounded_index(outcome)?,
                     });
                 }
                 outcome += 1;
@@ -257,7 +296,7 @@ impl EconomicBookV2 {
         while order_index < MAX_ORDERS {
             if self.orders[order_index] != EMPTY_ECONOMIC_ORDER_V2 {
                 return Err(EconomicErrorV2::NonCanonicalOrderPadding {
-                    order: order_index as u8,
+                    order: bounded_index(order_index)?,
                 });
             }
             order_index += 1;
@@ -323,8 +362,10 @@ pub enum EconomicErrorV2 {
     InvalidOutcomeCount,
     /// Price scale was zero.
     InvalidPriceScale,
-    /// Price evidence named a different policy.
+    /// Price precondition named a different policy.
     PricePolicyMismatch,
+    /// Claimed semantic price identity did not equal the canonical projection.
+    PriceSemanticDigestMismatch,
     /// One active price exceeded the scale.
     PriceOutOfRange { outcome: u8 },
     /// Active prices did not sum exactly to the scale.
@@ -398,12 +439,12 @@ pub fn verify_economic_candidate_v2(
     while order_index < MAX_ORDERS {
         if candidate.fills[order_index] != 0 {
             return Err(EconomicErrorV2::NonCanonicalFillPadding {
-                order: order_index as u8,
+                order: bounded_index(order_index)?,
             });
         }
         if mask_bit(candidate.honored_aon_mask, order_index) {
             return Err(EconomicErrorV2::AonMaskNotApplicable {
-                order: order_index as u8,
+                order: bounded_index(order_index)?,
             });
         }
         order_index += 1;
@@ -418,31 +459,31 @@ pub fn verify_economic_candidate_v2(
         let aon_bit = mask_bit(candidate.honored_aon_mask, order_index);
         if fill > order.quantity {
             return Err(EconomicErrorV2::FillExceedsQuantity {
-                order: order_index as u8,
+                order: bounded_index(order_index)?,
             });
         }
         match order.partial_policy {
             PartialPolicy::Allow => {
                 if aon_bit {
                     return Err(EconomicErrorV2::AonMaskNotApplicable {
-                        order: order_index as u8,
+                        order: bounded_index(order_index)?,
                     });
                 }
                 if fill != 0 && fill < order.minimum_fill {
                     return Err(EconomicErrorV2::MinimumFillViolation {
-                        order: order_index as u8,
+                        order: bounded_index(order_index)?,
                     });
                 }
             }
             PartialPolicy::AllOrNone => {
                 if fill != 0 && fill != order.quantity {
                     return Err(EconomicErrorV2::AllOrNoneViolation {
-                        order: order_index as u8,
+                        order: bounded_index(order_index)?,
                     });
                 }
                 if aon_bit != (fill != 0) {
                     return Err(EconomicErrorV2::AonMaskMismatch {
-                        order: order_index as u8,
+                        order: bounded_index(order_index)?,
                     });
                 }
             }
@@ -456,7 +497,7 @@ pub fn verify_economic_candidate_v2(
             };
             if !limit_ok {
                 return Err(EconomicErrorV2::LimitViolation {
-                    order: order_index as u8,
+                    order: bounded_index(order_index)?,
                 });
             }
         }
@@ -465,8 +506,8 @@ pub fn verify_economic_candidate_v2(
         while outcome < domain.outcomes() {
             let leg = order.coefficients[outcome].checked_mul(fill).ok_or(
                 EconomicErrorV2::FlowOverflow {
-                    order: order_index as u8,
-                    outcome: outcome as u8,
+                    order: bounded_index(order_index)?,
+                    outcome: bounded_index(outcome)?,
                 },
             )?;
             let cell = match order.side {
@@ -474,8 +515,8 @@ pub fn verify_economic_candidate_v2(
                 Side::Sell => &mut sell_flow[outcome],
             };
             *cell = cell.checked_add(leg).ok_or(EconomicErrorV2::FlowOverflow {
-                order: order_index as u8,
-                outcome: outcome as u8,
+                order: bounded_index(order_index)?,
+                outcome: bounded_index(outcome)?,
             })?;
             outcome += 1;
         }
@@ -488,12 +529,12 @@ pub fn verify_economic_candidate_v2(
         let from_buy = buy_flow[outcome]
             .checked_sub(candidate.virtual_split)
             .ok_or(EconomicErrorV2::VirtualSplitExceedsBuy {
-                outcome: outcome as u8,
+                outcome: bounded_index(outcome)?,
             })?;
         let from_sell = sell_flow[outcome]
             .checked_sub(candidate.virtual_merge)
             .ok_or(EconomicErrorV2::VirtualMergeExceedsSell {
-                outcome: outcome as u8,
+                outcome: bounded_index(outcome)?,
             })?;
         let left = buy_flow[outcome]
             .checked_add(candidate.virtual_merge)
@@ -503,7 +544,7 @@ pub fn verify_economic_candidate_v2(
             .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
         if left != right || from_buy != from_sell {
             return Err(EconomicErrorV2::OutcomeConservationMismatch {
-                outcome: outcome as u8,
+                outcome: bounded_index(outcome)?,
             });
         }
         direct_flow[outcome] = from_buy;
@@ -542,8 +583,8 @@ fn order_unit_value(
     let mut value = 0u128;
     let mut outcome = 0usize;
     while outcome < outcomes {
-        let term = (order.coefficients[outcome] as u128)
-            .checked_mul(prices[outcome] as u128)
+        let term = u128::from(order.coefficients[outcome])
+            .checked_mul(u128::from(prices[outcome]))
             .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
         value = value
             .checked_add(term)
@@ -555,6 +596,10 @@ fn order_unit_value(
 
 fn mask_bit(mask: u64, order: usize) -> bool {
     order < 64 && ((mask >> order) & 1) != 0
+}
+
+fn bounded_index(index: usize) -> Result<u8, EconomicErrorV2> {
+    u8::try_from(index).map_err(|_| EconomicErrorV2::ArithmeticOverflow)
 }
 
 fn is_zero_digest(digest: &[u8; 32]) -> bool {
@@ -603,7 +648,7 @@ fn economic_candidate_digest(
         order_index += 1;
     }
     hash.update(&price.policy_digest)?;
-    hash.update(&price.evidence_digest)?;
+    hash.update(&price.semantic_price_digest)?;
     let mut outcome = 0usize;
     while outcome < MAX_OUTCOMES {
         hash.update(&price.prices[outcome].to_le_bytes())?;

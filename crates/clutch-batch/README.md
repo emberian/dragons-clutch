@@ -82,12 +82,14 @@ canonical virtual split-or-merge, per-outcome conservation, and both
 economic input using a local safe, allocation-free FIPS-180 implementation and
 feeds the full digest into ScoreV2-Q.
 
-Price coherence remains an upstream semantic precondition. RelationV2 binds a
-nonzero evidence digest to the immutable price-policy digest and independently
-checks the exact integer simplex, but it does not copy V1b or claim that an
-arbitrary evidence digest is authenticated. Candidate allocation, fees,
-dealer transitions, account codecs, settlement authorization, lifecycle/SBF
-dispatch, and beneficial-controller identity are not implemented by this core.
+Price coherence remains an upstream semantic precondition. RelationV2
+recomputes a proof-independent semantic digest from the immutable domain,
+price-policy identity, and exact canonical integer simplex. Proof and
+certificate representations never enter the economic identity or rank. The
+core does not copy V1b or authenticate the upstream theorem. Candidate
+allocation, fees, dealer transitions, account codecs, settlement authorization,
+lifecycle/SBF dispatch, and beneficial-controller identity are not implemented
+by this core.
 
 Not implemented, and refused rather than guessed: portfolio marginal lot
 rationing (`P-b` returns `PolicyVariantUnimplemented`), the `N-c` owner-aware
