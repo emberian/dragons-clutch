@@ -14,6 +14,7 @@ default = []
 
 [dependencies]
 clutch-batch = { path = "../clutch-batch" }
+clutch-owner-settlement = { path = "../clutch-owner-settlement" }
 clutch-solana-layout = { path = "../../programs/solana-layout" }
 
 [lints.rust]

@@ -85,7 +85,8 @@
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
     feature = "profile-general-source-v2-point",
-    feature = "profile-non-production-dealer-policy-catalog-lab"
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
 )))]
 compile_error!("select exactly one Dragon's Clutch capability profile");
 #[cfg(any(
@@ -99,10 +100,23 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
         feature = "profile-general-source-v2-point"
     ),
     all(
+        feature = "profile-full",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ),
+    all(
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ),
+    all(
+        feature = "profile-general-source-v2-point",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ),
+    all(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         any(
             feature = "profile-direct-v3-source-v2-point",
-            feature = "profile-general-source-v2-point"
+            feature = "profile-general-source-v2-point",
+            feature = "profile-non-production-general-v2-empty-book-identity-lab"
         )
     )
 ))]

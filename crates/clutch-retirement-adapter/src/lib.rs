@@ -13,21 +13,60 @@
 
 mod account_auth;
 mod composition;
+mod generation_migration;
+mod live_family_auth;
+mod root_bundle;
+mod runtime_commit;
 
 pub use account_auth::{
     authenticate_counted_child, authenticate_direct_epoch_v4, authenticate_direct_reservation_v6,
-    authenticate_direct_reservation_v8, authenticate_general_epoch_tombstone_v1,
-    authenticate_general_epoch_v5, authenticate_general_reservation_v5,
-    authenticate_general_reservation_v7, authenticate_market_v2,
-    authenticate_position_tombstone_v1, authenticate_position_v2, AccountViewV1,
-    AuthenticatedAccountV1, CanonicalPdaV1, CountedChildSchemaV1,
+    authenticate_direct_reservation_v8, authenticate_epoch_budget_v1_exact,
+    authenticate_general_epoch_tombstone_v1, authenticate_general_epoch_tombstone_v1_exact,
+    authenticate_general_epoch_v5, authenticate_general_epoch_v5_exact,
+    authenticate_general_reservation_v5, authenticate_general_reservation_v7,
+    authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
+    authenticate_position_tombstone_v1_exact, authenticate_position_tombstone_v2_exact,
+    authenticate_position_v2, authenticate_position_v2_exact, authenticate_replay_absence_v1_exact,
+    authenticate_replay_successor_v1_exact, authenticate_runtime_executable_v2,
+    AbsentAccountViewV1, AccountAccessV2, AccountViewV1, AccountViewV2, AuthenticatedAccountV1,
+    AuthenticatedAccountV2, CanonicalPdaV1, CountedChildSchemaV1,
 };
 pub use composition::{
     decode_counted_child, encode_counted_child_after_base_validation,
-    project_authenticated_direct_epoch_v4, project_general_epoch_phase_v2,
+    project_authenticated_direct_epoch_v4, project_authenticated_epoch_budget_retirement_v1,
+    project_authenticated_epoch_budget_semantic_disposition_v1, project_authenticated_position_v2,
+    project_authenticated_replay_successor_v1, project_general_epoch_phase_v2,
     project_live_general_epoch_retirement_v2, DirectReservationAccountV6,
     DirectReservationAccountV8, GeneralEpochAccountV5, GeneralReservationAccountV5,
-    GeneralReservationAccountV7, MarketAccountV2, PositionAccountV2,
+    GeneralReservationAccountV7, MarketAccountV2, PositionAccountV2, ReplaySuccessorAccountV1,
+};
+pub use generation_migration::{
+    authenticate_and_plan_position_replay_reopen_v2,
+    authenticate_and_prepare_position_replay_close_v3, AuthenticatedPositionReplayReopenV2,
+    FundingPayerViewV1, NeutralSinkBalanceViewV1, PositionReplayCloseRuntimeRequestV3,
+    PositionReplayRentMinimumsV1, PositionReplayReopenRuntimeRequestV2, RetirementRecipientViewV1,
+    VacantPdaAccountViewV2,
+};
+pub use live_family_auth::{
+    authenticate_epoch_child_final_absence_v2, authenticate_epoch_child_terminal_account_v2,
+    authenticate_general_v2_budget_retirement_v2, authenticate_general_v2_neutral_sink_binding_v1,
+    authenticate_general_v2_root_siblings_v1, authenticate_general_v2_window_retirement_v1,
+    authenticate_terminal_epoch_families_v2, AuthenticatedEpochChildFamiliesV2,
+    AuthenticatedEpochChildFamilyV2, AuthenticatedGeneralV2BudgetRetirementV2,
+    AuthenticatedGeneralV2NeutralSinkBindingV1, AuthenticatedGeneralV2RootSiblingsV1,
+    AuthenticatedGeneralV2WindowRetirementV1, AuthenticatedTerminalEpochFamiliesV2,
+    FamilyOwnedFinalAbsenceEpochChildV1, FamilyOwnedTerminalEpochChildV1,
+};
+pub use root_bundle::{
+    authenticate_terminal_epoch_root_bundle_v1, AuthenticatedEpochChildClassV1,
+    AuthenticatedTerminalEpochRootBundleV1, EPOCH_CHILD_CLASS_CAPACITY_V1,
+};
+pub use runtime_commit::{
+    execute_epoch_root_close_v1, execute_position_replay_close_v2,
+    execute_position_replay_reopen_v2, prepare_epoch_root_close_v1,
+    prepare_position_replay_close_v2, prepare_position_replay_reopen_v2,
+    PositionReplayReopenRuntimeV2, PreparedEpochRootCloseV1, PreparedPositionReplayCloseV2,
+    PreparedPositionReplayReopenV2, RetirementCloseRuntimeV1,
 };
 
 /// Fail-closed errors at the live-layout composition boundary.
@@ -74,6 +113,10 @@ pub enum RetirementAdapterErrorV2 {
     Retirement(clutch_retirement::RetirementErrorV2),
     /// The authoritative base layout decoder refused.
     BaseCodec(clutch_solana_layout::CodecError),
+    /// The authoritative reference Replay codec refused.
+    ReferenceCodec(clutch_solana_reference::Error),
+    /// The authoritative General V2 codec or semantic owner refused.
+    GeneralV2Codec(clutch_general_v2_contract::CodecError),
     /// A central base encoder returned a width other than its frozen constant.
     BaseLengthMismatch,
     /// The runtime account is not owned by the expected program.
@@ -82,6 +125,18 @@ pub enum RetirementAdapterErrorV2 {
     WrongPda,
     /// A mutation path received a read-only account.
     NotWritable,
+    /// A required System-transfer funding authority did not sign.
+    MissingSigner,
+    /// A read-only role was declared writable.
+    UnexpectedWritable,
+    /// A state or evidence role was executable.
+    ExecutableAccount,
+    /// An executable program role was not executable.
+    NotExecutable,
+    /// An executable program role had the wrong exact address.
+    WrongProgramAddress,
+    /// An absence role was not System-owned, empty, and non-executable.
+    AccountNotAbsent,
     /// The stored bump disagrees with the canonical derivation.
     WrongBump,
     /// A caller supplied an impossible schema geometry.
@@ -94,9 +149,27 @@ impl From<clutch_retirement::RetirementErrorV2> for RetirementAdapterErrorV2 {
     }
 }
 
+impl From<clutch_retirement::RetirementErrorV1> for RetirementAdapterErrorV2 {
+    fn from(error: clutch_retirement::RetirementErrorV1) -> Self {
+        Self::Retirement(error.into())
+    }
+}
+
 impl From<clutch_solana_layout::CodecError> for RetirementAdapterErrorV2 {
     fn from(error: clutch_solana_layout::CodecError) -> Self {
         Self::BaseCodec(error)
+    }
+}
+
+impl From<clutch_solana_reference::Error> for RetirementAdapterErrorV2 {
+    fn from(error: clutch_solana_reference::Error) -> Self {
+        Self::ReferenceCodec(error)
+    }
+}
+
+impl From<clutch_general_v2_contract::CodecError> for RetirementAdapterErrorV2 {
+    fn from(error: clutch_general_v2_contract::CodecError) -> Self {
+        Self::GeneralV2Codec(error)
     }
 }
 
