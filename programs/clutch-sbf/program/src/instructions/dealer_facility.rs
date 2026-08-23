@@ -39,12 +39,13 @@ use clutch_general_v2_contract::{
     SELECTED_FEE_RECORD_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_BYTES, WINDOW_ACCOUNT_BYTES,
 };
 use clutch_batch::portfolio_book_v2::{
-    authenticate_complete_portfolio_book_for_root_transition_v2,
-    AuthenticatedCompletePortfolioBookV2, PortfolioBookAccountExpectationV2,
-    PortfolioBookAccountRoleV2, PortfolioBookAdapterV2, PortfolioBookPageSetRecordV2,
-    PortfolioCompleteBookProjectionExpectationV2,
+    authenticate_complete_portfolio_book_for_root_transition_into_v2,
+    AuthenticatedCompletePortfolioBookRefV2, PortfolioBookAccountExpectationV2,
+    PortfolioBookAccountRoleV2, PortfolioBookAdapterV2, PortfolioBookInPlaceAdapterV2,
+    PortfolioBookPageSetRecordV2, PortfolioCompleteBookProjectionExpectationV2,
     PORTFOLIO_BOOK_AUTHORITY_VERSION_V2, PORTFOLIO_BOOK_MAX_PAGES_V2,
 };
+use clutch_batch::dealer_leg_v2::DealerLegVerdictV2;
 use clutch_batch::relation_v2::{EconomicBookV2, EconomicDomainV2};
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, revenue_policy_digest, REVENUE_POLICY_BYTES,
@@ -54,10 +55,10 @@ use clutch_batch_policy_identity::{
 };
 use clutch_general_v2_runtime::{
     decode_sealed_candidate_feed_v1, project_owner_blind_slot,
-    verify_smooth_covered_dealer_candidate_v1,
+    verify_smooth_covered_dealer_candidate_into_v1,
 };
 use clutch_product_series::{
-    MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
+    ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1,
 };
 use clutch_liveness::runtime_adapter_v1::{
@@ -109,7 +110,9 @@ use super::dealer_policy::{
     authenticate_catalog_policy, create_exact_payer_debit_pda, create_full_principal_pda,
     dealer_fault,
 };
-use super::product_artifact::authenticate_product_artifact_v1;
+use super::product_artifact::{
+    authenticate_product_artifact_v1, AuthenticatedProductArtifactV1,
+};
 use crate::instructions_sysvar::{InstructionsSysvarV1, SYSVAR_OWNER_ID};
 use super::dealer_runtime::{
     decode_dealer_account_body_v1, encode_dealer_account_body_v1, DealerRuntimePayloadV1,
@@ -127,6 +130,7 @@ const CANCEL_FUNDING_ACCOUNT_COUNT: usize = 20;
 const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize = 20;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
+const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 40;
 
 /// Static source for the adapter's heap-resident complete RelationV2 book.
 ///
@@ -138,6 +142,13 @@ static EMPTY_DEALER_ECONOMIC_BOOK_V2: EconomicBookV2 = EconomicBookV2::empty();
 static EMPTY_DEALER_QUOTE_ADMISSION_V1:
     clutch_dealer_runtime_contract::DealerQuoteAdmissionV1 =
     clutch_dealer_runtime_contract::DealerQuoteAdmissionV1::ZEROED;
+
+/// Static source for the heap-owned checked Dealer verdict postimage.
+static EMPTY_DEALER_LEG_VERDICT_V2: DealerLegVerdictV2 = DealerLegVerdictV2::ZEROED;
+
+/// Static source for heap-owned creation of the 5,436-byte selection body.
+static EMPTY_COVERED_DEALER_SELECTION_V1: CoveredDealerSelectionV1 =
+    CoveredDealerSelectionV1::ZEROED;
 
 fn id(key: &Pubkey) -> Id {
     Id::from_bytes(key.to_bytes())
@@ -761,7 +772,7 @@ fn authenticate_general_epoch(
     .map_err(dealer_fault)
 }
 
-struct DealerCompleteBookAdapterV2 {
+struct DealerCompleteBookAdapterV2<'a> {
     owner_program_id: [u8; 32],
     root_account_id: [u8; 32],
     root_data_id: [u8; 32],
@@ -771,10 +782,11 @@ struct DealerCompleteBookAdapterV2 {
     page_account_ids: [[u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2],
     page_data_ids: [[u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2],
     page_count: u8,
-    book: Box<EconomicBookV2>,
+    relation_domain: EconomicDomainV2,
+    raw_pages: &'a [&'a [u8]],
 }
 
-impl PortfolioBookAdapterV2 for DealerCompleteBookAdapterV2 {
+impl PortfolioBookAdapterV2 for DealerCompleteBookAdapterV2<'_> {
     fn authenticate_book_account(&self, expected: &PortfolioBookAccountExpectationV2) -> bool {
         if expected.owner_program_id != self.owner_program_id {
             return false;
@@ -810,27 +822,81 @@ impl PortfolioBookAdapterV2 for DealerCompleteBookAdapterV2 {
 
     fn project_complete_economic_book(
         &self,
-        expected: &PortfolioCompleteBookProjectionExpectationV2,
+        _expected: &PortfolioCompleteBookProjectionExpectationV2,
     ) -> Option<EconomicBookV2> {
+        // This SBF-only adapter deliberately supports only the in-place
+        // capability constructor. Returning an owning 12-KiB-plus book would
+        // recreate the frame hazard this boundary exists to remove.
+        None
+    }
+}
+
+impl PortfolioBookInPlaceAdapterV2 for DealerCompleteBookAdapterV2<'_> {
+    fn project_complete_economic_book_into(
+        &self,
+        expected: &PortfolioCompleteBookProjectionExpectationV2,
+        output: &mut EconomicBookV2,
+    ) -> bool {
         if expected.page_set.page_count != self.page_count
             || expected.page_set.page_account_ids != self.page_account_ids
             || expected.page_set.page_semantic_ids != self.page_data_ids
         {
-            return None;
+            return false;
         }
-        Some(*self.book)
+        output.orders.fill(clutch_batch::relation_v2::EMPTY_ECONOMIC_ORDER_V2);
+        output.len = 0;
+        let mut page = 0usize;
+        while page < self.raw_pages.len() {
+            let header = match OrderPageHeaderV5::decode(self.raw_pages[page]) {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let mut cursor = match OrderSlotCursorV5::new(self.raw_pages[page]) {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let mut slot = 0usize;
+            while slot < usize::from(header.order_count) {
+                let verified = match cursor.next_slot() {
+                    Some(Ok(value)) => value,
+                    _ => return false,
+                };
+                let projection = match project_owner_blind_slot(
+                    verified.slot,
+                    &self.relation_domain,
+                ) {
+                    Ok(value) => value,
+                    Err(_) => return false,
+                };
+                if let Some((order, _membership)) = projection {
+                    let at = usize::from(output.len);
+                    if at >= output.orders.len() {
+                        return false;
+                    }
+                    output.orders[at] = order;
+                    output.len = match output.len.checked_add(1) {
+                        Some(value) => value,
+                        None => return false,
+                    };
+                }
+                slot += 1;
+            }
+            page += 1;
+        }
+        true
     }
 }
 
 #[inline(never)]
-fn authenticate_complete_dealer_book_v2(
+fn with_authenticated_complete_dealer_book_v2<R>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     root: &SettlementRootV1AccountV1,
     feed_account: &AccountInfo<'_>,
     domain: &EconomicDomainV2AccountV1,
     page_accounts: &[AccountInfo<'_>],
-) -> Outcome<AuthenticatedCompletePortfolioBookV2> {
+    consume: impl FnOnce(&AuthenticatedCompletePortfolioBookRefV2<'_>, &[u8]) -> Outcome<R>,
+) -> Outcome<R> {
     require(root_account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(root_account.is_writable, ClutchError::NotWritable)?;
     require(
@@ -916,9 +982,6 @@ fn authenticate_complete_dealer_book_v2(
 
     let mut page_account_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
     let mut page_data_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
-    let mut headers = [OrderPageHeaderV5::decode(&raw_pages[0])
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        PORTFOLIO_BOOK_MAX_PAGES_V2];
     page = 0;
     while page < page_accounts.len() {
         let account = &page_accounts[page];
@@ -947,7 +1010,6 @@ fn authenticate_complete_dealer_book_v2(
         )?;
         page_account_ids[page] = account.key.to_bytes();
         page_data_ids[page] = header.page_digest.bytes();
-        headers[page] = header;
         page += 1;
     }
 
@@ -962,35 +1024,6 @@ fn authenticate_complete_dealer_book_v2(
         outcome_count: transcript.outcome_count,
         price_scale: transcript.price_scale,
     };
-    let mut book = super::orders_batch::boxed_copy_of(&EMPTY_DEALER_ECONOMIC_BOOK_V2)?;
-    page = 0;
-    while page < page_accounts.len() {
-        let mut cursor = OrderSlotCursorV5::new(&raw_pages[page])
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        let mut slot = 0usize;
-        while slot < usize::from(headers[page].order_count) {
-            let verified = cursor
-                .next_slot()
-                .ok_or(ClutchError::MismatchedState)?
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-            if let Some((order, _membership)) = project_owner_blind_slot(
-                verified.slot,
-                &relation_domain,
-            )
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            {
-                let at = usize::from(book.len);
-                if at >= book.orders.len() {
-                    return Err(ClutchError::Arithmetic.into());
-                }
-                book.orders[at] = order;
-                book.len = book.len.checked_add(1).ok_or(ClutchError::Arithmetic)?;
-            }
-            slot += 1;
-        }
-        page += 1;
-    }
-    require(book.len == root.order_count(), ClutchError::MismatchedState)?;
     let root_data_id = root.data_id(&RuntimeSha256, clutch_general_v2_contract::Id32::new(
         root_account.key.to_bytes(),
     )?)?;
@@ -1023,15 +1056,23 @@ fn authenticate_complete_dealer_book_v2(
         page_account_ids,
         page_data_ids,
         page_count: page_set.page_count,
-        book,
+        relation_domain,
+        raw_pages: &raw_pages,
     };
-    authenticate_complete_portfolio_book_for_root_transition_v2(
+    let mut authenticated_book =
+        super::orders_batch::boxed_copy_of(&EMPTY_DEALER_ECONOMIC_BOOK_V2)?;
+    let authenticated = authenticate_complete_portfolio_book_for_root_transition_into_v2(
         &adapter,
         program_id.to_bytes(),
         &relation_domain,
         page_set,
+        &mut authenticated_book,
     )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    // The borrowed capability retains only `authenticated_book`; the adapter
+    // owns no second complete-book allocation.
+    drop(adapter);
+    consume(&authenticated, &feed_data)
 }
 
 #[inline(never)]
@@ -1076,6 +1117,197 @@ fn authenticate_signed_dealer_quote_v1(
         ClutchError::WrongProgramOwner,
     )?;
     Ok(quote)
+}
+
+struct AuthenticatedCoveredProductV1 {
+    market_instance: AuthenticatedProductArtifactV1<MarketInstancePreimageV2>,
+    product_template: AuthenticatedProductArtifactV1<ProductTemplateV4>,
+    native_basis: AuthenticatedProductArtifactV1<NativeClaimBasisV1>,
+    price_policy: AuthenticatedProductArtifactV1<PriceMeasurePolicyV1>,
+    genesis: AuthenticatedProductArtifactV1<MarketGenesisProfileV2>,
+}
+
+struct AuthenticatedCoveredRootInputsV1 {
+    root: Box<SettlementRootV1AccountV1>,
+    domain: Box<EconomicDomainV2AccountV1>,
+    binding: Box<MarketBindingV2>,
+    grid: Box<PriceGridAccount>,
+}
+
+#[inline(never)]
+fn authenticate_covered_root_inputs_v1(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    domain_account: &AccountInfo<'_>,
+    binding_account: &AccountInfo<'_>,
+    grid_account: &AccountInfo<'_>,
+    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+) -> Outcome<AuthenticatedCoveredRootInputsV1> {
+    for (account, writable, length) in [
+        (root_account, true, SETTLEMENT_ROOT_ACCOUNT_BYTES),
+        (domain_account, false, ECONOMIC_DOMAIN_ACCOUNT_BYTES),
+        (binding_account, false, MARKET_BINDING_ACCOUNT_BYTES_V2),
+        (grid_account, false, account_len::PRICE_GRID),
+    ] {
+        require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+        require(
+            account.is_writable == writable,
+            if writable {
+                ClutchError::NotWritable
+            } else {
+                ClutchError::UnexpectedWritable
+            },
+        )?;
+        require(
+            !account.is_signer && !account.executable && account.data_len() == length,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let root = Box::new(SettlementRootV1AccountV1::decode(&root_account.data.borrow())?);
+    let domain = Box::new(EconomicDomainV2AccountV1::decode(&domain_account.data.borrow())?);
+    let binding = Box::new(MarketBindingV2::decode(&binding_account.data.borrow())?);
+    let grid = Box::new(PriceGridAccount::decode(&grid_account.data.borrow())?);
+    expect_pda(
+        root_account.key,
+        seeds::general_v2_settlement_root_pda(
+            program_id,
+            &root.epoch().bytes(),
+            &root.settlement_candidate_id().bytes(),
+        ),
+        Some(root.stored_bump()),
+    )?;
+    expect_pda(
+        domain_account.key,
+        seeds::general_v2_economic_domain_pda(program_id, &root.epoch().bytes()),
+        Some(domain.stored_bump),
+    )?;
+    expect_pda(
+        binding_account.key,
+        seeds::general_v2_market_binding_pda(
+            program_id,
+            &root.market_instance_v2_id().bytes(),
+        ),
+        Some(binding.base().stored_bump),
+    )?;
+    expect_pda(
+        grid_account.key,
+        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
+        Some(grid.stored_bump),
+    )?;
+    let root_floor = root
+        .root_rent()
+        .refundable_principal
+        .checked_add(root.root_rent().donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        root_account.lamports() >= root_floor
+            && root.market_binding().bytes() == binding_account.key.to_bytes()
+            && root.market().bytes() == binding.base().market.bytes()
+            && root.market_instance_v2_id().bytes() == policy.market_instance_v2_id.bytes()
+            && binding.base().market_instance_v2_id.bytes()
+                == policy.market_instance_v2_id.bytes()
+            && binding.base().relation_policy_id.bytes() == policy.relation_v2_id.bytes()
+            && binding.base().price_measure_policy_v1_id.bytes()
+                == policy.price_measure_policy_id.bytes()
+            && binding.base().native_claim_basis_id.bytes() == policy.claim_basis_id.bytes()
+            && binding.base().outcome_count == policy.outcome_count
+            && domain.epoch.bytes() == root.epoch().bytes()
+            && domain.transcript.market_instance_v2_id.bytes()
+                == policy.market_instance_v2_id.bytes()
+            && grid.realm.bytes() == policy.realm_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedCoveredRootInputsV1 {
+        root,
+        domain,
+        binding,
+        grid,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_covered_product_v1(
+    program_id: &Pubkey,
+    market_instance_account: &AccountInfo<'_>,
+    product_template_account: &AccountInfo<'_>,
+    native_basis_account: &AccountInfo<'_>,
+    price_policy_account: &AccountInfo<'_>,
+    genesis_account: &AccountInfo<'_>,
+    root: &SettlementRootV1AccountV1,
+    binding: &MarketBindingV2,
+    grid: &PriceGridAccount,
+    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+) -> Outcome<AuthenticatedCoveredProductV1> {
+    let market_instance = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
+        program_id,
+        market_instance_account,
+        ContentId::from_bytes(root.market_instance_v2_id().bytes()),
+    )?;
+    let product_template = authenticate_product_artifact_v1::<ProductTemplateV4>(
+        program_id,
+        product_template_account,
+        market_instance.value().product_template_id.content_id(),
+    )?;
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        genesis_account,
+        market_instance
+            .value()
+            .market_genesis_profile_id
+            .content_id(),
+    )?;
+    let native_basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        native_basis_account,
+        product_template.value().native_claim_basis_id.content_id(),
+    )?;
+    let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
+        program_id,
+        price_policy_account,
+        genesis.value().price_measure_policy_id.content_id(),
+    )?;
+    market_instance
+        .value()
+        .validate_bindings(
+            product_template.value(),
+            native_basis.value(),
+            price_policy.value(),
+            genesis.value(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let base = binding.base();
+    require(
+        root.market_instance_v2_id().bytes() == policy.market_instance_v2_id.bytes()
+            && base.market_instance_v2_id.bytes() == policy.market_instance_v2_id.bytes()
+            && base.market_genesis_profile_v2_id.bytes() == genesis.semantic_id().bytes()
+            && base.price_measure_policy_v1_id.bytes() == price_policy.semantic_id().bytes()
+            && base.native_claim_basis_id.bytes() == native_basis.semantic_id().bytes()
+            && base.relation_policy_id.bytes() == policy.relation_v2_id.bytes()
+            && base.score_policy_id == root.score_policy_id()
+            && binding.batch_policy_id() == root.batch_policy_id()
+            && base.outcome_count == policy.outcome_count
+            && base.outcome_count == native_basis.value().outcome_count
+            && base.basis_degree == native_basis.value().basis_degree
+            && base.price_scale == grid.price_scale
+            && genesis.value().realm_id.bytes() == policy.realm_id.bytes()
+            && genesis.value().profile_id.bytes() == policy.profile_id.bytes()
+            && genesis.value().price_grid_id.bytes() == grid.grid.bytes()
+            && genesis.value().relation_policy_id.bytes() == policy.relation_v2_id.bytes()
+            && genesis.value().fee_policy_id.bytes() == policy.fee_policy_id.bytes()
+            && genesis.value().price_measure_policy_id.bytes()
+                == policy.price_measure_policy_id.bytes()
+            && product_template.value().native_claim_basis_id.bytes()
+                == policy.claim_basis_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedCoveredProductV1 {
+        market_instance,
+        product_template,
+        native_basis,
+        price_policy,
+        genesis,
+    })
 }
 
 #[inline(never)]
