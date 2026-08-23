@@ -659,7 +659,7 @@ impl AuthenticatedSourceProductRouteV3 {
 pub fn authenticate_source_product_route_v3(
     route: AuthenticatedSourceRouteV1,
     receiver: AuthenticatedReceiverRouteV2,
-    registry: AuthenticatedRegistryCapabilityReleaseV3,
+    registry: AuthenticatedRegistryCapabilityV3,
     bundle: &AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
     genesis: &AuthenticatedProductArtifactV1<MarketGenesisProfileV2>,
 ) -> Outcome<AuthenticatedSourceProductRouteV3> {
