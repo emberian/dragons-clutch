@@ -18,9 +18,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "clutch-bspline"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-price-measure"
+version = "0.1.0"
+dependencies = [
+ "clutch-bspline",
+]
+
+[[package]]
 name = "clutch-product-series"
 version = "0.1.0"
 dependencies = [
+ "clutch-bspline",
+ "clutch-price-measure",
  "sha2",
 ]
 

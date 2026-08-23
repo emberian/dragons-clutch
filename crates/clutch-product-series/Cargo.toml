@@ -13,4 +13,6 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
+clutch-bspline = { path = "../clutch-bspline" }
+clutch-price-measure = { path = "../clutch-price-measure" }
 sha2 = { version = "=0.10.9", default-features = false }

@@ -12,6 +12,11 @@ The crucial identity split is:
 ```text
 MarketInstanceId = H(TemplateId, MarketGenesisProfileId, start, cap)
 
+PriceMeasurePolicyV1Id = H(exact quantized checker and bound contract)
+MarketInstanceV2Id   = H(TemplateId, MarketGenesisProfileV2Id, start, cap)
+SeriesPlanV5Id       = H(TemplateId, GenesisProfileV2Id, AttachmentPlanId,
+                          finite recurrence, cap)
+
 SeriesFundingQuoteId   = H(exact per-component lamport/collateral amounts)
 SeriesAttachmentPlanId = H(FundingQuoteId, LiquidityPlanId, WrapperSetId)
 SeriesPlanId           = H(TemplateId, GenesisProfileId, AttachmentPlanId,
@@ -125,6 +130,121 @@ no registry values. The projection is deliberately not a codec and cannot
 authenticate itself: the adapter must derive it from an authenticated central
 release manifest and immutable Realm/Profile account before live activation.
 
+`MarketGenesisProfileV1` is frozen and remains decodable, but it does not own a
+price-measure policy. It is therefore not eligible for a RelationV2 profile
+that requires price coherence. The omission is repaired only by the successor
+types below; no V1 byte or typed ID is reinterpreted.
+
+## Quantized price-policy successor
+
+### `PriceMeasurePolicyV1` — 96 bytes
+
+Domain: `dragons-clutch/price-measure-policy/v1`
+
+| Range | Field |
+|---:|---|
+| `0..8` | `DCPMPV1\0` |
+| `8..10` | schema `1` |
+| `10..16` | reserved zero |
+| `16..48` | exact reviewed checker-release ID |
+| `48..54` | checker version, quantized-semantics version, degree range, outcome/atom bounds |
+| `54..64` | reserved zero |
+| `64..88` | maximum payout denominator, witness denominator, and price scale |
+| `88..96` | reserved zero |
+
+This first policy schema admits only price-measure checker version 3 and
+quantized-semantics version 1. That single version selects upstream exact
+integer-simplex prices, the production integer-coordinate evaluator, and
+largest-remainder/lowest-index payout quantization; callers cannot choose
+alternate basis or rounding enums. Its exact Product domain is degrees zero
+through three. Degree zero keeps the complete canonical Product finite payout
+table: ordered cells may repeat a payout-row mapping, payout rows may be
+non-one-hot, and payout count may differ from native outcome count. Degrees one
+through three use the exact smooth B-spline body. The policy also freezes
+maximum outcome/atom width, immutable payout denominator, primitive witness
+denominator, and price scale.
+
+The pure join checks the exact `NativeClaimBasisV1` body against those bounds.
+A PriceGrid is a scalar tick lattice: it has a tick count and price scale, not
+an outcome width. `validate_candidate_price_contract` instead requires the
+candidate `PriceVectorV3` width and degree to equal the native basis, checks its
+exact integer simplex and canonical padding, and requires its scale to equal an
+adapter-authenticated PriceGrid scale. The venue adapter remains responsible
+for proving active component membership in the authenticated tick lattice.
+`validate_witness_contract` makes the policy's atom and primitive-denominator
+bounds effective before the full V3 arithmetic check.
+
+`NativeClaimBasisV1` is the sole persisted owner of the payout body and its
+ambiguity/edge registry selectors. `MarketGenesisProfileV2` is the sole owner
+of the closed coordinate bounds. The registry owns the selector-to-semantics
+mapping; an adapter must authenticate that mapping before passing the resolved
+edge enum to `project_smooth_basis`. The degree-zero and smooth helpers combine
+those already-authenticated bodies ephemerally. Price-measure `basis_digest`
+equals the exact `NativeClaimBasisV1Id`; a Relation/EconomicDomain digest joins
+the Market/Genesis identity and its per-Epoch facts but is not free to choose
+alternate bounds. Until an adapter authenticates those joins, runtime
+price-witness activation remains deliberately blocked. Continuous or
+unquantized semantics cannot be smuggled through this codec: they require a
+distinct typed policy body and a new Genesis successor, and
+`MarketGenesisProfileV2` will not coerce that future ID into its V1 policy
+field.
+
+For a smooth basis with registry-resolved `Refuse`, the Genesis coordinate
+range must equal the inclusive first-to-last stored-knot span. Otherwise a
+valid market coordinate could have no payout and the partition would not be
+exhaustive. A registry-resolved `Clamp` may use a wider Genesis range because
+both exterior intervals deterministically map to their nearest endpoint.
+
+### `MarketGenesisProfileV2` — 416 bytes
+
+Domain: `dragons-clutch/market-genesis-profile/v2`
+
+This fresh `DCMGPV2\0`, schema-2 body preserves every V1 field, adds the exact
+typed `PriceMeasurePolicyV1Id` after `PriceGridId`, and appends the exact closed
+`u128` coordinate minimum and maximum after the bearer lot. Its identity
+therefore changes when the checker release, quantized semantics, admitted
+bounds, or market coordinate domain changes. The coordinate range must be
+nonempty and contain every active basis knot; the degree-zero first boundary is
+strictly above the lower bound. `CapabilitySemanticOwnersV2` and
+`RegistryCapabilityProjectionV2` equality-check that same policy ID and exact
+policy body in the complete registry join.
+
+| Range | Field |
+|---:|---|
+| `0..16` | fresh magic, schema 2, terminal-disposition selector, reserved zero |
+| `16..368` | eleven exact 32-byte identities, including PriceMeasurePolicyV1 |
+| `368..376` | native bearer lot |
+| `376..392` | coordinate-domain minimum |
+| `392..408` | coordinate-domain maximum |
+| `408..416` | reserved zero |
+
+### Successor identity cascade
+
+| Type | Bytes and offsets | Domain |
+|---|---|---|
+| `MarketInstancePreimageV2` | 88: magic `DCMKTIN2` `0..8`, Template ID `8..40`, GenesisProfileV2 ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v2` |
+| `SeriesPlanV5` | 152: fresh 16-byte schema-2 header, Template/GenesisV2/Attachment IDs `16..112`, recurrence/cap `112..152` | `dragons-clutch/series-plan/v5` |
+| `SeriesFundingTermsV2` | 208: fresh 16-byte schema-2 header, SeriesPlanV5 ID `16..48`, refund/sink/mint/token identities `48..208` | `dragons-clutch/series-funding-terms/v2` |
+
+`compile_ordinal_v2` returns `CompiledOrdinalV2` and a full
+`MarketInstanceV2Id`. `project_component_debits_v2` reuses the authoritative V1
+FundingQuote and Attachment amount bodies, because neither contains a V1
+Genesis, Market, or Series ID, while requiring the fresh typed market ID in its
+explicitly untrusted `AdapterFulfillmentProjectionV2`. Its public fields carry
+no authentication authority: a live adapter must populate them only after
+checking exact component accounts and capitalization.
+`ProjectedComponentPresenceV2::ClaimedPresentExactAndCapitalized` is freely
+constructible and describes only the projection's claim. Funding ownership uses
+`SeriesFundingTermsV2`, because the persisted Series ID changed.
+
+The successor market identity transitively commits the exact basis through
+`ProductTemplateId`, fee and price policy through `MarketGenesisProfileV2Id`,
+and start/cap directly. Series identity and operational attachments remain
+separate on purpose so two Series can converge on one economic market. A live
+successor Market account must nevertheless persist the full 32-byte
+`MarketInstanceV2Id`; lowering it to a legacy 64-bit nonce is not an injective
+identity bridge.
+
 ### Remaining exact bodies
 
 | Type | Bytes and offsets | Domain |
@@ -191,6 +311,25 @@ an adapter-authenticated attachment-capability join supplies and checks those
 authoritative bodies. This restriction does not alter `MarketInstanceId`, from
 which operational attachments are deliberately excluded.
 
+For the price-owning successor, the equivalent APIs are `compile_ordinal_v2`,
+`SeriesFundingTermsV2::validate_bindings`, and
+`project_component_debits_v2`. The V2 registry join additionally checks the
+supplied exact quantized PriceMeasurePolicy body and requires its ID to equal the
+Genesis and capability-owner IDs. A future RelationV2 adapter must set
+`EconomicDomainV2.price_policy_digest` to the exact
+`PriceMeasurePolicyV1Id` bytes, set price-measure `basis_digest` to the exact
+`NativeClaimBasisV1Id` bytes, and bind the Genesis-owned coordinate range plus
+the registry-resolved basis selectors into its authenticated Market/Economic
+domain join. The candidate-price digest is derived from the canonical exact
+candidate transcript—EconomicDomain digest, outcome count, price scale, and
+active integer prices—not from the PriceGrid body. The independently
+authenticated PriceGrid proves the common scale and venue tick membership.
+This crate does not claim that adapter exists.
+
+In particular, the Product-side d0 finite payout table is admitted without
+loss, but witness activation still refuses until the adapter authenticates its
+registry selector mapping and exact price transcript.
+
 ## Compatibility refusal and evidence
 
 The legacy `DCTMPLV3` and `DCPAYTV3` magics return
@@ -200,6 +339,11 @@ reinterpreted, or relabeled into these successor semantics.
 Golden digests and every fixture input are frozen in
 `vectors/product-series-v1.json`; the adversarial integration test independently
 recomputes each digest and checks every manifest entry.
+
+The successor adversarial suite freezes its exact lengths, magic/version
+headers, policy versions and bounds, transitive identity behavior, and
+cross-version refusals. V1 rejects V2 bytes and V2 rejects V1 bytes; equal-width families
+refuse on fresh magic, while different-width families refuse before decoding.
 
 ```text
 cargo test --manifest-path crates/clutch-product-series/Cargo.toml --offline --locked --release

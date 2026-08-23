@@ -4,6 +4,18 @@ Status: **PROPOSED / EXECUTABLE HOST MODEL / NO SBF ROUTES** (2026-08-22)
 
 Executable model: [`research/product-compiler-v1`](../../research/product-compiler-v1)
 
+Successor note (2026-08-23): the allocation-free
+[`clutch-product-series`](../../crates/clutch-product-series) core now adds a
+strictly versioned quantized price-policy cascade. `PriceMeasurePolicyV1`
+selects the V3 degree-zero-through-three price-measure checker and its single
+exact quantized evaluator/reconstruction semantics version. Degree zero keeps
+the canonical finite payout table, including repeated cell mappings and
+non-one-hot rows. `MarketGenesisProfileV2`,
+`MarketInstancePreimageV2`, `SeriesPlanV5`, and `SeriesFundingTermsV2` use fresh
+typed IDs, magics, domains, and schemas while preserving every V1 byte. No SBF
+route selects these artifacts yet, and runtime price-witness activation remains
+blocked on an authenticated registry-selector and exact-price adapter join.
+
 ## Result first
 
 The intended Template/Instance/Series architecture is coherent, but it cannot
@@ -64,7 +76,8 @@ shape is not another state partition.
 | Statistic evaluator and retained feature set | SummaryProgram | Template references SummaryProgramId |
 | Relative span, statistic, partition/basis, payouts, ambiguity, edge, repair, failure | Template | Instance/Terms reference TemplateId |
 | Human explanation and labels | presentation sidecar | `TemplatePresentationId = H(TemplateId, sidecar digest)` |
-| Realm/Profile, price/fee policy, recurrence, cap, work/liquidity policy references | immutable SeriesPlan | Instance descriptor derives from them |
+| Realm/Profile, price grid, exact quantized price-measure policy, fee policy, lifecycle policies | immutable MarketGenesisProfileV2 | MarketInstanceV2 commits its typed ID |
+| Recurrence, cap, work/liquidity/wrapper references | immutable SeriesPlanV5 and Attachment | Instance descriptor derives only the economic subset |
 | Exact raw source window | Hatchery WindowKey | many statistic results and Instances reference it |
 | One derived statistic result | StatisticResult | one or more compatible Templates reference it |
 | Liability and lifecycle | Instance/Market | clients and indexers project it |
@@ -96,6 +109,45 @@ TemplateId + exact start + Realm/Profile + price/fee/work/liquidity
  + market collateral cap          -> InstanceId
 ```
 
+The concrete successor refines those shorthand rows as:
+
+```text
+PriceMeasurePolicyV1 body
+  -> PriceMeasurePolicyV1Id
+
+Realm/Profile + PriceGridId + PriceMeasurePolicyV1Id + fee/relation/score/
+candidate-lifecycle/liveness/retirement/capability owners + bearer lot +
+closed coordinate bounds
+  -> MarketGenesisProfileV2Id
+
+TemplateId + MarketGenesisProfileV2Id + exact start + collateral cap
+  -> MarketInstanceV2Id
+
+TemplateId + MarketGenesisProfileV2Id + AttachmentPlanId + finite recurrence/cap
+  -> SeriesPlanV5Id
+```
+
+The current V1 Genesis lacks `PriceMeasurePolicyV1Id` and cannot authorize a
+RelationV2 price-coherence route. It remains frozen rather than gaining a field
+under the same 352-byte codec. The V2 Genesis accepts only the typed first
+quantized policy, which covers Product degrees zero through three. A future
+continuous/unquantized checker requires its own typed policy and another Genesis
+successor; transparent 32-byte wrappers must never be cast across those
+meanings. `NativeClaimBasisV1` owns the payout body and exact ambiguity/edge
+registry selectors. Genesis V2 owns the closed coordinate minimum and maximum,
+so `MarketInstanceV2Id` commits them transitively and no Epoch may choose a
+different range. The registry owns the selector-to-semantics mapping. A live
+adapter must authenticate that mapping before constructing the ephemeral
+checker input. The price-measure `basis_digest` remains the exact
+`NativeClaimBasisV1Id`; the Relation/EconomicDomain digest joins the committed
+Market domain and per-Epoch facts rather than becoming a second owner.
+
+Exhaustiveness further constrains a smooth basis whose authenticated registry
+mapping resolves to `Refuse`: Genesis minimum and maximum must equal the first
+and last stored knots inclusively. A broader domain is admitted only with
+`Clamp`, which maps both exterior intervals to their nearest endpoint. The full
+registry/Series join enforces this before compiling a Market occurrence.
+
 `InstanceId` does not contain SeriesId, ordinal, creator, or a free nonce.
 Two Series that schedule the exact same economic Instance converge on one ID.
 The pure transition can authenticate the existing Instance and advance without
@@ -105,8 +157,11 @@ The current adapter still demands `canonical_market_id(realm, profile, u64
 nonce)`. Compatibility lowering deterministically derives that nonce from the
 first eight InstanceId bytes. This removes caller choice but does not turn a
 64-bit projection into an injective identity. A future Market/Instance account
-must bind the full InstanceId; current deployment admission would additionally
-need to reserve/refuse a truncation collision.
+must bind the full InstanceId. The Product successor therefore does not call
+this lowering a compatibility route: a live V2 Market must persist the full
+`MarketInstanceV2Id`. A separate collision registry could make legacy
+admission fail closed, but it cannot make the 64-bit projection an economic
+identity.
 
 ## Recurrence and prepayment
 

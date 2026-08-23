@@ -20,6 +20,7 @@ mod codec;
 mod compile;
 mod funding;
 mod registry;
+mod successor;
 
 pub use artifacts::{
     EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV1, MarketInstancePreimageV1,
@@ -32,6 +33,7 @@ pub use artifacts::{
     SERIES_ATTACHMENT_PLAN_DOMAIN, SERIES_FUNDING_TERMS_BYTES, SERIES_FUNDING_TERMS_DOMAIN,
     SERIES_PLAN_BYTES, SERIES_PLAN_DOMAIN, UNIFORM_SPACING_NONE,
 };
+pub use clutch_bspline::{BasisSpec as QuantizedBasisSpecV1, EdgePolicy as QuantizedEdgePolicyV1};
 pub use compile::{
     compile_ordinal, AbsoluteRecoveryAttemptV1, CompiledOrdinalV1, CompiledScheduleV1,
 };
@@ -43,6 +45,16 @@ pub use funding::{
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
+};
+pub use successor::{
+    compile_ordinal_v2, project_component_debits_v2, AdapterFulfillmentProjectionV2,
+    CapabilitySemanticOwnersV2, CompiledOrdinalV2, MarketGenesisProfileV2,
+    MarketInstancePreimageV2, PriceMeasurePolicyV1, ProjectedComponentPresenceV2,
+    RegistryCapabilityProjectionV2, SeriesFundingTermsV2, SeriesPlanV5,
+    MARKET_GENESIS_PROFILE_V2_BYTES, MARKET_GENESIS_PROFILE_V2_DOMAIN,
+    MARKET_INSTANCE_PREIMAGE_V2_BYTES, MARKET_INSTANCE_V2_DOMAIN, PRICE_MEASURE_POLICY_BYTES,
+    PRICE_MEASURE_POLICY_DOMAIN, SERIES_FUNDING_TERMS_V2_BYTES, SERIES_FUNDING_TERMS_V2_DOMAIN,
+    SERIES_PLAN_V5_BYTES, SERIES_PLAN_V5_DOMAIN,
 };
 
 use sha2::{Digest, Sha256};
@@ -143,6 +155,23 @@ typed_id!(
 typed_id!(
     SeriesFundingTermsId,
     "Typed identity of one `SeriesFundingTermsV1`."
+);
+typed_id!(
+    PriceMeasurePolicyV1Id,
+    "Typed identity of one quantized `PriceMeasurePolicyV1`."
+);
+typed_id!(
+    MarketGenesisProfileV2Id,
+    "Typed identity of one `MarketGenesisProfileV2`."
+);
+typed_id!(
+    MarketInstanceV2Id,
+    "Typed identity of one economic `MarketInstancePreimageV2`."
+);
+typed_id!(SeriesPlanV5Id, "Typed identity of one `SeriesPlanV5`.");
+typed_id!(
+    SeriesFundingTermsV2Id,
+    "Typed identity of one `SeriesFundingTermsV2`."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.
