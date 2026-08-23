@@ -12,6 +12,8 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 
 /// Canonical native-basis, compiler-certificate, and market-intent artifacts.
 pub mod artifact;
+/// Authority-neutral exact price compilation over one Product basis.
+pub mod exact_market;
 /// Untrusted canonical Product-facing basis, payoff, and bundle target.
 pub mod production;
 /// Exact bridge from compiler coefficients to the live portfolio identity and
