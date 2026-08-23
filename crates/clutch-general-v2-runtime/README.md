@@ -9,18 +9,22 @@ The same crate now contains the first honest construction path. It streams a
 frozen OrderPage set into the single owner-blind `EconomicBookV2` truth,
 enumerates a caller-bounded deterministic family of exact singleton and
 primitive two-atom measures plus supplied wider measures, derives integer
-simplex prices without floats or a new rounding boundary, enumerates
+simplex prices without floats or a new rounding boundary, requires an exact
+finite production atom-mixture certificate, enumerates
 zero/minimum/full fill coordinates plus maximal exact buy/sell ratio pairs, and
 retains the best candidate that the authoritative V3 and RelationV2 checkers
 actually accept. Its result reports whether all members of that named bounded
 heuristic family were visited. It never describes the result as an optimal
 clearing.
 
-It admits the complete Product-selected V3 quantized family: mapped finite
-degree-zero markets and smooth degree-one-through-three markets. The caller
-supplies authenticated immutable Product bodies, the canonical PriceGrid, the
-revealed AdmissionNode, the EconomicDomain artifact, a sealed CandidateFeed
-account, and the ownerless RelationV2 book. The crate then:
+The actual successor ranking path deliberately admits only degree-two and
+degree-three Product bases, with respectively at least three and four outcomes
+and at most sixteen. Degree zero and one remain available only through the
+legacy V3 verifier; they cannot enter the successor policy until an equally
+exact finite certificate is selected for those profiles. The caller supplies
+authenticated immutable Product bodies, the canonical PriceGrid, the revealed
+AdmissionNode, the EconomicDomain artifact, a sealed CandidateFeed account,
+and the ownerless RelationV2 book. The crate then:
 
 1. decodes and validates the complete sealed active-width feed;
 2. derives the canonical owner-blind RelationV2 and ScoreV2-Q policy IDs and
@@ -29,10 +33,10 @@ account, and the ownerless RelationV2 book. The crate then:
    contract's single active-width transcript owner;
 4. proves every candidate price is an exact grid member;
 5. verifies exact finite-atom coherence against the production quantized
-   B-spline evaluator and, for degrees two and three, reprojects the same feed
-   atoms into the stronger payout-denominator-scale positive-mixture
-   certificate;
-6. verifies the owner-blind coefficient-vector relation and recomputes its
+   B-spline evaluator and reprojects the same feed atoms into the required
+   payout-denominator-scale positive-mixture certificate;
+6. mints a private price authority only from that certificate, then verifies
+   the owner-blind coefficient-vector relation and recomputes its
    final candidate digest;
 7. recomputes ScoreV2-Q; and
 8. emits the canonical descending rank with the authenticated Node's
@@ -42,23 +46,33 @@ The sole payout rounding boundary is Product's immutable largest-remainder,
 lowest-outcome-index quantizer. Prices are exact integer grid members before
 entry; neither certificate reconstruction nor RelationV2 rounds.
 
-For degree-two and degree-three markets, General admission additionally
-requires the MarketBinding/Grid price scale to equal the authenticated
+General admission requires the MarketBinding/Grid price scale to equal the authenticated
 NativeClaimBasis payout denominator. The exact Genesis V2 identity supplies
 the complete coordinate-domain Terms binding, the NativeClaimBasis identity
 supplies the evaluator binding, and RelationV2's canonical candidate-price
 digest supplies the price binding. The verifier constructs the 544-byte
 certificate ephemerally from the already-retained feed atoms; there is no
-second atom account, persisted certificate, or caller-selected identity.
-Degree-zero and degree-one markets remain on their exact V3 finite/mapped
-checker because the positive-mixture V1 theorem deliberately covers only
-degrees two and three.
+second atom account, persisted certificate, or caller-selected identity. The
+builder and public sealed-feed verifier both converge on the same private
+certificate-bearing price authority before any successor RelationV2 call.
 
 The price witness is intentionally representation-nonunique. Its canonical
 body digest authenticates the retained sidecar but is absent from the
-RelationV2 candidate identity and ScoreV2-Q rank. Selection is therefore over
-the best valid submitted candidate under the frozen rank, never an assertion
-of optimal clearing.
+RelationV2 candidate identity and ScoreV2-Q rank. The successor Relation policy
+digest instead commits the exact certificate schema, production evaluator
+semantics, admitted degrees, denominator-scale rule, and proof-independent
+identity rule. Because that policy digest and the exact semantic price digest
+already enter RelationV2's candidate transcript, a caller cannot substitute a
+raw simplex while alternate valid witnesses cannot grind the rank. Selection
+is over the best valid submitted candidate under the frozen rank, never an
+assertion of optimal clearing.
+
+The isolated General SBF source now checks this exact admission before creating
+even a resumable nonempty ClearWork account, and repeats it on the empty-book
+completion path before projecting ScoreV2-Q. ClearWork binds the authenticated
+feed and successor policy thereafter. This is source composition only: the
+non-production profile remains disabled by default and no build, local-bank,
+compute, or deployment claim follows from it.
 
 The page projection validates frozen page commitments, exact market/epoch/
 order-set bindings, grid membership, widths, expiry, and RelationV2 admission.
