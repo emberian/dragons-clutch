@@ -390,7 +390,7 @@ impl AuthenticatedDirectSettlementReceiptV1 {
 
     fn validate_for_accounting(self, outcome_count: u8) -> Result<()> {
         self.validate_common(outcome_count)?;
-        if self.accounted_end_mask != 0 || self.delivered_end_mask != 0 {
+        if self.accounted_end_mask == self.expected_end_mask || self.delivered_end_mask != 0 {
             return Err(Error::Terminal);
         }
         Ok(())
@@ -405,159 +405,137 @@ impl AuthenticatedDirectSettlementReceiptV1 {
     }
 }
 
-/// Complete authenticated prestate for page-wise exact price accounting.
+/// Complete authenticated prestate for one action-25 receipt end.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct DirectReceiptAccountingInputV1 {
-    /// Immutable direct receipt before either accounting latch is consumed.
+pub struct DirectReceiptEndAccountingInputV1 {
+    /// Immutable direct receipt before this end's accounting latch is consumed.
     pub receipt: AuthenticatedDirectSettlementReceiptV1,
-    /// Frozen buyer membership.
-    pub buyer_order: AuthenticatedOrderMembershipV1,
-    /// Frozen seller membership.
-    pub seller_order: AuthenticatedOrderMembershipV1,
-    /// Buyer Position projection authenticating owner and generation.
-    pub buyer_position: AuthenticatedPositionV1,
-    /// Seller Position projection authenticating owner and generation.
-    pub seller_position: AuthenticatedPositionV1,
-    /// Buy Reservation accounting prestate.
-    pub buyer_reservation: AuthenticatedReservationV1,
-    /// Sell Reservation accounting prestate.
-    pub seller_reservation: AuthenticatedReservationV1,
-    /// Buyer owner-settlement row prestate.
-    pub buyer_owner_row: AuthenticatedOwnerSettlementAccountV1,
-    /// Seller owner-settlement row prestate.
-    pub seller_owner_row: AuthenticatedOwnerSettlementAccountV1,
+    /// Frozen membership for exactly one real end.
+    pub order: AuthenticatedOrderMembershipV1,
+    /// Position projection authenticating owner and generation.
+    pub position: AuthenticatedPositionV1,
+    /// Reservation accounting prestate for this end.
+    pub reservation: AuthenticatedReservationV1,
+    /// Owner-settlement row prestate for this end.
+    pub owner_row: AuthenticatedOwnerSettlementAccountV1,
 }
 
-/// Atomic receipt-accounting poststate; it contains no Egg or cash movement.
+/// Atomic one-end accounting poststate; it contains no Egg or cash movement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct DirectReceiptAccountingPlanV1 {
+pub struct DirectReceiptEndAccountingPlanV1 {
     /// Exact action-25 accounting replay identity.
     pub receipt_accounting_id: [u8; 32],
     /// Later delivery identity committed by the same selected receipt.
     pub delivery_transition_id: [u8; 32],
     /// Receipt account to write.
     pub receipt: [u8; 32],
-    /// Both real price-accounting latches after the atomic update.
+    /// Monotone price-accounting latch mask after this end.
     pub receipt_accounted_end_mask: u8,
     /// Delivery remains independently unconsumed.
     pub receipt_delivered_end_mask: u8,
-    /// Buy Reservation accounting poststate.
-    pub buyer_reservation: AuthenticatedReservationV1,
-    /// Sell Reservation accounting poststate.
-    pub seller_reservation: AuthenticatedReservationV1,
-    /// Buyer owner-row accounting poststate.
-    pub buyer_owner_accounting: OwnerSettlementReceiptAccountingPlanV1,
-    /// Seller owner-row accounting poststate.
-    pub seller_owner_accounting: OwnerSettlementReceiptAccountingPlanV1,
-    /// Whether the buyer order is now completely accounted.
-    pub buyer_accounting_complete: bool,
-    /// Whether the seller order is now completely accounted.
-    pub seller_accounting_complete: bool,
-    /// Reservation cash handed to the aggregate owner row exactly once.
-    pub buyer_reserved_cash_handoff_atoms: Amount,
+    /// Reservation accounting poststate.
+    pub reservation: AuthenticatedReservationV1,
+    /// Owner-row accounting poststate.
+    pub owner_accounting: OwnerSettlementReceiptAccountingPlanV1,
+    /// Whether this order is now completely accounted.
+    pub accounting_complete: bool,
+    /// Buy-reservation cash handed to the aggregate owner row exactly once.
+    pub reserved_cash_handoff_atoms: Amount,
 }
 
-/// Stage both real ends' exact price accounting without delivering Eggs.
-pub fn prepare_direct_receipt_accounting_v1(
-    input: DirectReceiptAccountingInputV1,
-) -> Result<DirectReceiptAccountingPlanV1> {
+/// Stage one real end's exact price accounting without delivering Eggs.
+pub fn prepare_direct_receipt_end_accounting_v1(
+    input: DirectReceiptEndAccountingInputV1,
+) -> Result<DirectReceiptEndAccountingPlanV1> {
+    input.order.validate()?;
+    input.position.validate()?;
+    input.reservation.validate()?;
     input
         .receipt
-        .validate_for_accounting(input.buyer_position.outcome_count)?;
-    validate_direct_input_common(
+        .validate_for_accounting(input.position.outcome_count)?;
+    validate_order_binding(
         input.receipt,
-        input.buyer_order,
-        input.seller_order,
-        input.buyer_position,
-        input.seller_position,
-        input.buyer_reservation,
-        input.seller_reservation,
+        input.order,
+        input.position,
+        input.reservation,
     )?;
     validate_owner_row_binding(
         input.receipt,
-        input.buyer_order,
-        input.buyer_position,
-        input.buyer_owner_row,
+        input.order,
+        input.position,
+        input.owner_row,
         0,
     )?;
-    validate_owner_row_binding(
-        input.receipt,
-        input.seller_order,
-        input.seller_position,
-        input.seller_owner_row,
-        0,
-    )?;
-    if input.buyer_owner_row.address == input.seller_owner_row.address
-        || input.buyer_position.reserved_cash_atoms
-            < input.buyer_owner_row.accumulator.expectation.reserved_cash_atoms
-        || input.buyer_reservation.initial_cash_atoms
-            > input.buyer_owner_row.accumulator.expectation.reserved_cash_atoms
-        || aliases_direct_accounts(
+    let side_mask = match input.order.side {
+        SettlementSideV1::Buy => 1,
+        SettlementSideV1::Sell => 2,
+    };
+    if input.receipt.accounted_end_mask & side_mask != 0
+        || input.reservation.state != ReservationStateV1::Entitled
+        || input.order.order_id
+            != match input.order.side {
+                SettlementSideV1::Buy => input.receipt.buy_order_id,
+                SettlementSideV1::Sell => input.receipt.sell_order_id,
+            }
+        || (input.order.order_kind == OrderKindV1::Single
+            && input.order.single_outcome != input.receipt.outcome)
+        || (input.order.side == SettlementSideV1::Buy
+            && (input.reservation.remaining_internal != [0; MAX_OUTCOMES]
+                || input.position.reserved_cash_atoms
+                    < input.owner_row.accumulator.expectation.reserved_cash_atoms
+                || input.reservation.initial_cash_atoms
+                    > input.owner_row.accumulator.expectation.reserved_cash_atoms))
+        || (input.order.side == SettlementSideV1::Sell
+            && input.reservation.remaining_internal[usize::from(input.receipt.outcome)]
+                < input.receipt.quantity)
+        || aliases_accounting_accounts(
             input.receipt.receipt,
-            input.buyer_position.position,
-            input.seller_position.position,
-            input.buyer_reservation.account,
-            input.seller_reservation.account,
-            input.buyer_owner_row.address,
-            input.seller_owner_row.address,
+            input.position.position,
+            input.reservation.account,
+            input.owner_row.address,
         )
     {
         return Err(Error::InvalidAccount);
     }
 
-    let (mut buyer_reservation, buyer_complete) = advance_reservation_accounting(
-        input.buyer_reservation,
+    let (mut reservation, completes) = advance_reservation_accounting(
+        input.reservation,
         input.receipt.quantity,
         input.receipt.consideration_price_units,
     )?;
-    let (seller_reservation, seller_complete) = advance_reservation_accounting(
-        input.seller_reservation,
-        input.receipt.quantity,
-        input.receipt.consideration_price_units,
-    )?;
-    let buyer_handoff = if buyer_complete {
-        let handoff = buyer_reservation.remaining_cash_atoms;
-        buyer_reservation.remaining_cash_atoms = 0;
+    let handoff = if input.order.side == SettlementSideV1::Buy && completes {
+        let handoff = reservation.remaining_cash_atoms;
+        reservation.remaining_cash_atoms = 0;
         handoff
     } else {
         0
     };
-    buyer_reservation.validate()?;
-    seller_reservation.validate()?;
+    reservation.validate()?;
 
-    let buyer_accounting = prepare_account_receipt_end_v1(
-        input.buyer_owner_row,
-        accounting_receipt_end(input.receipt, input.buyer_order, buyer_complete),
+    let owner_accounting = prepare_account_receipt_end_v1(
+        input.owner_row,
+        accounting_receipt_end(input.receipt, input.order, completes),
     )?;
-    let seller_accounting = prepare_account_receipt_end_v1(
-        input.seller_owner_row,
-        accounting_receipt_end(input.receipt, input.seller_order, seller_complete),
-    )?;
-    if buyer_accounting.settlement_transition_id != input.receipt.receipt_accounting_id
-        || seller_accounting.settlement_transition_id != input.receipt.receipt_accounting_id
-        || buyer_accounting.receipt != input.receipt.receipt
-        || seller_accounting.receipt != input.receipt.receipt
-        || buyer_accounting.receipt_consumed_end_mask != 1
-        || seller_accounting.receipt_consumed_end_mask != 2
+    if owner_accounting.receipt_accounting_id != input.receipt.receipt_accounting_id
+        || owner_accounting.receipt != input.receipt.receipt
+        || owner_accounting.receipt_accounted_end_mask
+            != input.receipt.accounted_end_mask | side_mask
     {
         return Err(Error::InvariantViolation);
     }
 
-    Ok(DirectReceiptAccountingPlanV1 {
+    Ok(DirectReceiptEndAccountingPlanV1 {
         receipt_accounting_id: input.receipt.receipt_accounting_id,
         delivery_transition_id: input.receipt.delivery_transition_id,
         receipt: input.receipt.receipt,
-        receipt_accounted_end_mask: DIRECT_RECEIPT_EXPECTED_END_MASK_V1,
+        receipt_accounted_end_mask: owner_accounting.receipt_accounted_end_mask,
         receipt_delivered_end_mask: 0,
-        buyer_reservation,
-        seller_reservation,
-        buyer_owner_accounting: buyer_accounting,
-        seller_owner_accounting: seller_accounting,
-        buyer_accounting_complete: buyer_complete,
-        seller_accounting_complete: seller_complete,
-        buyer_reserved_cash_handoff_atoms: buyer_handoff,
+        reservation,
+        owner_accounting,
+        accounting_complete: completes,
+        reserved_cash_handoff_atoms: handoff,
     })
 }
 
@@ -629,7 +607,7 @@ pub struct DirectEggSettlementPlanV1 {
 
 /// Deliver one already-accounted direct receipt atomically.
 ///
-/// Both owner rows must already carry nonzero action-38 finalization identities.
+/// Both owner rows must already be in their one-way action-38 terminal state.
 /// This transition moves only native Eggs and delivery ledgers; receipt price
 /// accounting and cash realization cannot be replayed through this API.
 pub fn prepare_direct_egg_settlement_v1(
@@ -924,7 +902,7 @@ fn accounting_receipt_end(
 ) -> AuthenticatedSettlementReceiptEndV1 {
     AuthenticatedSettlementReceiptEndV1 {
         receipt: receipt.receipt,
-        settlement_transition_id: receipt.receipt_accounting_id,
+        receipt_accounting_id: receipt.receipt_accounting_id,
         market: receipt.market,
         epoch: receipt.epoch,
         candidate: receipt.candidate,
@@ -936,7 +914,7 @@ fn accounting_receipt_end(
         completes_order,
         slice_index: receipt.slice_index,
         sequence: receipt.sequence,
-        consumed_end_mask: receipt.accounted_end_mask,
+        accounted_end_mask: receipt.accounted_end_mask,
         expected_end_mask: receipt.expected_end_mask,
     }
 }

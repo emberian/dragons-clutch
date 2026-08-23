@@ -21,14 +21,20 @@ use crate::{
 const BUY_END_MASK: u8 = 1;
 const SELL_END_MASK: u8 = 2;
 
+/// Canonical persisted FinalPot semantic body width, including its one-to-one
+/// selected virtual-inventory budget and mutable consumption cursors.
+pub const FINAL_POT_BODY_V1_BYTES: usize = 328;
+
 /// Direction of an explicitly verifier-authorized virtual receipt or budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum VirtualReceiptKindV1 {
+    /// No virtual inventory exists for this selected candidate.
+    None = 0,
     /// Cash principal becomes one complete native claim set.
-    Split = 0,
+    Split = 1,
     /// One complete native claim set becomes cash principal.
-    Merge = 1,
+    Merge = 2,
 }
 
 /// Progress state of an exact selected-candidate inventory budget.
@@ -41,18 +47,10 @@ pub enum VirtualInventoryStateV1 {
     Complete = 1,
 }
 
-/// Candidate-owned, default-deny budget for virtual complete-set inventory.
+/// Typed subprojection of the budget stored by its one-to-one FinalPot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct AuthenticatedVirtualInventoryBudgetV1 {
-    /// Canonical mutable inventory-budget account.
-    pub account: [u8; 32],
-    /// Market identity.
-    pub market: [u8; 32],
-    /// Counted Epoch identity.
-    pub epoch: [u8; 32],
-    /// Final selected candidate identity.
-    pub candidate: [u8; 32],
+pub struct VirtualInventoryBudgetV1 {
     /// Exact checked-relation witness digest authorizing this amount.
     pub relation_witness_digest: [u8; 32],
     /// Split or merge direction. The two planners never branch across it.
@@ -65,35 +63,36 @@ pub struct AuthenticatedVirtualInventoryBudgetV1 {
     pub transition_sequence: u64,
     /// Open or complete.
     pub state: VirtualInventoryStateV1,
-    /// True only after central selected-candidate authentication.
-    pub verifier_authorized: bool,
-    /// Whether the budget account is writable.
-    pub writable: bool,
 }
 
-impl AuthenticatedVirtualInventoryBudgetV1 {
+impl VirtualInventoryBudgetV1 {
     fn validate(self) -> Result<()> {
-        for key in [
-            self.account,
-            self.market,
-            self.epoch,
-            self.candidate,
-            self.relation_witness_digest,
-        ] {
-            if key == [0; 32] {
-                return Err(Error::InvalidIdentity);
+        match self.kind {
+            VirtualReceiptKindV1::None => {
+                if self.relation_witness_digest != [0; 32]
+                    || self.authorized_complete_set_atoms != 0
+                    || self.processed_complete_set_atoms != 0
+                    || self.transition_sequence != 0
+                    || self.state != VirtualInventoryStateV1::Complete
+                {
+                    return Err(Error::InvariantViolation);
+                }
             }
-        }
-        if self.authorized_complete_set_atoms == 0
-            || self.processed_complete_set_atoms > self.authorized_complete_set_atoms
-            || !self.verifier_authorized
-            || !self.writable
-        {
-            return Err(Error::AuthorityUnavailable);
-        }
-        let complete = self.processed_complete_set_atoms == self.authorized_complete_set_atoms;
-        if complete != (self.state == VirtualInventoryStateV1::Complete) {
-            return Err(Error::InvariantViolation);
+            VirtualReceiptKindV1::Split | VirtualReceiptKindV1::Merge => {
+                if self.relation_witness_digest == [0; 32]
+                    || self.authorized_complete_set_atoms == 0
+                    || self.processed_complete_set_atoms > self.authorized_complete_set_atoms
+                    || (self.processed_complete_set_atoms == 0)
+                        != (self.transition_sequence == 0)
+                {
+                    return Err(Error::AuthorityUnavailable);
+                }
+                let complete =
+                    self.processed_complete_set_atoms == self.authorized_complete_set_atoms;
+                if complete != (self.state == VirtualInventoryStateV1::Complete) {
+                    return Err(Error::InvariantViolation);
+                }
+            }
         }
         Ok(())
     }
@@ -113,6 +112,8 @@ pub struct AuthenticatedFinalPotV1 {
     pub candidate: [u8; 32],
     /// Digest of the complete owner/order set whose virtual ends this pot owns.
     pub owner_order_set_digest: [u8; 32],
+    /// Checked-relation witness authorizing the embedded virtual budget.
+    pub relation_witness_digest: [u8; 32],
     /// Cash principal attributed to virtual inventory.
     ///
     /// This is neither a fee nor a donation. Physical custody remains in the
@@ -120,12 +121,24 @@ pub struct AuthenticatedFinalPotV1 {
     pub cash_principal_atoms: Amount,
     /// Native internal claims owned by the pot.
     pub internal_claims: [Amount; MAX_OUTCOMES],
+    /// Split or merge direction fixed by selection.
+    pub inventory_kind: VirtualReceiptKindV1,
+    /// Exact complete-set atoms admitted by the selected candidate.
+    pub authorized_complete_set_atoms: Amount,
+    /// Complete-set atoms already processed.
+    pub processed_complete_set_atoms: Amount,
+    /// Monotone inventory mutation sequence.
+    pub inventory_transition_sequence: u64,
+    /// Open or complete inventory budget state.
+    pub inventory_state: VirtualInventoryStateV1,
     /// Active outcome width.
     pub outcome_count: u8,
     /// Zero while inventory and receipts remain open.
     pub phase: u8,
     /// Whether the account meta is writable.
     pub writable: bool,
+    /// True only after central selected-candidate authentication of the budget.
+    pub selected_budget_authenticated: bool,
 }
 
 impl AuthenticatedFinalPotV1 {
@@ -145,11 +158,137 @@ impl AuthenticatedFinalPotV1 {
             || usize::from(self.outcome_count) > MAX_OUTCOMES
             || self.phase != 0
             || !self.writable
+            || !self.selected_budget_authenticated
             || !zero_padded(&self.internal_claims, self.outcome_count)
         {
             return Err(Error::InvalidAccount);
         }
+        self.inventory_budget().validate()?;
         Ok(())
+    }
+
+    /// Return the selected virtual budget stored by this FinalPot.
+    pub const fn inventory_budget(self) -> VirtualInventoryBudgetV1 {
+        VirtualInventoryBudgetV1 {
+            relation_witness_digest: self.relation_witness_digest,
+            kind: self.inventory_kind,
+            authorized_complete_set_atoms: self.authorized_complete_set_atoms,
+            processed_complete_set_atoms: self.processed_complete_set_atoms,
+            transition_sequence: self.inventory_transition_sequence,
+            state: self.inventory_state,
+        }
+    }
+
+    /// Encode persisted semantics, excluding account address and writability.
+    pub fn encode_body(self) -> Result<[u8; FINAL_POT_BODY_V1_BYTES]> {
+        self.validate()?;
+        let mut output = [0_u8; FINAL_POT_BODY_V1_BYTES];
+        let mut cursor = 0_usize;
+        for key in [
+            self.market,
+            self.epoch,
+            self.candidate,
+            self.owner_order_set_digest,
+            self.relation_witness_digest,
+        ] {
+            put_body(&mut output, &mut cursor, &key)?;
+        }
+        put_body(
+            &mut output,
+            &mut cursor,
+            &self.cash_principal_atoms.to_le_bytes(),
+        )?;
+        let mut at = 0_usize;
+        while at < MAX_OUTCOMES {
+            put_body(
+                &mut output,
+                &mut cursor,
+                &self.internal_claims[at].to_le_bytes(),
+            )?;
+            at += 1;
+        }
+        put_body(
+            &mut output,
+            &mut cursor,
+            &self.authorized_complete_set_atoms.to_le_bytes(),
+        )?;
+        put_body(
+            &mut output,
+            &mut cursor,
+            &self.processed_complete_set_atoms.to_le_bytes(),
+        )?;
+        put_body(
+            &mut output,
+            &mut cursor,
+            &self.inventory_transition_sequence.to_le_bytes(),
+        )?;
+        put_body(&mut output, &mut cursor, &[self.outcome_count])?;
+        put_body(&mut output, &mut cursor, &[self.phase])?;
+        put_body(&mut output, &mut cursor, &[self.inventory_kind as u8])?;
+        put_body(&mut output, &mut cursor, &[self.inventory_state as u8])?;
+        put_body(&mut output, &mut cursor, &[0; 4])?;
+        if cursor != FINAL_POT_BODY_V1_BYTES {
+            return Err(Error::InvariantViolation);
+        }
+        Ok(output)
+    }
+
+    /// Decode hostile semantic bytes with separately authenticated adapter facts.
+    pub fn decode_body(
+        input: &[u8],
+        account: [u8; 32],
+        selected_budget_authenticated: bool,
+        writable: bool,
+    ) -> Result<Self> {
+        if input.len() != FINAL_POT_BODY_V1_BYTES {
+            return Err(Error::InvalidAccount);
+        }
+        let mut cursor = 0_usize;
+        let market = read_body_key(input, &mut cursor)?;
+        let epoch = read_body_key(input, &mut cursor)?;
+        let candidate = read_body_key(input, &mut cursor)?;
+        let owner_order_set_digest = read_body_key(input, &mut cursor)?;
+        let relation_witness_digest = read_body_key(input, &mut cursor)?;
+        let cash_principal_atoms = read_body_u64(input, &mut cursor)?;
+        let mut internal_claims = [0_u64; MAX_OUTCOMES];
+        let mut at = 0_usize;
+        while at < MAX_OUTCOMES {
+            internal_claims[at] = read_body_u64(input, &mut cursor)?;
+            at += 1;
+        }
+        let value = Self {
+            account,
+            market,
+            epoch,
+            candidate,
+            owner_order_set_digest,
+            relation_witness_digest,
+            cash_principal_atoms,
+            internal_claims,
+            authorized_complete_set_atoms: read_body_u64(input, &mut cursor)?,
+            processed_complete_set_atoms: read_body_u64(input, &mut cursor)?,
+            inventory_transition_sequence: read_body_u64(input, &mut cursor)?,
+            outcome_count: read_body_u8(input, &mut cursor)?,
+            phase: read_body_u8(input, &mut cursor)?,
+            inventory_kind: match read_body_u8(input, &mut cursor)? {
+                0 => VirtualReceiptKindV1::None,
+                1 => VirtualReceiptKindV1::Split,
+                2 => VirtualReceiptKindV1::Merge,
+                _ => return Err(Error::InvalidAccount),
+            },
+            inventory_state: match read_body_u8(input, &mut cursor)? {
+                0 => VirtualInventoryStateV1::Open,
+                1 => VirtualInventoryStateV1::Complete,
+                _ => return Err(Error::InvalidAccount),
+            },
+            writable,
+            selected_budget_authenticated,
+        };
+        if take_body(input, &mut cursor, 4)? != &[0; 4] || cursor != input.len() {
+            return Err(Error::InvalidAccount);
+        }
+        value.validate()?;
+        Ok(value)
     }
 }
 
@@ -208,14 +347,12 @@ impl AuthenticatedMarketClaimLedgerV1 {
 #[repr(C)]
 pub struct VirtualInventoryPlanV1 {
     /// Opaque complete transition identity bound by the SBF adapter.
-    pub settlement_transition_id: [u8; 32],
+    pub delivery_transition_id: [u8; 32],
     /// Direction whose typed planner produced this value.
     pub kind: VirtualReceiptKindV1,
     /// Exact complete-set quantity processed.
     pub quantity: Amount,
-    /// Candidate budget poststate.
-    pub budget: AuthenticatedVirtualInventoryBudgetV1,
-    /// FinalPot cash/internal-claim poststate.
+    /// FinalPot cash/internal-claim and embedded-budget poststate.
     pub final_pot: AuthenticatedFinalPotV1,
     /// Hoard and aggregate-supply poststate.
     pub market_ledger: AuthenticatedMarketClaimLedgerV1,
@@ -223,15 +360,13 @@ pub struct VirtualInventoryPlanV1 {
 
 /// Convert explicit FinalPot cash principal into complete-set inventory.
 pub(crate) fn prepare_virtual_split_inventory_v1(
-    settlement_transition_id: [u8; 32],
-    budget: AuthenticatedVirtualInventoryBudgetV1,
+    delivery_transition_id: [u8; 32],
     final_pot: AuthenticatedFinalPotV1,
     market_ledger: AuthenticatedMarketClaimLedgerV1,
     quantity: Amount,
 ) -> Result<VirtualInventoryPlanV1> {
     prepare_inventory(
-        settlement_transition_id,
-        budget,
+        delivery_transition_id,
         final_pot,
         market_ledger,
         quantity,
@@ -241,15 +376,13 @@ pub(crate) fn prepare_virtual_split_inventory_v1(
 
 /// Convert complete-set FinalPot inventory back into cash principal.
 pub(crate) fn prepare_virtual_merge_inventory_v1(
-    settlement_transition_id: [u8; 32],
-    budget: AuthenticatedVirtualInventoryBudgetV1,
+    delivery_transition_id: [u8; 32],
     final_pot: AuthenticatedFinalPotV1,
     market_ledger: AuthenticatedMarketClaimLedgerV1,
     quantity: Amount,
 ) -> Result<VirtualInventoryPlanV1> {
     prepare_inventory(
-        settlement_transition_id,
-        budget,
+        delivery_transition_id,
         final_pot,
         market_ledger,
         quantity,
@@ -258,28 +391,20 @@ pub(crate) fn prepare_virtual_merge_inventory_v1(
 }
 
 fn prepare_inventory(
-    settlement_transition_id: [u8; 32],
-    budget: AuthenticatedVirtualInventoryBudgetV1,
+    delivery_transition_id: [u8; 32],
     final_pot: AuthenticatedFinalPotV1,
     market_ledger: AuthenticatedMarketClaimLedgerV1,
     quantity: Amount,
     expected_kind: VirtualReceiptKindV1,
 ) -> Result<VirtualInventoryPlanV1> {
-    budget.validate()?;
     final_pot.validate()?;
     market_ledger.validate()?;
-    if settlement_transition_id == [0; 32]
+    if delivery_transition_id == [0; 32]
         || quantity == 0
-        || budget.kind != expected_kind
-        || budget.state != VirtualInventoryStateV1::Open
-        || budget.market != final_pot.market
-        || budget.epoch != final_pot.epoch
-        || budget.candidate != final_pot.candidate
+        || final_pot.inventory_kind != expected_kind
+        || final_pot.inventory_state != VirtualInventoryStateV1::Open
         || market_ledger.market != final_pot.market
         || market_ledger.outcome_count != final_pot.outcome_count
-        || budget.account == final_pot.account
-        || budget.account == market_ledger.ledger
-        || budget.account == market_ledger.hoard
         || final_pot.account == market_ledger.ledger
         || final_pot.account == market_ledger.hoard
     {
@@ -292,24 +417,24 @@ fn prepare_inventory(
         }
         at += 1;
     }
-    let mut next_budget = budget;
-    next_budget.processed_complete_set_atoms = next_budget
+    let mut next_pot = final_pot;
+    next_pot.processed_complete_set_atoms = next_pot
         .processed_complete_set_atoms
         .checked_add(quantity)
         .ok_or(Error::ArithmeticOverflow)?;
-    if next_budget.processed_complete_set_atoms > next_budget.authorized_complete_set_atoms {
+    if next_pot.processed_complete_set_atoms > next_pot.authorized_complete_set_atoms {
         return Err(Error::TooManyFragments);
     }
-    next_budget.transition_sequence = next_budget
-        .transition_sequence
+    next_pot.inventory_transition_sequence = next_pot
+        .inventory_transition_sequence
         .checked_add(1)
         .ok_or(Error::ArithmeticOverflow)?;
-    if next_budget.processed_complete_set_atoms == next_budget.authorized_complete_set_atoms {
-        next_budget.state = VirtualInventoryStateV1::Complete;
+    if next_pot.processed_complete_set_atoms == next_pot.authorized_complete_set_atoms {
+        next_pot.inventory_state = VirtualInventoryStateV1::Complete;
     }
-    let mut next_pot = final_pot;
     let mut next_ledger = market_ledger;
     match expected_kind {
+        VirtualReceiptKindV1::None => return Err(Error::AuthorityUnavailable),
         VirtualReceiptKindV1::Split => {
             next_pot.cash_principal_atoms = next_pot
                 .cash_principal_atoms
@@ -357,14 +482,12 @@ fn prepare_inventory(
             }
         }
     }
-    next_budget.validate()?;
     next_pot.validate()?;
     next_ledger.validate()?;
     Ok(VirtualInventoryPlanV1 {
-        settlement_transition_id,
+        delivery_transition_id,
         kind: expected_kind,
         quantity,
-        budget: next_budget,
         final_pot: next_pot,
         market_ledger: next_ledger,
     })
@@ -426,7 +549,8 @@ impl AuthenticatedVirtualReceiptAuthorityV1 {
                 return Err(Error::InvalidIdentity);
             }
         }
-        if self.receipt_accounting_id == self.delivery_transition_id
+        if self.kind == VirtualReceiptKindV1::None
+            || self.receipt_accounting_id == self.delivery_transition_id
             || self.quantity == 0
             || self.consideration_price_units == 0
             || !self.verifier_authorized
@@ -699,8 +823,6 @@ pub struct VirtualMergeReceiptPlanV1 {
 pub struct VirtualSplitCompositeInputV1 {
     /// One already-accounted and funded buyer delivery prestate.
     pub receipt: VirtualSplitReceiptInputV1,
-    /// Exact selected virtual-split inventory budget.
-    pub inventory_budget: AuthenticatedVirtualInventoryBudgetV1,
     /// Hoard and aggregate claim-supply prestate.
     pub market_ledger: AuthenticatedMarketClaimLedgerV1,
     /// Fully owner-finalized pot holding the remaining split principal.
@@ -715,8 +837,6 @@ pub struct VirtualSplitCompositePlanV1 {
     pub delivery_transition_id: [u8; 32],
     /// Real buyer Position/Reservation/receipt and final FinalPot poststate.
     pub receipt: VirtualSplitReceiptPlanV1,
-    /// Inventory budget poststate.
-    pub inventory_budget: AuthenticatedVirtualInventoryBudgetV1,
     /// Hoard and aggregate supply poststate.
     pub market_ledger: AuthenticatedMarketClaimLedgerV1,
     /// Owner cash-pot poststate after exact principal transfer.
@@ -905,22 +1025,19 @@ pub fn prepare_virtual_merge_receipt_accounting_v1(
 pub fn prepare_virtual_split_composite_v1(
     input: VirtualSplitCompositeInputV1,
 ) -> Result<VirtualSplitCompositePlanV1> {
-    input.inventory_budget.validate()?;
     input.market_ledger.validate()?;
     input.cash_pot.validate()?;
     let authority = input.receipt.authority;
     let mut funded_final_pot = input.receipt.final_pot;
+    funded_final_pot.validate()?;
     authority.validate()?;
     let transition = authority.delivery_transition_id;
     if authority.kind != VirtualReceiptKindV1::Split
-        || input.inventory_budget.kind != VirtualReceiptKindV1::Split
-        || input.inventory_budget.relation_witness_digest != authority.relation_witness_digest
-        || input.inventory_budget.market != authority.market
-        || input.inventory_budget.epoch != authority.epoch
-        || input.inventory_budget.candidate != authority.candidate
+        || funded_final_pot.inventory_kind != VirtualReceiptKindV1::Split
+        || funded_final_pot.relation_witness_digest != authority.relation_witness_digest
         || input.cash_pot.expectation.virtual_cash_direction != VirtualCashDirectionV1::Split
         || input.cash_pot.expectation.virtual_cash_atoms
-            != input.inventory_budget.authorized_complete_set_atoms
+            != funded_final_pot.authorized_complete_set_atoms
         || input.cash_pot.expectation.market != authority.market
         || input.cash_pot.expectation.epoch != authority.epoch
         || input.cash_pot.expectation.candidate != authority.candidate
@@ -931,12 +1048,13 @@ pub fn prepare_virtual_split_composite_v1(
     {
         return Err(Error::AuthorityUnavailable);
     }
-    let remaining = input
-        .inventory_budget
+    let remaining = funded_final_pot
         .authorized_complete_set_atoms
-        .checked_sub(input.inventory_budget.processed_complete_set_atoms)
+        .checked_sub(funded_final_pot.processed_complete_set_atoms)
         .ok_or(Error::InvariantViolation)?;
-    let expected_cash_state = if input.inventory_budget.state == VirtualInventoryStateV1::Complete {
+    let expected_cash_state = if funded_final_pot.inventory_state
+        == VirtualInventoryStateV1::Complete
+    {
         2
     } else {
         1
@@ -971,12 +1089,8 @@ pub fn prepare_virtual_split_composite_v1(
     }
 
     let mut cash_pot = input.cash_pot;
-    let (inventory_budget, final_pot, market_ledger) = if deficit == 0 {
-        (
-            input.inventory_budget,
-            funded_final_pot,
-            input.market_ledger,
-        )
+    let (final_pot, market_ledger) = if deficit == 0 {
+        (funded_final_pot, input.market_ledger)
     } else {
         cash_pot.available_consideration_atoms = cash_pot
             .available_consideration_atoms
@@ -988,14 +1102,13 @@ pub fn prepare_virtual_split_composite_v1(
             .ok_or(Error::ArithmeticOverflow)?;
         let inventory = prepare_virtual_split_inventory_v1(
             transition,
-            input.inventory_budget,
             funded_final_pot,
             input.market_ledger,
             deficit,
         )?;
-        (inventory.budget, inventory.final_pot, inventory.market_ledger)
+        (inventory.final_pot, inventory.market_ledger)
     };
-    if inventory_budget.state == VirtualInventoryStateV1::Complete {
+    if final_pot.inventory_state == VirtualInventoryStateV1::Complete {
         cash_pot.state = 2;
     }
     cash_pot.validate()?;
@@ -1005,7 +1118,6 @@ pub fn prepare_virtual_split_composite_v1(
     Ok(VirtualSplitCompositePlanV1 {
         delivery_transition_id: transition,
         receipt,
-        inventory_budget,
         market_ledger,
         cash_pot,
         newly_split_complete_set_atoms: deficit,
@@ -1027,8 +1139,6 @@ pub enum VirtualMergeCashPotPostV1 {
 pub struct VirtualMergeCompositeInputV1 {
     /// One real seller end and its complete settlement prestate.
     pub receipt: VirtualMergeReceiptInputV1,
-    /// Exact selected virtual-merge inventory budget.
-    pub inventory_budget: AuthenticatedVirtualInventoryBudgetV1,
     /// Hoard and aggregate claim-supply prestate.
     pub market_ledger: AuthenticatedMarketClaimLedgerV1,
     /// Exact owner-cash expectation funded only when the merge completes.
@@ -1043,8 +1153,6 @@ pub struct VirtualMergeCompositePlanV1 {
     pub delivery_transition_id: [u8; 32],
     /// Real seller Position/Reservation/row/receipt and final FinalPot poststate.
     pub receipt: VirtualMergeReceiptPlanV1,
-    /// Inventory budget poststate.
-    pub inventory_budget: AuthenticatedVirtualInventoryBudgetV1,
     /// Hoard and aggregate supply poststate.
     pub market_ledger: AuthenticatedMarketClaimLedgerV1,
     /// Complete sets burned after accepting this real seller end.
@@ -1065,19 +1173,16 @@ pub struct VirtualMergeCompositePlanV1 {
 pub fn prepare_virtual_merge_composite_v1(
     input: VirtualMergeCompositeInputV1,
 ) -> Result<VirtualMergeCompositePlanV1> {
-    input.inventory_budget.validate()?;
     input.market_ledger.validate()?;
     input.cash_expectation.validate()?;
     let authority = input.receipt.authority;
     let pot_before = input.receipt.final_pot;
+    pot_before.validate()?;
     let transition = authority.delivery_transition_id;
     if authority.kind != VirtualReceiptKindV1::Merge
-        || input.inventory_budget.kind != VirtualReceiptKindV1::Merge
-        || input.inventory_budget.relation_witness_digest != authority.relation_witness_digest
-        || input.inventory_budget.market != authority.market
-        || input.inventory_budget.epoch != authority.epoch
-        || input.inventory_budget.candidate != authority.candidate
-        || input.inventory_budget.authorized_complete_set_atoms
+        || pot_before.inventory_kind != VirtualReceiptKindV1::Merge
+        || pot_before.relation_witness_digest != authority.relation_witness_digest
+        || pot_before.authorized_complete_set_atoms
             != input.cash_expectation.virtual_cash_atoms
         || input.cash_expectation.virtual_cash_direction != VirtualCashDirectionV1::Merge
         || input.cash_expectation.market != authority.market
@@ -1087,16 +1192,15 @@ pub fn prepare_virtual_merge_composite_v1(
         || input.market_ledger.market != authority.market
         || input.market_ledger.outcome_count != pot_before.outcome_count
         || pot_before.cash_principal_atoms
-            != input.inventory_budget.processed_complete_set_atoms
+            != pot_before.processed_complete_set_atoms
     {
         return Err(Error::AuthorityUnavailable);
     }
 
     let mut receipt = prepare_virtual_merge_receipt_v1(input.receipt)?;
-    let remaining = input
-        .inventory_budget
+    let remaining = pot_before
         .authorized_complete_set_atoms
-        .checked_sub(input.inventory_budget.processed_complete_set_atoms)
+        .checked_sub(pot_before.processed_complete_set_atoms)
         .ok_or(Error::InvariantViolation)?;
     let complete_inventory = minimum_internal(
         &receipt.final_pot.internal_claims,
@@ -1105,30 +1209,25 @@ pub fn prepare_virtual_merge_composite_v1(
     if complete_inventory > remaining {
         return Err(Error::InvariantViolation);
     }
-    let (next_budget, next_pot, next_ledger, newly_merged) = if complete_inventory == 0 {
-        (
-            input.inventory_budget,
-            receipt.final_pot,
-            input.market_ledger,
-            0,
-        )
+    let (next_pot, next_ledger, newly_merged) = if complete_inventory == 0 {
+        (receipt.final_pot, input.market_ledger, 0)
     } else {
         let inventory = prepare_virtual_merge_inventory_v1(
             transition,
-            input.inventory_budget,
             receipt.final_pot,
             input.market_ledger,
             complete_inventory,
         )?;
         (
-            inventory.budget,
             inventory.final_pot,
             inventory.market_ledger,
             inventory.quantity,
         )
     };
-    let (final_pot, cash_pot) = if next_budget.state == VirtualInventoryStateV1::Complete {
-        if next_pot.cash_principal_atoms != next_budget.authorized_complete_set_atoms
+    let (final_pot, cash_pot) = if next_pot.inventory_state
+        == VirtualInventoryStateV1::Complete
+    {
+        if next_pot.cash_principal_atoms != next_pot.authorized_complete_set_atoms
             || !active_internal_is_zero(&next_pot.internal_claims, next_pot.outcome_count)
         {
             return Err(Error::InvariantViolation);
@@ -1152,7 +1251,6 @@ pub fn prepare_virtual_merge_composite_v1(
     Ok(VirtualMergeCompositePlanV1 {
         delivery_transition_id: transition,
         receipt,
-        inventory_budget: next_budget,
         market_ledger: next_ledger,
         newly_merged_complete_set_atoms: newly_merged,
         cash_pot,
@@ -1603,7 +1701,7 @@ fn virtual_receipt_end(
 ) -> AuthenticatedSettlementReceiptEndV1 {
     AuthenticatedSettlementReceiptEndV1 {
         receipt,
-        settlement_transition_id: transition,
+        receipt_accounting_id: transition,
         market,
         epoch,
         candidate,
@@ -1615,7 +1713,7 @@ fn virtual_receipt_end(
         completes_order: completes,
         slice_index,
         sequence,
-        consumed_end_mask: 0,
+        accounted_end_mask: 0,
         expected_end_mask,
     }
 }
@@ -1657,6 +1755,45 @@ fn active_internal_is_zero(values: &[Amount; MAX_OUTCOMES], outcome_count: u8) -
         at += 1;
     }
     true
+}
+
+fn put_body<const N: usize>(
+    output: &mut [u8; N],
+    cursor: &mut usize,
+    bytes: &[u8],
+) -> Result<()> {
+    let end = cursor
+        .checked_add(bytes.len())
+        .ok_or(Error::ArithmeticOverflow)?;
+    output
+        .get_mut(*cursor..end)
+        .ok_or(Error::InvalidAccount)?
+        .copy_from_slice(bytes);
+    *cursor = end;
+    Ok(())
+}
+
+fn take_body<'a>(input: &'a [u8], cursor: &mut usize, width: usize) -> Result<&'a [u8]> {
+    let end = cursor.checked_add(width).ok_or(Error::ArithmeticOverflow)?;
+    let value = input.get(*cursor..end).ok_or(Error::InvalidAccount)?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_body_key(input: &[u8], cursor: &mut usize) -> Result<[u8; 32]> {
+    let mut value = [0_u8; 32];
+    value.copy_from_slice(take_body(input, cursor, 32)?);
+    Ok(value)
+}
+
+fn read_body_u8(input: &[u8], cursor: &mut usize) -> Result<u8> {
+    Ok(take_body(input, cursor, 1)?[0])
+}
+
+fn read_body_u64(input: &[u8], cursor: &mut usize) -> Result<u64> {
+    let mut value = [0_u8; 8];
+    value.copy_from_slice(take_body(input, cursor, 8)?);
+    Ok(u64::from_le_bytes(value))
 }
 
 fn zero_padded(values: &[Amount; MAX_OUTCOMES], outcome_count: u8) -> bool {
