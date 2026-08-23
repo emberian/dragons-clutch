@@ -2,9 +2,11 @@
 
 Status: **EXACT RESEARCH MODEL / NO LIVE AUTHORITY**.
 
-This crate is a dependency-free, safe Rust, `no_std`, `no_alloc`, fixed-capacity
-model of a fully capitalized cost-function facility over one Dragon's Clutch
-native Egg basis. It changes no kernel, account layout, SBF route, mint
+This crate is a safe Rust, `no_std`, `no_alloc`, fixed-capacity model of a fully
+capitalized cost-function facility over one Dragon's Clutch native Egg basis.
+Its sole first-party dependency is the Solana-free `clutch-batch` relation: that
+shared type boundary prevents the facility from creating a second per-order
+dealer-allocation truth. It changes no kernel, account layout, SBF route, mint
 authority, call-auction relation, or release claim.
 
 It contains two deliberately separate policy models:
@@ -140,7 +142,10 @@ loss subsidy and bid financing, exhaustive signed endpoints and payouts,
 state-contingent per-LP principal floors, funding cancellation/refunds,
 fixed-capacity positions, exit-queue shutdown, mixed-sign unwind, terminal
 Hamilton allocation, claim-order independence, cached-custody mutants, and
-rollback.
+rollback. It also obtains canonical per-order allocations only from a checked
+RelationV2 dealer verdict, independently recomputes the aggregate curve
+receipt, and refuses stale, misdirected, projection-mismatched, and
+relation-valid-but-curve-false quotes without mutation.
 
 The checked arguments are in [`PROOF_ARGUMENTS.md`](PROOF_ARGUMENTS.md). The
 unverified runtime boundary is in [`MODEL_BOUNDARY.md`](MODEL_BOUNDARY.md). The

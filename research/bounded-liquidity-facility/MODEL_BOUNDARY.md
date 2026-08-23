@@ -66,15 +66,19 @@ capacity. The existing auction's other cash and fee conservation equations
 must include the facility receipt exactly. The facility does not certify the
 candidate as best, globally optimal, or even included.
 
-For the signed dealer, one candidate also supplies each user order's exact
-dealer-leg cash allocation in strictly increasing immutable order identity.
-The pure model checks a frozen dealer-leg envelope excluding fees. The live
-verifier must derive and authenticate that envelope from every all-in order
-limit after exact fees or rebates, require the net signed sum against the
-facility to equal the one aggregate endpoint receipt, and close the existing
-total cash/fee equations. The endpoint alone does not determine a unique
-per-user split. A net-zero same-outcome flow must be removed before the
-facility leg rather than used to manufacture volume.
+For the signed dealer, `clutch_batch::dealer_leg_v2` is the sole semantic owner
+of per-order dealer fills, residual all-in envelopes, upstream-quoted external
+fee amounts, and the canonical `MinimumGrossHamiltonV1` cash allocation. It
+does not prove fee funding, custody, recipients, or transfer conservation. The
+facility accepts only that relation's authenticated aggregate projection,
+binds it to its exact semantic facility, policy, and pre-generation, and
+independently recomputes the curve receipt. It deliberately does not reinterpret
+the verdict's per-user rows.
+The live verifier must authenticate the price and dealer quote inputs, call the
+dealer relation, reconcile its aggregate receipt with the facility, and close
+all user, dealer, and fee transfers in one atomic transition. A public pure
+verdict value is not authentication. A net-zero same-outcome flow must be
+removed before the facility leg rather than used to manufacture volume.
 
 ## Promotion gates
 
@@ -94,11 +98,11 @@ Before a live route exists, all of the following must close:
    supply, SupplyLedger, kernel totals, Hoard locked backing, actual Hoard token
    balance, and any Position conservation identity, including unsolicited
    surplus handling.
-5. **Auction integration.** Version the nonlinear facility leg in the candidate
-   relation, define its exact ordering and duplicate rules, aggregate it once
-   per facility, and prove cash allocation and rollback with portfolios,
-   partial fills, fees, and virtual legs. Until then this facility has no live
-   executable quote.
+5. **Auction integration.** Promote the versioned nonlinear dealer join and its
+   canonical allocation into the candidate lifecycle, authenticate every
+   quote precondition, aggregate it once per facility, and prove physical cash
+   allocation and rollback with portfolios, partial fills, fees, and virtual
+   legs. Until then this facility has no live executable quote.
 6. **Replay and authority.** Consume the exact pre-generation. Authenticate the
    sponsor only for early halt and withdrawal; close and resolution progress
    must not depend on sponsor availability.
@@ -140,9 +144,9 @@ The signed dealer adds these gates:
     immutable worst-case expense compartment. Neither `K` nor future revenue
     silently pays them.
 16. **Signed receipt integration.** Aggregate native flow once per dealer and
-    generation; check physical vault conservation, derive dealer-leg envelopes
-    from authenticated all-in limits and fees, and atomically apply the receipt
-    with all user legs.
+    generation; authenticate the RelationV2 dealer projection, independently
+    reconcile its aggregate receipt, check physical vault conservation, and
+    atomically apply its canonical user allocations, fees, and facility leg.
 17. **Terminal retirement.** Join every LP claim, Egg vault, cash vault,
     generation, and immutable terminal allocation into the counted-retirement
     authority before reclaiming dealer state or rent.

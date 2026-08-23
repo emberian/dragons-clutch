@@ -1,8 +1,19 @@
+use clutch_batch::dealer_leg_v2::{
+    dealer_quote_semantics_digest_v2, dealer_upstream_economic_candidate_digest_v2,
+    verify_economic_candidate_with_dealer_v2, AggregateDealerTradeV2, DealerCashPolicyV2,
+    DealerFacilityBindingV2, DealerFillRowV2, DealerLegCandidateV2, DealerLegVerdictV2,
+    DealerQuotePreconditionV2, DealerQuoteRowV2, DealerReceiptV2, DEALER_LEG_VERSION_V2,
+    EMPTY_DEALER_FILL_ROW_V2, EMPTY_DEALER_QUOTE_ROW_V2, MAX_DEALER_ROWS_V2,
+};
+use clutch_batch::relation_v2::{
+    price_semantics_digest_v2, EconomicBookV2, EconomicCandidateV2, EconomicDomainV2,
+    EconomicOrderV2, PricePreconditionV2, ECONOMIC_RELATION_VERSION_V2,
+};
+use clutch_batch::{PartialPolicy, Side};
 use clutch_bounded_liquidity_facility::signed_dealer::{
-    signed_quadratic_price_vector, signed_rounded_quadratic_potential, DealerError,
-    DealerUserAllocationV1, LpPositionV1, SignedDealerPhase, SignedDealerPolicyV1,
-    SignedDealerStateV1, SignedDealerTradeV1, MAX_DEALER_ALLOCATIONS, MAX_LIVE_POOL_ATOMS, MAX_LPS,
-    MAX_TERMINAL_POOL_ATOMS,
+    signed_quadratic_price_vector, signed_rounded_quadratic_potential, DealerError, LpPositionV1,
+    SignedDealerPhase, SignedDealerPolicyV1, SignedDealerStateV1, SignedDealerTradeV1,
+    MAX_LIVE_POOL_ATOMS, MAX_LPS, MAX_TERMINAL_POOL_ATOMS,
 };
 use clutch_bounded_liquidity_facility::{MAX_ATOMS, MAX_OUTCOMES};
 
@@ -80,6 +91,118 @@ fn funded_state() -> SignedDealerStateV1 {
     state.contribute(2, id(9), 2).unwrap();
     state.activate(5).unwrap();
     state
+}
+
+#[derive(Clone, Copy)]
+struct DealerJoinFixture {
+    domain: EconomicDomainV2,
+    book: EconomicBookV2,
+    price: PricePreconditionV2,
+    candidate: EconomicCandidateV2,
+    dealer: DealerLegCandidateV2,
+    quote: DealerQuotePreconditionV2,
+}
+
+fn dealer_join_fixture(state: &SignedDealerStateV1) -> DealerJoinFixture {
+    let domain = EconomicDomainV2 {
+        relation_version: ECONOMIC_RELATION_VERSION_V2,
+        market_semantics_digest: state.policy.market,
+        epoch_semantics_digest: state.policy.instance_id,
+        relation_policy_digest: id(30),
+        price_policy_digest: id(31),
+        epoch_index: 1,
+        outcome_count: state.policy.outcome_count,
+        price_scale: 3,
+    };
+    let prices = uvec(&[1, 1, 1]);
+    let price = PricePreconditionV2 {
+        policy_digest: domain.price_policy_digest,
+        semantic_price_digest: price_semantics_digest_v2(&domain, &prices).unwrap(),
+        prices,
+    };
+    let mut book = EconomicBookV2::empty();
+    book.orders[0] = EconomicOrderV2 {
+        order_id: id(20),
+        side: Side::Buy,
+        coefficients: uvec(&[1, 0, 0]),
+        quantity: 6,
+        minimum_fill: 0,
+        partial_policy: PartialPolicy::Allow,
+        expiry_epoch: domain.epoch_index,
+        limit_value_price_units_per_unit: 1,
+    };
+    book.len = 1;
+    let mut candidate = EconomicCandidateV2::EMPTY;
+    candidate.fills[0] = 6;
+    let mut dealer_rows = [EMPTY_DEALER_FILL_ROW_V2; MAX_DEALER_ROWS_V2];
+    dealer_rows[0] = DealerFillRowV2 {
+        order_id: id(20),
+        dealer_fill_units: 6,
+    };
+    let dealer = DealerLegCandidateV2 {
+        rows: dealer_rows,
+        row_count: 1,
+    };
+    let mut quote_rows = [EMPTY_DEALER_QUOTE_ROW_V2; MAX_DEALER_ROWS_V2];
+    quote_rows[0] = DealerQuoteRowV2 {
+        order_id: id(20),
+        maximum_cash_in_atoms: 3,
+        minimum_cash_out_atoms: 0,
+        external_fee_atoms: 1,
+    };
+    let expected = state.quote_trade(10, trade(&[6, 0, 0], &[])).unwrap();
+    let mut quote = DealerQuotePreconditionV2 {
+        upstream_economic_candidate_digest: dealer_upstream_economic_candidate_digest_v2(
+            &domain, &book, &price, &candidate,
+        )
+        .unwrap(),
+        facility: DealerFacilityBindingV2 {
+            version: DEALER_LEG_VERSION_V2,
+            facility_semantics_digest: state.facility_id,
+            policy_semantics_digest: state.policy.policy_id,
+            pre_generation: state.generation,
+        },
+        cash_policy: DealerCashPolicyV2::MinimumGrossHamiltonV1,
+        fee_policy_semantics_digest: id(32),
+        trade: AggregateDealerTradeV2 {
+            sell_to_users: expected.trade.sell_to_users,
+            buy_from_users: expected.trade.buy_from_users,
+        },
+        receipt: DealerReceiptV2 {
+            dealer_net_cash_in_atoms: expected.trader_cash_in_atoms,
+            dealer_net_cash_out_atoms: expected.trader_cash_out_atoms,
+        },
+        rows: quote_rows,
+        semantic_quote_digest: [0; 32],
+    };
+    quote.semantic_quote_digest =
+        dealer_quote_semantics_digest_v2(&domain, &dealer, &quote).unwrap();
+    DealerJoinFixture {
+        domain,
+        book,
+        price,
+        candidate,
+        dealer,
+        quote,
+    }
+}
+
+fn dealer_verdict(fixture: &DealerJoinFixture) -> DealerLegVerdictV2 {
+    verify_economic_candidate_with_dealer_v2(
+        &fixture.domain,
+        &fixture.book,
+        &fixture.price,
+        &fixture.candidate,
+        &fixture.dealer,
+        &fixture.quote,
+    )
+    .unwrap()
+}
+
+fn refresh_quote(fixture: &mut DealerJoinFixture) {
+    fixture.quote.semantic_quote_digest = [0; 32];
+    fixture.quote.semantic_quote_digest =
+        dealer_quote_semantics_digest_v2(&fixture.domain, &fixture.dealer, &fixture.quote).unwrap();
 }
 
 #[test]
@@ -564,135 +687,132 @@ fn valid_aggregate_pool_values_may_exceed_each_single_source_bound() {
 }
 
 #[test]
-fn candidate_supplied_dealer_leg_allocations_close_exactly_and_obey_limits() {
+fn authenticated_dealer_leg_is_reconciled_and_committed_as_one_aggregate() {
     let state = funded_state();
-    let receipt = state.quote_trade(10, trade(&[6, 0, 0], &[])).unwrap();
+    let fixture = dealer_join_fixture(&state);
+    let verdict = dealer_verdict(&fixture);
+    assert_eq!(verdict.allocation_count, 1);
+    assert_eq!(verdict.allocations[0].user_cash_in_atoms, 3);
+    assert_eq!(verdict.total_external_fee_atoms, 1);
+
+    let receipt = state
+        .reconcile_authenticated_dealer_leg_v2(10, &fixture.quote, &verdict)
+        .unwrap();
     assert_eq!(receipt.trader_cash_in_atoms, 3);
-    let first = DealerUserAllocationV1 {
-        order_id: id(20),
-        trade: trade(&[2, 0, 0], &[]),
-        user_cash_in_atoms: 1,
-        user_cash_out_atoms: 0,
-        maximum_dealer_cash_in_atoms: 1,
-        minimum_dealer_cash_out_atoms: 0,
-    };
-    let second = DealerUserAllocationV1 {
-        order_id: id(21),
-        trade: trade(&[4, 0, 0], &[]),
-        user_cash_in_atoms: 2,
-        user_cash_out_atoms: 0,
-        maximum_dealer_cash_in_atoms: 2,
-        minimum_dealer_cash_out_atoms: 0,
-    };
-    let mut allocations = [DealerUserAllocationV1::EMPTY; MAX_DEALER_ALLOCATIONS];
-    allocations[0] = first;
-    allocations[1] = second;
+    assert_eq!(receipt.trader_cash_out_atoms, 0);
+
+    let mut through_join = state;
+    through_join
+        .execute_authenticated_dealer_leg_v2(10, &fixture.quote, &verdict)
+        .unwrap();
+    let mut direct = state;
+    direct.execute_trade(10, trade(&[6, 0, 0], &[])).unwrap();
+    assert_eq!(through_join, direct);
+}
+
+#[test]
+fn relation_valid_but_false_curve_receipt_is_refused_without_mutation() {
+    let state = funded_state();
+    let mut fixture = dealer_join_fixture(&state);
+    fixture.quote.receipt.dealer_net_cash_in_atoms = 2;
+    refresh_quote(&mut fixture);
+    let verdict = dealer_verdict(&fixture);
+    assert_eq!(verdict.allocations[0].user_cash_in_atoms, 2);
+
+    let mut attempted = state;
+    assert_eq!(
+        attempted.execute_authenticated_dealer_leg_v2(10, &fixture.quote, &verdict),
+        Err(DealerError::DealerLegReceiptMismatch)
+    );
+    assert_eq!(attempted, state);
+}
+
+#[test]
+fn stale_or_misdirected_authenticated_quote_is_refused_without_mutation() {
+    let state = funded_state();
+    let mut stale = dealer_join_fixture(&state);
+    stale.quote.facility.pre_generation += 1;
+    refresh_quote(&mut stale);
+    let stale_verdict = dealer_verdict(&stale);
+    let mut attempted = state;
+    assert_eq!(
+        attempted.execute_authenticated_dealer_leg_v2(10, &stale.quote, &stale_verdict),
+        Err(DealerError::DealerLegBindingMismatch)
+    );
+    assert_eq!(attempted, state);
+
+    let mut misdirected = dealer_join_fixture(&state);
+    misdirected.quote.facility.facility_semantics_digest = id(99);
+    refresh_quote(&mut misdirected);
+    let misdirected_verdict = dealer_verdict(&misdirected);
+    assert_eq!(
+        state.reconcile_authenticated_dealer_leg_v2(10, &misdirected.quote, &misdirected_verdict),
+        Err(DealerError::DealerLegBindingMismatch)
+    );
+}
+
+#[test]
+fn public_verdict_value_cannot_be_replayed_against_another_quote_projection() {
+    let state = funded_state();
+    let fixture = dealer_join_fixture(&state);
+    let verdict = dealer_verdict(&fixture);
+    let mut forged = verdict;
+    forged.trade.sell_to_users[0] -= 1;
+    assert_eq!(
+        state.reconcile_authenticated_dealer_leg_v2(10, &fixture.quote, &forged),
+        Err(DealerError::DealerLegBindingMismatch)
+    );
+
+    let mut other_quote = fixture.quote;
+    other_quote.fee_policy_semantics_digest = id(77);
+    other_quote.semantic_quote_digest = [0; 32];
+    other_quote.semantic_quote_digest =
+        dealer_quote_semantics_digest_v2(&fixture.domain, &fixture.dealer, &other_quote).unwrap();
+    assert_eq!(
+        state.reconcile_authenticated_dealer_leg_v2(10, &other_quote, &verdict),
+        Err(DealerError::DealerLegBindingMismatch)
+    );
+
+    // The same book, fills, and aggregate dealer trade under another valid
+    // price projection have another upstream economic identity. Re-signing
+    // only the quote projection cannot make the old verdict reusable.
+    let mut other_price = fixture.price;
+    other_price.prices = uvec(&[0, 2, 1]);
+    other_price.semantic_price_digest =
+        price_semantics_digest_v2(&fixture.domain, &other_price.prices).unwrap();
+    let mut other_price_quote = fixture.quote;
+    other_price_quote.upstream_economic_candidate_digest =
+        dealer_upstream_economic_candidate_digest_v2(
+            &fixture.domain,
+            &fixture.book,
+            &other_price,
+            &fixture.candidate,
+        )
+        .unwrap();
+    other_price_quote.semantic_quote_digest = [0; 32];
+    other_price_quote.semantic_quote_digest =
+        dealer_quote_semantics_digest_v2(&fixture.domain, &fixture.dealer, &other_price_quote)
+            .unwrap();
+    assert_ne!(
+        other_price_quote.upstream_economic_candidate_digest,
+        fixture.quote.upstream_economic_candidate_digest
+    );
+    assert_eq!(other_price_quote.trade, fixture.quote.trade);
+    let other_price_verdict = verify_economic_candidate_with_dealer_v2(
+        &fixture.domain,
+        &fixture.book,
+        &other_price,
+        &fixture.candidate,
+        &fixture.dealer,
+        &other_price_quote,
+    )
+    .unwrap();
     state
-        .validate_dealer_leg_allocations(10, &receipt, &allocations, 2)
+        .reconcile_authenticated_dealer_leg_v2(10, &other_price_quote, &other_price_verdict)
         .unwrap();
-    allocations.swap(0, 1);
     assert_eq!(
-        state.validate_dealer_leg_allocations(10, &receipt, &allocations, 2),
-        Err(DealerError::NonCanonicalFlow)
-    );
-    allocations.swap(0, 1);
-
-    let mut wrong_sum = allocations;
-    wrong_sum[0].user_cash_in_atoms -= 1;
-    assert_eq!(
-        state.validate_dealer_leg_allocations(10, &receipt, &wrong_sum, 2),
-        Err(DealerError::InvariantViolation)
-    );
-    let mut bad_limit = allocations;
-    bad_limit[0].maximum_dealer_cash_in_atoms = 0;
-    assert_eq!(
-        state.validate_dealer_leg_allocations(10, &receipt, &bad_limit, 2),
-        Err(DealerError::InsufficientCash)
-    );
-    let mut duplicate = allocations;
-    duplicate[1].order_id = duplicate[0].order_id;
-    assert_eq!(
-        state.validate_dealer_leg_allocations(10, &receipt, &duplicate, 2),
-        Err(DealerError::NonCanonicalFlow)
-    );
-    let mut trailing = allocations;
-    trailing[2] = first;
-    assert_eq!(
-        state.validate_dealer_leg_allocations(10, &receipt, &trailing, 2),
-        Err(DealerError::NonCanonicalFlow)
-    );
-
-    let mixed_receipt = state
-        .quote_trade(10, trade(&[0, 4, 0], &[6, 0, 0]))
-        .unwrap();
-    assert_eq!(mixed_receipt.trader_cash_in_atoms, 0);
-    assert_eq!(mixed_receipt.trader_cash_out_atoms, 0);
-    let mut mixed = [DealerUserAllocationV1::EMPTY; MAX_DEALER_ALLOCATIONS];
-    mixed[0] = DealerUserAllocationV1 {
-        order_id: id(22),
-        trade: trade(&[], &[6, 0, 0]),
-        user_cash_in_atoms: 0,
-        user_cash_out_atoms: 2,
-        maximum_dealer_cash_in_atoms: 0,
-        minimum_dealer_cash_out_atoms: 2,
-    };
-    mixed[1] = DealerUserAllocationV1 {
-        order_id: id(23),
-        trade: trade(&[0, 4, 0], &[]),
-        user_cash_in_atoms: 2,
-        user_cash_out_atoms: 0,
-        maximum_dealer_cash_in_atoms: 2,
-        minimum_dealer_cash_out_atoms: 0,
-    };
-    state
-        .validate_dealer_leg_allocations(10, &mixed_receipt, &mixed, 2)
-        .unwrap();
-
-    let mut individual_over_cap = mixed;
-    individual_over_cap[0].user_cash_out_atoms = MAX_ATOMS + 1;
-    individual_over_cap[0].minimum_dealer_cash_out_atoms = MAX_ATOMS + 1;
-    assert_eq!(
-        state.validate_dealer_leg_allocations(10, &mixed_receipt, &individual_over_cap, 2),
-        Err(DealerError::ParameterOutOfRange)
-    );
-
-    let half = MAX_ATOMS / 2;
-    let mut gross_over_cap = [DealerUserAllocationV1::EMPTY; MAX_DEALER_ALLOCATIONS];
-    gross_over_cap[0] = DealerUserAllocationV1 {
-        order_id: id(24),
-        trade: trade(&[], &[2, 0, 0]),
-        user_cash_in_atoms: 0,
-        user_cash_out_atoms: half + 1,
-        maximum_dealer_cash_in_atoms: 0,
-        minimum_dealer_cash_out_atoms: half + 1,
-    };
-    gross_over_cap[1] = DealerUserAllocationV1 {
-        order_id: id(25),
-        trade: trade(&[], &[4, 0, 0]),
-        user_cash_in_atoms: 0,
-        user_cash_out_atoms: half,
-        maximum_dealer_cash_in_atoms: 0,
-        minimum_dealer_cash_out_atoms: half,
-    };
-    gross_over_cap[2] = DealerUserAllocationV1 {
-        order_id: id(26),
-        trade: trade(&[0, 2, 0], &[]),
-        user_cash_in_atoms: half + 1,
-        user_cash_out_atoms: 0,
-        maximum_dealer_cash_in_atoms: half + 1,
-        minimum_dealer_cash_out_atoms: 0,
-    };
-    gross_over_cap[3] = DealerUserAllocationV1 {
-        order_id: id(27),
-        trade: trade(&[0, 2, 0], &[]),
-        user_cash_in_atoms: half,
-        user_cash_out_atoms: 0,
-        maximum_dealer_cash_in_atoms: half,
-        minimum_dealer_cash_out_atoms: 0,
-    };
-    assert_eq!(
-        state.validate_dealer_leg_allocations(10, &mixed_receipt, &gross_over_cap, 4),
-        Err(DealerError::ParameterOutOfRange)
+        state.reconcile_authenticated_dealer_leg_v2(10, &other_price_quote, &verdict),
+        Err(DealerError::DealerLegBindingMismatch)
     );
 }
 

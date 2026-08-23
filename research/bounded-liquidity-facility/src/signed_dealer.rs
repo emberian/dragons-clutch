@@ -7,12 +7,14 @@
 
 use core::convert::TryFrom;
 
+use clutch_batch::dealer_leg_v2::{
+    DealerLegVerdictV2, DealerQuotePreconditionV2, DEALER_LEG_VERSION_V2,
+};
+
 use super::{Id, PriceVectorV1, MAX_ATOMS, MAX_OUTCOMES, MAX_PRICE_DENOMINATOR};
 
 /// Maximum LP positions in one fixed-capacity dealer.
 pub const MAX_LPS: usize = 8;
-/// Maximum user allocations composing one aggregate dealer receipt.
-pub const MAX_DEALER_ALLOCATIONS: usize = 8;
 /// Conservative maximum live aggregate pool cash from LP cash, subsidy, and curve.
 pub const MAX_LIVE_POOL_ATOMS: u64 = 3 * MAX_ATOMS;
 /// Conservative maximum terminal pool after redeeming bounded Egg custody.
@@ -65,6 +67,10 @@ pub enum DealerError {
     InvalidPayoutVector,
     /// A terminal LP allocation was already claimed.
     AlreadyClaimed,
+    /// An authenticated dealer-leg projection named another facility, policy, or generation.
+    DealerLegBindingMismatch,
+    /// The dealer-leg aggregate receipt disagreed with exact facility recomputation.
+    DealerLegReceiptMismatch,
     /// A persisted field disagrees with exact recomputation.
     InvariantViolation,
 }
@@ -358,35 +364,6 @@ pub struct SignedDealerTradeReceiptV1 {
     pub new_pool_eggs: [u64; MAX_OUTCOMES],
 }
 
-/// One exact user allocation composing an aggregate dealer receipt.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerUserAllocationV1 {
-    /// Immutable order or reservation identity, zero only for padding.
-    pub order_id: Id,
-    /// Exact native Egg flow allocated to this order.
-    pub trade: SignedDealerTradeV1,
-    /// Collateral paid by this user to the pool.
-    pub user_cash_in_atoms: u64,
-    /// Collateral paid by the pool to this user.
-    pub user_cash_out_atoms: u64,
-    /// Frozen dealer-leg maximum this user permits paying, excluding batch fees.
-    pub maximum_dealer_cash_in_atoms: u64,
-    /// Frozen dealer-leg minimum this user requires receiving, excluding batch fees.
-    pub minimum_dealer_cash_out_atoms: u64,
-}
-
-impl DealerUserAllocationV1 {
-    /// Canonical unused allocation slot.
-    pub const EMPTY: Self = Self {
-        order_id: [0; 32],
-        trade: SignedDealerTradeV1::EMPTY,
-        user_cash_in_atoms: 0,
-        user_cash_out_atoms: 0,
-        maximum_dealer_cash_in_atoms: 0,
-        minimum_dealer_cash_out_atoms: 0,
-    };
-}
-
 /// Exact contribution or funding-withdrawal basket.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FundingBasketV1 {
@@ -405,7 +382,7 @@ pub struct FundingBasketV1 {
 pub struct SignedDealerStateV1 {
     /// Immutable dealer policy.
     pub policy: SignedDealerPolicyV1,
-    /// Canonical dealer identity.
+    /// Canonical semantic facility identity; a live account key is a separate adapter role.
     pub facility_id: Id,
     /// Sponsor/refund owner of the pre-activation sponsor capital.
     pub sponsor: Id,
@@ -840,101 +817,67 @@ impl SignedDealerStateV1 {
         })
     }
 
-    /// Validate candidate-supplied dealer-leg allocations against one receipt.
+    /// Reconcile an authenticated RelationV2 dealer verdict with this facility.
     ///
-    /// The receipt fixes aggregate facility cash. Individual allocations are
-    /// candidate content: each must satisfy its frozen dealer-leg envelope,
-    /// and their exact cash and Egg sums must reproduce the independently
-    /// recomputed receipt. The surrounding batch relation remains responsible
-    /// for authenticating every all-in order limit after fees and rebates.
-    pub fn validate_dealer_leg_allocations(
+    /// Per-order fills, cash allocations, residual limit envelopes, and
+    /// upstream-quoted external fee amounts are owned exclusively by
+    /// `clutch_batch::dealer_leg_v2`. That relation does not prove fee funding,
+    /// custody, recipients, or transfer conservation. This function
+    /// deliberately does not reinterpret or rescan `verdict.allocations`.
+    /// Instead it binds the authenticated projection to this exact facility,
+    /// policy, and pre-generation, then independently recomputes the aggregate
+    /// curve receipt from state.
+    ///
+    /// A `DealerLegVerdictV2` is a public value, not an authentication token.
+    /// The caller must have obtained it from
+    /// `verify_economic_candidate_with_dealer_v2` over authenticated book,
+    /// price, candidate, and quote inputs before calling this seam. A live
+    /// adapter must perform both calls inside one atomic state transition.
+    pub fn reconcile_authenticated_dealer_leg_v2(
         &self,
         slot: u64,
-        receipt: &SignedDealerTradeReceiptV1,
-        allocations: &[DealerUserAllocationV1; MAX_DEALER_ALLOCATIONS],
-        allocation_count: u8,
-    ) -> DealerResult<()> {
-        self.validate()?;
-        let count = usize::from(allocation_count);
-        if count == 0 || count > MAX_DEALER_ALLOCATIONS {
-            return Err(DealerError::InvalidBasis);
-        }
-        let expected = self.quote_trade(slot, receipt.trade)?;
-        if *receipt != expected {
-            return Err(DealerError::InvariantViolation);
-        }
-        let mut aggregate_sell = [0u64; MAX_OUTCOMES];
-        let mut aggregate_buy = [0u64; MAX_OUTCOMES];
-        let mut aggregate_cash_in = 0u64;
-        let mut aggregate_cash_out = 0u64;
-        let mut i = 0usize;
-        while i < MAX_DEALER_ALLOCATIONS {
-            if i >= count {
-                if allocations[i] != DealerUserAllocationV1::EMPTY {
-                    return Err(DealerError::NonCanonicalFlow);
-                }
-                i += 1;
-                continue;
-            }
-            let allocation = allocations[i];
-            check_id(allocation.order_id)?;
-            if i != 0 && allocations[i - 1].order_id >= allocation.order_id {
-                return Err(DealerError::NonCanonicalFlow);
-            }
-            validate_trade(&self.policy, &allocation.trade)?;
-            if allocation.user_cash_in_atoms != 0 && allocation.user_cash_out_atoms != 0 {
-                return Err(DealerError::NonCanonicalFlow);
-            }
-            if allocation.user_cash_in_atoms > MAX_ATOMS
-                || allocation.user_cash_out_atoms > MAX_ATOMS
-                || allocation.maximum_dealer_cash_in_atoms > MAX_ATOMS
-                || allocation.minimum_dealer_cash_out_atoms > MAX_ATOMS
-            {
-                return Err(DealerError::ParameterOutOfRange);
-            }
-            if allocation.user_cash_in_atoms > allocation.maximum_dealer_cash_in_atoms
-                || allocation.user_cash_out_atoms < allocation.minimum_dealer_cash_out_atoms
-            {
-                return Err(DealerError::InsufficientCash);
-            }
-            aggregate_cash_in = aggregate_cash_in
-                .checked_add(allocation.user_cash_in_atoms)
-                .ok_or(DealerError::ArithmeticOverflow)?;
-            aggregate_cash_out = aggregate_cash_out
-                .checked_add(allocation.user_cash_out_atoms)
-                .ok_or(DealerError::ArithmeticOverflow)?;
-            if aggregate_cash_in > MAX_ATOMS || aggregate_cash_out > MAX_ATOMS {
-                return Err(DealerError::ParameterOutOfRange);
-            }
-            let mut j = 0usize;
-            while j < usize::from(self.policy.outcome_count) {
-                aggregate_sell[j] = aggregate_sell[j]
-                    .checked_add(allocation.trade.sell_to_users[j])
-                    .ok_or(DealerError::ArithmeticOverflow)?;
-                aggregate_buy[j] = aggregate_buy[j]
-                    .checked_add(allocation.trade.buy_from_users[j])
-                    .ok_or(DealerError::ArithmeticOverflow)?;
-                j += 1;
-            }
-            i += 1;
-        }
-        let allocation_left = aggregate_cash_in
-            .checked_add(receipt.trader_cash_out_atoms)
-            .ok_or(DealerError::ArithmeticOverflow)?;
-        let receipt_left = aggregate_cash_out
-            .checked_add(receipt.trader_cash_in_atoms)
-            .ok_or(DealerError::ArithmeticOverflow)?;
-        if aggregate_sell != receipt.trade.sell_to_users
-            || aggregate_buy != receipt.trade.buy_from_users
-            || allocation_left != receipt_left
+        quote: &DealerQuotePreconditionV2,
+        verdict: &DealerLegVerdictV2,
+    ) -> DealerResult<SignedDealerTradeReceiptV1> {
+        if quote.facility.version != DEALER_LEG_VERSION_V2
+            || quote.facility.facility_semantics_digest != self.facility_id
+            || quote.facility.policy_semantics_digest != self.policy.policy_id
+            || quote.facility.pre_generation != self.generation
+            || verdict.outcome_count != self.policy.outcome_count
+            || verdict.trade != quote.trade
+            || verdict.dealer_quote_semantics_digest != quote.semantic_quote_digest
         {
-            return Err(DealerError::InvariantViolation);
+            return Err(DealerError::DealerLegBindingMismatch);
         }
-        self.pool_cash_atoms
-            .checked_add(aggregate_cash_in)
-            .and_then(|value| value.checked_sub(aggregate_cash_out))
-            .ok_or(DealerError::InsufficientCash)?;
-        Ok(())
+
+        let trade = SignedDealerTradeV1 {
+            sell_to_users: quote.trade.sell_to_users,
+            buy_from_users: quote.trade.buy_from_users,
+        };
+        let expected = self.quote_trade(slot, trade)?;
+        if quote.receipt.dealer_net_cash_in_atoms != expected.trader_cash_in_atoms
+            || quote.receipt.dealer_net_cash_out_atoms != expected.trader_cash_out_atoms
+        {
+            return Err(DealerError::DealerLegReceiptMismatch);
+        }
+        Ok(expected)
+    }
+
+    /// Apply one already-authenticated and independently reconciled dealer leg.
+    ///
+    /// The pure model commits the aggregate state only after both the batch
+    /// verdict binding and the facility receipt have been checked. Runtime
+    /// user transfers, fee transfers, and custody postconditions remain one
+    /// separately named atomic adapter obligation.
+    pub fn execute_authenticated_dealer_leg_v2(
+        &mut self,
+        slot: u64,
+        quote: &DealerQuotePreconditionV2,
+        verdict: &DealerLegVerdictV2,
+    ) -> DealerResult<SignedDealerTradeReceiptV1> {
+        let receipt = self.reconcile_authenticated_dealer_leg_v2(slot, quote, verdict)?;
+        self.commit_trade_receipt(receipt)?;
+        Ok(receipt)
     }
 
     /// Execute one aggregate call-auction transition after exact recomputation.
@@ -944,6 +887,11 @@ impl SignedDealerStateV1 {
         trade: SignedDealerTradeV1,
     ) -> DealerResult<SignedDealerTradeReceiptV1> {
         let receipt = self.quote_trade(slot, trade)?;
+        self.commit_trade_receipt(receipt)?;
+        Ok(receipt)
+    }
+
+    fn commit_trade_receipt(&mut self, receipt: SignedDealerTradeReceiptV1) -> DealerResult<()> {
         let mut next = *self;
         next.net_sold = receipt.new_net_sold;
         next.pool_cash_atoms = receipt.new_pool_cash_atoms;
@@ -951,7 +899,7 @@ impl SignedDealerStateV1 {
         next.generation = receipt.post_generation;
         next.validate()?;
         *self = next;
-        Ok(receipt)
+        Ok(())
     }
 
     /// Irrevocably queue LP shares and trigger unwind when the frozen quorum is met.

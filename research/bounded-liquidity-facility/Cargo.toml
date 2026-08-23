@@ -9,3 +9,4 @@ description = "Exact bounded quadratic liquidity facility model for Dragon's Clu
 path = "src/lib.rs"
 
 [dependencies]
+clutch-batch = { path = "../../crates/clutch-batch" }

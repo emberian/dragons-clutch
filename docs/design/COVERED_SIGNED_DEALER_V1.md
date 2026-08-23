@@ -12,8 +12,9 @@ native Eggs and cash before activation. The dealer may sell those custodied
 Eggs or buy more with present cash. It never invents an Egg, borrows collateral,
 uses future fees, or reaches into Hoard principal.
 
-No current SBF instruction, account codec, batch relation, or release manifest
-implements this dealer.
+The Solana-free RelationV2 batch model now implements the canonical dealer join
+and per-order cash allocation. No current SBF instruction, account codec,
+custody route, candidate lifecycle, or release manifest implements the dealer.
 
 ## Decision and economic ownership
 
@@ -333,20 +334,24 @@ verifier recomputes:
 - componentwise Egg flow.
 
 The endpoint determines total dealer cash, not a unique per-user allocation.
-V1 selects **candidate-supplied exact per-order dealer-leg cash**. The pure
-validator checks a frozen dealer-leg envelope excluding fees; the live batch
-adapter must derive and authenticate that envelope from each all-in order limit
-after its exact fee or rebate. Dealer-leg amounts must net to the receipt, and
-the surrounding candidate cash/fee relation must close. Allocation rows are
-strictly ordered by immutable order identity, so row permutation cannot create
-a second encoding. Different valid cash allocations are different submitted
-candidates and enter the frozen candidate total order. The protocol still says
-“best valid submitted candidate,” not optimal clearing.
+`clutch_batch::dealer_leg_v2` is the sole per-order allocation owner. Its frozen
+`MinimumGrossHamiltonV1` rule selects the least feasible gross payer and
+receiver totals, allocates payer cash by residual buyer capacity, satisfies
+seller minima, and assigns forced excess payout by native Egg flow, with exact
+Hamilton remainders and immutable-order-ID ties. The signed facility neither
+accepts candidate-supplied allocation bytes nor reimplements that rule. It
+binds an authenticated dealer verdict to the exact facility, policy, and
+pre-generation and independently recomputes only the aggregate curve receipt.
 
-A future canonical midpoint-price plus balanced-remainder allocator is plausible
-for quadratic curves, but it is not this model and must not be assumed by an
-adapter. Standalone offchain quotes are indicative until their generation and
-aggregate candidate execute atomically.
+The live adapter must authenticate every price and dealer quote precondition,
+obtain the verdict from the checked dealer relation, reconcile its aggregate
+receipt with the facility, and close all user, dealer, and fee transfers in one
+atomic transition. The pure verdict is a projection, not an authentication
+token. Its external fee amounts are upstream-quoted semantics, not proof of fee
+funding, custody, recipients, or transfer conservation. Standalone offchain
+quotes remain indicative until their generation and aggregate candidate execute
+atomically. The protocol still says “best valid submitted candidate,” not
+optimal clearing.
 
 Mixed cross-outcome flow may contain gross cash in and cash out even though the
 facility receipt stores only their canonical net. Candidate validation checks
@@ -419,9 +424,9 @@ lot size.
 - failed/stale funding cancellation with separate sponsor/LP refunds; and
 - checked fixed-capacity rollback under adversarial mutations.
 
-It does not prove a live account codec, token custody, live candidate integration
-or enforcement of modeled user-limit allocation, source publication,
-transaction inclusion, fee/rent funding, CU/rent feasibility,
+It does not prove a live account codec, token custody, authentication of live
+dealer/price projections, atomic application of derived user allocations,
+source publication, transaction inclusion, fee/rent funding, CU/rent feasibility,
 beneficial-owner identity, counted terminal account retirement, or formal
 refinement. Those remain promotion gates, not implementation details. The pure
 state deliberately retains an immutable resolved share/claim record even after
