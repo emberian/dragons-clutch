@@ -25,6 +25,9 @@ This directory contains offline `no_std` crates
 - `clutch-structured-claim` — exact rational coefficient realization,
   complete-set-compressed native backing, flat wrapper composition, and
   transactional transferable-claim custody/lifecycle semantics.
+- `clutch-structured-claim-adapter` — the exact wrapper descriptor,
+  deployment/basis identity reconstruction, and atomic Position
+  cash/native-Egg transfer contract for a future small SBF/Token-2022 adapter.
 - `clutch-client-contract` — shared untrusted client provenance, intent-registry
   linkage, and fail-closed settlement-shape classification. It owns no
   persisted protocol fact.
