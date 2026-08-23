@@ -547,6 +547,7 @@ fn authenticate_product(
         (2..=3).contains(&basis.basis_degree)
             && basis.basis_degree == binding.basis_degree
             && basis.outcome_count == binding.outcome_count
+            && basis.denominator == binding.price_scale
             && genesis.relation_policy_id.bytes() == binding.relation_policy_id.bytes()
             && genesis.score_policy_id.bytes() == binding.score_policy_id.bytes()
             && binding.relation_policy_id == relation_policy
