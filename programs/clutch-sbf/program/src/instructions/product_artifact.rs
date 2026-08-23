@@ -10,12 +10,13 @@ use crate::error::{ClutchError, Refusal};
 use crate::loader_state::{decode_loader_pair_v1, LoaderAccountViewV1};
 use crate::seeds;
 use clutch_product_series::{
-    CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, ContentId,
-    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProfileV2,
-    RegistryCapabilityProjectionV2, RegistryProgramReleaseV1, SeriesAttachmentPlanV1,
-    SeriesAttachmentPlanV2, SeriesFundingQuoteV1, SeriesFundingQuoteV2, SeriesFundingTermsV2,
-    SeriesPlanV5, SeriesPlanV5Id,
+    CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3,
+    ContentId, EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2,
+    MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
+    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProjectionV2,
+    RegistryProgramReleaseV1, SeriesAttachmentPlanV1, SeriesAttachmentPlanV2,
+    SeriesAttachmentPlanV3, SeriesFundingQuoteV1, SeriesFundingQuoteV2, SeriesFundingQuoteV3,
+    SeriesFundingTermsV2, SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
@@ -65,6 +66,9 @@ product_artifact_type!(MarketInstancePreimageV2, MarketInstancePreimageV2);
 product_artifact_type!(SeriesFundingQuoteV2, SeriesFundingQuoteV2);
 product_artifact_type!(CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV2);
 product_artifact_type!(SeriesAttachmentPlanV2, SeriesAttachmentPlanV2);
+product_artifact_type!(SeriesFundingQuoteV3, SeriesFundingQuoteV3);
+product_artifact_type!(CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV3);
+product_artifact_type!(SeriesAttachmentPlanV3, SeriesAttachmentPlanV3);
 
 impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
     const KIND: ArtifactKind = ArtifactKind::NativeClaimBasisV1;
@@ -83,6 +87,14 @@ impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
 
 impl ProductArtifactTypeV1 for RegistryCapabilityProfileV2 {
     const KIND: ArtifactKind = ArtifactKind::RegistryCapabilityProfileV2;
+
+    fn semantic_id(&self) -> clutch_product_series::Result<ContentId> {
+        Ok(self.id()?.content_id())
+    }
+}
+
+impl ProductArtifactTypeV1 for RegistryCapabilityProfileV3 {
+    const KIND: ArtifactKind = ArtifactKind::RegistryCapabilityProfileV3;
 
     fn semantic_id(&self) -> clutch_product_series::Result<ContentId> {
         Ok(self.id()?.content_id())
@@ -233,7 +245,7 @@ struct AuthenticatedRegistryArtifactPairV2 {
     release_artifact_account: Pubkey,
     profile_artifact_account: Pubkey,
     release: RegistryProgramReleaseV1,
-    profile: RegistryCapabilityProfileV2,
+    profile: RegistryCapabilityProfileV3,
     projection: RegistryCapabilityProjectionV2,
 }
 
@@ -245,7 +257,7 @@ pub struct AuthenticatedRegistryCapabilityReleaseV2 {
     release_artifact_account: Pubkey,
     profile_artifact_account: Pubkey,
     release: RegistryProgramReleaseV1,
-    profile: RegistryCapabilityProfileV2,
+    profile: RegistryCapabilityProfileV3,
     projection: RegistryCapabilityProjectionV2,
 }
 
@@ -276,7 +288,7 @@ impl AuthenticatedRegistryCapabilityReleaseV2 {
     }
 
     /// Complete immutable capability profile body.
-    pub const fn profile(self) -> RegistryCapabilityProfileV2 {
+    pub const fn profile(self) -> RegistryCapabilityProfileV3 {
         self.profile
     }
 
@@ -296,7 +308,7 @@ pub struct AuthenticatedRegistryCapabilityV2 {
     release_artifact_account: Pubkey,
     profile_artifact_account: Pubkey,
     release: RegistryProgramReleaseV1,
-    profile: RegistryCapabilityProfileV2,
+    profile: RegistryCapabilityProfileV3,
     projection: RegistryCapabilityProjectionV2,
 }
 
@@ -337,7 +349,7 @@ impl AuthenticatedRegistryCapabilityV2 {
     }
 
     /// Complete immutable capability profile body.
-    pub const fn profile(self) -> RegistryCapabilityProfileV2 {
+    pub const fn profile(self) -> RegistryCapabilityProfileV3 {
         self.profile
     }
 
@@ -413,7 +425,7 @@ fn authenticate_registry_artifact_pair_v2(
         release_artifact,
         expected_registry_release_id,
     )?;
-    let authenticated_profile = authenticate_product_artifact_v1::<RegistryCapabilityProfileV2>(
+    let authenticated_profile = authenticate_product_artifact_v1::<RegistryCapabilityProfileV3>(
         program_id,
         profile_artifact,
         expected_capability_profile_id,

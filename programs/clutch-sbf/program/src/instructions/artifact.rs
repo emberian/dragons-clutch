@@ -20,11 +20,14 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 #[cfg(target_os = "solana")]
 use clutch_product_series::{
-    CompiledProductSeriesBundleV2, FixedCodec as RegistryFixedCodec, RegistryCapabilityProfileV2,
-    RegistryProgramReleaseV1, SeriesAttachmentPlanV2, SeriesFundingQuoteV2,
-    COMPILED_PRODUCT_SERIES_BUNDLE_V2_DOMAIN, REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN,
+    CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3, FixedCodec as RegistryFixedCodec,
+    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryProgramReleaseV1,
+    SeriesAttachmentPlanV2, SeriesAttachmentPlanV3, SeriesFundingQuoteV2, SeriesFundingQuoteV3,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V2_DOMAIN, COMPILED_PRODUCT_SERIES_BUNDLE_V3_DOMAIN,
+    REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN,
     REGISTRY_PROGRAM_RELEASE_V1_DOMAIN, SERIES_ATTACHMENT_PLAN_V2_DOMAIN,
-    SERIES_FUNDING_QUOTE_V2_DOMAIN,
+    SERIES_ATTACHMENT_PLAN_V3_DOMAIN, SERIES_FUNDING_QUOTE_V2_DOMAIN,
+    SERIES_FUNDING_QUOTE_V3_DOMAIN,
 };
 use clutch_solana_layout::artifact::{
     self, ArtifactBinding, ArtifactKind, ArtifactStageHeader, ARTIFACT_CHUNK_BYTES,
@@ -322,7 +325,7 @@ fn begin(
         accounts[IX_FUNDER].key != accounts[IX_STAGE].key,
         ClutchError::AccountAlias,
     )?;
-    binding.validate()?;
+    binding.validate_for_registration()?;
     require_system_program(&accounts[IX_BEGIN_SYSTEM])?;
     let rent = read_rent(&accounts[IX_BEGIN_RENT])?;
     let current_slot = read_clock_slot(&accounts[IX_BEGIN_CLOCK])?;
@@ -387,6 +390,7 @@ fn write(
 ) -> Outcome<()> {
     require_count(accounts, WRITE_ACCOUNT_COUNT)?;
     require_zero_sequence(sequence)?;
+    binding.validate_for_registration()?;
     require(
         accounts[IX_FUNDER].key != accounts[IX_STAGE].key,
         ClutchError::AccountAlias,
@@ -435,7 +439,11 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         }
         kind @ (ArtifactKind::SeriesFundingQuoteV2
         | ArtifactKind::CompiledProductSeriesBundleV2
-        | ArtifactKind::SeriesAttachmentPlanV2) => {
+        | ArtifactKind::SeriesAttachmentPlanV2
+        | ArtifactKind::RegistryCapabilityProfileV3
+        | ArtifactKind::SeriesFundingQuoteV3
+        | ArtifactKind::CompiledProductSeriesBundleV3
+        | ArtifactKind::SeriesAttachmentPlanV3) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -464,6 +472,10 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
             | ArtifactKind::SeriesFundingQuoteV2
             | ArtifactKind::CompiledProductSeriesBundleV2
             | ArtifactKind::SeriesAttachmentPlanV2
+            | ArtifactKind::RegistryCapabilityProfileV3
+            | ArtifactKind::SeriesFundingQuoteV3
+            | ArtifactKind::CompiledProductSeriesBundleV3
+            | ArtifactKind::SeriesAttachmentPlanV3
     ) {
         binding.validate()?;
         require(
@@ -495,6 +507,26 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
                 SeriesAttachmentPlanV2::decode(body)
                     .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
                 SERIES_ATTACHMENT_PLAN_V2_DOMAIN
+            }
+            ArtifactKind::RegistryCapabilityProfileV3 => {
+                RegistryCapabilityProfileV3::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN
+            }
+            ArtifactKind::SeriesFundingQuoteV3 => {
+                SeriesFundingQuoteV3::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                SERIES_FUNDING_QUOTE_V3_DOMAIN
+            }
+            ArtifactKind::CompiledProductSeriesBundleV3 => {
+                CompiledProductSeriesBundleV3::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                COMPILED_PRODUCT_SERIES_BUNDLE_V3_DOMAIN
+            }
+            ArtifactKind::SeriesAttachmentPlanV3 => {
+                SeriesAttachmentPlanV3::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                SERIES_ATTACHMENT_PLAN_V3_DOMAIN
             }
             _ => return Err(ClutchError::MismatchedState.into()),
         };
@@ -744,7 +776,11 @@ fn create_final<'a>(
         }
         kind @ (ArtifactKind::SeriesFundingQuoteV2
         | ArtifactKind::CompiledProductSeriesBundleV2
-        | ArtifactKind::SeriesAttachmentPlanV2) => {
+        | ArtifactKind::SeriesAttachmentPlanV2
+        | ArtifactKind::RegistryCapabilityProfileV3
+        | ArtifactKind::SeriesFundingQuoteV3
+        | ArtifactKind::CompiledProductSeriesBundleV3
+        | ArtifactKind::SeriesAttachmentPlanV3) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,
@@ -800,6 +836,7 @@ fn seal(
 ) -> Outcome<()> {
     require_count(accounts, SEAL_ACCOUNT_COUNT)?;
     require_zero_sequence(sequence)?;
+    binding.validate_for_registration()?;
     require(
         accounts[IX_FUNDER].key != accounts[IX_STAGE].key
             && accounts[IX_FUNDER].key != accounts[IX_FINAL].key

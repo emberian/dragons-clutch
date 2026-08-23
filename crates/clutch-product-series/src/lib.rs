@@ -21,6 +21,7 @@ mod codec;
 mod compile;
 mod compiler_output;
 mod compiler_output_v2;
+mod compiler_output_v3;
 mod foundation_funding;
 mod funding;
 mod funding_state;
@@ -57,13 +58,20 @@ pub use compiler_output_v2::{
     ProductSeriesBundleInputsV2, COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V2_DOMAIN,
 };
+pub use compiler_output_v3::{
+    assemble_compiled_product_series_bundle_v3, CompiledProductSeriesBundleV3,
+    ProductSeriesBundleInputsV3, COMPILED_PRODUCT_SERIES_BUNDLE_V3_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V3_DOMAIN,
+};
 pub use foundation_funding::{
-    MarketFoundationScheduleV1, SeriesAttachmentPlanV2, SeriesFundingComponentV2,
-    SeriesFundingQuoteV2, SeriesMarketDispositionV1, MARKET_FOUNDATION_CORE_SLOT_COUNT_V1,
+    MarketFoundationScheduleV1, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3,
+    SeriesFundingComponentV2, SeriesFundingQuoteV2, SeriesFundingQuoteV3,
+    SeriesMarketDispositionV1, MARKET_FOUNDATION_CORE_SLOT_COUNT_V1,
     MARKET_FOUNDATION_MAX_OUTCOMES_V1, MARKET_FOUNDATION_SLOT_COUNT_V1,
-    SERIES_ATTACHMENT_PLAN_BYTES_V2, SERIES_ATTACHMENT_PLAN_V2_DOMAIN,
+    SERIES_ATTACHMENT_PLAN_BYTES_V2, SERIES_ATTACHMENT_PLAN_BYTES_V3,
+    SERIES_ATTACHMENT_PLAN_V2_DOMAIN, SERIES_ATTACHMENT_PLAN_V3_DOMAIN,
     SERIES_FUNDING_COMPONENT_COUNT_V2, SERIES_FUNDING_QUOTE_BYTES_V2,
-    SERIES_FUNDING_QUOTE_V2_DOMAIN,
+    SERIES_FUNDING_QUOTE_BYTES_V3, SERIES_FUNDING_QUOTE_V2_DOMAIN, SERIES_FUNDING_QUOTE_V3_DOMAIN,
 };
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
@@ -122,9 +130,10 @@ pub use market_lifecycle::{
     SERIES_LINK_OBLIGATION_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_DOMAIN_V1,
 };
 pub use product_registry::{
-    RegistryCapabilityProfileV2, RegistryProgramReleaseV1, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
-    REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
-    REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
+    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryProgramReleaseV1,
+    REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN,
+    REGISTRY_CAPABILITY_PROFILE_V3_BYTES, REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN,
+    REGISTRY_PROGRAM_RELEASE_V1_BYTES, REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
@@ -134,7 +143,7 @@ pub use source_series::{
     SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use successor::{
-    compile_ordinal_v2, compile_ordinal_v3, project_component_debits_v2,
+    compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, project_component_debits_v2,
     AdapterFulfillmentProjectionV2, CapabilitySemanticOwnersV2, CompiledOrdinalV2,
     MarketGenesisProfileV2, MarketInstancePreimageV2, PriceMeasurePolicyV1,
     ProjectedComponentPresenceV2, RegistryCapabilityProjectionV2, SeriesFundingTermsV2,
@@ -244,12 +253,24 @@ typed_id!(
     "Typed identity of one `CompiledProductSeriesBundleV2` compiler output."
 );
 typed_id!(
+    CompiledProductSeriesBundleV3Id,
+    "Typed identity of one `CompiledProductSeriesBundleV3` compiler output."
+);
+typed_id!(
     SeriesFundingQuoteId,
     "Typed identity of one `SeriesFundingQuoteV1`."
 );
 typed_id!(
     SeriesFundingQuoteV2Id,
-    "Typed identity of one six-compartment `SeriesFundingQuoteV2`."
+    "Typed identity of the withdrawn six-compartment `SeriesFundingQuoteV2`."
+);
+typed_id!(
+    SeriesFundingQuoteV3Id,
+    "Typed identity of one current six-compartment `SeriesFundingQuoteV3`."
+);
+typed_id!(
+    SeriesAttachmentPlanV3Id,
+    "Typed identity of one current `SeriesAttachmentPlanV3`."
 );
 typed_id!(
     MarketFoundationScheduleV1Id,
@@ -290,7 +311,11 @@ typed_id!(
 );
 typed_id!(
     RegistryCapabilityProfileV2Id,
-    "Typed identity of one immutable `RegistryCapabilityProfileV2`."
+    "Typed identity of one withdrawn immutable `RegistryCapabilityProfileV2`."
+);
+typed_id!(
+    RegistryCapabilityProfileV3Id,
+    "Typed identity of one current immutable `RegistryCapabilityProfileV3`."
 );
 typed_id!(
     SeriesFundingTermsV2Id,

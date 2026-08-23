@@ -293,6 +293,15 @@ identity bridge.
 | `SeriesFundingTermsV1` | 208: 16-byte header, Series ID `16..48`, lamport refund `48..80`, collateral refund token account `80..112`, neutral sink `112..144`, collateral mint `144..176`, token program `176..208` | `dragons-clutch/series-funding-terms/v1` |
 | `RegistryProgramReleaseV1` | 160: header `0..16`, Program/ProgramData/full-ProgramData SHA-256 `16..112`, deployment slot `112..120`, compiled capability-manifest ID `120..152`, reserved `152..160`; the release ID is derived from the complete body | `dragons-clutch/registry-program-release/v1` |
 | `RegistryCapabilityProfileV2` | 800: header `0..16`, exact RegistryRelease ID `16..48`, selector mappings and hard limits `48..96`, fourteen semantic-owner IDs `96..544`, immutable Realm collateral `544..744`, exact SummaryProgram body `744..800`; the capability-profile ID is derived from the complete body and is not stored inside it | `dragons-clutch/registry-capability-profile/v2` |
+| `RegistryCapabilityProfileV3` | 816: fresh V3 header/domain, exact RegistryRelease ID, selector mappings and hard limits including interval width, coordinates-per-advance, and Recovery progress-per-call, fourteen semantic-owner IDs, immutable Realm collateral, exact SummaryProgram body | `dragons-clutch/registry-capability-profile/v3` |
+| `SeriesFundingQuoteV2` | 648: withdrawn historical body with a quote-local eight-row Recovery attempt table; decode/audit only | `dragons-clutch/series-funding-quote/v2` |
+| `SeriesFundingQuoteV3` | 584: fresh V3 header/domain, three distinct Recovery policy/schedule identities, six exact component allocations, 45-slot Market foundation schedule, timeout, and separately named Recovery rent principal | `dragons-clutch/series-funding-quote/v3` |
+| `SeriesAttachmentPlanV3` | 112: fresh V3 header/domain, typed QuoteV3 ID, LiquidityFacilityPlan ID, WrapperRecipeSet ID | `dragons-clutch/series-attachment-plan/v3` |
+| `CompiledProductSeriesBundleV3` | 528: fresh V3 header/domain and sixteen exact graph edges, including typed ProfileV3, QuoteV3, and AttachmentV3 identities | `dragons-clutch/compiled-product-series-bundle/v3` |
+
+Artifact kinds 43, 48, 49, and 50 retain their historical V2 lengths and
+codecs for decoding and audit, but are withdrawn from new registration. Current
+registration uses kinds 51–54 for ProfileV3, QuoteV3, BundleV3, and AttachmentV3.
 
 ## Pure compilation and funding
 
