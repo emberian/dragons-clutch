@@ -265,7 +265,7 @@ identity bridge.
 | Type | Bytes and offsets | Domain |
 |---|---|---|
 | `MarketInstancePreimageV1` | 88: magic `0..8`, Template ID `8..40`, GenesisProfile ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v1` |
-| `SeriesFundingQuoteV1` | 264: header/count `0..16`, RecoveryPolicy ID `16..48`, five ordered `(lamports u64, collateral atoms u64)` components `48..128`, recovery rent principal `128..136`, eight `(progress cap u64, lamports/unit u64)` rows `136..264` | `dragons-clutch/series-funding-quote/v1` |
+| `SeriesFundingQuoteV1` | 280: header/count `0..16`, RecoveryPolicy ID `16..48`, five ordered `(lamports u64, collateral atoms u64)` components `48..128`, failure-root and permanent replay-tombstone rent principal `128..144`, Recovery rent principal `144..152`, eight `(progress cap u64, lamports/unit u64)` rows `152..280` | `dragons-clutch/series-funding-quote/v1` |
 | `SeriesAttachmentPlanV1` | 112: 16-byte header, FundingQuote ID `16..48`, LiquidityFacilityPlan ID `48..80`, WrapperRecipeSet ID `80..112` | `dragons-clutch/series-attachment-plan/v1` |
 | `SeriesPlanV4` | 152: 16-byte header, Template/Genesis/Attachment IDs `16..112`, first start `112..120`, stride `120..128`, count `128..132`, reserved `132..136`, lead `136..144`, cap `144..152` | `dragons-clutch/series-plan/v4` |
 | `SeriesFundingTermsV1` | 208: 16-byte header, Series ID `16..48`, lamport refund `48..80`, collateral refund token account `80..112`, neutral sink `112..144`, collateral mint `144..176`, token program `176..208` | `dragons-clutch/series-funding-terms/v1` |

@@ -285,10 +285,10 @@ fn canonical_offsets_match_the_documented_wire() {
         40
     );
     assert_eq!(
-        u64::from_le_bytes(quote_bytes[128..136].try_into().unwrap()),
+        u64::from_le_bytes(quote_bytes[144..152].try_into().unwrap()),
         11
     );
-    assert_eq!(&quote_bytes[168..264], &[0; 96]);
+    assert_eq!(&quote_bytes[184..280], &[0; 96]);
 }
 
 #[test]
@@ -894,6 +894,8 @@ fn quote() -> SeriesFundingQuoteV1 {
             lamports: 10,
             collateral_atoms: 0,
         },
+        failure_root_rent_principal_lamports: 3,
+        failure_replay_tombstone_rent_principal_lamports: 2,
         recovery_reserve: ComponentDebitV1 {
             lamports: 40,
             collateral_atoms: 0,
@@ -1363,6 +1365,8 @@ fn checked_manifest_contains_the_self_contained_fixture_and_every_vector() {
     "series_funding_quote": {
       "evidence_only_recovery_policy_id": "e46043825d2ff7dc51aacb74c85efdc951e146222fe60d5279d50736ea5dc552",
       "market_core": {"lamports": 10, "collateral_atoms": 0},
+      "failure_root_rent_principal_lamports": 3,
+      "failure_replay_tombstone_rent_principal_lamports": 2,
       "recovery_reserve": {"lamports": 40, "collateral_atoms": 0},
       "source_work": {"lamports": 30, "collateral_atoms": 0},
       "liquidity_facility": {"lamports": 40, "collateral_atoms": 100},
@@ -1376,14 +1380,14 @@ fn checked_manifest_contains_the_self_contained_fixture_and_every_vector() {
       "padding": "six zero recovery-attempt funding rows"
     },
     "series_attachment_plan": {
-      "funding_quote_id": "44f18205471449455ee992ec0613362f5651613c2c9819568560eebbd69cfc99",
+      "funding_quote_id": "a92fd091ed23988fa0fa801c4255f73f5040fc8d90bd0d49e94e5ee1bd94e70f",
       "liquidity_facility_plan_id": "[41;32]",
       "wrapper_recipe_set_id": "[42;32]"
     },
     "series_plan": {
       "product_template_id": "43dc967326bddff69db86b4d4be58bab67a582b1fc558326aa9c7e4cbc158419",
       "market_genesis_profile_id": "1a18d2658833f12fb8ea67a9a1ff6bb7331ce647fee72fe11b536d105f292f36",
-      "attachment_plan_id": "35d1e74275a4ee21d19f2b68688adefbb14e2cfe6ea4caeef83d8f9b768d602f",
+      "attachment_plan_id": "ff6bc419f13b5761fb7c0961c68c7c6976c48b6e98ce56dd7b36d0fa88c5450a",
       "first_start_bucket": 100,
       "stride_buckets": 10,
       "instance_count": 3,
@@ -1391,7 +1395,7 @@ fn checked_manifest_contains_the_self_contained_fixture_and_every_vector() {
       "market_collateral_cap": 1000
     },
     "series_funding_terms": {
-      "series_plan_id": "6e7ea7187db15c1e630938ebf12bb1788b9f0089e0769c29a45270922c9be58a",
+      "series_plan_id": "146ecfa93d5941488d601e98e84dfd7b660afdf0edf95fda879b3516550f981a",
       "lamport_principal_refund": "[50;32]",
       "collateral_principal_refund_token_account": "[51;32]",
       "neutral_sink": "[52;32]",

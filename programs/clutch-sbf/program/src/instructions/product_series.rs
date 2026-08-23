@@ -19,6 +19,9 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, create_pda_account, read_rent, require_creatable,
     require_system_program, transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::series_failure_funding::{
+    mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
+};
 use crate::loader_state::{decode_loader_pair_v1, LoaderAccountViewV1};
 use crate::seeds;
 use clutch_collateral_adapter_v2::{
@@ -3096,7 +3099,9 @@ pub fn lapse_series_occurrence(
 /// crosses this boundary.
 #[allow(clippy::too_many_arguments)]
 pub fn advance_series_occurrence_from_source<A: AuthenticatedSeriesFundingAuthorityV1 + ?Sized>(
+    program_id: &Pubkey,
     funding_account: &AccountInfo<'_>,
+    market_core_lamport_vault: &AccountInfo<'_>,
     funding: AuthenticatedSeriesFundingAccountV1,
     registry: AuthenticatedSeriesRegistryAccountV1,
     artifacts: &AuthenticatedSeriesArtifactsV1,
@@ -3106,7 +3111,10 @@ pub fn advance_series_occurrence_from_source<A: AuthenticatedSeriesFundingAuthor
     expected_source_occurrence_id: SourceOccurrenceV1Id,
     expected_market_instance_id: clutch_product_series::MarketInstanceV2Id,
     expected_ordinal: u32,
-) -> Outcome<clutch_product_series::DebitProjectionV1> {
+) -> Outcome<(
+    clutch_product_series::DebitProjectionV1,
+    Option<SeriesMarketCoreFundingReceiptV1>,
+)> {
     require(registry.activation_consumed(), ClutchError::Replay)?;
     let series_plan_id = artifacts
         .series
@@ -3158,8 +3166,84 @@ pub fn advance_series_occurrence_from_source<A: AuthenticatedSeriesFundingAuthor
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     require(ordinal == expected_ordinal, ClutchError::Replay)?;
+    let market_core_receipt = authenticate_market_core_funding_receipt(
+        program_id,
+        funding,
+        artifacts,
+        expected_ordinal,
+        expected_market_instance_id,
+        debit,
+        market_core_lamport_vault,
+    )?;
     write_series_funding_state(funding_account, funding, next)?;
-    Ok(debit)
+    Ok((debit, market_core_receipt))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_market_core_funding_receipt(
+    program_id: &Pubkey,
+    funding: AuthenticatedSeriesFundingAccountV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+    ordinal: u32,
+    market_instance_id: clutch_product_series::MarketInstanceV2Id,
+    debit: clutch_product_series::DebitProjectionV1,
+    market_core_lamport_vault: &AccountInfo<'_>,
+) -> Outcome<Option<SeriesMarketCoreFundingReceiptV1>> {
+    if debit.market_core == ComponentDebitV1::ZERO {
+        return Ok(None);
+    }
+    require(
+        debit.market_core == artifacts.quote.market_core,
+        ClutchError::MismatchedState,
+    )?;
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_quote_id = artifacts
+        .quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_lamport_vault_metadata(
+        program_id,
+        series_plan_id,
+        SeriesFundingComponentV1::MarketCore.index(),
+        market_core_lamport_vault,
+    )?;
+    let vault_balance_before = accounted_custody_balances(&funding.value().state)?.lamports
+        [SeriesFundingComponentV1::MarketCore.index()];
+    require(
+        market_core_lamport_vault.lamports() == vault_balance_before,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let vault_balance_after = sub(vault_balance_before, debit.market_core.lamports)?;
+    let failure_account_rent = add(
+        artifacts.quote.failure_root_rent_principal_lamports,
+        artifacts
+            .quote
+            .failure_replay_tombstone_rent_principal_lamports,
+    )?;
+    let vault_balance_after_failure_accounts = sub(vault_balance_before, failure_account_rent)?;
+    let generation = SERIES_ACTIVATION_GENERATION_V1;
+    Ok(Some(mint_series_market_core_funding_receipt_v1(
+        series_plan_id,
+        ordinal,
+        market_instance_id,
+        funding_quote_id,
+        funding.account(),
+        *market_core_lamport_vault.key,
+        artifacts.funding_terms.lamport_principal_refund,
+        artifacts.funding_terms.neutral_lamport_sink,
+        generation,
+        debit.market_core.lamports,
+        artifacts.quote.failure_root_rent_principal_lamports,
+        artifacts
+            .quote
+            .failure_replay_tombstone_rent_principal_lamports,
+        vault_balance_before,
+        vault_balance_after_failure_accounts,
+        vault_balance_after,
+    )))
 }
 
 fn require_lamport_vault_metadata(
