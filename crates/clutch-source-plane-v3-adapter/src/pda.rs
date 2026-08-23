@@ -106,13 +106,13 @@ impl PdaRecipeV3 {
         )
     }
 
-    /// Immutable Source work or terminal receipt content address.
-    pub fn source_work_receipt(receipt_id: ContentId) -> Result<Self> {
-        live(receipt_id)?;
+    /// Immutable Source work or terminal receipt at its predictable slot.
+    pub fn source_work_receipt(receipt_slot_id: ContentId) -> Result<Self> {
+        live(receipt_slot_id)?;
         Self::two(
             PdaFamilyV3::SourceWorkReceipt,
             b"dc-sp3-work-receipt",
-            &receipt_id.bytes(),
+            &receipt_slot_id.bytes(),
         )
     }
 

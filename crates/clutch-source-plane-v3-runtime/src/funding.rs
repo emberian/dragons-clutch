@@ -1,5 +1,6 @@
 use clutch_source_plane_v3::ContentId;
 
+use crate::account::RuntimeAccountHeaderV1;
 use crate::auth::{
     account_data_id, domain_id, live_id, AuthenticatedSourceRouteV1, RuntimeAccountViewV1,
     RuntimeDerivedPdaV1, RuntimeKey,
@@ -17,6 +18,7 @@ const SOURCE_WORK_SCHEDULE_MAGIC: [u8; 8] = *b"DCSWSV01";
 const SOURCE_WORK_RECEIPT_ACCOUNT_DOMAIN: &[u8] = b"dragons-clutch/source-work-receipt-account/v1";
 const SOURCE_WORK_RECEIPT_AUTH_DOMAIN: &[u8] =
     b"dragons-clutch/authenticated-source-work-receipt-account/v1";
+const SOURCE_RECEIPT_SLOT_DOMAIN: &[u8] = b"dragons-clutch/source-receipt-slot/v1";
 const SOURCE_WORK_RECEIPT_MAGIC: [u8; 8] = [0x92, 1, b'D', b'C', b'S', b'W', b'R', b'1'];
 
 /// Exact canonical bytes in one persisted Source work or terminal receipt.
@@ -251,6 +253,52 @@ pub fn plan_source_account_close(
         principal_recipient: ledger.principal_recipient,
         payer_refund_lamports: ledger.payer_principal_lamports,
         neutral_sink: ledger.neutral_sink,
+        neutral_surplus_lamports,
+        terminal_receipt_id,
+        close_receipt_id,
+    })
+}
+
+/// Split one globally tagged runtime account directly from its persisted header.
+///
+/// The header is the durable close authority. Rent-quote details used during
+/// creation are intentionally unnecessary at close: only exact payer
+/// principal, the donation floor, the current balance, and the frozen sink
+/// determine the exhaustive split.
+pub fn plan_runtime_account_close_from_header(
+    account: RuntimeKey,
+    header: RuntimeAccountHeaderV1,
+    neutral_sink: RuntimeKey,
+    actual_balance_lamports: u64,
+    terminal_receipt_id: ContentId,
+) -> Result<AccountCloseFundingV1> {
+    account.validate()?;
+    header.validate(neutral_sink)?;
+    live_id(terminal_receipt_id)?;
+    if account == neutral_sink || actual_balance_lamports < header.payer_principal_lamports {
+        return Err(Error::CloseMismatch);
+    }
+    let neutral_surplus_lamports = actual_balance_lamports
+        .checked_sub(header.payer_principal_lamports)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if neutral_surplus_lamports < header.donation_floor_lamports {
+        return Err(Error::CloseMismatch);
+    }
+    let mut bytes = [0_u8; 160];
+    bytes[..32].copy_from_slice(&account.bytes());
+    bytes[32..40].copy_from_slice(&header.generation.to_le_bytes());
+    bytes[40..72].copy_from_slice(&header.principal_recipient.bytes());
+    bytes[72..80].copy_from_slice(&header.payer_principal_lamports.to_le_bytes());
+    bytes[80..112].copy_from_slice(&neutral_sink.bytes());
+    bytes[112..120].copy_from_slice(&neutral_surplus_lamports.to_le_bytes());
+    bytes[120..152].copy_from_slice(&terminal_receipt_id.bytes());
+    let close_receipt_id = domain_id(CLOSE_FUNDING_DOMAIN, &bytes);
+    Ok(AccountCloseFundingV1 {
+        account,
+        generation: header.generation,
+        principal_recipient: header.principal_recipient,
+        payer_refund_lamports: header.payer_principal_lamports,
+        neutral_sink,
         neutral_surplus_lamports,
         terminal_receipt_id,
         close_receipt_id,
@@ -702,6 +750,29 @@ pub struct SourceWorkAuthorizationV1 {
 }
 
 impl SourceWorkAuthorizationV1 {
+    /// Predictable receipt slot before the physical PDA is derived.
+    pub fn receipt_slot_id(
+        route: AuthenticatedSourceRouteV1,
+        schedule: SourceWorkScheduleBindingV1,
+        kind: SourceWorkKindV1,
+        call_ordinal: u32,
+        semantic_receipt_id: ContentId,
+    ) -> Result<ContentId> {
+        schedule.validate_against(route)?;
+        live_id(semantic_receipt_id)?;
+        if call_ordinal == 0 || call_ordinal > schedule.maximum_calls {
+            return Err(Error::MismatchedBinding);
+        }
+        source_receipt_slot_id(
+            route,
+            schedule,
+            SourceReceiptDispositionV1::Work,
+            Some(kind),
+            call_ordinal,
+            semantic_receipt_id,
+        )
+    }
+
     /// Bind one concrete transition to a heterogeneous schedule entry.
     pub fn new(
         route: AuthenticatedSourceRouteV1,
@@ -837,6 +908,29 @@ pub struct SourceTerminalAuthorizationV1 {
 }
 
 impl SourceTerminalAuthorizationV1 {
+    /// Predictable terminal receipt slot before the physical PDA is derived.
+    pub fn receipt_slot_id(
+        route: AuthenticatedSourceRouteV1,
+        schedule: SourceWorkScheduleBindingV1,
+        outcome: SourceTerminalOutcomeV1,
+        semantic_terminal_receipt_id: ContentId,
+    ) -> Result<ContentId> {
+        schedule.validate_against(route)?;
+        live_id(semantic_terminal_receipt_id)?;
+        let disposition = match outcome {
+            SourceTerminalOutcomeV1::Success => SourceReceiptDispositionV1::TerminalSuccess,
+            SourceTerminalOutcomeV1::Failure => SourceReceiptDispositionV1::TerminalFailure,
+        };
+        source_receipt_slot_id(
+            route,
+            schedule,
+            disposition,
+            None,
+            0,
+            semantic_terminal_receipt_id,
+        )
+    }
+
     /// Bind a family terminal fact with canonical zero call ordinal/ceiling semantics.
     pub fn new(
         route: AuthenticatedSourceRouteV1,
@@ -1116,6 +1210,26 @@ impl SourceWorkReceiptAccountV1 {
         ))
     }
 
+    /// Predictable content coordinate used to derive this receipt account.
+    ///
+    /// Unlike [`Self::receipt_id`], this excludes the physical account and
+    /// therefore cannot create an address/receipt fixed point.
+    pub fn receipt_slot_id(
+        self,
+        route: AuthenticatedSourceRouteV1,
+        schedule: SourceWorkScheduleBindingV1,
+    ) -> Result<ContentId> {
+        self.validate_against(route, schedule)?;
+        source_receipt_slot_id(
+            route,
+            schedule,
+            self.disposition,
+            self.work_kind,
+            self.call_ordinal,
+            self.semantic_receipt_id,
+        )
+    }
+
     /// Work versus terminal disposition.
     pub const fn disposition(self) -> SourceReceiptDispositionV1 {
         self.disposition
@@ -1291,6 +1405,16 @@ pub struct AuthenticatedSourceWorkReceiptV1 {
     authentication_id: ContentId,
 }
 
+/// Runtime privilege under which an immutable receipt body is authenticated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SourceWorkReceiptAccessV1 {
+    /// Existing evidence consumed by a later instruction.
+    ExistingReadOnly = 1,
+    /// Exact postimage created by the current atomic instruction.
+    CreatedMutable = 2,
+}
+
 impl AuthenticatedSourceWorkReceiptV1 {
     /// Physical immutable receipt account.
     pub const fn account(self) -> RuntimeKey {
@@ -1323,17 +1447,21 @@ impl AuthenticatedSourceWorkReceiptV1 {
     }
 }
 
-/// Authenticate one exact read-only Source receipt account and quote schedule.
+/// Authenticate one exact existing or just-created Source receipt postimage.
 pub fn authenticate_source_work_receipt_account(
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
     account: RuntimeAccountViewV1<'_>,
     derived_pda: RuntimeDerivedPdaV1,
+    access: SourceWorkReceiptAccessV1,
 ) -> Result<AuthenticatedSourceWorkReceiptV1> {
     if account.owner != route.adapter_program() {
         return Err(Error::WrongOwner);
     }
-    if account.executable || account.signer || account.writable {
+    if account.executable
+        || account.signer
+        || account.writable != (access == SourceWorkReceiptAccessV1::CreatedMutable)
+    {
         return Err(Error::WrongPrivilege);
     }
     let receipt = SourceWorkReceiptAccountV1::decode(account.data)?;
@@ -1341,7 +1469,7 @@ pub fn authenticate_source_work_receipt_account(
     if receipt.receipt_account_id() != account.key {
         return Err(Error::WrongAccount);
     }
-    let recipe = PdaRecipeV3::source_work_receipt(receipt.receipt_id())?;
+    let recipe = PdaRecipeV3::source_work_receipt(receipt.receipt_slot_id(route, schedule)?)?;
     derived_pda.validate_for(
         route.adapter_program(),
         recipe.id()?,
@@ -1364,6 +1492,38 @@ pub fn authenticate_source_work_receipt_account(
         pda_bump: derived_pda.bump,
         authentication_id: domain_id(SOURCE_WORK_RECEIPT_AUTH_DOMAIN, &bytes),
     })
+}
+
+fn source_receipt_slot_id(
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    disposition: SourceReceiptDispositionV1,
+    work_kind: Option<SourceWorkKindV1>,
+    call_ordinal: u32,
+    semantic_receipt_id: ContentId,
+) -> Result<ContentId> {
+    schedule.validate_against(route)?;
+    live_id(semantic_receipt_id)?;
+    let kind = match disposition {
+        SourceReceiptDispositionV1::Work => work_kind.ok_or(Error::InvalidCodec)? as u8,
+        SourceReceiptDispositionV1::TerminalSuccess
+        | SourceReceiptDispositionV1::TerminalFailure => {
+            if work_kind.is_some() || call_ordinal != 0 {
+                return Err(Error::InvalidCodec);
+            }
+            0
+        }
+    };
+    let mut bytes = [0_u8; 152];
+    bytes[0] = disposition as u8;
+    bytes[1] = kind;
+    bytes[8..40].copy_from_slice(&route.route_id().bytes());
+    bytes[40..72].copy_from_slice(&schedule.source_work_schedule_id.bytes());
+    bytes[72..104].copy_from_slice(&schedule.lifecycle_id.bytes());
+    bytes[104..112].copy_from_slice(&schedule.generation.to_le_bytes());
+    bytes[112..116].copy_from_slice(&call_ordinal.to_le_bytes());
+    bytes[120..152].copy_from_slice(&semantic_receipt_id.bytes());
+    Ok(domain_id(SOURCE_RECEIPT_SLOT_DOMAIN, &bytes))
 }
 
 fn runtime_key_at(input: &[u8], at: usize) -> RuntimeKey {
