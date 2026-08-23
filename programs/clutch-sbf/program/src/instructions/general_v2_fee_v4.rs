@@ -34,17 +34,19 @@ use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
 use clutch_general_v2_contract::{
     payer_allocation_account_data_id_v1, Id32, OwnerFeeCarryV1AccountV1,
-    OwnerSettlementSeedTupleV5, PayerAllocationV1AccountV1, SelectedFeeRecordV1AccountV1,
-    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
-    Sha256BackendV1,
+    DeletableRentOwnerV1, OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1,
+    PayerAllocationV1AccountV1, SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1,
+    SettlementRootPhaseV1, SettlementRootV1AccountV1, Sha256BackendV1,
     OWNER_FEE_CARRY_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_BYTES,
-    SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    SELECTED_FEE_RECORD_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
 };
 use clutch_general_v2_runtime::{
     derive_root_owner_basis_v4, CandidateEntitlementProjectionV4, OwnerRowFeeEvidenceV4,
+    SettlementTraversalProjectionV4,
 };
 use clutch_owner_settlement::{
-    OwnerSettlementExpectationBasisV4, OwnerSettlementExpectationV4, SelectedOwnerFeeV1,
+    OwnerSettlementExpectationBasisV4, OwnerSettlementExpectationV4, OwnerSettlementStateV4,
+    SelectedOwnerFeeV1,
 };
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use solana_account_info::AccountInfo;
@@ -201,6 +203,47 @@ pub struct PreparedOwnerFeeAction24V5 {
     owner_row_seed: OwnerSettlementSeedTupleV5,
     owner_row_bump: u8,
     evidence: PreparedOwnerFeeEvidenceV4,
+}
+
+/// Root-bound authenticated V5 owner-row/fee prestate for action 38.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedOwnerFeeAction38V5 {
+    owner_row_account: Id32,
+    owner_row: OwnerSettlementV5AccountV1,
+    owner_row_prestate_data_id: Id32,
+    evidence: PreparedOwnerFeeEvidenceV4,
+}
+
+impl PreparedOwnerFeeAction38V5 {
+    /// Canonical writable V5 owner-row PDA.
+    pub const fn owner_row_account(&self) -> Id32 {
+        self.owner_row_account
+    }
+
+    /// Exact hostile-byte-decoded V5 outer and V4 semantic prestate.
+    pub const fn owner_row(&self) -> OwnerSettlementV5AccountV1 {
+        self.owner_row
+    }
+
+    /// Complete-data identity of the exact 340-byte owner-row prestate.
+    pub const fn owner_row_prestate_data_id(&self) -> Id32 {
+        self.owner_row_prestate_data_id
+    }
+
+    /// Exact root/policy/payer evidence with an explicit no-fee branch.
+    pub const fn evidence(&self) -> PreparedOwnerFeeEvidenceV4 {
+        self.evidence
+    }
+
+    /// Complete payer-prestate data identity only when a real fee record exists.
+    pub const fn payer_allocation_data_id(&self) -> Option<FeeId> {
+        match self.evidence {
+            PreparedOwnerFeeEvidenceV4::CandidateFee(value) => {
+                Some(value.payer_allocation_data_id())
+            }
+            PreparedOwnerFeeEvidenceV4::NoFeeRecord(_) => None,
+        }
+    }
 }
 
 impl PreparedOwnerFeeAction24V5 {
@@ -416,6 +459,25 @@ fn require_selected_fee_binding_v4(
             && revenue_record.realm.bytes() == expected.realm.bytes()
             && revenue_record.policy_digest.bytes() == expected.revenue_policy.bytes()
             && revenue_record.treasury.bytes() == selected.treasury_owner().0,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn require_owner_row_rent_v5(
+    rent: DeletableRentOwnerV1,
+    owner_row: Id32,
+    settlement_root: Id32,
+    current_lamports: u64,
+) -> Outcome<()> {
+    rent.validate()?;
+    let recorded_balance_floor = rent
+        .refundable_principal
+        .checked_add(rent.donation_floor)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        rent.payer != owner_row
+            && rent.payer != settlement_root
+            && current_lamports >= recorded_balance_floor,
         ClutchError::MismatchedState,
     )
 }
@@ -691,6 +753,100 @@ pub fn prepare_owner_fee_action24_v5(
     })
 }
 
+/// Authenticate the rent-owned owner-row and fee prestates for action 38.
+///
+/// The traversal must be the exhaustive retained-Feed/V5-page projection
+/// bound to the independently authenticated counted root.  This function
+/// requires the exact accounting-complete row and complete merge-delivery
+/// latch, but it does not inspect or mutate Position, Replay, cash pot, fee
+/// finalization, or root counters.  The General composer must atomically join
+/// those semantic owners before any write or close.
+pub fn prepare_owner_fee_action38_v5(
+    program_id: &Pubkey,
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
+    traversal: &SettlementTraversalProjectionV4,
+    owner_row: &AccountInfo<'_>,
+    fee_accounts: OwnerFeeAccountInputV4<'_, '_>,
+) -> Outcome<PreparedOwnerFeeAction38V5> {
+    require(
+        authenticated_root.root().phase() == SettlementRootPhaseV1::Settling,
+        ClutchError::MismatchedState,
+    )?;
+    require(owner_row.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!owner_row.executable, ClutchError::ExecutableAccount)?;
+    require(owner_row.is_writable, ClutchError::NotWritable)?;
+    require(
+        owner_row.data_len() == OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
+        ClutchError::WrongDataLength,
+    )?;
+    let decoded = OwnerSettlementV5AccountV1::decode(&borrow_data(owner_row)?)?;
+    let expectation = decoded.semantic.expectation();
+    let owner = Id32::from_bytes(expectation.owner());
+    let owner_row_seed = OwnerSettlementSeedTupleV5::new(
+        authenticated_root.root().epoch(),
+        authenticated_root.root().settlement_candidate_id(),
+        owner,
+    )?;
+    expect_pda(
+        owner_row.key,
+        seeds::find(
+            program_id,
+            &[
+                owner_row_seed.domain(),
+                owner_row_seed.epoch(),
+                owner_row_seed.settlement_candidate(),
+                owner_row_seed.owner(),
+            ],
+        ),
+        Some(decoded.stored_bump),
+    )?;
+    require_owner_row_rent_v5(
+        decoded.rent,
+        id(owner_row.key),
+        authenticated_root.account(),
+        owner_row.lamports(),
+    )?;
+    require(
+        decoded.semantic.state() == OwnerSettlementStateV4::AccountingComplete
+            && decoded
+                .semantic
+                .merge_delivered_count()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == expectation.expected_merge_delivery_count(),
+        ClutchError::MismatchedState,
+    )?;
+    let basis = derive_root_owner_basis_v4(
+        authenticated_root.account(),
+        authenticated_root.root(),
+        traversal,
+        owner,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let context = RootDerivedOwnerFeeContextV4::new(
+        authenticated_root.account(),
+        authenticated_root.root(),
+        Id32::from_bytes(traversal.position_market_binding().realm_id.bytes()),
+        id(owner_row.key),
+        basis,
+    )?;
+    let evidence = prepare_root_owner_fee_evidence_v4(
+        program_id,
+        context,
+        fee_accounts,
+        OwnerFeeSnapshotUseV4::Finalize,
+    )?;
+    require(
+        evidence.expectation() == expectation,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(PreparedOwnerFeeAction38V5 {
+        owner_row_account: id(owner_row.key),
+        owner_row: decoded,
+        owner_row_prestate_data_id: decoded.data_id(&RuntimeSha256)?,
+        evidence,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -837,6 +993,31 @@ mod tests {
         assert_eq!(
             require_distinct_keys(&policy_alias),
             Err(Refusal::Adapter(ClutchError::AccountAlias))
+        );
+    }
+
+    #[test]
+    fn v5_rent_principal_and_prefund_are_not_fee_value() {
+        let row = Id32::from_bytes([31; 32]);
+        let root = Id32::from_bytes([32; 32]);
+        let rent = DeletableRentOwnerV1 {
+            payer: Id32::from_bytes([33; 32]),
+            refundable_principal: 1_000,
+            donation_floor: 40,
+        };
+        assert_eq!(require_owner_row_rent_v5(rent, row, root, 1_040), Ok(()));
+        assert_eq!(
+            require_owner_row_rent_v5(rent, row, root, 1_039),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+        assert_eq!(
+            require_owner_row_rent_v5(
+                DeletableRentOwnerV1 { payer: row, ..rent },
+                row,
+                root,
+                1_040,
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
     }
 }
