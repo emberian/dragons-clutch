@@ -23,6 +23,7 @@ mod crank;
 mod decode;
 mod friday;
 mod http;
+mod index_api;
 mod integer;
 mod plan;
 mod pyth;

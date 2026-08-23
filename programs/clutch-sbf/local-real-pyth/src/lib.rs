@@ -5,10 +5,18 @@
 //! later interactive loop does not grow a second serializer or fall back to
 //! the mock-source Friday fixture.
 
+#[cfg(feature = "operator")]
+pub mod account_index;
 mod capture;
+#[cfg(feature = "operator")]
+pub mod index_service;
+#[cfg(feature = "operator")]
+pub mod operatord;
 pub mod plane;
 #[cfg(feature = "campaign")]
 pub mod provider;
+#[cfg(feature = "operator")]
+pub mod rpc_index;
 #[cfg(feature = "builder")]
 pub mod session;
 pub mod session_builder;

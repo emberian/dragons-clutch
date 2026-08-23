@@ -30,12 +30,12 @@ use {
 
 #[cfg(feature = "non-production-product-series-lab")]
 use clutch_product_series::{
-    ComponentDebitV1, ContentId, EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RecoveryAttemptFundingV1,
-    RecoveryAttemptV1, SeriesAttachmentPlanV1, SeriesFundingQuoteV1, SeriesFundingTermsV2,
-    SeriesPlanV5, SeriesPlanV5Id, BASIS_BYTES, MAX_OUTCOMES as PRODUCT_MAX_OUTCOMES,
-    MAX_PAYOUTS as PRODUCT_MAX_PAYOUTS, MAX_RECOVERY_ATTEMPTS, PAYOUT_MAP_UNUSED,
-    RECOVERY_POLICY_DOMAIN, UNIFORM_SPACING_NONE,
+    CompiledProductSeriesBundleV1, ComponentDebitV1, ContentId, EvidenceOnlyRecoveryPolicyV1,
+    FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    ProductTemplateV4, RecoveryAttemptFundingV1, RecoveryAttemptV1, SeriesAttachmentPlanV1,
+    SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5, SeriesPlanV5Id, BASIS_BYTES,
+    MAX_OUTCOMES as PRODUCT_MAX_OUTCOMES, MAX_PAYOUTS as PRODUCT_MAX_PAYOUTS,
+    MAX_RECOVERY_ATTEMPTS, PAYOUT_MAP_UNUSED, RECOVERY_POLICY_DOMAIN, UNIFORM_SPACING_NONE,
 };
 #[cfg(feature = "non-production-product-series-lab")]
 use sha2::{Digest, Sha256};
@@ -105,7 +105,9 @@ fn derive_final(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Address
         | ArtifactKind::SeriesFundingQuoteV1
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
-        | ArtifactKind::SeriesFundingTermsV2) => {
+        | ArtifactKind::SeriesFundingTermsV2
+        | ArtifactKind::ProductCapabilityRegistryV2
+        | ArtifactKind::CompiledProductSeriesBundleV1) => {
             return Address::find_program_address(
                 &[
                     seeds::SEED_PRODUCT_ARTIFACT_V1,
@@ -577,6 +579,29 @@ fn product_funding_terms() -> SeriesFundingTermsV2 {
 }
 
 #[cfg(feature = "non-production-product-series-lab")]
+fn compiled_product_series_bundle() -> CompiledProductSeriesBundleV1 {
+    let template = product_template();
+    CompiledProductSeriesBundleV1 {
+        registry_release_id: product_id(60),
+        capability_profile_id: product_genesis().capability_profile_id,
+        source_release_manifest_id: product_id(61),
+        source_plane_contract_id: template.source_plane_contract_id,
+        source_spec_id: template.source_spec_id,
+        summary_program_id: template.summary_program_id,
+        product_compiler_release_id: template.compiler_release_id,
+        native_claim_basis_id: product_basis().id().unwrap(),
+        evidence_only_recovery_policy_id: product_recovery().id().unwrap(),
+        product_template_id: template.id().unwrap(),
+        price_measure_policy_id: product_price_policy().id().unwrap(),
+        market_genesis_profile_id: product_genesis().id().unwrap(),
+        funding_quote_id: product_quote().id().unwrap(),
+        attachment_plan_id: product_attachment().id().unwrap(),
+        series_plan_id: product_series().id().unwrap(),
+        funding_terms_id: product_funding_terms().id().unwrap(),
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
 fn other_product_artifact_bodies() -> Vec<(ArtifactKind, Vec<u8>, Hash32)> {
     let mut cases = Vec::new();
     macro_rules! push {
@@ -598,6 +623,10 @@ fn other_product_artifact_bodies() -> Vec<(ArtifactKind, Vec<u8>, Hash32)> {
     push!(ArtifactKind::SeriesAttachmentPlanV1, product_attachment());
     push!(ArtifactKind::SeriesPlanV5, product_series());
     push!(ArtifactKind::SeriesFundingTermsV2, product_funding_terms());
+    push!(
+        ArtifactKind::CompiledProductSeriesBundleV1,
+        compiled_product_series_bundle()
+    );
     cases
 }
 
