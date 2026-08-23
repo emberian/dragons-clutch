@@ -16,8 +16,10 @@
 mod construction;
 mod custody_wire;
 mod descriptor;
+mod market_root;
 mod market_projection;
 mod position_transfer;
+mod recipe;
 mod replay_v3;
 mod runtime;
 mod wire;
@@ -39,6 +41,15 @@ pub use descriptor::{
     DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
     HISTORICAL_DESCRIPTOR_ACCOUNT_BYTES_V1, HISTORICAL_DESCRIPTOR_ACCOUNT_VERSION_V1,
 };
+pub use market_root::{
+    structured_descriptor_admission_receipt_v1, structured_owner_release_id_v1,
+    StructuredMarketRootBindingV1,
+    StructuredMarketRootV1, StructuredProductLineageV1,
+    STRUCTURED_DESCRIPTOR_ADMISSION_DOMAIN_V1, STRUCTURED_DESCRIPTOR_TERMINAL_DOMAIN_V1,
+    STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES, STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
+    STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION, STRUCTURED_MARKET_ROOT_BINDING_BYTES_V1,
+    STRUCTURED_MARKET_ROOT_BINDING_DOMAIN_V1, STRUCTURED_OWNER_RELEASE_DOMAIN_V1,
+};
 pub use market_projection::{
     project_structured_market_v1, StructuredMarketProjectionStateV1,
     StructuredMarketProjectionV1, STRUCTURED_MARKET_PROJECTION_PREIMAGE_BYTES_V1,
@@ -48,6 +59,15 @@ pub use position_transfer::{
     prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
     AtomicPositionAssetTransferRequestV1, AtomicPositionAssetTransferResultV1,
     PositionProjectionV1,
+};
+pub use recipe::{
+    authenticate_wrapper_recipe_membership_v1, build_wrapper_recipe_membership_v1, WrapperRecipeHashV1,
+    WrapperRecipeMembershipV1, WrapperRecipeV1, MAX_WRAPPER_RECIPES_V1,
+    MAX_WRAPPER_RECIPE_SLOTS_V1,
+    WRAPPER_RECIPE_ID_DOMAIN_V1, WRAPPER_RECIPE_MEMBERSHIP_BYTES_V1,
+    WRAPPER_RECIPE_MERKLE_DEPTH_BYTE_V1, WRAPPER_RECIPE_MERKLE_DEPTH_V1,
+    WRAPPER_RECIPE_NODE_DOMAIN_V1, WRAPPER_RECIPE_PREIMAGE_BYTES_V1,
+    WRAPPER_RECIPE_SET_ID_DOMAIN_V1, WRAPPER_RECIPE_SET_PREIMAGE_BYTES_V1,
 };
 pub use replay_v3::{
     StructuredClaimReplayDeltaV1, StructuredClaimReplayExtensionStateV1,

@@ -2,8 +2,8 @@
 
 use crate::runtime_contract::{
     reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1,
-    StructuredClaimDescriptorV2, StructuredClaimRuntimeAddressesV1, DESCRIPTOR_ACCOUNT_TAG,
-    DESCRIPTOR_ACCOUNT_VERSION,
+    StructuredClaimDescriptorV2, StructuredClaimRuntimeAddressesV1, WrapperRecipeV1,
+    DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION, WRAPPER_RECIPE_ID_DOMAIN_V1,
 };
 use clutch_structured_claim::DeploymentBinding;
 #[cfg(not(target_os = "solana"))]
@@ -19,6 +19,9 @@ pub const MINT_SEED: &[u8] = b"dc:claim-mint:v1";
 pub const MINT_AUTHORITY_SEED: &[u8] = b"dc:claim-mint-auth:v1";
 /// Base Position semantic-owner PDA seed prefix.
 pub const VAULT_OWNER_SEED: &[u8] = b"dc:claim-vault:v1";
+/// Series-link-scoped wrapper-product identity domain.
+pub const SERIES_SCOPED_WRAPPER_PRODUCT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/structured-claim/series-scoped-wrapper-product/v2\0";
 
 const _: () = assert!(DESCRIPTOR_ACCOUNT_TAG == 0x88);
 const _: () = assert!(DESCRIPTOR_ACCOUNT_VERSION == 2);
@@ -159,6 +162,39 @@ pub fn canonical_wrapper_product_id_v1(
     hash(&identity.product_preimage(native_claim_id)?)
 }
 
+/// Bind the deployment/native product to one exact Structured root and recipe.
+pub fn canonical_series_scoped_wrapper_product_id_v2(
+    identity: &DescriptorIdentityV1,
+    native_claim_id: Key,
+    structured_root_id: Key,
+    wrapper_recipe_id: Key,
+) -> Result<Key> {
+    if is_zero(&structured_root_id)
+        || is_zero(&wrapper_recipe_id)
+        || structured_root_id == wrapper_recipe_id
+    {
+        return Err(Error::DigestMismatch);
+    }
+    let recipe_preimage = WrapperRecipeV1 {
+        native_claim_id,
+        outcome_count: identity.claim.basis.outcome_count,
+        primitive: identity.claim.vector.coefficients,
+    }
+    .encode_preimage()
+    .map_err(|_| Error::DigestMismatch)?;
+    let canonical_recipe_id = hashv(&[WRAPPER_RECIPE_ID_DOMAIN_V1, &recipe_preimage])?;
+    if canonical_recipe_id != wrapper_recipe_id {
+        return Err(Error::DigestMismatch);
+    }
+    let deployment_product_id = canonical_wrapper_product_id_v1(identity, native_claim_id)?;
+    hashv(&[
+        SERIES_SCOPED_WRAPPER_PRODUCT_DOMAIN_V2,
+        &deployment_product_id,
+        &structured_root_id,
+        &wrapper_recipe_id,
+    ])
+}
+
 /// Join canonical descriptor semantics to exact deployments, hashes, and PDAs.
 #[allow(clippy::too_many_arguments)]
 pub fn bind_descriptor_v1<P: PdaVerifierV1>(
@@ -173,7 +209,12 @@ pub fn bind_descriptor_v1<P: PdaVerifierV1>(
     deployments.validate()?;
     let identity = reconstruct_descriptor_identity_v1(&descriptor, basis, deployments.binding)?;
     let native_claim_id = canonical_native_claim_id_v1(&identity)?;
-    let wrapper_product_id = canonical_wrapper_product_id_v1(&identity, native_claim_id)?;
+    let wrapper_product_id = canonical_series_scoped_wrapper_product_id_v2(
+        &identity,
+        native_claim_id,
+        descriptor.structured_root_id,
+        descriptor.wrapper_recipe_id,
+    )?;
     if native_claim_id != expected_native_claim_id
         || wrapper_product_id != expected_wrapper_product_id
         || is_zero(&native_claim_id)
@@ -242,13 +283,21 @@ pub fn bind_descriptor_v1<P: PdaVerifierV1>(
 }
 
 fn hash(input: &[u8]) -> Result<Key> {
+    hashv(&[input])
+}
+
+fn hashv(inputs: &[&[u8]]) -> Result<Key> {
     #[cfg(target_os = "solana")]
     {
-        Ok(solana_sha256_hasher::hash(input).to_bytes())
+        Ok(solana_sha256_hasher::hashv(inputs).to_bytes())
     }
     #[cfg(not(target_os = "solana"))]
     {
-        let digest = Sha256::digest(input);
+        let mut hasher = Sha256::new();
+        for input in inputs {
+            hasher.update(input);
+        }
+        let digest = hasher.finalize();
         let mut value = [0_u8; 32];
         value.copy_from_slice(&digest);
         Ok(value)
