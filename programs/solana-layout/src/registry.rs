@@ -95,6 +95,10 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
 pub const REPLAY_SUCCESSOR_ACCOUNT_VERSION: u8 = 1;
+/// Canonical purpose-owned Replay V3 envelope discriminator.
+pub const PURPOSE_REPLAY_V3_ACCOUNT_TAG: u8 = REPLAY_SUCCESSOR_ACCOUNT_TAG;
+/// Canonical purpose-owned Replay envelope version paired with Position V3.
+pub const PURPOSE_REPLAY_V3_ACCOUNT_VERSION: u8 = 3;
 /// Counted-retirement Market wrapper discriminator.
 pub const RETIREMENT_V2_MARKET_ACCOUNT_TAG: u8 = 3;
 /// Counted-retirement Market wrapper version.
@@ -508,6 +512,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "replay-successor-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PURPOSE_REPLAY_V3_ACCOUNT_TAG,
+            version: PURPOSE_REPLAY_V3_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "purpose-owned-replay-v3-envelope",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1338,6 +1351,10 @@ mod tests {
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,
                 REPLAY_SUCCESSOR_ACCOUNT_VERSION,
+            ),
+            (
+                PURPOSE_REPLAY_V3_ACCOUNT_TAG,
+                PURPOSE_REPLAY_V3_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_TAG,
