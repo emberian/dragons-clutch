@@ -227,11 +227,19 @@ pub const SEED_GENERAL_V2_ORDER_PAGE_V5: &[u8] =
 /// Disabled General V2 Reservation V3 seed prefix.
 pub const SEED_GENERAL_V2_RESERVATION_V3: &[u8] =
     clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V1;
+/// Disabled sole-future rent-owned General Reservation V9 seed prefix.
+pub const SEED_GENERAL_V2_RESERVATION_V9: &[u8] =
+    clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V9;
 /// Disabled General SettlementReceipt V3 seed prefix.
 pub const SEED_GENERAL_V2_RECEIPT: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
+/// Disabled sole-future rent-owned General SettlementReceipt V5 seed prefix.
+pub const SEED_GENERAL_V2_RECEIPT_V5: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V5;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
     clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
+/// Disabled sole-future rent-owned General owner-settlement V5 seed prefix.
+pub const SEED_GENERAL_V2_OWNER_SETTLEMENT_V5: &[u8] =
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V5;
 /// Disabled selected composite-fee record seed prefix.
 pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
     clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
@@ -581,6 +589,21 @@ pub fn general_v2_reservation_v3_pda(
     )
 }
 
+/// Canonical disabled rent-owned General V2 Reservation V9 PDA.
+///
+/// The fresh V9 semantic identity already commits MarketRuntime, Epoch,
+/// owner, Position generation, and order ID. Versions 5 and 7 retain their
+/// historical meanings and cannot alias this address family.
+pub fn general_v2_reservation_v9_pda(
+    program_id: &Pubkey,
+    reservation_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RESERVATION_V9, reservation_id],
+    )
+}
+
 /// Canonical disabled General SettlementReceipt V3 PDA.
 pub fn general_v2_receipt_pda(
     program_id: &Pubkey,
@@ -593,6 +616,25 @@ pub fn general_v2_receipt_pda(
         program_id,
         &[
             SEED_GENERAL_V2_RECEIPT,
+            epoch,
+            settlement_candidate,
+            &slice_index_le,
+        ],
+    )
+}
+
+/// Canonical disabled rent-owned General SettlementReceipt V5 PDA.
+pub fn general_v2_receipt_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    slice_index: u16,
+) -> (Pubkey, u8) {
+    let slice_index_le = slice_index.to_le_bytes();
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_RECEIPT_V5,
             epoch,
             settlement_candidate,
             &slice_index_le,
@@ -616,6 +658,24 @@ pub fn general_v2_owner_settlement_pda(
         program_id,
         &[
             SEED_GENERAL_V2_OWNER_SETTLEMENT,
+            epoch,
+            settlement_candidate,
+            owner,
+        ],
+    )
+}
+
+/// Canonical disabled rent-owned OwnerSettlement V5 PDA.
+pub fn general_v2_owner_settlement_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_OWNER_SETTLEMENT_V5,
             epoch,
             settlement_candidate,
             owner,
