@@ -14,6 +14,7 @@ use crate::instructions::failure_market_admission::{
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::product_market::AuthenticatedMarketFoundationPreallocationV2;
 use crate::seeds;
 use clutch_failure_policy_runtime::market_replay_v2::{
     admit_failure_market_replay_v2, AuthenticatedFailureMarketReplayFundingV2,
@@ -21,7 +22,7 @@ use clutch_failure_policy_runtime::market_replay_v2::{
     FailureMarketReplayPlanV2, FailureMarketReplayStateIdV2, FailureMarketReplayTerminalReceiptV2,
     FailureMarketReplayV2, FAILURE_MARKET_REPLAY_BYTES_V2,
 };
-use clutch_product_series::ContentId as ProductContentId;
+use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV2};
 use clutch_solana_layout::failure_market_replay_v2::{
     FailureMarketReplayAccountV2, FAILURE_MARKET_REPLAY_BODY_BYTES_V2,
 };
@@ -96,25 +97,39 @@ impl FailureMarketReplayPostimageV2 {
     }
 }
 
+/// Module-private bridge over Product's unforgeable slot-7 preallocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductFailureMarketReplayFundingV2 {
+    expected: FailureMarketReplayFundingFactsV2,
+}
+
+impl AuthenticatedFailureMarketReplayFundingV2 for ProductFailureMarketReplayFundingV2 {
+    fn authenticate_failure_market_replay_funding(
+        &self,
+        expected: FailureMarketReplayFundingFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if self.expected != expected {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Allocate, assign, and write the exact Product-prepaid Pending replay.
 ///
 /// This helper is crate-private and non-routable. Its authority must be a
 /// private adapter over Product's accepted slot-7 preallocation receipt; a
 /// caller-built facts value cannot pass the default-refusing pure trait.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn initialize_failure_market_replay_v2<'a, A>(
+pub(crate) fn initialize_failure_market_replay_v2<'a>(
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'a>,
     replay_account: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     admission: AuthenticatedFailureMarketRootV2,
-    product_foundation_authority: &A,
-    funding_facts: FailureMarketReplayFundingFactsV2,
-) -> Outcome<FailureMarketReplayPostimageV2>
-where
-    A: AuthenticatedFailureMarketReplayFundingV2 + ?Sized,
-{
+    product_preallocation: AuthenticatedMarketFoundationPreallocationV2,
+) -> Outcome<FailureMarketReplayPostimageV2> {
     require_system_program(system_program)?;
     require_distinct(&[
         admission_root_account.clone(),
@@ -128,6 +143,39 @@ where
     let admission = live_admission;
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
+    require(
+        product_preallocation.slot() == MarketFoundationSlotV2::FailureReplay
+            && product_preallocation.market_instance_id() == policy.market_instance_id
+            && product_preallocation.generation() == policy.generation
+            && product_preallocation.account() == *replay_account.key
+            && product_preallocation.root_account() != admission.account()
+            && product_preallocation.root_account() != *replay_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let funding_facts = FailureMarketReplayFundingFactsV2 {
+        failure_policy_binding_id: admission_state.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        prepaid_funding_receipt_id: product_preallocation.id(),
+        replay_account:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                replay_account.key.to_bytes(),
+            ),
+        permanent_rent_funder:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                product_preallocation.rent_refund_owner().to_bytes(),
+            ),
+        neutral_sink:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                product_preallocation.neutral_lamport_sink().to_bytes(),
+            ),
+        permanent_rent_principal_lamports: product_preallocation.principal_lamports(),
+        donation_floor_lamports: product_preallocation.donation_lamports(),
+        observed_balance_lamports: product_preallocation.observed_balance_lamports(),
+    };
+    let product_foundation_authority = ProductFailureMarketReplayFundingV2 {
+        expected: funding_facts,
+    };
     let expected_balance = funding_facts
         .permanent_rent_principal_lamports
         .checked_add(funding_facts.donation_floor_lamports)
@@ -156,7 +204,7 @@ where
     );
     expect_pda(replay_account.key, (expected_replay, bump), None)?;
     let (replay, funding) = admit_failure_market_replay_v2(
-        product_foundation_authority,
+        &product_foundation_authority,
         admission_state,
         funding_facts,
     )

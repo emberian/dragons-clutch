@@ -18,7 +18,8 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
 use crate::instructions::product_market::{
-    authenticate_market_instance_terminal_v1, AuthenticatedMarketInstanceTerminalV1,
+    authenticate_market_instance_terminal_v1, AuthenticatedMarketFoundationPreallocationV2,
+    AuthenticatedMarketInstanceTerminalV1,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
@@ -35,13 +36,16 @@ use clutch_failure_policy_runtime::market_interval_history_v2::{
     FailureMarketIntervalHistoryPlanV2, FailureMarketIntervalHistoryStateIdV2,
     FailureMarketIntervalHistoryV2, FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2,
 };
-use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateIdV1;
+use clutch_failure_policy_runtime::market_policy_v1::{
+    FailureMarketAccountIdV1, FailureMarketAdmissionStateIdV1,
+};
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
-use clutch_product_series::ContentId as ProductContentId;
+use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV2};
 use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
     FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2, FAILURE_MARKET_INTERVAL_HISTORY_BODY_BYTES_V2,
 };
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
 use clutch_solana_layout::registry::{
     FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES, FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES,
 };
@@ -171,6 +175,24 @@ impl FailureMarketIntervalPostimageV2 {
     }
 }
 
+/// Module-private bridge over Product's paired retained-slot receipts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductFailureMarketIntervalFundingV2 {
+    expected: FailureMarketIntervalFundingFactsV2,
+}
+
+impl AuthenticatedFailureMarketIntervalFundingV2 for ProductFailureMarketIntervalFundingV2 {
+    fn authenticate_failure_market_interval_funding(
+        &self,
+        expected: FailureMarketIntervalFundingFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if self.expected != expected {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Exact authenticated physical close of the sealed reusable interval pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedFailureMarketIntervalCloseV2 {
@@ -241,7 +263,7 @@ impl AuthenticatedFailureMarketIntervalCloseV2 {
 /// root/schedule/graph/transcript, live Rent, and the exact current zero-data
 /// balances. No caller-built amount or generic funding ID is sufficient.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn initialize_failure_market_interval_accounts_v2<'a, A>(
+pub(crate) fn initialize_failure_market_interval_accounts_v2<'a>(
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'a>,
     cell_account: &AccountInfo<'a>,
@@ -250,12 +272,9 @@ pub(crate) fn initialize_failure_market_interval_accounts_v2<'a, A>(
     system_program: &AccountInfo<'a>,
     admission: AuthenticatedFailureMarketRootV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
-    product_preallocation_authority: &A,
-    funding_facts: FailureMarketIntervalFundingFactsV2,
-) -> Outcome<FailureMarketIntervalPostimageV2>
-where
-    A: AuthenticatedFailureMarketIntervalFundingV2 + ?Sized,
-{
+    work_preallocation: AuthenticatedMarketFoundationPreallocationV2,
+    history_preallocation: AuthenticatedMarketFoundationPreallocationV2,
+) -> Outcome<FailureMarketIntervalPostimageV2> {
     require_system_program(system_program)?;
     require_distinct(&[
         admission_root_account.clone(),
@@ -270,6 +289,60 @@ where
     let admission = live_admission;
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
+    require(
+        work_preallocation.slot() == MarketFoundationSlotV2::FailureIntervalWork
+            && history_preallocation.slot() == MarketFoundationSlotV2::FailureIntervalHistory
+            && work_preallocation.id() != history_preallocation.id()
+            && work_preallocation.root_account() == history_preallocation.root_account()
+            && work_preallocation.root_authentication_id()
+                == history_preallocation.root_authentication_id()
+            && work_preallocation.market_instance_id() == policy.market_instance_id
+            && history_preallocation.market_instance_id() == policy.market_instance_id
+            && work_preallocation.generation() == policy.generation
+            && history_preallocation.generation() == policy.generation
+            && work_preallocation.account() == *cell_account.key
+            && history_preallocation.account() == *history_account.key
+            && work_preallocation.foundation_schedule_id()
+                == history_preallocation.foundation_schedule_id()
+            && work_preallocation.foundation_account_graph_id()
+                == history_preallocation.foundation_account_graph_id()
+            && work_preallocation.foundation_transcript_id()
+                == history_preallocation.foundation_transcript_id()
+            && work_preallocation.rent_refund_owner() == history_preallocation.rent_refund_owner()
+            && work_preallocation.neutral_lamport_sink()
+                == history_preallocation.neutral_lamport_sink()
+            && work_preallocation.root_account() != admission.account()
+            && work_preallocation.root_account() != *cell_account.key
+            && work_preallocation.root_account() != *history_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let funding_facts = FailureMarketIntervalFundingFactsV2 {
+        failure_policy_binding_id: admission_state.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        work_preallocation_receipt_id: work_preallocation.id(),
+        history_preallocation_receipt_id: history_preallocation.id(),
+        foundation_schedule_id: work_preallocation.foundation_schedule_id(),
+        foundation_account_graph_id: work_preallocation.foundation_account_graph_id(),
+        foundation_transcript_id: work_preallocation.foundation_transcript_id(),
+        work_account: FailureMarketAccountIdV1::from_bytes(cell_account.key.to_bytes()),
+        history_account: FailureMarketAccountIdV1::from_bytes(history_account.key.to_bytes()),
+        rent_refund_owner: FailureMarketAccountIdV1::from_bytes(
+            work_preallocation.rent_refund_owner().to_bytes(),
+        ),
+        neutral_sink: FailureMarketAccountIdV1::from_bytes(
+            work_preallocation.neutral_lamport_sink().to_bytes(),
+        ),
+        work_rent_principal_lamports: work_preallocation.principal_lamports(),
+        history_rent_principal_lamports: history_preallocation.principal_lamports(),
+        work_donation_floor_lamports: work_preallocation.donation_lamports(),
+        work_observed_balance_lamports: work_preallocation.observed_balance_lamports(),
+        history_donation_floor_lamports: history_preallocation.donation_lamports(),
+        history_observed_balance_lamports: history_preallocation.observed_balance_lamports(),
+    };
+    let product_preallocation_authority = ProductFailureMarketIntervalFundingV2 {
+        expected: funding_facts,
+    };
     let work_balance = funding_facts
         .work_rent_principal_lamports
         .checked_add(funding_facts.work_donation_floor_lamports)
@@ -320,7 +393,7 @@ where
     expect_pda(cell_account.key, (expected_cell, cell_bump), None)?;
     expect_pda(history_account.key, (expected_history, history_bump), None)?;
     let (history, funding) = admit_failure_market_interval_history_v2(
-        product_preallocation_authority,
+        &product_preallocation_authority,
         admission_state,
         quote,
         funding_facts,
@@ -801,6 +874,7 @@ pub(crate) fn close_failure_market_interval_accounts_v2<'a>(
     authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
     seal: FailureMarketIntervalFamilySealReceiptV2,
     market_terminal: AuthenticatedMarketInstanceTerminalV1,
+    market_root_output: &mut MarketLifecycleRootAccountV1,
 ) -> Outcome<AuthenticatedFailureMarketIntervalCloseV2> {
     require(
         !admission_root_account.is_writable && !market_root_account.is_writable,
@@ -813,6 +887,7 @@ pub(crate) fn close_failure_market_interval_accounts_v2<'a>(
         market_root_account,
         authenticated.cell.market_instance_id(),
         authenticated.cell.generation(),
+        market_root_output,
     )?;
     require(
         live_admission.account() == authenticated.admission_root_account
