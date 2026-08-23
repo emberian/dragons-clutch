@@ -77,6 +77,48 @@ Proof dependencies need the same review as runtime dependencies. A trusted
 specification, axiom, code generator, compiler plugin, or binary tool expands the
 evidence boundary even when it is not linked into the SBF ELF.
 
+### 3.1 `sha2` 0.10.9 admission for `clutch-product-series`
+
+Status: **admitted to the offline pure-core dependency lock; not a release
+approval or SBF promotion** (reviewed 2026-08-23).
+
+| Required fact | Admission record |
+| --- | --- |
+| Name and purpose | `sha2` 0.10.9 supplies the SHA-256 implementation used to derive the typed, domain-separated product, basis, recovery-policy, MarketInstance, Series, attachment, and funding identities in `crates/clutch-product-series`. These identities are semantic/consensus inputs, so the hash implementation is a production pure-core dependency rather than a test convenience. |
+| Upstream package/repository | crates.io package `sha2`; package metadata names `https://github.com/RustCrypto/hashes`, with `path_in_vcs` equal to `sha2`. Authors are recorded as “RustCrypto Developers.” |
+| Exact version and content | Exact requirement `=0.10.9`, registry source `registry+https://github.com/rust-lang/crates.io-index`. Cargo checksum and independently recomputed SHA-256 of the locally cached `sha2-0.10.9.crate` archive are both `a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283`. |
+| Upstream commit | The archive's Cargo-generated `.cargo_vcs_info.json` records RustCrypto/hashes commit `82c36a428f8d6f05f3bfccdedb243e9d1f85359d` and `path_in_vcs: sha2`. This is package-carried provenance, not an independently signed Git attestation. |
+| License and notices | Package metadata declares `MIT OR Apache-2.0` and the archive contains `LICENSE-MIT` and `LICENSE-APACHE`. The MIT file records copyright notices for Graydon Hoare, Mozilla Foundation, and Artyom Pavlov. No separate `NOTICE` file is present in the package. A distribution must retain the selected license text and applicable copyright/notice material; the repository-wide third-party notice bundle and human release-time license review remain outstanding. |
+| Source availability | Preferred source is identified by the repository/commit/path above. The exact crates.io source archive and its unpacked Rust source, manifest, licenses, README, changelog, tests, and benches were available in the local Cargo cache during this review. No source was copied into first-party code. |
+| Maintainer/release authenticity | Integrity was checked from the cached archive through the crates.io/Cargo checksum recorded in the lock. No maintainer signature, Sigstore record, independent Git checkout, or other release attestation was available or evaluated. The checksum authenticates bytes relative to registry metadata; it does not independently authenticate the publisher. |
+| Features enabled | `default-features = false`; no `sha2` feature is enabled. In particular `std`, `asm`, `asm-aarch64`, `loongarch64_asm`, `oid`, `compress`, `force-soft`, and `force-soft-compact` are not enabled. |
+| Classification | Production pure-core/runtime dependency for typed SHA-256 identities. It is not a proof, build, or dev dependency and is not presently linked into an admitted SBF ELF. Any later SBF use requires a target-specific closure and final-ELF review. |
+| Security and reproducibility | The crate assumes SHA-256 collision and preimage resistance and the correctness of this Rust implementation and its transitives; Dragon's Clutch has not formally verified that boundary. Exact versions/checksums are frozen by the crate-local lock. Offline `--locked` release tests, clippy, and rustdoc passed for the introducing core. Repository-wide advisory/SBOM review and a public third-party notice bundle remain release blockers. |
+| Reviewer and date | Codex dependency/provenance audit, 2026-08-23. This is a technical admission record, not human legal advice or final release approval. |
+
+The exact introducing lock is
+`crates/clutch-product-series/Cargo.lock`, SHA-256
+`ec92ea7f8b9119f36bb15cae13775ba3e3a5d12f8181da2919f9a157c825d897`.
+Its exact locked resolution covers the following normal and build dependencies;
+target-conditional packages remain lock entries:
+
+| Locked package | Cargo package checksum | Dependency role |
+| --- | --- | --- |
+| `sha2 0.10.9` | `a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283` | Direct SHA-256 implementation |
+| `cfg-if 1.0.4` | `9330f8b2ff13b34540b44e946ef35111825727b38d33286ef986142615121801` | Direct `sha2` configuration dependency |
+| `cpufeatures 0.2.17` | `59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280` | Target-conditional CPU-feature selection on aarch64/x86/x86_64 |
+| `libc 0.2.189` | `3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2` | Transitive of target-conditional `cpufeatures` |
+| `digest 0.10.7` | `9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292` | Hash trait and block-processing boundary |
+| `block-buffer 0.10.4` | `3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71` | Digest block buffering |
+| `crypto-common 0.1.7` | `78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a` | Shared cryptographic types |
+| `generic-array 0.14.7` | `85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a` | Fixed-size generic buffers |
+| `typenum 1.20.1` | `b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20` | Type-level lengths used by `generic-array`/`crypto-common` |
+| `version_check 0.9.5` | `0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a` | Build-time transitive of `generic-array`; locked even though it is not runtime code |
+
+Changing any direct version, feature, registry source, archive checksum, upstream
+commit claim, transitive version/checksum, or lock digest invalidates this record
+and requires a new admission review.
+
 ## 4. Fixtures and research inputs
 
 Every nontrivial fixture or dataset records:

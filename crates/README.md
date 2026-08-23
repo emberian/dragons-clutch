@@ -1,7 +1,7 @@
 # Rust crates
 
 This directory contains offline `no_std` crates
-(updated 2026-08-22; none is a deployment or release claim —
+(updated 2026-08-23; none is a deployment or release claim —
 `CURRENT_TRUTH.md` supersedes status language here):
 
 - `clutch-kernel` — pure `no_std` collateral-generic complete-claim transition
@@ -25,6 +25,11 @@ This directory contains offline `no_std` crates
 - `clutch-structured-claim` — exact rational coefficient realization,
   complete-set-compressed native backing, flat wrapper composition, and
   transactional transferable-claim custody/lifecycle semantics.
+- `clutch-product-series` — strict fixed-layout product/basis/evidence-recovery,
+  MarketInstance, recurring Series, attachment, and funding identities plus
+  pure schedule/debit projections. It depends only on reviewed no-default-feature
+  `sha2`; account, source, collateral, Clock, and token authentication remain
+  adapter obligations.
 
 New crates record their semantic owner, dependency direction, toolchain
 compatibility, and license/provenance at introduction (each README does).
