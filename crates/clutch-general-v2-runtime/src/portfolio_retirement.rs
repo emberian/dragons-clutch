@@ -19,9 +19,9 @@ use clutch_general_v2_contract::{
     project_general_replay_transition_v1, verify_general_replay_last_transition_v1,
     GeneralPositionReplayPrestateV1,
     GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1, Id32, MarketBindingV2,
-    RetirePortfolioPairArchivesPayloadV1, SettlementRootPhaseV1,
-    SettlementRootV1AccountV1, SettlementSliceLegKindV1, SettlementSliceV1, Sha256BackendV1,
-    SETTLEMENT_SLICE_BYTES,
+    RetirePortfolioPairArchivesPayloadV1, SettlementCandidateKindV1,
+    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
+    SettlementSliceLegKindV1, SettlementSliceV1, Sha256BackendV1, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 use clutch_retirement::{
@@ -356,9 +356,12 @@ where
         || input.market_binding.base().market != root.market()
         || input.market_binding.base().market_instance_v2_id != root.market_instance_v2_id()
         || input.market_binding.base().outcome_count != root.outcome_count()
+        || input.market_binding.batch_policy_id() != root.batch_policy_id()
+        || input.market_binding.base().score_policy_id != root.score_policy_id()
         || input.neutral_sink_account != input.market_binding.base().neutral_sink
         || input.neutral_sink_account.is_zero()
         || root.phase() != SettlementRootPhaseV1::Settling
+        || root.retained_feed_state() != SettlementRootChildStateV1::Live
     {
         return Err(PortfolioArchiveRetirementErrorV2::BindingMismatch);
     }
@@ -401,6 +404,13 @@ where
         || feed.epoch_generation != root.epoch_generation()
         || feed.outcome_count != root.outcome_count()
         || feed.order_count != root.order_count()
+        || feed.relation_policy_id != input.market_binding.base().relation_policy_id
+        || feed.price_measure_policy_v1_id
+            != input.market_binding.base().price_measure_policy_v1_id
+        || feed.native_claim_basis_id != input.market_binding.base().native_claim_basis_id
+        || feed.price_scale != input.market_binding.base().price_scale
+        || feed.candidate_kind != SettlementCandidateKindV1::Direct
+        || feed.base_relation_candidate_id != root.settlement_candidate_id()
     {
         return Err(PortfolioArchiveRetirementErrorV2::BindingMismatch);
     }

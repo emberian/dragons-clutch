@@ -61,6 +61,14 @@ Its private `AuthenticatedPortfolioReceiptSiblingSetV2` result—not payload
 `page_count`/`receipt_count`—authorizes the runtime constructor to choose
 `PortfolioPairPending` for every and only sibling.
 
+Selection authentication has two named, disjoint privilege contracts. Atomic
+delivery retains the original `(SettlementRoot read-only, Position writable)`
+tuple. All-sibling action-24 materialization uses only
+`authenticate_selected_portfolio_order_for_materialization_v2`, whose tuple is
+`(SettlementRoot writable, Position read-only)`. No caller boolean or public
+access enum can weaken either route, and an adapter presenting the opposite
+tuple cannot mint the private selected-order capability.
+
 The pure sibling plan is a fixed 16-cell array and performs no allocation.
 The SBF consumer uses `authenticate_complete_portfolio_book_ref_v2` and
 `prepare_portfolio_pair_execution_borrowed_v2`; the maximum 64-row book and
