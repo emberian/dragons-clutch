@@ -31,9 +31,32 @@ submit candidate → streamed relation check → verified-only candidate admissi
              select best valid submitted candidate fully verified by deadline
               │
               ▼
-freeze entitlements → settle exact receipts and pots → close safe leaf machinery
-                                                   → retain the epoch root
+freeze entitlements → settle exact receipts and pots
+              │
+sealed source archive → resolve → redeem claims → withdraw collateral
+              │
+              └→ close safe leaf machinery → retain the epoch root
 ```
+
+The newest retained end-to-end run joins the source and trading sides of that
+picture. The 2026-08-23 joined-v4 campaign records 52 signed transactions on a
+loopback Agave validator: the captured Pyth router and receiver verify a
+deterministic 13-of-19 locally signed observation, wrong-Config and wrong-feed
+append attempts roll back with the expected `0x7a`, the admitted update seals,
+two funded owners trade one direct outcome pair through General V1, and the
+same market resolves, redeems, and returns all 128 collateral atoms. The
+campaign ran at repository HEAD `4e83648`; the strict Operator parser landed at
+`633a366`, the public-safe transcript at `94f5143`, and its current documentation
+at `bbfeaa5`. Read the retained
+[campaign evidence](docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23/)
+or render it with Operator's `pyth-local` mode.
+
+That is **unpromoted local SBF execution over a synthetic observation**, not a
+production price, devnet or mainnet execution, deployment, live frontend,
+economic-demand result, or release. It exercises one simple direct buy/sell
+pair under the current zero-fee General V1 path. It does not close the broader
+portfolio, virtual, mixed, inexact, fee-bearing, liveness, or terminal-shape
+gaps listed below.
 
 The last accepted Cycle-G default SBF artifact is 2,149,672 bytes with SHA-256
 `0d52c561909cedef96f571ddeca3a21e621a629be778f775dd7e0a8023956cc7`.
@@ -71,11 +94,11 @@ ELF `342fdfcb0e6b0836ec9ecd492d9a8577c87f493b49fd8c35e3cb47c448d06112`.
 The mock result exercises laboratory source/value paths and is not production
 source evidence.
 
-`scripts/run_operator_trade.sh` was rerun at `e07c08a` on 2026-08-22. It
-confirmed 54/54 local transactions, decoded 1,177 observed account images, and
-closed its six reported conservation identities. The run uses a
-genesis-assisted local validator, a non-production mock-source ELF, and ephemeral
-test-only signers.
+The older `scripts/run_operator_trade.sh` demonstration remains a useful,
+separate interactive bench: its 2026-08-22 run confirmed 54/54 local
+transactions and closed six reported conservation identities, but it uses a
+non-production mock-source ELF. It is no longer the strongest joined lifecycle
+evidence.
 
 ### Implemented and bounded
 
@@ -130,15 +153,16 @@ test-only signers.
   and archive. The Program/ProgramData bytes are captured deployment bytes;
   the router guardian set and receiver Config are freshly initialized local
   fixture state. This is real deployed provider-program/ABI/crypto execution
-  over a synthetic local observation, not devnet price evidence or a
-  same-market source-to-redemption lifecycle.
-  A separate signed-RPC campaign now proves the same seam through a patched,
-  listener-audited Agave validator: 13 confirmed transactions initialize and
-  verify the provider path, assert two exact atomic refusals, accept adjacent
-  `PostUpdate` + append, seal, and resolve. Its committed transcripts are in
-  [the local-real review](docs/reviews/LOCAL_REAL_PYTH_SIGNED_RPC_2026-08-22.md).
-  Production provider, feed-profile, stability, and trust-floor identities
-  remain deliberately unpinned.
+  over a synthetic local observation. The retained 2026-08-23 joined-v4 run now
+  carries that seam through signed market creation, collateral endowment,
+  splitting, one direct General V1 trade, candidate verification and selection,
+  entitlement and settlement, source-driven resolution, redemption, and both
+  withdrawals. Its append-time Clock admits the 210-second-old observation;
+  the final authenticated Clock is 530 seconds old only after the fixed
+  1,000-slot candidate window and consumes the already sealed archive. This is
+  still not devnet price/provider-availability evidence or a production
+  profile. No production row is registered, and provider, feed-profile,
+  stability, and trust-floor identities remain deliberately unpinned.
 - Fixed bounds are one measured capacity profile, not a claim that the concept
   is limited to those widths.
 - Frozen ScoreV1 rewards risk-free complete-set wash flow and pubkey
@@ -254,6 +278,31 @@ wallet or Solana CLI config. The retained clean-HEAD campaign and exact claim
 boundary are in
 [the signed-RPC review](docs/reviews/LOCAL_REAL_PYTH_SIGNED_RPC_2026-08-22.md).
 
+To repeat the current source-to-trade-to-redemption campaign, choose a new,
+empty transcript directory and run:
+
+```sh
+CLUTCH_LOOPBACK_TEST_VALIDATOR="$PWD/.cache/agave-loopback-validator/bin/solana-test-validator" \
+CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR=/absolute/path/to/new-empty-transcript \
+  programs/clutch-sbf/scripts/run_local_joined_pyth_lifecycle.sh
+```
+
+The runner uses disposable local keys and loopback listeners, never a default
+wallet or public RPC. To inspect the already retained result without replaying
+or extending it:
+
+```sh
+CARGO_NET_OFFLINE=true cargo run --offline \
+  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
+  serve --mode pyth-local \
+  --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23
+# open http://127.0.0.1:9130/
+```
+
+Operator strictly parses the three public transcript files and presents them
+as an untrusted projection. It does not contact RPC, load a wallet, or attest
+chain state independently.
+
 The faster in-process bank version remains available:
 
 ```sh
@@ -271,7 +320,7 @@ selected cell contains the entire admitted conservative interval
 digest live under
 `programs/clutch-sbf/svm-tests/tests/fixtures/real-pyth-local/`.
 
-### Run the local trading lifecycle
+### Run the separate mock-source trading bench
 
 ```sh
 CARGO_NET_OFFLINE=true scripts/run_operator_trade.sh

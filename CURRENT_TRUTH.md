@@ -1,6 +1,6 @@
 # Dragon's Clutch: current truth and control plane
 
-Status date: 2026-08-22. This is the operational entry point for implementation
+Status date: 2026-08-23. This is the operational entry point for implementation
 and evidence status. [`PROJECT.md`](PROJECT.md) is the canonical product brief,
 [`AGENTS.md`](AGENTS.md) is the authority and correctness policy, and the
 source-backed [`architecture review`](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
@@ -38,7 +38,32 @@ economics.
 
 ## 2. Snapshot boundary
 
-The last accepted local evidence ancestry is the 2026-08-21 **cycle-G** chain:
+The newest retained end-to-end execution evidence is the 2026-08-23
+**joined-v4 local-real campaign**. At pinned run HEAD
+`4e83648479db33ca8f50798126141ab2fa262d8b`, 52 signed transactions executed on
+a listener-audited loopback Agave validator against Clutch ELF SHA-256
+`004de0ba81d3fe9c067a07c667248afc71d0c946735fa438f318f12d1b4c0343`.
+The captured Pyth router and receiver verified deterministic 13-of-19 locally
+signed VAAs; the wrong-Config and wrong-feed transactions produced the exact
+instruction-2 `SourceAdmissionFailed` (`0x7a`) refusals with atomic rollback;
+the admitted update sealed; and the campaign created a market for two funded
+owners, traded it through General V1, settled, resolved from that sealed
+archive, redeemed, and withdrew all 128 collateral atoms. The strict joined-v4
+Operator parser landed at `633a366`, the immutable public-safe evidence at
+`94f5143`, and its current documentation at `bbfeaa5`. The retained record is
+[`docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23`](docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-23/).
+
+This campaign is **SBF-EXECUTED and UNPROMOTED**. Its observation and guardian
+quorum are synthetic, its network and disposable signers are local, and its
+provider Program/ProgramData bytes are captured fixture inputs. It is not
+devnet or mainnet execution, current deployment evidence, a production source
+release, an official frontend, independent demand evidence, or a protocol
+release. The joined market uses the current zero-fee General V1 path and one
+simple direct buy/sell pair; broader portfolio, virtual, mixed, inexact,
+fee-bearing, liveness, and terminal shapes remain outside this run.
+
+The last accepted **sealed** local evidence ancestry remains the 2026-08-21
+**cycle-G** chain:
 liveness seal at commit `846afab` over the same runtime ancestry, superseding
 the cycle-E chain (`934bdd6` / `d77d670` / manifest `cb94c27`) and the cycle-F
 chain (`04acf61`). Its sealed default ELF is **2,149,672 bytes with
@@ -107,6 +132,14 @@ engineering evidence, not a release or global liveness claim.
 
 Runtime evidence is artifact-specific:
 
+- the current joined-v4 campaign described above ran at `4e83648` and retained
+  52 ordered signed steps: 50 successful transitions and two expected atomic
+  `0x7a` refusals. Its accepted append Clock records a 210-second observation
+  age; its final authenticated Clock records 530 seconds after the fixed
+  1,000-slot candidate window. The terminal state has zero Hoard collateral,
+  zero Hoard token balance, zero owner Position cash/internal balances, and
+  zero internal supply, with 76 collateral atoms returned to the buyer and 52
+  to the seller;
 - the historical 20-step signed committed walk at `882204f` executed ELF
   `98cac8a1e48f629f15d0efbf6295b2c96df5296f6acf6cec28ca76491da4b391`;
 - the focused withdrawal bank campaign executed ELF
@@ -444,19 +477,21 @@ public `derive_payout` to be degree-zero-only; smooth callers must use
 
 | Surface | Current status | Boundary / repair |
 | --- | --- | --- |
-| General clearing | **current source SBF-EXECUTED / UNSEALED** | Seal is immutable-feed-only; atomic Complete admits only a recomputed full score before the shared deadline. Seven candidate-selection, two lifecycle, and four cone-gate bank tests cover prefill, full-width ordering, displacement, deadline, tampering, and lapse. The honest claim is “best valid submitted candidate among those fully verified before the shared deadline”; separate submission/verification deadlines remain a successor. |
-| General settlement | **current source SBF-EXECUTED / UNSEALED** | Exact receipts and pots work for the measured admitted domain. The receipt bound now shares `MAX_SLICES`; a fixed maximum-book campaign executes slice index 128 at 763,755 CU and four-page/64-order/416-slice direct Entitle at 803,935 CU. Maximum-page portfolio full-pair, virtual, and inexact variants remain unmeasured; some inexact portfolio and multi-order-per-owner shapes correctly refuse. |
+| General clearing | **current source + joined-v4 SBF-EXECUTED / UNPROMOTED** | Seal is immutable-feed-only; atomic Complete admits only a recomputed full score before the shared deadline. The joined-v4 loopback campaign creates its Epoch, page, two funded orders, candidate, and ClearWork by signed transactions, then verifies and selects one simple direct pair through current General V1. Seven candidate-selection, two lifecycle, and four cone-gate bank tests cover broader hostile cases. The honest claim is “best valid submitted candidate among those fully verified before the shared deadline”; General V2 and separate submission/verification deadlines remain successors. |
+| General settlement | **current source + joined-v4 SBF-EXECUTED / UNPROMOTED** | Joined-v4 freezes entitlement and entitles/settles one direct slice before source-driven resolution, redemption, and withdrawal. Exact receipts and pots also work for the wider measured bank domain. The receipt bound now shares `MAX_SLICES`; a fixed maximum-book campaign executes slice index 128 at 763,755 CU and four-page/64-order/416-slice direct Entitle at 803,935 CU. The joined validator run does not cover those maximum shapes; maximum-page portfolio full-pair, virtual, mixed, and inexact variants remain unmeasured, and some inexact portfolio and multi-order-per-owner shapes correctly refuse. |
 | Collateral | **Token-2022 adapter only** | The codec admits legacy SPL, but V1 runtime and `ImmutableOwner` checks do not. The offline DREGG reference profile is legacy and cannot found a V1 market. A successor must separate Realm-selected collateral CPI from Token-2022 claim issuance without a DREGG branch. |
-| Resolution/source | **local-real provider seam SBF-EXECUTED; production STOP** | The adapter authenticates the exact Pyth post discriminator, seven-account shape/effective flags, writable update, and Clock owner. A feature-gated local bank executes the captured deployed router and receiver through exact Upgradeable Loader Program/ProgramData accounts. The router first persists a Verified locally signed 13-of-19 synthetic VAA. In a later transaction, real `PostUpdate` and `AppendSourceArchiveV2` execute adjacently and atomically. Missing adjacency refuses with the archive unchanged; wrong Config or feed rolls back both the receiver-created update and archive. The one-record archive seals and resolves payout cell 1 because the entire admitted conservative interval `[99,980,929, 100,019,071]` lies in that cell. The Program/ProgramData bytes are captured deployment bytes; guardian and Config state is freshly initialized local fixture state. This is not devnet price/provider-availability evidence, redemption, a multi-boundary shared window, or a production profile. No production row is registered, and unregistered specs fail closed. |
+| Resolution/source | **joined local-real path SBF-EXECUTED / UNPROMOTED; production STOP** | The adapter authenticates the exact Pyth post discriminator, account shape/effective flags, writable update, SourceSpec identity, and Clock owner. The joined-v4 loopback campaign executes captured router/receiver Program and ProgramData bodies, persists two Verified locally signed 13-of-19 synthetic VAAs, proves wrong Config and feed rollback, and accepts adjacent real `PostUpdate` plus `AppendSourceArchiveV2`. The one-record archive seals and later resolves the already traded market to payout cell 1 because `[99,980,929, 100,019,071]` lies wholly in that cell; both owners then redeem and withdraw. Append freshness is checked at age 210 seconds; final age 530 is reported after the 1,000-slot trading window, not re-applied to the sealed observation. Captured deployment bytes plus freshly initialized local guardian/Config state are not devnet price/provider-availability, current deployment, production profile, or demand evidence. No production row is registered, and unregistered specs fail closed. |
 | ResolutionWork liveness | **current plan SBF-EXECUTED / UNSEALED** | Runtime minimum deposit for 32 records is 49,431,920 lamports. The profile separates protocol prefund, named-plan payouts/refunds, and external keeper budget; eight Fold(4) calls plus Finalize pay 10,790,000 and refund 38,641,920. Against `a6381fbe…`, `[6,2]` consumes 514,332 CU / 1,228 bytes and 171,765 CU / 704 bytes, with 1,090,000 lamports external Fold budget and singleton/rollback equivalence. The identity-bound overlay does not relabel Cycle-G sealed evidence. |
 | Fees/economics | **arithmetic/model only; runtime zero-fee** | Fee-bearing general clearing, treasury custody, owner carry, and keeper compensation are not live. Hoard principal and future fees are never liveness capital. |
 | Terminal closure | **leaf routes exist; root/Position deletion STOP** | Tags 60–66 can release and close authenticated general-clearing leaves. The audited current repair disables `ClosePosition` until an outstanding-reservation proof exists and disables `CloseGeneralEpoch` until a monotone epoch generation/tombstone plus exhaustive child counts exist. A ledgered root therefore retains 7,161,840 lamports deliberately. Protocol-wide mint, bearer-forfeiture, fractional-credit, abandoned-owner, donation, and Market/source terminality also remain open. |
-| Clients | **static docs + offline Glass + loopback test bench** | No live-chain static client, release-manifest binding, wallet path, official URL, or visual browser QA. Host/Origin/media-type checks, a process-local capability cookie, exact integer display, and mechanical DOM/accessibility regressions pass; exact `u64` JSON transport and real browser/visual coverage remain open. |
-| Evidence/release | **last accepted Cycle-G artifact; current source UNSEALED** | The 101-gate Cycle-G manifest had 100 expected dispositions and one documentation-window failure. Current `169a1ba` passes the complete offline artifact audit with three byte-identical builds and the full default/mock bank matrix plus keeper restart gate, but has no current manifest, second-host result, or seal. No release, deployment, signed tag, independent audit, or mainnet evidence exists. |
+| Clients | **static docs + offline Glass + loopback Operator surfaces** | Operator's strict parser renders the retained source-v2/joined-v4 transcript and refuses older ambiguous joined-v3; its Pyth mode is read-only and does not contact RPC. Watch/Trade transport protocol-width integers as canonical decimal strings with checked `BigInt` presentation. There is still no live-chain static client, release-manifest binding, wallet path, official URL, or real browser/visual QA; every screen is an untrusted projection. |
+| Evidence/release | **joined-v4 retained; last sealed artifact Cycle G; current source UNSEALED** | The joined run is pinned to `4e83648`, parsed at `633a366`, retained at `94f5143`, and documented at `bbfeaa5`; its 52-step transcript and loopback probes are committed, but the run is unpromoted and artifact-specific. The 101-gate Cycle-G manifest had 100 expected dispositions and one documentation-window failure. `169a1ba` passed the complete offline artifact audit with three byte-identical builds and the full default/mock bank matrix plus keeper restart gate, but no current manifest, second-host result, or seal supersedes Cycle G. No release, deployment, signed tag, independent audit, devnet/mainnet execution, or demand evidence exists. |
 
 The detailed table below is the pre-review ledger retained for evidence links.
-Its stale “missing” and completion prose is superseded by the compact matrix
-above and by the 2026-08-22 architecture review; it is not a current queue.
+Its stale “missing” and completion prose—including older mock-only and unjoined
+source/trading statements—is superseded by the compact matrix above, the
+retained joined-v4 evidence, and the 2026-08-22 architecture review; it is not a
+current queue.
 
 ### Historical pre-review capability ledger
 
