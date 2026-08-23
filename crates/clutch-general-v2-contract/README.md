@@ -178,7 +178,7 @@ be synchronized before activation.
 
 ## Action allocation and pure payload contracts
 
-General family `74/1` retains local action names `1..=35`. Strict allocation-free
+General family `74/1` retains local action names `1..=37`. Strict allocation-free
 payload decoders and pure poststate owners now exist for the identity-lab spine
 at actions 2, 6, 7, 8, 9, 10, 14, and 15, permissionless reverse-head cleanup
 at action 20, and the separately authenticated one-way solver-prize claim at
@@ -214,6 +214,15 @@ Reservations, and both owner-row accounting bodies. It moves only internal
 native Eggs; cash conversion remains owner-terminal. The action stays disabled
 until the direct receipt can project an exact Settlement-compartment liveness
 receipt, call ordinal, quote ceiling, keeper payment, and payer refund.
+
+Actions 36 `ConsumeVirtualSplitReceiptEggs` and 37
+`ConsumeVirtualMergeReceiptEggs` each have a distinct strict 96-byte disabled
+selector `epoch || receipt || settlement_transition_id`. They are not aliases
+for action 26 or for each other. A future handler must bind one checked
+selected-candidate witness and transition ID across the virtual inventory
+budget, FinalPot, Hoard/aggregate supply, one real receipt end, Position,
+Reservation, owner row, and Settlement liveness mutation. No inventory-only
+action is allocated, and neither route is executable yet.
 
 The capability-disabled fee envelopes at `0x82` through `0x86` add only an
 exact outer tag/version, the constructor-checked inner fee codec, a stored PDA

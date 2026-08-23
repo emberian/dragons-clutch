@@ -115,7 +115,7 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 /// Return whether a family-local action has an allocation in the central registry.
 ///
 /// Allocation does not imply execution capability.  Currently only General V2
-/// local actions 1 through 35 are allocated; the other family action spaces
+/// local actions 1 through 37 are allocated; the other family action spaces
 /// remain intentionally empty until their payload contracts are fixed.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,

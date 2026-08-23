@@ -34,6 +34,10 @@ pub const FREEZE_ENTITLEMENT_PAYLOAD_BYTES: usize = 96;
 pub const ENTITLE_SLICE_PAYLOAD_BYTES: usize = 149;
 /// Exact action-26 disabled direct-receipt selector bytes.
 pub const CONSUME_DIRECT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
+/// Exact action-36 disabled virtual-split receipt selector bytes.
+pub const CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
+/// Exact action-37 disabled virtual-merge receipt selector bytes.
+pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -645,6 +649,76 @@ impl ConsumeDirectReceiptEggsPayloadV1 {
     }
 }
 
+/// Action-36 `ConsumeVirtualSplitReceiptEggs` immutable selector.
+///
+/// The transition ID must authenticate one indivisible plan containing both
+/// the checked complete-set split and the associated real buy receipt end.
+/// No inventory-only successor action is allocated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsumeVirtualSplitReceiptEggsPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Canonical selected virtual-split receipt account PDA.
+    pub receipt: Id32,
+    /// Opaque identity of the complete inventory-and-real-end transition.
+    pub settlement_transition_id: Id32,
+}
+
+impl ConsumeVirtualSplitReceiptEggsPayloadV1 {
+    /// Decode exactly 96 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            receipt: live_id(&mut reader)?,
+            settlement_transition_id: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.receipt
+            || value.epoch == value.settlement_transition_id
+            || value.receipt == value.settlement_transition_id
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
+/// Action-37 `ConsumeVirtualMergeReceiptEggs` immutable selector.
+///
+/// The transition ID must authenticate one indivisible plan containing both
+/// the associated real sell receipt end and the checked complete-set merge.
+/// No inventory-only successor action is allocated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsumeVirtualMergeReceiptEggsPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Canonical selected virtual-merge receipt account PDA.
+    pub receipt: Id32,
+    /// Opaque identity of the complete real-end-and-inventory transition.
+    pub settlement_transition_id: Id32,
+}
+
+impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
+    /// Decode exactly 96 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            receipt: live_id(&mut reader)?,
+            settlement_transition_id: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.receipt
+            || value.epoch == value.settlement_transition_id
+            || value.receipt == value.settlement_transition_id
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -673,6 +747,15 @@ pub enum DirectSettlementPayloadV1 {
     ConsumeDirectReceiptEggs(ConsumeDirectReceiptEggsPayloadV1),
 }
 
+/// Strict payload facts for disabled one-real-end virtual Egg actions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualSettlementPayloadV1 {
+    /// Action 36 selector only; the composite SBF route remains disabled.
+    ConsumeVirtualSplitReceiptEggs(ConsumeVirtualSplitReceiptEggsPayloadV1),
+    /// Action 37 selector only; the composite SBF route remains disabled.
+    ConsumeVirtualMergeReceiptEggs(ConsumeVirtualMergeReceiptEggsPayloadV1),
+}
+
 /// Decode action 26 without adding it to the live-lab union.
 pub fn decode_direct_settlement_payload_v1(
     local_action: u8,
@@ -681,6 +764,22 @@ pub fn decode_direct_settlement_payload_v1(
     match local_action {
         26 => Ok(DirectSettlementPayloadV1::ConsumeDirectReceiptEggs(
             ConsumeDirectReceiptEggsPayloadV1::decode(payload)?,
+        )),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decode actions 36 and 37 without adding either to the live-lab union.
+pub fn decode_virtual_settlement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<VirtualSettlementPayloadV1, CodecError> {
+    match local_action {
+        36 => Ok(VirtualSettlementPayloadV1::ConsumeVirtualSplitReceiptEggs(
+            ConsumeVirtualSplitReceiptEggsPayloadV1::decode(payload)?,
+        )),
+        37 => Ok(VirtualSettlementPayloadV1::ConsumeVirtualMergeReceiptEggs(
+            ConsumeVirtualMergeReceiptEggsPayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }
@@ -830,6 +929,50 @@ mod tests {
         assert_eq!(
             decode_identity_lab_payload_v1(1, &[]),
             Err(CodecError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn virtual_receipt_selectors_are_distinct_strict_disabled_routes() {
+        let mut selector = [0u8; CONSUME_VIRTUAL_SPLIT_RECEIPT_EGGS_PAYLOAD_BYTES];
+        selector[..32].copy_from_slice(&live(1));
+        selector[32..64].copy_from_slice(&live(2));
+        selector[64..].copy_from_slice(&live(3));
+
+        assert!(matches!(
+            decode_virtual_settlement_payload_v1(36, &selector),
+            Ok(VirtualSettlementPayloadV1::ConsumeVirtualSplitReceiptEggs(
+                _
+            ))
+        ));
+        assert!(matches!(
+            decode_virtual_settlement_payload_v1(37, &selector),
+            Ok(VirtualSettlementPayloadV1::ConsumeVirtualMergeReceiptEggs(
+                _
+            ))
+        ));
+        assert_eq!(
+            decode_virtual_settlement_payload_v1(26, &selector),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_direct_settlement_payload_v1(36, &selector),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_virtual_settlement_payload_v1(36, &selector[..95]),
+            Err(CodecError::WrongLength)
+        );
+
+        selector[32..64].copy_from_slice(&live(1));
+        assert_eq!(
+            decode_virtual_settlement_payload_v1(36, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+        selector[32..64].fill(0);
+        assert_eq!(
+            decode_virtual_settlement_payload_v1(37, &selector),
+            Err(CodecError::ZeroIdentity)
         );
     }
 

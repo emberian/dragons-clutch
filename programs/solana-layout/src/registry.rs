@@ -738,13 +738,17 @@ pub enum GeneralV2Action {
     ClosePosition = 34,
     /// Atomically transfer free cash and native Eggs between two Positions.
     TransferPositionAssets = 35,
+    /// Atomically split complete-set inventory and consume its real buy end.
+    ConsumeVirtualSplitReceiptEggs = 36,
+    /// Atomically consume a real sell end and merge complete-set inventory.
+    ConsumeVirtualMergeReceiptEggs = 37,
 }
 
 impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 35;
+    pub const LAST_TAG: u8 = 37;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -784,6 +788,8 @@ impl GeneralV2Action {
             Self::CloseEpoch => 33,
             Self::ClosePosition => 34,
             Self::TransferPositionAssets => 35,
+            Self::ConsumeVirtualSplitReceiptEggs => 36,
+            Self::ConsumeVirtualMergeReceiptEggs => 37,
         }
     }
 
@@ -825,6 +831,8 @@ impl GeneralV2Action {
             33 => Some(Self::CloseEpoch),
             34 => Some(Self::ClosePosition),
             35 => Some(Self::TransferPositionAssets),
+            36 => Some(Self::ConsumeVirtualSplitReceiptEggs),
+            37 => Some(Self::ConsumeVirtualMergeReceiptEggs),
             _ => None,
         }
     }

@@ -24,7 +24,7 @@ vertical slices and must remain disabled until their own evidence gates pass.
 
 The General V2 extension family is centrally reserved at outer intent family
 tag 74 decimal (`0x4a`), family version 1. Its family-local actions are
-allocated at `1..=35`. Allocation does not authorize execution.
+allocated at `1..=37`. Allocation does not authorize execution.
 
 Every production SBF profile has an empty General V2 extension capability table.
 The existing `profile-general-source-v2-point` is the legacy General V1
@@ -302,7 +302,7 @@ count/record-width mismatch, and arithmetic overflow.
 
 These are frozen codec contracts. The live source handlers are exactly the
 capability set in section 7; payload facts for disabled actions 24 through 26
-do not create a success route.
+and 36 through 37 do not create a success route.
 
 | Local action | Exact payload |
 |---:|---|
@@ -320,6 +320,8 @@ do not create a success route.
 | 25 `EntitleSlice` (disabled claim) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || slice_index u16_le || order_index u8 || side u8 || consideration_price_units u128_le || completes_order u8` (149 bytes) |
 | 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
 | 32 `CloseClearWork` | `epoch[32] || node[32]` |
+| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
 
@@ -688,7 +690,7 @@ All other General V2 actions remain disabled. In particular:
   work fits under the one-creation ceiling;
 - actions 12-13 are not needed by the bounded empty-book lab; generic streaming
   RelationV2 progress needs its own contract before activation;
-- actions 17-19, 22-31, and 33-35 remain disabled, including the remaining
+- actions 17-19, 22-31, and 33-37 remain disabled, including the remaining
   candidate terminal paths, entitlements, settlement, selected-artifact
   retirement, root retirement, and the reserved Position asset-transfer
   primitive.
@@ -728,6 +730,22 @@ Eggs. It does not convert cash. An SBF meta contract cannot freeze until the
 receipt also authenticates the exact Settlement-compartment liveness receipt,
 call ordinal, quote ceiling, keeper payment, and payer refund; virtual
 split/merge receipts require distinct actions and contracts.
+
+Actions 36 and 37 reserve those distinct virtual contracts. Both use a strict
+96-byte selector, but they decode into different types and cannot be routed
+through action 26 or through one another. Action 36 must atomically join the
+selected virtual-split authority, its complete-set split inventory mutation,
+and the associated real buy receipt/Position/Reservation/owner-row mutation.
+Action 37 must atomically join the selected virtual-merge authority, its real
+sell receipt/Position/Reservation/owner-row mutation, and the complete-set
+merge. Every layer must name the same Epoch, selected candidate, checked
+relation witness, receipt, and settlement transition ID. The FinalPot, Hoard,
+aggregate claim ledger, inventory budget, receipt, Position, Reservation,
+owner row, and Settlement liveness compartment form one rollback boundary.
+No separately callable inventory action is allocated. Exact ordered SBF metas
+remain an activation blocker until the receipt codec projects the complete
+selected witness and the liveness owner freezes the call ordinal, quote
+ceiling, keeper payment, payer refund, and unique receipt join.
 
 This lab can close completed Work and unlink terminal source nodes while
 retaining the selected Feed. It still leaves the retained Feed,
