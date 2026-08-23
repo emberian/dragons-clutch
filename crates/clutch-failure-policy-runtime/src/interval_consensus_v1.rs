@@ -1052,6 +1052,7 @@ impl FailureIntervalConsensusClosePlanV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureIntervalConsensusTerminalReceiptV1 {
     id: FailureIntervalConsensusTerminalReceiptIdV1,
+    interval_binding_id: FailureIntervalConsensusBindingIdV1,
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
     failure_policy_binding_id: FailurePolicyBindingId,
@@ -1060,9 +1061,15 @@ pub struct FailureIntervalConsensusTerminalReceiptV1 {
     product_certificate_id: QuantizedIntervalConsensusCertificateV1Id,
     failure_resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1,
     work_close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1,
+    permanent_replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1,
 }
 
 impl FailureIntervalConsensusTerminalReceiptV1 {
+    /// Exact Failure-owned interval lifecycle.
+    pub const fn interval_binding_id(self) -> FailureIntervalConsensusBindingIdV1 {
+        self.interval_binding_id
+    }
+
     /// Full-width V2 economic occurrence.
     pub const fn market_instance_id(self) -> MarketInstanceV2Id {
         self.market_instance_id
@@ -1105,6 +1112,11 @@ impl FailureIntervalConsensusTerminalReceiptV1 {
         self,
     ) -> FailureIntervalConsensusCloseAuthorizationIdV1 {
         self.work_close_authorization_id
+    }
+
+    /// Exact permanent replay postimage retained after work-account closure.
+    pub const fn permanent_replay_receipt_id(self) -> FailureIntervalConsensusReplayReceiptIdV1 {
+        self.permanent_replay_receipt_id
     }
 
     /// Complete terminal receipt identity.
@@ -1414,6 +1426,7 @@ fn terminal_receipt(
     hasher.update(replay.id.bytes());
     FailureIntervalConsensusTerminalReceiptV1 {
         id: FailureIntervalConsensusTerminalReceiptIdV1::from_bytes(hasher.finalize().into()),
+        interval_binding_id: state.binding_id,
         market_instance_id: state.market_instance_id,
         generation: state.generation,
         failure_policy_binding_id: state.failure_policy_binding_id,
@@ -1422,6 +1435,7 @@ fn terminal_receipt(
         product_certificate_id: state.certificate_id,
         failure_resolution_receipt_id: state.resolution_receipt_id,
         work_close_authorization_id: state.close_authorization_id,
+        permanent_replay_receipt_id: replay.id,
     }
 }
 
@@ -1574,5 +1588,27 @@ mod tests {
             first.id(),
             resolution_receipt(&changed_state, accepted_resolution_id, certificate_id,).id()
         );
+    }
+
+    #[test]
+    fn terminal_receipt_exposes_the_exact_permanent_replay_postimage() {
+        let state = state_from_persisted_facts(FailureIntervalConsensusPersistedFactsV1 {
+            phase: FailureIntervalConsensusPhaseV1::Closed,
+            checked_coordinates: 2,
+            certificate_id: QuantizedIntervalConsensusCertificateV1Id::from_bytes([40; 32]),
+            resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1::from_bytes(
+                [41; 32],
+            ),
+            close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1::from_bytes(
+                [42; 32],
+            ),
+            ..active_facts()
+        })
+        .unwrap();
+        let replay = replay_from_state(state);
+        let receipt = terminal_receipt(state, replay);
+        assert_eq!(receipt.interval_binding_id(), state.binding_id);
+        assert_eq!(receipt.permanent_replay_receipt_id(), replay.id());
+        assert!(live(receipt.terminal_receipt_id().bytes()));
     }
 }
