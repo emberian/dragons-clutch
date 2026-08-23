@@ -175,13 +175,18 @@ impl DealerAssetTransferBundleV1 {
             identity.validate_live()?;
         }
         let zero_claim = self.action == DealerRuntimeActionV1::Claim && self.amounts.is_zero();
+        let zero_begin =
+            self.action == DealerRuntimeActionV1::SelectLeaseAndBegin && self.amounts.is_zero();
         if self.source_account_id == self.destination_account_id {
             return Err(Error::MismatchedBinding);
         }
-        if zero_claim {
+        if zero_claim || zero_begin {
             validate_padding_u64(self.market.outcome_count, &self.amounts.native_eggs)?;
             if self.source_pre_semantic_id != self.source_post_semantic_id
-                || self.destination_pre_semantic_id != self.destination_post_semantic_id
+                || (zero_claim
+                    && self.destination_pre_semantic_id != self.destination_post_semantic_id)
+                || (zero_begin
+                    && self.destination_pre_semantic_id == self.destination_post_semantic_id)
             {
                 return Err(Error::ConservationFailure);
             }
@@ -700,7 +705,12 @@ pub fn prepare_dealer_position_pot_transfer_v1(
     market.validate()?;
     position.validate(market)?;
     pot.validate(market)?;
-    amounts.validate(market.outcome_count)?;
+    let zero_begin = action == DealerRuntimeActionV1::SelectLeaseAndBegin && amounts.is_zero();
+    if zero_begin {
+        validate_padding_u64(market.outcome_count, &amounts.native_eggs)?;
+    } else {
+        amounts.validate(market.outcome_count)?;
+    }
     if position.account_id() == pot.pot_account_id {
         return Err(Error::MismatchedBinding);
     }
@@ -728,7 +738,11 @@ pub fn prepare_dealer_position_pot_transfer_v1(
     require_transfer_direction(action, source_kind, destination_kind)?;
     let position_post = if position_to_pot {
         require_pot_credit_delta(pot, amounts)?;
-        apply_position_debit(position.position(), amounts)?
+        if zero_begin {
+            position.position()
+        } else {
+            apply_position_debit(position.position(), amounts)?
+        }
     } else {
         if amounts.source_reserved_cash_atoms != 0 || amounts.destination_reserved_cash_atoms != 0 {
             return Err(Error::ConservationFailure);

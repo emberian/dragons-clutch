@@ -8,8 +8,7 @@ use crate::{
     DealerFundedDependenciesV2, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
     DealerStateV2, DeletableRentOwnerV1, Error, FixedCodec, Id, Result,
-    DEALER_LEASE_CONTENT_DOMAIN_V2, DELETABLE_RENT_OWNER_BYTES, MAX_OUTCOMES,
-    MAX_SETTLEMENT_ROWS,
+    DEALER_LEASE_CONTENT_DOMAIN_V2, DELETABLE_RENT_OWNER_BYTES, MAX_OUTCOMES, MAX_SETTLEMENT_ROWS,
 };
 
 /// Local semantic-body magic for the V2 lease successor.
@@ -18,7 +17,7 @@ pub const DEALER_LEASE_MAGIC_V2: [u8; 8] = *b"DCLSEV02";
 pub const DEALER_LEASE_VERSION_V2: u16 = 2;
 /// Exact bytes in one canonical V2 lease body.
 pub const DEALER_LEASE_BYTES_V2: usize =
-    HEADER_BYTES + (28 * 32) + (5 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
+    HEADER_BYTES + (29 * 32) + (5 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
 
 /// Immutable authority for one funded `g -> g+1` Dealer settlement.
 ///
@@ -37,7 +36,7 @@ pub struct DealerLeaseV2 {
     pub dealer_state_account_id: Id,
     /// Pre-generation Facility Position semantic identity.
     pub facility_position_pre_id: Id,
-    /// Current leased Facility Position semantic identity after Begin deposits.
+    /// Current leased Facility Position identity after Begin, equal to pre-ID only for zero deposit.
     pub facility_position_leased_id: Id,
     /// Derived V2 Lease account recorded by State.
     pub lease_account_id: Id,
@@ -49,11 +48,13 @@ pub struct DealerLeaseV2 {
     pub epoch_binding_account_id: Id,
     /// Final SettlementCandidateId.
     pub settlement_candidate_id: Id,
+    /// Exact authenticated General V2 SelectedCandidate account.
+    pub selected_candidate_account_id: Id,
     /// Exact upstream economic-candidate identity.
     pub upstream_economic_candidate_id: Id,
     /// Authenticated quote artifact.
     pub quote_id: Id,
-    /// Checked dealer-leg verdict.
+    /// Checked CoveredDealer final economic identity; exactly the SettlementCandidateId.
     pub dealer_leg_verdict_id: Id,
     /// Exact quantized curve-price certificate.
     pub curve_price_certificate_id: Id,
@@ -116,6 +117,7 @@ impl DealerLeaseV2 {
             self.epoch_id,
             self.epoch_binding_account_id,
             self.settlement_candidate_id,
+            self.selected_candidate_account_id,
             self.upstream_economic_candidate_id,
             self.quote_id,
             self.dealer_leg_verdict_id,
@@ -157,7 +159,7 @@ impl DealerLeaseV2 {
             || self.selected_fee_record_account_id == self.dealer_state_account_id
             || self.selected_fee_record_account_id == self.lease_account_id
             || self.selected_fee_record_account_id == self.settlement_pot_id
-            || self.facility_position_pre_id == self.facility_position_leased_id
+            || self.dealer_leg_verdict_id != self.settlement_candidate_id
         {
             return Err(Error::InvalidParameter);
         }
@@ -183,8 +185,10 @@ impl DealerLeaseV2 {
         runtime.validate()?;
         select_begin.validate_against(schedule, runtime)?;
         selected_fee.validate()?;
-        if !matches!(state.phase, DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly)
-            || self.policy_id != policy.policy_id()?
+        if !matches!(
+            state.phase,
+            DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly
+        ) || self.policy_id != policy.policy_id()?
             || self.facility_id != state.facility_id
             || self.facility_position_binding_id != state.facility_position_binding_id
             || self.dealer_state_account_id != dependency.bindings.asset_vault_authority_account_id
@@ -268,6 +272,7 @@ impl FixedCodec for DealerLeaseV2 {
             self.epoch_id,
             self.epoch_binding_account_id,
             self.settlement_candidate_id,
+            self.selected_candidate_account_id,
             self.upstream_economic_candidate_id,
             self.quote_id,
             self.dealer_leg_verdict_id,
@@ -314,6 +319,7 @@ impl FixedCodec for DealerLeaseV2 {
         let epoch_id = reader.id();
         let epoch_binding_account_id = reader.id();
         let settlement_candidate_id = reader.id();
+        let selected_candidate_account_id = reader.id();
         let upstream_economic_candidate_id = reader.id();
         let quote_id = reader.id();
         let dealer_leg_verdict_id = reader.id();
@@ -343,6 +349,7 @@ impl FixedCodec for DealerLeaseV2 {
             epoch_id,
             epoch_binding_account_id,
             settlement_candidate_id,
+            selected_candidate_account_id,
             upstream_economic_candidate_id,
             quote_id,
             dealer_leg_verdict_id,
@@ -378,5 +385,5 @@ impl FixedCodec for DealerLeaseV2 {
     }
 }
 
-const _: () = assert!(DEALER_LEASE_BYTES_V2 == 1_036);
+const _: () = assert!(DEALER_LEASE_BYTES_V2 == 1_068);
 const _: () = assert!(DEALER_LEASE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

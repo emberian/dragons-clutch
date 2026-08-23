@@ -401,6 +401,8 @@ pub enum DealerMetaOwnerV1 {
     LivenessRuntime,
     /// Authenticated General V2 market/Epoch runtime.
     GeneralV2Runtime,
+    /// Canonical owner-netted fee runtime.
+    FeeRuntime,
     /// System Program or a system-owned not-yet-created PDA.
     System,
     /// Clock sysvar at its exact well-known address.
@@ -466,8 +468,18 @@ pub enum DealerMetaRoleV1 {
     ClaimWork,
     /// Newly created or existing Dealer Epoch-binding account.
     EpochBinding,
+    /// Newly created or existing Dealer Lease V2 account.
+    Lease,
+    /// Newly created or existing Dealer SettlementPot V2 account.
+    SettlementPot,
     /// Authenticated General V2 Epoch.
     GeneralEpoch,
+    /// Immutable selected-candidate artifact.
+    SelectedCandidate,
+    /// Selected sealed General feed that owns candidate and settlement witness bytes.
+    SelectedFeed,
+    /// Selected owner-netted fee record.
+    FeeRecord,
     /// Authenticated canonical EconomicDomainV2.
     EconomicDomain,
     /// Immutable quantized price-measure policy artifact.
@@ -642,6 +654,28 @@ const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+];
+
+const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::GeneralEpoch, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::EconomicDomain, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::SelectedCandidate, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::SelectedFeed, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::FeeRecord, DealerMetaOwnerV1::FeeRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::Lease, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::SettlementPot, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
 const CANCEL_FUNDING: &[DealerMetaSpecV1] = &[
@@ -888,6 +922,7 @@ pub fn meta_contract_v1(
         DealerFacilityAction::RefundCancelledSponsor => Some(REFUND_SPONSOR),
         DealerFacilityAction::BindEpoch => Some(BIND_EPOCH),
         DealerFacilityAction::LapseEpoch => Some(LAPSE_EPOCH),
+        DealerFacilityAction::SelectLeaseAndBegin => Some(SELECT_LEASE_BEGIN),
         DealerFacilityAction::SponsorHalt => Some(SPONSOR_HALT),
         DealerFacilityAction::TimedClose => Some(TIMED_CLOSE),
         DealerFacilityAction::QueueExit

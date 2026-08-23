@@ -252,7 +252,7 @@ pub const DEALER_LEASE_V2_ACCOUNT_TAG: u8 = 0x99;
 /// Dealer Lease V2 account version.
 pub const DEALER_LEASE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer Lease V2 account bytes.
-pub const DEALER_LEASE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_036;
+pub const DEALER_LEASE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_068;
 /// Three-stage Dealer SettlementPot V2 discriminator.
 pub const DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG: u8 = 0x9a;
 /// Dealer SettlementPot V2 account version.
@@ -266,7 +266,7 @@ pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG: u8 = 0x9b;
 pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer Epoch-binding V2 account bytes.
 pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES: usize =
-    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 764;
+    DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 772;
 /// Page-scoped Dealer terminal-allocation discriminator.
 pub const DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG: u8 = 0x9c;
 /// Dealer terminal-allocation account version.

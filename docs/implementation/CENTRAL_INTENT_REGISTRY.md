@@ -186,9 +186,9 @@ or pure runtime elsewhere does not make a route executable.
 | `0x94/1` | Dealer | authoritative State V2 with persisted terminal evidence (980 bytes) |
 | `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
 | `0x98/1` | Dealer | immutable-after-activation LP page V2 (980 bytes) |
-| `0x99/1` | Dealer | one-generation Lease V2 (1,044 bytes) |
+| `0x99/1` | Dealer | selected-artifact-bound one-generation Lease V2 (1,076 bytes) |
 | `0x9a/1` | Dealer | SettlementPot V2 (1,236 bytes) |
-| `0x9b/1` | Dealer | counted Epoch binding V2 (772 bytes) |
+| `0x9b/1` | Dealer | counted General-generation-bound Epoch V2 (780 bytes) |
 | `0x9c/1` | Dealer | page terminal allocation (756 bytes) |
 | `0x9d/1` | Dealer | streamed terminal ClaimWork (1,148 bytes) |
 | `0x9e/1` | Dealer | permanent root tombstone V2 (476 bytes) |
