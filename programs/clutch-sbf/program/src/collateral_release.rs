@@ -568,48 +568,6 @@ pub(crate) fn authenticate_realm_collateral_v2(
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
-/// Reauthenticate the exact current ProgramData deployment selected by an
-/// already hostile-decoded Realm/ProfileV2 chain.
-///
-/// Value-bearing collateral routes must use this helper in the same
-/// instruction before constructing any token CPI. Pure internal accounting
-/// may use [`authenticate_realm_collateral_v2`] without claiming current code
-/// observation.
-pub(crate) fn authenticate_realm_collateral_deployment_v2(
-    program_id: &Pubkey,
-    realm_account: &AccountInfo<'_>,
-    profile_account: &AccountInfo<'_>,
-    policy_account: &AccountInfo<'_>,
-    token_program: &AccountInfo<'_>,
-    token_programdata: &AccountInfo<'_>,
-) -> Outcome<(
-    BoundRealmCollateralV2,
-    AuthenticatedCollateralReleaseDeploymentV2,
-)> {
-    let bound = authenticate_realm_collateral_v2(
-        program_id,
-        realm_account,
-        profile_account,
-        policy_account,
-        token_program,
-    )?;
-    let deployment = authenticate_collateral_release_deployment_v2(
-        bound.release(),
-        token_program,
-        token_programdata,
-    )?;
-    require(
-        deployment.release() == bound.release()
-            && deployment.release_id()
-                == bound
-                    .release()
-                    .id()
-                    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?,
-        ClutchError::AuthorizationUnavailable,
-    )?;
-    Ok((bound, deployment))
-}
-
 fn require_read_only_program_account(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
