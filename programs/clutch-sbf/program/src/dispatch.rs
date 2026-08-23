@@ -637,15 +637,6 @@ fn process_general_v2(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        #[cfg(feature = "non-production-structured-custody-lab")]
-        ExtensionAction::GeneralV2(
-            clutch_solana_layout::registry::GeneralV2Action::TransferPositionAssets,
-        ) => structured_custody::process(
-            program_id,
-            accounts,
-            request.sequence,
-            request.envelope.payload,
-        ),
         ExtensionAction::GeneralV2(
             action @ clutch_solana_layout::registry::GeneralV2Action::ConsumeDirectReceiptEggs,
         ) => general_v2_direct_v5::process(
