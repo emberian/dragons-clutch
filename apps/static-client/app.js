@@ -267,8 +267,10 @@
     const compilerReleaseSha256 = $("compiler-release-sha256").value.trim();
     const request = COMPILER.buildRequest(
       compilerReleaseSha256,
+      configuration.release.programId,
       definitionValue,
-      parseJsonField("compiler-bundle-inputs", "Canonical Product/Series bundle inputs")
+      parseJsonField("compiler-bundle-inputs", "Canonical Product/Series bundle inputs"),
+      $("compiler-exact-market-search").value.trim() === "" ? null : parseJsonField("compiler-exact-market-search", "Exact market search")
     );
     const inputCanonicalSha256 = await digest(new TextEncoder().encode(definitionValue.canonicalJson));
     const requestCanonicalSha256 = await digest(new TextEncoder().encode(COMPILER.canonicalJson(request)));
@@ -285,9 +287,10 @@
       context.requestCanonicalSha256,
       context.inputCanonicalSha256,
       context.compilerReleaseSha256,
-      context.definitionValue
+      context.definitionValue,
+      context.request
     );
-    const profileId = proposal.compiledProductSeriesBundle.identities.capabilityProfileId;
+    const profileId = proposal.compiledProductSeriesBundleV5.identities.capabilityProfileId;
     if (profileId !== context.configuration.release.capabilityProfileId) {
       throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
     }
@@ -310,7 +313,10 @@
       definition("Native basis ID / bytes", `${proposal.nativeClaimBasis.id} / ${proposal.nativeClaimBasis.byteLength}`),
       definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
       definition("Certification subdivision depth", proposal.subdivisionDepth),
-      definition("Bundle ID / bytes", `${proposal.compiledProductSeriesBundle.id} / ${proposal.compiledProductSeriesBundle.byteLength}`),
+      definition("BundleV5 ID / bytes", `${proposal.compiledProductSeriesBundleV5.id} / ${proposal.compiledProductSeriesBundleV5.byteLength}`),
+      definition("BundleV5 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV5.artifact.kind} / ${proposal.compiledProductSeriesBundleV5.artifact.pda}`),
+      definition("Exact market outcome / coverage", proposal.exactMarket ? `${proposal.exactMarket.outcome} / ${proposal.exactMarket.coverage}` : "not requested"),
+      definition("Exact certificate / work manifest", proposal.exactMarket ? `${proposal.exactMarket.certificate ? proposal.exactMarket.certificate.outputId : "none"} / ${proposal.exactMarket.workManifest.id}` : "not requested"),
       definition("Capability profile join", profileId),
       definition("Registration authority", "false — every body and join must be recomputed onchain")
     );
@@ -414,13 +420,13 @@
     });
     $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(CHAIN.redactedConfiguration(state.configuration), null, 2), $("export-configuration")); });
     $("copy-snapshot").addEventListener("click", () => { if (state.snapshot) copy($("snapshot-json").textContent, $("copy-snapshot")); });
-    for (const id of ["compiler-release-sha256", "compiler-definition", "compiler-bundle-inputs"]) {
+    for (const id of ["compiler-release-sha256", "compiler-definition", "compiler-bundle-inputs", "compiler-exact-market-search"]) {
       $(id).addEventListener("input", () => { compilerRevision += 1; });
     }
     $("compiler-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       clearError("compiler-error");
-      const button = $("compile-payoff");
+      const button = $("compile-product-exact-market");
       button.disabled = true;
       button.textContent = "Compiling through bounded endpoint…";
       try { await compilePayoff(); } catch (error) { resetCompiler("proposal refused"); setError("compiler-error", error.message); }
