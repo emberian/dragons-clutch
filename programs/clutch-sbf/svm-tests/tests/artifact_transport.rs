@@ -28,6 +28,18 @@ use {
     solana_transaction_error::TransactionError,
 };
 
+#[cfg(feature = "non-production-product-series-lab")]
+use clutch_product_series::{
+    ComponentDebitV1, ContentId, EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2,
+    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RecoveryAttemptFundingV1,
+    RecoveryAttemptV1, SeriesAttachmentPlanV1, SeriesFundingQuoteV1, SeriesFundingTermsV2,
+    SeriesPlanV5, SeriesPlanV5Id, BASIS_BYTES, MAX_OUTCOMES as PRODUCT_MAX_OUTCOMES,
+    MAX_PAYOUTS as PRODUCT_MAX_PAYOUTS, MAX_RECOVERY_ATTEMPTS, PAYOUT_MAP_UNUSED,
+    RECOVERY_POLICY_DOMAIN, UNIFORM_SPACING_NONE,
+};
+#[cfg(feature = "non-production-product-series-lab")]
+use sha2::{Digest, Sha256};
+
 const CLOCK_SYSVAR: Address = Address::new_from_array([
     6, 167, 213, 23, 24, 199, 116, 201, 40, 86, 99, 152, 105, 29, 94, 182, 139, 94, 184, 163, 155,
     75, 109, 92, 115, 85, 91, 33, 0, 0, 0, 0,
@@ -85,6 +97,24 @@ fn derive_final(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Address
         ArtifactKind::Terms => seeds::SEED_TERMS,
         ArtifactKind::BatchPolicy => seeds::SEED_BATCH_POLICY,
         ArtifactKind::DirectBatchPolicyV3 => seeds::SEED_DIRECT_BATCH_POLICY_V3,
+        kind @ (ArtifactKind::NativeClaimBasisV1
+        | ArtifactKind::EvidenceOnlyRecoveryPolicyV1
+        | ArtifactKind::ProductTemplateV4
+        | ArtifactKind::PriceMeasurePolicyV1
+        | ArtifactKind::MarketGenesisProfileV2
+        | ArtifactKind::SeriesFundingQuoteV1
+        | ArtifactKind::SeriesAttachmentPlanV1
+        | ArtifactKind::SeriesPlanV5
+        | ArtifactKind::SeriesFundingTermsV2) => {
+            return Address::find_program_address(
+                &[
+                    seeds::SEED_PRODUCT_ARTIFACT_V1,
+                    &[kind.byte()],
+                    &digest.bytes(),
+                ],
+                &PROGRAM_ID,
+            );
+        }
     };
     Address::find_program_address(&[prefix, &context.bytes(), &digest.bytes()], &PROGRAM_ID)
 }
@@ -225,6 +255,14 @@ async fn send(
     instruction: Instruction,
     signer: &Keypair,
 ) -> Result<(), TransactionError> {
+    send_measured(context, instruction, signer).await.0
+}
+
+async fn send_measured(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    signer: &Keypair,
+) -> (Result<(), TransactionError>, u64) {
     let blockhash = context.banks_client.get_latest_blockhash().await.unwrap();
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],
@@ -232,12 +270,16 @@ async fn send(
         &[&context.payer, signer],
         blockhash,
     );
-    context
+    let outcome = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
-        .unwrap()
-        .result
+        .unwrap();
+    let units = outcome
+        .metadata
+        .map(|metadata| metadata.compute_units_consumed)
+        .unwrap_or_default();
+    (outcome.result, units)
 }
 
 fn custom(result: Result<(), TransactionError>) -> u32 {
@@ -341,6 +383,581 @@ fn encode_terms(mut terms: TermsAccount) -> (Vec<u8>, Hash32, u8) {
     let mut body = vec![0; account_len::TERMS];
     assert_eq!(terms.encode(&mut body), Ok(account_len::TERMS));
     (body, terms.terms, bump)
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_basis() -> NativeClaimBasisV1 {
+    let mut payout_weights = [[0; PRODUCT_MAX_OUTCOMES]; PRODUCT_MAX_PAYOUTS];
+    let mut index = 0_usize;
+    while index < 4 {
+        payout_weights[index][index] = 1_000;
+        index += 1;
+    }
+    let mut payout_map = [PAYOUT_MAP_UNUSED; PRODUCT_MAX_OUTCOMES];
+    payout_map[..4].copy_from_slice(&[0, 1, 2, 3]);
+    let mut knots = [0; PRODUCT_MAX_OUTCOMES];
+    knots[..3].copy_from_slice(&[100, 200, 300]);
+    NativeClaimBasisV1 {
+        basis_degree: 0,
+        outcome_count: 4,
+        payout_count: 4,
+        knot_count: 3,
+        uniform_log2_spacing: UNIFORM_SPACING_NONE,
+        ambiguity_policy_registry_value: 1,
+        edge_policy_registry_value: 1,
+        denominator: 1_000,
+        payout_weights,
+        payout_map,
+        knots,
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_basis_body() -> (Vec<u8>, Hash32) {
+    let basis = product_basis();
+    let mut body = vec![0_u8; BASIS_BYTES];
+    basis.encode_into(&mut body).expect("canonical basis");
+    (body, Hash32::from_bytes(basis.id().unwrap().bytes()))
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_id(byte: u8) -> ContentId {
+    ContentId::from_bytes([byte; 32])
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_recovery() -> EvidenceOnlyRecoveryPolicyV1 {
+    let mut attempts = [RecoveryAttemptV1::ZERO; MAX_RECOVERY_ATTEMPTS];
+    attempts[0] = RecoveryAttemptV1 {
+        repair_generation_delta: 0,
+        opens_after_primary_maturity_buckets: 0,
+        closes_after_primary_maturity_buckets: 2,
+    };
+    attempts[1] = RecoveryAttemptV1 {
+        repair_generation_delta: 1,
+        opens_after_primary_maturity_buckets: 2,
+        closes_after_primary_maturity_buckets: 5,
+    };
+    EvidenceOnlyRecoveryPolicyV1 {
+        attempt_count: 2,
+        attempts,
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_template() -> ProductTemplateV4 {
+    ProductTemplateV4 {
+        source_plane_contract_id: product_id(1),
+        source_spec_id: product_id(2),
+        summary_program_id: product_id(3),
+        native_claim_basis_id: product_basis().id().unwrap(),
+        evidence_only_recovery_policy_id: product_recovery().id().unwrap(),
+        compiler_release_id: product_id(4),
+        statistic_registry_value: 11,
+        coverage_policy_registry_value: 12,
+        window_span_buckets: 4,
+        primary_maturity_grace_buckets: 2,
+        base_repair_generation: 10,
+        coverage_policy_parameter: 0,
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_price_policy() -> PriceMeasurePolicyV1 {
+    PriceMeasurePolicyV1 {
+        checker_release_id: product_id(30),
+        checker_version: 3,
+        quantized_semantics_version: 1,
+        minimum_basis_degree: 0,
+        maximum_basis_degree: 3,
+        maximum_outcome_count: 16,
+        maximum_atom_count: 16,
+        maximum_payout_denominator: u64::MAX,
+        maximum_witness_denominator: u64::MAX,
+        maximum_price_scale: u64::MAX / 16,
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_genesis() -> MarketGenesisProfileV2 {
+    MarketGenesisProfileV2 {
+        realm_id: product_id(20),
+        profile_id: product_id(21),
+        price_grid_id: product_id(22),
+        price_measure_policy_id: product_price_policy().id().unwrap(),
+        fee_policy_id: product_id(23),
+        relation_policy_id: product_id(24),
+        score_policy_id: product_id(25),
+        candidate_lifecycle_policy_id: product_id(26),
+        candidate_liveness_policy_id: product_id(27),
+        retirement_policy_id: product_id(28),
+        capability_profile_id: product_id(29),
+        terminal_disposition_registry_value: 7,
+        native_bearer_lot: 1_000,
+        coordinate_domain_min: 0,
+        coordinate_domain_max: 400,
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_quote() -> SeriesFundingQuoteV1 {
+    let mut attempts = [RecoveryAttemptFundingV1::ZERO; MAX_RECOVERY_ATTEMPTS];
+    attempts[0] = RecoveryAttemptFundingV1 {
+        max_progress_units: 3,
+        lamports_per_progress_unit: 5,
+    };
+    attempts[1] = RecoveryAttemptFundingV1 {
+        max_progress_units: 2,
+        lamports_per_progress_unit: 7,
+    };
+    SeriesFundingQuoteV1 {
+        evidence_only_recovery_policy_id: product_recovery().id().unwrap(),
+        market_core: ComponentDebitV1 {
+            lamports: 10,
+            collateral_atoms: 0,
+        },
+        recovery_reserve: ComponentDebitV1 {
+            lamports: 40,
+            collateral_atoms: 0,
+        },
+        source_work: ComponentDebitV1 {
+            lamports: 30,
+            collateral_atoms: 0,
+        },
+        liquidity_facility: ComponentDebitV1 {
+            lamports: 40,
+            collateral_atoms: 100,
+        },
+        wrapper_set: ComponentDebitV1 {
+            lamports: 50,
+            collateral_atoms: 10,
+        },
+        recovery_attempt_count: 2,
+        recovery_attempt_funding: attempts,
+        recovery_rent_principal_lamports: 11,
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_attachment() -> SeriesAttachmentPlanV1 {
+    SeriesAttachmentPlanV1 {
+        funding_quote_id: product_quote().id().unwrap(),
+        liquidity_facility_plan_id: product_id(41),
+        wrapper_recipe_set_id: product_id(42),
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_series() -> SeriesPlanV5 {
+    SeriesPlanV5 {
+        product_template_id: product_template().id().unwrap(),
+        market_genesis_profile_id: product_genesis().id().unwrap(),
+        attachment_plan_id: product_attachment().id().unwrap(),
+        first_start_bucket: 100,
+        stride_buckets: 10,
+        instance_count: 3,
+        creation_lead_buckets: 5,
+        market_collateral_cap: 1_000,
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn product_funding_terms() -> SeriesFundingTermsV2 {
+    SeriesFundingTermsV2 {
+        series_plan_id: SeriesPlanV5Id::from_bytes(product_series().id().unwrap().bytes()),
+        lamport_principal_refund: product_id(50),
+        collateral_principal_refund_token_account: product_id(51),
+        neutral_collateral_disposition_token_account: product_id(52),
+        neutral_lamport_sink: product_id(55),
+        collateral_mint: product_id(53),
+        token_program: product_id(54),
+    }
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn other_product_artifact_bodies() -> Vec<(ArtifactKind, Vec<u8>, Hash32)> {
+    let mut cases = Vec::new();
+    macro_rules! push {
+        ($kind:expr, $value:expr) => {{
+            let value = $value;
+            let mut body = vec![0_u8; $kind.exact_len()];
+            value.encode_into(&mut body).unwrap();
+            cases.push(($kind, body, Hash32::from_bytes(value.id().unwrap().bytes())));
+        }};
+    }
+    push!(
+        ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
+        product_recovery()
+    );
+    push!(ArtifactKind::ProductTemplateV4, product_template());
+    push!(ArtifactKind::PriceMeasurePolicyV1, product_price_policy());
+    push!(ArtifactKind::MarketGenesisProfileV2, product_genesis());
+    push!(ArtifactKind::SeriesFundingQuoteV1, product_quote());
+    push!(ArtifactKind::SeriesAttachmentPlanV1, product_attachment());
+    push!(ArtifactKind::SeriesPlanV5, product_series());
+    push!(ArtifactKind::SeriesFundingTermsV2, product_funding_terms());
+    cases
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+fn typed_digest(domain: &[u8], body: &[u8]) -> Hash32 {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(body);
+    Hash32::from_bytes(hasher.finalize().into())
+}
+
+#[cfg(feature = "non-production-product-series-lab")]
+#[tokio::test]
+async fn product_series_artifact_catalog_is_real_resumable_and_fail_closed() {
+    let author = uploader();
+    let kind = ArtifactKind::NativeClaimBasisV1;
+    let binding_context = Hash32::ZERO;
+    let (body, digest) = product_basis_body();
+    assert_eq!(body.len(), 12 * ARTIFACT_CHUNK_BYTES + 48);
+    let (stage, _) = derive_stage(author.pubkey(), kind, binding_context, digest);
+    let (final_account, _) = derive_final(kind, binding_context, digest);
+    let mut context = new_bank(&[(author.pubkey(), empty_system_account(UPLOADER_LAMPORTS))])
+        .start_with_context()
+        .await;
+
+    // Product artifacts are global typed content. A Realm-like transport
+    // context is not harmless metadata and refuses before a stage exists.
+    // Start from a canonically encoded zero-context request and mutate only
+    // the hostile wire field because the trusted encoder correctly refuses to
+    // construct this request for us.
+    let hostile_context = Hash32::from_bytes([0x91; 32]);
+    let (hostile_stage, _) = derive_stage(author.pubkey(), kind, hostile_context, digest);
+    let mut hostile_begin = begin_ix(
+        author.pubkey(),
+        hostile_stage,
+        kind,
+        binding_context,
+        digest,
+        1_000,
+    );
+    const REQUEST_ENVELOPE_BYTES: usize = 13;
+    const ARTIFACT_CONTEXT_OFFSET: usize = REQUEST_ENVELOPE_BYTES + 2 + 1;
+    hostile_begin.data[ARTIFACT_CONTEXT_OFFSET..ARTIFACT_CONTEXT_OFFSET + 32]
+        .copy_from_slice(&hostile_context.bytes());
+    assert!(send(&mut context, hostile_begin, &author).await.is_err());
+    assert!(account(&mut context, hostile_stage).await.is_none());
+
+    let mut replay_begin = begin_ix(author.pubkey(), stage, kind, binding_context, digest, 1_000);
+    replay_begin.data[2..10].copy_from_slice(&1_u64.to_le_bytes());
+    assert_eq!(
+        custom(send(&mut context, replay_begin, &author).await),
+        ClutchError::Replay as u32
+    );
+    assert!(account(&mut context, stage).await.is_none());
+
+    // Keep the body fully canonical while changing its economics: denominator
+    // and each live diagonal payout weight move together from 1,000 to 999.
+    // The owning decoder accepts this second basis, but sealing it under the
+    // first basis's typed digest must fail at the native SHA boundary. The
+    // complete stage and absent final prove the late refusal is atomic.
+    let mut stale_digest_body = body.clone();
+    stale_digest_body[24..32].copy_from_slice(&999_u64.to_le_bytes());
+    for index in 0..4 {
+        let weight_offset = 32 + (index * PRODUCT_MAX_OUTCOMES + index) * 8;
+        stale_digest_body[weight_offset..weight_offset + 8].copy_from_slice(&999_u64.to_le_bytes());
+    }
+    let stale_basis = NativeClaimBasisV1::decode(&stale_digest_body).expect("second valid basis");
+    assert_ne!(stale_basis.id().unwrap().bytes(), digest.bytes());
+    send(
+        &mut context,
+        begin_ix(author.pubkey(), stage, kind, binding_context, digest, 1_000),
+        &author,
+    )
+    .await
+    .expect("begin stale-digest basis stage");
+    write_all_chunks(
+        &mut context,
+        &author,
+        stage,
+        kind,
+        binding_context,
+        digest,
+        &stale_digest_body,
+    )
+    .await;
+    let complete_stale_stage = account(&mut context, stage).await.unwrap();
+    assert_eq!(
+        custom(
+            send(
+                &mut context,
+                seal_ix(
+                    author.pubkey(),
+                    stage,
+                    final_account,
+                    kind,
+                    binding_context,
+                    digest,
+                ),
+                &author,
+            )
+            .await
+        ),
+        ClutchError::EvidenceBufferMismatch as u32
+    );
+    assert_eq!(
+        account(&mut context, stage).await.unwrap(),
+        complete_stale_stage
+    );
+    assert!(account(&mut context, final_account).await.is_none());
+    send(
+        &mut context,
+        abort_ix(
+            author.pubkey(),
+            stage,
+            author.pubkey(),
+            kind,
+            binding_context,
+            digest,
+        ),
+        &author,
+    )
+    .await
+    .expect("funder aborts refused stale-digest stage");
+    assert!(account(&mut context, stage).await.is_none());
+
+    send(
+        &mut context,
+        begin_ix(author.pubkey(), stage, kind, binding_context, digest, 1_000),
+        &author,
+    )
+    .await
+    .expect("begin basis stage");
+    let initial_stage = account(&mut context, stage).await.unwrap();
+
+    // A skipped first chunk and an incomplete seal both roll back exactly.
+    assert!(send(
+        &mut context,
+        write_ix(
+            author.pubkey(),
+            stage,
+            kind,
+            binding_context,
+            digest,
+            ARTIFACT_CHUNK_BYTES,
+            &body,
+        ),
+        &author,
+    )
+    .await
+    .is_err());
+    assert_eq!(account(&mut context, stage).await.unwrap(), initial_stage);
+    assert!(send(
+        &mut context,
+        seal_ix(
+            author.pubkey(),
+            stage,
+            final_account,
+            kind,
+            binding_context,
+            digest,
+        ),
+        &author,
+    )
+    .await
+    .is_err());
+    assert_eq!(account(&mut context, stage).await.unwrap(), initial_stage);
+    assert!(account(&mut context, final_account).await.is_none());
+
+    send(
+        &mut context,
+        write_ix(
+            author.pubkey(),
+            stage,
+            kind,
+            binding_context,
+            digest,
+            0,
+            &body,
+        ),
+        &author,
+    )
+    .await
+    .expect("first ordered basis chunk");
+    let after_first = account(&mut context, stage).await.unwrap();
+    assert!(send(
+        &mut context,
+        write_ix(
+            author.pubkey(),
+            stage,
+            kind,
+            binding_context,
+            digest,
+            0,
+            &body,
+        ),
+        &author,
+    )
+    .await
+    .is_err());
+    assert_eq!(account(&mut context, stage).await.unwrap(), after_first);
+
+    let mut cursor = ARTIFACT_CHUNK_BYTES;
+    while cursor < body.len() {
+        send(
+            &mut context,
+            write_ix(
+                author.pubkey(),
+                stage,
+                kind,
+                binding_context,
+                digest,
+                cursor,
+                &body,
+            ),
+            &author,
+        )
+        .await
+        .expect("ordered basis chunk");
+        cursor += ARTIFACT_CHUNK_BYTES.min(body.len() - cursor);
+    }
+    let complete_stage = account(&mut context, stage).await.unwrap();
+    let mut wrong_digest_bytes = digest.bytes();
+    wrong_digest_bytes[0] ^= 1;
+    let wrong_digest = Hash32::from_bytes(wrong_digest_bytes);
+    let (wrong_final, _) = derive_final(kind, binding_context, wrong_digest);
+    assert!(send(
+        &mut context,
+        seal_ix(
+            author.pubkey(),
+            stage,
+            wrong_final,
+            kind,
+            binding_context,
+            wrong_digest,
+        ),
+        &author,
+    )
+    .await
+    .is_err());
+    assert_eq!(account(&mut context, stage).await.unwrap(), complete_stage);
+    assert!(account(&mut context, wrong_final).await.is_none());
+
+    let (seal_result, seal_units) = send_measured(
+        &mut context,
+        seal_ix(
+            author.pubkey(),
+            stage,
+            final_account,
+            kind,
+            binding_context,
+            digest,
+        ),
+        &author,
+    )
+    .await;
+    seal_result.expect("native-hashed basis seal");
+    assert!(seal_units > 0 && seal_units <= 200_000);
+    eprintln!("product_series_basis_seal_compute_units={seal_units}");
+    assert!(account(&mut context, stage).await.is_none());
+    let sealed = account(&mut context, final_account).await.unwrap();
+    assert_eq!(sealed.owner, PROGRAM_ID);
+    assert_eq!(sealed.data, body);
+    assert_eq!(
+        sealed.lamports,
+        Rent::default().minimum_balance(BASIS_BYTES)
+    );
+
+    // A second complete upload converges on the exact existing final instead
+    // of inventing another account or treating publication as exclusive.
+    let (_, converged_final) =
+        upload_all(&mut context, &author, kind, binding_context, digest, &body).await;
+    assert_eq!(converged_final, final_account);
+    assert_eq!(account(&mut context, final_account).await.unwrap(), sealed);
+
+    // The eight smaller Product/Series kinds take distinct target-only codec
+    // and domain-dispatch arms. Drive each through this same real ELF rather
+    // than projecting host validation onto those arms.
+    for (other_kind, other_body, other_digest) in other_product_artifact_bodies() {
+        let (other_stage, other_final) = upload_all(
+            &mut context,
+            &author,
+            other_kind,
+            Hash32::ZERO,
+            other_digest,
+            &other_body,
+        )
+        .await;
+        assert!(account(&mut context, other_stage).await.is_none());
+        let published = account(&mut context, other_final).await.unwrap();
+        assert_eq!(published.owner, PROGRAM_ID, "{other_kind:?}");
+        assert_eq!(published.data, other_body, "{other_kind:?}");
+        assert_eq!(
+            published.lamports,
+            Rent::default().minimum_balance(other_kind.exact_len()),
+            "{other_kind:?}"
+        );
+    }
+
+    // A digest alone is not admission. Give the generic target path a
+    // correctly self-hashed Recovery body whose first reserved byte is
+    // nonzero. The owning codec must refuse before a final account exists.
+    let malformed_kind = ArtifactKind::EvidenceOnlyRecoveryPolicyV1;
+    let mut malformed_body = vec![0_u8; malformed_kind.exact_len()];
+    product_recovery().encode_into(&mut malformed_body).unwrap();
+    malformed_body[11] = 1;
+    assert!(EvidenceOnlyRecoveryPolicyV1::decode(&malformed_body).is_err());
+    let malformed_digest = typed_digest(RECOVERY_POLICY_DOMAIN, &malformed_body);
+    let (malformed_stage, _) = derive_stage(
+        author.pubkey(),
+        malformed_kind,
+        Hash32::ZERO,
+        malformed_digest,
+    );
+    let (malformed_final, _) = derive_final(malformed_kind, Hash32::ZERO, malformed_digest);
+    send(
+        &mut context,
+        begin_ix(
+            author.pubkey(),
+            malformed_stage,
+            malformed_kind,
+            Hash32::ZERO,
+            malformed_digest,
+            1_000,
+        ),
+        &author,
+    )
+    .await
+    .expect("begin self-hashed malformed recovery");
+    write_all_chunks(
+        &mut context,
+        &author,
+        malformed_stage,
+        malformed_kind,
+        Hash32::ZERO,
+        malformed_digest,
+        &malformed_body,
+    )
+    .await;
+    let malformed_before = account(&mut context, malformed_stage).await.unwrap();
+    assert_eq!(
+        custom(
+            send(
+                &mut context,
+                seal_ix(
+                    author.pubkey(),
+                    malformed_stage,
+                    malformed_final,
+                    malformed_kind,
+                    Hash32::ZERO,
+                    malformed_digest,
+                ),
+                &author,
+            )
+            .await
+        ),
+        clutch_sbf::error::codec_code(clutch_solana_layout::CodecError::MismatchedBinding)
+    );
+    assert_eq!(
+        account(&mut context, malformed_stage).await.unwrap(),
+        malformed_before
+    );
+    assert!(account(&mut context, malformed_final).await.is_none());
 }
 
 #[tokio::test]

@@ -82,6 +82,8 @@ headers still loses only the header-only protections rather than all of them.
 - Any host that can set headers (Netlify `_headers`, Cloudflare, nginx,
   Caddy, S3+CloudFront function) should ship the block above verbatim.
 
-None of this makes the page authoritative. It stays an untrusted projection: an
-inspect-only surface with no chain capability, whose integrity root is the
+None of this makes the page authoritative. It stays an untrusted projection
+with no network, wallet, signing, or submission capability. Its local
+constructor can emit exact unsigned bytes only for named contract boundaries;
+that is not chain authentication or execution. The integrity root is the
 reviewed source and its digests, never the server that handed you the bytes.

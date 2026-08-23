@@ -1,7 +1,16 @@
 # Transferable structured claim: implementation-ready adapter plan
 
-Status: **PURE STRUCTURED-CLAIM KERNEL IMPLEMENTED; SBF ADAPTER NOT IMPLEMENTED**
-(2026-08-22).
+Status: **PURE KERNEL, CANONICAL RUNTIME CONTRACT, AND DISABLED SBF SUCCESSOR
+SEAM IMPLEMENTED; OWNER-SIDE CPIS, DISPATCH ACTIVATION, AND VALIDATION OPEN**
+(2026-08-23).
+
+The implementation authority for the Solana seam is now
+`programs/structured-claim-adapter`. It consumes
+`crates/clutch-structured-claim-runtime-contract` directly and deletes the
+historical parallel adapter descriptor/request/planner. Its runtime capability
+mask is empty. The remainder of this document records design rationale; where
+its older staged-CPI wording differs from the successor adapter README, the
+successor adapter is authoritative.
 
 The production-bound, allocation-free `no_std` semantic core now
 lives in `crates/clutch-structured-claim`. It promotes the exact rational
@@ -16,10 +25,17 @@ first-party `clutch-kernel`; the SBF adapter must additionally reconcile its
 authenticated internal/external SupplyLedger closure and enforce the immutable
 collateral cap.
 
-The remaining implementation work in this plan is therefore the adapter and
-bank-evidence boundary, not a redesign of wrapper economics. In particular,
-the base atomic Position transfer, donation transitions, and aggregate-vector
-redemption described below are still absent from the live SBF dispatcher.
+`crates/clutch-structured-claim-runtime-contract` now freezes the exact descriptor image,
+reconstructs native/deployment identity hashing inputs, and stages the required
+atomic Position cash/native-Egg transfer over authenticated semantic
+projections. The disabled SBF successor now implements exact
+PDA/owner/ProgramData/slot joins, a named Token-2022 parser boundary,
+pre-fund-safe descriptor/mint construction, strict account frames, all eight
+canonical route handlers, exact outer-operation staging, and receipt
+reconciliation. The remaining work is concrete base owner-side instruction
+bytes/handlers, reuse of the pinned Token-2022 parser/CPI owner, central action
+and `0x88/1` allocation, main dispatcher wiring, and validation. None of these
+routes is live.
 
 This plan names the smallest trustworthy runtime seam for a genuinely
 transferable shaped position without narrowing the protocol's analytic or
@@ -226,11 +242,12 @@ single-outcome `transfer_internal` theorem; the Solana adapter owns the account
 and replay facts. A refused transition writes nothing.
 
 This one transition enables canonical-backing wrap/unwrap with one base CPI.
-The full-Egg convenience route may compose this transfer with existing
-Merge/Split in the same Solana transaction. Only if measured CU/account limits
-justify it should the base add fused `CompressAndTransfer` and
-`ExpandAndTransfer` instructions; their post-state must be byte-identical to
-the two existing semantic steps.
+The full-Egg route requires one atomic base-owned
+`CompressAndTransfer`/`ExpandAndTransfer` transition. Independent transfer and
+Merge/Split calls consume different Replay transitions and cannot represent the
+single prospective Position/Replay poststate returned by the canonical runtime
+contract. Their fused post-state must remain byte-identical to the complete
+semantic composition.
 
 ## Wrapper transitions
 
@@ -268,16 +285,16 @@ Resolved:
 
 When `k > 0`, while Active only:
 
-1. move `q*p_i` Eggs into the wrapper vault;
-2. invoke existing base `Merge(q*k)` as the vault PDA, leaving `q*r_i` Eggs and
-   crediting `q*k` vault cash;
-3. mint `q` wrappers; and
-4. authenticate the same canonical post-state as `WrapCanonicalBacking`.
+1. invoke the base-owned atomic full-vector transition that moves `q*p_i` Eggs
+   into the wrapper vault and merges `q*k` complete sets, leaving `q*r_i` Eggs
+   and crediting `q*k` vault cash;
+2. mint `q` wrappers; and
+3. authenticate the same canonical post-state as `WrapCanonicalBacking`.
 
-The initial implementation uses two base CPIs plus the mint. A fused base
-transition is an optimization only after the composed route has bank evidence.
-When `k = 0`, the full vector is already canonical, no Merge CPI exists, and
-the exact route is valid after resolution too.
+The base transition is fused because the runtime stages one atomic user/vault
+Replay advance. When `k = 0`, the full vector is already canonical but the same
+atomic base owner still authenticates and applies the custody move; the exact
+route is valid after resolution too.
 
 ### UnwrapCanonicalBacking
 
@@ -294,8 +311,9 @@ complete set.
 
 ### UnwrapFullEggVector
 
-When `k > 0`, while Active only, burn the wrapper, invoke base `Split(q*k)` in
-the vault, and move `q*p_i` Eggs to the owner. When `k = 0`, full and canonical
+When `k > 0`, while Active only, burn the wrapper and invoke the base-owned
+atomic transition that splits `q*k` complete sets and moves `q*p_i` Eggs to the
+owner under one user/vault Replay advance. When `k = 0`, full and canonical
 backing are byte-identical and the route remains available after resolution.
 This is a convenience representation change; it is not more solvent than
 canonical backing.

@@ -16,9 +16,11 @@
 //! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
 //! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
 //! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam and the revenue admission boundary ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::RevenuePolicyRecordMissing`]) |
+//! | `0x00a0..=0x00af` | disabled Source/Series SBF adapter account and custody boundaries |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
+//! | `0x4000 + n` | [`clutch_general_v2_contract::CodecError`] variant `n` |
 //!
 //! The `0x0050-0x005f` block realizes the allocation `observe_resolve`'s
 //! module docs proposed while this file was frozen: the eleven evidence-gate
@@ -37,6 +39,7 @@
 //! evidence block and the genesis block costs nothing and keeps a later
 //! evidence append from having to jump over an unrelated family.
 
+use clutch_general_v2_contract::CodecError as GeneralV2CodecError;
 use clutch_kernel::Error as KernelError;
 use clutch_solana_layout::{resolution_work::ResolutionWorkCodecError, CodecError};
 use clutch_solana_reference::Error as ReferenceError;
@@ -234,6 +237,12 @@ pub enum ClutchError {
     /// A registered source release refused provider deployment, source bytes,
     /// freshness, lineage, confidence, window, or archive provenance.
     SourceAdmissionFailed = 0x007a,
+    /// A Series component custody transfer did not produce the exact expected
+    /// source and destination balance deltas, or its System CPI refused.
+    ///
+    /// Series lamport custody is not token custody, so reusing
+    /// [`ClutchError::TokenDeltaMismatch`] would misname the trust boundary.
+    SeriesCustodyDeltaMismatch = 0x00a0,
     /// The checkpoint account's body bytes are not a `ClearWorkV1` encoding.
     ///
     /// `clutch_batch::relation_v1_stream::CodecFaultV1`, collapsed: the bytes
@@ -446,6 +455,22 @@ pub const fn resolution_work_code(error: ResolutionWorkError) -> u32 {
     }
 }
 
+/// Stable numeric projection for the General V2 pure contract.
+pub const fn general_v2_codec_code(error: GeneralV2CodecError) -> u32 {
+    0x4000
+        + match error {
+            GeneralV2CodecError::WrongLength => 0,
+            GeneralV2CodecError::WrongTag => 1,
+            GeneralV2CodecError::WrongVersion => 2,
+            GeneralV2CodecError::ZeroIdentity => 3,
+            GeneralV2CodecError::InvalidCount => 4,
+            GeneralV2CodecError::InvalidState => 5,
+            GeneralV2CodecError::NonCanonicalPadding => 6,
+            GeneralV2CodecError::MismatchedBinding => 7,
+            GeneralV2CodecError::ArithmeticOverflow => 8,
+        }
+}
+
 /// One refusal type for the whole processor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
@@ -459,6 +484,8 @@ pub enum Refusal {
     Reference(ReferenceError),
     /// Resumable occupation-resolution refusal.
     ResolutionWork(ResolutionWorkError),
+    /// Strict General V2 account, payload, or semantic-contract refusal.
+    GeneralV2(GeneralV2CodecError),
 }
 
 impl Refusal {
@@ -470,6 +497,7 @@ impl Refusal {
             Self::Kernel(error) => kernel_code(error),
             Self::Reference(error) => reference_code(error),
             Self::ResolutionWork(error) => resolution_work_code(error),
+            Self::GeneralV2(error) => general_v2_codec_code(error),
         }
     }
 }
@@ -507,6 +535,12 @@ impl From<ResolutionWorkError> for Refusal {
 impl From<ResolutionWorkCodecError> for Refusal {
     fn from(value: ResolutionWorkCodecError) -> Self {
         Self::ResolutionWork(ResolutionWorkError::Codec(value))
+    }
+}
+
+impl From<GeneralV2CodecError> for Refusal {
+    fn from(value: GeneralV2CodecError) -> Self {
+        Self::GeneralV2(value)
     }
 }
 

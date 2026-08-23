@@ -104,6 +104,23 @@ pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
 /// DirectBatchPolicy V3 final-artifact seed prefix, disjoint from legacy policy.
 pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
+/// Globally content-addressed successor Product/Series artifact prefix.
+///
+/// The kind byte is a seed so transparent 32-byte typed IDs are never cast
+/// across artifact meanings. Realm binding remains inside Genesis V2.
+pub const SEED_PRODUCT_ARTIFACT_V1: &[u8] = b"dc:product-artifact:v1";
+/// Persistent V5 Series registration/replay-anchor prefix.
+pub const SEED_SERIES_REGISTRY_V1: &[u8] = b"dc:series-registry:v1";
+/// Mutable V5 Series funding-state prefix.
+pub const SEED_SERIES_FUNDING_V1: &[u8] = b"dc:series-funding:v1";
+/// Zero-data, System-owned per-component lamport custody prefix.
+pub const SEED_SERIES_LAMPORT_VAULT_V1: &[u8] = b"dc:series-lamports:v1";
+/// Sole PDA signing authority for one Series' collateral vault set.
+pub const SEED_SERIES_COLLATERAL_AUTHORITY_V1: &[u8] = b"dc:series-collateral-auth:v1";
+/// Per-component release-selected collateral custody prefix.
+pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
+/// Immutable SourcePlane V3 occurrence-provenance record prefix.
+pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -133,6 +150,61 @@ pub const SEED_REVENUE_POLICY: &[u8] = b"dragons-clutch:revenue-policy:v1";
 pub const SEED_RESOLUTION_WORK: &[u8] = b"resolution-work-v1";
 /// Program-owned prepaid Reserve bound to one deterministic Work PDA.
 pub const SEED_RESOLUTION_RESERVE: &[u8] = b"resolution-reserve-v1";
+
+/// Immutable General V2 MarketBinding seed prefix.
+pub const SEED_GENERAL_V2_MARKET_BINDING: &[u8] =
+    clutch_general_v2_contract::MARKET_BINDING_SEED_DOMAIN_V1;
+/// Genesis-assisted General V2 mutable Market runtime seed prefix.
+pub const SEED_GENERAL_V2_MARKET_RUNTIME: &[u8] =
+    clutch_general_v2_contract::MARKET_RUNTIME_SEED_DOMAIN_V1;
+/// Counted General V2 Epoch seed prefix.
+pub const SEED_GENERAL_V2_EPOCH: &[u8] = clutch_general_v2_contract::EPOCH_SEED_DOMAIN_V1;
+/// General V2 EconomicDomain artifact seed prefix.
+pub const SEED_GENERAL_V2_ECONOMIC_DOMAIN: &[u8] =
+    clutch_general_v2_contract::ECONOMIC_DOMAIN_SEED_DOMAIN_V1;
+/// General V2 candidate Window seed prefix.
+pub const SEED_GENERAL_V2_WINDOW: &[u8] = clutch_general_v2_contract::WINDOW_SEED_DOMAIN_V1;
+/// General V2 root Budget seed prefix.
+pub const SEED_GENERAL_V2_BUDGET: &[u8] = clutch_general_v2_contract::EPOCH_BUDGET_SEED_DOMAIN_V1;
+/// General V2 ordinal-owned AdmissionNode seed prefix.
+pub const SEED_GENERAL_V2_NODE: &[u8] = clutch_general_v2_contract::CANDIDATE_NODE_SEED_DOMAIN_V1;
+/// General V2 active-width Feed/Stage seed prefix.
+pub const SEED_GENERAL_V2_FEED: &[u8] = clutch_general_v2_contract::CANDIDATE_FEED_SEED_DOMAIN_V1;
+/// General V2 active-width ClearWork seed prefix.
+pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V1;
+/// General V2 selected settlement-authority seed prefix.
+pub const SEED_GENERAL_V2_SELECTED: &[u8] =
+    clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
+/// Disabled General V2 owner-aggregated settlement seed prefix.
+pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
+/// Disabled selected composite-fee record seed prefix.
+pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
+    clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
+/// Disabled owner-scoped fee-carry seed prefix.
+pub const SEED_GENERAL_V2_OWNER_FEE_CARRY: &[u8] =
+    clutch_general_v2_contract::OWNER_FEE_CARRY_SEED_DOMAIN_V1;
+/// Disabled owner payer-allocation seed prefix.
+pub const SEED_GENERAL_V2_PAYER_ALLOCATION: &[u8] =
+    clutch_general_v2_contract::PAYER_ALLOCATION_SEED_DOMAIN_V1;
+/// Disabled candidate-wide recipient-allocation seed prefix.
+pub const SEED_GENERAL_V2_RECIPIENT_ALLOCATION: &[u8] =
+    clutch_general_v2_contract::RECIPIENT_ALLOCATION_SEED_DOMAIN_V1;
+/// Disabled selected-record treasury-ledger seed prefix.
+pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
+    clutch_general_v2_contract::TREASURY_LEDGER_SEED_DOMAIN_V1;
+/// Disabled buyer-first candidate settlement cash-pot seed prefix.
+pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
+    clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
+
+/// Single-custody failure semantic root, keyed by V2 market and generation.
+pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
+/// Immutable runtime-liveness policy account.
+pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
+/// Sole external Recovery work/rent custody account.
+pub const SEED_FAILURE_EXTERNAL_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
+/// Permanent failure-generation replay tombstone.
+pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -190,6 +262,59 @@ pub fn replay_pda(
     )
 }
 
+/// Canonical single-custody failure semantic root.
+pub fn failure_external_root_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_EXTERNAL_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical immutable runtime-liveness policy account.
+pub fn failure_liveness_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_FAILURE_LIVENESS_POLICY, policy_id])
+}
+
+/// Canonical sole Recovery work/rent custody account.
+pub fn failure_external_recovery_pda(
+    program_id: &Pubkey,
+    lifecycle_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_EXTERNAL_RECOVERY,
+            lifecycle_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical permanent replay tombstone for one failure generation.
+pub fn failure_replay_tombstone_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_REPLAY_TOMBSTONE,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
 /// Canonical market-wide supply-ledger address and bump.
 ///
 /// One ledger per market, not per position: the two-term ledger is a
@@ -229,6 +354,174 @@ pub fn resolution_reserve_pda(
     find(program_id, &[SEED_RESOLUTION_RESERVE, market, work])
 }
 
+/// Canonical immutable General V2 MarketBinding PDA.
+pub fn general_v2_market_binding_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_MARKET_BINDING, market_instance_v2_id],
+    )
+}
+
+/// Canonical genesis-assisted General V2 Market runtime PDA.
+pub fn general_v2_market_runtime_pda(
+    program_id: &Pubkey,
+    market_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_MARKET_RUNTIME, market_binding],
+    )
+}
+
+/// Canonical counted General V2 Epoch PDA.
+pub fn general_v2_epoch_pda(
+    program_id: &Pubkey,
+    market_binding: &[u8; 32],
+    epoch_index: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_EPOCH,
+            market_binding,
+            &epoch_index.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical General V2 EconomicDomain artifact PDA.
+pub fn general_v2_economic_domain_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_ECONOMIC_DOMAIN, epoch])
+}
+
+/// Canonical General V2 candidate Window PDA.
+pub fn general_v2_window_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WINDOW, epoch])
+}
+
+/// Canonical General V2 root Budget PDA.
+pub fn general_v2_budget_pda(program_id: &Pubkey, epoch: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_BUDGET, epoch])
+}
+
+/// Canonical General V2 ordinal-owned AdmissionNode PDA.
+pub fn general_v2_node_pda(program_id: &Pubkey, epoch: &[u8; 32], ordinal: u64) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_NODE, epoch, &ordinal.to_le_bytes()],
+    )
+}
+
+/// Canonical General V2 Feed/Stage PDA inherited from its AdmissionNode.
+pub fn general_v2_feed_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_FEED, node])
+}
+
+/// Canonical General V2 ClearWork PDA inherited from its AdmissionNode.
+pub fn general_v2_work_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WORK, node])
+}
+
+/// Canonical General V2 selected settlement-authority PDA.
+pub fn general_v2_selected_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SELECTED, epoch, settlement_candidate_id],
+    )
+}
+
+/// Canonical disabled owner-settlement address for one selected owner row.
+pub fn general_v2_owner_settlement_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_OWNER_SETTLEMENT,
+            epoch,
+            settlement_candidate,
+            owner,
+        ],
+    )
+}
+
+/// Canonical disabled selected fee-record address for one SelectedCandidate.
+pub fn general_v2_selected_fee_record_pda(
+    program_id: &Pubkey,
+    selected_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SELECTED_FEE_RECORD, selected_candidate],
+    )
+}
+
+/// Canonical disabled carry address keyed only by fee record and owner.
+pub fn general_v2_owner_fee_carry_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_OWNER_FEE_CARRY, fee_record, owner],
+    )
+}
+
+/// Canonical disabled temporary payer-allocation address for one owner.
+pub fn general_v2_payer_allocation_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_PAYER_ALLOCATION, fee_record, owner],
+    )
+}
+
+/// Canonical disabled candidate-wide recipient-allocation address.
+pub fn general_v2_recipient_allocation_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RECIPIENT_ALLOCATION, fee_record],
+    )
+}
+
+/// Canonical disabled treasury-ledger address for one selected fee record.
+pub fn general_v2_treasury_ledger_pda(program_id: &Pubkey, fee_record: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_TREASURY_LEDGER, fee_record])
+}
+
+/// Canonical disabled buyer-first cash-pot address for one final candidate.
+pub fn general_v2_settlement_cash_pot_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_SETTLEMENT_CASH_POT,
+            epoch,
+            settlement_candidate,
+        ],
+    )
+}
+
 /// Canonical immutable-terms address and bump.
 ///
 /// Terms are content-addressed by their own digest and namespaced by the Realm
@@ -259,6 +552,64 @@ pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) ->
 /// Canonical full-width batch-policy artifact address.
 pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_BATCH_POLICY, epoch, digest])
+}
+
+/// Canonical immutable successor Product/Series artifact address.
+pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_PRODUCT_ARTIFACT_V1, &[kind], digest])
+}
+
+/// Canonical immutable registered-Series address.
+pub fn series_registry_pda(program_id: &Pubkey, series: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SERIES_REGISTRY_V1, series])
+}
+
+/// Canonical mutable funding-state address for one registered Series.
+pub fn series_funding_pda(program_id: &Pubkey, series: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SERIES_FUNDING_V1, series])
+}
+
+/// Canonical zero-data lamport custody address for one funding component.
+///
+/// `component` is the exact `SeriesFundingComponentV1` discriminant `0..=4`;
+/// the instruction parser must refuse every other byte before deriving it.
+pub fn series_lamport_vault_pda(
+    program_id: &Pubkey,
+    series: &[u8; 32],
+    component: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SERIES_LAMPORT_VAULT_V1, series, &[component]],
+    )
+}
+
+/// Canonical sole signing authority for one Series' five collateral vaults.
+pub fn series_collateral_authority_pda(program_id: &Pubkey, series: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SERIES_COLLATERAL_AUTHORITY_V1, series])
+}
+
+/// Canonical release-selected collateral vault for one funding component.
+///
+/// Address allocation is owned here; token-account semantic admission remains
+/// the collateral adapter's typed boundary.
+pub fn series_collateral_vault_pda(
+    program_id: &Pubkey,
+    series: &[u8; 32],
+    component: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SERIES_COLLATERAL_VAULT_V1, series, &[component]],
+    )
+}
+
+/// Canonical immutable SourcePlane provenance account for one compiled record.
+pub fn source_occurrence_pda(program_id: &Pubkey, source_occurrence_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SOURCE_OCCURRENCE_V1, source_occurrence_id],
+    )
 }
 
 /// Canonical DirectBatchPolicy V3 artifact address.

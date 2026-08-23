@@ -24,6 +24,42 @@ use super::{
     account_len, collateral, is_zero, CodecError, Hash32, PriceGridAccount, Result, TermsAccount,
     HASH_BYTES,
 };
+#[cfg(all(
+    feature = "non-production-product-series-lab",
+    not(target_os = "solana")
+))]
+use clutch_product_series::{
+    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
+    PriceMeasurePolicyV1, ProductTemplateV4, SeriesAttachmentPlanV1, SeriesFundingQuoteV1,
+    SeriesFundingTermsV2, SeriesPlanV5,
+};
+
+const PRODUCT_BASIS_BYTES: usize = 2_352;
+const PRODUCT_RECOVERY_BYTES: usize = 208;
+const PRODUCT_TEMPLATE_V4_BYTES: usize = 256;
+const PRODUCT_PRICE_MEASURE_POLICY_BYTES: usize = 96;
+const PRODUCT_MARKET_GENESIS_V2_BYTES: usize = 416;
+const PRODUCT_FUNDING_QUOTE_BYTES: usize = 264;
+const PRODUCT_ATTACHMENT_PLAN_BYTES: usize = 112;
+const PRODUCT_SERIES_PLAN_V5_BYTES: usize = 152;
+const PRODUCT_FUNDING_TERMS_V2_BYTES: usize = 240;
+
+#[cfg(feature = "non-production-product-series-lab")]
+const _: () = {
+    assert!(PRODUCT_BASIS_BYTES == clutch_product_series::BASIS_BYTES);
+    assert!(PRODUCT_RECOVERY_BYTES == clutch_product_series::EVIDENCE_ONLY_RECOVERY_POLICY_BYTES);
+    assert!(PRODUCT_TEMPLATE_V4_BYTES == clutch_product_series::PRODUCT_TEMPLATE_BYTES);
+    assert!(
+        PRODUCT_PRICE_MEASURE_POLICY_BYTES == clutch_product_series::PRICE_MEASURE_POLICY_BYTES
+    );
+    assert!(
+        PRODUCT_MARKET_GENESIS_V2_BYTES == clutch_product_series::MARKET_GENESIS_PROFILE_V2_BYTES
+    );
+    assert!(PRODUCT_FUNDING_QUOTE_BYTES == clutch_product_series::SERIES_FUNDING_QUOTE_BYTES);
+    assert!(PRODUCT_ATTACHMENT_PLAN_BYTES == clutch_product_series::SERIES_ATTACHMENT_PLAN_BYTES);
+    assert!(PRODUCT_SERIES_PLAN_V5_BYTES == clutch_product_series::SERIES_PLAN_V5_BYTES);
+    assert!(PRODUCT_FUNDING_TERMS_V2_BYTES == clutch_product_series::SERIES_FUNDING_TERMS_V2_BYTES);
+};
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 use clutch_batch_policy_identity::BATCH_POLICY_BYTES;
 #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
@@ -55,7 +91,7 @@ pub const ARTIFACT_STAGE_HEADER_BYTES: usize = 2
     + HASH_BYTES
     + ARTIFACT_STAGE_RESERVED_BYTES;
 /// Largest artifact body admitted by this transport revision.
-pub const MAX_ARTIFACT_BYTES: usize = account_len::TERMS;
+pub const MAX_ARTIFACT_BYTES: usize = PRODUCT_BASIS_BYTES;
 
 /// A fixed artifact family with one owning hostile-byte codec.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +107,24 @@ pub enum ArtifactKind {
     BatchPolicy = 4,
     /// Direct-policy plus verifier release identity. Its context is an Epoch id.
     DirectBatchPolicyV3 = 5,
+    /// Product-owned finite or smooth native claim basis V1.
+    NativeClaimBasisV1 = 32,
+    /// Product-owned evidence-only recovery policy V1.
+    EvidenceOnlyRecoveryPolicyV1 = 33,
+    /// Reusable relative Product template V4.
+    ProductTemplateV4 = 34,
+    /// Exact quantized price-measure policy V1.
+    PriceMeasurePolicyV1 = 35,
+    /// Realm/profile-bound Market genesis profile V2.
+    MarketGenesisProfileV2 = 36,
+    /// Exact per-occurrence component funding quote V1.
+    SeriesFundingQuoteV1 = 37,
+    /// Operational attachment plan V1.
+    SeriesAttachmentPlanV1 = 38,
+    /// Finite recurring Series plan V5.
+    SeriesPlanV5 = 39,
+    /// Successor Series funding ownership terms V2.
+    SeriesFundingTermsV2 = 40,
 }
 
 impl ArtifactKind {
@@ -87,6 +141,24 @@ impl ArtifactKind {
                 feature = "profile-direct-v3-source-v2-point"
             ))]
             5 => Ok(Self::DirectBatchPolicyV3),
+            #[cfg(feature = "non-production-product-series-lab")]
+            32 => Ok(Self::NativeClaimBasisV1),
+            #[cfg(feature = "non-production-product-series-lab")]
+            33 => Ok(Self::EvidenceOnlyRecoveryPolicyV1),
+            #[cfg(feature = "non-production-product-series-lab")]
+            34 => Ok(Self::ProductTemplateV4),
+            #[cfg(feature = "non-production-product-series-lab")]
+            35 => Ok(Self::PriceMeasurePolicyV1),
+            #[cfg(feature = "non-production-product-series-lab")]
+            36 => Ok(Self::MarketGenesisProfileV2),
+            #[cfg(feature = "non-production-product-series-lab")]
+            37 => Ok(Self::SeriesFundingQuoteV1),
+            #[cfg(feature = "non-production-product-series-lab")]
+            38 => Ok(Self::SeriesAttachmentPlanV1),
+            #[cfg(feature = "non-production-product-series-lab")]
+            39 => Ok(Self::SeriesPlanV5),
+            #[cfg(feature = "non-production-product-series-lab")]
+            40 => Ok(Self::SeriesFundingTermsV2),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -104,7 +176,36 @@ impl ArtifactKind {
             Self::Terms => account_len::TERMS,
             Self::BatchPolicy => BATCH_POLICY_BYTES,
             Self::DirectBatchPolicyV3 => DIRECT_BATCH_POLICY_V3_BYTES,
+            Self::NativeClaimBasisV1 => PRODUCT_BASIS_BYTES,
+            Self::EvidenceOnlyRecoveryPolicyV1 => PRODUCT_RECOVERY_BYTES,
+            Self::ProductTemplateV4 => PRODUCT_TEMPLATE_V4_BYTES,
+            Self::PriceMeasurePolicyV1 => PRODUCT_PRICE_MEASURE_POLICY_BYTES,
+            Self::MarketGenesisProfileV2 => PRODUCT_MARKET_GENESIS_V2_BYTES,
+            Self::SeriesFundingQuoteV1 => PRODUCT_FUNDING_QUOTE_BYTES,
+            Self::SeriesAttachmentPlanV1 => PRODUCT_ATTACHMENT_PLAN_BYTES,
+            Self::SeriesPlanV5 => PRODUCT_SERIES_PLAN_V5_BYTES,
+            Self::SeriesFundingTermsV2 => PRODUCT_FUNDING_TERMS_V2_BYTES,
         }
+    }
+
+    /// Whether this kind is a globally content-addressed Product/Series body.
+    ///
+    /// These artifacts are reusable across Realms. Their upload context is
+    /// therefore the exact zero sentinel; Realm binding is checked later from
+    /// the Genesis and Series bodies, never smuggled into transport identity.
+    pub const fn is_product_series(self) -> bool {
+        matches!(
+            self,
+            Self::NativeClaimBasisV1
+                | Self::EvidenceOnlyRecoveryPolicyV1
+                | Self::ProductTemplateV4
+                | Self::PriceMeasurePolicyV1
+                | Self::MarketGenesisProfileV2
+                | Self::SeriesFundingQuoteV1
+                | Self::SeriesAttachmentPlanV1
+                | Self::SeriesPlanV5
+                | Self::SeriesFundingTermsV2
+        )
     }
 }
 
@@ -113,7 +214,8 @@ impl ArtifactKind {
 pub struct ArtifactBinding {
     /// Codec family.
     pub kind: ArtifactKind,
-    /// Profile id for a collateral policy; Realm id for grid and terms.
+    /// Profile id for a collateral policy; Realm id for grid and terms; the
+    /// canonical zero sentinel for globally reusable Product/Series bodies.
     pub context: Hash32,
     /// Canonical semantic digest owned by the artifact codec.
     pub digest: Hash32,
@@ -122,9 +224,13 @@ pub struct ArtifactBinding {
 }
 
 impl ArtifactBinding {
-    /// Refuse zero identities, invented lengths, and bodies above the bound.
+    /// Refuse a zero digest, a noncanonical context, invented lengths, and
+    /// bodies above the bound.
     pub fn validate(&self) -> Result<()> {
-        if is_zero(&self.context.0) || is_zero(&self.digest.0) {
+        if is_zero(&self.digest.0)
+            || (self.kind.is_product_series() && self.context != Hash32::ZERO)
+            || (!self.kind.is_product_series() && is_zero(&self.context.0))
+        {
             return Err(CodecError::ZeroIdentity);
         }
         if self.exact_len as usize != self.kind.exact_len()
@@ -428,6 +534,180 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
         }
         #[cfg(feature = "profile-general-source-v2-point")]
         ArtifactKind::DirectBatchPolicyV3 => Err(CodecError::InvalidEnum),
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::NativeClaimBasisV1 => {
+            let value =
+                NativeClaimBasisV1::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::EvidenceOnlyRecoveryPolicyV1 => {
+            let value = EvidenceOnlyRecoveryPolicyV1::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::ProductTemplateV4 => {
+            let value =
+                ProductTemplateV4::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::PriceMeasurePolicyV1 => {
+            let value =
+                PriceMeasurePolicyV1::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::MarketGenesisProfileV2 => {
+            let value =
+                MarketGenesisProfileV2::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::SeriesFundingQuoteV1 => {
+            let value =
+                SeriesFundingQuoteV1::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::SeriesAttachmentPlanV1 => {
+            let value =
+                SeriesAttachmentPlanV1::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::SeriesPlanV5 => {
+            let value = SeriesPlanV5::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(all(
+            feature = "non-production-product-series-lab",
+            not(target_os = "solana")
+        ))]
+        ArtifactKind::SeriesFundingTermsV2 => {
+            let value =
+                SeriesFundingTermsV2::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        #[cfg(any(
+            not(feature = "non-production-product-series-lab"),
+            target_os = "solana"
+        ))]
+        ArtifactKind::NativeClaimBasisV1
+        | ArtifactKind::EvidenceOnlyRecoveryPolicyV1
+        | ArtifactKind::ProductTemplateV4
+        | ArtifactKind::PriceMeasurePolicyV1
+        | ArtifactKind::MarketGenesisProfileV2
+        | ArtifactKind::SeriesFundingQuoteV1
+        | ArtifactKind::SeriesAttachmentPlanV1
+        | ArtifactKind::SeriesPlanV5
+        | ArtifactKind::SeriesFundingTermsV2 => Err(CodecError::InvalidEnum),
     }
 }
 
@@ -440,12 +720,312 @@ mod tests {
     };
     extern crate std;
 
+    #[cfg(feature = "non-production-product-series-lab")]
+    use clutch_product_series::{
+        ComponentDebitV1, ContentId, RecoveryAttemptFundingV1, RecoveryAttemptV1, SeriesPlanV5Id,
+        MAX_OUTCOMES as PRODUCT_MAX_OUTCOMES, MAX_PAYOUTS as PRODUCT_MAX_PAYOUTS,
+        MAX_RECOVERY_ATTEMPTS, PAYOUT_MAP_UNUSED, UNIFORM_SPACING_NONE,
+    };
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_id(byte: u8) -> ContentId {
+        ContentId::from_bytes([byte; 32])
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_basis() -> NativeClaimBasisV1 {
+        let mut payout_weights = [[0; PRODUCT_MAX_OUTCOMES]; PRODUCT_MAX_PAYOUTS];
+        let mut index = 0_usize;
+        while index < 4 {
+            payout_weights[index][index] = 1_000;
+            index += 1;
+        }
+        let mut payout_map = [PAYOUT_MAP_UNUSED; PRODUCT_MAX_OUTCOMES];
+        payout_map[..4].copy_from_slice(&[0, 1, 2, 3]);
+        let mut knots = [0; PRODUCT_MAX_OUTCOMES];
+        knots[..3].copy_from_slice(&[100, 200, 300]);
+        NativeClaimBasisV1 {
+            basis_degree: 0,
+            outcome_count: 4,
+            payout_count: 4,
+            knot_count: 3,
+            uniform_log2_spacing: UNIFORM_SPACING_NONE,
+            ambiguity_policy_registry_value: 1,
+            edge_policy_registry_value: 1,
+            denominator: 1_000,
+            payout_weights,
+            payout_map,
+            knots,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_recovery() -> EvidenceOnlyRecoveryPolicyV1 {
+        let mut attempts = [RecoveryAttemptV1::ZERO; MAX_RECOVERY_ATTEMPTS];
+        attempts[0] = RecoveryAttemptV1 {
+            repair_generation_delta: 0,
+            opens_after_primary_maturity_buckets: 0,
+            closes_after_primary_maturity_buckets: 2,
+        };
+        attempts[1] = RecoveryAttemptV1 {
+            repair_generation_delta: 1,
+            opens_after_primary_maturity_buckets: 2,
+            closes_after_primary_maturity_buckets: 5,
+        };
+        EvidenceOnlyRecoveryPolicyV1 {
+            attempt_count: 2,
+            attempts,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_template() -> ProductTemplateV4 {
+        ProductTemplateV4 {
+            source_plane_contract_id: product_id(1),
+            source_spec_id: product_id(2),
+            summary_program_id: product_id(3),
+            native_claim_basis_id: product_basis().id().unwrap(),
+            evidence_only_recovery_policy_id: product_recovery().id().unwrap(),
+            compiler_release_id: product_id(4),
+            statistic_registry_value: 11,
+            coverage_policy_registry_value: 12,
+            window_span_buckets: 4,
+            primary_maturity_grace_buckets: 2,
+            base_repair_generation: 10,
+            coverage_policy_parameter: 0,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_price_policy() -> PriceMeasurePolicyV1 {
+        PriceMeasurePolicyV1 {
+            checker_release_id: product_id(30),
+            checker_version: 3,
+            quantized_semantics_version: 1,
+            minimum_basis_degree: 0,
+            maximum_basis_degree: 3,
+            maximum_outcome_count: 16,
+            maximum_atom_count: 16,
+            maximum_payout_denominator: u64::MAX,
+            maximum_witness_denominator: u64::MAX,
+            maximum_price_scale: u64::MAX / 16,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_genesis() -> MarketGenesisProfileV2 {
+        MarketGenesisProfileV2 {
+            realm_id: product_id(20),
+            profile_id: product_id(21),
+            price_grid_id: product_id(22),
+            price_measure_policy_id: product_price_policy().id().unwrap(),
+            fee_policy_id: product_id(23),
+            relation_policy_id: product_id(24),
+            score_policy_id: product_id(25),
+            candidate_lifecycle_policy_id: product_id(26),
+            candidate_liveness_policy_id: product_id(27),
+            retirement_policy_id: product_id(28),
+            capability_profile_id: product_id(29),
+            terminal_disposition_registry_value: 7,
+            native_bearer_lot: 1_000,
+            coordinate_domain_min: 0,
+            coordinate_domain_max: 400,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_quote() -> SeriesFundingQuoteV1 {
+        let mut attempts = [RecoveryAttemptFundingV1::ZERO; MAX_RECOVERY_ATTEMPTS];
+        attempts[0] = RecoveryAttemptFundingV1 {
+            max_progress_units: 3,
+            lamports_per_progress_unit: 5,
+        };
+        attempts[1] = RecoveryAttemptFundingV1 {
+            max_progress_units: 2,
+            lamports_per_progress_unit: 7,
+        };
+        SeriesFundingQuoteV1 {
+            evidence_only_recovery_policy_id: product_recovery().id().unwrap(),
+            market_core: ComponentDebitV1 {
+                lamports: 10,
+                collateral_atoms: 0,
+            },
+            recovery_reserve: ComponentDebitV1 {
+                lamports: 40,
+                collateral_atoms: 0,
+            },
+            source_work: ComponentDebitV1 {
+                lamports: 30,
+                collateral_atoms: 0,
+            },
+            liquidity_facility: ComponentDebitV1 {
+                lamports: 40,
+                collateral_atoms: 100,
+            },
+            wrapper_set: ComponentDebitV1 {
+                lamports: 50,
+                collateral_atoms: 10,
+            },
+            recovery_attempt_count: 2,
+            recovery_attempt_funding: attempts,
+            recovery_rent_principal_lamports: 11,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_attachment() -> SeriesAttachmentPlanV1 {
+        SeriesAttachmentPlanV1 {
+            funding_quote_id: product_quote().id().unwrap(),
+            liquidity_facility_plan_id: product_id(41),
+            wrapper_recipe_set_id: product_id(42),
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_series() -> SeriesPlanV5 {
+        SeriesPlanV5 {
+            product_template_id: product_template().id().unwrap(),
+            market_genesis_profile_id: product_genesis().id().unwrap(),
+            attachment_plan_id: product_attachment().id().unwrap(),
+            first_start_bucket: 100,
+            stride_buckets: 10,
+            instance_count: 3,
+            creation_lead_buckets: 5,
+            market_collateral_cap: 1_000,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn product_funding_terms() -> SeriesFundingTermsV2 {
+        SeriesFundingTermsV2 {
+            series_plan_id: SeriesPlanV5Id::from_bytes(product_series().id().unwrap().bytes()),
+            lamport_principal_refund: product_id(50),
+            collateral_principal_refund_token_account: product_id(51),
+            neutral_collateral_disposition_token_account: product_id(52),
+            neutral_lamport_sink: product_id(55),
+            collateral_mint: product_id(53),
+            token_program: product_id(54),
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    fn assert_product_artifact(kind: ArtifactKind, body: &[u8], digest: [u8; 32]) {
+        let binding = ArtifactBinding {
+            kind,
+            context: Hash32::ZERO,
+            digest: Hash32::from_bytes(digest),
+            exact_len: kind.exact_len() as u16,
+        };
+        assert_eq!(validate_artifact(binding, body), Ok(0), "{kind:?}");
+
+        let mut wrong_digest = binding;
+        let mut bytes = wrong_digest.digest.bytes();
+        bytes[0] ^= 1;
+        wrong_digest.digest = Hash32::from_bytes(bytes);
+        assert_eq!(
+            validate_artifact(wrong_digest, body),
+            Err(CodecError::MismatchedBinding),
+            "{kind:?} digest"
+        );
+
+        let mut contextualized = binding;
+        contextualized.context = Hash32::from_bytes([1; 32]);
+        assert_eq!(
+            validate_artifact(contextualized, body),
+            Err(CodecError::ZeroIdentity),
+            "{kind:?} context"
+        );
+    }
+
     fn binding(kind: ArtifactKind) -> ArtifactBinding {
         ArtifactBinding {
             kind,
-            context: Hash32::from_bytes([0x31; 32]),
+            context: if kind.is_product_series() {
+                Hash32::ZERO
+            } else {
+                Hash32::from_bytes([0x31; 32])
+            },
             digest: Hash32::from_bytes([0x52; 32]),
             exact_len: kind.exact_len() as u16,
+        }
+    }
+
+    #[cfg(feature = "non-production-product-series-lab")]
+    #[test]
+    fn every_product_series_kind_is_exactly_typed_and_globally_context_free() {
+        macro_rules! check {
+            ($kind:expr, $type:ty, $value:expr) => {{
+                let value = $value;
+                let mut body = std::vec![0_u8; <$type as FixedCodec>::ENCODED_LEN];
+                value.encode_into(&mut body).unwrap();
+                assert_product_artifact($kind, &body, value.id().unwrap().bytes());
+            }};
+        }
+
+        check!(
+            ArtifactKind::NativeClaimBasisV1,
+            NativeClaimBasisV1,
+            product_basis()
+        );
+        check!(
+            ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
+            EvidenceOnlyRecoveryPolicyV1,
+            product_recovery()
+        );
+        check!(
+            ArtifactKind::ProductTemplateV4,
+            ProductTemplateV4,
+            product_template()
+        );
+        check!(
+            ArtifactKind::PriceMeasurePolicyV1,
+            PriceMeasurePolicyV1,
+            product_price_policy()
+        );
+        check!(
+            ArtifactKind::MarketGenesisProfileV2,
+            MarketGenesisProfileV2,
+            product_genesis()
+        );
+        check!(
+            ArtifactKind::SeriesFundingQuoteV1,
+            SeriesFundingQuoteV1,
+            product_quote()
+        );
+        check!(
+            ArtifactKind::SeriesAttachmentPlanV1,
+            SeriesAttachmentPlanV1,
+            product_attachment()
+        );
+        check!(ArtifactKind::SeriesPlanV5, SeriesPlanV5, product_series());
+        check!(
+            ArtifactKind::SeriesFundingTermsV2,
+            SeriesFundingTermsV2,
+            product_funding_terms()
+        );
+
+        for (tag, expected) in (u8::MIN..=u8::MAX).map(|tag| {
+            let expected = if (32..=40).contains(&tag) {
+                Ok(match tag {
+                    32 => ArtifactKind::NativeClaimBasisV1,
+                    33 => ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
+                    34 => ArtifactKind::ProductTemplateV4,
+                    35 => ArtifactKind::PriceMeasurePolicyV1,
+                    36 => ArtifactKind::MarketGenesisProfileV2,
+                    37 => ArtifactKind::SeriesFundingQuoteV1,
+                    38 => ArtifactKind::SeriesAttachmentPlanV1,
+                    39 => ArtifactKind::SeriesPlanV5,
+                    40 => ArtifactKind::SeriesFundingTermsV2,
+                    _ => unreachable!(),
+                })
+            } else {
+                ArtifactKind::from_byte(tag)
+            };
+            (tag, expected)
+        }) {
+            if (32..=40).contains(&tag) {
+                assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
+            }
         }
     }
 
@@ -577,6 +1157,14 @@ mod tests {
         h = header(ArtifactKind::Terms);
         h.cursor = 1;
         assert_eq!(h.validate(), Err(CodecError::InvalidCount));
+    }
+
+    #[cfg(not(feature = "non-production-product-series-lab"))]
+    #[test]
+    fn production_profiles_refuse_every_reserved_product_series_kind() {
+        for kind in 32..=40 {
+            assert_eq!(ArtifactKind::from_byte(kind), Err(CodecError::InvalidEnum));
+        }
     }
 
     #[test]

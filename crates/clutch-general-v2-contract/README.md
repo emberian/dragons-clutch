@@ -13,6 +13,8 @@ counted Epoch codecs must not be described as General V2-compatible.
 
 | Semantic owner | Tag/version | Exact length |
 |---|---:|---:|
+| genesis-assisted `MarketRuntimeV3AccountV1` | `3/3` | 148 |
+| counted `GeneralEpochV6AccountV1` | `11/6` | 321 |
 | `ClearWorkV2` | `17/2` | `672 + 16*O + 8*N*O`, max 9,120 |
 | sealed `CandidateFeedV2` | `18/2` | `538 + 8*O + 8*N + 24*A + 13*S`, max 6,970 |
 | `CandidateWindowV4` | `24/4` | 565 |
@@ -23,11 +25,26 @@ counted Epoch codecs must not be described as General V2-compatible.
 | counted-retirement Replay successor | `0x7a/1` | 132, owned by retirement/reference |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
+| disabled selected fee-record envelope | `0x82/1` | 340 |
+| disabled owner fee-carry envelope | `0x83/1` | 132 |
+| disabled temporary payer-allocation envelope | `0x84/1` | 2,684 |
+| disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
+| disabled treasury-ledger envelope | `0x86/1` | 148 |
+| disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
 
 The successor `solana-layout` collision ledger reserves every coordinate above
-as `ReservedDisabled`, records retirement's provisional tombstones at `0x75/1`
-and `0x76/1`, and proves its recorded rows internally disjoint. A complete
-legacy-account inventory cross-check remains an activation gate.
+as `ReservedDisabled`, records retirement's provisional
+tombstones at `0x75/1` and `0x76/1` plus its permanent Position tombstone at
+`0x75/2`, and proves its recorded rows internally
+disjoint. Dealer owns `0x7d/1` and `0x7e/1`; Source/Series owns `0x7f/1` and
+`0x80/1`. General does not reinterpret those coordinates. The `0x81/1`
+owner-settlement coordinate is a reservation, not an
+executable capability. A complete legacy-account inventory cross-check remains
+an activation gate.
+The same coordinated block reserves the StructuredClaim descriptor at
+`0x88/1` and a fresh General FinalPot at `0x89/1`; neither has a live route in
+this crate.
 The numeric constants in this standalone crate describe matching codec bytes,
 not a second allocation authority; the eventual adapter must add a parity gate
 against the central registry when both crates are dependencies.
@@ -45,6 +62,7 @@ The first-spine tuples are exact ordered seeds:
 | Account | Ordered seeds after the program ID |
 |---|---|
 | MarketBinding | `general-market-binding:v1`, full `MarketInstanceV2Id` |
+| MarketRuntime | `general-market-runtime:v1`, MarketBinding PDA |
 | Epoch | `general-epoch:v2`, MarketBinding PDA, `epoch_index_le` |
 | EconomicDomain | `economic-domain:v2`, Epoch PDA |
 | Window | `general-window:v4`, Epoch PDA |
@@ -53,6 +71,13 @@ The first-spine tuples are exact ordered seeds:
 | Feed/Stage | `candidate-feed:v2`, AdmissionNode PDA |
 | ClearWork | `clear-work:v2`, AdmissionNode PDA |
 | SelectedCandidate | `selected-candidate:v1`, Epoch PDA, final `SettlementCandidateId` |
+| OwnerSettlement | `owner-settlement:v1`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
+| selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
+| owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
+| temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner |
+| temporary recipient allocation | `candidate-recipient-allocation:v1`, selected fee-record PDA |
+| treasury ledger | `fee-treasury-ledger:v1`, selected fee-record PDA |
+| settlement cash pot | `settlement-cash-pot:v1`, Epoch PDA, final `SettlementCandidateId` |
 
 The Window assigns the ordinal atomically before deriving a node; no
 submitter-selected commitment or address controls the final rank tie. Remaining
@@ -103,6 +128,11 @@ be synchronized before activation.
   one-based ordinal. Node validation checks both embedded identities and the
   eight canonical zero padding bytes. The current CandidateLifecycle V4 uses a
   node-ID suffix and is therefore incompatible.
+- `clutch-general-v2-runtime` owns the fixed domain-separated General selector
+  IDs for the already-owned owner-blind RelationV2 and ScoreV2-Q semantics. A
+  live adapter must derive those IDs rather than accepting arbitrary nonzero
+  relation/score labels, and must persist the runtime-returned rank rather than
+  caller-supplied score components.
 - Duplicate candidates are economically bounded by per-node bond, rent, and
   verification capitalization. Progress rewards pay checked work from that
   node's compartment; they are not duplicate solver prizes. The root Budget
@@ -146,10 +176,99 @@ be synchronized before activation.
   payer; its root-close compartment remains fully present in every live Budget.
   A keeper top-up, future fee, or refundable principal is not liveness funding.
 
-## Action allocation
+## Action allocation and pure payload contracts
 
-General family `74/1` retains local action names `1..=34`, but none has a
-payload/account-meta handler contract yet and therefore none may be activated.
+General family `74/1` retains local action names `1..=38`. Strict allocation-free
+payload decoders and pure poststate owners now exist for the identity-lab spine
+at actions 2, 6, 7, 8, 9, 10, 14, and 15, permissionless reverse-head cleanup
+at action 20, and the separately authenticated one-way solver-prize claim at
+action 21. Action 32 owns bounded terminal ClearWork closure and its paired
+Epoch Work-count decrement. This pure crate does not provide an account-meta
+handler or itself activate a runtime route; those remain separate adapter and
+release obligations.
+
+Action 16 also has one deliberately narrow pure transition: at or after
+submission close it may terminalize only an unrevealed `Committed` node as
+`ExpiredCommitment` and increment the Window's matching count. It performs no
+lamport movement and does not infer revealed/Work expiry semantics.
+
+Actions 24 and 25 have strict disabled payload facts only. Action 24 is the
+96-byte selector `epoch || selected_candidate || owner`. Action 25 is renamed
+`AccountReceiptEnd` with no compatibility alias and uses the 160-byte selector
+`epoch || selected_candidate || owner_settlement || receipt ||
+receipt_accounting_id`. Slice, order, side, price, and completion are owned
+solely by the authenticated receipt and selected-order projection, never by
+caller bytes. The accounting ID is persisted and replay-checked separately
+from every later Egg-delivery transition ID.
+
+Action 38 `FinalizeOwnerSettlement` has a strict disabled 192-byte selector
+`epoch || selected_candidate || owner_settlement || position ||
+settlement_cash_pot || owner_finalization_id`. It exists separately because a
+last receipt fragment may leave a credit-bearing owner waiting for earlier
+buyer or merge liquidity. Net owner debits are admitted into the pot first;
+credits refuse and retry without consuming replay or liveness when liquidity
+is absent. The accounting-complete row becomes finalized and records the
+distinct finalization identity only after the exact Position/cash-pot transfer.
+No success transition exists: creating the 288-byte semantic body requires the
+complete authenticated filled-order set, exactly one selected-fee row per
+participating owner, checked candidate totals, and a canonically derived owner
+order-set digest. General V2 does not yet expose that complete projection.
+The 292-byte outer row stores only tag/version, that semantic body, bump, and
+zero flags. Its pre-fund-safe creation plan must atomically update the separate
+rent ledger that owns payer principal, refund recipient, and donation sink.
+
+Action 26 is renamed `ConsumeDirectReceiptEggs` and has the exact disabled
+96-byte selector `epoch || receipt || settlement_transition_id`. The imported
+pure planner requires both real ends already accounting-latched, then
+atomically stages a distinct delivery latch, both Positions, and both
+Reservations while treating owner rows as read-only accounting evidence. It
+moves only internal native Eggs; cash conversion remains owner-terminal. The action stays disabled
+until the direct receipt can project an exact Settlement-compartment liveness
+receipt, call ordinal, quote ceiling, keeper payment, and payer refund.
+
+Actions 36 `ConsumeVirtualSplitReceiptEggs` and 37
+`ConsumeVirtualMergeReceiptEggs` each have a distinct strict 96-byte disabled
+selector `epoch || receipt || settlement_transition_id`. They are not aliases
+for action 26 or for each other. A future handler must bind one checked
+selected-candidate witness and transition ID across the virtual inventory
+budget, FinalPot, Hoard/aggregate supply, one real receipt end, Position,
+Reservation, distinct delivery latch, and Settlement liveness mutation. The
+already-accounted owner row is authenticated but not rewritten. No inventory-only
+action is allocated, and neither route is executable yet.
+
+The capability-disabled fee envelopes at `0x82` through `0x86` add only an
+exact outer tag/version, the constructor-checked inner fee codec, a stored PDA
+bump, and zero flags. The separately authenticated runtime/rent ledger owns
+funding, refundable principal, and hostile-prefund disposition; these semantic
+accounts do not duplicate that truth. The selected record is candidate-scoped;
+carry and payer allocation are keyed by
+`(selected fee record, owner)`; recipient allocation and treasury ledger are
+selected-record scoped. No General action is assigned to these accounts yet,
+and no fee-bearing value movement becomes executable from their reservation.
+
+The disabled `0x87/1` account wraps the exact 256-byte buyer-first cash-pot
+body. It segregates buyer consideration, selected fees, rounding price units,
+and exactly one typed virtual-cash direction while owner rows are realized.
+`Split` retains terminal cash, `Merge` contributes opening proceeds, and
+`None` requires zero virtual cash; the exact conservation equation is buyer
+debit plus opening merge minus seller credit equals rounding plus terminal
+split. Allocation
+completion is not retirement authority: no action may close the pot or move
+value until the matching complete Egg/reservation transition and later
+FinalPot disposition owner are both authenticated.
+
+Action 20's strict 96-byte payload is `epoch || node || selected_candidate`.
+The selected field is all zero exactly when the Epoch and Window authenticate
+that no selected artifact exists; otherwise it is the actual artifact PDA and
+the adapter must decode that account. Fixed Feed and Work metas use their
+derived PDA identities even when the adapter proves canonical account absence.
+The pure transition refuses `ExpiredUnverified`: its remaining Work funding,
+refund, and penalty semantics are not inferred from another terminal class.
+Action 32 reuses the exact 64-byte `epoch || node` payload. It admits only a
+terminal phase-3, zero-order/zero-slice Work belonging to a VerifiedValid or
+VerifiedRefused node, returns the decremented Epoch and `close_work = true`,
+and coalesces Work rent principal to its recorded payer, hostile donation floor
+to the immutable neutral sink, and the present-funded close reward to keeper.
 The intended phases are:
 
 | Actions | Intended phase |
@@ -174,10 +293,9 @@ transitions, refusal rollback tests, and a capability-specific evidence gate.
 
 ## Remaining activation blockers
 
-The next runnable vertical slice still needs a RelationV2-native counted Epoch
-and Market identity/cursor codec, one canonical frozen order-set owner, a
-streaming RelationV2 accumulator contract in addition to the raw SHA checkpoint,
-Product-successor authentication, exact intent payload/account-meta codecs, and
+The next runnable vertical slice still needs a streaming RelationV2 accumulator
+contract in addition to the raw SHA checkpoint, Product-successor authentication,
+exact account-meta codecs, and
 atomic retirement transitions that include EconomicDomain and the counted
 SelectedCandidate artifact. Product/policy fields are labeled 32-byte slots in
 this dependency-free crate; the adapter must authenticate and convert the

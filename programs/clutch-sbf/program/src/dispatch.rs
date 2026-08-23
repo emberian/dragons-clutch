@@ -46,18 +46,24 @@ use crate::error::ClutchError;
     feature = "profile-direct-v3-source-v2-point"
 ))]
 use crate::instructions::direct_selection_v3;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+use crate::instructions::general_v2_identity;
 use crate::instructions::{
     artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
     orders_batch, source_ingest_v2, split,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 #[cfg(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point"
 ))]
 use clutch_solana_reference::DirectV3Request;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+use clutch_solana_reference::ExtensionRequest;
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -93,6 +99,8 @@ enum Route {
     DirectSelectionV3,
     #[cfg(feature = "profile-full")]
     ResolutionWork,
+    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+    GeneralV2,
     DecodeOnly,
 }
 
@@ -171,6 +179,20 @@ const INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT: u8 = 73;
 fn route_hint(instruction_data: &[u8]) -> Route {
     match instruction_data.get(10).copied() {
         Some(ACTION_LAYOUT_HINT) => match instruction_data.get(13).copied() {
+            #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+            Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
+                if instruction_data.get(14).copied()
+                    == Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION)
+                    && instruction_data.get(15).copied().is_some_and(|action| {
+                        capabilities::extension_intent_action_enabled(
+                            clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG,
+                            clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
+                            action,
+                        )
+                    }) =>
+            {
+                Route::GeneralV2
+            }
             Some(INTENT_SPLIT_HINT) => Route::Split,
             Some(INTENT_MERGE_HINT | INTENT_MATERIALIZE_HINT | INTENT_DEMATERIALIZE_HINT) => {
                 Route::MergeMaterialize
@@ -315,7 +337,33 @@ pub fn process(
         }
         #[cfg(feature = "profile-full")]
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+        Route::GeneralV2 => process_general_v2(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+/// Decode the strict successor envelope and enter only the General V2 lab.
+#[inline(never)]
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+fn process_general_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::GeneralV2(action) => general_v2_identity::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
     }
 }
 
@@ -1640,20 +1688,99 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
                 local_action,
             );
-            assert!(disabled_canonical_tag(&bytes), "action {local_action}");
+            let enabled = capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG,
+                clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
+                local_action,
+            );
+            assert_eq!(
+                disabled_canonical_tag(&bytes),
+                !enabled,
+                "action {local_action}"
+            );
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            if enabled {
+                assert_ne!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "enabled action {local_action} must reach its strict payload decoder"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "disabled action {local_action}"
+                );
+            }
+        }
+        for local_action in clutch_solana_layout::registry::SourceSeriesAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::SourceSeriesAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "source action {local_action}"
+            );
             assert_eq!(
                 process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
                 Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
-                "action {local_action}"
+                "source action {local_action}"
+            );
+        }
+        for local_action in clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "series action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "series action {local_action}"
+            );
+        }
+        for local_action in clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::RECOVERY_FAMILY_TAG,
+                clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "recovery action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "recovery action {local_action}"
             );
         }
     }
 
     #[test]
     fn unknown_family_version_and_local_action_do_not_gain_capability() {
-        for (family_tag, family_version, local_action) in
-            [(74, 2, 1), (74, 1, 0), (74, 1, 35), (75, 1, 1), (79, 1, 1)]
-        {
+        for (family_tag, family_version, local_action) in [
+            (74, 2, 1),
+            (74, 1, 0),
+            (74, 1, 39),
+            (75, 1, 1),
+            (77, 2, 0),
+            (77, 2, 19),
+            (79, 1, 1),
+        ] {
             let bytes = extension_request(family_tag, family_version, local_action);
             assert!(!disabled_canonical_tag(&bytes));
             assert!(process(&Pubkey::new_from_array([9; 32]), &[], &bytes).is_err());

@@ -22,13 +22,30 @@
 //! preserved for source compatibility; it is also a forgeable projection and
 //! does not contradict that rule.
 
+mod budget;
 mod codec;
+mod position_v3;
 mod transition;
 
+pub use budget::{
+    plan_epoch_budget_retirement, AuthenticatedEpochBudgetDispositionV1,
+    EpochBudgetRetirementPlanV1, EpochBudgetRetirementRequestV1,
+};
 pub use codec::{
     ChildGenerationV1, DeletableRentOwnerV1, EpochChildCountsV1, EpochRetirementTailV1,
     GeneralEpochTombstoneV1, Identity32V1, MarketEpochCursorV1, PositionRetirementTailV1,
-    PositionTombstoneV1, RentSplitV2, ReservationCountTailV1, ReservationRetirementTailV2,
+    PositionTombstoneV1, PositionTombstoneV2, RentSplitV2, ReservationCountTailV1,
+    ReservationRetirementTailV2,
+};
+pub use position_v3::{
+    project_dealer_position_v3, project_general_position_v3, project_series_position_v3,
+    project_structured_claim_position_v3, AdapterPositionMarketBindingV3,
+    AdapterPositionPurposeBindingV3, DealerPositionProjectionV3, GeneralPositionProjectionV3,
+    PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, PositionTerminalProjectionV3,
+    PositionTombstoneLifecycleV3, PositionTombstoneV3, PositionTombstoneV3Fields, PositionV3Fields,
+    PositionV3PdaSeeds, PositionV3Sha256Backend, SeriesPositionProjectionV3,
+    StructuredClaimPositionProjectionV3, POSITION_TOMBSTONE_V3_SEMANTIC_DOMAIN,
+    POSITION_V3_PDA_PREFIX, POSITION_V3_SEMANTIC_DOMAIN,
 };
 pub use transition::{
     admit_deletable_rent, admit_initial_rent_split, admit_reopen_rent_split, close_epoch,
@@ -36,15 +53,18 @@ pub use transition::{
     close_registered_candidate, close_registered_candidate_v2, create_epoch_child,
     create_epoch_child_v2, create_registered_candidate_after_validation,
     create_registered_candidate_after_validation_v2, entitle_reservation, entitle_reservation_v2,
-    open_general_epoch, open_general_epoch_root, plan_direct_reservation_close,
-    plan_epoch_retirement, plan_epoch_root_retirement, plan_general_reservation_close,
-    plan_position_replay_retirement, plan_position_retirement, register_direct_reservation,
-    register_direct_reservation_v2, register_general_reservation, register_general_reservation_v2,
-    reopen_position, reopen_position_with_replay, terminate_reservation, terminate_reservation_v2,
-    update_registered_candidate_status_after_validation,
+    found_position_with_replay, open_general_epoch, open_general_epoch_root,
+    plan_direct_reservation_close, plan_epoch_retirement, plan_epoch_root_retirement,
+    plan_epoch_root_retirement_v2, plan_general_reservation_close, plan_position_replay_retirement,
+    plan_position_replay_retirement_v2, plan_position_replay_retirement_v3,
+    plan_position_retirement, register_direct_reservation, register_direct_reservation_v2,
+    register_general_reservation, register_general_reservation_v2, reopen_position,
+    reopen_position_with_replay, reopen_position_with_replay_v2, terminate_reservation,
+    terminate_reservation_v2, update_registered_candidate_status_after_validation,
     update_registered_candidate_status_after_validation_v2, AdapterDirectEpochProjectionV1,
-    AdapterEpochAccountProjectionV1, AdapterMarketAccountProjectionV1,
-    AdapterNeutralSinkBindingProjectionV1, AdapterPositionAccountProjectionV1,
+    AdapterEpochAccountProjectionV1, AdapterFreshPositionNamespaceProjectionV1,
+    AdapterMarketAccountProjectionV1, AdapterNeutralSinkBindingProjectionV1,
+    AdapterPositionAbsenceProjectionV1, AdapterPositionAccountProjectionV1,
     AdapterReplayAbsenceProjectionV1, AdapterReplayAccountProjectionV1, AuthenticatedEpochChildV1,
     ChildSlotV1, CoalescedPayerDebitsV1, CoalescedRecipientCreditsV1,
     CountedEpochChildProjectionV2, CountedEpochChildSlotV2, CountedReservationV1,
@@ -52,16 +72,20 @@ pub use transition::{
     DeletableRentDispositionV1, DirectEpochLifecyclePhaseV1, DirectReservationClosePlanV1,
     DirectReservationCloseRequestV1, DirectReservationRegistrationAccountsV1,
     EpochBudgetRootSiblingV1, EpochChildProjectionV1, EpochLifecycleStateV5, EpochRootAccountsV1,
-    EpochRootRetirementPlanV1, EpochRootRetirementRequestV1, EpochWindowRootSiblingV1,
-    GeneralEpochLifecycleProjectionV2, GeneralReservationClosePlanV1,
+    EpochRootRecipientBalanceBookV2, EpochRootRecipientCreditsV2, EpochRootRetirementPlanV1,
+    EpochRootRetirementPlanV2, EpochRootRetirementRequestV1, EpochRootRetirementRequestV2,
+    EpochWindowRootSiblingV1, GeneralEpochLifecycleProjectionV2, GeneralReservationClosePlanV1,
     GeneralReservationCloseRequestV1, GeneralReservationRegistrationAccountsV1, LiveEpochV5,
     LiveGeneralEpochProjectionV2, LivePositionV2, LiveReplaySuccessorV1,
     OpenGeneralEpochRootPlanV1, OpenGeneralEpochRootRequestV1, PayerDebitV1,
     PositionEconomicStateV1, PositionLifecycleStateV2, PositionReplayAccountsV1,
-    PositionReplayReopenAccountsV1, PositionReplayReopenPlanV1, PositionReplayReopenRequestV1,
-    PositionReplayRetirementPlanV1, PositionReplayRetirementRequestV1, RecipientBalanceBookV1,
-    RecipientBalanceV1, RecipientCreditV1, RentDispositionV2, RentSplitAdmissionPlanV2,
-    ReplayLifecycleStateV1, RetirementCommitPlanV2, ValidatedAdmissionLedgerRetiredV1,
+    PositionReplayFoundingRequestV1, PositionReplayReopenAccountsV1, PositionReplayReopenPlanV1,
+    PositionReplayReopenPlanV2, PositionReplayReopenRequestV1, PositionReplayReopenRequestV2,
+    PositionReplayRetirementPlanV1, PositionReplayRetirementPlanV2,
+    PositionReplayRetirementRequestV1, PositionReplayRetirementRequestV2,
+    PositionReplayRetirementRequestV3, RecipientBalanceBookV1, RecipientBalanceV1,
+    RecipientCreditV1, RentDispositionV2, RentSplitAdmissionPlanV2, ReplayLifecycleStateV1,
+    RetirementCommitPlanV2, ValidatedAdmissionLedgerRetiredV1, MAX_EPOCH_ROOT_RECIPIENTS_V2,
     MAX_RETIREMENT_RECIPIENTS,
 };
 
@@ -82,6 +106,11 @@ pub const fn canonical_epoch_generation(epoch_index: u64) -> Result<u64, Retirem
 pub const POSITION_ACCOUNT_TAG: u8 = 6;
 /// Counted Position schema.
 pub const POSITION_ACCOUNT_VERSION_V2: u8 = 2;
+/// Full-width, purpose-neutral Position successor schema.
+///
+/// The central registry reserves this coordinate with every runtime route
+/// disabled until its account adapter is integrated.
+pub const POSITION_ACCOUNT_VERSION_V3: u8 = 3;
 /// Existing Epoch account discriminator.
 pub const EPOCH_ACCOUNT_TAG: u8 = 11;
 /// Counted general Epoch schema.
@@ -123,6 +152,10 @@ pub const DIRECT_RESERVATION_ACCOUNT_VERSION_V8: u8 = 8;
 pub const POSITION_TOMBSTONE_TAG: u8 = 0x75;
 /// First Position tombstone schema.
 pub const POSITION_TOMBSTONE_VERSION_V1: u8 = 1;
+/// Successor Position tombstone version persisting permanent rent principal.
+pub const POSITION_TOMBSTONE_VERSION_V2: u8 = 2;
+/// Full-identity Position V3 permanent tombstone schema.
+pub const POSITION_TOMBSTONE_VERSION_V3: u8 = 3;
 /// Codec-local general Epoch tombstone discriminator.
 ///
 /// The authoritative central registry reserves this coordinate as disabled.
@@ -171,6 +204,8 @@ pub const CHILD_GENERATION_V1_BYTES: usize = 8;
 
 /// Exact full Position V2 width after composition.
 pub const POSITION_V2_BYTES: usize = POSITION_V1_BYTES + POSITION_RETIREMENT_TAIL_V1_BYTES;
+/// Exact full-width global Position V3 body.
+pub const POSITION_V3_BYTES: usize = 480;
 /// Exact full general Epoch V5 width after composition.
 pub const EPOCH_V5_BYTES: usize = EPOCH_V2_BYTES + EPOCH_RETIREMENT_TAIL_V1_BYTES;
 /// Exact full Market V2 width after composition.
@@ -187,10 +222,16 @@ pub const DIRECT_RESERVATION_V8_BYTES: usize =
     DIRECT_RESERVATION_V2_BYTES + RESERVATION_RETIREMENT_TAIL_V2_BYTES;
 /// Exact Position tombstone width.
 pub const POSITION_TOMBSTONE_V1_BYTES: usize = 76;
+/// Exact successor Position tombstone width.
+pub const POSITION_TOMBSTONE_V2_BYTES: usize = 84;
+/// Exact full-identity permanent Position V3 tombstone body.
+pub const POSITION_TOMBSTONE_V3_BYTES: usize = 280;
 /// Exact general Epoch tombstone width.
 pub const GENERAL_EPOCH_TOMBSTONE_V1_BYTES: usize = 84;
 
 const _: () = assert!(POSITION_V2_BYTES == 280);
+const _: () = assert!(POSITION_V3_BYTES == 480);
+const _: () = assert!(POSITION_TOMBSTONE_V3_BYTES == 280);
 const _: () = assert!(EPOCH_V5_BYTES == 429);
 const _: () = assert!(MARKET_V2_BYTES == 734);
 const _: () = assert!(RESERVATION_V5_BYTES == 627);
@@ -198,6 +239,7 @@ const _: () = assert!(DIRECT_RESERVATION_V6_BYTES == 627);
 const _: () = assert!(RESERVATION_V7_BYTES == 675);
 const _: () = assert!(DIRECT_RESERVATION_V8_BYTES == 675);
 const _: () = assert!(PROJECTED_REPLAY_SUCCESSOR_BYTES == 132);
+const _: () = assert!(POSITION_TOMBSTONE_V2_BYTES == 84);
 
 /// Refusals owned by the counted-retirement seam.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

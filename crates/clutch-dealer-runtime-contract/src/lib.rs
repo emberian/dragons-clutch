@@ -23,8 +23,10 @@ mod lease;
 mod lp_page;
 mod pda;
 mod policy;
+mod position_transfer;
 mod pot;
 mod rent;
+mod replay;
 mod state;
 
 pub use budget::*;
@@ -32,8 +34,10 @@ pub use lease::*;
 pub use lp_page::*;
 pub use pda::*;
 pub use policy::*;
+pub use position_transfer::*;
 pub use pot::*;
 pub use rent::*;
+pub use replay::*;
 pub use state::*;
 
 use sha2::{Digest, Sha256};

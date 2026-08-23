@@ -33,13 +33,31 @@ name = "clutch_svm_fixture"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["profile-full"]
+# Keep the historical default test graph byte-for-byte on the full product,
+# while permitting one explicitly selected mutually exclusive lab ELF.
+profile-full = [
+    "clutch-sbf/profile-full",
+    "clutch-solana-layout/profile-full",
+    "clutch-solana-reference/profile-full",
+]
+profile-non-production-general-v2-empty-book-identity-lab = [
+    "clutch-sbf/profile-non-production-general-v2-empty-book-identity-lab",
+    "clutch-solana-layout/profile-general-source-v2-point",
+    "clutch-solana-reference/profile-general-source-v2-point",
+]
 # Explicitly select the different laboratory ELF and expose only tests whose
 # successful value/source path depends on that compiled mock release.
 non-production-mock-source = ["clutch-sbf/non-production-mock-source"]
 # Compiles the explicit local-real Pyth release row and its SVM campaign. This
 # is a different, non-production ELF identity; the default registry is unchanged.
 non-production-real-pyth-lab = ["clutch-sbf/non-production-real-pyth-lab"]
+# Builds the separate Product/Series account-boundary ELF. All recurring-Series
+# extension actions remain capability-disabled.
+non-production-product-series-lab = [
+    "clutch-sbf/non-production-product-series-lab",
+    "clutch-solana-layout/non-production-product-series-lab",
+]
 
 [dependencies]
 # The frozen byte layouts and the reference-only codecs.  Both are
@@ -47,15 +65,18 @@ non-production-real-pyth-lab = ["clutch-sbf/non-production-real-pyth-lab"]
 # nothing and — this is the point — the account bytes this harness writes at
 # genesis come from the *same* encoders the program decodes with.  A hand-rolled
 # second copy would test the copy.
-clutch-sbf = { path = "../program", features = ["laboratory-fixtures"] }
+clutch-sbf = { path = "../program", default-features = false, features = ["custom-heap", "laboratory-fixtures"] }
 # The checkpoint's owning crate: the idle body the final grow writes on-chain
 # is compared byte-for-byte against `ClearWorkV1::encode_idle_into` here, so
 # the account image and the host image share one writer.
 clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
-clutch-solana-layout = { path = "../../solana-layout" }
-clutch-solana-reference = { path = "../../solana-reference" }
+clutch-solana-layout = { path = "../../solana-layout", default-features = false }
+clutch-solana-reference = { path = "../../solana-reference", default-features = false }
+clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
+clutch-price-measure = { path = "../../../crates/clutch-price-measure" }
+clutch-product-series = { path = "../../../crates/clutch-product-series" }
 
 # `curve25519` is what makes off-chain `find_program_address` available at all.
 # `programs/clutch-sbf` deliberately cannot enable it (its proc-macro dependency

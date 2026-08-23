@@ -36,6 +36,16 @@ def measurement(elf: int, text: int, rodata: int, digest: str) -> dict:
 
 
 class SizeDiagnosticTests(unittest.TestCase):
+    def test_explicit_full_retains_cargo_default_identity_marker(self) -> None:
+        self.assertEqual(
+            sizes.explicit_profile_features("profile-full"),
+            ["custom-heap", "default", "profile-full"],
+        )
+        self.assertEqual(
+            sizes.explicit_profile_features("profile-direct-v3-source-v2-point"),
+            ["custom-heap", "profile-direct-v3-source-v2-point"],
+        )
+
     def test_profile_selectors_are_explicit_unique_and_known(self) -> None:
         self.assertEqual(
             sizes.parse_profile_specs(

@@ -1,11 +1,12 @@
 # Product and Series pure core
 
-`clutch-product-series` is the registry-independent, allocation-free semantic
-core for recurring Dragon's Clutch products. It freezes typed content
-identities, exact product/Series joins, absolute window and evidence-only repair
-arithmetic, and component-by-component funding projections. It has no account
-tags, instruction intents, Solana SDK, Token-2022, oracle SDK, CPI, account
-memory, allocator, floats, or caller-selected market nonce.
+`clutch-product-series` is the allocation-free semantic and transition core for
+recurring Dragon's Clutch products. It freezes typed content identities, exact
+Product/Series joins, absolute window and evidence-only repair arithmetic,
+authenticated-adapter seams, canonical SourcePlane V3 occurrence provenance,
+and component-by-component funding transitions. It has no account tags,
+instruction intents, Solana SDK, Token-2022, oracle SDK, CPI, account memory,
+allocator, floats, or caller-selected market nonce.
 
 The crucial identity split is:
 
@@ -27,6 +28,18 @@ SeriesFundingTermsId   = H(SeriesPlanId, refund/sink/mint/token identities)
 Work price, liquidity, wrappers, funding sponsor, and refund destinations do
 not fork an economically identical market. Changing the Template, immutable
 Realm/profile venue semantics, absolute start, or collateral cap does.
+
+## SBF publication boundary
+
+The `clutch-sbf` adapter has an explicitly non-production
+`non-production-product-series-lab` profile that can publish each canonical
+body from this crate as a program-owned, content-addressed artifact. The
+adapter decodes the hostile body with this crate's codec and checks the same
+typed SHA-256 identity before sealing it. That route is an immutable catalog,
+not a Series registry, funding state, occurrence compiler, Market creator, or
+runtime price-witness activation path. In particular, freely constructible
+registry and fulfillment projections in this pure core never become onchain
+authority merely because their bodies can be published.
 
 ## Canonical rules
 
@@ -224,7 +237,9 @@ policy body in the complete registry join.
 |---|---|---|
 | `MarketInstancePreimageV2` | 88: magic `DCMKTIN2` `0..8`, Template ID `8..40`, GenesisProfileV2 ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v2` |
 | `SeriesPlanV5` | 152: fresh 16-byte schema-2 header, Template/GenesisV2/Attachment IDs `16..112`, recurrence/cap `112..152` | `dragons-clutch/series-plan/v5` |
-| `SeriesFundingTermsV2` | 208: fresh 16-byte schema-2 header, SeriesPlanV5 ID `16..48`, refund/sink/mint/token identities `48..208` | `dragons-clutch/series-funding-terms/v2` |
+| `SeriesFundingTermsV2` | 240: fresh 16-byte schema-2 header, SeriesPlanV5 ID `16..48`, lamport/collateral refund identities `48..112`, collateral-neutral token account `112..144`, lamport-neutral System account `144..176`, mint `176..208`, token program `208..240` | `dragons-clutch/series-funding-terms/v2` |
+| `CompiledSourceOccurrenceV3` | 184: 16-byte header, SeriesPlanV5 ID + ordinal `16..56`, MarketInstanceV2/Attachment/Window/Statistic IDs `56..184` | `dragons-clutch/source-occurrence-record/v1` |
+| `SeriesFundingStateV1` | 324: 16-byte header, Series/FundingTerms/Quote IDs `16..112`, cursor/lapse fields `112..124`, five 40-byte principal/donation/consumption compartments `124..324` | mutable state; no content ID |
 
 `compile_ordinal_v2` returns `CompiledOrdinalV2` and a full
 `MarketInstanceV2Id`. `project_component_debits_v2` reuses the authoritative V1
@@ -293,14 +308,17 @@ reused together. `PresentExactAndCapitalized` means the adapter already proved
 the exact component identity, state, and required balances; the public Rust
 value is not itself that external proof.
 
-This projection is intentionally for one occurrence only. It is not Series
-activation, prepayment, fulfillment, or refund authorization. A separate
-mutable whole-Series funding owner must bind total activation funding, cursor,
-component receipts, lapse, and refunds before any live adapter may claim that a
-finite Series is prepaid or fulfilled. Applying a one-occurrence projection
-atomically, proving absence or exact capitalized existence, preserving
-payer/donation ownership, and moving real lamports/tokens remain adapter
-obligations.
+`SeriesFundingStateV1` is now the one mutable whole-Series owner for exact
+activation principal, the ordinal cursor, lapse count, five segregated
+remaining-principal/donation compartments, and absent-component allocation
+consumption. It derives created count and phase rather than persisting them
+twice. Activation joins the complete V5 Product/Genesis/Realm/FundingTerms
+graph, requires exact `instance_count * quote_component` principal, and cannot
+use donations to cure a shortfall. Creation derives the component projection
+from a default-deny adapter authority, exact-existing components consume zero,
+and lapse spends nothing. Applying those transitions atomically and moving real
+lamports/tokens remain adapter obligations; the existing SBF route does not yet
+implement them.
 
 The pure Series join treats nonzero LiquidityFacilityPlan and WrapperRecipeSet
 IDs as structural attachment references only. It does not authenticate those

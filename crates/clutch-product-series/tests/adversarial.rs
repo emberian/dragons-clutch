@@ -157,6 +157,7 @@ fn registry_for(
             collateral_mint: id(53),
             token_program: id(54),
             neutral_incinerator: id(52),
+            neutral_lamport_sink: id(55),
             market_collateral_cap_ceiling: 2_000,
         },
     }
