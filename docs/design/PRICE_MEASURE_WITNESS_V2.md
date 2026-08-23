@@ -2,6 +2,12 @@
 
 Status: **DESIGN / NOT A RUNTIME CLAIM**.
 
+The first executable exact-arithmetic model is now under
+`research/price-measure-witness`. It generates every degree-two/three transfer
+table it exercises from the canonical open-clamped recurrence and validates
+point measures, cross-span mixtures, quadrics, canonical denominators, and
+mutations. It remains an offline model, not adapter or SBF evidence.
+
 This design turns the exact degree-two/three membership theorem already proved
 in `docs/research/DUAL_IS_THE_MEASURE.md` section 7.6 into a bounded candidate
 witness. It is the path to keeping smooth coupled markets without pretending
@@ -254,6 +260,7 @@ Before this becomes an SBF claim:
     correspondence actually proved; do not call the SBF adapter formally
     verified.
 
-The first executable milestone is an isolated safe-Rust, fixed-capacity
-checker and table generator. Runtime wiring follows only after its corpus has
-an independently generated false-acceptance witness against V1b.
+The next executable milestone is an isolated safe-Rust, fixed-capacity checker
+and generated-table corpus equivalent to the exact Python model. Runtime wiring
+follows only after independent table generation agrees and the integer bounds
+above are proved.
