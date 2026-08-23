@@ -94,6 +94,37 @@ pub enum MarketLiabilityLifecycleV1 {
     Retiring = 3,
 }
 
+/// One-way state of the separately owned fractional policy/ledger binding.
+///
+/// `OpenUnlatched` is a fractional-family state, not the Market liability
+/// lifecycle. It may survive Resolution activation because the final
+/// Resolution data identity is intentionally unavailable at Market founding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FractionalBindingStateV1 {
+    /// No fractional account exists and both stored identities are zero.
+    OpenUnlatched = 1,
+    /// Exact policy and aggregate-ledger accounts were atomically latched.
+    Latched = 2,
+}
+
+impl FractionalBindingStateV1 {
+    const fn wire_value(self) -> u8 {
+        match self {
+            Self::OpenUnlatched => 1,
+            Self::Latched => 2,
+        }
+    }
+
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(Self::OpenUnlatched),
+            2 => Ok(Self::Latched),
+            _ => Err(Error::InvalidParameter),
+        }
+    }
+}
+
 impl MarketLiabilityLifecycleV1 {
     fn decode(value: u8) -> Result<Self> {
         match value {
@@ -183,6 +214,7 @@ impl HoardV2 {
             self.lifecycle,
             self.outcome_count,
             self.stored_bump,
+            0,
         )?;
         for id in [
             self.market_instance_id,
@@ -205,8 +237,11 @@ impl HoardV2 {
     /// Decode exactly [`HOARD_V2_BYTES`] hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, HOARD_V2_BYTES)?;
-        let (lifecycle, outcome_count, stored_bump) =
+        let (lifecycle, outcome_count, stored_bump, auxiliary) =
             read_header(&mut reader, HOARD_V2_TAG, HOARD_V2_VERSION)?;
+        if auxiliary != 0 {
+            return Err(Error::NonCanonicalPadding);
+        }
         let value = Self {
             market_instance_id: reader.id()?,
             realm_id: reader.id()?,
@@ -248,9 +283,9 @@ pub struct ClaimLedgerV3 {
     pub realm_id: Id,
     /// Exact NativeClaimBasis body identity.
     pub native_claim_basis_id: Id,
-    /// Immutable fractional-credit policy identity.
+    /// Immutable fractional-credit policy identity; zero only while unlatched.
     pub fractional_policy_id: Id,
-    /// Exact 0xa5 fractional ledger account; it alone owns K and live count.
+    /// Exact 0xa5 account; zero only while unlatched and sole K/count owner after.
     pub fractional_ledger_account: Id,
     /// Exact Resolution account, zero only before resolution.
     pub resolution_account: Id,
@@ -260,8 +295,10 @@ pub struct ClaimLedgerV3 {
     pub aggregate_materialized_supply: [u64; MAX_OUTCOMES],
     /// Exact next ordinal consumed by an atomic 0xa5 fractional mutation.
     pub next_fractional_sequence: u64,
-    /// Last atomic 0xa5/ClaimLedger transition; zero only at founding.
+    /// Last atomic 0xa5/ClaimLedger transition; zero only while unlatched.
     pub last_fractional_transition_id: Id,
+    /// Explicit one-way ownership state for the two fractional identities.
+    pub fractional_binding: FractionalBindingStateV1,
     /// Shared liability lifecycle.
     pub lifecycle: MarketLiabilityLifecycleV1,
     /// Active native outcome width.
@@ -279,8 +316,6 @@ impl ClaimLedgerV3 {
             self.market_instance_id,
             self.realm_id,
             self.native_claim_basis_id,
-            self.fractional_policy_id,
-            self.fractional_ledger_account,
         ] {
             id.require_live()?;
         }
@@ -302,10 +337,26 @@ impl ClaimLedgerV3 {
             }
             index += 1;
         }
-        if (self.next_fractional_sequence == 0 && !self.last_fractional_transition_id.is_zero())
-            || (self.next_fractional_sequence != 0 && self.last_fractional_transition_id.is_zero())
-        {
-            return Err(Error::InvalidParameter);
+        match self.fractional_binding {
+            FractionalBindingStateV1::OpenUnlatched => {
+                if !self.fractional_policy_id.is_zero()
+                    || !self.fractional_ledger_account.is_zero()
+                    || self.next_fractional_sequence != 0
+                    || !self.last_fractional_transition_id.is_zero()
+                    || self.lifecycle == MarketLiabilityLifecycleV1::Retiring
+                {
+                    return Err(Error::InvalidParameter);
+                }
+            }
+            FractionalBindingStateV1::Latched => {
+                self.fractional_policy_id.require_live()?;
+                self.fractional_ledger_account.require_live()?;
+                if self.next_fractional_sequence == 0
+                    || self.last_fractional_transition_id.is_zero()
+                {
+                    return Err(Error::InvalidParameter);
+                }
+            }
         }
         self.rent.validate().map_err(|_| Error::InvalidParameter)
     }
@@ -321,6 +372,7 @@ impl ClaimLedgerV3 {
             self.lifecycle,
             self.outcome_count,
             self.stored_bump,
+            self.fractional_binding.wire_value(),
         )?;
         for id in [
             self.market_instance_id,
@@ -347,7 +399,7 @@ impl ClaimLedgerV3 {
     /// Decode exactly [`CLAIM_LEDGER_V3_BYTES`] hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, CLAIM_LEDGER_V3_BYTES)?;
-        let (lifecycle, outcome_count, stored_bump) =
+        let (lifecycle, outcome_count, stored_bump, fractional_binding) =
             read_header(&mut reader, CLAIM_LEDGER_V3_TAG, CLAIM_LEDGER_V3_VERSION)?;
         let market_instance_id = reader.id()?;
         let realm_id = reader.id()?;
@@ -380,6 +432,7 @@ impl ClaimLedgerV3 {
             aggregate_materialized_supply,
             next_fractional_sequence,
             last_fractional_transition_id,
+            fractional_binding: FractionalBindingStateV1::decode(fractional_binding)?,
             lifecycle,
             outcome_count,
             stored_bump,
@@ -429,10 +482,6 @@ pub struct MarketLiabilityFoundingRequestV3 {
     pub market_instance_id: Id,
     /// Exact Product-owned NativeClaimBasis identity.
     pub native_claim_basis_id: Id,
-    /// Immutable fractional-credit policy identity.
-    pub fractional_policy_id: Id,
-    /// Exact canonical fractional-ledger account, initially absent.
-    pub fractional_ledger_account: Id,
     /// Exact General MarketRuntime authority for outcome claim mints.
     pub claim_mint_authority: Id,
     /// Active native outcome width.
@@ -563,8 +612,6 @@ pub fn prepare_market_liability_founding_v3<B: PositionV3Sha256Backend>(
         request.claim_ledger_account,
         request.market_instance_id,
         request.native_claim_basis_id,
-        request.fractional_policy_id,
-        request.fractional_ledger_account,
         request.claim_mint_authority,
     ] {
         id.require_live()?;
@@ -609,13 +656,14 @@ pub fn prepare_market_liability_founding_v3<B: PositionV3Sha256Backend>(
         market_instance_id: market.market,
         realm_id: market.realm,
         native_claim_basis_id: request.native_claim_basis_id,
-        fractional_policy_id: request.fractional_policy_id,
-        fractional_ledger_account: request.fractional_ledger_account,
+        fractional_policy_id: Id::ZERO,
+        fractional_ledger_account: Id::ZERO,
         resolution_account: Id::ZERO,
         aggregate_internal_supply: [0; MAX_OUTCOMES],
         aggregate_materialized_supply: [0; MAX_OUTCOMES],
         next_fractional_sequence: 0,
         last_fractional_transition_id: Id::ZERO,
+        fractional_binding: FractionalBindingStateV1::OpenUnlatched,
         lifecycle: MarketLiabilityLifecycleV1::Open,
         outcome_count: request.outcome_count,
         stored_bump: request.claim_ledger_bump,
@@ -782,7 +830,8 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
     claim_ledger.validate()?;
     fractional_ledger_before_id.require_live()?;
     fractional_ledger_after_id.require_live()?;
-    if fractional_ledger_before_id == fractional_ledger_after_id
+    if claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
+        || fractional_ledger_before_id == fractional_ledger_after_id
         || consumed_sequence != claim_ledger.next_fractional_sequence
         || claim_ledger.lifecycle == MarketLiabilityLifecycleV1::Retiring
     {
@@ -858,6 +907,7 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalClaimLedgerFoundingPlanV3 {
     claim_ledger_before_id: Id,
+    fractional_policy_id: Id,
     fractional_ledger_account: Id,
     fractional_ledger_after_id: Id,
     claim_ledger_after: ClaimLedgerV3,
@@ -869,6 +919,11 @@ impl FractionalClaimLedgerFoundingPlanV3 {
     /// Founding ClaimLedger semantic ID before the latch is consumed.
     pub const fn claim_ledger_before_id(self) -> Id {
         self.claim_ledger_before_id
+    }
+
+    /// Exact immutable fractional policy latched by this transition.
+    pub const fn fractional_policy_id(self) -> Id {
+        self.fractional_policy_id
     }
 
     /// Exact canonical 0xa5 account whose absence must be authenticated.
@@ -901,12 +956,20 @@ impl FractionalClaimLedgerFoundingPlanV3 {
 /// authenticated the exact 0xa5 PDA's absence and its atomic creation plan.
 pub fn prepare_fractional_claim_ledger_founding_v3<B: PositionV3Sha256Backend>(
     claim_ledger: ClaimLedgerV3,
+    fractional_policy_id: Id,
+    fractional_ledger_account: Id,
     fractional_ledger_after_id: Id,
     backend: &B,
 ) -> Result<FractionalClaimLedgerFoundingPlanV3> {
     claim_ledger.validate()?;
+    fractional_policy_id.require_live()?;
+    fractional_ledger_account.require_live()?;
     fractional_ledger_after_id.require_live()?;
-    if claim_ledger.next_fractional_sequence != 0
+    if claim_ledger.fractional_binding != FractionalBindingStateV1::OpenUnlatched
+        || !claim_ledger.fractional_policy_id.is_zero()
+        || !claim_ledger.fractional_ledger_account.is_zero()
+        || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || claim_ledger.next_fractional_sequence != 0
         || !claim_ledger.last_fractional_transition_id.is_zero()
     {
         return Err(Error::MismatchedBinding);
@@ -917,8 +980,8 @@ pub fn prepare_fractional_claim_ledger_founding_v3<B: PositionV3Sha256Backend>(
         &[
             &[0],
             &claim_ledger.market_instance_id.bytes(),
-            &claim_ledger.fractional_policy_id.bytes(),
-            &claim_ledger.fractional_ledger_account.bytes(),
+            &fractional_policy_id.bytes(),
+            &fractional_ledger_account.bytes(),
             &fractional_ledger_after_id.bytes(),
             &claim_ledger_before_id.bytes(),
             &0u64.to_le_bytes(),
@@ -926,15 +989,19 @@ pub fn prepare_fractional_claim_ledger_founding_v3<B: PositionV3Sha256Backend>(
     );
     transition_id.require_live()?;
     let claim_ledger_after = ClaimLedgerV3 {
+        fractional_policy_id,
+        fractional_ledger_account,
         next_fractional_sequence: 1,
         last_fractional_transition_id: transition_id,
+        fractional_binding: FractionalBindingStateV1::Latched,
         ..claim_ledger
     };
     claim_ledger_after.validate()?;
     let claim_ledger_after_id = claim_ledger_after.semantic_id(backend)?;
     Ok(FractionalClaimLedgerFoundingPlanV3 {
         claim_ledger_before_id,
-        fractional_ledger_account: claim_ledger.fractional_ledger_account,
+        fractional_policy_id,
+        fractional_ledger_account,
         fractional_ledger_after_id,
         claim_ledger_after,
         claim_ledger_after_id,
@@ -1006,7 +1073,8 @@ pub fn prepare_fractional_claim_ledger_retirement_v3<B: PositionV3Sha256Backend>
     claim_ledger.validate()?;
     fractional_ledger_before_id.require_live()?;
     fractional_ledger_retirement_id.require_live()?;
-    if claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
+    if claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
+        || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
         || claim_ledger.next_fractional_sequence != consumed_sequence
         || fractional_ledger_before_id == fractional_ledger_retirement_id
     {
@@ -1518,13 +1586,14 @@ fn write_header(
     lifecycle: MarketLiabilityLifecycleV1,
     outcome_count: u8,
     stored_bump: u8,
+    auxiliary: u8,
 ) -> Result<()> {
     writer.u8(tag)?;
     writer.u8(version)?;
     writer.u8(lifecycle as u8)?;
     writer.u8(outcome_count)?;
     writer.u8(stored_bump)?;
-    writer.u8(0)?;
+    writer.u8(auxiliary)?;
     writer.bytes(&[0; 10])
 }
 
@@ -1532,7 +1601,7 @@ fn read_header(
     reader: &mut Reader<'_>,
     expected_tag: u8,
     expected_version: u8,
-) -> Result<(MarketLiabilityLifecycleV1, u8, u8)> {
+) -> Result<(MarketLiabilityLifecycleV1, u8, u8, u8)> {
     if reader.u8()? != expected_tag {
         return Err(Error::BadMagic);
     }
@@ -1542,11 +1611,9 @@ fn read_header(
     let lifecycle = MarketLiabilityLifecycleV1::decode(reader.u8()?)?;
     let outcome_count = reader.u8()?;
     let stored_bump = reader.u8()?;
-    if reader.u8()? != 0 {
-        return Err(Error::NonCanonicalPadding);
-    }
+    let auxiliary = reader.u8()?;
     reader.require_zeroes(10)?;
-    Ok((lifecycle, outcome_count, stored_bump))
+    Ok((lifecycle, outcome_count, stored_bump, auxiliary))
 }
 
 #[allow(dead_code)]
@@ -1638,8 +1705,6 @@ mod tests {
             claim_ledger_account: id(7),
             market_instance_id: id(3),
             native_claim_basis_id: id(8),
-            fractional_policy_id: id(9),
-            fractional_ledger_account: id(10),
             claim_mint_authority: id(11),
             outcome_count: 2,
             hoard_bump: 12,
@@ -1696,6 +1761,12 @@ mod tests {
             [0; MAX_OUTCOMES]
         );
         assert_eq!(plan.claim_ledger().resolution_account, Id::ZERO);
+        assert_eq!(plan.claim_ledger().fractional_policy_id, Id::ZERO);
+        assert_eq!(plan.claim_ledger().fractional_ledger_account, Id::ZERO);
+        assert_eq!(
+            plan.claim_ledger().fractional_binding,
+            FractionalBindingStateV1::OpenUnlatched
+        );
         assert_eq!(plan.claim_ledger().next_fractional_sequence, 0);
         assert_eq!(plan.claim_ledger().last_fractional_transition_id, Id::ZERO);
         assert!(!plan.founding_id().is_zero());
@@ -1755,6 +1826,132 @@ mod tests {
                 postwrite(&hoard_data, &claim_ledger_data, &empty_token),
             ),
             Err(Error::PostAdmissionFailed)
+        );
+    }
+
+    #[test]
+    fn fractional_binding_is_a_one_way_post_resolution_latch() {
+        let founded = prepare_market_liability_founding_v3(bound(), request(), &TestSha256)
+            .unwrap()
+            .claim_ledger();
+        assert_eq!(
+            founded.fractional_binding,
+            FractionalBindingStateV1::OpenUnlatched
+        );
+        assert!(founded.fractional_policy_id.is_zero());
+        assert!(founded.fractional_ledger_account.is_zero());
+
+        let resolved = ClaimLedgerV3 {
+            resolution_account: id(30),
+            lifecycle: MarketLiabilityLifecycleV1::Resolved,
+            ..founded
+        };
+        let plan = prepare_fractional_claim_ledger_founding_v3(
+            resolved,
+            id(31),
+            id(32),
+            id(33),
+            &TestSha256,
+        )
+        .unwrap();
+        let latched = plan.claim_ledger_after();
+        assert_eq!(
+            latched.fractional_binding,
+            FractionalBindingStateV1::Latched
+        );
+        assert_eq!(latched.fractional_policy_id, id(31));
+        assert_eq!(latched.fractional_ledger_account, id(32));
+        assert_eq!(latched.next_fractional_sequence, 1);
+        assert_eq!(
+            prepare_fractional_claim_ledger_founding_v3(
+                latched,
+                id(31),
+                id(32),
+                id(34),
+                &TestSha256,
+            ),
+            Err(Error::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn fractional_activity_and_mixed_latch_encodings_refuse_before_latch() {
+        let open = prepare_market_liability_founding_v3(bound(), request(), &TestSha256)
+            .unwrap()
+            .claim_ledger();
+        assert_eq!(
+            prepare_fractional_claim_ledger_successor_v3(
+                open,
+                id(40),
+                id(41),
+                0,
+                FractionalClaimSupplyMutationV3::Unchanged,
+                &TestSha256,
+            ),
+            Err(Error::MismatchedBinding)
+        );
+        for malformed in [
+            ClaimLedgerV3 {
+                fractional_policy_id: id(42),
+                ..open
+            },
+            ClaimLedgerV3 {
+                fractional_binding: FractionalBindingStateV1::Latched,
+                ..open
+            },
+            ClaimLedgerV3 {
+                next_fractional_sequence: 1,
+                ..open
+            },
+        ] {
+            assert_eq!(malformed.validate(), Err(Error::InvalidParameter));
+        }
+    }
+
+    #[test]
+    fn fractional_binding_parser_refuses_unknown_or_mixed_wire_states() {
+        let plan = prepare_market_liability_founding_v3(bound(), request(), &TestSha256).unwrap();
+        let open = plan.claim_ledger();
+        let mut open_bytes = [0u8; CLAIM_LEDGER_V3_BYTES];
+        open.encode(&mut open_bytes).unwrap();
+        assert_eq!(
+            open_bytes[5],
+            FractionalBindingStateV1::OpenUnlatched.wire_value()
+        );
+        assert_eq!(ClaimLedgerV3::decode(&open_bytes), Ok(open));
+
+        let mut unknown_state = open_bytes;
+        unknown_state[5] = 3;
+        assert_eq!(
+            ClaimLedgerV3::decode(&unknown_state),
+            Err(Error::InvalidParameter)
+        );
+
+        let resolved = ClaimLedgerV3 {
+            resolution_account: id(30),
+            lifecycle: MarketLiabilityLifecycleV1::Resolved,
+            ..open
+        };
+        let latched = prepare_fractional_claim_ledger_founding_v3(
+            resolved,
+            id(31),
+            id(32),
+            id(33),
+            &TestSha256,
+        )
+        .unwrap()
+        .claim_ledger_after();
+        let mut mixed = [0u8; CLAIM_LEDGER_V3_BYTES];
+        latched.encode(&mut mixed).unwrap();
+        mixed[112..144].fill(0);
+        assert_eq!(ClaimLedgerV3::decode(&mixed), Err(Error::InvalidParameter));
+
+        let mut hoard_bytes = [0u8; HOARD_V2_BYTES];
+        plan.hoard().encode(&mut hoard_bytes).unwrap();
+        hoard_bytes[5] = 1;
+        assert_eq!(
+            HoardV2::decode(&hoard_bytes),
+            Err(Error::NonCanonicalPadding)
         );
     }
 }

@@ -102,6 +102,7 @@ clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapt
 clutch-evidence-recovery = { path = "../../../crates/clutch-evidence-recovery", optional = true }
 clutch-failure-policy-adapter = { path = "../../../crates/clutch-failure-policy-adapter", optional = true }
 clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-runtime", optional = true }
+clutch-fractional-redemption-runtime = { path = "../../../crates/clutch-fractional-redemption-runtime" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 clutch-fee-runtime-contract = { path = "../../../crates/clutch-fee-runtime-contract", optional = true }

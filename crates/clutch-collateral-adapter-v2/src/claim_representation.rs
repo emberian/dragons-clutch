@@ -16,7 +16,8 @@ use clutch_retirement::{
 };
 
 use crate::{
-    digest, BoundClaimIssuanceV1, ClaimLedgerV3, Error, Id, MarketLiabilityLifecycleV1, Result,
+    digest, BoundClaimIssuanceV1, ClaimLedgerV3, Error, FractionalBindingStateV1, Id,
+    MarketLiabilityLifecycleV1, Result,
 };
 
 /// Domain for the semantic Position/ClaimLedger representation transition.
@@ -512,13 +513,14 @@ mod tests {
             market_instance_id: id(1),
             realm_id: id(2),
             native_claim_basis_id: id(9),
-            fractional_policy_id: id(10),
-            fractional_ledger_account: id(11),
+            fractional_policy_id: Id::ZERO,
+            fractional_ledger_account: Id::ZERO,
             resolution_account: Id::ZERO,
             aggregate_internal_supply: internal,
             aggregate_materialized_supply: materialized,
             next_fractional_sequence: 0,
             last_fractional_transition_id: Id::ZERO,
+            fractional_binding: FractionalBindingStateV1::OpenUnlatched,
             lifecycle: MarketLiabilityLifecycleV1::Open,
             outcome_count: 2,
             stored_bump: 1,

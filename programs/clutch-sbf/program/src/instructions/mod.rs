@@ -69,6 +69,7 @@ pub mod failure_interval_consensus;
 pub mod failure_market_admission;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
+pub mod fractional_redemption;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]

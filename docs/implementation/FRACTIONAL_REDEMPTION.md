@@ -52,6 +52,16 @@ digests. Current decoders refuse those versions; V2 uses fresh policy/credit
 PDA domains and a fresh policy-state identity domain. The unchanged aggregate
 ledger had no reinterpreted field and remains `0xa5/v1`.
 
+ClaimLedger V3 no longer predicts those accounts before Resolution exists. It
+is founded with an explicit fractional `OpenUnlatched` state, zero a4/a5
+identities, sequence zero, and a zero latch. Resolution activation changes only
+the liability lifecycle and Resolution account; it preserves that fractional
+state. Fractional Initialize alone performs the one-way `OpenUnlatched →
+Latched` transition after the exact Resolution V5 data identity is known,
+stores the canonical a4/v2 and a5/v1 accounts, advances sequence zero to one,
+and emits the Product five-family admission receipt. Mixed zero/live identity
+encodings, fractional activity before the latch, and every relatch refuse.
+
 ## 2. Exact lots
 
 ### 2.1 Resolved and universal formulas
@@ -376,7 +386,7 @@ it has no sweep operation by construction.
 When every claim, credit, and locked claim-principal atom is exactly zero, the
 runtime prepares one terminal family close for immutable policy `0xa4` and
 aggregate ledger `0xa5`. ClaimLedger first commits the exact transient `0xa5`
-retirement-state identity. A private ProductOccurrenceRoot authorization must
+retirement-state identity. A private Product five-family aggregator authorization must
 bind the Market, generation, both physical accounts, both terminal state IDs,
 and the ClaimLedger retirement transition before either account is deleted.
 Each account refunds only its own stored rent payer; hostile or unsolicited
@@ -406,8 +416,10 @@ arithmetic truth. The runtime does not claim that a particular reachable
 B-spline family has a smaller universal lot without the corresponding gcd
 evidence.
 
-The runtime contract is present, but **SBF activation remains STOP**. Activation
-still requires the real Token-2022 burn adapter, Realm-selected collateral CPI
+The exact-internal SBF action-2 handler is present but capability-disabled
+until Product lands the canonical Foundation, Resolution activation, and
+five-family admission producers needed by action 1. Bearer activation still
+requires the real Token-2022 burn adapter, Realm-selected collateral CPI
 composer, canonical Resolution projection, Position/Replay V3 writer,
 ClaimLedger V3/Hoard V2 atomic writeback, rent admission, release capability,
 and local-bank adversarial execution. Family 79/v1 stays

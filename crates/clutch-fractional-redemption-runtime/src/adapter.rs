@@ -321,8 +321,9 @@ pub struct FractionalAccountContractV1 {
 
 /// Return the frozen account-count and mutability contract for one action.
 ///
-/// Account-role names and order are documented in the crate README. This does
-/// not enable dispatch; the live capability table remains empty.
+/// Account-role names and order are documented in the crate README. Action 2's
+/// complete adapter uses this geometry, but the central capability tuple stays
+/// disabled until action 1 can create its canonical inputs.
 pub const fn fractional_account_contract_v1(
     action: FractionalRedemptionActionV1,
 ) -> FractionalAccountContractV1 {
@@ -333,9 +334,9 @@ pub const fn fractional_account_contract_v1(
             signer_mask: 0b0_0000_0000_0001,
         },
         FractionalRedemptionActionV1::RedeemInternalExact => FractionalAccountContractV1 {
-            account_count: 9,
-            writable_mask: 0b0_1111_0100,
-            signer_mask: 0b0000_0001,
+            account_count: 15,
+            writable_mask: 0b111_0011_0000_0000,
+            signer_mask: 0b000_0000_0000_0001,
         },
         FractionalRedemptionActionV1::RedeemBearerExact => FractionalAccountContractV1 {
             account_count: 14,

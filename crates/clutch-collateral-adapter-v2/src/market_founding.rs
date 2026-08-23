@@ -362,8 +362,6 @@ mod tests {
                 claim_ledger_account: id(7),
                 market_instance_id: id(3),
                 native_claim_basis_id: id(8),
-                fractional_policy_id: id(9),
-                fractional_ledger_account: id(10),
                 claim_mint_authority: authority,
                 outcome_count: outcomes,
                 hoard_bump: 1,
