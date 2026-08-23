@@ -27,6 +27,7 @@ use clutch_direct_market_runtime::codec_v1::{
 };
 use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
 use clutch_direct_market_runtime::reservation_v1::AuthenticatedDirectReservationAdmissionV1;
+use clutch_direct_market_runtime::settlement_v1::AuthenticatedDirectReservationCancelV1;
 use clutch_direct_market_runtime::selection_v1::DirectSelectionV1;
 use clutch_direct_market_runtime::selection_v1::{
     begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
@@ -38,7 +39,7 @@ use clutch_direct_market_runtime::{
     DirectRentOwnerV1, DirectRootReplayPostV1,
 };
 use clutch_direct_market_runtime::settlement_v1::{
-    prepare_direct_reservation_admission_with_replay_v1,
+    prepare_direct_reservation_admission_with_replay_v1, prepare_direct_reservation_cancel_v1,
     DirectReservationOrderInputV1,
 };
 use clutch_collateral_adapter_v2::{
@@ -858,6 +859,153 @@ pub(crate) fn process_direct_admit_order_v1(
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DirectReservationCancelAuthoritySbfV1 {
+    state: DirectRootReplayPostV1,
+    reservation: DirectReservationV1,
+    position_replay: clutch_general_v2_contract::GeneralPositionReplayPrestateV1,
+    observed_lamports: u64,
+    sequence: u64,
+    slot: u64,
+}
+
+impl AuthenticatedDirectReservationCancelV1 for DirectReservationCancelAuthoritySbfV1 {
+    fn authenticate_cancel(
+        &self,
+        state: DirectRootReplayPostV1,
+        reservation: DirectReservationV1,
+        position_replay: clutch_general_v2_contract::GeneralPositionReplayPrestateV1,
+        observed_reservation_lamports: u64,
+        consumed_sequence: u64,
+        observed_slot: u64,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if state == self.state
+            && reservation == self.reservation
+            && position_replay == self.position_replay
+            && observed_reservation_lamports == self.observed_lamports
+            && consumed_sequence == self.sequence
+            && observed_slot == self.slot
+        {
+            Ok(())
+        } else {
+            Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+        }
+    }
+}
+
+/// Execute action 3 and immediately retire exactly one active b4 archive.
+///
+/// The sixteen accounts are root, Direct replay, Reservation, owner/payer,
+/// Position, GEN1, Realm, Profile, collateral policy, token program, General
+/// MarketBindingV2, General runtime, MarketInstanceV2, GenesisV2, neutral
+/// lamport sink, and Clock. Principal returns only to the persisted payer;
+/// every other lamport goes only to the root's Realm-authenticated sink.
+pub(crate) fn process_direct_cancel_order_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, 16)?;
+    require_distinct(accounts)?;
+    decode_direct_empty_payload_v1(payload)?;
+    let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
+    let direct_replay = authenticate_direct_action_replay_writable_v1(
+        program_id,
+        &accounts[1],
+        root,
+    )?;
+    let reservation = authenticate_direct_reservation_writable_v1(
+        program_id,
+        &accounts[2],
+        root,
+    )?;
+    require_signer(&accounts[3])?;
+    require(accounts[3].is_writable, ClutchError::NotWritable)?;
+    require(
+        accounts[14].is_writable
+            && !accounts[14].is_signer
+            && accounts[14].key.to_bytes() == root.value().binding.neutral_lamport_sink
+            && accounts[3].key.to_bytes() == reservation.value().owner()
+            && accounts[3].key.to_bytes() == reservation.value().rent().payer,
+        ClutchError::MismatchedState,
+    )?;
+    let observed_slot = read_clock_slot(&accounts[15])?;
+    let bound = authenticate_direct_general_market_v1(
+        program_id,
+        root,
+        &accounts[6],
+        &accounts[7],
+        &accounts[8],
+        &accounts[9],
+        &accounts[10],
+        &accounts[11],
+        &accounts[12],
+        &accounts[13],
+    )?;
+    let position_replay = authenticate_current_general_position_replay_v2(
+        program_id,
+        bound,
+        &accounts[10],
+        &accounts[11],
+        &accounts[4],
+        &accounts[5],
+        accounts[3].key.to_bytes(),
+    )?;
+    let state = DirectRootReplayPostV1 {
+        root: root.value(),
+        replay: direct_replay.value(),
+    };
+    let authority = DirectReservationCancelAuthoritySbfV1 {
+        state,
+        reservation: reservation.value(),
+        position_replay: position_replay.replay,
+        observed_lamports: reservation.observed_lamports(),
+        sequence,
+        slot: observed_slot,
+    };
+    let plan = prepare_direct_reservation_cancel_v1(
+        &authority,
+        state,
+        reservation.value(),
+        position_replay.replay,
+        reservation.observed_lamports(),
+        sequence,
+        observed_slot,
+        &DirectRuntimeSha256V1,
+    )
+    .map_err(map_direct_error_v1)?;
+    require(
+        plan.retirement.source_count == 1
+            && plan.retirement.refund_count == 1
+            && plan.retirement.neutral_lamport_sink == accounts[14].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let refund = plan.retirement.refunds[0]
+        .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let source = plan.retirement.sources[0]
+        .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        source.account == accounts[2].key.to_bytes()
+            && source.observed_lamports == accounts[2].lamports()
+            && refund.recipient == accounts[3].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
+    credit_lamports_v1(&accounts[3], refund.lamports)?;
+    credit_lamports_v1(&accounts[14], plan.retirement.surplus_lamports)?;
+    write_position_post_v1(&accounts[4], &plan.endpoint.position_poststate)?;
+    write_general_replay_post_v1(&accounts[5], &plan.endpoint.replay_transition)?;
+    write_direct_market_root_v1(&accounts[0], root.bump(), plan.state.root)?;
+    write_direct_action_replay_v1(
+        &accounts[1],
+        direct_replay.bump(),
+        plan.state.replay,
+        plan.state.root,
+    )?;
+    close_direct_program_account_v1(&accounts[2], source.observed_lamports)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn authenticate_direct_general_market_v1(
     program_id: &Pubkey,
@@ -1363,6 +1511,43 @@ fn write_general_replay_post_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     data.copy_from_slice(body);
     Ok(())
+}
+
+fn credit_lamports_v1(account: &AccountInfo<'_>, amount: u64) -> Outcome<()> {
+    require(account.is_writable, ClutchError::NotWritable)?;
+    let mut lamports = account
+        .try_borrow_mut_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    **lamports = lamports
+        .checked_add(amount)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    Ok(())
+}
+
+fn close_direct_program_account_v1(
+    account: &AccountInfo<'_>,
+    expected_lamports: u64,
+) -> Outcome<()> {
+    require(
+        account.is_writable && account.lamports() == expected_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    {
+        let mut lamports = account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **lamports = 0;
+    }
+    account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    account.assign(&SYSTEM_PROGRAM_ID);
+    require(
+        account.lamports() == 0
+            && account.data_len() == 0
+            && account.owner.to_bytes() == SYSTEM_PROGRAM_ID,
+        ClutchError::MismatchedState,
+    )
 }
 
 /// Fund the exact persisted principal in full even when a hostile caller
