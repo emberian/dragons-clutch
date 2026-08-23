@@ -14,6 +14,7 @@
 //! boundaries and execute the returned plans exactly.
 
 mod descriptor;
+mod construction;
 mod position_transfer;
 mod runtime;
 mod wire;
@@ -22,6 +23,10 @@ pub use descriptor::{
     reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1,
     DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
     DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
+};
+pub use construction::{
+    prepare_permanent_identity_funding_v1, PermanentIdentityFundingPlanV1,
+    PermanentTargetProjectionV1, WRAPPER_MINT_ACCOUNT_BYTES,
 };
 pub use position_transfer::{
     prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
@@ -83,6 +88,8 @@ pub enum Error {
     EconomicTransitionRefused,
     /// The family-local action is unallocated.
     UnknownAction,
+    /// A construction target has hostile data, owner, executable, or address state.
+    InvalidAccount,
 }
 
 /// Result alias for adapter contracts.

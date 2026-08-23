@@ -25,7 +25,7 @@ pub struct StructuredClaimRuntimeAddressesV1 {
 }
 
 impl StructuredClaimRuntimeAddressesV1 {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         let keys = [
             self.descriptor,
             self.mint,
