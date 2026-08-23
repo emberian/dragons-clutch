@@ -14,11 +14,10 @@ use crate::{
     VerifiedQuantizedAtomMixtureV1, MAX_OUTCOMES, MAX_QUANTIZED_ATOMS,
 };
 use crate::fraction_free_v1::{
-    determinant_2x2, wide_gcd, FractionFreeErrorV1, FractionFreeMatrix3V1,
-    SignedDeltaV1,
+    determinant_2x2, select_independent_rows_v1, wide_gcd, FractionFreeErrorV1,
+    FractionFreeMatrix3V1, FractionFreeMatrixV1, SignedDeltaV1, SignedWideV1,
+    WideUnsignedV1, MAX_FRACTION_FREE_ROWS_V1, MAX_FRACTION_FREE_SIDE_V1,
 };
-#[cfg(test)]
-use crate::fraction_free_v1::WideUnsignedV1;
 
 /// Largest caller-declared coordinate set searched by the exact pair solver.
 pub const MAX_QUANTIZED_ATOM_SOLVER_COORDINATES_V1: usize = 64;
@@ -194,6 +193,29 @@ impl QuantizedAtomSupport4SolverPlanV1 {
     }
 }
 
+/// Uniform per-support work bound for exact search through `outcome_count`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuantizedAtomAllSupportSolverPlanV1 {
+    maximum_subset_evaluations_per_support: u64,
+}
+
+impl QuantizedAtomAllSupportSolverPlanV1 {
+    /// Require a positive bound for every support family of size at least two.
+    pub fn new(maximum_subset_evaluations_per_support: u64) -> ResultAtomSolverV1<Self> {
+        if maximum_subset_evaluations_per_support == 0 {
+            return Err(QuantizedAtomPairSolverErrorV1::ZeroSubsetEvaluationLimit);
+        }
+        Ok(Self {
+            maximum_subset_evaluations_per_support,
+        })
+    }
+
+    /// Maximum subsets evaluated separately at each support size.
+    pub const fn maximum_subset_evaluations_per_support(&self) -> u64 {
+        self.maximum_subset_evaluations_per_support
+    }
+}
+
 /// Factual coverage of one exact support-at-most-three inverse search.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuantizedAtomSupport3SolverReportV1 {
@@ -325,6 +347,72 @@ impl QuantizedAtomSupport4SolverReportV1 {
     }
 }
 
+/// Factual coverage of bounded exact search through the affine support bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuantizedAtomAllSupportSolverReportV1 {
+    coordinate_count: u8,
+    outcome_count: u8,
+    evaluations_by_support: [u64; MAX_QUANTIZED_ATOMS],
+    exact_but_unrepresentable_by_support: [u64; MAX_QUANTIZED_ATOMS],
+    maximum_subset_evaluations_per_support: u64,
+    exhausted_through_support: u8,
+    truncated_support: u8,
+    covers_full_integer_domain: bool,
+}
+
+impl QuantizedAtomAllSupportSolverReportV1 {
+    /// Number of declared coordinates.
+    pub const fn coordinate_count(&self) -> u8 {
+        self.coordinate_count
+    }
+
+    /// Affine Caratheodory support bound searched by this invocation.
+    pub const fn outcome_count(&self) -> u8 {
+        self.outcome_count
+    }
+
+    /// Number of subsets visited at one support size, or `None` outside
+    /// `1..=outcome_count`.
+    pub fn evaluations_for_support(&self, support: u8) -> Option<u64> {
+        if support == 0 || support > self.outcome_count {
+            None
+        } else {
+            Some(self.evaluations_by_support[usize::from(support - 1)])
+        }
+    }
+
+    /// Exact positive solutions outside the primitive-`u64` certificate
+    /// profile at one support size.
+    pub fn exact_but_unrepresentable_for_support(&self, support: u8) -> Option<u64> {
+        if support == 0 || support > self.outcome_count {
+            None
+        } else {
+            Some(self.exact_but_unrepresentable_by_support[usize::from(support - 1)])
+        }
+    }
+
+    /// Uniform per-family subset work bound for supports of size at least two.
+    pub const fn maximum_subset_evaluations_per_support(&self) -> u64 {
+        self.maximum_subset_evaluations_per_support
+    }
+
+    /// Largest support size whose entire declared-coordinate family finished.
+    pub const fn exhausted_through_support(&self) -> u8 {
+        self.exhausted_through_support
+    }
+
+    /// Support family stopped by its work bound, or zero when none did.
+    pub const fn truncated_support(&self) -> u8 {
+        self.truncated_support
+    }
+
+    /// Whether the declared coordinates are every integer in the complete
+    /// Terms domain, including both endpoints.
+    pub const fn covers_full_integer_domain(&self) -> bool {
+        self.covers_full_integer_domain
+    }
+}
+
 impl QuantizedAtomPairSolverReportV1 {
     /// Number of declared coordinates.
     pub const fn coordinate_count(&self) -> u8 {
@@ -403,6 +491,34 @@ impl ExactQuantizedSupport4SolutionV1 {
 
     /// Exact search-prefix coverage that preceded the first solution.
     pub const fn report(&self) -> QuantizedAtomSupport4SolverReportV1 {
+        self.report
+    }
+}
+
+/// One certificate of any support through `outcome_count`, constructed and
+/// independently reverified by the production positive-mixture checker.
+/// Repeated binding bytes remain authority-neutral until the owning adapter
+/// authenticates the Market/Terms/Basis/price bodies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExactQuantizedAllSupportSolutionV1 {
+    certificate: QuantizedAtomMixtureCertificateV1,
+    verified: VerifiedQuantizedAtomMixtureV1,
+    report: QuantizedAtomAllSupportSolverReportV1,
+}
+
+impl ExactQuantizedAllSupportSolutionV1 {
+    /// Canonical sparse certificate body produced by the solver.
+    pub const fn certificate(&self) -> &QuantizedAtomMixtureCertificateV1 {
+        &self.certificate
+    }
+
+    /// Independent production-verifier result for the same certificate.
+    pub const fn verified(&self) -> VerifiedQuantizedAtomMixtureV1 {
+        self.verified
+    }
+
+    /// Exact search-prefix coverage that preceded the first solution.
+    pub const fn report(&self) -> QuantizedAtomAllSupportSolverReportV1 {
         self.report
     }
 }
@@ -487,6 +603,23 @@ pub enum QuantizedAtomSupport4SolverOutcomeV1 {
     WorkTruncated(QuantizedAtomSupport4SolverReportV1),
 }
 
+/// Total outcome of bounded exact search through `outcome_count` support.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuantizedAtomAllSupportSolverOutcomeV1 {
+    /// The first exact lexicographic support was constructed and independently
+    /// reverified.
+    Solved(ExactQuantizedAllSupportSolutionV1),
+    /// Every subset through the affine support bound was exhausted without a
+    /// representable certificate. Completeness still applies only to the
+    /// declared coordinate set unless the report records full-domain coverage.
+    Unsupported(QuantizedAtomAllSupportSolverReportV1),
+    /// Exact positive solutions existed, but their primitive mass vectors were
+    /// outside the certificate's named `u64` representability profile.
+    OutOfProfile(QuantizedAtomAllSupportSolverReportV1),
+    /// The named support family reached its subset work bound.
+    WorkTruncated(QuantizedAtomAllSupportSolverReportV1),
+}
+
 /// Malformed-input or checked-arithmetic refusals from exact inverse solvers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuantizedAtomPairSolverErrorV1 {
@@ -516,6 +649,8 @@ pub enum QuantizedAtomPairSolverErrorV1 {
     ZeroTripleEvaluationLimit,
     /// A support-four search cannot have a zero quartet work bound.
     ZeroQuartetEvaluationLimit,
+    /// A general support search cannot have a zero per-family subset bound.
+    ZeroSubsetEvaluationLimit,
     /// A checked integer conversion or counter overflowed.
     ArithmeticOverflow,
     /// Solver-derived facts disagreed despite exact input validation.
@@ -1133,6 +1268,152 @@ pub fn solve_quantized_atom_support4_hull_v1(
     }
 }
 
+/// Search exact positive supports from one through `outcome_count` over a
+/// declared finite coordinate set.
+///
+/// Each support family is lexicographic and has the same positive caller-bound
+/// subset budget. Affinely dependent supports are skipped because any positive
+/// representation on them reduces to a smaller support already exhausted by
+/// the search. Consequently `Unsupported` after full-domain exhaustion is a
+/// complete negative for the finite production-quantized hull: affine
+/// Caratheodory bounds every representation by `outcome_count`. For a partial
+/// coordinate declaration it remains only a negative over that declared set.
+/// No outcome claims uniqueness, fair value, or optimality, and the inverse
+/// arithmetic introduces no rounding boundary.
+pub fn solve_quantized_atom_hull_v1(
+    bound: &BoundQuantizedSplineV1,
+    prices: &QuantizedPayoutPriceVectorV1,
+    coordinates: QuantizedAtomSearchCoordinatesV1,
+    plan: QuantizedAtomAllSupportSolverPlanV1,
+) -> ResultAtomSolverV1<QuantizedAtomAllSupportSolverOutcomeV1> {
+    let basis = bound.validated()?;
+    let spec = basis.spec();
+    validate_target_price(bound, prices, spec.outcome_count, spec.denominator)?;
+    validate_coordinates(bound, coordinates)?;
+    let mut report = QuantizedAtomAllSupportSolverReportV1 {
+        coordinate_count: coordinates.coordinate_count,
+        outcome_count: spec.outcome_count,
+        evaluations_by_support: [0u64; MAX_QUANTIZED_ATOMS],
+        exact_but_unrepresentable_by_support: [0u64; MAX_QUANTIZED_ATOMS],
+        maximum_subset_evaluations_per_support: plan.maximum_subset_evaluations_per_support,
+        exhausted_through_support: 0,
+        truncated_support: 0,
+        covers_full_integer_domain: covers_full_integer_domain(bound, coordinates)?,
+    };
+    let active_coordinates = usize::from(coordinates.coordinate_count);
+    let active_outcomes = usize::from(spec.outcome_count);
+    let mut coordinate = 0usize;
+    while coordinate < active_coordinates {
+        let atom = basis
+            .evaluate_point(coordinates.coordinates[coordinate])
+            .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                witness: u8_index(coordinate)?,
+            })?;
+        report.evaluations_by_support[0] = report.evaluations_by_support[0]
+            .checked_add(1)
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        if equal_active(&atom.weights, &prices.prices, active_outcomes) {
+            let mut selected_coordinates = [0u128; MAX_QUANTIZED_ATOMS];
+            selected_coordinates[0] = coordinates.coordinates[coordinate];
+            return Ok(QuantizedAtomAllSupportSolverOutcomeV1::Solved(
+                make_all_support_solution(
+                    bound,
+                    prices,
+                    selected_coordinates,
+                    one_mass_vector(),
+                    1,
+                    1,
+                    report,
+                )?,
+            ));
+        }
+        coordinate += 1;
+    }
+    report.exhausted_through_support = 1;
+
+    let mut saw_out_of_profile = false;
+    let mut support = 2usize;
+    while support <= active_outcomes {
+        if support > active_coordinates {
+            report.exhausted_through_support = u8_index(support)?;
+            support += 1;
+            continue;
+        }
+        let mut combination = first_combination(support);
+        loop {
+            let report_index = support - 1;
+            if report.evaluations_by_support[report_index]
+                == plan.maximum_subset_evaluations_per_support
+            {
+                report.truncated_support = u8_index(support)?;
+                return Ok(QuantizedAtomAllSupportSolverOutcomeV1::WorkTruncated(
+                    report,
+                ));
+            }
+            report.evaluations_by_support[report_index] = report.evaluations_by_support
+                [report_index]
+                .checked_add(1)
+                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+            let mut atoms = [[0u64; MAX_OUTCOMES]; MAX_QUANTIZED_ATOMS];
+            let mut selected_coordinates = [0u128; MAX_QUANTIZED_ATOMS];
+            let mut selected = 0usize;
+            while selected < support {
+                let source_index = combination[selected];
+                let atom = basis
+                    .evaluate_point(coordinates.coordinates[source_index])
+                    .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                        witness: u8_index(source_index)?,
+                    })?;
+                atoms[selected] = atom.weights;
+                selected_coordinates[selected] = coordinates.coordinates[source_index];
+                selected += 1;
+            }
+            match solve_general_support_weights(
+                &atoms,
+                support,
+                &prices.prices,
+                active_outcomes,
+            )? {
+                GeneralWeightSolutionV1::NoExactPositiveSolution => {}
+                GeneralWeightSolutionV1::ExactButOutsideU64Profile => {
+                    saw_out_of_profile = true;
+                    report.exact_but_unrepresentable_by_support[report_index] = report
+                        .exact_but_unrepresentable_by_support[report_index]
+                        .checked_add(1)
+                        .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+                }
+                GeneralWeightSolutionV1::Representable {
+                    masses,
+                    denominator,
+                } => {
+                    return Ok(QuantizedAtomAllSupportSolverOutcomeV1::Solved(
+                        make_all_support_solution(
+                            bound,
+                            prices,
+                            selected_coordinates,
+                            masses,
+                            denominator,
+                            u8_index(support)?,
+                            report,
+                        )?,
+                    ));
+                }
+            }
+            if !advance_combination(&mut combination, support, active_coordinates)? {
+                break;
+            }
+        }
+        report.exhausted_through_support = u8_index(support)?;
+        support += 1;
+    }
+
+    if saw_out_of_profile {
+        Ok(QuantizedAtomAllSupportSolverOutcomeV1::OutOfProfile(report))
+    } else {
+        Ok(QuantizedAtomAllSupportSolverOutcomeV1::Unsupported(report))
+    }
+}
+
 fn validate_target_price(
     bound: &BoundQuantizedSplineV1,
     prices: &QuantizedPayoutPriceVectorV1,
@@ -1456,6 +1737,177 @@ enum QuartetWeightSolutionV1 {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralWeightSolutionV1 {
+    NoExactPositiveSolution,
+    ExactButOutsideU64Profile,
+    Representable {
+        masses: [u64; MAX_QUANTIZED_ATOMS],
+        denominator: u64,
+    },
+}
+
+fn solve_general_support_weights(
+    atoms: &[[u64; MAX_OUTCOMES]; MAX_QUANTIZED_ATOMS],
+    support: usize,
+    target: &[u64; MAX_OUTCOMES],
+    active_outcomes: usize,
+) -> ResultAtomSolverV1<GeneralWeightSolutionV1> {
+    if support < 2
+        || support > active_outcomes
+        || active_outcomes > MAX_FRACTION_FREE_ROWS_V1
+    {
+        return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
+    }
+    let variable_count = support - 1;
+    if variable_count > MAX_FRACTION_FREE_SIDE_V1 {
+        return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
+    }
+    let reference = support - 1;
+    let mut coefficients = [[SignedDeltaV1::between(0, 0);
+        MAX_FRACTION_FREE_SIDE_V1]; MAX_FRACTION_FREE_ROWS_V1];
+    let mut outcome = 0usize;
+    while outcome < active_outcomes {
+        let mut variable = 0usize;
+        while variable < variable_count {
+            coefficients[outcome][variable] =
+                SignedDeltaV1::between(atoms[variable][outcome], atoms[reference][outcome]);
+            variable += 1;
+        }
+        outcome += 1;
+    }
+    let Some(pivot_rows) =
+        select_independent_rows_v1(&coefficients, active_outcomes, variable_count)?
+    else {
+        // Any positive point on an affine-dependent support has a convex
+        // representation on a proper subset, which the outer increasing-size
+        // search has already exhausted.
+        return Ok(GeneralWeightSolutionV1::NoExactPositiveSolution);
+    };
+    let side = u8_index(variable_count)?;
+    let mut matrix = FractionFreeMatrixV1::new(side)?;
+    let mut row = 0usize;
+    while row < variable_count {
+        let source_row = usize::from(pivot_rows[row]);
+        let mut column = 0usize;
+        while column < variable_count {
+            matrix.set(row, column, coefficients[source_row][column])?;
+            column += 1;
+        }
+        row += 1;
+    }
+    let mut denominator = matrix.determinant()?;
+    if denominator.magnitude.is_zero() {
+        return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
+    }
+    let mut right_hand_side =
+        [SignedDeltaV1::between(0, 0); MAX_FRACTION_FREE_SIDE_V1];
+    row = 0;
+    while row < variable_count {
+        let source_row = usize::from(pivot_rows[row]);
+        right_hand_side[row] =
+            SignedDeltaV1::between(target[source_row], atoms[reference][source_row]);
+        row += 1;
+    }
+    let mut numerators = [
+        SignedWideV1::new(false, WideUnsignedV1::ZERO);
+        MAX_FRACTION_FREE_SIDE_V1
+    ];
+    let mut variable = 0usize;
+    while variable < variable_count {
+        numerators[variable] = matrix
+            .with_column(variable, &right_hand_side)?
+            .determinant()?;
+        variable += 1;
+    }
+    if denominator.negative {
+        denominator = denominator.negated();
+        variable = 0;
+        while variable < variable_count {
+            numerators[variable] = numerators[variable].negated();
+            variable += 1;
+        }
+    }
+    let mut wide_masses = [WideUnsignedV1::ZERO; MAX_QUANTIZED_ATOMS];
+    let mut mass_sum = WideUnsignedV1::ZERO;
+    variable = 0;
+    while variable < variable_count {
+        if numerators[variable].negative || numerators[variable].magnitude.is_zero() {
+            return Ok(GeneralWeightSolutionV1::NoExactPositiveSolution);
+        }
+        wide_masses[variable] = numerators[variable].magnitude;
+        mass_sum = mass_sum
+            .checked_add(numerators[variable].magnitude)
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        variable += 1;
+    }
+    if mass_sum >= denominator.magnitude {
+        return Ok(GeneralWeightSolutionV1::NoExactPositiveSolution);
+    }
+    wide_masses[reference] = denominator
+        .magnitude
+        .checked_sub(mass_sum)
+        .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?;
+
+    outcome = 0;
+    while outcome < active_outcomes {
+        let mut reconstructed = WideUnsignedV1::ZERO;
+        let mut atom = 0usize;
+        while atom < support {
+            let term = wide_masses[atom]
+                .checked_mul_u64(atoms[atom][outcome])
+                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+            reconstructed = reconstructed
+                .checked_add(term)
+                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+            atom += 1;
+        }
+        let expected = denominator
+            .magnitude
+            .checked_mul_u64(target[outcome])
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        if reconstructed != expected {
+            return Ok(GeneralWeightSolutionV1::NoExactPositiveSolution);
+        }
+        outcome += 1;
+    }
+
+    let mut divisor = denominator.magnitude;
+    let mut atom = 0usize;
+    while atom < support {
+        divisor = wide_gcd(divisor, wide_masses[atom])?;
+        atom += 1;
+    }
+    let reduced_denominator = denominator.magnitude.checked_div_exact(divisor)?;
+    let Some(denominator) = reduced_denominator.to_u64() else {
+        return Ok(GeneralWeightSolutionV1::ExactButOutsideU64Profile);
+    };
+    let mut masses = [0u64; MAX_QUANTIZED_ATOMS];
+    let mut reduced_sum = 0u64;
+    atom = 0;
+    while atom < support {
+        let reduced = wide_masses[atom].checked_div_exact(divisor)?;
+        let Some(mass) = reduced.to_u64() else {
+            return Ok(GeneralWeightSolutionV1::ExactButOutsideU64Profile);
+        };
+        if mass == 0 {
+            return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
+        }
+        masses[atom] = mass;
+        reduced_sum = reduced_sum
+            .checked_add(mass)
+            .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?;
+        atom += 1;
+    }
+    if reduced_sum != denominator {
+        return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
+    }
+    Ok(GeneralWeightSolutionV1::Representable {
+        masses,
+        denominator,
+    })
+}
+
 fn solve_quartet_weights(
     atoms: [&[u64; MAX_OUTCOMES]; 4],
     target: &[u64; MAX_OUTCOMES],
@@ -1746,6 +2198,85 @@ fn make_support4_solution(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn make_all_support_solution(
+    bound: &BoundQuantizedSplineV1,
+    prices: &QuantizedPayoutPriceVectorV1,
+    coordinates: [u128; MAX_QUANTIZED_ATOMS],
+    masses: [u64; MAX_QUANTIZED_ATOMS],
+    weight_denominator: u64,
+    witness_count: u8,
+    report: QuantizedAtomAllSupportSolverReportV1,
+) -> ResultAtomSolverV1<ExactQuantizedAllSupportSolutionV1> {
+    let spec = bound.basis;
+    let certificate = QuantizedAtomMixtureCertificateV1::new(
+        bound.bindings,
+        spec.degree,
+        spec.outcome_count,
+        spec.denominator,
+        weight_denominator,
+        witness_count,
+        coordinates,
+        masses,
+    )?;
+    let verified = verify_quantized_atom_mixture_v1(bound, prices, &certificate)?;
+    Ok(ExactQuantizedAllSupportSolutionV1 {
+        certificate,
+        verified,
+        report,
+    })
+}
+
+const fn one_mass_vector() -> [u64; MAX_QUANTIZED_ATOMS] {
+    let mut masses = [0u64; MAX_QUANTIZED_ATOMS];
+    masses[0] = 1;
+    masses
+}
+
+fn first_combination(support: usize) -> [usize; MAX_QUANTIZED_ATOMS] {
+    let mut combination = [0usize; MAX_QUANTIZED_ATOMS];
+    let mut index = 0usize;
+    while index < support {
+        combination[index] = index;
+        index += 1;
+    }
+    combination
+}
+
+fn advance_combination(
+    combination: &mut [usize; MAX_QUANTIZED_ATOMS],
+    support: usize,
+    coordinate_count: usize,
+) -> ResultAtomSolverV1<bool> {
+    if support == 0 || support > coordinate_count || support > MAX_QUANTIZED_ATOMS {
+        return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
+    }
+    let base_maximum = coordinate_count
+        .checked_sub(support)
+        .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?;
+    let mut cursor = support;
+    while cursor != 0 {
+        cursor -= 1;
+        let maximum = base_maximum
+            .checked_add(cursor)
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        if combination[cursor] < maximum {
+            combination[cursor] = combination[cursor]
+                .checked_add(1)
+                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+            let mut suffix = cursor + 1;
+            while suffix < support {
+                combination[suffix] = combination[suffix - 1]
+                    .checked_add(1)
+                    .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+                suffix += 1;
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn equal_active(
     left: &[u64; MAX_OUTCOMES],
     right: &[u64; MAX_OUTCOMES],
@@ -1846,6 +2377,41 @@ mod tests {
         QuantizedPayoutPriceVectorV1 {
             price_id: [4; 32],
             outcome_count: 4,
+            prices: padded,
+        }
+    }
+
+    fn support5_bound() -> BoundQuantizedSplineV1 {
+        let mut knots = [0u128; 16];
+        knots[..3].copy_from_slice(&[0, 4, 8]);
+        BoundQuantizedSplineV1 {
+            bindings: QuantizedAtomMixtureBindingsV1 {
+                market_id: [1; 32],
+                terms_id: [2; 32],
+                basis_id: [3; 32],
+                price_id: [4; 32],
+            },
+            coordinate_domain_min: 0,
+            coordinate_domain_max: 8,
+            basis: BasisSpec {
+                outcome_count: 5,
+                degree: 3,
+                knot_count: 3,
+                uniform_log2_spacing: 2,
+                denominator: 32,
+                domain_max: 8,
+                edge_policy: EdgePolicy::Refuse,
+                knots,
+            },
+        }
+    }
+
+    fn support5_target(prices: [u64; 5]) -> QuantizedPayoutPriceVectorV1 {
+        let mut padded = [0u64; MAX_OUTCOMES];
+        padded[..5].copy_from_slice(&prices);
+        QuantizedPayoutPriceVectorV1 {
+            price_id: [4; 32],
+            outcome_count: 5,
             prices: padded,
         }
     }
@@ -2024,6 +2590,87 @@ mod tests {
     }
 
     #[test]
+    fn exact_support_five_is_constructed_and_full_affine_search_terminates() {
+        let solution = solve_quantized_atom_hull_v1(
+            &support5_bound(),
+            &support5_target([7, 6, 6, 6, 7]),
+            coordinates(&[0, 2, 4, 6, 8]),
+            QuantizedAtomAllSupportSolverPlanV1::new(10).unwrap(),
+        )
+        .unwrap();
+        let QuantizedAtomAllSupportSolverOutcomeV1::Solved(solution) = solution else {
+            panic!("expected exact support-five solution")
+        };
+        assert_eq!(solution.certificate().witness_count, 5);
+        assert_eq!(solution.certificate().weight_denominator, 16);
+        assert_eq!(
+            &solution.certificate().observation_coordinates[..5],
+            &[0, 2, 4, 6, 8]
+        );
+        assert_eq!(&solution.certificate().weights[..5], &[3, 4, 2, 4, 3]);
+        assert_eq!(solution.verified().witness_count(), 5);
+        assert_eq!(solution.report().evaluations_for_support(1), Some(5));
+        assert_eq!(solution.report().evaluations_for_support(2), Some(10));
+        assert_eq!(solution.report().evaluations_for_support(3), Some(10));
+        assert_eq!(solution.report().evaluations_for_support(4), Some(5));
+        assert_eq!(solution.report().evaluations_for_support(5), Some(1));
+        assert_eq!(solution.report().exhausted_through_support(), 4);
+        assert_eq!(solution.report().truncated_support(), 0);
+    }
+
+    #[test]
+    fn all_support_profile_keeps_work_and_u64_representation_outcomes_distinct() {
+        let truncated = solve_quantized_atom_hull_v1(
+            &support5_bound(),
+            &support5_target([0, 32, 0, 0, 0]),
+            coordinates(&[0, 1, 2, 3, 4, 8]),
+            QuantizedAtomAllSupportSolverPlanV1::new(1).unwrap(),
+        )
+        .unwrap();
+        let QuantizedAtomAllSupportSolverOutcomeV1::WorkTruncated(report) = truncated else {
+            panic!("expected a bounded pair-family prefix")
+        };
+        assert_eq!(report.truncated_support(), 2);
+        assert_eq!(report.evaluations_for_support(2), Some(1));
+
+        let denominator = u64::MAX;
+        let mut atoms = [[0u64; MAX_OUTCOMES]; MAX_QUANTIZED_ATOMS];
+        atoms[0][..4].copy_from_slice(&[denominator - 1, 1, 0, 0]);
+        atoms[1][..4].copy_from_slice(&[1, denominator - 1, 0, 0]);
+        atoms[2][..4].copy_from_slice(&[0, 0, denominator, 0]);
+        atoms[3][..4].copy_from_slice(&[0, 0, 0, denominator]);
+        let mut target = [0u64; MAX_OUTCOMES];
+        target[..4].copy_from_slice(&[1, 2, 1, denominator - 4]);
+        assert_eq!(
+            solve_general_support_weights(&atoms, 4, &target, 4).unwrap(),
+            GeneralWeightSolutionV1::ExactButOutsideU64Profile,
+        );
+
+        let mut maximum_atoms = [[0u64; MAX_OUTCOMES]; MAX_QUANTIZED_ATOMS];
+        let maximum_target = [1u64; MAX_OUTCOMES];
+        let mut atom = 0usize;
+        while atom < MAX_OUTCOMES {
+            maximum_atoms[atom][atom] = u64::try_from(MAX_OUTCOMES).unwrap();
+            atom += 1;
+        }
+        let GeneralWeightSolutionV1::Representable {
+            masses,
+            denominator,
+        } = solve_general_support_weights(
+            &maximum_atoms,
+            MAX_OUTCOMES,
+            &maximum_target,
+            MAX_OUTCOMES,
+        )
+        .unwrap()
+        else {
+            panic!("expected exact maximum-support simplex")
+        };
+        assert_eq!(denominator, u64::try_from(MAX_OUTCOMES).unwrap());
+        assert_eq!(masses, [1u64; MAX_QUANTIZED_ATOMS]);
+    }
+
+    #[test]
     fn support_four_unsupported_work_truncated_and_out_of_profile_are_distinct() {
         let unsupported = solve_quantized_atom_support4_hull_v1(
             &support4_bound(),
@@ -2181,6 +2828,10 @@ mod tests {
         assert_eq!(
             QuantizedAtomSupport4SolverPlanV1::new(1, 1, 0),
             Err(QuantizedAtomPairSolverErrorV1::ZeroQuartetEvaluationLimit)
+        );
+        assert_eq!(
+            QuantizedAtomAllSupportSolverPlanV1::new(0),
+            Err(QuantizedAtomPairSolverErrorV1::ZeroSubsetEvaluationLimit)
         );
         let mut malformed = target([16, 0, 0]);
         malformed.prices[3] = 1;
