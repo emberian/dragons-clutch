@@ -43,6 +43,16 @@ non-actionable. Every output integer is a canonical decimal string. The
 composer reads no wallet or browser session and has no RPC, signing, submission,
 deployment, or persistence path.
 
+Chain-attached composition additionally requires the manifest-owned Cargo
+profile feature to be `profile-successor-chain-attached-v1`. That reserved
+identity is intentionally not yet measurable: every profile currently accepted
+by the capability checker retains at least one withdrawn legacy Source,
+General, Dealer-laboratory, or artifact action across its layout/reference/SBF
+closure. Operatord refuses those ELFs as a whole; it does not hide their old
+actions in the browser while presenting the remainder as a current release.
+The blocker is removed only by cutting and measuring the full M7 profile—not by
+adding historical account DTOs to this index.
+
 The hostile decoder admits Source V3 runtime accounts and only the current
 Collateral Hoard V2, ClaimLedger V3, Resolution V5, and the current General
 successor versions (including Window V5, AdmissionNode V4/outer-v2,
@@ -62,8 +72,9 @@ projection.
 
 Product/Series discovery includes the exact `0xaa/1` MarketLifecycleRoot and
 `0xad/1` SeriesMarketLink account frames in addition to the current
-`0x7f/2` SeriesRegistry and SeriesFunding. A registry is accepted only at its
-canonical PDA. Its exact BundleV5 final is then reopened at the kind-scoped
+`0x7f/2` SeriesRegistry and `0x80/2` SeriesFunding. Both are accepted only at
+their canonical PDAs. A registry's
+exact BundleV5 final is then reopened at the kind-scoped
 content PDA; only that hostile-decoded bundle may supply the kinds and digests
 used to classify its RegistryReleaseV2, CapabilityProfileV4, Source release,
 Product policy, QuoteV4, AttachmentV4, SeriesPlanV5, and FundingTermsV2

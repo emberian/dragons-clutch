@@ -25,6 +25,11 @@ const LOCAL_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manif
 const MAX_LOCAL_MANIFEST_BYTES: usize = 262_144;
 const MAX_CAPABILITY_MANIFEST_BYTES: usize = 1_048_576;
 const WORKFLOW_DOMAIN: &[u8] = b"dragons-clutch/operatord-chain-config-workflow/v2\0";
+/// Exact profile feature reserved for the first release whose layout,
+/// reference request/action decoders, SBF dispatch, account codecs, and Source
+/// generation surface have all removed the withdrawn Source/General/Dealer
+/// paths together.  No currently measured profile owns this identity.
+const M7_SUCCESSOR_ONLY_PROFILE_FEATURE: &str = "profile-successor-chain-attached-v1";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -312,6 +317,7 @@ pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilit
     {
         return Err("capability profile is not a completely linked deployable input".into());
     }
+    require_m7_successor_only_profile(&summary)?;
     let manifest_sha256 = hash32(
         summary_string(&summary, &["manifest_canonical_sha256"])?,
         "checked profile manifest_canonical_sha256",
@@ -343,6 +349,32 @@ pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilit
         elf_sha256,
         source_profile,
     })
+}
+
+fn require_m7_successor_only_profile(summary: &Value) -> Result<()> {
+    let features = summary
+        .get("cargo_features")
+        .and_then(Value::as_array)
+        .ok_or("checked profile summary has no exact Cargo feature set")?;
+    let mut profile = None;
+    for feature in features {
+        let feature = feature
+            .as_str()
+            .ok_or("checked profile Cargo feature is not text")?;
+        if feature.starts_with("profile-") {
+            if profile.replace(feature).is_some() {
+                return Err("checked profile summary names multiple profile features".into());
+            }
+        }
+    }
+    let profile = profile.ok_or("checked profile summary names no profile feature")?;
+    if profile != M7_SUCCESSOR_ONLY_PROFILE_FEATURE {
+        return Err(format!(
+            "checked profile {profile} retains a withdrawn legacy wire surface; chain-attached serving requires the unmeasured {M7_SUCCESSOR_ONLY_PROFILE_FEATURE} full M7 closure"
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn summary_string<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
@@ -674,5 +706,24 @@ mod tests {
         assert!(!DeploymentSlotPolicy::SynthesizedLocalZero.accepts(1));
         assert!(!DeploymentSlotPolicy::ObservedPublicPositive.accepts(0));
         assert!(DeploymentSlotPolicy::ObservedPublicPositive.accepts(1));
+    }
+
+    #[test]
+    fn current_measured_profiles_cannot_bypass_m7_with_extension_rows() {
+        for profile in [
+            "profile-full",
+            "profile-direct-v3-source-v2-point",
+            "profile-general-source-v2-point",
+        ] {
+            let summary = json!({
+                "cargo_features": ["custom-heap", profile],
+                "central_registry": {"enabled_intent_triples": [[77, 2, 1]]}
+            });
+            assert!(require_m7_successor_only_profile(&summary).is_err());
+        }
+        assert!(require_m7_successor_only_profile(&json!({
+            "cargo_features": ["custom-heap", M7_SUCCESSOR_ONLY_PROFILE_FEATURE]
+        }))
+        .is_ok());
     }
 }
