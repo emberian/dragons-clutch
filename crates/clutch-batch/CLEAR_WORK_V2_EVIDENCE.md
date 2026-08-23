@@ -158,6 +158,9 @@ Additional gates:
   idle;
 - execute 384 bounded deterministic books through batch, V1 stream, and V2
   stream oracles, comparing the exact compact checkpoint after every call;
+- exercise 32 additional accepted/refused policy cases covering portfolio lots,
+  witnessed AON masks, both allocation and dust families, all three self-cross
+  policies, nonzero composite fees, and six candidate-tamper families;
 - execute the minimum and maximum active widths, including all 64 orders, 64
   owner identities, and 16 outcomes at the maximum;
 - compare every explicit-slice cursor boundary and both two-pass and three-pass
@@ -169,7 +172,7 @@ Additional gates:
   a defined debug transition (23,337 cases); the two excluded V1 transitions
   hit its known unchecked score multiplication, while V2 uses checked math;
 - bounds-check first/last and one-past-end matrix and ledger accesses;
-- run all 126 `clutch-batch` tests and Clippy with warnings denied.
+- run all 127 `clutch-batch` tests and Clippy with warnings denied.
 
 Commands:
 

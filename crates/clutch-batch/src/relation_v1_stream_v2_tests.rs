@@ -1,8 +1,9 @@
 use super::relation_v1::{
     canonical_candidate, canonical_pairing, AllocationPolicyV1, AonPolicyV1, BookV1, CandidateV1,
     FeeBaseV1, FrozenPolicyV1, OrderV1, PairingWitnessPolicyV1, PortfolioLotPolicyV1,
-    RelationDomainV1, ResidualSettlementV1, RoundingBoundaryV1, ScorePolicyV1, SelfCrossPolicyV1,
-    SingleEggOrderV1, TransferPhaseV1, MAX_OUTCOMES, PRICE_SCALE, RELATION_VERSION_V1,
+    PortfolioOrderV1, RelationDomainV1, ResidualSettlementV1, RoundingBoundaryV1, ScorePolicyV1,
+    SelfCrossPolicyV1, SingleEggOrderV1, TransferPhaseV1, MAX_OUTCOMES, PRICE_SCALE,
+    RELATION_VERSION_V1, TEST_COMPOSITE_LAB,
 };
 use super::relation_v1_stream::{ClearWorkV1, FeedErrorV1, StreamCandidateV1};
 use super::relation_v1_stream_v2::*;
@@ -57,6 +58,61 @@ fn single(id: u64, owner: u16, outcome: u8, side: Side) -> OrderV1 {
         partial_policy: PartialPolicy::Allow,
         expiry_epoch: u64::MAX,
     })
+}
+
+fn single_with_obligation(
+    id: u64,
+    owner: u16,
+    outcome: u8,
+    side: Side,
+    quantity: u64,
+    minimum_fill: u64,
+    partial_policy: PartialPolicy,
+) -> OrderV1 {
+    OrderV1::SingleEgg(SingleEggOrderV1 {
+        canonical_order_id: id,
+        owner,
+        outcome,
+        side,
+        quantity,
+        limit_price: if side == Side::Buy { PRICE_SCALE } else { 0 },
+        minimum_fill,
+        partial_policy,
+        expiry_epoch: u64::MAX,
+    })
+}
+
+fn portfolio(id: u64, owner: u16, side: Side, coefficients: &[u64], lots: u64) -> OrderV1 {
+    let mut active = [0u64; MAX_OUTCOMES];
+    active[..coefficients.len()].copy_from_slice(coefficients);
+    OrderV1::Portfolio(PortfolioOrderV1 {
+        canonical_order_id: id,
+        owner,
+        side,
+        coefficients: active,
+        active_len: coefficients.len() as u8,
+        lots,
+        limit_collateral_per_lot: PRICE_SCALE,
+        minimum_fill_lots: 1,
+        partial_policy: PartialPolicy::Allow,
+        expiry_epoch: u64::MAX,
+    })
+}
+
+fn candidate_mutations(candidate: &CandidateV1) -> [CandidateV1; 6] {
+    let mut fill = *candidate;
+    fill.fills[0] = fill.fills[0].wrapping_add(1);
+    let mut split = *candidate;
+    split.virtual_split = split.virtual_split.wrapping_add(1);
+    let mut merge = *candidate;
+    merge.virtual_merge = merge.virtual_merge.wrapping_add(1);
+    let mut mask = *candidate;
+    mask.honored_aon_mask ^= 1;
+    let mut score = *candidate;
+    score.claimed_score.churn = score.claimed_score.churn.wrapping_add(1);
+    let mut digest = *candidate;
+    digest.canonical_candidate_digest ^= 1;
+    [fill, split, merge, mask, score, digest]
 }
 
 fn fixture(self_cross: SelfCrossPolicyV1) -> (RelationDomainV1, BookV1, [u64; MAX_OUTCOMES]) {
@@ -429,6 +485,129 @@ fn minimum_and_maximum_active_widths_execute_without_v1_expansion() {
         canonical_candidate(&maximum_domain, &maximum_book, &maximum_prices, 0, 0)
             .expect("maximum active dimensions have a canonical candidate");
     drive_lockstep_book(&maximum_domain, &maximum_book, &maximum_candidate);
+}
+
+#[test]
+fn portfolio_aon_dust_self_cross_and_composite_hooks_are_v1_exact() {
+    let mut compared = 0usize;
+
+    let mut portfolio_domain = domain(SelfCrossPolicyV1::AllowGateAtPairing);
+    portfolio_domain.outcome_count = 3;
+    portfolio_domain.owner_count = 3;
+    let mut portfolio_book = BookV1::empty();
+    portfolio_book.len = 4;
+    portfolio_book.orders[0] = portfolio(1, 0, Side::Buy, &[1, 1, 1], 2);
+    portfolio_book.orders[1] =
+        single_with_obligation(2, 1, 0, Side::Sell, 2, 1, PartialPolicy::Allow);
+    portfolio_book.orders[2] =
+        single_with_obligation(3, 1, 1, Side::Sell, 2, 1, PartialPolicy::Allow);
+    portfolio_book.orders[3] =
+        single_with_obligation(4, 2, 2, Side::Sell, 2, 1, PartialPolicy::Allow);
+    let mut portfolio_prices = [0u64; MAX_OUTCOMES];
+    portfolio_prices[0] = PRICE_SCALE / 4;
+    portfolio_prices[1] = PRICE_SCALE / 4;
+    portfolio_prices[2] = PRICE_SCALE / 2;
+    let portfolio_candidate =
+        canonical_candidate(&portfolio_domain, &portfolio_book, &portfolio_prices, 0, 0).unwrap();
+    drive_lockstep_book(&portfolio_domain, &portfolio_book, &portfolio_candidate);
+    for mutation in candidate_mutations(&portfolio_candidate) {
+        drive_lockstep_book(&portfolio_domain, &portfolio_book, &mutation);
+        compared += 1;
+    }
+
+    let mut aon_domain = domain(SelfCrossPolicyV1::AllowGateAtPairing);
+    aon_domain.owner_count = 4;
+    aon_domain.policy.aon = AonPolicyV1::WitnessedHonoredMask;
+    let mut aon_book = BookV1::empty();
+    aon_book.len = 4;
+    aon_book.orders[0] = single_with_obligation(1, 0, 0, Side::Buy, 4, 4, PartialPolicy::AllOrNone);
+    aon_book.orders[1] =
+        single_with_obligation(2, 1, 0, Side::Sell, 4, 4, PartialPolicy::AllOrNone);
+    aon_book.orders[2] = single_with_obligation(3, 2, 1, Side::Buy, 4, 4, PartialPolicy::AllOrNone);
+    aon_book.orders[3] =
+        single_with_obligation(4, 3, 1, Side::Sell, 4, 4, PartialPolicy::AllOrNone);
+    let mut midpoint = [0u64; MAX_OUTCOMES];
+    midpoint[0] = PRICE_SCALE / 2;
+    midpoint[1] = PRICE_SCALE / 2;
+    for mask in 0..16u64 {
+        let candidate = canonical_candidate(&aon_domain, &aon_book, &midpoint, 0, mask)
+            .unwrap_or_else(|_| {
+                let mut refused = CandidateV1::empty(4, midpoint);
+                refused.honored_aon_mask = mask;
+                refused
+            });
+        drive_lockstep_book(&aon_domain, &aon_book, &candidate);
+        compared += 1;
+    }
+
+    let mut variant_book = BookV1::empty();
+    variant_book.len = 4;
+    variant_book.orders[0] = single_with_obligation(1, 0, 0, Side::Buy, 4, 1, PartialPolicy::Allow);
+    variant_book.orders[1] =
+        single_with_obligation(2, 1, 0, Side::Sell, 2, 1, PartialPolicy::Allow);
+    variant_book.orders[2] =
+        single_with_obligation(3, 2, 0, Side::Sell, 1, 1, PartialPolicy::Allow);
+    variant_book.orders[3] =
+        single_with_obligation(4, 3, 0, Side::Sell, 3, 1, PartialPolicy::Allow);
+    for allocation in [
+        AllocationPolicyV1::PricePriorityMarginalProRata,
+        AllocationPolicyV1::FullProRata,
+    ] {
+        for dust in [DustPolicy::AssignCanonical, DustPolicy::Reject] {
+            let mut variant_domain = domain(SelfCrossPolicyV1::AllowGateAtPairing);
+            variant_domain.owner_count = 4;
+            variant_domain.policy.allocation = allocation;
+            variant_domain.policy.dust = dust;
+            if let Ok(candidate) =
+                canonical_candidate(&variant_domain, &variant_book, &midpoint, 0, 0)
+            {
+                drive_lockstep_book(&variant_domain, &variant_book, &candidate);
+                compared += 1;
+            }
+        }
+    }
+
+    let mut overlap_book = BookV1::empty();
+    overlap_book.len = 3;
+    overlap_book.orders[0] = single_with_obligation(1, 0, 0, Side::Buy, 3, 1, PartialPolicy::Allow);
+    overlap_book.orders[1] =
+        single_with_obligation(2, 0, 0, Side::Sell, 2, 1, PartialPolicy::Allow);
+    overlap_book.orders[2] =
+        single_with_obligation(3, 1, 0, Side::Sell, 2, 1, PartialPolicy::Allow);
+    for self_cross in [
+        SelfCrossPolicyV1::RefuseOverlap,
+        SelfCrossPolicyV1::NetAtAdmission,
+        SelfCrossPolicyV1::AllowGateAtPairing,
+    ] {
+        let mut overlap_domain = domain(self_cross);
+        overlap_domain.owner_count = 2;
+        let candidate = canonical_candidate(&overlap_domain, &overlap_book, &midpoint, 0, 0)
+            .unwrap_or_else(|_| CandidateV1::empty(3, midpoint));
+        drive_lockstep_book(&overlap_domain, &overlap_book, &candidate);
+        compared += 1;
+    }
+
+    let mut fee_domain = domain(SelfCrossPolicyV1::AllowGateAtPairing);
+    fee_domain.owner_count = 2;
+    fee_domain.policy.fee_base = TEST_COMPOSITE_LAB;
+    fee_domain.policy.rounding = RoundingBoundaryV1::ReceiptFloor;
+    let mut fee_book = BookV1::empty();
+    fee_book.len = 2;
+    fee_book.orders[0] =
+        single_with_obligation(1, 0, 0, Side::Buy, 40_000, 1, PartialPolicy::Allow);
+    fee_book.orders[1] =
+        single_with_obligation(2, 1, 0, Side::Sell, 40_000, 1, PartialPolicy::Allow);
+    let fee_candidate = canonical_candidate(&fee_domain, &fee_book, &midpoint, 0, 0).unwrap();
+    let fee_summary = super::relation_v1::verify(&fee_domain, &fee_book, &fee_candidate, None)
+        .expect("fee fixture must accept");
+    assert!(fee_summary.fee_price_units > 0);
+    drive_lockstep_book(&fee_domain, &fee_book, &fee_candidate);
+    for mutation in candidate_mutations(&fee_candidate) {
+        drive_lockstep_book(&fee_domain, &fee_book, &mutation);
+        compared += 1;
+    }
+
+    assert_eq!(compared, 32, "policy corpus moved; re-audit it");
 }
 
 #[test]
