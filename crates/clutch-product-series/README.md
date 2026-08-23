@@ -1,0 +1,164 @@
+# Product and Series pure core
+
+`clutch-product-series` is the registry-independent, allocation-free semantic
+core for recurring Dragon's Clutch products. It freezes typed content
+identities, exact product/Series joins, absolute window and evidence-only repair
+arithmetic, and component-by-component funding projections. It has no account
+tags, instruction intents, Solana SDK, Token-2022, oracle SDK, CPI, account
+memory, allocator, floats, or caller-selected market nonce.
+
+The crucial identity split is:
+
+```text
+MarketInstanceId = H(TemplateId, MarketGenesisProfileId, start, cap)
+
+SeriesAttachmentPlanId = H(FundingQuoteId, LiquidityPlanId, WrapperSetId)
+SeriesPlanId           = H(TemplateId, GenesisProfileId, AttachmentPlanId,
+                           finite recurrence, cap)
+SeriesFundingTermsId   = H(SeriesPlanId, refund/sink/mint/token identities)
+```
+
+Work price, liquidity, wrappers, funding sponsor, and refund destinations do
+not fork an economically identical market. Changing the Template, immutable
+Realm/profile venue semantics, absolute start, or collateral cap does.
+
+## Canonical rules
+
+All integers are little-endian. Decode requires the exact named byte length;
+reserved bytes are zero; fixed arrays use an active prefix and exact canonical
+padding; required identities are nonzero. A typed identity is:
+
+```text
+SHA256(exact ASCII domain || exact canonical body)
+```
+
+There is no delimiter byte and no length prefix because both the domain and
+body width are frozen by the typed codec. Registry-owned semantic values remain
+opaque nonzero inputs. This crate allocates no global registry values.
+
+### `NativeClaimBasisV1` — 2,352 bytes
+
+Domain: `dragons-clutch/native-claim-basis/v1`
+
+| Range | Field |
+|---:|---|
+| `0..8` | `DCBASIS1` |
+| `8..10` | schema `1` |
+| `10..18` | degree, outcome count, payout count, knot count, spacing, ambiguity, edge, zero flags |
+| `18..24` | reserved zero |
+| `24..32` | common denominator |
+| `32..2080` | `[16][16]u64` payout weights |
+| `2080..2096` | degree-zero payout map / `0xff` unused entries |
+| `2096..2352` | `[16]u128` knots |
+
+This artifact is the sole partition/basis/payout owner. It contains no failure
+policy, failure payout index, or privileged payout vector. Every active payout
+row is merely one vector the authenticated evidence relation may select.
+
+### `EvidenceOnlyRecoveryPolicyV1` — 208 bytes
+
+Domain: `dragons-clutch/evidence-only-recovery-policy/v1`
+
+| Range | Field |
+|---:|---|
+| `0..8` | `DCRECV1\0` |
+| `8..10` | schema `1` |
+| `10..11` | attempt count |
+| `11..16` | zero flags/reserved |
+| `16..208` | eight 24-byte attempts |
+
+Each attempt is generation delta `u32`, reserved `u32`, open offset `u64`, and
+exclusive close offset `u64`, all relative to primary maturity. Active attempts
+are finite, generation-nondecreasing, ordered, and non-overlapping. The raw
+economic window never shifts; later attempts change authenticated repair
+generation and deadline only. Exhaustion can lead to dormant recovery, never a
+numeric payout.
+
+### `ProductTemplateV4` — 256 bytes
+
+Domain: `dragons-clutch/product-template/v4`
+
+| Range | Field |
+|---:|---|
+| `0..8` | `DCTMPLV4` |
+| `8..16` | schema, statistic, coverage policy, zero flags |
+| `16..48` | SourcePlane contract/release ID |
+| `48..80` | SourceSpec ID |
+| `80..112` | SummaryProgram ID |
+| `112..144` | NativeClaimBasis ID |
+| `144..176` | EvidenceOnlyRecoveryPolicy ID |
+| `176..208` | compiler/relation release ID |
+| `208..216` | primary window span |
+| `216..224` | primary maturity grace |
+| `224..232` | base repair generation |
+| `232..240` | coverage parameter |
+| `240..256` | reserved zero |
+
+### `MarketGenesisProfileV1` — 352 bytes
+
+Domain: `dragons-clutch/market-genesis-profile/v1`
+
+| Range | Field |
+|---:|---|
+| `0..8` | `DCMGPV1\0` |
+| `8..12` | schema and registry-owned terminal disposition |
+| `12..16` | reserved zero |
+| `16..336` | Realm, Profile, PriceGrid, fee, relation, score, candidate lifecycle, candidate liveness, retirement, capability-profile IDs |
+| `336..344` | native bearer lot |
+| `344..352` | reserved zero |
+
+The live join supplies the central registry's exact `BURN` disposition value
+and proves equality. The core also requires the basis denominator to divide the
+bearer lot. It does not allocate the `BURN` registry value itself.
+
+### Remaining exact bodies
+
+| Type | Bytes and offsets | Domain |
+|---|---|---|
+| `MarketInstancePreimageV1` | 88: magic `0..8`, Template ID `8..40`, GenesisProfile ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v1` |
+| `SeriesAttachmentPlanV1` | 112: 16-byte header, FundingQuote ID `16..48`, LiquidityFacilityPlan ID `48..80`, WrapperRecipeSet ID `80..112` | `dragons-clutch/series-attachment-plan/v1` |
+| `SeriesPlanV4` | 152: 16-byte header, Template/Genesis/Attachment IDs `16..112`, first start `112..120`, stride `120..128`, count `128..132`, reserved `132..136`, lead `136..144`, cap `144..152` | `dragons-clutch/series-plan/v4` |
+| `SeriesFundingTermsV1` | 208: 16-byte header, Series ID `16..48`, lamport refund `48..80`, collateral refund token account `80..112`, neutral sink `112..144`, collateral mint `144..176`, token program `176..208` | `dragons-clutch/series-funding-terms/v1` |
+
+## Pure compilation and funding
+
+`compile_ordinal` authenticates every supplied basis/recovery/Template/Genesis/
+Attachment/Series content join, validates the terminal `BURN` value and bearer
+lot, checks the final finite recovery deadline, and derives an absolute schedule
+and full-width MarketInstanceId. Series provenance and attachments remain next
+to the market result rather than entering its economic preimage.
+
+`SeriesFundingTermsV1::validate_bindings` additionally requires the exact
+GenesisProfile and the collateral mint/token-program projection returned by an
+adapter-authenticated immutable Realm/Profile collateral policy. It does not
+attempt to duplicate or interpret that collateral policy.
+
+`project_component_debits` accepts an adapter-authenticated FundingQuote view
+and exact `Absent`/`PresentExact` states. It projects independent market-core,
+recovery-reserve, source-work, liquidity, and wrapper debits with checked sums
+and segregated lamport/collateral balances. A mismatch is never a status. Market
+core and mandatory recovery state must be created or reused together.
+
+The quote artifact remains the semantic owner of amounts; this crate does not
+persist a parallel quote DTO. Applying the projection atomically, proving
+account absence or exact existence, preserving payer/donation ownership, and
+moving real lamports/tokens are adapter obligations.
+
+## Compatibility refusal and evidence
+
+The legacy `DCTMPLV3` and `DCPAYTV3` magics return
+`LegacyNumericFallback`. A current V3 Template/Payout body cannot be padded,
+reinterpreted, or relabeled into these successor semantics.
+
+Golden digests are frozen in `vectors/product-series-v1.json` and independently
+asserted byte-for-byte by the adversarial integration test.
+
+```text
+cargo test --manifest-path crates/clutch-product-series/Cargo.toml --offline --locked --release
+cargo clippy --manifest-path crates/clutch-product-series/Cargo.toml --offline --locked --all-targets -- -D warnings
+cargo doc --manifest-path crates/clutch-product-series/Cargo.toml --offline --locked --no-deps
+```
+
+Passing these tests is pure-core evidence only. There is no SBF route, account
+codec, deployment, Token-2022 CPI, source authentication, or local-validator
+claim in this crate.

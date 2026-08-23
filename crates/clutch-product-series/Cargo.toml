@@ -1,0 +1,16 @@
+[package]
+name = "clutch-product-series"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Allocation-free recurring product and Series identity core"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+sha2 = { version = "=0.10.9", default-features = false }
