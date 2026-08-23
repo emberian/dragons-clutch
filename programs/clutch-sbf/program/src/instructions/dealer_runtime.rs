@@ -294,7 +294,7 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::BindEpoch
             | DealerFacilityAction::LapseEpoch
             | DealerFacilityAction::SelectLeaseAndBegin => 16,
-            DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 4,
+            DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 24,
             DealerFacilityAction::QueueExit => 16,
             DealerFacilityAction::Claim | DealerFacilityAction::Retire => 8,
             _ => 0,
@@ -394,7 +394,22 @@ impl DealerRuntimePayloadV1 {
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => {
                 value.row_start = read_u16(input, 16);
                 value.row_count = read_u16(input, 18);
-                if value.row_count == 0 {
+                value.book_page_count = input[20];
+                if input[21..24].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.liveness_call_ordinal = read_u32(input, 24);
+                if input[28..32].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 32);
+                // One Reservation/Position/Replay incarnation is mutated per
+                // instruction.  Batching rows would require a second trusted
+                // delimiter and permit owner-crossing partial writes.
+                if value.row_count != 1
+                    || !(1..=4).contains(&value.book_page_count)
+                    || value.liveness_call_ordinal == 0
+                {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
                 }
             }
@@ -530,6 +545,12 @@ pub enum DealerMetaRoleV1 {
     NewPage,
     /// Ordinary LP PositionV3.
     LpPosition,
+    /// Ordinary owner PositionV3 participating in one settlement row.
+    GeneralPosition,
+    /// Canonical General-purpose Replay V3 for the row Position.
+    GeneralReplay,
+    /// Canonical rent-owned General Reservation V9 for the row.
+    Reservation,
     /// Sponsor funding PositionV3.
     SponsorPosition,
     /// Immutable sponsor refund-recipient identity.
@@ -867,6 +888,47 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
 
+const COLLECT_DELIVER_FIXED_COUNT: usize = 33;
+const COLLECT_DELIVER: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, false),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::CoveredSelection, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::Lease, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SettlementPot, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::SettlementRoot, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::SelectedFeed, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::EconomicDomain, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::Reservation, DealerMetaOwnerV1::GeneralV2Runtime, false, true),
+    meta(DealerMetaRoleV1::GeneralPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::GeneralReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::MarketBinding, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::PriceGrid, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::MarketGenesis, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+];
+
 const CANCEL_FUNDING: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1135,6 +1197,10 @@ pub fn meta_contract_v1(
             &SELECT_LEASE_BEGIN
                 [..SELECT_LEASE_BEGIN_FIXED_COUNT + usize::from(payload.book_page_count)],
         ),
+        DealerFacilityAction::Collect | DealerFacilityAction::Deliver => Some(
+            &COLLECT_DELIVER
+                [..COLLECT_DELIVER_FIXED_COUNT + usize::from(payload.book_page_count)],
+        ),
         DealerFacilityAction::SponsorHalt => Some(SPONSOR_HALT),
         DealerFacilityAction::TimedClose => Some(TIMED_CLOSE),
         DealerFacilityAction::QueueExit
@@ -1257,8 +1323,6 @@ const fn recipient_alias_allowed_v1(left: DealerMetaRoleV1, right: DealerMetaRol
 pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Refusal> {
     match action {
         DealerFacilityAction::SelectLeaseAndBegin
-        | DealerFacilityAction::Collect
-        | DealerFacilityAction::Deliver
         | DealerFacilityAction::FinalizeSettlement
         | DealerFacilityAction::AbortBeforeCollection
         | DealerFacilityAction::QueueExit
@@ -1278,7 +1342,9 @@ pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Ref
         | DealerFacilityAction::CancelFunding
         | DealerFacilityAction::RefundCancelledSponsor
         | DealerFacilityAction::BindEpoch
-        | DealerFacilityAction::LapseEpoch => {
+        | DealerFacilityAction::LapseEpoch
+        | DealerFacilityAction::Collect
+        | DealerFacilityAction::Deliver => {
             Err(ClutchError::UnsupportedInstruction.into())
         }
     }
