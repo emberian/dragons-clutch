@@ -304,6 +304,62 @@ pub(super) fn create_full_principal_pda<'a>(
     Ok((principal, donation))
 }
 
+/// Debit an exact independently computed rent delta into an existing
+/// program-owned account and only then enlarge its data. Existing surplus is
+/// never treated as funding for the successor schema.
+pub(super) fn fund_and_resize_program_account<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    payer_debit: u64,
+    expected_old_space: usize,
+    new_space: usize,
+) -> Outcome<()> {
+    require_signer(payer)?;
+    require(payer.is_writable, ClutchError::NotWritable)?;
+    require_system_program(system_program)?;
+    require(
+        target.owner == program_id
+            && target.is_writable
+            && !target.executable
+            && !target.is_signer
+            && target.data_len() == expected_old_space
+            && new_space > expected_old_space
+            && new_space - expected_old_space <= MAX_PERMITTED_DATA_INCREASE
+            && payer_debit != 0,
+        ClutchError::AccountCreationFailed,
+    )?;
+    let balance_after = target
+        .lamports()
+        .checked_add(payer_debit)
+        .ok_or(ClutchError::Arithmetic)?;
+    let transfer = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &transfer_data(payer_debit),
+        vec![
+            AccountMeta::new(*payer.key, true),
+            AccountMeta::new(*target.key, false),
+        ],
+    );
+    invoke(
+        &transfer,
+        &[payer.clone(), target.clone(), system_program.clone()],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.lamports() == balance_after,
+        ClutchError::AccountCreationFailed,
+    )?;
+    target
+        .resize(new_space)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.data_len() == new_space && target.owner == program_id,
+        ClutchError::AccountCreationFailed,
+    )
+}
+
 /// Allocate one predictable program account while debiting the named payer by
 /// the exact independently checked principal. Existing lamports remain a
 /// donation in the account and never discount that debit.
