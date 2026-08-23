@@ -42,7 +42,7 @@ pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 160;
 /// Exact action-39 counted-root initialization selector bytes.
 pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES: usize = 64;
 /// Exact action-40 merge-payment selector bytes.
-pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 64;
+pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 96;
 /// Exact action-41 zero-fill Reservation-release selector bytes.
 pub const RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES: usize = 64;
 /// Exact action-42 coefficient-portfolio pair selector bytes.
@@ -748,24 +748,37 @@ impl InitializeSettlementRootPayloadV1 {
 ///
 /// The payment transition identity is derived from the authenticated Receipt
 /// V5 PDA and exact payment-pending prestate; no replay ID is caller-owned.
+/// Fee-bearing settlement requires a zero stable-evidence selector and derives
+/// durable evidence from the authenticated owner-fee finalization account.
+/// Zero-fee settlement requires a nonzero stable-evidence selector: the first
+/// payment compares it to the action-38 derivation, while every later payment
+/// authenticates it by recomputing the preceding canonical GEN1 action-40
+/// delta. The strict SBF composer owns that disjoint branch check.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeMergeReceiptPaymentPayloadV1 {
     /// Counted parent Epoch PDA.
     pub epoch: Id32,
     /// Exact payment-pending merge Receipt V5 PDA.
     pub receipt: Id32,
+    /// Zero for fee-bearing settlement; stable action-38 evidence for zero-fee settlement.
+    pub stable_zero_fee_finalization_evidence_id: Id32,
 }
 
 impl FinalizeMergeReceiptPaymentPayloadV1 {
-    /// Decode exactly 64 hostile selector bytes.
+    /// Decode exactly 96 hostile selector bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
+            stable_zero_fee_finalization_evidence_id: Id32::from_bytes(reader.array()?),
         };
         reader.finish()?;
-        if value.epoch == value.receipt {
+        if value.epoch == value.receipt
+            || (!value.stable_zero_fee_finalization_evidence_id.is_zero()
+                && (value.stable_zero_fee_finalization_evidence_id == value.epoch
+                    || value.stable_zero_fee_finalization_evidence_id == value.receipt))
+        {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(value)
@@ -1187,6 +1200,40 @@ mod tests {
         selector[2 * ID_BYTES..3 * ID_BYTES].copy_from_slice(&live(2));
         assert_eq!(
             decode_portfolio_settlement_payload_v1(42, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn action40_selector_is_strict_and_keeps_fee_branches_disjoint() {
+        let mut selector = [0u8; FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES];
+        selector[..ID_BYTES].copy_from_slice(&live(1));
+        selector[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
+
+        let fee_bearing = FinalizeMergeReceiptPaymentPayloadV1::decode(&selector).unwrap();
+        assert!(fee_bearing
+            .stable_zero_fee_finalization_evidence_id
+            .is_zero());
+
+        selector[2 * ID_BYTES..3 * ID_BYTES].copy_from_slice(&live(3));
+        let zero_fee = FinalizeMergeReceiptPaymentPayloadV1::decode(&selector).unwrap();
+        assert_eq!(
+            zero_fee.stable_zero_fee_finalization_evidence_id,
+            Id32::from_bytes(live(3))
+        );
+        assert_eq!(
+            FinalizeMergeReceiptPaymentPayloadV1::decode(&selector[..95]),
+            Err(CodecError::WrongLength)
+        );
+
+        selector[2 * ID_BYTES..3 * ID_BYTES].copy_from_slice(&live(2));
+        assert_eq!(
+            FinalizeMergeReceiptPaymentPayloadV1::decode(&selector),
+            Err(CodecError::MismatchedBinding)
+        );
+        selector[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(1));
+        assert_eq!(
+            FinalizeMergeReceiptPaymentPayloadV1::decode(&selector),
             Err(CodecError::MismatchedBinding)
         );
     }
