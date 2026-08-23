@@ -23,6 +23,8 @@ use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
+use super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5;
+
 /// SettlementRoot, retained Feed, and writable V5 receipt.
 pub const RECEIPT_V5_AUTH_ACCOUNT_COUNT: usize = 3;
 /// Counted SettlementRoot; read-only or writable as fixed by the action.
@@ -109,6 +111,7 @@ fn require_program_state(
 ) -> Outcome<()> {
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
     require(
         account.is_writable == writable,
         if writable {
@@ -243,6 +246,87 @@ fn authenticate_general_receipt_v5_inner(
     })
 }
 
+/// Authenticate one writable ReceiptV5 against the already authenticated
+/// read-only SettlementRoot and exhaustive shared traversal.
+///
+/// This is the sole action-26/portfolio-neutral bridge. It does not accept raw
+/// root, Feed, candidate, price, or page facts and performs no mutation.
+pub fn authenticate_general_receipt_v5_root_traversal(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_>,
+    receipt_account_info: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedGeneralReceiptV5> {
+    require_program_state(
+        program_id,
+        receipt_account_info,
+        true,
+        Some(SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5),
+    )?;
+    let authenticated_root = authenticated.root();
+    let authenticated_traversal = authenticated.traversal();
+    let root = *authenticated_root.root();
+    let root_account = authenticated_root.account();
+    let retained_feed_account = authenticated_traversal.feed_account();
+    let feed = authenticated_traversal.feed();
+    let traversal = authenticated_traversal.traversal();
+    let receipt_account = id(receipt_account_info.key);
+    require(
+        receipt_account != root_account && receipt_account != retained_feed_account,
+        ClutchError::AccountAlias,
+    )?;
+    let receipt_data = borrow_data(receipt_account_info)?;
+    let (receipt, evidence) = project_settlement_receipt_evidence_v5(
+        LayoutHash32::new(receipt_account.bytes())?,
+        &receipt_data,
+    )?;
+    let semantic = receipt.semantic();
+    let receipt_pda = seeds::general_v2_receipt_v5_pda(
+        program_id,
+        &root.epoch().bytes(),
+        &root.settlement_candidate_id().bytes(),
+        semantic.slice_index,
+    );
+    require(
+        *receipt_account_info.key == receipt_pda.0 && semantic.stored_bump == receipt_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let counts = root.counts();
+    require(
+        root.phase() == contract::SettlementRootPhaseV1::Settling
+            && root.retained_feed_state() == contract::SettlementRootChildStateV1::Live
+            && root.retained_feed() == retained_feed_account
+            && feed.epoch == root.epoch()
+            && feed.epoch_generation == root.epoch_generation()
+            && feed.market == root.market()
+            && feed.node == root.source_admission_node()
+            && feed.order_set == root.order_set()
+            && feed.settlement_candidate_id == root.settlement_candidate_id()
+            && feed.settlement_witness_digest == root.settlement_witness_digest()
+            && feed.outcome_count == root.outcome_count()
+            && feed.slice_count == counts.expected_receipts
+            && counts.admitted_receipts == counts.expected_receipts
+            && counts.live_receipts > 0
+            && receipt.transition() == SettlementReceiptTransitionCommitmentV5::None
+            && semantic.epoch.0 == root.epoch().bytes()
+            && semantic.market.0 == root.market().bytes()
+            && semantic.candidate.0 == root.settlement_candidate_id().bytes()
+            && semantic.slice_index < counts.admitted_receipts
+            && traversal.settlement_slice(semantic.slice_index).is_some()
+            && semantic.outcome < feed.outcome_count
+            && traversal.outcome_price(semantic.outcome) == Some(semantic.price),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedGeneralReceiptV5 {
+        settlement_root_account: root_account,
+        retained_feed_account,
+        receipt_account,
+        root,
+        feed,
+        receipt,
+        evidence,
+    })
+}
+
 /// Authenticate an existing V5 receipt for an action that does not mutate root.
 pub fn authenticate_general_receipt_v5_readonly_root(
     program_id: &Pubkey,
@@ -268,6 +352,7 @@ mod tests {
         owner: Pubkey,
         lamports: u64,
         data: Vec<u8>,
+        signer: bool,
         writable: bool,
         executable: bool,
     }
@@ -279,6 +364,7 @@ mod tests {
                 owner: program_id,
                 lamports: 1,
                 data: vec![0; len],
+                signer: false,
                 writable,
                 executable: false,
             }
@@ -287,7 +373,7 @@ mod tests {
         fn info(&mut self) -> AccountInfo<'_> {
             AccountInfo::new(
                 &self.key,
-                false,
+                self.signer,
                 self.writable,
                 &mut self.lamports,
                 &mut self.data,
@@ -327,6 +413,13 @@ mod tests {
         assert_eq!(
             require_program_state(&program_id, &writable.info(), true, Some(7)),
             Err(ClutchError::WrongDataLength.into())
+        );
+
+        let mut signer = Cell::program_owned(program_id, false, 8);
+        signer.signer = true;
+        assert_eq!(
+            require_program_state(&program_id, &signer.info(), false, Some(8)),
+            Err(ClutchError::MismatchedState.into())
         );
     }
 }
