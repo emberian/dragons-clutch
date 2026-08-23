@@ -27,6 +27,11 @@ pub use clutch_product_series::{
 
 /// Fixed width of every non-artifact semantic identity.
 pub const IDENTITY_BYTES: usize = 32;
+/// Exact canonical width of one persisted recovery state.
+pub const RECOVERY_STATE_V2_BYTES: usize = 1_016;
+
+const RECOVERY_STATE_V2_MAGIC: [u8; 8] = *b"DCRECST2";
+const RECOVERY_STATE_V2_SCHEMA: u16 = 2;
 
 /// Recovery transition result.
 pub type Result<T> = core::result::Result<T, RecoveryError>;
@@ -154,6 +159,16 @@ pub enum ReserveDisposition {
 /// Deterministic refusal from the pure runtime projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecoveryError {
+    /// A persisted recovery state was not the one exact canonical width.
+    WrongLength,
+    /// A persisted recovery state used another discriminator.
+    BadMagic,
+    /// A persisted recovery state used another schema version.
+    BadVersion,
+    /// Reserved persisted bytes were nonzero.
+    NonCanonicalReserved,
+    /// A persisted enum discriminant was unknown.
+    InvalidEnum,
     /// A required identity is zero.
     ZeroIdentity,
     /// A generation is zero.
@@ -593,6 +608,188 @@ impl RecoveryState {
         self.schedule
     }
 
+    /// Encode the complete canonical recovery state for a persisted adapter.
+    ///
+    /// The codec remains owned here so an account adapter cannot create a
+    /// parallel mutable budget or phase truth.
+    pub fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.check()?;
+        let mut writer = StateWriter::new(output)?;
+        writer.bytes(&RECOVERY_STATE_V2_MAGIC)?;
+        writer.u16(RECOVERY_STATE_V2_SCHEMA)?;
+        writer.u8(match self.market_identity {
+            RecoveryMarketIdentity::Legacy(_) => 1,
+            RecoveryMarketIdentity::Successor(_) => 2,
+        })?;
+        writer.u8(self.phase as u8)?;
+        writer.u8(self.reserve_disposition as u8)?;
+        writer.u8(self.next_attempt_index)?;
+        writer.reserved(2)?;
+        writer.bytes(&match self.market_identity {
+            RecoveryMarketIdentity::Legacy(id) => id.bytes(),
+            RecoveryMarketIdentity::Successor(id) => id.bytes(),
+        })?;
+        writer.u64(self.schedule.start_bucket)?;
+        writer.u64(self.schedule.end_bucket_exclusive)?;
+        writer.u64(self.schedule.primary_maturity_bucket_exclusive)?;
+        writer.u8(self.schedule.recovery_attempt_count)?;
+        writer.reserved(7)?;
+        for attempt in self.schedule.recovery_attempts {
+            writer.u64(attempt.repair_generation)?;
+            writer.u64(attempt.opens_at_bucket)?;
+            writer.u64(attempt.closes_at_bucket)?;
+        }
+        writer.bytes(&self.series_funding_quote_id.bytes())?;
+        let mut quote = [0; clutch_product_series::SERIES_FUNDING_QUOTE_BYTES];
+        clutch_product_series::FixedCodec::encode_into(&self.funding_quote, &mut quote)
+            .map_err(map_funding_quote_error)?;
+        writer.bytes(&quote)?;
+        for identity in [
+            self.state_id,
+            self.work_funder,
+            self.rent_payer,
+            self.neutral_sink,
+            self.resolution_evidence_id,
+        ] {
+            writer.bytes(&identity.bytes())?;
+        }
+        writer.u64(self.generation)?;
+        writer.u64(self.transition_nonce)?;
+        writer.u64(self.last_clock.slot)?;
+        writer.i64(self.last_clock.unix_timestamp)?;
+        writer.u64(self.last_clock.current_bucket)?;
+        for progress in self.accepted_progress_units {
+            writer.u64(progress)?;
+        }
+        writer.bytes(&self.active_work.work_id.bytes())?;
+        writer.bytes(&self.active_work.reward_recipient.bytes())?;
+        writer.u8(self.active_work.attempt_index)?;
+        writer.reserved(7)?;
+        for value in [
+            self.work_initial,
+            self.work_remaining,
+            self.accepted_progress_paid,
+            self.success_refunded,
+            self.dormancy_neutralized,
+            self.rent_initial,
+            self.rent_remaining,
+            self.rent_refunded,
+        ] {
+            writer.u64(value)?;
+        }
+        writer.u128(self.donations_received)?;
+        writer.u128(self.donations_remaining)?;
+        writer.u128(self.donations_neutralized)?;
+        writer.finish()
+    }
+
+    /// Decode and fully validate one complete canonical persisted state.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = StateReader::new(input)?;
+        if reader.bytes::<8>()? != RECOVERY_STATE_V2_MAGIC {
+            return Err(RecoveryError::BadMagic);
+        }
+        if reader.u16()? != RECOVERY_STATE_V2_SCHEMA {
+            return Err(RecoveryError::BadVersion);
+        }
+        let market_kind = reader.u8()?;
+        let phase = decode_phase(reader.u8()?)?;
+        let reserve_disposition = decode_disposition(reader.u8()?)?;
+        let next_attempt_index = reader.u8()?;
+        reader.reserved(2)?;
+        let market_bytes = reader.bytes::<IDENTITY_BYTES>()?;
+        let market_identity = match market_kind {
+            1 => RecoveryMarketIdentity::Legacy(MarketInstanceId::from_bytes(market_bytes)),
+            2 => RecoveryMarketIdentity::Successor(MarketInstanceV2Id::from_bytes(market_bytes)),
+            _ => return Err(RecoveryError::InvalidEnum),
+        };
+        let start_bucket = reader.u64()?;
+        let end_bucket_exclusive = reader.u64()?;
+        let primary_maturity_bucket_exclusive = reader.u64()?;
+        let recovery_attempt_count = reader.u8()?;
+        reader.reserved(7)?;
+        let mut recovery_attempts = [AbsoluteRecoveryAttemptV1::ZERO; MAX_RECOVERY_ATTEMPTS];
+        let mut attempt_index = 0_usize;
+        while attempt_index < MAX_RECOVERY_ATTEMPTS {
+            recovery_attempts[attempt_index] = AbsoluteRecoveryAttemptV1 {
+                repair_generation: reader.u64()?,
+                opens_at_bucket: reader.u64()?,
+                closes_at_bucket: reader.u64()?,
+            };
+            attempt_index += 1;
+        }
+        let schedule = CompiledScheduleV1 {
+            start_bucket,
+            end_bucket_exclusive,
+            primary_maturity_bucket_exclusive,
+            recovery_attempt_count,
+            recovery_attempts,
+        };
+        let series_funding_quote_id = SeriesFundingQuoteId::from_bytes(reader.bytes()?);
+        let quote = reader.bytes::<{ clutch_product_series::SERIES_FUNDING_QUOTE_BYTES }>()?;
+        let funding_quote = <SeriesFundingQuoteV1 as clutch_product_series::FixedCodec>::decode(
+            &quote,
+        )
+        .map_err(map_funding_quote_error)?;
+        let state_id = Identity::from_bytes(reader.bytes()?);
+        let work_funder = Identity::from_bytes(reader.bytes()?);
+        let rent_payer = Identity::from_bytes(reader.bytes()?);
+        let neutral_sink = Identity::from_bytes(reader.bytes()?);
+        let resolution_evidence_id = Identity::from_bytes(reader.bytes()?);
+        let generation = reader.u64()?;
+        let transition_nonce = reader.u64()?;
+        let last_clock = RecoveryClock {
+            slot: reader.u64()?,
+            unix_timestamp: reader.i64()?,
+            current_bucket: reader.u64()?,
+        };
+        let mut accepted_progress_units = [0; MAX_RECOVERY_ATTEMPTS];
+        let mut progress_index = 0_usize;
+        while progress_index < MAX_RECOVERY_ATTEMPTS {
+            accepted_progress_units[progress_index] = reader.u64()?;
+            progress_index += 1;
+        }
+        let active_work = ActiveWork {
+            work_id: Identity::from_bytes(reader.bytes()?),
+            reward_recipient: Identity::from_bytes(reader.bytes()?),
+            attempt_index: reader.u8()?,
+        };
+        reader.reserved(7)?;
+        let state = Self {
+            market_identity,
+            schedule,
+            series_funding_quote_id,
+            funding_quote,
+            state_id,
+            generation,
+            work_funder,
+            rent_payer,
+            neutral_sink,
+            resolution_evidence_id,
+            phase,
+            reserve_disposition,
+            transition_nonce,
+            last_clock,
+            next_attempt_index,
+            accepted_progress_units,
+            active_work,
+            work_initial: reader.u64()?,
+            work_remaining: reader.u64()?,
+            accepted_progress_paid: reader.u64()?,
+            success_refunded: reader.u64()?,
+            dormancy_neutralized: reader.u64()?,
+            rent_initial: reader.u64()?,
+            rent_remaining: reader.u64()?,
+            rent_refunded: reader.u64()?,
+            donations_received: reader.u128()?,
+            donations_remaining: reader.u128()?,
+            donations_neutralized: reader.u128()?,
+        };
+        reader.finish()?;
+        state.check()?;
+        Ok(state)
+    }
+
     /// Adapter-authenticated generation binding.
     ///
     /// Freshness and nonreuse remain adapter/tombstone obligations.
@@ -644,6 +841,16 @@ impl RecoveryState {
             return Err(RecoveryError::ProjectionMismatch);
         }
         Ok(self.accepted_progress_units[index])
+    }
+
+    /// Exact FundingQuote row for one active compiled attempt.
+    pub fn attempt_funding(&self, attempt_index: u8) -> Result<RecoveryAttemptFundingV1> {
+        self.check()?;
+        let index = usize::from(attempt_index);
+        if index >= usize::from(self.schedule.recovery_attempt_count) {
+            return Err(RecoveryError::ProjectionMismatch);
+        }
+        Ok(self.funding_quote.recovery_attempt_funding[index])
     }
 
     /// Active Work identity, if any.
@@ -1389,6 +1596,167 @@ fn require_live(identity: Identity) -> Result<()> {
         Err(RecoveryError::ZeroIdentity)
     } else {
         Ok(())
+    }
+}
+
+fn decode_phase(value: u8) -> Result<RecoveryPhase> {
+    match value {
+        0 => Ok(RecoveryPhase::Active),
+        1 => Ok(RecoveryPhase::DegradedRecoverable),
+        2 => Ok(RecoveryPhase::RecoveryDormant),
+        3 => Ok(RecoveryPhase::Resolved),
+        _ => Err(RecoveryError::InvalidEnum),
+    }
+}
+
+fn decode_disposition(value: u8) -> Result<ReserveDisposition> {
+    match value {
+        0 => Ok(ReserveDisposition::Open),
+        1 => Ok(ReserveDisposition::Success),
+        2 => Ok(ReserveDisposition::Dormancy),
+        _ => Err(RecoveryError::InvalidEnum),
+    }
+}
+
+struct StateWriter<'a> {
+    output: &'a mut [u8],
+    at: usize,
+}
+
+impl<'a> StateWriter<'a> {
+    fn new(output: &'a mut [u8]) -> Result<Self> {
+        if output.len() != RECOVERY_STATE_V2_BYTES {
+            return Err(RecoveryError::WrongLength);
+        }
+        output.fill(0);
+        Ok(Self { output, at: 0 })
+    }
+
+    fn bytes(&mut self, value: &[u8]) -> Result<()> {
+        let end = self
+            .at
+            .checked_add(value.len())
+            .ok_or(RecoveryError::ArithmeticOverflow)?;
+        let target = self
+            .output
+            .get_mut(self.at..end)
+            .ok_or(RecoveryError::WrongLength)?;
+        target.copy_from_slice(value);
+        self.at = end;
+        Ok(())
+    }
+
+    fn u8(&mut self, value: u8) -> Result<()> {
+        self.bytes(&[value])
+    }
+
+    fn u16(&mut self, value: u16) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn u64(&mut self, value: u64) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn i64(&mut self, value: i64) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn u128(&mut self, value: u128) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn reserved(&mut self, count: usize) -> Result<()> {
+        let end = self
+            .at
+            .checked_add(count)
+            .ok_or(RecoveryError::ArithmeticOverflow)?;
+        if end > self.output.len() {
+            return Err(RecoveryError::WrongLength);
+        }
+        self.at = end;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.at == RECOVERY_STATE_V2_BYTES {
+            Ok(())
+        } else {
+            Err(RecoveryError::WrongLength)
+        }
+    }
+}
+
+struct StateReader<'a> {
+    input: &'a [u8],
+    at: usize,
+}
+
+impl<'a> StateReader<'a> {
+    fn new(input: &'a [u8]) -> Result<Self> {
+        if input.len() != RECOVERY_STATE_V2_BYTES {
+            return Err(RecoveryError::WrongLength);
+        }
+        Ok(Self { input, at: 0 })
+    }
+
+    fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let end = self
+            .at
+            .checked_add(N)
+            .ok_or(RecoveryError::ArithmeticOverflow)?;
+        let source = self
+            .input
+            .get(self.at..end)
+            .ok_or(RecoveryError::WrongLength)?;
+        let mut value = [0; N];
+        value.copy_from_slice(source);
+        self.at = end;
+        Ok(value)
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.bytes::<1>()?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.bytes()?))
+    }
+
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.bytes()?))
+    }
+
+    fn i64(&mut self) -> Result<i64> {
+        Ok(i64::from_le_bytes(self.bytes()?))
+    }
+
+    fn u128(&mut self) -> Result<u128> {
+        Ok(u128::from_le_bytes(self.bytes()?))
+    }
+
+    fn reserved(&mut self, count: usize) -> Result<()> {
+        let end = self
+            .at
+            .checked_add(count)
+            .ok_or(RecoveryError::ArithmeticOverflow)?;
+        let source = self
+            .input
+            .get(self.at..end)
+            .ok_or(RecoveryError::WrongLength)?;
+        if source.iter().any(|byte| *byte != 0) {
+            return Err(RecoveryError::NonCanonicalReserved);
+        }
+        self.at = end;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.at == RECOVERY_STATE_V2_BYTES {
+            Ok(())
+        } else {
+            Err(RecoveryError::WrongLength)
+        }
     }
 }
 

@@ -14,7 +14,7 @@
 use clutch_evidence_recovery::{
     EvidenceDecision, FundingObservation, Identity as RecoveryIdentity, RecoveryAdmission,
     RecoveryClock, RecoveryError, RecoveryLedger, RecoveryPhase, RecoveryState, TransferPlan,
-    TransitionPlan as RecoveryTransitionPlan,
+    TransitionPlan as RecoveryTransitionPlan, RECOVERY_STATE_V2_BYTES,
 };
 use clutch_product_series::{
     compile_ordinal_v2, CompiledOrdinalV2, EvidenceOnlyRecoveryPolicyId,
@@ -35,6 +35,11 @@ const ADMISSION_RECEIPT_DOMAIN: &[u8] = b"dragons-clutch/failure-admission-recei
 const TRIGGER_DOMAIN: &[u8] = b"dragons-clutch/failure-trigger/v1";
 const ACCEPTED_RESOLUTION_DOMAIN: &[u8] = b"dragons-clutch/failure-accepted-resolution/v1";
 const TERMINAL_JOIN_DOMAIN: &[u8] = b"dragons-clutch/failure-terminal-join/v1";
+const FAILURE_RUNTIME_MAGIC: [u8; 8] = *b"DCFAILR1";
+const FAILURE_RUNTIME_SCHEMA: u16 = 1;
+
+/// Exact canonical width of one persisted successor failure runtime.
+pub const FAILURE_RUNTIME_V1_BYTES: usize = 1_776;
 
 /// Result alias for the successor failure-policy join.
 pub type Result<T> = core::result::Result<T, Error>;
@@ -88,6 +93,16 @@ typed_id!(
 /// Deterministic refusal from the successor failure-policy composition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
+    /// A persisted failure runtime was not the one exact canonical width.
+    WrongLength,
+    /// A persisted failure runtime used another discriminator.
+    BadMagic,
+    /// A persisted failure runtime used another schema version.
+    BadVersion,
+    /// Reserved persisted bytes were nonzero.
+    NonCanonicalReserved,
+    /// A persisted enum discriminant was unknown.
+    InvalidEnum,
     /// A Product/Series semantic owner refused the supplied join.
     Product(clutch_product_series::Error),
     /// SourcePlane refused the supplied source/evaluator join.
@@ -444,6 +459,53 @@ pub struct RecoveryWorkJoinV1 {
     pub repair_generation: u64,
     /// Exact deterministic SourcePlane Window identity.
     pub window_id: SourceContentId,
+    /// Exact immutable FundingQuote identity pricing this attempt.
+    pub funding_quote_id: SeriesFundingQuoteId,
+    /// Exact cumulative progress cap for this attempt.
+    pub max_progress_units: u64,
+    /// Exact lamports paid per newly accepted progress unit.
+    pub lamports_per_progress_unit: u64,
+    /// Maximum additional lamports still payable at the current cursor.
+    pub maximum_remaining_lamports: u64,
+}
+
+/// Private-field join to one liveness-runtime accepted-work receipt.
+///
+/// A live adapter must authenticate the receipt under the liveness runtime
+/// before calling [`FailureRuntimeV1::join_liveness_work_receipt`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LivenessWorkReceiptJoinV1 {
+    work_receipt_id: [u8; 32],
+    binding_id: FailurePolicyBindingId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    attempt_index: u8,
+    window_id: SourceContentId,
+    accepted_progress_total: u64,
+    quote_schedule_id: [u8; 32],
+    scheduled_ceiling_lamports: u64,
+}
+
+impl LivenessWorkReceiptJoinV1 {
+    /// Exact authenticated liveness-runtime work receipt.
+    pub const fn work_receipt_id(&self) -> [u8; 32] {
+        self.work_receipt_id
+    }
+
+    /// Exact cumulative accepted progress carried by the receipt.
+    pub const fn accepted_progress_total(&self) -> u64 {
+        self.accepted_progress_total
+    }
+
+    /// Exact liveness quote-schedule identity, equal to the FundingQuote ID.
+    pub const fn quote_schedule_id(&self) -> [u8; 32] {
+        self.quote_schedule_id
+    }
+
+    /// Exact authenticated per-call liveness ceiling.
+    pub const fn scheduled_ceiling_lamports(&self) -> u64 {
+        self.scheduled_ceiling_lamports
+    }
 }
 
 /// Private-field capability for an exact successful source result and relation record.
@@ -679,7 +741,136 @@ impl FailureRuntimeV1 {
         {
             return Err(Error::BindingMismatch);
         }
+        if let Some(trigger) = self.trigger {
+            self.validate_trigger(trigger)?;
+        }
         Ok(())
+    }
+
+    /// Encode the complete canonical runtime state into adapter-owned account data.
+    pub fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.check()?;
+        let mut writer = RuntimeWriter::new(output)?;
+        writer.bytes(&FAILURE_RUNTIME_MAGIC)?;
+        writer.u16(FAILURE_RUNTIME_SCHEMA)?;
+        writer.reserved(6)?;
+        writer.bytes(&self.binding.series_plan_id.bytes())?;
+        writer.u32(self.binding.ordinal)?;
+        writer.reserved(4)?;
+        writer.bytes(&self.binding.market_instance_id.bytes())?;
+        writer.bytes(&self.binding.product_template_id.bytes())?;
+        writer.bytes(&self.binding.recovery_policy_id.bytes())?;
+        writer.bytes(&self.binding.funding_quote_id.bytes())?;
+        writer.bytes(&self.binding.funding_terms_id.bytes())?;
+        writer.bytes(&self.binding.source_plane_program_id.bytes())?;
+        writer.bytes(&self.binding.source_spec_id.bytes())?;
+        writer.bytes(&self.binding.summary_program_id.bytes())?;
+        writer.bytes(&self.binding.primary_window_id.bytes())?;
+        writer.bytes(&self.binding.statistic_key_id.bytes())?;
+        writer.bytes(&self.binding.relation_policy_id)?;
+        writer.bytes(&self.binding.recovery_state_id.bytes())?;
+        writer.u64(self.binding.generation)?;
+        writer.bytes(&self.binding_id.bytes())?;
+        let mut window = [0; clutch_source_plane_v3::WINDOW_SPEC_BYTES];
+        clutch_source_plane_v3::FixedCodec::encode_into(&self.primary_window, &mut window)?;
+        writer.bytes(&window)?;
+        writer.bytes(&self.statistic_key_id.bytes())?;
+        writer.bytes(&self.summary_program_id.bytes())?;
+        let mut recovery = [0; RECOVERY_STATE_V2_BYTES];
+        self.recovery.encode_into(&mut recovery)?;
+        writer.bytes(&recovery)?;
+        match self.trigger {
+            None => writer.reserved(96)?,
+            Some(trigger) => {
+                writer.u8(1)?;
+                writer.u8(kind_code(trigger.kind))?;
+                writer.reserved(2)?;
+                writer.u32(trigger.refusal_code)?;
+                writer.bytes(&trigger.id.bytes())?;
+                writer.bytes(&trigger.evidence_id)?;
+                writer.u64(trigger.clock.slot)?;
+                writer.i64(trigger.clock.unix_timestamp)?;
+                writer.u64(trigger.clock.current_bucket)?;
+            }
+        }
+        writer.finish()
+    }
+
+    /// Decode and fully validate one complete canonical persisted runtime.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = RuntimeReader::new(input)?;
+        if reader.bytes::<8>()? != FAILURE_RUNTIME_MAGIC {
+            return Err(Error::BadMagic);
+        }
+        if reader.u16()? != FAILURE_RUNTIME_SCHEMA {
+            return Err(Error::BadVersion);
+        }
+        reader.reserved(6)?;
+        let series_plan_id = SeriesPlanV5Id::from_bytes(reader.bytes()?);
+        let ordinal = reader.u32()?;
+        reader.reserved(4)?;
+        let binding = FailurePolicyBindingV1 {
+            series_plan_id,
+            ordinal,
+            market_instance_id: MarketInstanceV2Id::from_bytes(reader.bytes()?),
+            product_template_id: ProductTemplateId::from_bytes(reader.bytes()?),
+            recovery_policy_id: EvidenceOnlyRecoveryPolicyId::from_bytes(reader.bytes()?),
+            funding_quote_id: SeriesFundingQuoteId::from_bytes(reader.bytes()?),
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes(reader.bytes()?),
+            source_plane_program_id: SourceContentId::from_bytes(reader.bytes()?),
+            source_spec_id: SourceContentId::from_bytes(reader.bytes()?),
+            summary_program_id: SourceContentId::from_bytes(reader.bytes()?),
+            primary_window_id: SourceContentId::from_bytes(reader.bytes()?),
+            statistic_key_id: SourceContentId::from_bytes(reader.bytes()?),
+            relation_policy_id: reader.bytes()?,
+            recovery_state_id: RecoveryIdentity::from_bytes(reader.bytes()?),
+            generation: reader.u64()?,
+        };
+        let binding_id = FailurePolicyBindingId::from_bytes(reader.bytes()?);
+        let window = reader.bytes::<{ clutch_source_plane_v3::WINDOW_SPEC_BYTES }>()?;
+        let primary_window = <WindowSpecV3 as clutch_source_plane_v3::FixedCodec>::decode(&window)?;
+        let statistic_key_id = SourceContentId::from_bytes(reader.bytes()?);
+        let summary_program_id = SourceContentId::from_bytes(reader.bytes()?);
+        let recovery_bytes = reader.bytes::<RECOVERY_STATE_V2_BYTES>()?;
+        let recovery = RecoveryState::decode(&recovery_bytes)?;
+        let trigger = match reader.u8()? {
+            0 => {
+                reader.reserved(95)?;
+                None
+            }
+            1 => {
+                let kind = decode_trigger_kind(reader.u8()?)?;
+                reader.reserved(2)?;
+                let refusal_code = reader.u32()?;
+                let id = FailureTriggerId::from_bytes(reader.bytes()?);
+                let evidence_id = reader.bytes()?;
+                let clock = RecoveryClock {
+                    slot: reader.u64()?,
+                    unix_timestamp: reader.i64()?,
+                    current_bucket: reader.u64()?,
+                };
+                Some(FailureTriggerV1 {
+                    id,
+                    kind,
+                    evidence_id,
+                    refusal_code,
+                    clock,
+                })
+            }
+            _ => return Err(Error::InvalidEnum),
+        };
+        reader.finish()?;
+        let runtime = Self {
+            binding,
+            binding_id,
+            primary_window,
+            statistic_key_id,
+            summary_program_id,
+            recovery,
+            trigger,
+        };
+        runtime.check()?;
+        Ok(runtime)
     }
 
     /// Refuse new exposure through the funded recovery owner's crank-lag-safe gate.
@@ -795,10 +986,73 @@ impl FailureRuntimeV1 {
         self.check()?;
         let (attempt_index, attempt) = self.eligible_attempt(clock)?;
         let window = self.repair_window(attempt.repair_generation, attempt.closes_at_bucket)?;
+        let funding = self.recovery.attempt_funding(attempt_index)?;
+        let accepted = self.recovery.accepted_progress_units(attempt_index)?;
+        let remaining_progress = funding
+            .max_progress_units
+            .checked_sub(accepted)
+            .ok_or(Error::BindingMismatch)?;
+        let maximum_remaining_lamports = remaining_progress
+            .checked_mul(funding.lamports_per_progress_unit)
+            .ok_or(Error::BindingMismatch)?;
         Ok(RecoveryWorkJoinV1 {
             attempt_index,
             repair_generation: attempt.repair_generation,
             window_id: window.id()?,
+            funding_quote_id: self.binding.funding_quote_id,
+            max_progress_units: funding.max_progress_units,
+            lamports_per_progress_unit: funding.lamports_per_progress_unit,
+            maximum_remaining_lamports,
+        })
+    }
+
+    /// Bind an adapter-authenticated liveness work receipt to the exact current
+    /// recovery occurrence, generation, attempt, Window, and progress cursor.
+    #[allow(clippy::too_many_arguments)]
+    pub fn join_liveness_work_receipt(
+        &self,
+        clock: RecoveryClock,
+        work_receipt_id: [u8; 32],
+        market_instance_id: MarketInstanceV2Id,
+        generation: u64,
+        attempt_index: u8,
+        window_id: SourceContentId,
+        accepted_progress_total: u64,
+        quote_schedule_id: [u8; 32],
+        scheduled_ceiling_lamports: u64,
+    ) -> Result<LivenessWorkReceiptJoinV1> {
+        let expected = self.recovery_work_join(clock)?;
+        let prior = self.recovery.accepted_progress_units(expected.attempt_index)?;
+        let progress_delta = accepted_progress_total
+            .checked_sub(prior)
+            .ok_or(Error::BindingMismatch)?;
+        let exact_reward = progress_delta
+            .checked_mul(expected.lamports_per_progress_unit)
+            .ok_or(Error::BindingMismatch)?;
+        if work_receipt_id.iter().all(|byte| *byte == 0)
+            || market_instance_id != self.binding.market_instance_id
+            || generation != self.binding.generation
+            || attempt_index != expected.attempt_index
+            || window_id != expected.window_id
+            || accepted_progress_total > expected.max_progress_units
+            || quote_schedule_id != expected.funding_quote_id.bytes()
+            || scheduled_ceiling_lamports == 0
+            || exact_reward == 0
+            || exact_reward > scheduled_ceiling_lamports
+            || scheduled_ceiling_lamports > expected.maximum_remaining_lamports
+        {
+            return Err(Error::BindingMismatch);
+        }
+        Ok(LivenessWorkReceiptJoinV1 {
+            work_receipt_id,
+            binding_id: self.binding_id,
+            market_instance_id,
+            generation,
+            attempt_index,
+            window_id,
+            accepted_progress_total,
+            quote_schedule_id,
+            scheduled_ceiling_lamports,
         })
     }
 
@@ -827,6 +1081,38 @@ impl FailureRuntimeV1 {
             accepted_progress_total,
         )?;
         self.wrap_plan(recovery, None)
+    }
+
+    /// Pay an exact liveness-runtime receipt after rechecking its private-field
+    /// failure-policy join. The receipt identity becomes the recovery Work ID.
+    pub fn plan_accept_liveness_work_progress(
+        &self,
+        clock: RecoveryClock,
+        actual_reserve_balance: u64,
+        window: &WindowSpecV3,
+        reward_recipient: RecoveryIdentity,
+        receipt: LivenessWorkReceiptJoinV1,
+    ) -> Result<FailureTransitionPlanV1> {
+        let expected = self.recovery_work_join(clock)?;
+        if receipt.binding_id != self.binding_id
+            || receipt.market_instance_id != self.binding.market_instance_id
+            || receipt.generation != self.binding.generation
+            || receipt.attempt_index != expected.attempt_index
+            || receipt.window_id != expected.window_id
+            || receipt.quote_schedule_id != expected.funding_quote_id.bytes()
+            || window.id()? != expected.window_id
+            || window.repair_generation != expected.repair_generation
+        {
+            return Err(Error::BindingMismatch);
+        }
+        self.plan_accept_work_progress(
+            clock,
+            actual_reserve_balance,
+            window,
+            RecoveryIdentity::from_bytes(receipt.work_receipt_id),
+            reward_recipient,
+            receipt.accepted_progress_total,
+        )
     }
 
     /// Mint a private-field accepted-resolution capability after exact
@@ -1041,16 +1327,7 @@ impl FailureRuntimeV1 {
         if evidence_id.iter().all(|byte| *byte == 0) {
             return Err(Error::ZeroIdentity);
         }
-        let mut hasher = Sha256::new();
-        hasher.update(TRIGGER_DOMAIN);
-        hasher.update(self.binding_id.bytes());
-        hasher.update([kind_code(kind)]);
-        hasher.update(evidence_id);
-        hasher.update(refusal_code.to_le_bytes());
-        hasher.update(clock.slot.to_le_bytes());
-        hasher.update(clock.unix_timestamp.to_le_bytes());
-        hasher.update(clock.current_bucket.to_le_bytes());
-        let id = FailureTriggerId::from_bytes(hasher.finalize().into());
+        let id = trigger_id(self.binding_id, kind, evidence_id, refusal_code, clock);
         Ok(FailureTriggerV1 {
             id,
             kind,
@@ -1058,6 +1335,27 @@ impl FailureRuntimeV1 {
             refusal_code,
             clock,
         })
+    }
+
+    fn validate_trigger(&self, trigger: FailureTriggerV1) -> Result<()> {
+        if trigger.id.is_zero()
+            || trigger.evidence_id.iter().all(|byte| *byte == 0)
+            || trigger.clock.current_bucket
+                < self.recovery.schedule().primary_maturity_bucket_exclusive
+        {
+            return Err(Error::BindingMismatch);
+        }
+        let expected = trigger_id(
+            self.binding_id,
+            trigger.kind,
+            trigger.evidence_id,
+            trigger.refusal_code,
+            trigger.clock,
+        );
+        if trigger.id != expected {
+            return Err(Error::BindingMismatch);
+        }
+        Ok(())
     }
 
     fn wrap_plan(
@@ -1154,6 +1452,7 @@ pub struct FailureTerminalJoinV1 {
     retirement_root_id: [u8; 32],
     replay_tombstone_id: [u8; 32],
     source_release_receipt_id: [u8; 32],
+    liveness_terminal_receipt_id: [u8; 32],
 }
 
 impl FailureTerminalJoinV1 {
@@ -1164,6 +1463,7 @@ impl FailureTerminalJoinV1 {
         retirement_root_id: [u8; 32],
         replay_tombstone_id: [u8; 32],
         source_release_receipt_id: [u8; 32],
+        liveness_terminal_receipt_id: [u8; 32],
     ) -> Result<Self> {
         runtime.check()?;
         if runtime.phase() != RecoveryPhase::Resolved {
@@ -1173,6 +1473,9 @@ impl FailureTerminalJoinV1 {
             || retirement_root_id.iter().all(|byte| *byte == 0)
             || replay_tombstone_id.iter().all(|byte| *byte == 0)
             || source_release_receipt_id.iter().all(|byte| *byte == 0)
+            || liveness_terminal_receipt_id
+                .iter()
+                .all(|byte| *byte == 0)
         {
             return Err(Error::BindingMismatch);
         }
@@ -1184,6 +1487,7 @@ impl FailureTerminalJoinV1 {
         hasher.update(retirement_root_id);
         hasher.update(replay_tombstone_id);
         hasher.update(source_release_receipt_id);
+        hasher.update(liveness_terminal_receipt_id);
         let id = FailureTerminalJoinId::from_bytes(hasher.finalize().into());
         Ok(Self {
             id,
@@ -1193,6 +1497,7 @@ impl FailureTerminalJoinV1 {
             retirement_root_id,
             replay_tombstone_id,
             source_release_receipt_id,
+            liveness_terminal_receipt_id,
         })
     }
 
@@ -1230,6 +1535,11 @@ impl FailureTerminalJoinV1 {
     pub const fn source_release_receipt_id(&self) -> [u8; 32] {
         self.source_release_receipt_id
     }
+
+    /// Adapter-authenticated liveness-runtime terminal receipt identity.
+    pub const fn liveness_terminal_receipt_id(&self) -> [u8; 32] {
+        self.liveness_terminal_receipt_id
+    }
 }
 
 const fn kind_code(kind: FailureTriggerKindV1) -> u8 {
@@ -1237,5 +1547,157 @@ const fn kind_code(kind: FailureTriggerKindV1) -> u8 {
         FailureTriggerKindV1::PrimaryMaturityWithoutAcceptedResolution => 1,
         FailureTriggerKindV1::SourceEvaluationRefused => 2,
         FailureTriggerKindV1::ResolutionRelationRefused => 3,
+    }
+}
+
+fn decode_trigger_kind(value: u8) -> Result<FailureTriggerKindV1> {
+    match value {
+        1 => Ok(FailureTriggerKindV1::PrimaryMaturityWithoutAcceptedResolution),
+        2 => Ok(FailureTriggerKindV1::SourceEvaluationRefused),
+        3 => Ok(FailureTriggerKindV1::ResolutionRelationRefused),
+        _ => Err(Error::InvalidEnum),
+    }
+}
+
+fn trigger_id(
+    binding_id: FailurePolicyBindingId,
+    kind: FailureTriggerKindV1,
+    evidence_id: [u8; 32],
+    refusal_code: u32,
+    clock: RecoveryClock,
+) -> FailureTriggerId {
+    let mut hasher = Sha256::new();
+    hasher.update(TRIGGER_DOMAIN);
+    hasher.update(binding_id.bytes());
+    hasher.update([kind_code(kind)]);
+    hasher.update(evidence_id);
+    hasher.update(refusal_code.to_le_bytes());
+    hasher.update(clock.slot.to_le_bytes());
+    hasher.update(clock.unix_timestamp.to_le_bytes());
+    hasher.update(clock.current_bucket.to_le_bytes());
+    FailureTriggerId::from_bytes(hasher.finalize().into())
+}
+
+struct RuntimeWriter<'a> {
+    output: &'a mut [u8],
+    at: usize,
+}
+
+impl<'a> RuntimeWriter<'a> {
+    fn new(output: &'a mut [u8]) -> Result<Self> {
+        if output.len() != FAILURE_RUNTIME_V1_BYTES {
+            return Err(Error::WrongLength);
+        }
+        output.fill(0);
+        Ok(Self { output, at: 0 })
+    }
+
+    fn bytes(&mut self, value: &[u8]) -> Result<()> {
+        let end = self.at.checked_add(value.len()).ok_or(Error::WrongLength)?;
+        let target = self
+            .output
+            .get_mut(self.at..end)
+            .ok_or(Error::WrongLength)?;
+        target.copy_from_slice(value);
+        self.at = end;
+        Ok(())
+    }
+
+    fn u8(&mut self, value: u8) -> Result<()> {
+        self.bytes(&[value])
+    }
+
+    fn u16(&mut self, value: u16) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn u32(&mut self, value: u32) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn u64(&mut self, value: u64) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn i64(&mut self, value: i64) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn reserved(&mut self, count: usize) -> Result<()> {
+        let end = self.at.checked_add(count).ok_or(Error::WrongLength)?;
+        if end > self.output.len() {
+            return Err(Error::WrongLength);
+        }
+        self.at = end;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.at == FAILURE_RUNTIME_V1_BYTES {
+            Ok(())
+        } else {
+            Err(Error::WrongLength)
+        }
+    }
+}
+
+struct RuntimeReader<'a> {
+    input: &'a [u8],
+    at: usize,
+}
+
+impl<'a> RuntimeReader<'a> {
+    fn new(input: &'a [u8]) -> Result<Self> {
+        if input.len() != FAILURE_RUNTIME_V1_BYTES {
+            return Err(Error::WrongLength);
+        }
+        Ok(Self { input, at: 0 })
+    }
+
+    fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let end = self.at.checked_add(N).ok_or(Error::WrongLength)?;
+        let source = self.input.get(self.at..end).ok_or(Error::WrongLength)?;
+        let mut value = [0; N];
+        value.copy_from_slice(source);
+        self.at = end;
+        Ok(value)
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.bytes::<1>()?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.bytes()?))
+    }
+
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.bytes()?))
+    }
+
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.bytes()?))
+    }
+
+    fn i64(&mut self) -> Result<i64> {
+        Ok(i64::from_le_bytes(self.bytes()?))
+    }
+
+    fn reserved(&mut self, count: usize) -> Result<()> {
+        let end = self.at.checked_add(count).ok_or(Error::WrongLength)?;
+        let source = self.input.get(self.at..end).ok_or(Error::WrongLength)?;
+        if source.iter().any(|byte| *byte != 0) {
+            return Err(Error::NonCanonicalReserved);
+        }
+        self.at = end;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.at == FAILURE_RUNTIME_V1_BYTES {
+            Ok(())
+        } else {
+            Err(Error::WrongLength)
+        }
     }
 }

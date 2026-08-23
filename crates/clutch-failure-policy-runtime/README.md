@@ -1,6 +1,6 @@
 # Failure-policy runtime join
 
-Status: **PURE SUCCESSOR CONTRACT / NOT AN SBF ROUTE OR ACCOUNT ABI**.
+Status: **PURE SUCCESSOR CONTRACT WITH FIXED STATE CODEC / NOT AN SBF ROUTE**.
 
 This crate joins the current successor Terms owners (`ProductTemplateV4`,
 `MarketGenesisProfileV2`, `SeriesPlanV5`, and the complete capability
@@ -24,9 +24,17 @@ private-field admission receipt is keyed by `SeriesPlanV5Id`, ordinal,
 Series code may consume that receipt; it must not copy or reinterpret budget
 balances.
 
+The canonical runtime codec persists the complete immutable binding, primary
+Window, funded recovery state, replay nonce, and optional first maturity
+trigger. Account headers, PDAs, owner checks, sysvar parsing, transfers, and
+instruction dispatch remain adapter work; there is still no central SBF route.
+
 Finite repair windows derive from the compiled schedule and SourcePlane
 generation. Accepted work is still paid only by the recovery core's monotone
-progress transition. On exhaustion, the same core sends unused work principal
+progress transition. A liveness work receipt additionally binds the exact
+FundingQuote ID, accepted-progress delta, rate, remaining maximum, and its own
+authenticated per-call ceiling before its receipt ID becomes the Work identity.
+On exhaustion, the same core sends unused work principal
 and donations to the immutable neutral sink, refunds only rent principal, and
 enters recoverable dormancy. Hoard principal, claim backing, owner cash, fees,
 future revenue, and treasury funds do not appear in this API.
@@ -35,5 +43,6 @@ An accepted-resolution capability binds a successful exact SourcePlane result
 to the frozen relation-policy identity and an adapter-authenticated resolution
 record. It does not expose a resolver identity. A dormant market can still
 resolve caller-funded. A terminal join is only a typed boundary to separately
-authenticated retirement, replay tombstone, and source-release owners; this
-crate cannot infer zero liabilities or retire those owners itself.
+authenticated retirement, replay tombstone, source-release, and liveness
+terminal receipts; this crate cannot infer zero liabilities or retire those
+owners itself.
