@@ -23,12 +23,23 @@
 //! does not contradict that rule.
 
 mod codec;
+mod position_v3;
 mod transition;
 
 pub use codec::{
     ChildGenerationV1, DeletableRentOwnerV1, EpochChildCountsV1, EpochRetirementTailV1,
     GeneralEpochTombstoneV1, Identity32V1, MarketEpochCursorV1, PositionRetirementTailV1,
     PositionTombstoneV1, RentSplitV2, ReservationCountTailV1, ReservationRetirementTailV2,
+};
+pub use position_v3::{
+    project_dealer_position_v3, project_general_position_v3, project_series_position_v3,
+    project_structured_claim_position_v3, AdapterPositionMarketBindingV3,
+    AdapterPositionPurposeBindingV3, DealerPositionProjectionV3, GeneralPositionProjectionV3,
+    PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, PositionTerminalProjectionV3,
+    PositionTombstoneLifecycleV3, PositionTombstoneV3, PositionTombstoneV3Fields, PositionV3Fields,
+    PositionV3PdaSeeds, PositionV3Sha256Backend, SeriesPositionProjectionV3,
+    StructuredClaimPositionProjectionV3, POSITION_TOMBSTONE_V3_SEMANTIC_DOMAIN,
+    POSITION_V3_PDA_PREFIX, POSITION_V3_SEMANTIC_DOMAIN,
 };
 pub use transition::{
     admit_deletable_rent, admit_initial_rent_split, admit_reopen_rent_split, close_epoch,
@@ -82,6 +93,11 @@ pub const fn canonical_epoch_generation(epoch_index: u64) -> Result<u64, Retirem
 pub const POSITION_ACCOUNT_TAG: u8 = 6;
 /// Counted Position schema.
 pub const POSITION_ACCOUNT_VERSION_V2: u8 = 2;
+/// Full-width, purpose-neutral Position successor schema.
+///
+/// The central registry reserves this coordinate with every runtime route
+/// disabled until its account adapter is integrated.
+pub const POSITION_ACCOUNT_VERSION_V3: u8 = 3;
 /// Existing Epoch account discriminator.
 pub const EPOCH_ACCOUNT_TAG: u8 = 11;
 /// Counted general Epoch schema.
@@ -123,6 +139,8 @@ pub const DIRECT_RESERVATION_ACCOUNT_VERSION_V8: u8 = 8;
 pub const POSITION_TOMBSTONE_TAG: u8 = 0x75;
 /// First Position tombstone schema.
 pub const POSITION_TOMBSTONE_VERSION_V1: u8 = 1;
+/// Full-identity Position V3 permanent tombstone schema.
+pub const POSITION_TOMBSTONE_VERSION_V3: u8 = 3;
 /// Codec-local general Epoch tombstone discriminator.
 ///
 /// The authoritative central registry reserves this coordinate as disabled.
@@ -171,6 +189,8 @@ pub const CHILD_GENERATION_V1_BYTES: usize = 8;
 
 /// Exact full Position V2 width after composition.
 pub const POSITION_V2_BYTES: usize = POSITION_V1_BYTES + POSITION_RETIREMENT_TAIL_V1_BYTES;
+/// Exact full-width global Position V3 body.
+pub const POSITION_V3_BYTES: usize = 480;
 /// Exact full general Epoch V5 width after composition.
 pub const EPOCH_V5_BYTES: usize = EPOCH_V2_BYTES + EPOCH_RETIREMENT_TAIL_V1_BYTES;
 /// Exact full Market V2 width after composition.
@@ -187,10 +207,14 @@ pub const DIRECT_RESERVATION_V8_BYTES: usize =
     DIRECT_RESERVATION_V2_BYTES + RESERVATION_RETIREMENT_TAIL_V2_BYTES;
 /// Exact Position tombstone width.
 pub const POSITION_TOMBSTONE_V1_BYTES: usize = 76;
+/// Exact full-identity permanent Position V3 tombstone body.
+pub const POSITION_TOMBSTONE_V3_BYTES: usize = 280;
 /// Exact general Epoch tombstone width.
 pub const GENERAL_EPOCH_TOMBSTONE_V1_BYTES: usize = 84;
 
 const _: () = assert!(POSITION_V2_BYTES == 280);
+const _: () = assert!(POSITION_V3_BYTES == 480);
+const _: () = assert!(POSITION_TOMBSTONE_V3_BYTES == 280);
 const _: () = assert!(EPOCH_V5_BYTES == 429);
 const _: () = assert!(MARKET_V2_BYTES == 734);
 const _: () = assert!(RESERVATION_V5_BYTES == 627);
