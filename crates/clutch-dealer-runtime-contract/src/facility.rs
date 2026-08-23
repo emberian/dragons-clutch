@@ -6,6 +6,10 @@ use crate::{
     DealerLivenessScheduleV1, DealerPhaseV1, DealerPhaseV2, DealerPolicyV1,
     DealerPositionObservationV3, DealerRuntimeLivenessBindingV1, DealerStateV1, DealerStateV2,
     Error, FacilityPositionBindingV2, FixedCodec, Id, Result, SponsorCapitalDispositionV1,
+    DealerActionLivenessAuthorizationV1, DealerAssetEndpointKindV1,
+    DealerFacilityReplayV1, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
+    DealerTransitionIntentV1, DealerTransitionLivenessModeV1,
+    PreparedDealerPositionPairTransferV1, PreparedDealerReplayTransitionV1,
 };
 
 /// Local semantic-body magic for one immutable facility genesis.
@@ -673,6 +677,104 @@ pub fn validate_facility_initialization_v3(
         return Err(Error::MismatchedBinding);
     }
     Ok(binding_id)
+}
+
+/// Exact atomic initialization bundle over StateV2, PositionV3, ReplayV3,
+/// funded dependencies, sponsor transfer, and liveness receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerInitializationV3 {
+    /// Canonical initialized State body supplied to the exact validator.
+    pub state: DealerStateV2,
+    /// Sponsor-to-facility PositionV3 transfer.
+    pub transfer: PreparedDealerPositionPairTransferV1,
+    /// First accepted Replay intent, advancing the founding ordinal to one.
+    pub replay: PreparedDealerReplayTransitionV1,
+}
+
+/// Prepare the first real facility transition without inventing a State preimage.
+///
+/// Initialize alone commits a zero `state_pre_content_id`; every later action
+/// requires a live exact State preimage. The post-State, both Position semantic
+/// IDs, sponsor transfer, funded receipt, and founding Replay are still bound
+/// atomically by the first intent.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_facility_initialization_v3(
+    genesis: &DealerFacilityGenesisV1,
+    binding: &FacilityPositionBindingV2,
+    policy: &DealerPolicyV1,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    state_account_id: Id,
+    dependency_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    authorization: &DealerActionLivenessAuthorizationV1,
+    position: &DealerPositionObservationV3,
+    state: &DealerStateV2,
+    transfer: PreparedDealerPositionPairTransferV1,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+) -> Result<PreparedDealerInitializationV3> {
+    validate_facility_initialization_v3(
+        genesis,
+        binding,
+        policy,
+        schedule,
+        runtime,
+        state_account_id,
+        dependency_account_id,
+        dependency,
+        position,
+        state,
+    )?;
+    authorization.validate_against(schedule, runtime)?;
+    replay.validate()?;
+    let bundle = transfer.bundle();
+    bundle.validate()?;
+    if authorization.action != DealerRuntimeActionV1::Initialize
+        || authorization.owner != state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
+        || bundle.action != DealerRuntimeActionV1::Initialize
+        || bundle.source_kind != DealerAssetEndpointKindV1::GeneralPosition
+        || bundle.destination_kind != DealerAssetEndpointKindV1::FacilityPosition
+        || bundle.destination_account_id != state.facility_position_account_id
+        || bundle.destination_post_semantic_id != state.facility_position_id
+        || bundle.amounts.cash_atoms != state.sponsor_capital_atoms
+        || bundle.amounts.native_eggs != [0; crate::MAX_OUTCOMES]
+        || replay.facility_position_account_id() != state.facility_position_account_id
+        || replay.replay_account_id() != state.facility_replay_account_id
+        || replay.facility_position_binding_id() != state.facility_position_binding_id
+        || replay.position_generation() != state.generation
+        || replay.next_transition_ordinal()
+            != crate::DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1
+        || !replay.last_transition_intent_id().is_zero()
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let prepared = replay.prepare_transition(
+        replay_binding,
+        DealerTransitionIntentV1 {
+            replay_account_id: replay.replay_account_id(),
+            replay_pre_id: replay.replay_id()?,
+            state_pre_content_id: Id::ZERO,
+            state_post_content_id: state.state_content_id()?,
+            position_pre_semantic_id: bundle.destination_pre_semantic_id,
+            position_post_semantic_id: bundle.destination_post_semantic_id,
+            liveness_receipt_semantic_id: authorization.receipt_semantic_id,
+            fee_receipt_semantic_id: Id::ZERO,
+            asset_transfer_bundle_id: bundle.bundle_id()?,
+            position_generation_before: state.generation,
+            position_generation_after: state.generation,
+            expected_ordinal: crate::DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1,
+            action: DealerRuntimeActionV1::Initialize,
+            liveness_mode: DealerTransitionLivenessModeV1::ExternalReceipt,
+        },
+    )?;
+    Ok(PreparedDealerInitializationV3 {
+        state: *state,
+        transfer,
+        replay: prepared,
+    })
 }
 
 const _: () = assert!(DEALER_FACILITY_GENESIS_BYTES_V1 == 116);

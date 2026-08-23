@@ -369,7 +369,10 @@ pub fn prepare_lp_withdrawal_v2(
 ) -> Result<PreparedDealerLpWithdrawalV2> {
     validate_tail(policy, state, state_account_id, page)?;
     lp_owner.validate_live()?;
-    if state.phase != DealerPhaseV2::Funding || share_delta == 0 || page.sealed {
+    if !matches!(state.phase, DealerPhaseV2::Funding | DealerPhaseV2::Cancelled)
+        || share_delta == 0
+        || page.sealed
+    {
         return Err(Error::InvalidPhase);
     }
     let bundle = transfer.bundle();
@@ -562,6 +565,128 @@ fn initial_page_prefix(
     let id = Id::from_bytes(hasher.finalize().into());
     id.validate_live()?;
     Ok(id)
+}
+
+/// Exact lamport observation for one empty funding-page close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerEmptyLpPageCloseRentV2 {
+    /// Closed page lamports before deletion.
+    pub page_lamports_before: u64,
+    /// Closed page lamports after deletion; exactly zero.
+    pub page_lamports_after: u64,
+    /// Sole refundable-principal recipient.
+    pub payer: Id,
+    /// Canonical donation/surplus recipient.
+    pub neutral_sink: Id,
+    /// Exact principal credit.
+    pub payer_refund_lamports: u64,
+    /// Exact donation-floor and later-surplus credit.
+    pub neutral_sink_lamports: u64,
+}
+
+/// Permissionless reverse-tail close result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerEmptyLpPageCloseV2 {
+    /// Previous page after becoming the mutable tail, or `None` for page zero.
+    pub previous_page_after: Option<LpPageV2>,
+    /// Authoritative State after the exact page-count decrement.
+    pub state_after: DealerStateV2,
+}
+
+/// Close one empty tail in reverse order without stranding earlier LP refunds.
+#[allow(clippy::too_many_arguments)]
+pub fn close_empty_lp_tail_v2(
+    policy: &DealerPolicyV1,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    page_account_id: Id,
+    page: &LpPageV2,
+    previous_page_account_id: Id,
+    previous_page: Option<&LpPageV2>,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    authorization: &DealerActionLivenessAuthorizationV1,
+    rent: DealerEmptyLpPageCloseRentV2,
+) -> Result<PreparedDealerEmptyLpPageCloseV2> {
+    validate_tail(policy, state, state_account_id, page)?;
+    authorization.validate_against(schedule, runtime)?;
+    page_account_id.validate_live()?;
+    let protected = page
+        .rent
+        .refundable_principal
+        .checked_add(page.rent.donation_floor)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if !matches!(state.phase, DealerPhaseV2::Funding | DealerPhaseV2::Cancelled)
+        || page.entry_count != 0
+        || page.sealed
+        || page.page_ordinal.checked_add(1) != Some(state.children.lp_pages)
+        || authorization.action != DealerRuntimeActionV1::Retire
+        || authorization.owner != state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
+        || rent.page_lamports_after != 0
+        || rent.page_lamports_before < protected
+        || rent.payer != page.rent.payer
+        || rent.neutral_sink != page.rent.neutral_sink
+        || rent.payer_refund_lamports != page.rent.refundable_principal
+        || rent.neutral_sink_lamports
+            != rent
+                .page_lamports_before
+                .checked_sub(page.rent.refundable_principal)
+                .ok_or(Error::ConservationFailure)?
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let mut state_after = *state;
+    state_after.children.lp_pages = state_after
+        .children
+        .lp_pages
+        .checked_sub(1)
+        .ok_or(Error::InvalidChildGraph)?;
+    state_after.child_sequence = next(state.child_sequence)?;
+    let previous_page_after = if page.page_ordinal == 0 {
+        if previous_page.is_some()
+            || !previous_page_account_id.is_zero()
+            || page_account_id != state.lp_page_head_id
+            || state.children.live_lp_positions != 0
+            || state.total_shares != 0
+        {
+            return Err(Error::InvalidChildGraph);
+        }
+        state_after.lp_page_head_id = Id::ZERO;
+        state_after.lp_page_set_root = Id::ZERO;
+        state_after.last_lp_owner = Id::ZERO;
+        None
+    } else {
+        let previous = previous_page.ok_or(Error::InvalidChildGraph)?;
+        previous_page_account_id.validate_live()?;
+        previous.validate_against(policy, state, state_account_id)?;
+        let (previous_live, previous_total) = previous.aggregate_totals()?;
+        if previous_page_account_id == page_account_id
+            || previous.page_ordinal.checked_add(1) != Some(page.page_ordinal)
+            || previous.next_page_ordinal != page.page_ordinal
+            || !previous.sealed
+            || usize::from(previous.entry_count) != LP_ENTRIES_PER_PAGE
+            || previous.page_content_id()? != page.page_set_prefix_root
+            || previous_live != page.prefix_live_positions
+            || previous_total != page.prefix_total_shares
+        {
+            return Err(Error::InvalidChildGraph);
+        }
+        let mut after = *previous;
+        after.next_page_ordinal = NO_NEXT_LP_PAGE;
+        after.sealed = false;
+        after.revision = next(previous.revision)?;
+        after.validate_against(policy, state, state_account_id)?;
+        state_after.lp_page_set_root = after.page_content_id()?;
+        state_after.last_lp_owner = tail_last_owner(&after);
+        Some(after)
+    };
+    state_after.validate_against_policy(policy)?;
+    Ok(PreparedDealerEmptyLpPageCloseV2 {
+        previous_page_after,
+        state_after,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

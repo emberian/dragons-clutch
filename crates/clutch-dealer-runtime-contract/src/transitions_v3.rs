@@ -10,6 +10,8 @@ use crate::{
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2,
     DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2, FixedCodec, Id,
     LpPageV2, PreparedDealerReplayTransitionV1, Result,
+    DealerAssetEndpointKindV1, PreparedDealerPositionPairTransferV1,
+    SponsorCapitalDispositionV1,
 };
 
 /// Atomic Funding-to-Trading result over PositionV3 and the last mutable page.
@@ -29,6 +31,26 @@ pub struct PreparedDealerUnwindV3 {
     /// Authoritative State after the transition.
     pub state_after: DealerStateV2,
     /// Replay advance binding the exact cause and State write.
+    pub replay: PreparedDealerReplayTransitionV1,
+}
+
+/// Atomic funding cancellation result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerCancellationV3 {
+    /// Authoritative State after entering Cancelled.
+    pub state_after: DealerStateV2,
+    /// Replay advance binding the funded cancellation receipt.
+    pub replay: PreparedDealerReplayTransitionV1,
+}
+
+/// Atomic sponsor-refund and Retiring-entry result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerSponsorRefundV3 {
+    /// Authoritative State after exact sponsor principal left PositionV3.
+    pub state_after: DealerStateV2,
+    /// Canonical facility-to-refund Position transfer.
+    pub transfer: PreparedDealerPositionPairTransferV1,
+    /// Replay advance binding transfer, State, and funded receipt.
     pub replay: PreparedDealerReplayTransitionV1,
 }
 
@@ -228,6 +250,147 @@ pub fn prepare_timed_close_dealer_v3(
         authorization.receipt_semantic_id,
         DealerTransitionLivenessModeV1::ExternalReceipt,
     )
+}
+
+/// Cancel funding after its immutable opportunity has become stale.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_cancel_stale_funding_v3(
+    policy: &DealerPolicyV1,
+    binding: &FacilityPositionBindingV2,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    authorization: &DealerActionLivenessAuthorizationV1,
+    current_slot: u64,
+    position: &DealerPositionObservationV3,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+) -> Result<PreparedDealerCancellationV3> {
+    validate_v3_plane(
+        policy,
+        binding,
+        state,
+        state_account_id,
+        dependency,
+        schedule,
+        runtime,
+        position,
+        replay,
+    )?;
+    authorization.validate_against(schedule, runtime)?;
+    let stale = current_slot >= policy.trading_close_slot
+        || (current_slot >= policy.trading_open_slot
+            && state.total_shares < policy.minimum_lp_shares);
+    if state.phase != DealerPhaseV2::Funding
+        || !stale
+        || authorization.action != DealerRuntimeActionV1::CancelFunding
+        || authorization.owner != state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
+    {
+        return Err(Error::InvalidSchedule);
+    }
+    let mut state_after = *state;
+    state_after.phase = DealerPhaseV2::Cancelled;
+    state_after.validate_against_policy(policy)?;
+    let replay = prepare_funding_replay_v2(
+        state,
+        &state_after,
+        replay,
+        replay_binding,
+        DealerRuntimeActionV1::CancelFunding,
+        authorization.receipt_semantic_id,
+        DealerTransitionLivenessModeV1::ExternalReceipt,
+        DealerEmptyAssetTransferBundleV1 {
+            action: DealerRuntimeActionV1::CancelFunding,
+        }
+        .bundle_id()?,
+        state.facility_position_id,
+        state.facility_position_id,
+    )?;
+    Ok(PreparedDealerCancellationV3 {
+        state_after,
+        replay,
+    })
+}
+
+/// Refund exact sponsor principal only after every LP Position and page retired.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_refund_cancelled_sponsor_v3(
+    policy: &DealerPolicyV1,
+    binding: &FacilityPositionBindingV2,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    authorization: &DealerActionLivenessAuthorizationV1,
+    position: &DealerPositionObservationV3,
+    transfer: PreparedDealerPositionPairTransferV1,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+) -> Result<PreparedDealerSponsorRefundV3> {
+    validate_v3_plane(
+        policy,
+        binding,
+        state,
+        state_account_id,
+        dependency,
+        schedule,
+        runtime,
+        position,
+        replay,
+    )?;
+    authorization.validate_against(schedule, runtime)?;
+    let bundle = transfer.bundle();
+    bundle.validate()?;
+    let position_after = transfer.source_post();
+    if state.phase != DealerPhaseV2::Cancelled
+        || state.sponsor_capital_disposition != SponsorCapitalDispositionV1::Refundable
+        || state.total_shares != 0
+        || state.children.live_lp_positions != 0
+        || state.children.lp_pages != 0
+        || authorization.action != DealerRuntimeActionV1::RefundCancelledSponsor
+        || authorization.owner != state_account_id
+        || authorization.lifecycle_id != state.facility_id
+        || authorization.facility_generation != state.generation
+        || bundle.action != DealerRuntimeActionV1::RefundCancelledSponsor
+        || bundle.source_kind != DealerAssetEndpointKindV1::FacilityPosition
+        || bundle.destination_kind != DealerAssetEndpointKindV1::GeneralPosition
+        || bundle.source_account_id != state.facility_position_account_id
+        || bundle.source_pre_semantic_id != state.facility_position_id
+        || bundle.amounts.cash_atoms != state.sponsor_capital_atoms
+        || bundle.amounts.native_eggs != [0; crate::MAX_OUTCOMES]
+        || position_after.cash_atoms() != 0
+        || position_after.reserved_cash_atoms() != 0
+        || position_after.native_eggs() != [0; crate::MAX_OUTCOMES]
+    {
+        return Err(Error::ConservationFailure);
+    }
+    let mut state_after = *state;
+    state_after.facility_position_id = bundle.source_post_semantic_id;
+    state_after.sponsor_capital_disposition = SponsorCapitalDispositionV1::Refunded;
+    state_after.phase = DealerPhaseV2::Retiring;
+    state_after.validate_against_policy(policy)?;
+    let replay = prepare_funding_replay_v2(
+        state,
+        &state_after,
+        replay,
+        replay_binding,
+        DealerRuntimeActionV1::RefundCancelledSponsor,
+        authorization.receipt_semantic_id,
+        DealerTransitionLivenessModeV1::ExternalReceipt,
+        bundle.bundle_id()?,
+        bundle.source_pre_semantic_id,
+        bundle.source_post_semantic_id,
+    )?;
+    Ok(PreparedDealerSponsorRefundV3 {
+        state_after,
+        transfer,
+        replay,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
