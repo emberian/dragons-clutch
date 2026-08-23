@@ -18,8 +18,11 @@ use clutch_general_v2_contract::{
     ClaimSolverTransitionV1, CleanupCandidateTransitionV1, ClearWorkHeaderV2,
     CloseClearWorkTransitionV1, EpochBudgetV2AccountV1, ExpireCommittedCandidateTransitionV1,
     GeneralEpochPhaseV1, GeneralEpochV6AccountV1, IdentityLabPayloadV1, MarketRuntimeV3AccountV1,
-    OwnerSettlementPayloadV1, SelectedCandidateRetirementContractV1, SelectedCandidateV1AccountV1,
-    WriteCandidateFeedPayloadV1,
+    OwnerSettlementPayloadV1, WriteCandidateFeedPayloadV1,
+};
+#[cfg(test)]
+use clutch_general_v2_contract::{
+    SelectedCandidateRetirementContractV1, SelectedCandidateV1AccountV1,
 };
 use clutch_owner_settlement::{
     prepare_account_receipt_end_v1, prepare_direct_egg_settlement_v1,
@@ -1288,6 +1291,9 @@ pub struct CandidateCrankObservation<'a> {
     pub node: Option<&'a AdmissionNodeV3AccountV1>,
     pub feed: Option<(&'a CandidateFeedHeaderV2, bool)>,
     pub work: Option<&'a ClearWorkHeaderV2>,
+    /// Historical hostile-fixture input; no checked client exposes a live
+    /// SelectedCandidate mapping.
+    #[cfg(test)]
     pub selected: Option<&'a SelectedCandidateV1AccountV1>,
     pub observed_state_sha256: [u8; 32],
 }
@@ -1303,17 +1309,21 @@ impl CandidateCrankObservation<'_> {
         self.window
             .validate()
             .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        #[cfg(test)]
         let expected_epoch_phase = if self.selected.is_some() {
             GeneralEpochPhaseV1::Finalized
         } else {
             GeneralEpochPhaseV1::Frozen
         };
+        #[cfg(not(test))]
+        let expected_epoch_phase = GeneralEpochPhaseV1::Frozen;
         if self.epoch.phase != expected_epoch_phase
             || self.window.market != self.epoch.market_runtime
             || self.window.epoch_generation != self.epoch.generation
         {
             return Err(WorkflowGraphError::InvalidCanonicalState);
         }
+        #[cfg(test)]
         if let Some(selected) = self.selected {
             selected
                 .validate()
@@ -1549,23 +1559,13 @@ pub fn plan_candidate_crank(
     cursor: ResumableWorkflowCursor,
     material: WorkflowActionMaterial,
 ) -> Result<PlannedWorkflowNode> {
-    let generation = observation.epoch.generation;
-    let (position, action) = observation.next()?;
-    cursor.require(
-        WorkflowLane::Candidate,
-        generation,
-        position,
-        observation.observed_state_sha256,
-    )?;
-    observation.validate_payload(action, &material.payload)?;
-    construct(
-        manifest,
-        builder,
-        cursor,
-        ProtocolFlow::GeneralV2Candidate,
-        CanonicalActionCoordinate::General(action),
-        material,
-    )
+    let _ = (manifest, builder, observation, cursor, material);
+    // The only planner implemented here targets withdrawn SelectedCandidate,
+    // Window V4, AdmissionNode V3, and legacy General request actions. Keep
+    // its structural model available for historical untrusted observations,
+    // but never generate a transaction until the current Product-rooted
+    // V2/V5 lifecycle has its own exact planner.
+    Err(WorkflowGraphError::NotReady)
 }
 
 /// Keeper state is derived through canonical owner-settlement pure transitions,
@@ -1781,6 +1781,7 @@ pub enum RecoveryObservation<'a> {
     CleanupCandidate(CleanupCandidateTransitionV1<'a>),
     ClaimSolver(ClaimSolverTransitionV1<'a>),
     CloseClearWork(CloseClearWorkTransitionV1<'a>),
+    #[cfg(test)]
     CloseSelected(&'a SelectedCandidateRetirementContractV1),
     CloseEpoch {
         epoch: &'a GeneralEpochV6AccountV1,
@@ -1860,6 +1861,7 @@ impl RecoveryObservation<'_> {
                     ProtocolFlow::RecoveryRetirement,
                 ))
             }
+            #[cfg(test)]
             Self::CloseSelected(contract) => {
                 if !contract
                     .retirable()
@@ -2099,19 +2101,11 @@ fn construct(
         return Err(WorkflowGraphError::InvalidCanonicalPayload);
     }
     let draft = match coordinate {
-        CanonicalActionCoordinate::General(action) => {
-            validate_general_payload(action, &material.payload)?;
-            OwnedInstructionDraft::allocated_successor(
-                flow,
-                material.action_name,
-                material.semantic_owner,
-                manifest.clutch.program_id,
-                material.accounts,
-                material.required_signers,
-                material.exact_equations,
-                ExtensionAction::GeneralV2(action),
-                &material.payload,
-            )
+        CanonicalActionCoordinate::General(_) => {
+            // No checked release currently admits a General successor. Keep
+            // historical observation/parser types for hostile read-only
+            // inspection, but do not turn any of them into transaction bytes.
+            return Err(WorkflowGraphError::NotReady);
         }
         CanonicalActionCoordinate::Series(action) => {
             validate_series_payload(action, &material.payload)?;

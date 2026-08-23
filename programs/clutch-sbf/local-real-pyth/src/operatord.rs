@@ -224,10 +224,6 @@ fn dependency_digest(
 #[derive(Default)]
 struct KeeperFrontier {
     open_sources: BTreeSet<[u8; 32]>,
-    candidate_children: BTreeSet<[u8; 32]>,
-    sealed_feeds: BTreeSet<[u8; 32]>,
-    clear_work: BTreeSet<[u8; 32]>,
-    selected_epochs: BTreeSet<[u8; 32]>,
 }
 
 impl KeeperFrontier {
@@ -238,28 +234,6 @@ impl KeeperFrontier {
                 CanonicalAccountKind::SourceOpenRawPage => {
                     if let Some(binding) = version.projection.primary_binding {
                         frontier.open_sources.insert(binding);
-                    }
-                }
-                CanonicalAccountKind::GeneralCandidateFeedStage => {
-                    if let Some(node) = version.projection.secondary_binding {
-                        frontier.candidate_children.insert(node);
-                    }
-                }
-                CanonicalAccountKind::GeneralCandidateFeed => {
-                    if let Some(node) = version.projection.secondary_binding {
-                        frontier.candidate_children.insert(node);
-                        frontier.sealed_feeds.insert(node);
-                    }
-                }
-                CanonicalAccountKind::GeneralClearWork => {
-                    if let Some(node) = version.projection.secondary_binding {
-                        frontier.candidate_children.insert(node);
-                        frontier.clear_work.insert(node);
-                    }
-                }
-                CanonicalAccountKind::GeneralSelectedCandidate => {
-                    if let Some(epoch) = version.projection.primary_binding {
-                        frontier.selected_epochs.insert(epoch);
                     }
                 }
                 _ => {}
@@ -274,40 +248,6 @@ impl KeeperFrontier {
                 .projection
                 .primary_binding
                 .is_some_and(|binding| self.open_sources.contains(&binding)),
-            CanonicalAccountKind::GeneralAdmissionNode => {
-                version
-                    .projection
-                    .secondary_binding
-                    .is_some_and(|node| self.candidate_children.contains(&node))
-                    || version
-                        .projection
-                        .primary_binding
-                        .is_some_and(|epoch| self.selected_epochs.contains(&epoch))
-            }
-            CanonicalAccountKind::GeneralCandidateFeedStage => {
-                version
-                    .projection
-                    .secondary_binding
-                    .is_some_and(|node| self.sealed_feeds.contains(&node))
-                    || version
-                        .projection
-                        .primary_binding
-                        .is_some_and(|epoch| self.selected_epochs.contains(&epoch))
-            }
-            CanonicalAccountKind::GeneralCandidateFeed => {
-                version
-                    .projection
-                    .secondary_binding
-                    .is_some_and(|node| self.clear_work.contains(&node))
-                    || version
-                        .projection
-                        .primary_binding
-                        .is_some_and(|epoch| self.selected_epochs.contains(&epoch))
-            }
-            CanonicalAccountKind::GeneralClearWork => version
-                .projection
-                .primary_binding
-                .is_some_and(|epoch| self.selected_epochs.contains(&epoch)),
             _ => false,
         }
     }
