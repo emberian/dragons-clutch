@@ -26,6 +26,10 @@ pub const INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1: u8 = 2;
 /// Exact active successor width.
 pub const INDEXED_SETTLEMENT_ROOT_BYTES_V1: usize =
     16 + SETTLEMENT_ROOT_ACCOUNT_BYTES + (6 * 32) + 8;
+const INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1: usize = 16;
+const INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1: usize =
+    INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1 + SETTLEMENT_ROOT_ACCOUNT_BYTES;
+const INDEXED_SETTLEMENT_ROOT_SUFFIX_BYTES_V1: usize = (6 * 32) + 8;
 /// Account-key-bound data identity domain for the complete successor bytes.
 pub const INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-v2/indexed-settlement-root-data/v1\0";
@@ -41,6 +45,10 @@ pub const CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1: &[u8] =
 
 const _: () = assert!(SETTLEMENT_ROOT_ACCOUNT_BYTES == 980);
 const _: () = assert!(INDEXED_SETTLEMENT_ROOT_BYTES_V1 == 1_196);
+const _: () = assert!(
+    INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1 + INDEXED_SETTLEMENT_ROOT_SUFFIX_BYTES_V1
+        == INDEXED_SETTLEMENT_ROOT_BYTES_V1
+);
 const _: () = assert!(INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
 const _: () = assert!(FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1.len() <= 32);
 const _: () = assert!(CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1.len() <= 32);
@@ -639,6 +647,18 @@ impl IndexedSettlementRootV1AccountV1 {
         if base.phase() != SettlementRootPhaseV1::Materializing {
             return Err(CodecError::InvalidState);
         }
+        let counts = Self::live_counts();
+        Self::validate_components(
+            &base,
+            locator_account,
+            adjacency_account,
+            plane_id,
+            locator_data_id,
+            adjacency_data_id,
+            capability_profile_id,
+            counts,
+            ExactIndexChildrenStateV1::Live,
+        )?;
         let value = Self {
             base,
             locator_account,
@@ -647,16 +667,19 @@ impl IndexedSettlementRootV1AccountV1 {
             locator_data_id,
             adjacency_data_id,
             capability_profile_id,
-            counts: ExactIndexChildCountsV1 {
-                expected: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
-                admitted: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
-                live: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
-                retired: 0,
-            },
+            counts,
             state: ExactIndexChildrenStateV1::Live,
         };
-        value.validate()?;
         Ok(value)
+    }
+
+    const fn live_counts() -> ExactIndexChildCountsV1 {
+        ExactIndexChildCountsV1 {
+            expected: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+            admitted: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+            live: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+            retired: 0,
+        }
     }
 
     /// Exact historical root semantics and mutable settlement counters.
@@ -712,14 +735,39 @@ impl IndexedSettlementRootV1AccountV1 {
 
     /// Validate the base root, six identities, exact count partition, and phase join.
     pub fn validate(&self) -> Result<(), CodecError> {
-        self.base.validate()?;
-        let identities = [
+        Self::validate_components(
+            &self.base,
             self.locator_account,
             self.adjacency_account,
             self.plane_id,
             self.locator_data_id,
             self.adjacency_data_id,
             self.capability_profile_id,
+            self.counts,
+            self.state,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_components(
+        base: &SettlementRootV1AccountV1,
+        locator_account: Id32,
+        adjacency_account: Id32,
+        plane_id: Id32,
+        locator_data_id: Id32,
+        adjacency_data_id: Id32,
+        capability_profile_id: Id32,
+        counts: ExactIndexChildCountsV1,
+        state: ExactIndexChildrenStateV1,
+    ) -> Result<(), CodecError> {
+        base.validate()?;
+        let identities = [
+            locator_account,
+            adjacency_account,
+            plane_id,
+            locator_data_id,
+            adjacency_data_id,
+            capability_profile_id,
         ];
         if identities.iter().any(|identity| identity.is_zero()) {
             return Err(CodecError::ZeroIdentity);
@@ -729,12 +777,12 @@ impl IndexedSettlementRootV1AccountV1 {
         // an otherwise valid root unrepresentable. Only physical accounts
         // require pairwise nonaliasing below.
         let physical = [
-            self.locator_account,
-            self.adjacency_account,
-            self.base.market(),
-            self.base.epoch(),
-            self.base.market_binding(),
-            self.base.retained_feed(),
+            locator_account,
+            adjacency_account,
+            base.market(),
+            base.epoch(),
+            base.market_binding(),
+            base.retained_feed(),
         ];
         let mut left = 0usize;
         while left < physical.len() {
@@ -747,16 +795,16 @@ impl IndexedSettlementRootV1AccountV1 {
             }
             left += 1;
         }
-        self.counts.validate(self.state)?;
-        if self.state == ExactIndexChildrenStateV1::Live
-            && self.base.retained_feed_state() != SettlementRootChildStateV1::Live
+        counts.validate(state)?;
+        if state == ExactIndexChildrenStateV1::Live
+            && base.retained_feed_state() != SettlementRootChildStateV1::Live
         {
             return Err(CodecError::InvalidState);
         }
-        if self.state == ExactIndexChildrenStateV1::Retired {
-            match self.base.phase() {
+        if state == ExactIndexChildrenStateV1::Retired {
+            match base.phase() {
                 SettlementRootPhaseV1::Retiring
-                    if Self::at_pre_feed_terminal_frontier(&self.base) => {}
+                    if Self::at_pre_feed_terminal_frontier(base) => {}
                 SettlementRootPhaseV1::Terminal => {}
                 _ => return Err(CodecError::InvalidState),
             }
@@ -858,33 +906,120 @@ impl IndexedSettlementRootV1AccountV1 {
         Ok(value)
     }
 
+    /// Stream one canonical live successor directly into account memory.
+    ///
+    /// This is byte-for-byte identical to `new_live(...).encode(...)` without
+    /// materializing either the 1,196-byte wrapper or a 980-byte base scratch
+    /// array in the caller's frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_new_live_into(
+        base: &SettlementRootV1AccountV1,
+        locator_account: Id32,
+        adjacency_account: Id32,
+        plane_id: Id32,
+        locator_data_id: Id32,
+        adjacency_data_id: Id32,
+        capability_profile_id: Id32,
+        output: &mut [u8],
+    ) -> Result<(), CodecError> {
+        if base.phase() != SettlementRootPhaseV1::Materializing {
+            return Err(CodecError::InvalidState);
+        }
+        let counts = Self::live_counts();
+        Self::validate_components(
+            base,
+            locator_account,
+            adjacency_account,
+            plane_id,
+            locator_data_id,
+            adjacency_data_id,
+            capability_profile_id,
+            counts,
+            ExactIndexChildrenStateV1::Live,
+        )?;
+        Self::encode_components(
+            base,
+            locator_account,
+            adjacency_account,
+            plane_id,
+            locator_data_id,
+            adjacency_data_id,
+            capability_profile_id,
+            counts,
+            ExactIndexChildrenStateV1::Live,
+            output,
+        )
+    }
+
     /// Encode the exact reserved successor envelope and nested canonical Root V1.
     pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
         self.validate()?;
-        let mut base = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-        self.base.encode(&mut base)?;
-        let mut writer = Writer::exact(output, INDEXED_SETTLEMENT_ROOT_BYTES_V1)?;
-        writer.u8(INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG)?;
-        writer.u8(INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION)?;
-        writer.u8(self.state.code())?;
-        writer.u8(0)?;
-        writer.bytes(&[0; 12])?;
-        writer.bytes(&base)?;
-        for identity in [
+        Self::encode_components(
+            &self.base,
             self.locator_account,
             self.adjacency_account,
             self.plane_id,
             self.locator_data_id,
             self.adjacency_data_id,
             self.capability_profile_id,
+            self.counts,
+            self.state,
+            output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_components(
+        base: &SettlementRootV1AccountV1,
+        locator_account: Id32,
+        adjacency_account: Id32,
+        plane_id: Id32,
+        locator_data_id: Id32,
+        adjacency_data_id: Id32,
+        capability_profile_id: Id32,
+        counts: ExactIndexChildCountsV1,
+        state: ExactIndexChildrenStateV1,
+        output: &mut [u8],
+    ) -> Result<(), CodecError> {
+        if output.len() != INDEXED_SETTLEMENT_ROOT_BYTES_V1 {
+            return Err(CodecError::WrongLength);
+        }
+        output.fill(0);
+        let envelope = output
+            .get_mut(..INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1)
+            .ok_or(CodecError::WrongLength)?;
+        envelope[0] = INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG;
+        envelope[1] = INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION;
+        envelope[2] = state.code();
+        base.encode(
+            output
+                .get_mut(
+                    INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1
+                        ..INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1,
+                )
+                .ok_or(CodecError::WrongLength)?,
+        )?;
+        let mut writer = Writer::exact(
+            output
+                .get_mut(INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1..)
+                .ok_or(CodecError::WrongLength)?,
+            INDEXED_SETTLEMENT_ROOT_SUFFIX_BYTES_V1,
+        )?;
+        for identity in [
+            locator_account,
+            adjacency_account,
+            plane_id,
+            locator_data_id,
+            adjacency_data_id,
+            capability_profile_id,
         ] {
             writer.bytes(&identity.bytes())?;
         }
         for count in [
-            self.counts.expected,
-            self.counts.admitted,
-            self.counts.live,
-            self.counts.retired,
+            counts.expected,
+            counts.admitted,
+            counts.live,
+            counts.retired,
         ] {
             writer.u8(count)?;
         }
@@ -894,18 +1029,36 @@ impl IndexedSettlementRootV1AccountV1 {
 
     /// Decode only the exact reserved successor schema and rerun every invariant.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
-        let mut reader = Reader::exact(input, INDEXED_SETTLEMENT_ROOT_BYTES_V1)?;
-        if reader.u8()? != INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG {
+        if input.len() != INDEXED_SETTLEMENT_ROOT_BYTES_V1 {
+            return Err(CodecError::WrongLength);
+        }
+        let envelope = input
+            .get(..INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1)
+            .ok_or(CodecError::WrongLength)?;
+        if envelope[0] != INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if reader.u8()? != INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION {
+        if envelope[1] != INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION {
             return Err(CodecError::WrongVersion);
         }
-        let state = ExactIndexChildrenStateV1::decode(reader.u8()?)?;
-        if reader.u8()? != 0 || reader.array::<12>()? != [0; 12] {
+        let state = ExactIndexChildrenStateV1::decode(envelope[2])?;
+        if envelope[3..].iter().any(|byte| *byte != 0) {
             return Err(CodecError::NonCanonicalPadding);
         }
-        let base = SettlementRootV1AccountV1::decode(&reader.array::<SETTLEMENT_ROOT_ACCOUNT_BYTES>()?)?;
+        let base = SettlementRootV1AccountV1::decode(
+            input
+                .get(
+                    INDEXED_SETTLEMENT_ROOT_ENVELOPE_BYTES_V1
+                        ..INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1,
+                )
+                .ok_or(CodecError::WrongLength)?,
+        )?;
+        let mut reader = Reader::exact(
+            input
+                .get(INDEXED_SETTLEMENT_ROOT_SUFFIX_OFFSET_V1..)
+                .ok_or(CodecError::WrongLength)?,
+            INDEXED_SETTLEMENT_ROOT_SUFFIX_BYTES_V1,
+        )?;
         let locator_account = Id32::new(reader.array()?)?;
         let adjacency_account = Id32::new(reader.array()?)?;
         let plane_id = Id32::new(reader.array()?)?;
@@ -1054,6 +1207,54 @@ mod tests {
         assert_eq!(
             IndexedSettlementRootV1AccountV1::decode(&bytes),
             Err(CodecError::NonCanonicalPadding)
+        );
+    }
+
+    #[test]
+    fn streamed_live_encoder_is_byte_exact_without_root_scratch_values() {
+        let indexed = live_indexed_root();
+        let mut ordinary = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        indexed.encode(&mut ordinary).unwrap();
+        let mut streamed = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        IndexedSettlementRootV1AccountV1::encode_new_live_into(
+            indexed.base(),
+            indexed.locator_account(),
+            indexed.adjacency_account(),
+            indexed.plane_id(),
+            indexed.locator_data_id(),
+            indexed.adjacency_data_id(),
+            indexed.capability_profile_id(),
+            &mut streamed,
+        )
+        .unwrap();
+        assert_eq!(streamed, ordinary);
+        assert_eq!(IndexedSettlementRootV1AccountV1::decode(&streamed), Ok(indexed));
+        assert_eq!(
+            IndexedSettlementRootV1AccountV1::encode_new_live_into(
+                indexed.base(),
+                indexed.locator_account(),
+                indexed.adjacency_account(),
+                indexed.plane_id(),
+                indexed.locator_data_id(),
+                indexed.adjacency_data_id(),
+                indexed.capability_profile_id(),
+                &mut streamed[..INDEXED_SETTLEMENT_ROOT_BYTES_V1 - 1],
+            ),
+            Err(CodecError::WrongLength),
+        );
+        let later = crate::settlement_root::tests::portfolio_settling_root();
+        assert_eq!(
+            IndexedSettlementRootV1AccountV1::encode_new_live_into(
+                &later,
+                indexed.locator_account(),
+                indexed.adjacency_account(),
+                indexed.plane_id(),
+                indexed.locator_data_id(),
+                indexed.adjacency_data_id(),
+                indexed.capability_profile_id(),
+                &mut streamed,
+            ),
+            Err(CodecError::InvalidState),
         );
     }
 

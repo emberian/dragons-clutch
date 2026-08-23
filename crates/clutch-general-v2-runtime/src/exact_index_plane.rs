@@ -14,8 +14,9 @@ use clutch_general_v2_contract::{
     ExactIndexChildrenStateV1, Id32, IndexedSettlementRootRentPreparationV1,
     IndexedSettlementRootV1AccountV1, MarketBindingV2, SettlementRootV1AccountV1,
     SettlementSliceLegKindV1, SettlementSliceV1, INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
-    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1, MAX_ORDERS,
-    MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+    INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1, MAX_ORDERS, MAX_OUTCOMES, MAX_SLICES,
+    SETTLEMENT_SLICE_BYTES,
 };
 use clutch_solana_layout::registry::{
     GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
@@ -308,8 +309,8 @@ pub fn adjacency_data_len_v1(order_count: u8, references: u16) -> Result<usize, 
 }
 
 pub fn stream_counted_exact_index_root_v1(
-    root_rent: IndexedSettlementRootRentPreparationV1,
-    input: ConstructExactIndexStreamingInputV1<'_>,
+    root_rent: &IndexedSettlementRootRentPreparationV1,
+    input: &ConstructExactIndexStreamingInputV1<'_>,
     root_output: &mut [u8], locator_output: &mut [u8], adjacency_output: &mut [u8],
 ) -> Result<CountedExactIndexRootStreamResultV1, ExactIndexPlaneErrorV1> {
     input.settlement_root.validate().map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
@@ -467,13 +468,22 @@ pub fn stream_counted_exact_index_root_v1(
             rent: adjacency_rent, stored_bump: input.adjacency_create.stored_bump, ..common })?;
     let locator_data_id = sealed_locator_data_id_from_raw_v1(locator_output)?;
     let adjacency_data_id = sealed_adjacency_data_id_from_raw_v1(adjacency_output)?;
-    let indexed = IndexedSettlementRootV1AccountV1::new_live(*root_rent.base_after(),
-        input.locator_create.account, input.adjacency_create.account, plane_id, locator_data_id,
-        adjacency_data_id, input.capability_profile_id)
-        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
-    indexed.encode(root_output).map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
-    let indexed_root_data_id = indexed.data_id(&CanonicalSha256, input.settlement_root_account)
-        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    IndexedSettlementRootV1AccountV1::encode_new_live_into(
+        root_rent.base_after(),
+        input.locator_create.account,
+        input.adjacency_create.account,
+        plane_id,
+        locator_data_id,
+        adjacency_data_id,
+        input.capability_profile_id,
+        root_output,
+    )
+    .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    let mut indexed_hasher = Sha256::new();
+    indexed_hasher.update(INDEXED_SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1);
+    indexed_hasher.update(input.settlement_root_account.bytes());
+    indexed_hasher.update(root_output);
+    let indexed_root_data_id = finish_id(indexed_hasher)?;
     Ok(CountedExactIndexRootStreamResultV1 { indexed_root_data_id, locator_data_id,
         adjacency_data_id, plane_id })
 }
