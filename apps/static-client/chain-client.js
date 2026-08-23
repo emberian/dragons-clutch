@@ -14,7 +14,7 @@
   const HASH32 = /^[0-9a-f]{64}$/;
   const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
-  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v1-source-v3-current";
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v3-general-no-keeper-no-selected-candidate";
   const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
@@ -64,7 +64,6 @@
     "general-candidate-feed-stage": "candidate",
     "general-candidate-feed": "candidate",
     "general-clear-work": "candidate",
-    "general-selected-candidate": "candidate",
     "general-epoch-budget": "candidate",
     "general-owner-settlement": "settlement",
     "general-owner-settlement-v5": "settlement",

@@ -14,32 +14,27 @@
 //! | module | intents and actions |
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
-//! | [`collateral_cash_v3`] | `Intent::Endow`, `Intent::WithdrawCash` over full-width PositionV3/HoardV2/GEN1 |
-//! | [`claim_representation_v3`] | `Intent::Materialize`, `Intent::Dematerialize` over PositionV3/ClaimLedgerV3/GEN1 and the separate claim release |
-//! | [`external_redemption_v3`] | `Intent::RedeemExternal` over ResolutionV5/HoardV2/ClaimLedgerV3 and bearer Token-2022 claims |
-//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::CloseRevenuePolicyRecord` |
-//! | [`split`] | `Intent::Split` |
-//! | [`merge_materialize`] | withdrawn lowered-ledger migration implementation; no live dispatch |
-//! | [`market_init`] | `Intent::CreateMarket` |
+//! | [`collateral_cash_v3`] | current full-width `Intent::Endow` / `Intent::WithdrawCash` over MarketBindingV2 and Profile-selected collateral code |
+//! | [`claim_representation_v3`] | current full-width `Intent::Materialize` / `Intent::Dematerialize` over MarketBindingV2 and GeneralMarketValueAuthorityV2 |
+//! | [`external_redemption_v3`] | current full-width `Intent::RedeemExternal` over MarketBindingV2 and Profile-selected collateral code |
+//! | [`genesis`] | current `InitRealm`, `InitProfileV2`, and exact revenue-record close; page constructors are historical fixtures |
+//! | [`complete_set_v3`] | current full-width `Intent::Split` / `Intent::Merge` over MarketBindingV2 and GeneralMarketValueAuthorityV2 |
+//! | [`split`] | historical lowered-ledger Split implementation; no checked dispatch |
+//! | [`merge_materialize`] | historical lowered-ledger Merge/representation implementation; no checked dispatch |
+//! | [`market_init`] | host-forensic legacy Market founder; no checked dispatch |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
 //! | [`source_ingest_v2`] | `Intent::InitSourceSpecV2`, `Intent::InitSourceArchiveV2`, `Intent::AppendSourceArchiveV2`, `Intent::SealSourceArchiveV2` |
-//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
+//! | [`orders_batch`] | historical General and Direct V2/V3 host fixtures; no checked dispatch |
 //! | `general_v2_fee_v5` | current counted-root/rent-owned V5 owner fee authentication and action-38 composition; account order remains General-owned |
 //! | `general_v2_receipt_v5` | exact SettlementRoot/retained-Feed/PDA authentication for rent-owned General Receipt V5 |
 //! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
-//! Implemented: genesis (the five account-creating initializers), full-width
-//! collateral_cash_v3 (Endow/WithdrawCash), claim_representation_v3
-//! (Materialize/Dematerialize), complete_set_v3 (Split/Merge), market_init,
-//! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and the whole Tier 2
-//! general clearing lifecycle in orders_batch: funded placement and
-//! cancellation, the general epoch open/freeze, the on-chain streaming walk
-//! to a verified verdict, candidate submission/selection, the entitlement
-//! freeze (verified-summary pot + per-slice receipts, `ACTIVE → ENTITLED`),
-//! and entitled `SettlePage` consumption for single-Egg direct slices and
-//! portfolio full pairs.  The standing refusals — partial fills, virtual
-//! pots, terminal closure — live in `orders_batch::settlement`'s ledger.
+//! Checked profiles route only account families whose current schemas are
+//! closed. The shared numeric value tags 2–5 and 15–17 are current full-width
+//! Collateral routes; the legacy founder and General placement/clearing
+//! families remain compiled only for hostile host fixtures and dependency-
+//! lower migration work, with no capability or checked dispatch.
 //!
 //! [`genesis`] owns namespace construction; [`orders_batch`] reuses its shared
 //! prefund-safe System-CPI helper for the two content-addressed submission
@@ -110,8 +105,6 @@ pub mod general_v2_merge_payment_v5;
 pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
-pub mod general_v2_identity;
 /// Staged action-24 rent-owned V5 materializer; route remains disabled.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_materialize_v5;
@@ -153,11 +146,15 @@ pub mod general_v2_settlement_producer_v5;
 ))]
 pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
+#[cfg(test)]
 pub mod market_init;
+#[cfg(test)]
 pub mod merge_materialize;
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
+/// Disabled narrow Product authority for founding the current General Market owner.
+pub(crate) mod product_general_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
 #[cfg(feature = "non-production-product-series-lab")]

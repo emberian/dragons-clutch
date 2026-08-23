@@ -63,11 +63,14 @@ coordinates plus the checked release. The browser never receives the raw RPC
 URLs and refuses an inconsistent or changing daemon projection. See
 [`CHAIN_SERVE.md`](CHAIN_SERVE.md).
 
-The config must name the current `source-v3-current` canonical decoder set.
+The config must name the current
+`v3-general-no-keeper-no-selected-candidate` canonical decoder set.
 Withdrawn Source V1/V2, historical General account versions, and raw historical
 Dealer V1 bodies are not live fallbacks: a selected release containing those
 bytes fails closed instead of being reinterpreted or displayed as current
-state. Current Dealer accounts must carry their exact central tag/version and
+state. SelectedCandidate V1 is not a live browser mapping, and current General
+accounts emit no keeper action until a capability-admitted planner exists.
+Current Dealer accounts must carry their exact central tag/version and
 strict eight-byte global envelope. Current Failure MarketRoot V2 and
 interval-consensus work/replay accounts are also decoded through their exact
 semantic-owner codecs. The Dealer upload-stage allocation is explicitly

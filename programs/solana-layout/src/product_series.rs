@@ -99,6 +99,322 @@ pub const OBSERVE_SERIES_DONATION_PAYLOAD_BYTES_V1: usize = HASH_BYTES + 1 + 1 +
 /// Exact `CloseFunding` payload width.
 pub const CLOSE_SERIES_FUNDING_PAYLOAD_BYTES_V1: usize = HASH_BYTES;
 
+/// Exact current physical FundingV2 activation account count.
+pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 43;
+/// First of six ordered System-owned lamport vaults.
+pub const ACTIVATE_SERIES_LAMPORT_VAULT_START_V2: usize = 3;
+/// Exclusive end of the six ordered System-owned lamport vaults.
+pub const ACTIVATE_SERIES_LAMPORT_VAULT_END_V2: usize = 9;
+/// First of five ordered Realm-selected collateral vaults.
+pub const ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2: usize = 21;
+/// Exclusive end of the five ordered Realm-selected collateral vaults.
+pub const ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2: usize = 26;
+/// First of nine ordered immutable Series artifacts.
+pub const ACTIVATE_SERIES_ARTIFACT_START_V2: usize = 34;
+/// Exclusive end of the nine ordered immutable Series artifacts.
+pub const ACTIVATE_SERIES_ARTIFACT_END_V2: usize = 43;
+
+/// Semantic role of one ordered current FundingV2 activation account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActivateSeriesFundingAccountRoleV2 {
+    /// Writable persistent Series registry/replay owner.
+    Registry,
+    /// Writable absent FundingV2 PDA.
+    Funding,
+    /// FundingTerms-bound lamport payer and refund identity.
+    Payer,
+    /// MarketCore lamport custody PDA.
+    LamportVaultMarketCore,
+    /// SeriesAdmission lamport custody PDA.
+    LamportVaultSeriesAdmission,
+    /// RecoveryReserve lamport custody PDA.
+    LamportVaultRecoveryReserve,
+    /// SourceWork lamport custody PDA.
+    LamportVaultSourceWork,
+    /// LiquidityFacility lamport custody PDA.
+    LamportVaultLiquidityFacility,
+    /// WrapperSet lamport custody PDA.
+    LamportVaultWrapperSet,
+    /// Holder collateral source account.
+    PayerCollateralSource,
+    /// Signer owning the holder collateral source.
+    PayerTokenAuthority,
+    /// FundingTerms-bound receive-only collateral principal refund account.
+    CollateralPrincipalRefund,
+    /// FundingTerms-bound receive-only neutral collateral disposition account.
+    NeutralCollateralDisposition,
+    /// FundingTerms-bound System-owned neutral lamport sink.
+    NeutralLamportSink,
+    /// Canonical Series collateral-vault authority PDA.
+    CollateralAuthority,
+    /// Immutable Realm account.
+    Realm,
+    /// Immutable ProfileV2 account.
+    Profile,
+    /// Exact collateral-policy artifact.
+    CollateralPolicy,
+    /// Realm-selected collateral mint.
+    CollateralMint,
+    /// Realm-selected collateral token program.
+    CollateralTokenProgram,
+    /// Exact linked collateral ProgramData account.
+    CollateralTokenProgramData,
+    /// MarketCore collateral vault.
+    CollateralVaultMarketCore,
+    /// RecoveryReserve collateral vault.
+    CollateralVaultRecoveryReserve,
+    /// SourceWork collateral vault.
+    CollateralVaultSourceWork,
+    /// LiquidityFacility collateral vault.
+    CollateralVaultLiquidityFacility,
+    /// WrapperSet collateral vault.
+    CollateralVaultWrapperSet,
+    /// System Program.
+    SystemProgram,
+    /// Rent sysvar.
+    RentSysvar,
+    /// Executing Clutch program account.
+    ExecutingProgram,
+    /// Linked Clutch ProgramData account.
+    ExecutingProgramData,
+    /// Exact RegistryRelease artifact.
+    RegistryRelease,
+    /// Exact CapabilityProfile artifact.
+    CapabilityProfile,
+    /// Exact Source release account.
+    SourceRelease,
+    /// Exact compiled BundleV5 artifact.
+    CompilerBundle,
+    /// SeriesPlanV5 artifact.
+    SeriesPlan,
+    /// SeriesFundingTermsV2 artifact.
+    FundingTerms,
+    /// ProductTemplateV4 artifact.
+    ProductTemplate,
+    /// NativeClaimBasisV1 artifact.
+    NativeClaimBasis,
+    /// EvidenceOnlyRecoveryPolicyV1 artifact.
+    RecoveryPolicy,
+    /// PriceMeasurePolicyV1 artifact.
+    PricePolicy,
+    /// MarketGenesisProfileV2 artifact.
+    MarketGenesis,
+    /// SeriesFundingQuoteV4 artifact.
+    FundingQuote,
+    /// SeriesAttachmentPlanV4 artifact.
+    AttachmentPlan,
+}
+
+impl ActivateSeriesFundingAccountRoleV2 {
+    /// Exact index in the current FundingV2 activation account list.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Registry => 0,
+            Self::Funding => 1,
+            Self::Payer => 2,
+            Self::LamportVaultMarketCore => 3,
+            Self::LamportVaultSeriesAdmission => 4,
+            Self::LamportVaultRecoveryReserve => 5,
+            Self::LamportVaultSourceWork => 6,
+            Self::LamportVaultLiquidityFacility => 7,
+            Self::LamportVaultWrapperSet => 8,
+            Self::PayerCollateralSource => 9,
+            Self::PayerTokenAuthority => 10,
+            Self::CollateralPrincipalRefund => 11,
+            Self::NeutralCollateralDisposition => 12,
+            Self::NeutralLamportSink => 13,
+            Self::CollateralAuthority => 14,
+            Self::Realm => 15,
+            Self::Profile => 16,
+            Self::CollateralPolicy => 17,
+            Self::CollateralMint => 18,
+            Self::CollateralTokenProgram => 19,
+            Self::CollateralTokenProgramData => 20,
+            Self::CollateralVaultMarketCore => 21,
+            Self::CollateralVaultRecoveryReserve => 22,
+            Self::CollateralVaultSourceWork => 23,
+            Self::CollateralVaultLiquidityFacility => 24,
+            Self::CollateralVaultWrapperSet => 25,
+            Self::SystemProgram => 26,
+            Self::RentSysvar => 27,
+            Self::ExecutingProgram => 28,
+            Self::ExecutingProgramData => 29,
+            Self::RegistryRelease => 30,
+            Self::CapabilityProfile => 31,
+            Self::SourceRelease => 32,
+            Self::CompilerBundle => 33,
+            Self::SeriesPlan => 34,
+            Self::FundingTerms => 35,
+            Self::ProductTemplate => 36,
+            Self::NativeClaimBasis => 37,
+            Self::RecoveryPolicy => 38,
+            Self::PricePolicy => 39,
+            Self::MarketGenesis => 40,
+            Self::FundingQuote => 41,
+            Self::AttachmentPlan => 42,
+        }
+    }
+}
+
+/// Required effective Solana privileges for one activation role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivateSeriesFundingAccountMetaV2 {
+    /// Exact semantic role at this index.
+    pub role: ActivateSeriesFundingAccountRoleV2,
+    /// Required effective signer bit after allowed privilege union.
+    pub signer: bool,
+    /// Required effective writable bit after allowed privilege union.
+    pub writable: bool,
+    /// Required executable bit.
+    pub executable: bool,
+}
+
+/// Observed runtime key and privileges without a Solana SDK dependency.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObservedActivateSeriesFundingAccountMetaV2 {
+    /// Exact runtime account key. The all-zero System Program key is admitted
+    /// only at the SystemProgram role.
+    pub key: [u8; HASH_BYTES],
+    /// Effective transaction signer bit.
+    pub signer: bool,
+    /// Effective transaction writable bit.
+    pub writable: bool,
+    /// Runtime executable bit.
+    pub executable: bool,
+}
+
+const fn activation_meta(
+    role: ActivateSeriesFundingAccountRoleV2,
+    signer: bool,
+    writable: bool,
+    executable: bool,
+) -> ActivateSeriesFundingAccountMetaV2 {
+    ActivateSeriesFundingAccountMetaV2 {
+        role,
+        signer,
+        writable,
+        executable,
+    }
+}
+
+/// Frozen full account order for current FundingV2 physical activation.
+pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2:
+    [ActivateSeriesFundingAccountMetaV2; ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
+    activation_meta(ActivateSeriesFundingAccountRoleV2::Registry, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::Funding, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::Payer, true, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultMarketCore, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultSeriesAdmission, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultRecoveryReserve, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultSourceWork, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultLiquidityFacility, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultWrapperSet, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::PayerCollateralSource, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority, true, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralPrincipalRefund, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::NeutralCollateralDisposition, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::NeutralLamportSink, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralAuthority, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::Realm, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::Profile, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralPolicy, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralMint, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgram, false, false, true),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralTokenProgramData, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralVaultMarketCore, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralVaultRecoveryReserve, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralVaultSourceWork, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralVaultLiquidityFacility, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CollateralVaultWrapperSet, false, true, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::SystemProgram, false, false, true),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::RentSysvar, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::ExecutingProgram, false, false, true),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::ExecutingProgramData, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::RegistryRelease, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CapabilityProfile, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::SourceRelease, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::CompilerBundle, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::SeriesPlan, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::FundingTerms, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::ProductTemplate, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::NativeClaimBasis, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::RecoveryPolicy, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::PricePolicy, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::MarketGenesis, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::FundingQuote, false, false, false),
+    activation_meta(ActivateSeriesFundingAccountRoleV2::AttachmentPlan, false, false, false),
+];
+
+fn activation_alias_allowed(
+    left: ActivateSeriesFundingAccountRoleV2,
+    right: ActivateSeriesFundingAccountRoleV2,
+) -> bool {
+    matches!(
+        (left, right),
+        (
+            ActivateSeriesFundingAccountRoleV2::Payer,
+            ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority
+        ) | (
+            ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority,
+            ActivateSeriesFundingAccountRoleV2::Payer
+        )
+    )
+}
+
+/// Validate exact count, order-derived effective privileges, executability,
+/// live keys, and the sole payer/token-authority alias exception.
+///
+/// The accessor keeps this owner allocation-free and lets the SBF adapter pass
+/// its live `AccountInfo` slice without creating a second role table.
+pub fn validate_activate_series_funding_account_metas_v2<F>(
+    observed_len: usize,
+    mut observed_at: F,
+) -> Result<()>
+where
+    F: FnMut(usize) -> Option<ObservedActivateSeriesFundingAccountMetaV2>,
+{
+    if observed_len < ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        return Err(CodecError::Truncated);
+    }
+    if observed_len > ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        return Err(CodecError::TrailingBytes);
+    }
+    let mut index = 0usize;
+    while index < ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        let observed = observed_at(index).ok_or(CodecError::InvalidCount)?;
+        let requirement = ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2[index];
+        if (is_zero(&observed.key)
+            && requirement.role != ActivateSeriesFundingAccountRoleV2::SystemProgram)
+            || observed.executable != requirement.executable
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let mut effective_signer = requirement.signer;
+        let mut effective_writable = requirement.writable;
+        let mut other_index = 0usize;
+        while other_index < ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+            if other_index != index {
+                let other = observed_at(other_index).ok_or(CodecError::InvalidCount)?;
+                if observed.key == other.key {
+                    let other_requirement =
+                        ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2[other_index];
+                    if !activation_alias_allowed(requirement.role, other_requirement.role) {
+                        return Err(CodecError::MismatchedBinding);
+                    }
+                    effective_signer |= other_requirement.signer;
+                    effective_writable |= other_requirement.writable;
+                }
+            }
+            other_index += 1;
+        }
+        if observed.signer != effective_signer || observed.writable != effective_writable {
+            return Err(CodecError::MismatchedBinding);
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
 const SERIES_REGISTRY_RESERVED_BYTES_V1: usize = 28;
 
 fn require_exact(input: &[u8], exact: usize) -> Result<()> {
@@ -1174,6 +1490,31 @@ impl CloseSeriesFundingIntentV1 {
 mod tests {
     use super::*;
 
+    fn observed_activation_meta(
+        index: usize,
+        payer_authority_alias: bool,
+    ) -> ObservedActivateSeriesFundingAccountMetaV2 {
+        let requirement = ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2[index];
+        let payer_index = ActivateSeriesFundingAccountRoleV2::Payer.index();
+        let authority_index = ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority.index();
+        let key_byte = u8::try_from(index.checked_add(1).unwrap()).unwrap();
+        let key = if requirement.role == ActivateSeriesFundingAccountRoleV2::SystemProgram {
+            [0; HASH_BYTES]
+        } else if payer_authority_alias && index == authority_index {
+            let payer_byte = u8::try_from(payer_index.checked_add(1).unwrap()).unwrap();
+            [payer_byte; HASH_BYTES]
+        } else {
+            [key_byte; HASH_BYTES]
+        };
+        let aliased = payer_authority_alias && (index == payer_index || index == authority_index);
+        ObservedActivateSeriesFundingAccountMetaV2 {
+            key,
+            signer: if aliased { true } else { requirement.signer },
+            writable: if aliased { true } else { requirement.writable },
+            executable: requirement.executable,
+        }
+    }
+
     fn registry_v2() -> SeriesRegistryAccountV2 {
         SeriesRegistryAccountV2 {
             series_plan_id: SeriesPlanV5Id::from_bytes([1; HASH_BYTES]),
@@ -1262,6 +1603,194 @@ mod tests {
         assert_eq!(
             SeriesFundingAccountV2::decode(&body),
             Err(CodecError::WrongVersion)
+        );
+    }
+
+    #[test]
+    fn activation_account_contract_accepts_only_exact_ordered_roles() {
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| Some(observed_activation_meta(index, false)),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ACTIVATE_SERIES_LAMPORT_VAULT_START_V2]
+                .role,
+            ActivateSeriesFundingAccountRoleV2::LamportVaultMarketCore
+        );
+        assert_eq!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2]
+                .role,
+            ActivateSeriesFundingAccountRoleV2::CollateralVaultMarketCore
+        );
+        assert_eq!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ActivateSeriesFundingAccountRoleV2::CollateralPrincipalRefund.index()]
+                .writable,
+            false
+        );
+        assert_eq!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ActivateSeriesFundingAccountRoleV2::NeutralCollateralDisposition.index()]
+                .writable,
+            false
+        );
+        assert_eq!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2[ACTIVATE_SERIES_ARTIFACT_START_V2].role,
+            ActivateSeriesFundingAccountRoleV2::SeriesPlan
+        );
+    }
+
+    #[test]
+    fn activation_payer_authority_alias_requires_union_privileges() {
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| Some(observed_activation_meta(index, true)),
+            ),
+            Ok(())
+        );
+        let authority_index = ActivateSeriesFundingAccountRoleV2::PayerTokenAuthority.index();
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, true);
+                    if index == authority_index {
+                        observed.writable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn activation_wrong_alias_zero_key_and_executable_refuse() {
+        let neutral_index = ActivateSeriesFundingAccountRoleV2::NeutralLamportSink.index();
+        let payer_index = ActivateSeriesFundingAccountRoleV2::Payer.index();
+        let payer_key = observed_activation_meta(payer_index, false).key;
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, false);
+                    if index == neutral_index {
+                        observed.key = payer_key;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        let refund_index =
+            ActivateSeriesFundingAccountRoleV2::CollateralPrincipalRefund.index();
+        let disposition_index =
+            ActivateSeriesFundingAccountRoleV2::NeutralCollateralDisposition.index();
+        let refund_key = observed_activation_meta(refund_index, false).key;
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, false);
+                    if index == disposition_index {
+                        observed.key = refund_key;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, false);
+                    if index == refund_index {
+                        observed.writable = true;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, false);
+                    if index == payer_index {
+                        observed.key = [0; HASH_BYTES];
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        let token_program =
+            ActivateSeriesFundingAccountRoleV2::CollateralTokenProgram.index();
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, false);
+                    if index == token_program {
+                        observed.executable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn activation_account_count_is_exact() {
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2
+                    .checked_sub(1)
+                    .unwrap(),
+                |_| None,
+            ),
+            Err(CodecError::Truncated)
+        );
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2
+                    .checked_add(1)
+                    .unwrap(),
+                |_| None,
+            ),
+            Err(CodecError::TrailingBytes)
+        );
+    }
+
+    #[test]
+    fn activation_payload_is_exact_and_carries_no_caller_amounts() {
+        let value = ActivateSeriesFundingIntentV1 {
+            series_plan_id: SeriesPlanV5Id::from_bytes([0x51; HASH_BYTES]),
+        };
+        let mut bytes = [0u8; ACTIVATE_SERIES_FUNDING_PAYLOAD_BYTES_V1];
+        value.encode(&mut bytes).unwrap();
+        assert_eq!(ActivateSeriesFundingIntentV1::decode(&bytes), Ok(value));
+
+        let mut trailing = [0u8; ACTIVATE_SERIES_FUNDING_PAYLOAD_BYTES_V1 + 1];
+        trailing[..ACTIVATE_SERIES_FUNDING_PAYLOAD_BYTES_V1].copy_from_slice(&bytes);
+        assert_eq!(
+            ActivateSeriesFundingIntentV1::decode(&trailing),
+            Err(CodecError::TrailingBytes)
+        );
+        assert_eq!(
+            ActivateSeriesFundingIntentV1::decode(
+                &[0u8; ACTIVATE_SERIES_FUNDING_PAYLOAD_BYTES_V1]
+            ),
+            Err(CodecError::ZeroIdentity)
         );
     }
 }

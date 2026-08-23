@@ -12,7 +12,7 @@
 //! | [`Intent::InitProfileV2`] | [`ProfileAccount`], policy/release frozen | 8 |
 //! | [`Intent::InitPriceGrid`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitTerms`] | obsolete: use typed `SealArtifact` | -- |
-//! | [`Intent::InitOrderPage`] | one order page | 6 |
+//! | [`Intent::InitOrderPage`] | exact DirectEpochV4 page-zero constructor only | 6 |
 //! | [`Intent::Endow`] | registered source + absent generation-zero Position/Replay, then collateral deposit and cash credit | 15 |
 //!
 //! ## `Endow` is the inbound value boundary
@@ -35,20 +35,9 @@
 //! `Split`; it is not silently reused as a custody ceiling.  A position may
 //! deposit more unused cash than the market can lock.
 //!
-//! ## Authority — **PROPOSED**, and it is the same proposal `market_init` made
-//!
-//! Creation here is **permissionless**: the account at index [`IX_PAYER`]
-//! signs and pays, and nothing else is privileged.  The frozen layout carries
-//! no authority field for a Realm, a Profile, a grid, a terms artifact or a
-//! page, so a gate here would be an invented ABI — the argument
-//! [`super::market_init`] sets out at length, unchanged.  What bounds the
-//! plane instead is that **every address is content- or nonce-derived**: a
-//! Realm's identity is a function of its Profile and a nonce, a Profile's is a
-//! function of its collateral policy, a grid's and a terms artifact's are
-//! digests of their own bodies, and a page's is its position in its epoch.  So
-//! a second caller can create the same account first, and cannot create a
-//! *different* account at that address.  Naming that residue is not fixing it;
-//! it is the same first-come-address residue market creation has.
+//! `InitOrderPage` is current only for the exact DirectEpochV4 page-zero
+//! constructor. The historical General account-width fallback is a host-test
+//! fixture and cannot compile into the Solana program.
 //!
 //! `Endow` is permissionless self-service, not a third-party credit interface:
 //! the signer must equal the requested Position owner and may deposit only
@@ -90,12 +79,10 @@
 //!
 //! ## What is *not* here, and who owns it
 //!
-//! * **No `InitEpoch`.**  [`Intent::InitOrderPage`] requires an epoch account
-//!   to already exist, which on a fresh chain nothing creates.  The epoch is a
-//!   ten-identity account whose freeze semantics belong with the order-set
-//!   commitment work (gap row 14), and creating it from a bring-up genesis
-//!   lane would fix a wire format for a freeze this program cannot yet
-//!   perform.  Named, not done.
+//! * **No General `InitEpoch` or page constructor.**  The shared
+//!   [`Intent::InitOrderPage`] tag is admitted only for an exact DirectEpochV4
+//!   account.  Historical General epoch/page constructors are host-test
+//!   fixtures, not a deployable lifecycle.
 //! * **No `InitClearWork` and no `InitCandidateFeed`.**  The two clearing
 //!   accounts landed as codecs this wave
 //!   ([`clutch_solana_layout::clearing`]) and are consumed by nothing.  The
@@ -495,15 +482,13 @@ pub const IX_PROFILE_TOKEN_PROGRAM: usize = 6;
 /// Immutable Upgradeable Loader ProgramData linked by that token program.
 pub const IX_PROFILE_TOKEN_PROGRAMDATA: usize = 7;
 
-/// Accounts in an `InitOrderPage` instruction without funding registration.
+/// Accounts in the current DirectEpochV4 `InitOrderPage` instruction.
 pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
-/// Accounts in a general-plane `InitOrderPage` that also registers the
-/// page's funding: one optional trailing `GeneralFundingLedgerV1` PDA,
-/// written in the same transition that debits the payer (TerminalClosure's
-/// exact-principal-to-payer input). Retired Direct V4 account shapes are not
-/// admitted by this current constructor.
+/// Historical host-fixture account count with a funding-ledger tail. Neither
+/// the withdrawn General plane nor retired Direct V4 account shapes are
+/// admitted by a current Solana constructor.
 pub const INIT_PAGE_LEDGERED_ACCOUNT_COUNT: usize = INIT_PAGE_ACCOUNT_COUNT + 1;
-/// The optional funding-ledger PDA.  General `InitOrderPage` only.
+/// Historical host-fixture funding-ledger role; never admitted on Solana.
 pub const IX_PAGE_LEDGER: usize = 6;
 /// The market the epoch belongs to (read-only, program-owned).
 pub const IX_PAGE_MARKET: usize = 2;
@@ -1125,11 +1110,16 @@ fn init_order_page(
         let _ = (program_id, accounts, sequence, intent);
         return Err(ClutchError::UnsupportedInstruction.into());
     }
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+    #[cfg(test)]
     return init_legacy_order_page(program_id, accounts, sequence, intent);
+    #[cfg(not(test))]
+    {
+        let _ = (program_id, accounts, sequence, intent);
+        Err(ClutchError::UnsupportedInstruction.into())
+    }
 }
 
-#[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
+#[cfg(test)]
 #[inline(never)]
 fn init_legacy_order_page(
     program_id: &Pubkey,
