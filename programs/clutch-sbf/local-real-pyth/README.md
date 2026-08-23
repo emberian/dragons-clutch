@@ -51,10 +51,12 @@ The builder feature now also exposes two reusable boundaries:
   balance equations, and assembles unsigned blockhash-free Solana transactions.
   Its flow inventory covers SourcePlane V3, General V2 candidate construction,
   owner settlement, fees, direct Eggs, liveness, Product Series, and structured
-  claims. Main-program successor envelopes use the central family allocation;
-  SourcePlane and liveness keep their separately owned codecs. The resulting
-  object always reports `signed=false` and `submitted=false`, and reserved SBF
-  routes remain labeled `ReservedDisabled`. `build_current_workflow` refuses
+  claims. Main-program successor envelopes carry a proposed central-family
+  wire identity but remain production-inert until the central registry,
+  dispatcher, and a checked release manifest all admit them; SourcePlane and
+  liveness keep their separately owned codecs. The resulting object always
+  reports `signed=false` and `submitted=false`, and every route is fixed to
+  `ReservedDisabled`. `build_current_workflow` refuses
   to substitute any missing flow: it requires SourcePlane V3, General V2
   candidate work, settlement, fees, direct Eggs, liveness, Series, and
   structured claims. Cursor-bearing work remains an ordered unsigned sequence;

@@ -86,14 +86,16 @@ pub enum ProtocolFlow {
 }
 
 /// Runtime status carried into every construction artifact.
+///
+/// This construction-only crate cannot promote an instruction to an enabled
+/// route. A future executable launcher must derive admission from a checked
+/// release manifest and the central registry rather than accepting a caller
+/// assertion here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeAdmission {
     /// Dispatcher capability is known to be disabled. Bytes are useful only
     /// for integration work and must not be represented as executable.
     ReservedDisabled,
-    /// A caller supplied an independently checked release manifest that names
-    /// an enabled capability. This builder does not perform that check.
-    ExternallyManifested,
 }
 
 /// The semantic package and reviewed digest that owned instruction bytes.
@@ -222,7 +224,6 @@ impl OwnedInstructionDraft {
         equations: Vec<ExactEquation>,
         exact_bytes: usize,
         data: Vec<u8>,
-        runtime_admission: RuntimeAdmission,
     ) -> Result<Self> {
         Self::owned_bytes(
             ProtocolFlow::SourcePlaneV3,
@@ -234,7 +235,6 @@ impl OwnedInstructionDraft {
             equations,
             OwnedWireContract::SourcePlaneV3 { exact_bytes },
             data,
-            runtime_admission,
         )
     }
 
@@ -248,7 +248,6 @@ impl OwnedInstructionDraft {
         equations: Vec<ExactEquation>,
         exact_bytes: usize,
         data: Vec<u8>,
-        runtime_admission: RuntimeAdmission,
     ) -> Result<Self> {
         Self::owned_bytes(
             ProtocolFlow::Liveness,
@@ -260,12 +259,14 @@ impl OwnedInstructionDraft {
             equations,
             OwnedWireContract::LivenessRuntimeV1 { exact_bytes },
             data,
-            runtime_admission,
         )
     }
 
-    /// Assemble a central successor envelope around semantic-owner payload.
-    pub fn successor(
+    /// Assemble a production-inert central-family envelope around bytes from
+    /// their semantic owner. `family` and `local_action` describe proposed
+    /// wire identity only: this method deliberately does not infer central
+    /// registry allocation, dispatcher support, or release admission.
+    pub fn reserved_successor(
         flow: ProtocolFlow,
         action_name: impl Into<String>,
         semantic_owner: SemanticOwner,
@@ -276,7 +277,6 @@ impl OwnedInstructionDraft {
         family: ExtensionFamily,
         local_action: u8,
         payload: &[u8],
-        runtime_admission: RuntimeAdmission,
     ) -> Result<Self> {
         if payload.len() > MAX_EXTENSION_PAYLOAD_BYTES {
             return Err(ConstructionError::PayloadTooLong);
@@ -299,7 +299,6 @@ impl OwnedInstructionDraft {
                 local_action,
             },
             data,
-            runtime_admission,
         )
     }
 
@@ -314,7 +313,6 @@ impl OwnedInstructionDraft {
         equations: Vec<ExactEquation>,
         wire: OwnedWireContract,
         data: Vec<u8>,
-        runtime_admission: RuntimeAdmission,
     ) -> Result<Self> {
         let value = Self {
             flow,
@@ -324,7 +322,7 @@ impl OwnedInstructionDraft {
             accounts,
             required_signers,
             equations,
-            runtime_admission,
+            runtime_admission: RuntimeAdmission::ReservedDisabled,
             wire,
             data,
         };
@@ -687,7 +685,7 @@ mod tests {
     fn structured_claim_envelope_is_built_without_signing_or_submission() {
         let payer = Address::new_from_array([1; 32]);
         let program = Address::new_from_array([2; 32]);
-        let draft = OwnedInstructionDraft::successor(
+        let draft = OwnedInstructionDraft::reserved_successor(
             ProtocolFlow::StructuredClaim,
             "wrap-full",
             owner(),
@@ -705,7 +703,6 @@ mod tests {
             ExtensionFamily::StructuredClaim,
             3,
             &[9; 72],
-            RuntimeAdmission::ReservedDisabled,
         )
         .unwrap();
         assert_eq!(&draft.data()[..3], &[75, 1, 3]);
@@ -733,8 +730,8 @@ mod tests {
             left: 5,
             right: 5,
         };
-        let successor = |flow, action| {
-            OwnedInstructionDraft::successor(
+        let reserved_successor = |flow, action| {
+            OwnedInstructionDraft::reserved_successor(
                 flow,
                 "general-action",
                 owner(),
@@ -745,7 +742,6 @@ mod tests {
                 ExtensionFamily::GeneralV2,
                 action,
                 &[8; 32],
-                RuntimeAdmission::ReservedDisabled,
             )
             .unwrap()
         };
@@ -760,13 +756,15 @@ mod tests {
             vec![equation()],
             liveness_data.len(),
             liveness_data,
-            RuntimeAdmission::ReservedDisabled,
         )
         .unwrap();
+        // This intentionally unallocated value proves construction does not
+        // pretend that a proposed envelope is admitted by the registry.
+        const RESERVED_TEST_ACTION: u8 = u8::MAX;
         let drafts = [
-            successor(ProtocolFlow::GeneralV2Settlement, 25),
-            successor(ProtocolFlow::GeneralV2Fees, 25),
-            successor(ProtocolFlow::DirectEggSettlement, 26),
+            reserved_successor(ProtocolFlow::GeneralV2Settlement, RESERVED_TEST_ACTION),
+            reserved_successor(ProtocolFlow::GeneralV2Fees, RESERVED_TEST_ACTION),
+            reserved_successor(ProtocolFlow::DirectEggSettlement, RESERVED_TEST_ACTION),
             liveness,
         ];
         let builder = ProtocolTransactionBuilder::new(
