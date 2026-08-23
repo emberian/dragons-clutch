@@ -8,6 +8,12 @@ use super::{budget_instruction, transaction, Instruction, Message, COMPUTE_UNIT_
 use clutch_sbf::instructions::{
     claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
 };
+use clutch_solana_layout::collateral_v3_accounts::{
+    account_contract_v3, validate_collateral_account_metas_v3, CollateralAccountContractV3,
+    CollateralActionV3, ObservedCollateralAccountMetaV3,
+};
+use clutch_solana_layout::Intent;
+use clutch_solana_reference::{Action, Request};
 
 /// Shared authenticated accounts for one full-width MarketInstanceV2.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,6 +82,32 @@ fn claim_readonly_roles(
     readonly
 }
 
+fn contract_from_request(data: &[u8], outcome_mints: usize) -> CollateralAccountContractV3 {
+    let request = Request::decode(data).expect("collateral builder requires one exact request");
+    let (action, selected_outcome) = match request.action {
+        Action::Layout(Intent::Endow { .. }) => (CollateralActionV3::Endow, None),
+        Action::Layout(Intent::WithdrawCash { .. }) => (CollateralActionV3::WithdrawCash, None),
+        Action::Layout(Intent::Split { .. }) => (CollateralActionV3::Split, None),
+        Action::Layout(Intent::Merge { .. }) => (CollateralActionV3::Merge, None),
+        Action::Layout(Intent::Materialize { outcome, .. }) => {
+            (CollateralActionV3::Materialize, Some(outcome))
+        }
+        Action::Layout(Intent::Dematerialize { outcome, .. }) => {
+            (CollateralActionV3::Dematerialize, Some(outcome))
+        }
+        Action::Layout(Intent::RedeemExternal { outcome, .. }) if request.sequence == 0 => {
+            (CollateralActionV3::RedeemExternal, Some(outcome))
+        }
+        _ => panic!("request is not an enabled full-width collateral route"),
+    };
+    account_contract_v3(
+        action,
+        u8::try_from(outcome_mints).expect("active market width must fit u8"),
+        selected_outcome,
+    )
+    .expect("active market width and selected outcome must be canonical")
+}
+
 fn build(
     fee_payer: [u8; 32],
     program: [u8; 32],
@@ -84,6 +116,7 @@ fn build(
     readonly_signers: &[[u8; 32]],
     writable: &[[u8; 32]],
     readonly_roles: &[[u8; 32]],
+    contract: CollateralAccountContractV3,
     role_keys: &[[u8; 32]],
     data: Vec<u8>,
 ) -> Vec<u8> {
@@ -121,6 +154,28 @@ fn build(
         &writable_keys,
         &readonly_keys,
     );
+    let observed = role_keys
+        .iter()
+        .map(|key| {
+            let index = usize::from(message.index(key));
+            let required_signatures = usize::from(message.required_signatures);
+            let writable_signatures = required_signatures - usize::from(message.readonly_signed);
+            let writable_unsigned_end = message.keys.len() - usize::from(message.readonly_unsigned);
+            ObservedCollateralAccountMetaV3 {
+                key: *key,
+                signer: index < required_signatures,
+                writable: index < writable_signatures
+                    || (index >= required_signatures && index < writable_unsigned_end),
+            }
+        })
+        .collect::<Vec<_>>();
+    validate_collateral_account_metas_v3(
+        contract.action(),
+        contract.outcome_count(),
+        contract.selected_outcome(),
+        &observed,
+    )
+    .expect("full-width collateral message must preserve the canonical V3 account contract");
     let action = Instruction {
         program_index: message.index(&program),
         accounts: message.indices(role_keys),
@@ -167,6 +222,8 @@ pub fn endow_v3_transaction(
         rent_sysvar,
     ];
     assert_eq!(roles.len(), collateral_cash_v3::ENDOW_ACCOUNT_COUNT_V3);
+    let contract = contract_from_request(&data, market.outcome_mints.len());
+    assert_eq!(contract.action(), CollateralActionV3::Endow);
     build(
         fee_payer,
         program,
@@ -194,6 +251,7 @@ pub fn endow_v3_transaction(
             system_program,
             rent_sysvar,
         ],
+        contract,
         &roles,
         data,
     )
@@ -228,6 +286,8 @@ pub fn withdraw_cash_v3_transaction(
         market.hoard_token,
     ];
     assert_eq!(roles.len(), collateral_cash_v3::WITHDRAW_ACCOUNT_COUNT_V3);
+    let contract = contract_from_request(&data, market.outcome_mints.len());
+    assert_eq!(contract.action(), CollateralActionV3::WithdrawCash);
     build(
         fee_payer,
         program,
@@ -253,6 +313,7 @@ pub fn withdraw_cash_v3_transaction(
             market.collateral_mint,
             market.hoard_authority,
         ],
+        contract,
         &roles,
         data,
     )
@@ -284,6 +345,11 @@ pub fn complete_set_v3_transaction(
         market.hoard_token,
     ];
     assert_eq!(roles.len(), complete_set_v3::COMPLETE_SET_ACCOUNT_COUNT_V3);
+    let contract = contract_from_request(&data, market.outcome_mints.len());
+    assert!(matches!(
+        contract.action(),
+        CollateralActionV3::Split | CollateralActionV3::Merge
+    ));
     build(
         fee_payer,
         program,
@@ -307,6 +373,7 @@ pub fn complete_set_v3_transaction(
             market.collateral_mint,
             market.hoard_token,
         ],
+        contract,
         &roles,
         data,
     )
@@ -362,6 +429,12 @@ pub fn claim_representation_v3_transaction(
             market.outcome_token_program,
         ],
     );
+    let contract = contract_from_request(&data, market.outcome_mints.len());
+    assert!(matches!(
+        contract.action(),
+        CollateralActionV3::Materialize | CollateralActionV3::Dematerialize
+    ));
+    assert_eq!(contract.selected_outcome(), Some(outcome));
     build(
         fee_payer,
         program,
@@ -376,6 +449,7 @@ pub fn claim_representation_v3_transaction(
             market.outcome_mints[selected],
         ],
         &readonly,
+        contract,
         &roles,
         data,
     )
@@ -440,6 +514,9 @@ pub fn redeem_external_v3_transaction(
             market.outcome_token_program,
         ],
     );
+    let contract = contract_from_request(&data, market.outcome_mints.len());
+    assert_eq!(contract.action(), CollateralActionV3::RedeemExternal);
+    assert_eq!(contract.selected_outcome(), Some(outcome));
     build(
         fee_payer,
         program,
@@ -455,6 +532,7 @@ pub fn redeem_external_v3_transaction(
             market.outcome_mints[selected],
         ],
         &readonly,
+        contract,
         &roles,
         data,
     )
@@ -463,6 +541,7 @@ pub fn redeem_external_v3_transaction(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_solana_layout::Hash32;
 
     fn key(value: u8) -> [u8; 32] {
         [value; 32]
@@ -496,6 +575,20 @@ mod tests {
         }
     }
 
+    fn request(sequence: u64, intent: Intent) -> Vec<u8> {
+        let mut encoded_intent = vec![0; intent.encoded_len()];
+        let written = intent.encode(&mut encoded_intent).unwrap();
+        encoded_intent.truncate(written);
+        let mut data = vec![0xd1, 1];
+        data.extend_from_slice(&sequence.to_le_bytes());
+        data.push(0);
+        let encoded_intent_len =
+            u16::try_from(encoded_intent.len()).expect("fixed Request intent fits u16");
+        data.extend_from_slice(&encoded_intent_len.to_le_bytes());
+        data.extend_from_slice(&encoded_intent);
+        data
+    }
+
     #[test]
     fn builds_each_fixed_full_width_account_order() {
         let market = market();
@@ -508,7 +601,14 @@ mod tests {
             key(5),
             &market,
             owner,
-            vec![1],
+            request(
+                0,
+                Intent::Endow {
+                    market: Hash32::from_bytes(key(40)),
+                    owner: Hash32::from_bytes(owner.owner),
+                    amount: 1,
+                },
+            ),
         )
         .is_empty());
         assert!(!withdraw_cash_v3_transaction(
@@ -518,13 +618,33 @@ mod tests {
             &market,
             owner,
             key(34),
-            vec![2],
+            request(
+                0,
+                Intent::WithdrawCash {
+                    market: Hash32::from_bytes(key(40)),
+                    owner: Hash32::from_bytes(owner.owner),
+                    destination: Hash32::from_bytes(key(34)),
+                    amount: 1,
+                },
+            ),
         )
         .is_empty());
-        assert!(
-            !complete_set_v3_transaction(key(1), key(2), key(3), &market, owner, vec![3],)
-                .is_empty()
-        );
+        assert!(!complete_set_v3_transaction(
+            key(1),
+            key(2),
+            key(3),
+            &market,
+            owner,
+            request(
+                0,
+                Intent::Split {
+                    market: Hash32::from_bytes(key(40)),
+                    owner: Hash32::from_bytes(owner.owner),
+                    quantity: 1,
+                },
+            ),
+        )
+        .is_empty());
     }
 
     #[test]
@@ -539,7 +659,16 @@ mod tests {
             owner,
             key(34),
             0,
-            vec![4],
+            request(
+                0,
+                Intent::Materialize {
+                    market: Hash32::from_bytes(key(40)),
+                    owner: Hash32::from_bytes(owner.owner),
+                    destination: Hash32::from_bytes(key(34)),
+                    outcome: 0,
+                    quantity: 1,
+                },
+            ),
         )
         .is_empty());
         assert!(!redeem_external_v3_transaction(
@@ -552,7 +681,17 @@ mod tests {
             key(36),
             key(37),
             1,
-            vec![5],
+            request(
+                0,
+                Intent::RedeemExternal {
+                    market: Hash32::from_bytes(key(40)),
+                    claimant: Hash32::from_bytes(owner.owner),
+                    source: Hash32::from_bytes(key(35)),
+                    destination: Hash32::from_bytes(key(36)),
+                    outcome: 1,
+                    quantity: 1,
+                },
+            ),
         )
         .is_empty());
     }
@@ -570,7 +709,38 @@ mod tests {
             owner(),
             key(34),
             0,
-            vec![4],
+            request(
+                0,
+                Intent::Materialize {
+                    market: Hash32::from_bytes(key(40)),
+                    owner: Hash32::from_bytes(owner().owner),
+                    destination: Hash32::from_bytes(key(34)),
+                    outcome: 0,
+                    quantity: 1,
+                },
+            ),
         );
+    }
+
+    #[test]
+    fn admits_fee_payer_alias_for_transaction_signing_owner() {
+        let market = market();
+        let owner = owner();
+        assert!(!complete_set_v3_transaction(
+            owner.owner,
+            key(2),
+            key(3),
+            &market,
+            owner,
+            request(
+                0,
+                Intent::Merge {
+                    market: Hash32::from_bytes(key(40)),
+                    owner: Hash32::from_bytes(owner.owner),
+                    quantity: 1,
+                },
+            ),
+        )
+        .is_empty());
     }
 }

@@ -5,7 +5,7 @@
 //! Realm-selected collateral account are authenticated but never debited,
 //! credited, or used as mint authority.
 
-use crate::accounts::{require, require_signer, Outcome};
+use crate::accounts::{require, Outcome};
 use crate::claim_release::authenticate_claim_issuance_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
@@ -19,6 +19,8 @@ use clutch_general_v2_contract::{
 };
 use clutch_owner_settlement::PositionSettlementPoststateV3;
 use clutch_retirement::MAX_OUTCOMES;
+use clutch_solana_layout::collateral_v3_accounts::claim_representation_indices_v3 as ix;
+use clutch_solana_layout::collateral_v3_accounts::CollateralActionV3;
 use clutch_solana_layout::{Hash32, Intent};
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -26,27 +28,12 @@ use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
     authenticate_general_market_liabilities_v1, authenticate_general_position_replay_v1,
-    RuntimeSha256,
+    validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
 
 /// Fixed prefix before one mint per active outcome.
-pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize = 14;
-
-const IX_ACTOR: usize = 0;
-const IX_REALM: usize = 1;
-const IX_PROFILE: usize = 2;
-const IX_POLICY: usize = 3;
-const IX_COLLATERAL_TOKEN_PROGRAM: usize = 4;
-const IX_MARKET_BINDING: usize = 5;
-const IX_MARKET_RUNTIME: usize = 6;
-const IX_MARKET_INSTANCE: usize = 7;
-const IX_HOARD: usize = 8;
-const IX_CLAIM_LEDGER: usize = 9;
-const IX_POSITION: usize = 10;
-const IX_REPLAY: usize = 11;
-const IX_OUTCOME_TOKEN_PROGRAM: usize = 12;
-const IX_HOLDER_TOKEN: usize = 13;
-const IX_OUTCOME_MINTS: usize = CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3;
+pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize =
+    clutch_solana_layout::collateral_v3_accounts::CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ClaimRepresentationRequestV3 {
@@ -95,27 +82,6 @@ fn decode_request(request: &Request) -> Outcome<ClaimRepresentationRequestV3> {
     }
 }
 
-/// Permit only the unavoidable alias between collateral and outcome token
-/// program roles when a Realm itself selects Token-2022.
-fn require_distinct_claim_roles(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
-    let mut left = 0usize;
-    while left < accounts.len() {
-        let mut right = left + 1;
-        while right < accounts.len() {
-            let allowed_program_alias = left == IX_COLLATERAL_TOKEN_PROGRAM
-                && right == IX_OUTCOME_TOKEN_PROGRAM
-                && accounts[left].key == accounts[right].key;
-            require(
-                accounts[left].key != accounts[right].key || allowed_program_alias,
-                ClutchError::AccountAlias,
-            )?;
-            right += 1;
-        }
-        left += 1;
-    }
-    Ok(())
-}
-
 fn observe_mints(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -126,8 +92,8 @@ fn observe_mints(
     claim_truth::observe_outcome_mints_v2(
         program_id,
         accounts,
-        IX_OUTCOME_MINTS,
-        *accounts[IX_MARKET_RUNTIME].key,
+        ix::OUTCOME_MINTS,
+        *accounts[ix::MARKET_RUNTIME].key,
         market_instance_id,
         outcome_count,
         Some(selected_outcome),
@@ -138,18 +104,18 @@ fn token_observation(
     accounts: &[AccountInfo],
     outcome: u8,
 ) -> Outcome<AdapterClaimRepresentationObservationV3> {
-    let mint_index = IX_OUTCOME_MINTS
+    let mint_index = ix::OUTCOME_MINTS
         .checked_add(usize::from(outcome))
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     let mint = &accounts[mint_index];
-    let holder = &accounts[IX_HOLDER_TOKEN];
+    let holder = &accounts[ix::HOLDER_TOKEN];
     let mint_observation = token::admit_mint(
         mint,
-        &token::MintPolicy::outcome(*mint.key, *accounts[IX_MARKET_RUNTIME].key),
+        &token::MintPolicy::outcome(*mint.key, *accounts[ix::MARKET_RUNTIME].key),
     )?;
     let holder_observation = token::admit_token_account(
         holder,
-        &token::TokenAccountPolicy::holder(*mint.key, *accounts[IX_ACTOR].key),
+        &token::TokenAccountPolicy::holder(*mint.key, *accounts[ix::ACTOR].key),
     )?;
     let mint_authority = mint_observation
         .mint_authority
@@ -171,54 +137,53 @@ pub fn process_claim_representation_v3(
     request: &Request,
 ) -> Outcome<()> {
     let request = decode_request(request)?;
-    require(
-        accounts.len() >= CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3,
-        ClutchError::AccountCount,
+    let observed_outcome_count = validate_full_width_collateral_accounts_v3(
+        accounts,
+        match request.kind {
+            ClaimRepresentationKindV3::Materialize => CollateralActionV3::Materialize,
+            ClaimRepresentationKindV3::Dematerialize => CollateralActionV3::Dematerialize,
+        },
+        Some(request.outcome),
     )?;
-    require_signer(&accounts[IX_ACTOR])?;
-    require_distinct_claim_roles(accounts)?;
     require(
-        accounts[IX_ACTOR].key.to_bytes() == request.owner.bytes()
-            && accounts[IX_HOLDER_TOKEN].key.to_bytes() == request.holder_token_account.bytes(),
+        accounts[ix::ACTOR].key.to_bytes() == request.owner.bytes()
+            && accounts[ix::HOLDER_TOKEN].key.to_bytes() == request.holder_token_account.bytes(),
         ClutchError::UnauthorizedActor,
     )?;
 
     let liabilities = authenticate_general_market_liabilities_v1(
         program_id,
-        &accounts[IX_REALM],
-        &accounts[IX_PROFILE],
-        &accounts[IX_POLICY],
-        &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_MARKET_INSTANCE],
-        &accounts[IX_HOARD],
-        &accounts[IX_CLAIM_LEDGER],
+        &accounts[ix::REALM],
+        &accounts[ix::PROFILE],
+        &accounts[ix::POLICY],
+        &accounts[ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[ix::MARKET_BINDING],
+        &accounts[ix::MARKET_RUNTIME],
+        &accounts[ix::MARKET_INSTANCE],
+        &accounts[ix::HOARD],
+        &accounts[ix::CLAIM_LEDGER],
         false,
         true,
     )?;
-    let expected_count = CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3
-        .checked_add(usize::from(liabilities.market_binding.outcome_count))
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    require(accounts.len() == expected_count, ClutchError::AccountCount)?;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()
             == request.market_instance_id.bytes()
+            && liabilities.market_binding.outcome_count == observed_outcome_count
             && request.outcome < liabilities.market_binding.outcome_count,
         ClutchError::MismatchedState,
     )?;
     let position = authenticate_general_position_replay_v1(
         program_id,
         liabilities.bound,
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_POSITION],
-        &accounts[IX_REPLAY],
+        &accounts[ix::MARKET_BINDING],
+        &accounts[ix::MARKET_RUNTIME],
+        &accounts[ix::POSITION],
+        &accounts[ix::REPLAY],
         request.owner.bytes(),
         request.sequence,
     )?;
     let claim =
-        authenticate_claim_issuance_v1(liabilities.bound, &accounts[IX_OUTCOME_TOKEN_PROGRAM])?;
+        authenticate_claim_issuance_v1(liabilities.bound, &accounts[ix::OUTCOME_TOKEN_PROGRAM])?;
     let observed_before = observe_mints(
         program_id,
         accounts,
@@ -229,15 +194,15 @@ pub fn process_claim_representation_v3(
     let token_before = token_observation(accounts, request.outcome)?;
     let authority = match request.kind {
         ClaimRepresentationKindV3::Materialize => {
-            CollateralId::from_bytes(accounts[IX_MARKET_RUNTIME].key.to_bytes())
+            CollateralId::from_bytes(accounts[ix::MARKET_RUNTIME].key.to_bytes())
         }
         ClaimRepresentationKindV3::Dematerialize => {
-            CollateralId::from_bytes(accounts[IX_ACTOR].key.to_bytes())
+            CollateralId::from_bytes(accounts[ix::ACTOR].key.to_bytes())
         }
     };
     let prepared = prepare_claim_representation_v3(
         claim,
-        CollateralId::from_bytes(accounts[IX_POSITION].key.to_bytes()),
+        CollateralId::from_bytes(accounts[ix::POSITION].key.to_bytes()),
         position.projection,
         liabilities.claim_ledger,
         request.kind,
@@ -250,11 +215,11 @@ pub fn process_claim_representation_v3(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     let intent = prepared.issuance_intent();
-    let selected_mint = &accounts[IX_OUTCOME_MINTS + usize::from(request.outcome)];
+    let selected_mint = &accounts[ix::OUTCOME_MINTS + usize::from(request.outcome)];
     require(
         intent.mint == CollateralId::from_bytes(selected_mint.key.to_bytes())
             && intent.holder_token_account
-                == CollateralId::from_bytes(accounts[IX_HOLDER_TOKEN].key.to_bytes())
+                == CollateralId::from_bytes(accounts[ix::HOLDER_TOKEN].key.to_bytes())
             && intent.authority == authority
             && intent.amount_atoms == request.quantity,
         ClutchError::MismatchedState,
@@ -265,14 +230,14 @@ pub fn process_claim_representation_v3(
                 intent.minting && intent.program_signed,
                 ClutchError::MismatchedState,
             )?;
-            let binding_key = accounts[IX_MARKET_BINDING].key.to_bytes();
+            let binding_key = accounts[ix::MARKET_BINDING].key.to_bytes();
             let bump = [position.market_runtime.stored_bump];
             let signer: [&[u8]; 3] = [seeds::SEED_GENERAL_V2_MARKET_RUNTIME, &binding_key, &bump];
             token::mint_to_signed(
-                &accounts[IX_OUTCOME_TOKEN_PROGRAM],
+                &accounts[ix::OUTCOME_TOKEN_PROGRAM],
                 selected_mint,
-                &accounts[IX_HOLDER_TOKEN],
-                &accounts[IX_MARKET_RUNTIME],
+                &accounts[ix::HOLDER_TOKEN],
+                &accounts[ix::MARKET_RUNTIME],
                 request.quantity,
                 &signer,
             )?;
@@ -283,10 +248,10 @@ pub fn process_claim_representation_v3(
                 ClutchError::MismatchedState,
             )?;
             token::burn(
-                &accounts[IX_OUTCOME_TOKEN_PROGRAM],
-                &accounts[IX_HOLDER_TOKEN],
+                &accounts[ix::OUTCOME_TOKEN_PROGRAM],
+                &accounts[ix::HOLDER_TOKEN],
                 selected_mint,
-                &accounts[IX_ACTOR],
+                &accounts[ix::ACTOR],
                 request.quantity,
             )?;
         }
@@ -335,7 +300,7 @@ pub fn process_claim_representation_v3(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
 
-    accounts[IX_POSITION]
+    accounts[ix::POSITION]
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
         .copy_from_slice(
@@ -346,12 +311,12 @@ pub fn process_claim_representation_v3(
     accepted
         .claim_ledger_after()
         .encode(
-            &mut accounts[IX_CLAIM_LEDGER]
+            &mut accounts[ix::CLAIM_LEDGER]
                 .try_borrow_mut_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    accounts[IX_REPLAY]
+    accounts[ix::REPLAY]
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
         .copy_from_slice(replay.replay_poststate_body());

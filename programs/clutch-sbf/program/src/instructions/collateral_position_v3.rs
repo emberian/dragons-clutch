@@ -24,6 +24,10 @@ use clutch_retirement::{
     GeneralPositionProjectionV3, Identity32V1, PositionAccountV3, PositionPurposeV3,
     PositionV3Sha256Backend, ReplayV3HashBackend, POSITION_V3_BYTES,
 };
+use clutch_solana_layout::collateral_v3_accounts::{
+    validate_inferred_collateral_account_metas_with_v3, CollateralActionV3,
+    ObservedCollateralAccountMetaV3,
+};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -32,6 +36,30 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
 use super::product_artifact::authenticate_product_artifact_v1;
+
+/// Enforce the central full-width account-role, privilege, and alias contract
+/// over live effective AccountInfo metadata without allocation.
+pub(crate) fn validate_full_width_collateral_accounts_v3(
+    accounts: &[AccountInfo<'_>],
+    action: CollateralActionV3,
+    selected_outcome: Option<u8>,
+) -> Outcome<u8> {
+    validate_inferred_collateral_account_metas_with_v3(
+        action,
+        selected_outcome,
+        accounts.len(),
+        |index| {
+            accounts
+                .get(index)
+                .map(|account| ObservedCollateralAccountMetaV3 {
+                    key: account.key.to_bytes(),
+                    writable: account.is_writable,
+                    signer: account.is_signer,
+                })
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeSha256;

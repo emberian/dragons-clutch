@@ -1,0 +1,16 @@
+[package]
+name = "clutch-market-quality"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Exact integer portfolio value and risk certificates for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+clutch-kernel = { path = "../clutch-kernel" }

@@ -11,8 +11,10 @@ use crate::{
     Result,
 };
 use clutch_local_real_pyth::index_service::{RpcIndexEngine, RpcIndexEngineEvent};
-use clutch_local_real_pyth::rpc_index::{PlannedRpcRequest, RpcIndexPlan};
-use serde_json::Value;
+use clutch_local_real_pyth::rpc_index::{
+    public_rpc_endpoint_binding, PlannedRpcRequest, RpcIndexPlan,
+};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -29,6 +31,7 @@ const IO_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const READ_BUFFER_BYTES: usize = 16 * 1024;
 const WRITE_BUFFER_BYTES: usize = 16 * 1024;
 const MAX_WRITE_BUFFER_BYTES: usize = 128 * 1024;
+const GENESIS_CHALLENGE_REQUEST_ID: u64 = 9_100_000;
 
 type RpcSocket = WebSocket<MaybeTlsStream<TcpStream>>;
 
@@ -76,7 +79,9 @@ pub fn spawn(
                 Ok(()) => {
                     "processed WebSocket generation ended without an explicit error".to_string()
                 }
-                Err(error) => error.to_string(),
+                Err(error) => {
+                    redacted_error_detail(&error.to_string(), &plan.cluster.rpc_websocket_url)
+                }
             };
             if state
                 .read()
@@ -124,6 +129,14 @@ pub fn spawn(
     });
 }
 
+fn redacted_error_detail(_detail: &str, websocket_url: &str) -> String {
+    let websocket = public_rpc_endpoint_binding(websocket_url);
+    format!(
+        "processed WebSocket generation failed at {}; endpoint credentials and transport detail are withheld from the browser projection",
+        websocket.redacted
+    )
+}
+
 fn run_generation(
     engine: &Arc<RwLock<RpcIndexEngine>>,
     plan: &RpcIndexPlan,
@@ -135,9 +148,12 @@ fn run_generation(
     let timeout = Duration::from_secs(timeout_seconds);
     let mut socket = connect(&plan.cluster.rpc_websocket_url, plan, timeout)?;
     update_state(state, |state| {
-        state.mark_registering();
+        state.mark_authenticating_genesis();
         Ok(())
     })?;
+    authenticate_websocket_genesis(&mut socket, plan, timeout)?;
+    update_state(state, ProcessedTransportState::mark_genesis_matched)?;
+    update_state(state, ProcessedTransportState::mark_registering)?;
     let requests = subscription_requests(engine)?;
     if requests.len() != plan.releases.len().saturating_add(3) {
         return Err("processed generation does not own the complete program/block/slot/root subscription set".into());
@@ -242,10 +258,7 @@ fn run_generation(
     for notification in buffered {
         admit_notification(engine, state, &notification)?;
     }
-    update_state(state, |state| {
-        state.mark_live();
-        Ok(())
-    })?;
+    update_state(state, |state| state.mark_live())?;
 
     last_message = Instant::now();
     loop {
@@ -264,6 +277,46 @@ fn run_generation(
             }
         }
     }
+}
+
+fn authenticate_websocket_genesis(
+    socket: &mut RpcSocket,
+    plan: &RpcIndexPlan,
+    timeout: Duration,
+) -> Result<()> {
+    let body = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": GENESIS_CHALLENGE_REQUEST_ID,
+        "method": "getGenesisHash",
+        "params": []
+    }))?;
+    if body.len() > plan.bounds.maximum_total_response_bytes {
+        return Err("WebSocket genesis challenge exceeds the configured byte bound".into());
+    }
+    socket.send(Message::text(body))?;
+    let started = Instant::now();
+    loop {
+        match read_json(socket, plan.bounds.maximum_total_response_bytes)? {
+            Incoming::Timeout => require_not_idle(started, timeout)?,
+            Incoming::Control => {}
+            Incoming::Json(value, _) => {
+                return validate_genesis_response(&value, &plan.cluster.genesis_hash);
+            }
+        }
+    }
+}
+
+fn validate_genesis_response(value: &Value, expected_genesis: &str) -> Result<()> {
+    if response_id(value)? != Some(GENESIS_CHALLENGE_REQUEST_ID) {
+        return Err("WebSocket emitted a notification or unrelated response before its genesis challenge completed".into());
+    }
+    if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || value.get("error").is_some_and(|error| !error.is_null())
+        || value.get("result").and_then(Value::as_str) != Some(expected_genesis)
+    {
+        return Err("WebSocket genesis challenge differs from the exact selected cluster".into());
+    }
+    Ok(())
 }
 
 fn connect(endpoint: &str, plan: &RpcIndexPlan, timeout: Duration) -> Result<RpcSocket> {
@@ -474,5 +527,43 @@ mod tests {
         assert!(response_id(&json!({})).is_err());
         assert!(response_id(&json!({"id": 7, "method": "rootNotification"})).is_err());
         assert!(response_id(&json!({"id": "7"})).is_err());
+    }
+
+    #[test]
+    fn websocket_genesis_challenge_refuses_mismatch_error_and_notification() {
+        let expected = "11111111111111111111111111111111";
+        assert!(validate_genesis_response(
+            &json!({"jsonrpc":"2.0", "id":GENESIS_CHALLENGE_REQUEST_ID, "result":expected}),
+            expected
+        )
+        .is_ok());
+        assert!(validate_genesis_response(
+            &json!({"jsonrpc":"2.0", "id":GENESIS_CHALLENGE_REQUEST_ID, "result":"wrong"}),
+            expected
+        )
+        .is_err());
+        assert!(validate_genesis_response(
+            &json!({"jsonrpc":"2.0", "id":GENESIS_CHALLENGE_REQUEST_ID, "error":{"code":-1}}),
+            expected
+        )
+        .is_err());
+        assert!(validate_genesis_response(
+            &json!({"jsonrpc":"2.0", "method":"rootNotification"}),
+            expected
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn public_transport_error_never_repeats_endpoint_path_or_query() {
+        let endpoint = "wss://rpc.example/private/token?api-key=secret";
+        let detail = redacted_error_detail(
+            "connection to wss://rpc.example/private/token?api-key=secret failed",
+            endpoint,
+        );
+        assert!(detail.contains("wss://rpc.example/<redacted>?<redacted>"));
+        assert!(!detail.contains("private"));
+        assert!(!detail.contains("token"));
+        assert!(!detail.contains("secret"));
     }
 }

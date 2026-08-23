@@ -85,21 +85,29 @@ release plus `blockSubscribe`, `slotsUpdatesSubscribe`, and `rootSubscribe`.
 Before a processed generation becomes readable it:
 
 1. opens the exact configured WebSocket URL with no redirect or proxy fallback;
-2. binds every server-assigned subscription ID to its planned request;
-3. buffers notifications under the configured count and aggregate-byte bounds;
-4. runs a serialized HTTP release-check → finalized scan → release-check cycle;
-5. replays the buffered notifications in wire order; and
-6. marks the generation live only after the complete replay succeeds.
+2. sends `getGenesisHash` on that same connection and requires the exact selected
+   genesis before sending any subscription request;
+3. binds every server-assigned subscription ID to its planned request;
+4. buffers notifications under the configured count and aggregate-byte bounds;
+5. runs a serialized HTTP release-check → finalized scan → release-check cycle;
+6. replays the buffered notifications in wire order; and
+7. marks the generation live only after the complete replay succeeds.
 
 Program rows remain buffered until their slot has a unique blockhash and is
 frozen. A dead slot withdraws buffered rows and already-indexed descendants.
 Each new root must be non-regressing, uniquely block-identified, free of known
 dead ancestry, and descend from the previous observed root. Root arrival drains
-same-slot pending rows. Capacity exhaustion, ambiguous topology, closure/owner
-change, malformed input, release mismatch, idle timeout, or transport loss
-withdraws the entire generation—including processed versions, fork nodes,
-pending rows/root, and connection-scoped subscription IDs—and reconnects with
-an explicitly configured exponentially increasing, capped backoff.
+same-slot pending rows. A well-formed exact zero-lamport/empty/non-executable
+closure or a well-formed non-executable owner change creates a fork-bound,
+release-specific removal observation. It masks only that release's processed
+row, increments the rollback epoch, preserves the finalized baseline, and is
+itself reverted if its branch dies. An unknown-address removal is recorded but
+has nothing to mask. Executable owner changes, malformed changes, capacity
+exhaustion, ambiguous topology, release mismatch, idle timeout, or transport
+loss still withdraw the entire generation—including processed versions,
+removals, fork nodes, pending rows/root, and connection-scoped subscription
+IDs—and reconnect with an explicitly configured exponentially increasing,
+capped backoff.
 
 Processed output is always labeled non-final and rollbackable. It has
 `authorityEligibility: false`; the processed keeper endpoint returns no actions,
@@ -108,18 +116,24 @@ finalized projection. The common read gate is withdrawn during each release-
 bracketed finalized scan; otherwise the last complete finalized scan remains
 available while processed transport is in backoff, registration, or replay.
 
-`/v1/acquisition` echoes the exact HTTP URL, WebSocket URL, genesis binding,
-and every configured Program/ProgramData/deployment-slot/ELF coordinate. Glass
-requires exact equality with its immutable selected configuration before it
-accepts any account response. For processed reads it brackets its bounded GET
-sequence with acquisition-state reads and rejects a changed connection
-generation or rollback epoch. The echoed verification disposition means only
-that the read gate follows the last complete untrusted HTTP release bracket; it
-is explicitly not authority eligibility or cryptographic chain authentication.
+`/v1/acquisition` publishes a domain-separated SHA-256 binding for each complete
+HTTP and WebSocket URL plus a display coordinate containing only
+scheme/authority and redacted path/query markers. It never returns raw URL
+userinfo, path tokens, or query credentials. Userinfo is rejected at config
+admission. Glass hashes its exact immutable URL selections locally and requires
+both hashes, the genesis binding, and every configured
+Program/ProgramData/deployment-slot/ELF coordinate to match before accepting an
+account response. Its displayed/copied configuration is redacted too. For
+processed reads it brackets its bounded GET sequence with acquisition-state
+reads and rejects a changed connection generation or rollback epoch. The
+echoed verification disposition means only that the read gate follows the last
+complete untrusted HTTP release bracket; it is explicitly not authority
+eligibility or cryptographic chain authentication.
 
-The HTTP genesis/release checks do not cryptographically prove that a distinct
-WebSocket service is operated by the same backend. The exact URL join prevents
-silent target substitution inside Glass; all WebSocket observations remain
+Matching `getGenesisHash` on the exact WebSocket connection prevents a silently
+different cluster from entering that processed generation. It does not prove
+that the HTTP and WebSocket services share an operator, authenticate the RPC,
+or make its observations authoritative. All WebSocket observations remain
 untrusted and onchain execution must independently reload authority.
 
 The RPC plan accepts HTTPS/WSS endpoints or canonical loopback
