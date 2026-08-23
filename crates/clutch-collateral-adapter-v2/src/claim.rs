@@ -2,14 +2,22 @@
 
 use crate::codec::{Reader, Writer};
 use crate::{digest, AdapterReleaseV2, Error, Id, Result, TOKEN_2022_PROGRAM};
+use clutch_retirement::MAX_OUTCOMES;
 
 const CLAIM_MAGIC: [u8; 8] = *b"DCCLAIM1";
 const CLAIM_VERSION: u16 = 1;
 const CLAIM_DOMAIN: &[u8] = b"dragons-clutch/claim-issuance-binding/v1\0";
+const CLAIM_MINT_FOUNDING_DOMAIN_V2: &[u8] = b"dragons-clutch/claim-mint/founding/v2\0";
+const CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2: &[u8] = b"dragons-clutch/claim-mint/founding-step/v2\0";
+const ACCEPTED_CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/claim-mint/founding-step-accepted/v2\0";
 const CLAIM_RESERVED_BYTES: usize = 3;
 
 /// Exact canonical claim-issuance binding width.
 pub const CLAIM_ISSUANCE_BINDING_V1_BYTES: usize = 160;
+/// Exact extension-free Token-2022 mint width selected by claim release V1.
+pub const CLAIM_MINT_ACCOUNT_BYTES_V2: usize = 82;
+const CLAIM_MINT_ACCOUNT_BYTES_V2_WIRE: u16 = 82;
 
 /// Claim release emits only protocol-owned mint/burn operations.
 pub const CLAIM_FLAG_MINT_BURN_ONLY: u16 = 1 << 0;
@@ -209,4 +217,458 @@ pub fn bind_claim_issuance_v1(
         binding_id,
         binding,
     })
+}
+
+/// Exact fixed-width addresses for one full MarketInstanceV2 claim-mint plane.
+///
+/// This value is not authority. It is accepted only together with a
+/// private-field [`BoundClaimIssuanceV1`] produced from the compiled claim
+/// release and observed Token-2022 deployment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimMintFoundingRequestV2 {
+    /// Full Product-owned MarketInstanceV2 identity.
+    pub market_instance_id: Id,
+    /// General MarketRuntime PDA that alone mints native claims.
+    pub mint_authority: Id,
+    /// Active native outcome width.
+    pub outcome_count: u8,
+    /// Canonical OutcomeMintV2 accounts in outcome order; inactive tail zero.
+    pub outcome_mints: [Id; MAX_OUTCOMES],
+}
+
+/// Closed claim-mint creation contract for one full-width Market.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimMintFoundingPlanV2 {
+    binding_id: Id,
+    market_instance_id: Id,
+    mint_authority: Id,
+    outcome_count: u8,
+    outcome_mints: [Id; MAX_OUTCOMES],
+    founding_id: Id,
+}
+
+/// Exact one-mint projection from a complete Market claim-plane plan.
+///
+/// Product can use this bounded projection for one replay-counted founding
+/// step without letting a caller substitute a mint or authority. A receipt
+/// from this projection still does not activate the Market; Product owns the
+/// exhaustive step counter and final activation transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimMintFoundingStepV2 {
+    binding_id: Id,
+    founding_id: Id,
+    market_instance_id: Id,
+    mint_authority: Id,
+    outcome: u8,
+    mint: Id,
+    step_id: Id,
+}
+
+/// Reloaded runtime facts for one newly created OutcomeMintV2.
+///
+/// The SBF adapter derives this view from the actual account and its hostile
+/// Token-2022 parser. It is not authority by itself; acceptance also consumes
+/// a private-field founding step and the compiled claim-release binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimMintFoundingPostwriteV2 {
+    /// Exact mint account address.
+    pub mint: Id,
+    /// Runtime owner of the mint account.
+    pub owner_program: Id,
+    /// Runtime writable bit.
+    pub writable: bool,
+    /// Runtime signer bit.
+    pub signer: bool,
+    /// Runtime executable bit.
+    pub executable: bool,
+    /// Exact observed data width.
+    pub account_bytes: u16,
+    /// Whether the Token-2022 base state is initialized.
+    pub initialized: bool,
+    /// Observed raw-atom exponent.
+    pub decimals: u8,
+    /// Observed mint supply.
+    pub supply_atoms: u64,
+    /// Exact observed mint authority; founding requires the General runtime.
+    pub mint_authority: Option<Id>,
+    /// Exact observed freeze authority; founding requires none.
+    pub freeze_authority: Option<Id>,
+    /// Observed extension mask; claim release V1 requires zero.
+    pub extensions: u64,
+}
+
+/// Accepted exact OutcomeMintV2 creation step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedClaimMintFoundingStepV2 {
+    step: ClaimMintFoundingStepV2,
+    receipt_id: Id,
+}
+
+impl AcceptedClaimMintFoundingStepV2 {
+    /// Exact bounded step whose postwrite state was observed.
+    pub const fn step(self) -> ClaimMintFoundingStepV2 {
+        self.step
+    }
+
+    /// Receipt Product can consume to advance the ordered mint counter.
+    pub const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
+}
+
+impl ClaimMintFoundingStepV2 {
+    /// Exact independently authenticated claim release.
+    pub const fn binding_id(self) -> Id {
+        self.binding_id
+    }
+
+    /// Complete claim-plane founding plan identity.
+    pub const fn founding_id(self) -> Id {
+        self.founding_id
+    }
+
+    /// Full MarketInstanceV2 identity.
+    pub const fn market_instance_id(self) -> Id {
+        self.market_instance_id
+    }
+
+    /// Sole General MarketRuntime mint authority.
+    pub const fn mint_authority(self) -> Id {
+        self.mint_authority
+    }
+
+    /// Exact active outcome index created by this step.
+    pub const fn outcome(self) -> u8 {
+        self.outcome
+    }
+
+    /// Exact canonical OutcomeMintV2 account created by this step.
+    pub const fn mint(self) -> Id {
+        self.mint
+    }
+
+    /// Replay-sensitive identity for this one bounded creation step.
+    pub const fn step_id(self) -> Id {
+        self.step_id
+    }
+}
+
+impl ClaimMintFoundingPlanV2 {
+    /// Exact independently authenticated claim release.
+    pub const fn binding_id(self) -> Id {
+        self.binding_id
+    }
+
+    /// Full MarketInstanceV2 identity.
+    pub const fn market_instance_id(self) -> Id {
+        self.market_instance_id
+    }
+
+    /// Sole General MarketRuntime mint authority.
+    pub const fn mint_authority(self) -> Id {
+        self.mint_authority
+    }
+
+    /// Active outcome width.
+    pub const fn outcome_count(self) -> u8 {
+        self.outcome_count
+    }
+
+    /// Exact active mint, refusing inactive or out-of-range indices.
+    pub fn outcome_mint(self, outcome: u8) -> Result<Id> {
+        if outcome >= self.outcome_count {
+            return Err(Error::InvalidParameter);
+        }
+        Ok(self.outcome_mints[usize::from(outcome)])
+    }
+
+    /// Canonical fixed-width mint vector with a zero inactive tail.
+    pub const fn outcome_mints(self) -> [Id; MAX_OUTCOMES] {
+        self.outcome_mints
+    }
+
+    /// Exact mint account width selected by claim release V1.
+    pub const fn mint_account_bytes(self) -> usize {
+        CLAIM_MINT_ACCOUNT_BYTES_V2
+    }
+
+    /// Shared claim-mint founding identity.
+    pub const fn founding_id(self) -> Id {
+        self.founding_id
+    }
+
+    /// Project one exact active mint for a bounded, replay-counted Product
+    /// founding step.
+    pub fn step(self, outcome: u8) -> Result<ClaimMintFoundingStepV2> {
+        let mint = self.outcome_mint(outcome)?;
+        let outcome_byte = [outcome];
+        let step_id = digest(
+            CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2,
+            &[
+                &self.binding_id.bytes(),
+                &self.founding_id.bytes(),
+                &self.market_instance_id.bytes(),
+                &self.mint_authority.bytes(),
+                &outcome_byte,
+                &mint.bytes(),
+            ],
+        );
+        step_id.require_live()?;
+        Ok(ClaimMintFoundingStepV2 {
+            binding_id: self.binding_id,
+            founding_id: self.founding_id,
+            market_instance_id: self.market_instance_id,
+            mint_authority: self.mint_authority,
+            outcome,
+            mint,
+            step_id,
+        })
+    }
+}
+
+/// Bind all canonical OutcomeMintV2 addresses to the independent claim
+/// release and one exact General MarketRuntime authority.
+///
+/// PDA derivation and absence remain runtime obligations. This constructor
+/// prevents a writer from mixing releases, authorities, Markets, duplicate
+/// mints, or a noncanonical inactive tail.
+pub fn prepare_claim_mint_founding_v2(
+    claim: BoundClaimIssuanceV1,
+    request: ClaimMintFoundingRequestV2,
+) -> Result<ClaimMintFoundingPlanV2> {
+    request.market_instance_id.require_live()?;
+    request.mint_authority.require_live()?;
+    if request.outcome_count == 0 || usize::from(request.outcome_count) > MAX_OUTCOMES {
+        return Err(Error::InvalidParameter);
+    }
+    let binding = claim.binding();
+    binding.validate()?;
+    if binding.decimals != 0
+        || binding.mint_extensions != 0
+        || binding.account_extensions != 0
+        || binding.token_program != TOKEN_2022_PROGRAM
+    {
+        return Err(Error::MismatchedBinding);
+    }
+
+    let active = usize::from(request.outcome_count);
+    let mut index = 0usize;
+    while index < MAX_OUTCOMES {
+        let mint = request.outcome_mints[index];
+        if index < active {
+            mint.require_live()?;
+            if mint == request.market_instance_id || mint == request.mint_authority {
+                return Err(Error::MismatchedBinding);
+            }
+            let mut prior = 0usize;
+            while prior < index {
+                if request.outcome_mints[prior] == mint {
+                    return Err(Error::MismatchedBinding);
+                }
+                prior += 1;
+            }
+        } else if !mint.is_zero() {
+            return Err(Error::NonCanonicalPadding);
+        }
+        index += 1;
+    }
+
+    let mut outcome_count = [0u8; 1];
+    outcome_count[0] = request.outcome_count;
+    let mut mint_bytes = [[0u8; 32]; MAX_OUTCOMES];
+    index = 0;
+    while index < MAX_OUTCOMES {
+        mint_bytes[index] = request.outcome_mints[index].bytes();
+        index += 1;
+    }
+    let mut parts: [&[u8]; 5 + MAX_OUTCOMES] = [&[]; 5 + MAX_OUTCOMES];
+    let binding_id = claim.binding_id();
+    let binding_bytes = binding_id.bytes();
+    let market_bytes = request.market_instance_id.bytes();
+    let authority_bytes = request.mint_authority.bytes();
+    let account_bytes = CLAIM_MINT_ACCOUNT_BYTES_V2_WIRE.to_le_bytes();
+    parts[0] = &binding_bytes;
+    parts[1] = &market_bytes;
+    parts[2] = &authority_bytes;
+    parts[3] = &outcome_count;
+    parts[4] = &account_bytes;
+    index = 0;
+    while index < MAX_OUTCOMES {
+        parts[5 + index] = &mint_bytes[index];
+        index += 1;
+    }
+    let founding_id = digest(CLAIM_MINT_FOUNDING_DOMAIN_V2, &parts);
+    founding_id.require_live()?;
+    Ok(ClaimMintFoundingPlanV2 {
+        binding_id,
+        market_instance_id: request.market_instance_id,
+        mint_authority: request.mint_authority,
+        outcome_count: request.outcome_count,
+        outcome_mints: request.outcome_mints,
+        founding_id,
+    })
+}
+
+/// Accept one bounded mint-creation step only after an exact runtime reload.
+pub fn accept_claim_mint_founding_step_v2(
+    claim: BoundClaimIssuanceV1,
+    step: ClaimMintFoundingStepV2,
+    postwrite: ClaimMintFoundingPostwriteV2,
+) -> Result<AcceptedClaimMintFoundingStepV2> {
+    let binding = claim.binding();
+    binding.validate()?;
+    if claim.binding_id() != step.binding_id
+        || postwrite.mint != step.mint
+        || postwrite.owner_program != binding.token_program
+        || !postwrite.writable
+        || postwrite.signer
+        || postwrite.executable
+        || postwrite.account_bytes != CLAIM_MINT_ACCOUNT_BYTES_V2_WIRE
+        || !postwrite.initialized
+        || postwrite.decimals != binding.decimals
+        || postwrite.supply_atoms != 0
+        || postwrite.mint_authority != Some(step.mint_authority)
+        || postwrite.freeze_authority.is_some()
+        || postwrite.extensions != binding.mint_extensions
+    {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let outcome = [step.outcome];
+    let receipt_id = digest(
+        ACCEPTED_CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2,
+        &[
+            &step.step_id.bytes(),
+            &step.binding_id.bytes(),
+            &step.founding_id.bytes(),
+            &step.market_instance_id.bytes(),
+            &step.mint_authority.bytes(),
+            &outcome,
+            &step.mint.bytes(),
+            &postwrite.account_bytes.to_le_bytes(),
+            &postwrite.supply_atoms.to_le_bytes(),
+        ],
+    );
+    receipt_id.require_live()?;
+    Ok(AcceptedClaimMintFoundingStepV2 { step, receipt_id })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const fn id(byte: u8) -> Id {
+        Id::from_bytes([byte; 32])
+    }
+
+    fn bound_claim() -> BoundClaimIssuanceV1 {
+        let collateral_release = AdapterReleaseV2::legacy_spl(id(1), id(2));
+        let binding = ClaimIssuanceBindingV1 {
+            flags: CLAIM_FLAGS_V1,
+            adapter_release: id(3),
+            token_program: TOKEN_2022_PROGRAM,
+            token_program_deployment: id(4),
+            parser_cpi_code: id(5),
+            decimals: 0,
+            mint_extensions: 0,
+            account_extensions: 0,
+        };
+        bind_claim_issuance_v1(
+            binding.id().unwrap(),
+            binding,
+            ClaimRuntimeObservationV1 {
+                token_program: TOKEN_2022_PROGRAM,
+                token_program_executable: true,
+                token_program_writable: false,
+                token_program_signer: false,
+                token_program_deployment: id(4),
+                parser_cpi_code: id(5),
+            },
+            collateral_release,
+        )
+        .unwrap()
+    }
+
+    fn request() -> ClaimMintFoundingRequestV2 {
+        let mut outcome_mints = [Id::ZERO; MAX_OUTCOMES];
+        outcome_mints[0] = id(20);
+        outcome_mints[1] = id(21);
+        ClaimMintFoundingRequestV2 {
+            market_instance_id: id(10),
+            mint_authority: id(11),
+            outcome_count: 2,
+            outcome_mints,
+        }
+    }
+
+    fn postwrite(authority: Id, supply_atoms: u64) -> ClaimMintFoundingPostwriteV2 {
+        ClaimMintFoundingPostwriteV2 {
+            mint: id(20),
+            owner_program: TOKEN_2022_PROGRAM,
+            writable: true,
+            signer: false,
+            executable: false,
+            account_bytes: CLAIM_MINT_ACCOUNT_BYTES_V2_WIRE,
+            initialized: true,
+            decimals: 0,
+            supply_atoms,
+            mint_authority: Some(authority),
+            freeze_authority: None,
+            extensions: 0,
+        }
+    }
+
+    #[test]
+    fn founding_plan_commits_ordered_mints_and_bounded_steps() {
+        let plan = prepare_claim_mint_founding_v2(bound_claim(), request()).unwrap();
+        assert_eq!(plan.outcome_mint(0), Ok(id(20)));
+        assert_eq!(plan.outcome_mint(1), Ok(id(21)));
+        assert_eq!(plan.outcome_mint(2), Err(Error::InvalidParameter));
+        assert_eq!(plan.mint_account_bytes(), CLAIM_MINT_ACCOUNT_BYTES_V2);
+        let first = plan.step(0).unwrap();
+        let second = plan.step(1).unwrap();
+        assert_eq!(first.mint(), id(20));
+        assert_eq!(first.mint_authority(), id(11));
+        assert_eq!(first.founding_id(), plan.founding_id());
+        assert_ne!(first.step_id(), second.step_id());
+    }
+
+    #[test]
+    fn founding_plan_refuses_duplicate_mints_and_nonzero_tail() {
+        let mut duplicate = request();
+        duplicate.outcome_mints[1] = duplicate.outcome_mints[0];
+        assert_eq!(
+            prepare_claim_mint_founding_v2(bound_claim(), duplicate),
+            Err(Error::MismatchedBinding)
+        );
+
+        let mut dirty_tail = request();
+        dirty_tail.outcome_mints[2] = id(22);
+        assert_eq!(
+            prepare_claim_mint_founding_v2(bound_claim(), dirty_tail),
+            Err(Error::NonCanonicalPadding)
+        );
+    }
+
+    #[test]
+    fn founding_step_accepts_only_exact_zero_supply_reload() {
+        let claim = bound_claim();
+        let step = prepare_claim_mint_founding_v2(claim, request())
+            .unwrap()
+            .step(0)
+            .unwrap();
+        let accepted =
+            accept_claim_mint_founding_step_v2(claim, step, postwrite(id(11), 0)).unwrap();
+        assert_eq!(accepted.step(), step);
+        assert_eq!(accepted.step().binding_id(), claim.binding_id());
+        assert!(!accepted.receipt_id().is_zero());
+
+        assert_eq!(
+            accept_claim_mint_founding_step_v2(claim, step, postwrite(id(12), 0)),
+            Err(Error::PostAdmissionFailed)
+        );
+        assert_eq!(
+            accept_claim_mint_founding_step_v2(claim, step, postwrite(id(11), 1)),
+            Err(Error::PostAdmissionFailed)
+        );
+    }
 }

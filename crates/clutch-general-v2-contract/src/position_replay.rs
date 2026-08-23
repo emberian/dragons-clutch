@@ -36,6 +36,7 @@ const SETTLEMENT_FAMILY: u8 = 1;
 const STRUCTURED_EXCHANGE_FAMILY: u8 = 2;
 const COLLATERAL_CASH_FAMILY: u8 = 3;
 const FRACTIONAL_REDEMPTION_FAMILY: u8 = 4;
+const CLAIM_REPRESENTATION_FAMILY: u8 = 5;
 const TRANSITION_VERSION_V1: u8 = 1;
 const OWNER_ACCOUNTING_ROLE: u8 = 1;
 const OWNER_CASH_ROLE: u8 = 2;
@@ -44,6 +45,8 @@ const DIRECT_SELLER_ROLE: u8 = 4;
 const VIRTUAL_SPLIT_BUYER_ROLE: u8 = 5;
 const VIRTUAL_MERGE_SELLER_ROLE: u8 = 6;
 const STRUCTURED_GENERAL_ROLE: u8 = 7;
+const UNFILLED_RESERVATION_OWNER_ROLE: u8 = 8;
+const MERGE_PAYMENT_OWNER_ROLE: u8 = 9;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
@@ -57,6 +60,10 @@ pub enum GeneralReplayTransitionKindV1 {
     Split,
     /// Legacy Intent `Merge`, unlocking complete-set backing into cash.
     Merge,
+    /// Move Position-owned native Eggs into independently issued bearer claims.
+    Materialize,
+    /// Burn bearer claims back into Position-owned native Eggs.
+    Dematerialize,
     /// Action 25 owner accounting; the Position body is unchanged.
     AccountReceiptEnd,
     /// Action 38 owner cash realization.
@@ -69,6 +76,10 @@ pub enum GeneralReplayTransitionKindV1 {
     VirtualSplitBuyer,
     /// Action 37 real seller Position endpoint.
     VirtualMergeSeller,
+    /// Action 41 zero-fill Reservation release and co-close endpoint.
+    ReleaseUnfilledReservation,
+    /// Action 40 merge Reservation payment latch; Position is unchanged.
+    FinalizeMergeReceiptPayment,
     /// Action 35 General Position endpoint of a structured exchange.
     StructuredGeneral,
     /// FractionalRedemption action 2 internal exact-lot endpoint.
@@ -108,6 +119,18 @@ impl GeneralReplayTransitionKindV1 {
                 4,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ),
+            Self::Materialize => (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::Dematerialize => (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
             Self::AccountReceiptEnd => (
                 SETTLEMENT_FAMILY,
                 TRANSITION_VERSION_V1,
@@ -143,6 +166,18 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 37,
                 VIRTUAL_MERGE_SELLER_ROLE,
+            ),
+            Self::ReleaseUnfilledReservation => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                41,
+                UNFILLED_RESERVATION_OWNER_ROLE,
+            ),
+            Self::FinalizeMergeReceiptPayment => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                40,
+                MERGE_PAYMENT_OWNER_ROLE,
             ),
             Self::StructuredGeneral => (
                 STRUCTURED_EXCHANGE_FAMILY,
@@ -203,6 +238,18 @@ impl GeneralReplayTransitionKindV1 {
                 4,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ) => Ok(Self::Merge),
+            (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Materialize),
+            (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Dematerialize),
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 25, OWNER_ACCOUNTING_ROLE) => {
                 Ok(Self::AccountReceiptEnd)
             }
@@ -221,6 +268,18 @@ impl GeneralReplayTransitionKindV1 {
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 37, VIRTUAL_MERGE_SELLER_ROLE) => {
                 Ok(Self::VirtualMergeSeller)
             }
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                41,
+                UNFILLED_RESERVATION_OWNER_ROLE,
+            ) => Ok(Self::ReleaseUnfilledReservation),
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                40,
+                MERGE_PAYMENT_OWNER_ROLE,
+            ) => Ok(Self::FinalizeMergeReceiptPayment),
             (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
                 Ok(Self::StructuredGeneral)
             }
@@ -616,6 +675,63 @@ impl GeneralPositionReplayPrestateV1 {
     }
 }
 
+/// Recompute and compare the exact transition immediately preceding a checked
+/// General Replay prestate.
+///
+/// This is structural, not an execution capability. The action-specific
+/// composer must derive `prior_position_semantic_id`, `transition_id`, and
+/// `transition_evidence_id` from its authenticated semantic owners. It is
+/// useful for a sequence of same-Position transitions such as per-receipt
+/// merge payments, where the current Replay retains the prior transition and
+/// delta but no duplicate payment authority account should be invented.
+pub fn verify_general_replay_last_transition_v1<B: ReplayV3HashBackend>(
+    prestate: GeneralPositionReplayPrestateV1,
+    prior_position_semantic_id: Id32,
+    kind: GeneralReplayTransitionKindV1,
+    transition_id: Id32,
+    transition_evidence_id: Id32,
+    backend: &B,
+) -> Result<(), CodecError> {
+    if prior_position_semantic_id.is_zero()
+        || transition_id.is_zero()
+        || transition_evidence_id.is_zero()
+    {
+        return Err(CodecError::ZeroIdentity);
+    }
+    let consumed_sequence = prestate
+        .replay_header
+        .next_sequence()
+        .checked_sub(1)
+        .ok_or(CodecError::InvalidState)?;
+    let extension = prestate.extension;
+    let current_position_semantic_id = Id32::new(prestate.position.semantic_id)?;
+    let generation = prestate.position.semantic.fields().generation;
+    let (family, version, action, role) = kind.coordinates();
+    let expected_delta_id = Id32::new(backend.sha256_parts(&[
+        GENERAL_REPLAY_DELTA_DOMAIN_V1,
+        &[family],
+        &[version],
+        &[action],
+        &[role],
+        &consumed_sequence.to_le_bytes(),
+        &transition_id.bytes(),
+        &transition_evidence_id.bytes(),
+        &prestate.position.account,
+        &prior_position_semantic_id.bytes(),
+        &current_position_semantic_id.bytes(),
+        &generation.to_le_bytes(),
+        &generation.to_le_bytes(),
+    ]))?;
+    if extension.last_kind() != Some(kind)
+        || extension.last_transition_id() != transition_id
+        || extension.last_delta_id() != expected_delta_id
+        || extension.current_position_semantic_id() != current_position_semantic_id
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    Ok(())
+}
+
 /// Decode and structurally bind exact Position V3 and General Replay V3 bytes.
 pub fn project_general_position_replay_prestate_v1<B>(
     replay_account: Id32,
@@ -790,10 +906,21 @@ where
     {
         return Err(CodecError::MismatchedBinding);
     }
+    let expected_outstanding_reservations = if kind
+        == GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
+    {
+        pre_fields
+            .outstanding_reservations
+            .checked_sub(1)
+            .ok_or(CodecError::InvalidState)?
+    } else {
+        pre_fields.outstanding_reservations
+    };
     let expected_poststate = PositionAccountV3::new(PositionV3Fields {
         cash_atoms: post_fields.cash_atoms,
         reserved_cash_atoms: post_fields.reserved_cash_atoms,
         native_eggs: post_fields.native_eggs,
+        outstanding_reservations: expected_outstanding_reservations,
         ..pre_fields
     })
     .map_err(|_| CodecError::InvalidState)?;
@@ -808,7 +935,11 @@ where
             .bytes(),
     )?;
     let position_prestate_semantic_id = Id32::new(position_prestate.semantic_id)?;
-    let unchanged_required = kind == GeneralReplayTransitionKindV1::AccountReceiptEnd;
+    let unchanged_required = matches!(
+        kind,
+        GeneralReplayTransitionKindV1::AccountReceiptEnd
+            | GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment
+    );
     // Fractional credit transfer/merge can either realize a whole collateral
     // atom into Position cash or leave the Position body unchanged when the
     // destination residue remains below one atom. The Fractional composer owns
@@ -819,8 +950,11 @@ where
             | GeneralReplayTransitionKindV1::WithdrawCash
             | GeneralReplayTransitionKindV1::Split
             | GeneralReplayTransitionKindV1::Merge
+            | GeneralReplayTransitionKindV1::Materialize
+            | GeneralReplayTransitionKindV1::Dematerialize
             | GeneralReplayTransitionKindV1::DirectBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
+            | GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
             | GeneralReplayTransitionKindV1::StructuredGeneral
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalExact
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit
@@ -889,4 +1023,40 @@ where
         consumed_sequence,
         next_sequence: replay_header.next_sequence(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn advanced_extension(action: u8, role: u8) -> [u8; GENERAL_REPLAY_EXTENSION_V1_BYTES] {
+        let mut body = [0u8; GENERAL_REPLAY_EXTENSION_V1_BYTES];
+        body[..32].copy_from_slice(&[1; 32]);
+        body[32..64].copy_from_slice(&[2; 32]);
+        body[64..96].copy_from_slice(&[3; 32]);
+        body[96..128].copy_from_slice(&[4; 32]);
+        body[128] = action;
+        body[129] = 1;
+        body[130] = SETTLEMENT_FAMILY;
+        body[131] = TRANSITION_VERSION_V1;
+        body[132] = role;
+        body
+    }
+
+    #[test]
+    fn action40_tuple_is_exact_and_wrong_role_is_refused() {
+        let value = GeneralReplayExtensionV1::decode(&advanced_extension(
+            40,
+            MERGE_PAYMENT_OWNER_ROLE,
+        ))
+        .unwrap();
+        assert_eq!(
+            value.last_kind(),
+            Some(GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(40, OWNER_CASH_ROLE)),
+            Err(CodecError::InvalidState)
+        );
+    }
 }

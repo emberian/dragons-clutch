@@ -132,6 +132,11 @@ pub const DEALER_FUNDED_DEPENDENCIES_CONTENT_DOMAIN_V2: &[u8] =
 /// Transcript domain for an authenticated external liveness bundle projection.
 pub const DEALER_RUNTIME_LIVENESS_BINDING_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/runtime-liveness-binding/v1\0";
+/// Content domain for one immutable generic runtime-liveness policy selected
+/// by a Dealer facility. The policy-ID field is canonically zeroed in the
+/// transcript to avoid a recursive self-hash.
+pub const DEALER_RUNTIME_LIVENESS_POLICY_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/runtime-liveness-policy/v1\0";
 /// Content domain for one typed successful Dealer-action liveness receipt.
 pub const DEALER_ACTION_LIVENESS_RECEIPT_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/action-liveness-receipt/v1\0";

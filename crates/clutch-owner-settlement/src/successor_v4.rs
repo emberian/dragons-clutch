@@ -1270,12 +1270,12 @@ pub fn project_owner_settlement_account_v4(
     })
 }
 
-/// Selected-candidate authority for one V4 owner-row creation.
+/// Counted SettlementRoot authority facts for one V4 owner-row creation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct SelectedOwnerRowAuthorityV4 {
-    /// SelectedCandidate account PDA.
-    pub selected_candidate_account: [u8; 32],
+pub struct SettlementRootOwnerRowAuthorityV4 {
+    /// Counted SettlementRoot account PDA.
+    pub settlement_root_account: [u8; 32],
     /// Complete V4 expectation.
     pub expectation: OwnerSettlementExpectationV4,
     /// Zero-based owner-sorted row ordinal.
@@ -1292,10 +1292,10 @@ pub struct SelectedOwnerRowAuthorityV4 {
     pub donation_sink: [u8; 32],
 }
 
-impl SelectedOwnerRowAuthorityV4 {
+impl SettlementRootOwnerRowAuthorityV4 {
     fn validate(&self) -> Result<()> {
         self.expectation.validate()?;
-        if self.selected_candidate_account == [0; 32]
+        if self.settlement_root_account == [0; 32]
             || self.owner_count == 0
             || self.row_ordinal >= self.owner_count
             || self.rent_payer == [0; 32]
@@ -1303,10 +1303,10 @@ impl SelectedOwnerRowAuthorityV4 {
             || self.rent_ledger == [0; 32]
             || self.donation_sink == [0; 32]
             || self.rent_ledger == self.donation_sink
-            || self.rent_ledger == self.selected_candidate_account
+            || self.rent_ledger == self.settlement_root_account
             || self.rent_ledger == self.rent_payer
             || self.rent_ledger == self.rent_refund_recipient
-            || self.donation_sink == self.selected_candidate_account
+            || self.donation_sink == self.settlement_root_account
             || self.donation_sink == self.rent_payer
             || self.donation_sink == self.rent_refund_recipient
         {
@@ -1391,7 +1391,7 @@ impl OwnerSettlementCreatePlanV4 {
 
 /// Prepare rent-safe creation of a pristine V4 owner row.
 pub fn prepare_create_owner_settlement_account_v4(
-    authority: SelectedOwnerRowAuthorityV4,
+    authority: SettlementRootOwnerRowAuthorityV4,
     derived: OwnerSettlementPdaProjectionV4,
     funding: OwnerSettlementCreateFundingV1,
 ) -> Result<OwnerSettlementCreatePlanV4> {

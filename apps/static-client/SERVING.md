@@ -25,7 +25,8 @@ The implemented read-only topology is:
 operatord chain-serve --config chain.json --port 9130 --static apps/static-client
 ```
 
-It serves the static client, bounded finalized index `GET` routes, and the pure
+It serves the static client, bounded finalized plus explicitly rollbackable
+processed index `GET` routes, and the pure
 compiler `POST` route from the same exact loopback authority. `compiler-serve`
 is the smaller no-RPC mode when only compiler output and static inspection are
 needed. See [`CHAIN_SERVE.md`](CHAIN_SERVE.md) and

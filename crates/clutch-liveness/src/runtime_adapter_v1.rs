@@ -175,7 +175,11 @@ pub fn plan_runtime_bundle_admission_v1(
     admissions: [RuntimeCompartmentAdmissionV1; RUNTIME_COMPARTMENT_COUNT_V1],
     observations: [RuntimeAdmissionAccountObservationV1; RUNTIME_COMPARTMENT_COUNT_V1],
 ) -> RuntimeAdapterResultV1<RuntimeAtomicAdmissionV1> {
-    live(expected_uninitialized_program_id)?;
+    // A concrete runtime may use an all-zero physical owner identity for its
+    // canonical uninitialized-account program (Solana's System Program does).
+    // This value is an exact pre-owner comparator, never a persisted live
+    // semantic identity; every policy, lifecycle, payer, owner, and account ID
+    // admitted below remains subject to the runtime's nonzero rules.
     let policy = decode_runtime_policy_account_v1(
         expected_runtime_program_id,
         expected_policy_account_id,

@@ -15,6 +15,10 @@
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::{seeds, token};
+use clutch_collateral_adapter_v2::{
+    accept_claim_mint_founding_step_v2, AcceptedClaimMintFoundingStepV2, BoundClaimIssuanceV1,
+    ClaimMintFoundingPostwriteV2, ClaimMintFoundingStepV2, Id as CollateralId,
+};
 use clutch_solana_layout::{Hash32, SupplyLedgerAccount, MAX_OUTCOMES};
 use clutch_solana_reference::KernelAccount;
 use solana_account_info::AccountInfo;
@@ -53,6 +57,80 @@ pub fn observe_outcome_mints(
         writable_outcome,
         |outcome| seeds::outcome_mint_pda(program_id, &market.bytes(), outcome),
     )
+}
+
+/// Admit the canonical full-width MarketInstanceV2 outcome-mint suffix.
+///
+/// This successor uses a fresh mint seed domain and the authenticated stable
+/// MarketRuntime PDA as mint authority. It never treats the full content ID as
+/// a legacy lowered Market coordinate or asks a Product artifact account to
+/// sign claim issuance.
+#[inline(never)]
+pub fn observe_outcome_mints_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    first: usize,
+    market_runtime_authority: Pubkey,
+    market_instance_v2_id: [u8; 32],
+    outcome_count: u8,
+    writable_outcome: Option<u8>,
+) -> Outcome<ObservedMintSupplies> {
+    observe_outcome_mints_with(
+        accounts,
+        first,
+        market_runtime_authority,
+        outcome_count,
+        writable_outcome,
+        |outcome| seeds::outcome_mint_v2_pda(program_id, &market_instance_v2_id, outcome),
+    )
+}
+
+/// Reload and accept one newly created OutcomeMintV2 against its exact
+/// bounded founding step.
+///
+/// Product owns FoundationVault debit/rent evidence and its ordered Founding
+/// counter. This helper owns only the canonical mint PDA, hostile Token-2022
+/// admission, and the pure claim-release postwrite receipt.
+#[inline(never)]
+pub(crate) fn accept_outcome_mint_founding_postwrite_v2(
+    program_id: &Pubkey,
+    claim: BoundClaimIssuanceV1,
+    step: ClaimMintFoundingStepV2,
+    mint: &AccountInfo<'_>,
+) -> Outcome<AcceptedClaimMintFoundingStepV2> {
+    expect_pda(
+        mint.key,
+        seeds::outcome_mint_v2_pda(
+            program_id,
+            &step.market_instance_id().bytes(),
+            step.outcome(),
+        ),
+        None,
+    )?;
+    let authority = Pubkey::new_from_array(step.mint_authority().bytes());
+    let observation = token::admit_mint(mint, &token::MintPolicy::outcome(*mint.key, authority))
+        .map_err(Refusal::from)?;
+    let account_bytes = u16::try_from(mint.data_len())
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    accept_claim_mint_founding_step_v2(
+        claim,
+        step,
+        ClaimMintFoundingPostwriteV2 {
+            mint: CollateralId::from_bytes(mint.key.to_bytes()),
+            owner_program: CollateralId::from_bytes(mint.owner.to_bytes()),
+            writable: mint.is_writable,
+            signer: mint.is_signer,
+            executable: mint.executable,
+            account_bytes,
+            initialized: true,
+            decimals: observation.decimals,
+            supply_atoms: observation.supply,
+            mint_authority: observation.mint_authority.map(CollateralId::from_bytes),
+            freeze_authority: observation.freeze_authority.map(CollateralId::from_bytes),
+            extensions: observation.extensions,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))
 }
 
 /// Boxed [`observe_outcome_mints`]: the observed vector lives in this helper's

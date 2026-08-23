@@ -28,6 +28,7 @@ mod index_api;
 mod integer;
 mod payoff_compiler;
 mod plan;
+mod processed_ws;
 mod pyth;
 mod pyth_live;
 mod quantize;

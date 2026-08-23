@@ -19,9 +19,9 @@ pub const POSITION_ASSET_TRANSFER_PAYLOAD_BYTES: usize = 298;
 pub const STRUCTURED_CUSTODY_CALL_V1_DOMAIN: &[u8] =
     b"dragons-clutch/authenticated-structured-custody-call/v1\0";
 /// Exact canonical digest-body width, excluding the domain above.
-pub const STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES: usize = 1_352;
+pub const STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES: usize = 1_480;
 
-const IDENTITY_COUNT: usize = 32;
+const IDENTITY_COUNT: usize = 36;
 const DEPLOYMENT_SLOT_COUNT: usize = 3;
 const HEADER_BYTES: usize = 6;
 
@@ -267,14 +267,18 @@ pub struct StructuredCustodyCallProjectionV1 {
     pub wrapper_product_id: [u8; 32],
     /// Exact authenticated wrapper/base/wrapper-token deployments.
     pub deployment: DeploymentBinding,
-    /// Canonical base Market account carrying the current lifecycle phase.
-    pub market_account: [u8; 32],
-    /// Domain-separated digest of the complete canonical Market prestate.
-    pub market_body_digest: [u8; 32],
+    /// Canonical full-width Hoard V2 account carrying the liability lifecycle.
+    pub hoard_account: [u8; 32],
+    /// Domain-separated digest of the complete canonical Hoard V2 prestate.
+    pub hoard_body_digest: [u8; 32],
     /// Immutable General V2 MarketBinding PDA.
     pub market_binding_account: [u8; 32],
     /// Domain-separated digest of the exact canonical MarketBinding body.
     pub market_binding_body_digest: [u8; 32],
+    /// Stable General V2 MarketRuntime selected by the immutable binding.
+    pub market_runtime_account: [u8; 32],
+    /// Domain-separated digest of the exact canonical MarketRuntime prestate.
+    pub market_runtime_body_digest: [u8; 32],
     /// Base-owned NativeClaimBasis artifact PDA.
     pub native_claim_basis_account: [u8; 32],
     /// Typed exact-body NativeClaimBasis identity.
@@ -283,6 +287,10 @@ pub struct StructuredCustodyCallProjectionV1 {
     pub market_instance_account: [u8; 32],
     /// Typed MarketInstanceV2 content identity.
     pub market_instance_id: [u8; 32],
+    /// Canonical full-width ClaimLedger V3 aggregate owner.
+    pub claim_ledger_account: [u8; 32],
+    /// Domain-separated digest of the complete ClaimLedger V3 prestate.
+    pub claim_ledger_body_digest: [u8; 32],
     /// Immutable Realm identity selected by the Market.
     pub realm_id: [u8; 32],
     /// Immutable Realm-selected collateral-policy content identity.
@@ -317,7 +325,7 @@ pub struct StructuredCustodyCallProjectionV1 {
 impl StructuredCustodyCallProjectionV1 {
     /// Encode the exact digest body into caller-owned storage.
     ///
-    /// SBF adapters should use this form so the 1,352-byte transcript is not
+    /// SBF adapters should use this form so the 1,480-byte transcript is not
     /// materialized as a second stack return value.
     pub fn encode_preimage_into(
         &self,
@@ -377,14 +385,18 @@ impl StructuredCustodyCallProjectionV1 {
             &self.deployment.token_2022_deployment_slot.to_le_bytes(),
         )?;
         for identity in [
-            self.market_account,
-            self.market_body_digest,
+            self.hoard_account,
+            self.hoard_body_digest,
             self.market_binding_account,
             self.market_binding_body_digest,
+            self.market_runtime_account,
+            self.market_runtime_body_digest,
             self.native_claim_basis_account,
             self.native_claim_basis_id,
             self.market_instance_account,
             self.market_instance_id,
+            self.claim_ledger_account,
+            self.claim_ledger_body_digest,
             self.realm_id,
             self.collateral_policy_id,
             self.collateral_release_id,
@@ -437,14 +449,18 @@ impl StructuredCustodyCallProjectionV1 {
             self.descriptor_body_digest,
             self.native_claim_id,
             self.wrapper_product_id,
-            self.market_account,
-            self.market_body_digest,
+            self.hoard_account,
+            self.hoard_body_digest,
             self.market_binding_account,
             self.market_binding_body_digest,
+            self.market_runtime_account,
+            self.market_runtime_body_digest,
             self.native_claim_basis_account,
             self.native_claim_basis_id,
             self.market_instance_account,
             self.market_instance_id,
+            self.claim_ledger_account,
+            self.claim_ledger_body_digest,
             self.realm_id,
             self.collateral_policy_id,
             self.collateral_release_id,
@@ -554,14 +570,18 @@ mod tests {
                 token_2022_program_data: [15; 32],
                 token_2022_deployment_slot: 3,
             },
-            market_account: [34; 32],
-            market_body_digest: [35; 32],
+            hoard_account: [34; 32],
+            hoard_body_digest: [35; 32],
             market_binding_account: [16; 32],
             market_binding_body_digest: [17; 32],
+            market_runtime_account: [36; 32],
+            market_runtime_body_digest: [37; 32],
             native_claim_basis_account: [18; 32],
             native_claim_basis_id: [19; 32],
             market_instance_account: [20; 32],
             market_instance_id: [1; 32],
+            claim_ledger_account: [38; 32],
+            claim_ledger_body_digest: [39; 32],
             realm_id: [21; 32],
             collateral_policy_id: [22; 32],
             collateral_release_id: [23; 32],
@@ -595,5 +615,62 @@ mod tests {
             ]
         );
         assert_eq!(&bytes[bytes.len() - 32..], &[0; 32]);
+    }
+
+    #[test]
+    fn custody_projection_refuses_detached_full_width_liability_owners() {
+        let mut projection = StructuredCustodyCallProjectionV1 {
+            target_base_program: [7; 32],
+            wrapper_local_action: StructuredClaimActionV1::WrapCanonical,
+            descriptor_account: [10; 32],
+            descriptor_body_digest: [11; 32],
+            native_claim_id: [12; 32],
+            wrapper_product_id: [13; 32],
+            deployment: DeploymentBinding {
+                wrapper_program: [4; 32],
+                wrapper_program_data: [5; 32],
+                wrapper_deployment_slot: 1,
+                base_program: [7; 32],
+                base_program_data: [8; 32],
+                base_deployment_slot: 2,
+                token_2022_program: [14; 32],
+                token_2022_program_data: [15; 32],
+                token_2022_deployment_slot: 3,
+            },
+            hoard_account: [34; 32],
+            hoard_body_digest: [35; 32],
+            market_binding_account: [16; 32],
+            market_binding_body_digest: [17; 32],
+            market_runtime_account: [36; 32],
+            market_runtime_body_digest: [37; 32],
+            native_claim_basis_account: [18; 32],
+            native_claim_basis_id: [19; 32],
+            market_instance_account: [20; 32],
+            market_instance_id: [1; 32],
+            claim_ledger_account: [38; 32],
+            claim_ledger_body_digest: [39; 32],
+            realm_id: [21; 32],
+            collateral_policy_id: [22; 32],
+            collateral_release_id: [23; 32],
+            vault_authority: [24; 32],
+            user_actor: [25; 32],
+            source_position_account: [26; 32],
+            source_position_body_digest: [27; 32],
+            source_replay_account: [28; 32],
+            source_replay_body_digest: [29; 32],
+            destination_position_account: [30; 32],
+            destination_position_body_digest: [31; 32],
+            destination_replay_account: [32; 32],
+            destination_replay_body_digest: [33; 32],
+            transfer: payload([9; 32]),
+        };
+        projection.hoard_body_digest = [0; 32];
+        assert_eq!(projection.encode_preimage(), Err(Error::InvalidIdentity));
+        projection.hoard_body_digest = [35; 32];
+        projection.market_runtime_account = [0; 32];
+        assert_eq!(projection.encode_preimage(), Err(Error::InvalidIdentity));
+        projection.market_runtime_account = [36; 32];
+        projection.claim_ledger_body_digest = [0; 32];
+        assert_eq!(projection.encode_preimage(), Err(Error::InvalidIdentity));
     }
 }

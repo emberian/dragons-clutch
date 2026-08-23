@@ -51,7 +51,7 @@ use clutch_source_plane_v3_adapter::{
     IntentPreimageV3, TransitionActionV3, TransitionPlanV3, INTENT_PREIMAGE_BYTES,
 };
 use clutch_source_plane_v3_runtime::{
-    LineageFamilyV1, ReopenLineageV1, SourceReleaseManifestV1, SourceWorkKindV1,
+    LineageFamilyV1, ReopenLineageV1, SourceReleaseManifestV2, SourceWorkKindV1,
     SourceWorkScheduleBindingV1,
 };
 use clutch_structured_claim_runtime_contract::{
@@ -129,6 +129,8 @@ impl ReleasedProgram {
 pub struct ExplicitOperatorReleaseManifest {
     pub manifest_sha256: [u8; 32],
     pub clutch: ReleasedProgram,
+    /// Exact first-party read-only Pyth parser release selected by Source.
+    pub pyth_parser: ReleasedProgram,
     /// Exact captured Pyth receiver release admitted by the Source release.
     pub pyth_receiver: ReleasedProgram,
     /// Exact captured Pyth router release used to authenticate VAA transport.
@@ -142,13 +144,30 @@ impl ExplicitOperatorReleaseManifest {
             return Err(WorkflowGraphError::ZeroIdentity);
         }
         self.clutch.validate()?;
+        self.pyth_parser.validate()?;
         self.pyth_receiver.validate()?;
         self.pyth_router.validate()?;
-        if self.pyth_receiver.program_id == self.pyth_router.program_id
-            || self.pyth_receiver.program_data == self.pyth_router.program_data
-            || self.pyth_receiver.program_id == self.clutch.program_id
-            || self.pyth_router.program_id == self.clutch.program_id
-            || self.semantic_releases.is_empty()
+        let programs = [
+            self.clutch.program_id,
+            self.pyth_parser.program_id,
+            self.pyth_receiver.program_id,
+            self.pyth_router.program_id,
+        ];
+        let programdata = [
+            self.clutch.program_data,
+            self.pyth_parser.program_data,
+            self.pyth_receiver.program_data,
+            self.pyth_router.program_data,
+        ];
+        if programs.iter().enumerate().any(|(index, identity)| {
+            programs[..index]
+                .iter()
+                .any(|previous| previous == identity)
+        }) || programdata.iter().enumerate().any(|(index, identity)| {
+            programdata[..index]
+                .iter()
+                .any(|previous| previous == identity)
+        }) || self.semantic_releases.is_empty()
         {
             return Err(WorkflowGraphError::WrongProgramRelease);
         }
@@ -321,12 +340,38 @@ pub struct OpenRawPageAccountsV2 {
     pub rent_sysvar: Address,
 }
 
+/// Named physical accounts for executable Source action 4. The receiver
+/// Program, ProgramData, and Config are explicit because their exact release
+/// and complete Config bytes are authenticated by the immutable Source
+/// release; the feed owner address alone is not a release boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IngestBoundaryAccountsV2 {
+    pub route: AuthenticatedSourceRouteAccountsV2,
+    pub clock_sysvar: Address,
+    pub feed: Address,
+    pub receiver_program: Address,
+    pub receiver_program_data: Address,
+    pub receiver_config: Address,
+    pub source_head: Address,
+    pub head_lineage: Address,
+    pub open_raw_page: Address,
+    pub open_page_lineage: Address,
+    pub source_work_receipt: Address,
+    pub liveness_policy: Address,
+    pub source_compartment: Address,
+    pub keeper: Address,
+    pub payer: Address,
+    pub system_program: Address,
+    pub rent_sysvar: Address,
+}
+
 /// Closed executable Source account vocabulary. Adding an onchain action does
 /// not make it constructible until its named projection is added here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EnabledSourceActionAccountsV2 {
     InitializeHead(InitializeHeadAccountsV2),
     OpenRawPage(OpenRawPageAccountsV2),
+    IngestBoundary(IngestBoundaryAccountsV2),
 }
 
 /// One exact ordered role exposed to operator/session projections.
@@ -344,6 +389,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(_) => SourceSeriesAction::InitializeHead,
             Self::OpenRawPage(_) => SourceSeriesAction::OpenRawPage,
+            Self::IngestBoundary(_) => SourceSeriesAction::IngestBoundaryBatch,
         }
     }
 
@@ -351,6 +397,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.route,
             Self::OpenRawPage(accounts) => accounts.route,
+            Self::IngestBoundary(accounts) => accounts.route,
         }
     }
 
@@ -358,6 +405,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.keeper,
             Self::OpenRawPage(accounts) => accounts.keeper,
+            Self::IngestBoundary(accounts) => accounts.keeper,
         }
     }
 
@@ -365,6 +413,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.payer,
             Self::OpenRawPage(accounts) => accounts.payer,
+            Self::IngestBoundary(accounts) => accounts.payer,
         }
     }
 
@@ -372,6 +421,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.source_compartment,
             Self::OpenRawPage(accounts) => accounts.source_compartment,
+            Self::IngestBoundary(accounts) => accounts.source_compartment,
         }
     }
 
@@ -379,6 +429,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.liveness_policy,
             Self::OpenRawPage(accounts) => accounts.liveness_policy,
+            Self::IngestBoundary(accounts) => accounts.liveness_policy,
         }
     }
 
@@ -386,6 +437,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.source_head,
             Self::OpenRawPage(accounts) => accounts.source_head,
+            Self::IngestBoundary(accounts) => accounts.source_head,
         }
     }
 
@@ -393,6 +445,7 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.head_lineage,
             Self::OpenRawPage(accounts) => accounts.head_lineage,
+            Self::IngestBoundary(accounts) => accounts.head_lineage,
         }
     }
 
@@ -400,32 +453,49 @@ impl EnabledSourceActionAccountsV2 {
         match self {
             Self::InitializeHead(accounts) => accounts.system_program,
             Self::OpenRawPage(accounts) => accounts.system_program,
+            Self::IngestBoundary(accounts) => accounts.system_program,
+        }
+    }
+
+    const fn work_kind(self) -> SourceWorkKindV1 {
+        match self {
+            Self::IngestBoundary(_) => SourceWorkKindV1::AppendBoundaryBatch,
+            Self::InitializeHead(_) | Self::OpenRawPage(_) => SourceWorkKindV1::TerminalLifecycle,
         }
     }
 
     fn validate_route_selection(
         self,
         observation: SourceCrankObservation<'_>,
-        release: &SourceReleaseManifestV1,
+        release: &SourceReleaseManifestV2,
         schedule: &SourceWorkScheduleBindingV1,
     ) -> Result<()> {
         let route = self.route();
         if route.source_release != observation.release_account
             || route.source_work_schedule != observation.schedule_account
             || self.liveness_policy() != observation.liveness_policy_account
-            || route.adapter_program.to_bytes() != release.adapter.program.bytes()
-            || route.adapter_program_data.to_bytes() != release.adapter.programdata.bytes()
-            || route.parser_program.to_bytes() != release.parser.program.bytes()
-            || route.parser_program_data.to_bytes() != release.parser.programdata.bytes()
-            || route.parser_config.to_bytes() != release.parser_config.bytes()
-            || route.source_spec.to_bytes() != release.source_spec_account.bytes()
+            || route.adapter_program.to_bytes() != release.base.adapter.program.bytes()
+            || route.adapter_program_data.to_bytes() != release.base.adapter.programdata.bytes()
+            || route.parser_program.to_bytes() != release.base.parser.program.bytes()
+            || route.parser_program_data.to_bytes() != release.base.parser.programdata.bytes()
+            || route.parser_config.to_bytes() != release.base.parser_config.bytes()
+            || route.source_spec.to_bytes() != release.base.source_spec_account.bytes()
             || self.payer().to_bytes() != schedule.payer().bytes()
             || self.source_compartment().to_bytes() != schedule.source_compartment_account().bytes()
-            || self.system_program().to_bytes() != release.system_program.bytes()
+            || self.system_program().to_bytes() != release.base.system_program.bytes()
         {
             return Err(WorkflowGraphError::ActionStateMismatch);
         }
-        let expected_lineage = observation
+        if let Self::IngestBoundary(accounts) = self {
+            if accounts.feed.to_bytes() != release.base.feed.bytes()
+                || accounts.receiver_program.to_bytes() != release.receiver.program.bytes()
+                || accounts.receiver_program_data.to_bytes() != release.receiver.programdata.bytes()
+                || accounts.receiver_config.to_bytes() != release.receiver_config.bytes()
+            {
+                return Err(WorkflowGraphError::ActionStateMismatch);
+            }
+        }
+        let expected_head_lineage = observation
             .lineages
             .iter()
             .find(|lineage| {
@@ -439,14 +509,41 @@ impl EnabledSourceActionAccountsV2 {
                             SourceLineageExpectation::OpenAtGeneration(generation)
                                 if generation == observation.generation
                         ),
+                        Self::IngestBoundary(_) => matches!(
+                            lineage.expectation,
+                            SourceLineageExpectation::OpenAtGeneration(generation)
+                                if generation == observation.generation
+                        ),
                     }
             })
             .ok_or(WorkflowGraphError::ActionStateMismatch)?;
-        if self.head_lineage().to_bytes() != expected_lineage.lineage.lineage_account.bytes()
-            || matches!(self, Self::OpenRawPage(_))
-                && self.source_head().to_bytes() != expected_lineage.lineage.active_account.bytes()
+        if self.head_lineage().to_bytes() != expected_head_lineage.lineage.lineage_account.bytes()
+            || !matches!(self, Self::InitializeHead(_))
+                && self.source_head().to_bytes()
+                    != expected_head_lineage.lineage.active_account.bytes()
         {
             return Err(WorkflowGraphError::ActionStateMismatch);
+        }
+        if let Self::IngestBoundary(accounts) = self {
+            let expected_open_lineage = observation
+                .lineages
+                .iter()
+                .find(|lineage| {
+                    lineage.lineage.family == LineageFamilyV1::OpenRawPage
+                        && matches!(
+                            lineage.expectation,
+                            SourceLineageExpectation::OpenAtGeneration(generation)
+                                if generation == observation.generation
+                        )
+                })
+                .ok_or(WorkflowGraphError::ActionStateMismatch)?;
+            if accounts.open_page_lineage.to_bytes()
+                != expected_open_lineage.lineage.lineage_account.bytes()
+                || accounts.open_raw_page.to_bytes()
+                    != expected_open_lineage.lineage.active_account.bytes()
+            {
+                return Err(WorkflowGraphError::ActionStateMismatch);
+            }
         }
         Ok(())
     }
@@ -472,6 +569,27 @@ impl EnabledSourceActionAccountsV2 {
             Self::OpenRawPage(accounts) => {
                 accounts.route.append_to(&mut addresses);
                 addresses.extend([
+                    accounts.source_head,
+                    accounts.head_lineage,
+                    accounts.open_raw_page,
+                    accounts.open_page_lineage,
+                    accounts.source_work_receipt,
+                    accounts.liveness_policy,
+                    accounts.source_compartment,
+                    accounts.keeper,
+                    accounts.payer,
+                    accounts.system_program,
+                    accounts.rent_sysvar,
+                ]);
+            }
+            Self::IngestBoundary(accounts) => {
+                accounts.route.append_to(&mut addresses);
+                addresses.extend([
+                    accounts.clock_sysvar,
+                    accounts.feed,
+                    accounts.receiver_program,
+                    accounts.receiver_program_data,
+                    accounts.receiver_config,
                     accounts.source_head,
                     accounts.head_lineage,
                     accounts.open_raw_page,
@@ -916,7 +1034,7 @@ pub struct ObservedSourceLineage<'a> {
 pub struct SourceCrankObservation<'a> {
     /// Canonical immutable release body selected by the operator. Execution
     /// independently authenticates its owner, content-addressed PDA and bytes.
-    pub release: &'a SourceReleaseManifestV1,
+    pub release: &'a SourceReleaseManifestV2,
     /// Physical immutable release account observed by the operator.
     pub release_account: Address,
     /// Canonical release-selected paid-work schedule body. The physical
@@ -954,22 +1072,30 @@ impl SourceCrankObservation<'_> {
             .schedule
             .id()
             .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?
-            != self.release.source_work_schedule_id
-            || self.schedule.liveness_policy_id() != self.release.liveness_policy_id
-            || self.schedule.source_compartment_account() != self.release.source_compartment_account
-            || self.schedule.source_compartment_owner() != self.release.source_compartment_owner
-            || self.schedule.receipt_account_owner_program() != self.release.adapter.program
-            || self.schedule.payer() == self.release.neutral_sink
+            != self.release.base.source_work_schedule_id
+            || self.schedule.liveness_policy_id() != self.release.base.liveness_policy_id
+            || self.schedule.source_compartment_account()
+                != self.release.base.source_compartment_account
+            || self.schedule.source_compartment_owner()
+                != self.release.base.source_compartment_owner
+            || self.schedule.receipt_account_owner_program() != self.release.base.adapter.program
+            || self.schedule.payer() == self.release.base.neutral_sink
         {
             return Err(WorkflowGraphError::ActionStateMismatch);
         }
-        if self.release.adapter.program.bytes() != manifest.clutch.program_id.to_bytes()
-            || self.release.adapter.programdata.bytes() != manifest.clutch.program_data.to_bytes()
-            || self.release.adapter.deployment_slot != manifest.clutch.deployment_slot
-            || self.release.parser.program.bytes() != manifest.pyth_receiver.program_id.to_bytes()
-            || self.release.parser.programdata.bytes()
+        if self.release.base.adapter.program.bytes() != manifest.clutch.program_id.to_bytes()
+            || self.release.base.adapter.programdata.bytes()
+                != manifest.clutch.program_data.to_bytes()
+            || self.release.base.adapter.deployment_slot != manifest.clutch.deployment_slot
+            || self.release.base.parser.program.bytes()
+                != manifest.pyth_parser.program_id.to_bytes()
+            || self.release.base.parser.programdata.bytes()
+                != manifest.pyth_parser.program_data.to_bytes()
+            || self.release.base.parser.deployment_slot != manifest.pyth_parser.deployment_slot
+            || self.release.receiver.program.bytes() != manifest.pyth_receiver.program_id.to_bytes()
+            || self.release.receiver.programdata.bytes()
                 != manifest.pyth_receiver.program_data.to_bytes()
-            || self.release.parser.deployment_slot != manifest.pyth_receiver.deployment_slot
+            || self.release.receiver.deployment_slot != manifest.pyth_receiver.deployment_slot
         {
             return Err(WorkflowGraphError::WrongProgramRelease);
         }
@@ -981,8 +1107,8 @@ impl SourceCrankObservation<'_> {
                 .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
             if lineage.adapter_program.bytes() != manifest.clutch.program_id.to_bytes()
                 || lineage.release_manifest_id != release_id
-                || lineage.source_work_schedule_id != self.release.source_work_schedule_id
-                || lineage.neutral_sink != self.release.neutral_sink
+                || lineage.source_work_schedule_id != self.release.base.source_work_schedule_id
+                || lineage.neutral_sink != self.release.base.neutral_sink
                 || !accounts.insert(lineage.lineage_account.bytes())
             {
                 return Err(WorkflowGraphError::InvalidCanonicalState);
@@ -1041,7 +1167,7 @@ pub fn plan_source_crank(
     )?;
     let call_ceiling = observation
         .schedule
-        .ceiling_for(SourceWorkKindV1::TerminalLifecycle);
+        .ceiling_for(material.accounts.work_kind());
     if call_ceiling == 0 {
         return Err(WorkflowGraphError::NotReady);
     }
@@ -2233,6 +2359,57 @@ mod source_account_projection_tests {
         });
         assert_eq!(
             accounts.ordered_projection(),
+            Err(WorkflowGraphError::InvalidCanonicalPayload)
+        );
+    }
+
+    fn ingest_accounts() -> IngestBoundaryAccountsV2 {
+        IngestBoundaryAccountsV2 {
+            route: route(),
+            clock_sysvar: address(9),
+            feed: address(10),
+            receiver_program: address(11),
+            receiver_program_data: address(12),
+            receiver_config: address(13),
+            source_head: address(14),
+            head_lineage: address(15),
+            open_raw_page: address(16),
+            open_page_lineage: address(17),
+            source_work_receipt: address(18),
+            liveness_policy: address(19),
+            source_compartment: address(20),
+            keeper: address(21),
+            payer: address(21),
+            system_program: address(22),
+            rent_sysvar: address(23),
+        }
+    }
+
+    #[test]
+    fn ingest_projection_includes_the_receiver_release_and_config() {
+        let projection = EnabledSourceActionAccountsV2::IngestBoundary(ingest_accounts())
+            .ordered_projection()
+            .unwrap();
+        assert_eq!(projection.len(), 24);
+        assert_eq!(projection[8].role, SourceAccountRoleV2::ClockSysvar);
+        assert_eq!(projection[9].role, SourceAccountRoleV2::Feed);
+        assert_eq!(projection[10].role, SourceAccountRoleV2::ReceiverProgram);
+        assert_eq!(
+            projection[11].role,
+            SourceAccountRoleV2::ReceiverProgramData
+        );
+        assert_eq!(projection[12].role, SourceAccountRoleV2::ReceiverConfig);
+        assert_eq!(projection[20].role, SourceAccountRoleV2::Keeper);
+        assert_eq!(projection[21].role, SourceAccountRoleV2::Payer);
+        assert_eq!(projection[20].address, projection[21].address);
+    }
+
+    #[test]
+    fn ingest_projection_refuses_receiver_feed_aliasing() {
+        let mut accounts = ingest_accounts();
+        accounts.receiver_program = accounts.feed;
+        assert_eq!(
+            EnabledSourceActionAccountsV2::IngestBoundary(accounts).ordered_projection(),
             Err(WorkflowGraphError::InvalidCanonicalPayload)
         );
     }

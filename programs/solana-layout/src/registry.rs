@@ -61,6 +61,24 @@ pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION: u8 = 3;
 pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG: u8 = 0x0f;
 /// General SettlementReceipt V4 version.
 pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION: u8 = 4;
+/// Historical counted General Reservation discriminator.
+pub const GENERAL_RESERVATION_V5_ACCOUNT_TAG: u8 = 0x13;
+/// Historical counted General Reservation version.
+pub const GENERAL_RESERVATION_V5_ACCOUNT_VERSION: u8 = 5;
+/// Exact historical counted General Reservation width.
+pub const GENERAL_RESERVATION_V5_ACCOUNT_BYTES: usize = 627;
+/// Withdrawn deletable General Reservation discriminator.
+pub const GENERAL_RESERVATION_V7_ACCOUNT_TAG: u8 = 0x13;
+/// Withdrawn deletable General Reservation version.
+pub const GENERAL_RESERVATION_V7_ACCOUNT_VERSION: u8 = 7;
+/// Exact withdrawn deletable General Reservation width.
+pub const GENERAL_RESERVATION_V7_ACCOUNT_BYTES: usize = 675;
+/// Rent-owned General Reservation successor discriminator.
+pub const GENERAL_RESERVATION_V9_ACCOUNT_TAG: u8 = 0x13;
+/// Sole future rent-owned General Reservation version.
+pub const GENERAL_RESERVATION_V9_ACCOUNT_VERSION: u8 = 9;
+/// Exact rent-owned General Reservation width.
+pub const GENERAL_RESERVATION_V9_ACCOUNT_BYTES: usize = 666;
 /// General OrderPage successor discriminator. This deliberately reuses the
 /// historical OrderPage tag under a fresh version.
 pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG: u8 = 8;
@@ -82,6 +100,12 @@ pub const COLLATERAL_HOARD_V2_ACCOUNT_VERSION: u8 = 2;
 pub const CLAIM_LEDGER_V3_ACCOUNT_TAG: u8 = 0x41;
 /// Full-width native ClaimLedger successor version.
 pub const CLAIM_LEDGER_V3_ACCOUNT_VERSION: u8 = 3;
+/// Full-width central Resolution successor discriminator.
+pub const RESOLUTION_V5_ACCOUNT_TAG: u8 = 16;
+/// Full-width central Resolution successor version.
+pub const RESOLUTION_V5_ACCOUNT_VERSION: u8 = 5;
+const _: () = assert!(RESOLUTION_V5_ACCOUNT_TAG == 16);
+const _: () = assert!(RESOLUTION_V5_ACCOUNT_VERSION == 5);
 /// Full-width global Position successor discriminator.
 pub const RETIREMENT_V3_POSITION_ACCOUNT_TAG: u8 = 6;
 /// Full-width global Position successor version.
@@ -158,9 +182,9 @@ pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
-/// Non-production Dealer staged-policy account discriminator.
+/// Non-production Dealer staged-catalog account discriminator.
 pub const DEALER_POLICY_STAGE_ACCOUNT_TAG: u8 = 0x7d;
-/// Dealer staged-policy account version.
+/// Dealer staged-catalog account version.
 pub const DEALER_POLICY_STAGE_ACCOUNT_VERSION: u8 = 1;
 /// Immutable Dealer policy catalog account discriminator.
 pub const DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
@@ -168,9 +192,9 @@ pub const DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
 pub const DEALER_POLICY_ACCOUNT_VERSION: u8 = 1;
 /// Frozen canonical `DealerPolicyV1` semantic-body length.
 pub const DEALER_POLICY_BODY_BYTES: usize = 1_148;
-/// Exact adapter-owned upload-stage header length.
+/// Exact adapter-owned typed upload-stage header length.
 pub const DEALER_POLICY_STAGE_HEADER_BYTES: usize = 140;
-/// Exact upload-stage account length.
+/// Exact maximum-width upload-stage account length.
 pub const DEALER_POLICY_STAGE_ACCOUNT_BYTES: usize =
     DEALER_POLICY_STAGE_HEADER_BYTES + DEALER_POLICY_BODY_BYTES;
 /// Exact adapter-owned immutable catalog header length.
@@ -235,8 +259,11 @@ pub const GENERAL_V2_FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
 pub const GENERAL_V2_FINAL_POT_ACCOUNT_VERSION: u8 = 1;
 /// Immutable authenticated SourcePlane V3 release account discriminator.
 pub const SOURCE_V3_RELEASE_ACCOUNT_TAG: u8 = 0x8a;
-/// SourcePlane V3 release account version.
-pub const SOURCE_V3_RELEASE_ACCOUNT_VERSION: u8 = 1;
+/// Historical SourcePlane V3 release account version. Its 1,008-byte body did
+/// not authenticate the upgradeable receiver release and is never executable.
+pub const SOURCE_V3_RELEASE_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current SourcePlane V3 release account version.
+pub const SOURCE_V3_RELEASE_ACCOUNT_VERSION: u8 = 2;
 /// Mutable SourcePlane V3 head account discriminator.
 pub const SOURCE_V3_HEAD_ACCOUNT_TAG: u8 = 0x8b;
 /// SourcePlane V3 head account version.
@@ -360,8 +387,10 @@ pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
 /// Immutable exact fractional-redemption policy discriminator.
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG: u8 = 0xa4;
-/// Immutable exact fractional-redemption policy version.
-pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn policy version whose offset 80 meant payout-vector digest.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION: u8 = 1;
+/// Canonical Resolution-V5-data-bound policy version.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION: u8 = 2;
 /// Exact immutable fractional-redemption policy bytes.
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_BYTES: usize = 296;
 /// Sole aggregate numerator-credit ledger discriminator.
@@ -372,14 +401,18 @@ pub const FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION: u8 = 1;
 pub const FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_BYTES: usize = 224;
 /// Owner-scoped exact numerator-credit discriminator.
 pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG: u8 = 0xa6;
-/// Owner-scoped exact numerator-credit version.
-pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn credit version whose offset 176 meant payout-vector digest.
+pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION: u8 = 1;
+/// Canonical Resolution-V5-data-bound owner-credit version.
+pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION: u8 = 2;
 /// Exact owner-scoped numerator-credit bytes.
 pub const FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES: usize = 296;
 /// Permanent zero-credit replay tombstone discriminator.
 pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa7;
-/// Permanent zero-credit replay tombstone version.
-pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn tombstone version whose offset 160 meant payout-vector digest.
+pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION: u8 = 1;
+/// Canonical Resolution-V5-data-bound replay tombstone version.
+pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
 /// Exact permanent zero-credit replay tombstone bytes.
 pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES: usize = 232;
 /// Mutable exhaustive quantized interval-consensus work discriminator.
@@ -427,12 +460,33 @@ const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG == 15);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION == 4);
+const _: () = assert!(GENERAL_RESERVATION_V5_ACCOUNT_TAG == 0x13);
+const _: () = assert!(GENERAL_RESERVATION_V5_ACCOUNT_VERSION == 5);
+const _: () = assert!(GENERAL_RESERVATION_V5_ACCOUNT_BYTES == 627);
+const _: () = assert!(GENERAL_RESERVATION_V7_ACCOUNT_TAG == 0x13);
+const _: () = assert!(GENERAL_RESERVATION_V7_ACCOUNT_VERSION == 7);
+const _: () = assert!(GENERAL_RESERVATION_V7_ACCOUNT_BYTES == 675);
+const _: () =
+    assert!(GENERAL_RESERVATION_V9_ACCOUNT_TAG == super::reservation::RESERVATION_ACCOUNT_TAG);
+const _: () = assert!(
+    GENERAL_RESERVATION_V9_ACCOUNT_VERSION == super::reservation_v9::RESERVATION_ACCOUNT_VERSION_V9
+);
+const _: () = assert!(
+    GENERAL_RESERVATION_V9_ACCOUNT_BYTES == super::reservation_v9::RESERVATION_ACCOUNT_BYTES_V9
+);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == 8);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == 5);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG);
 const _: () =
     assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == super::order_page_v5::ORDER_PAGE_V5_VERSION);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
+const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION == 2);
+const _: () = assert!(FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION == 2);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION == 1);
+const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION == 2);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG == 0x93);
 const _: () = assert!(DEALER_STATE_V2_ACCOUNT_TAG == 0x94);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG == 0x95);
@@ -469,6 +523,9 @@ pub enum AllocationStatus {
     /// Executable only in one explicitly named non-production laboratory
     /// profile; every production profile remains disabled.
     NonProductionLab,
+    /// Coordinates remain permanently occupied but no decoder, constructor,
+    /// migration, or executable route may treat them as current state.
+    Withdrawn,
 }
 
 /// Coordinates occupied by one collision-ledger entry.
@@ -501,7 +558,7 @@ pub enum AllocationCoordinates {
 pub struct CollisionLedgerEntry {
     /// Occupied wire coordinates.
     pub coordinates: AllocationCoordinates,
-    /// Whether the coordinates are frozen or merely reserved and disabled.
+    /// Whether the coordinates are frozen, disabled, laboratory-only, or withdrawn.
     pub status: AllocationStatus,
     /// Stable human-readable allocation name.
     pub name: &'static str,
@@ -532,6 +589,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_RESERVATION_V5_ACCOUNT_TAG,
+            version: GENERAL_RESERVATION_V5_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::Frozen,
+        name: "withdrawn-counted-general-reservation-v5-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_RESERVATION_V7_ACCOUNT_TAG,
+            version: GENERAL_RESERVATION_V7_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "withdrawn-deletable-general-reservation-v7-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_RESERVATION_V9_ACCOUNT_TAG,
+            version: GENERAL_RESERVATION_V9_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-reservation-v9-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -685,6 +769,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "native-claim-ledger-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RESOLUTION_V5_ACCOUNT_TAG,
+            version: RESOLUTION_V5_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "full-width-resolution-v5-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1014,10 +1107,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: SOURCE_V3_RELEASE_ACCOUNT_TAG,
+            version: SOURCE_V3_RELEASE_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-release-v1-account-historical",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_RELEASE_ACCOUNT_TAG,
             version: SOURCE_V3_RELEASE_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-v3-release-v1-account",
+        name: "source-v3-release-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1230,10 +1332,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "fractional-redemption-policy-v1-withdrawn-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "fractional-redemption-policy-v1-account",
+        name: "fractional-redemption-policy-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1248,10 +1359,28 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "fractional-redemption-credit-v1-withdrawn-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "fractional-redemption-credit-v1-account",
+        name: "fractional-redemption-credit-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "fractional-redemption-credit-tombstone-v1-withdrawn-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1260,7 +1389,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             version: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "fractional-redemption-credit-tombstone-v1-account",
+        name: "fractional-redemption-credit-tombstone-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1501,9 +1630,42 @@ pub enum GeneralV2Action {
     InitializeSettlementRoot = 39,
     /// Complete one merge receipt's separately authenticated payment latch.
     FinalizeMergeReceiptPayment = 40,
+    /// Release and close one exact zero-fill Reservation.
+    ReleaseUnfilledReservation = 41,
 }
 
-/// Dealer family-local policy-catalog transport actions.
+/// Exact immutable artifact carried by the Dealer catalog transport.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerCatalogArtifactKindV1 {
+    /// Covered-dealer economic policy body.
+    Policy = 1,
+    /// Fine-grained Dealer action quote schedule.
+    LivenessSchedule = 2,
+    /// Generic seven-compartment runtime-liveness policy.
+    RuntimeLivenessPolicy = 3,
+}
+
+impl DealerCatalogArtifactKindV1 {
+    pub const fn from_byte(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Policy),
+            2 => Some(Self::LivenessSchedule),
+            3 => Some(Self::RuntimeLivenessPolicy),
+            _ => None,
+        }
+    }
+
+    pub const fn body_bytes(self) -> usize {
+        match self {
+            Self::Policy => DEALER_POLICY_BODY_BYTES,
+            Self::LivenessSchedule => 372,
+            Self::RuntimeLivenessPolicy => 1_132,
+        }
+    }
+}
+
+/// Dealer family-local immutable-catalog transport actions.
 ///
 /// These nonzero wire values deliberately do not reuse the pure Dealer
 /// runtime enum's `0..=21` representation. Only `SealPolicy` completes the
@@ -1516,7 +1678,7 @@ pub enum DealerPolicyAction {
     BeginPolicy = 1,
     /// Append the next strict fixed-width chunk.
     WritePolicy = 2,
-    /// Validate and materialize the immutable content-addressed policy.
+    /// Validate and materialize the selected immutable catalog artifact.
     SealPolicy = 3,
     /// Close an incomplete stage under its stored rent split.
     AbortPolicy = 4,
@@ -1637,14 +1799,14 @@ impl DealerFacilityAction {
     }
 }
 
-/// Exact body bytes accepted in each staged Dealer-policy write.
+/// Exact body bytes accepted in each staged Dealer-catalog write.
 pub const DEALER_POLICY_CHUNK_BYTES: usize = 192;
-/// Exact Begin payload bytes: policy ID, neutral sink, expiry slot.
-pub const DEALER_BEGIN_POLICY_PAYLOAD_BYTES: usize = 32 + 32 + 8;
-/// Exact Write payload bytes: policy ID, cursor, active length, padded chunk.
-pub const DEALER_WRITE_POLICY_PAYLOAD_BYTES: usize = 32 + 2 + 2 + DEALER_POLICY_CHUNK_BYTES;
-/// Exact Seal/Abort payload bytes: policy ID.
-pub const DEALER_POLICY_ID_PAYLOAD_BYTES: usize = 32;
+/// Exact Begin payload bytes: kind/padding, identity, neutral sink, expiry.
+pub const DEALER_BEGIN_POLICY_PAYLOAD_BYTES: usize = 8 + 32 + 32 + 8;
+/// Exact Write payload bytes: kind/padding, identity, cursor, active length, chunk.
+pub const DEALER_WRITE_POLICY_PAYLOAD_BYTES: usize = 8 + 32 + 2 + 2 + DEALER_POLICY_CHUNK_BYTES;
+/// Exact typed-identity payload bytes for Seal and Abort.
+pub const DEALER_POLICY_ID_PAYLOAD_BYTES: usize = 8 + 32;
 
 const _: () = assert!(DEALER_WRITE_POLICY_PAYLOAD_BYTES <= MAX_EXTENSION_PAYLOAD_BYTES);
 
@@ -1652,7 +1814,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 40;
+    pub const LAST_TAG: u8 = 41;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -1697,6 +1859,7 @@ impl GeneralV2Action {
             Self::FinalizeOwnerSettlement => 38,
             Self::InitializeSettlementRoot => 39,
             Self::FinalizeMergeReceiptPayment => 40,
+            Self::ReleaseUnfilledReservation => 41,
         }
     }
 
@@ -1743,6 +1906,7 @@ impl GeneralV2Action {
             38 => Some(Self::FinalizeOwnerSettlement),
             39 => Some(Self::InitializeSettlementRoot),
             40 => Some(Self::FinalizeMergeReceiptPayment),
+            41 => Some(Self::ReleaseUnfilledReservation),
             _ => None,
         }
     }
@@ -2307,6 +2471,10 @@ mod tests {
     fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
             (
+                GENERAL_RESERVATION_V9_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V9_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
                 GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
             ),
@@ -2452,6 +2620,37 @@ mod tests {
     }
 
     #[test]
+    fn reservation_history_is_not_reinterpreted_by_the_rent_owned_successor() {
+        let expected = [
+            (
+                GENERAL_RESERVATION_V5_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V5_ACCOUNT_VERSION,
+                AllocationStatus::Frozen,
+            ),
+            (
+                GENERAL_RESERVATION_V7_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V7_ACCOUNT_VERSION,
+                AllocationStatus::ReservedDisabled,
+            ),
+            (
+                GENERAL_RESERVATION_V9_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V9_ACCOUNT_VERSION,
+                AllocationStatus::ReservedDisabled,
+            ),
+        ];
+        for (tag, version, expected_status) in expected {
+            let matches: Vec<_> = CENTRAL_COLLISION_LEDGER
+                .iter()
+                .filter(|entry| {
+                    coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+                })
+                .collect();
+            assert_eq!(matches.len(), 1, "reservation {tag}/{version}");
+            assert_eq!(matches[0].status, expected_status);
+        }
+    }
+
+    #[test]
     fn coordinated_post_selected_account_block_is_complete_and_disabled() {
         let expected = [
             (
@@ -2534,6 +2733,10 @@ mod tests {
     #[test]
     fn source_v3_account_block_is_complete_and_disabled() {
         let expected = [
+            (
+                SOURCE_V3_RELEASE_ACCOUNT_TAG,
+                SOURCE_V3_RELEASE_ACCOUNT_VERSION_V1,
+            ),
             (
                 SOURCE_V3_RELEASE_ACCOUNT_TAG,
                 SOURCE_V3_RELEASE_ACCOUNT_VERSION,
@@ -2663,6 +2866,38 @@ mod tests {
     }
 
     #[test]
+    fn fractional_redemption_reinterpreted_v1_accounts_are_withdrawn() {
+        let withdrawn = [
+            (
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_V1_VERSION,
+            ),
+        ];
+        for (tag, version) in withdrawn {
+            let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.next().map(|entry| entry.status),
+                Some(AllocationStatus::Withdrawn),
+                "withdrawn account {tag}/{version}"
+            );
+            assert!(
+                matching.next().is_none(),
+                "duplicate withdrawn account {tag}/{version}"
+            );
+        }
+    }
+
+    #[test]
     fn counted_retirement_wrapper_coordinates_are_reserved_but_disabled() {
         let expected = [
             (
@@ -2769,9 +3004,9 @@ mod tests {
             );
         }
         assert_eq!(DEALER_POLICY_CHUNK_BYTES, 192);
-        assert_eq!(DEALER_BEGIN_POLICY_PAYLOAD_BYTES, 72);
-        assert_eq!(DEALER_WRITE_POLICY_PAYLOAD_BYTES, 228);
-        assert_eq!(DEALER_POLICY_ID_PAYLOAD_BYTES, 32);
+        assert_eq!(DEALER_BEGIN_POLICY_PAYLOAD_BYTES, 80);
+        assert_eq!(DEALER_WRITE_POLICY_PAYLOAD_BYTES, 236);
+        assert_eq!(DEALER_POLICY_ID_PAYLOAD_BYTES, 40);
 
         for action in [
             DealerPolicyAction::BeginPolicy,

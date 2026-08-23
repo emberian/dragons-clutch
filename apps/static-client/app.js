@@ -144,6 +144,7 @@
     const finality = snapshot.finality;
     target.append(
       metric("Commitment", finality.requestedCommitment, finality.requestedCommitment === "finalized" ? "good" : "warn"),
+      metric("Authority eligibility", "false — projection only", "warn"),
       metric("Projected tip slot", finality.projectedTipSlot),
       metric("Finalized root", finality.finalizedRootSlot || "not observed", finality.finalizedRootSlot ? "good" : "warn"),
       metric("Selected accounts", snapshot.accountCounts.selectedRelease),
@@ -151,6 +152,7 @@
       metric("Unsafe fork rows", finality.unsafeForkAccountCount, finality.unsafeForkAccountCount === "0" ? "good" : "bad"),
       metric("Bootstrap", snapshot.acquisition.bootstrapComplete ? "complete" : "incomplete", snapshot.acquisition.bootstrapComplete ? "good" : "warn"),
       metric("Pending accounts", snapshot.acquisition.pendingAccounts, snapshot.acquisition.pendingAccounts === "0" ? "good" : "warn"),
+      metric("Processed transport", finality.processedTransport ? `${finality.processedTransport.phase} · generation ${finality.processedTransport.connectionGeneration} · rollback epoch ${finality.processedTransport.rollbackEpoch}` : "not configured", finality.requestedCommitment === "processed" ? "warn" : ""),
       metric("Response budget left", `${snapshot.acquisitionBounds.remainingResponseBytes} bytes`)
     );
   };
@@ -225,8 +227,9 @@
       option.value = String(index);
       select.append(option);
     });
-    select.disabled = false;
-    $("build-workflow").disabled = false;
+    const processed = snapshot.finality.requestedCommitment === "processed";
+    select.disabled = processed;
+    $("build-workflow").disabled = processed;
   };
 
   const renderSnapshot = async (snapshot) => {
@@ -236,7 +239,8 @@
     const unsafe = snapshot.finality.unsafeForkAccountCount !== "0";
     const stale = snapshot.finality.staleAccountCount !== "0";
     status.className = `status-panel ${unsafe ? "bad" : stale || !snapshot.acquisition.bootstrapComplete ? "incomplete" : "ready"}`;
-    status.textContent = `Loaded ${snapshot.accountCounts.selectedRelease} selected-release accounts at ${snapshot.finality.requestedCommitment} commitment. This is an untrusted operatord projection, not onchain authority.${unsafe ? " Dead or unidentified fork rows are present." : ""}${stale ? " The configured staleness policy is exceeded." : ""}`;
+    const processedWarning = snapshot.finality.requestedCommitment === "processed" ? " This view is non-final, rollbackable, never authority-eligible, and cannot construct keeper workflows." : "";
+    status.textContent = `Loaded ${snapshot.accountCounts.selectedRelease} selected-release accounts at ${snapshot.finality.requestedCommitment} commitment. This is an untrusted operatord projection, not onchain authority.${processedWarning}${unsafe ? " Dead or unidentified fork rows are present." : ""}${stale ? " The configured staleness policy is exceeded." : ""}`;
     renderRelease(snapshot);
     renderMetrics(snapshot);
     renderCapabilities(snapshot);
@@ -361,6 +365,7 @@
   const buildWorkflow = async () => {
     if (!state.configuration || !state.snapshot) throw new Error("Acquire a chain projection before constructing a workflow node.");
     if (state.snapshot.configuration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
+    if (state.snapshot.finality.requestedCommitment === "processed") throw new Error("Processed observations are rollbackable and never authority-eligible; switch to finalized and reacquire before constructing a workflow.");
     let draft;
     try { draft = JSON.parse($("draft-json").value); } catch (_) { throw new Error("Semantic-owner draft is not valid JSON."); }
     const keeper = keeperForSelection();

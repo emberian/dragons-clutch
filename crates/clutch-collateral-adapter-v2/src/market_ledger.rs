@@ -16,8 +16,9 @@ use clutch_retirement::{
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    digest, AcceptedClaimRedemptionCollateralV2, AcceptedPositionCollateralTransferV3,
-    CustodyTransferKindV2, Error, Id, Result,
+    admit_collateral_account_v2, digest, AcceptedClaimRedemptionCollateralV2,
+    AcceptedPositionCollateralTransferV3, BoundCollateralProfileV2, CustodyTransferKindV2, Error,
+    Id, Result, RuntimeAccountViewV2, TokenAccountRoleV2,
 };
 
 /// Reused historical Hoard discriminator under the full-width V2 layout.
@@ -58,6 +59,12 @@ pub const FRACTIONAL_CLAIM_LEDGER_FOUNDING_DOMAIN_V3: &[u8] =
 /// Exhausted ClaimLedger/0xa5 retirement transition domain.
 pub const FRACTIONAL_CLAIM_LEDGER_RETIREMENT_DOMAIN_V3: &[u8] =
     b"dragons-clutch/claim-ledger/fractional-retirement/v3\0";
+/// Exact absent-account Market-liability founding plan domain.
+pub const MARKET_LIABILITY_FOUNDING_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/market-liability/founding/v3\0";
+/// Accepted exact postwrite Market-liability founding receipt domain.
+pub const ACCEPTED_MARKET_LIABILITY_FOUNDING_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/market-liability/founding-accepted/v3\0";
 
 const HEADER_BYTES: usize = 16;
 const HOARD_ID_COUNT: usize = 7;
@@ -403,6 +410,292 @@ impl ClaimLedgerV3 {
             .checked_add(self.aggregate_materialized_supply[usize::from(outcome)])
             .ok_or(Error::Arithmetic)
     }
+}
+
+/// Exact non-persisted identities and rent owners required to found the two
+/// canonical Market-liability accounts.
+///
+/// This value is not authority. The constructor also requires a private-field
+/// [`crate::BoundCollateralProfileV2`] produced by the runtime's authenticated
+/// Realm/Profile/policy/release join. The SBF adapter must separately prove
+/// that both named accounts are absent canonical PDAs before allocating them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLiabilityFoundingRequestV3 {
+    /// Exact absent HoardV2 account.
+    pub hoard_account: Id,
+    /// Exact absent ClaimLedgerV3 account.
+    pub claim_ledger_account: Id,
+    /// Full Product-owned MarketInstanceV2 identity.
+    pub market_instance_id: Id,
+    /// Exact Product-owned NativeClaimBasis identity.
+    pub native_claim_basis_id: Id,
+    /// Immutable fractional-credit policy identity.
+    pub fractional_policy_id: Id,
+    /// Exact canonical fractional-ledger account, initially absent.
+    pub fractional_ledger_account: Id,
+    /// Exact General MarketRuntime authority for outcome claim mints.
+    pub claim_mint_authority: Id,
+    /// Active native outcome width.
+    pub outcome_count: u8,
+    /// Canonical HoardV2 PDA bump.
+    pub hoard_bump: u8,
+    /// Canonical ClaimLedgerV3 PDA bump.
+    pub claim_ledger_bump: u8,
+    /// Separately admitted HoardV2 lamport-rent owner.
+    pub hoard_rent: DeletableRentOwnerV1,
+    /// Separately admitted ClaimLedgerV3 lamport-rent owner.
+    pub claim_ledger_rent: DeletableRentOwnerV1,
+}
+
+/// Closed founding poststate for the full-width Market liability plane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLiabilityFoundingPlanV3 {
+    hoard_account: Id,
+    claim_ledger_account: Id,
+    claim_mint_authority: Id,
+    hoard: HoardV2,
+    claim_ledger: ClaimLedgerV3,
+    hoard_id: Id,
+    claim_ledger_id: Id,
+    founding_id: Id,
+}
+
+/// Hostile runtime observations after the liability/custody founding step.
+///
+/// The SBF adapter supplies these directly from reloaded accounts. This public
+/// view is not authority; only an exact private-field founding plan can be
+/// accepted against it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLiabilityFoundingPostwriteV3<'a> {
+    /// Exact program-owned HoardV2 account address.
+    pub hoard_account: Id,
+    /// Reloaded HoardV2 bytes.
+    pub hoard_data: &'a [u8],
+    /// Exact program-owned ClaimLedgerV3 account address.
+    pub claim_ledger_account: Id,
+    /// Reloaded ClaimLedgerV3 bytes.
+    pub claim_ledger_data: &'a [u8],
+    /// Reloaded release-selected Hoard collateral token account.
+    pub hoard_token: RuntimeAccountViewV2<'a>,
+}
+
+/// Accepted zero-liability/custody founding capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedMarketLiabilityFoundingV3 {
+    plan: MarketLiabilityFoundingPlanV3,
+    visible_hoard_atoms: u64,
+    receipt_id: Id,
+}
+
+impl AcceptedMarketLiabilityFoundingV3 {
+    /// Complete exact founding plan whose poststate was observed.
+    pub const fn plan(self) -> MarketLiabilityFoundingPlanV3 {
+        self.plan
+    }
+
+    /// Reloaded Hoard token amount; founding requires exact zero.
+    pub const fn visible_hoard_atoms(self) -> u64 {
+        self.visible_hoard_atoms
+    }
+
+    /// Exact receipt Product can count for the bounded core-liability step.
+    pub const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
+}
+
+impl MarketLiabilityFoundingPlanV3 {
+    /// Exact absent HoardV2 account the runtime must create.
+    pub const fn hoard_account(self) -> Id {
+        self.hoard_account
+    }
+
+    /// Exact absent ClaimLedgerV3 account the runtime must create.
+    pub const fn claim_ledger_account(self) -> Id {
+        self.claim_ledger_account
+    }
+
+    /// General MarketRuntime authority selected for all outcome claim mints.
+    pub const fn claim_mint_authority(self) -> Id {
+        self.claim_mint_authority
+    }
+
+    /// Complete canonical zero-liability Hoard poststate.
+    pub const fn hoard(self) -> HoardV2 {
+        self.hoard
+    }
+
+    /// Complete canonical zero-supply ClaimLedger poststate.
+    pub const fn claim_ledger(self) -> ClaimLedgerV3 {
+        self.claim_ledger
+    }
+
+    /// Semantic identity of the exact Hoard poststate.
+    pub const fn hoard_id(self) -> Id {
+        self.hoard_id
+    }
+
+    /// Semantic identity of the exact ClaimLedger poststate.
+    pub const fn claim_ledger_id(self) -> Id {
+        self.claim_ledger_id
+    }
+
+    /// Shared identity joining both absent accounts, rent owners, and the
+    /// separately selected claim-mint authority.
+    pub const fn founding_id(self) -> Id {
+        self.founding_id
+    }
+}
+
+/// Prepare the only canonical founding poststate for HoardV2 and
+/// ClaimLedgerV3.
+///
+/// Cash, locked principal, native supply, the fractional latch, and the
+/// Resolution link all begin at zero. In particular, this function cannot
+/// endow a founding Position, mint a claim, or source rent from collateral.
+pub fn prepare_market_liability_founding_v3<B: PositionV3Sha256Backend>(
+    bound: crate::BoundCollateralProfileV2,
+    request: MarketLiabilityFoundingRequestV3,
+    backend: &B,
+) -> Result<MarketLiabilityFoundingPlanV3> {
+    for id in [
+        request.hoard_account,
+        request.claim_ledger_account,
+        request.market_instance_id,
+        request.native_claim_basis_id,
+        request.fractional_policy_id,
+        request.fractional_ledger_account,
+        request.claim_mint_authority,
+    ] {
+        id.require_live()?;
+    }
+    request
+        .hoard_rent
+        .validate()
+        .map_err(|_| Error::InvalidParameter)?;
+    request
+        .claim_ledger_rent
+        .validate()
+        .map_err(|_| Error::InvalidParameter)?;
+
+    let market = bound.market();
+    let realm = bound.realm_bound().realm();
+    if market.market != request.market_instance_id
+        || market.realm != realm.realm
+        || market.profile != realm.profile
+        || request.outcome_count == 0
+        || usize::from(request.outcome_count) > MAX_OUTCOMES
+    {
+        return Err(Error::MismatchedBinding);
+    }
+
+    let hoard = HoardV2 {
+        market_instance_id: market.market,
+        realm_id: market.realm,
+        profile_id: market.profile,
+        collateral_policy_id: bound.policy_id(),
+        collateral_release_id: bound.release().id()?,
+        authority: market.hoard_authority,
+        token_account: market.hoard_token_account,
+        collateral_cap_atoms: market.collateral_cap_atoms,
+        cash_liability_atoms: 0,
+        locked_claim_principal_atoms: 0,
+        lifecycle: MarketLiabilityLifecycleV1::Open,
+        outcome_count: request.outcome_count,
+        stored_bump: request.hoard_bump,
+        rent: request.hoard_rent,
+    };
+    let claim_ledger = ClaimLedgerV3 {
+        market_instance_id: market.market,
+        realm_id: market.realm,
+        native_claim_basis_id: request.native_claim_basis_id,
+        fractional_policy_id: request.fractional_policy_id,
+        fractional_ledger_account: request.fractional_ledger_account,
+        resolution_account: Id::ZERO,
+        aggregate_internal_supply: [0; MAX_OUTCOMES],
+        aggregate_materialized_supply: [0; MAX_OUTCOMES],
+        next_fractional_sequence: 0,
+        last_fractional_transition_id: Id::ZERO,
+        lifecycle: MarketLiabilityLifecycleV1::Open,
+        outcome_count: request.outcome_count,
+        stored_bump: request.claim_ledger_bump,
+        rent: request.claim_ledger_rent,
+    };
+    hoard.validate()?;
+    claim_ledger.validate()?;
+    let hoard_id = hoard.semantic_id(backend)?;
+    let claim_ledger_id = claim_ledger.semantic_id(backend)?;
+    let founding_id = digest(
+        MARKET_LIABILITY_FOUNDING_DOMAIN_V3,
+        &[
+            &request.hoard_account.bytes(),
+            &request.claim_ledger_account.bytes(),
+            &request.claim_mint_authority.bytes(),
+            &hoard_id.bytes(),
+            &claim_ledger_id.bytes(),
+        ],
+    );
+    founding_id.require_live()?;
+    Ok(MarketLiabilityFoundingPlanV3 {
+        hoard_account: request.hoard_account,
+        claim_ledger_account: request.claim_ledger_account,
+        claim_mint_authority: request.claim_mint_authority,
+        hoard,
+        claim_ledger,
+        hoard_id,
+        claim_ledger_id,
+        founding_id,
+    })
+}
+
+/// Accept the liability/custody founding step only after exact account reloads.
+///
+/// The SBF adapter must additionally authenticate program ownership, canonical
+/// PDAs, FoundationVault rent deltas, and its private Product founding
+/// authority. This contract checks the semantic bytes and external custody
+/// poststate owned by the collateral plane.
+pub fn accept_market_liability_founding_v3(
+    bound: BoundCollateralProfileV2,
+    plan: MarketLiabilityFoundingPlanV3,
+    postwrite: MarketLiabilityFoundingPostwriteV3<'_>,
+) -> Result<AcceptedMarketLiabilityFoundingV3> {
+    if postwrite.hoard_account != plan.hoard_account
+        || postwrite.claim_ledger_account != plan.claim_ledger_account
+        || HoardV2::decode(postwrite.hoard_data)? != plan.hoard
+        || ClaimLedgerV3::decode(postwrite.claim_ledger_data)? != plan.claim_ledger
+        || postwrite.hoard_token.key != plan.hoard.token_account
+    {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let observation =
+        admit_collateral_account_v2(bound, postwrite.hoard_token, TokenAccountRoleV2::Hoard)?;
+    if observation.address != plan.hoard.token_account
+        || observation.owner_authority != plan.hoard.authority
+        || observation.semantic_owner != plan.hoard.market_instance_id
+        || observation.compartment != 1
+        || observation.amount_atoms != 0
+        || plan.hoard.required_custody_atoms()? != 0
+    {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let receipt_id = digest(
+        ACCEPTED_MARKET_LIABILITY_FOUNDING_DOMAIN_V3,
+        &[
+            &plan.founding_id.bytes(),
+            &postwrite.hoard_account.bytes(),
+            &plan.hoard_id.bytes(),
+            &postwrite.claim_ledger_account.bytes(),
+            &plan.claim_ledger_id.bytes(),
+            &observation.address.bytes(),
+            &observation.amount_atoms.to_le_bytes(),
+        ],
+    );
+    receipt_id.require_live()?;
+    Ok(AcceptedMarketLiabilityFoundingV3 {
+        plan,
+        visible_hoard_atoms: observation.amount_atoms,
+        receipt_id,
+    })
 }
 
 /// Exact native-supply effect paired with one 0xa5 fractional mutation.
@@ -1264,4 +1557,204 @@ fn rent_payer_id(rent: DeletableRentOwnerV1) -> Id {
 #[allow(dead_code)]
 fn identity(value: Id) -> Result<Identity32V1> {
     Identity32V1::new(value.bytes()).map_err(|_| Error::ZeroIdentity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        bind_collateral_profile_v2, AdapterCatalogV2, AdapterReleaseV2, CollateralPolicyV2,
+        MarketCollateralBindingV2, ProfileCollateralBindingV2, RealmCollateralBindingV2,
+        RuntimeReleaseObservationV2, LEGACY_SPL_TOKEN_PROGRAM,
+    };
+    use sha2::{Digest, Sha256};
+
+    static RELEASES: [AdapterReleaseV2; 1] = [AdapterReleaseV2::legacy_spl(
+        Id::from_bytes([20; 32]),
+        Id::from_bytes([21; 32]),
+    )];
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct TestSha256;
+
+    impl PositionV3Sha256Backend for TestSha256 {
+        fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            hasher.update(domain);
+            hasher.update(body);
+            hasher.finalize().into()
+        }
+    }
+
+    const fn id(byte: u8) -> Id {
+        Id::from_bytes([byte; 32])
+    }
+
+    fn rent(payer: u8, principal: u64) -> DeletableRentOwnerV1 {
+        DeletableRentOwnerV1::from_persisted(Identity32V1::new([payer; 32]).unwrap(), principal, 0)
+            .unwrap()
+    }
+
+    fn bound() -> crate::BoundCollateralProfileV2 {
+        let release = RELEASES[0];
+        let policy =
+            CollateralPolicyV2::for_release(release, id(22), 6, 1_000, 500, 0, 0, 0, 0).unwrap();
+        let policy_id = policy.id().unwrap();
+        bind_collateral_profile_v2(
+            MarketCollateralBindingV2 {
+                market: id(3),
+                realm: id(1),
+                profile: id(2),
+                collateral_cap_atoms: 500,
+                hoard_authority: id(4),
+                hoard_token_account: id(5),
+            },
+            RealmCollateralBindingV2 {
+                realm: id(1),
+                profile: id(2),
+            },
+            ProfileCollateralBindingV2 {
+                profile: id(2),
+                collateral_policy: policy_id,
+                adapter_release: release.id().unwrap(),
+            },
+            policy,
+            AdapterCatalogV2::new(&RELEASES).unwrap(),
+            RuntimeReleaseObservationV2 {
+                token_program: LEGACY_SPL_TOKEN_PROGRAM,
+                token_program_executable: true,
+                token_program_writable: false,
+                token_program_signer: false,
+                token_program_deployment: id(20),
+                parser_cpi_code: id(21),
+            },
+        )
+        .unwrap()
+    }
+
+    fn request() -> MarketLiabilityFoundingRequestV3 {
+        MarketLiabilityFoundingRequestV3 {
+            hoard_account: id(6),
+            claim_ledger_account: id(7),
+            market_instance_id: id(3),
+            native_claim_basis_id: id(8),
+            fractional_policy_id: id(9),
+            fractional_ledger_account: id(10),
+            claim_mint_authority: id(11),
+            outcome_count: 2,
+            hoard_bump: 12,
+            claim_ledger_bump: 13,
+            hoard_rent: rent(14, 100),
+            claim_ledger_rent: rent(15, 200),
+        }
+    }
+
+    fn token_bytes(amount: u64) -> [u8; 165] {
+        let mut bytes = [0u8; 165];
+        bytes[0..32].copy_from_slice(&id(22).bytes());
+        bytes[32..64].copy_from_slice(&id(4).bytes());
+        bytes[64..72].copy_from_slice(&amount.to_le_bytes());
+        bytes[108] = 1;
+        bytes
+    }
+
+    fn postwrite<'a>(
+        hoard_data: &'a [u8],
+        claim_ledger_data: &'a [u8],
+        token_data: &'a [u8],
+    ) -> MarketLiabilityFoundingPostwriteV3<'a> {
+        MarketLiabilityFoundingPostwriteV3 {
+            hoard_account: id(6),
+            hoard_data,
+            claim_ledger_account: id(7),
+            claim_ledger_data,
+            hoard_token: RuntimeAccountViewV2 {
+                key: id(5),
+                owner_program: LEGACY_SPL_TOKEN_PROGRAM,
+                data: token_data,
+                is_signer: false,
+                is_writable: true,
+                executable: false,
+            },
+        }
+    }
+
+    #[test]
+    fn founding_plan_starts_every_liability_and_supply_at_zero() {
+        let plan = prepare_market_liability_founding_v3(bound(), request(), &TestSha256).unwrap();
+        assert_eq!(plan.hoard_account(), id(6));
+        assert_eq!(plan.claim_ledger_account(), id(7));
+        assert_eq!(plan.claim_mint_authority(), id(11));
+        assert_eq!(plan.hoard().cash_liability_atoms, 0);
+        assert_eq!(plan.hoard().locked_claim_principal_atoms, 0);
+        assert_eq!(
+            plan.claim_ledger().aggregate_internal_supply,
+            [0; MAX_OUTCOMES]
+        );
+        assert_eq!(
+            plan.claim_ledger().aggregate_materialized_supply,
+            [0; MAX_OUTCOMES]
+        );
+        assert_eq!(plan.claim_ledger().resolution_account, Id::ZERO);
+        assert_eq!(plan.claim_ledger().next_fractional_sequence, 0);
+        assert_eq!(plan.claim_ledger().last_fractional_transition_id, Id::ZERO);
+        assert!(!plan.founding_id().is_zero());
+    }
+
+    #[test]
+    fn founding_plan_refuses_a_market_substitution_or_invalid_width() {
+        let mut wrong_market = request();
+        wrong_market.market_instance_id = id(30);
+        assert_eq!(
+            prepare_market_liability_founding_v3(bound(), wrong_market, &TestSha256),
+            Err(Error::MismatchedBinding)
+        );
+
+        let mut zero_outcomes = request();
+        zero_outcomes.outcome_count = 0;
+        assert_eq!(
+            prepare_market_liability_founding_v3(bound(), zero_outcomes, &TestSha256),
+            Err(Error::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn founding_acceptance_requires_exact_reloaded_zero_poststate() {
+        let bound = bound();
+        let plan = prepare_market_liability_founding_v3(bound, request(), &TestSha256).unwrap();
+        let mut hoard_data = [0u8; HOARD_V2_BYTES];
+        let mut claim_ledger_data = [0u8; CLAIM_LEDGER_V3_BYTES];
+        plan.hoard().encode(&mut hoard_data).unwrap();
+        plan.claim_ledger().encode(&mut claim_ledger_data).unwrap();
+        let empty_token = token_bytes(0);
+        let accepted = accept_market_liability_founding_v3(
+            bound,
+            plan,
+            postwrite(&hoard_data, &claim_ledger_data, &empty_token),
+        )
+        .unwrap();
+        assert_eq!(accepted.plan(), plan);
+        assert_eq!(accepted.visible_hoard_atoms(), 0);
+        assert!(!accepted.receipt_id().is_zero());
+
+        let nonempty_token = token_bytes(1);
+        assert_eq!(
+            accept_market_liability_founding_v3(
+                bound,
+                plan,
+                postwrite(&hoard_data, &claim_ledger_data, &nonempty_token),
+            ),
+            Err(Error::PostAdmissionFailed)
+        );
+
+        hoard_data[248] = 1;
+        assert_eq!(
+            accept_market_liability_founding_v3(
+                bound,
+                plan,
+                postwrite(&hoard_data, &claim_ledger_data, &empty_token),
+            ),
+            Err(Error::PostAdmissionFailed)
+        );
+    }
 }

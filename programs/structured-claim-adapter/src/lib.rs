@@ -40,8 +40,9 @@ pub use custody::{
     PositionV3WriteV1, ReplayV3WriteV1, StructuredCustodyPdaVerifierV1,
     StructuredCustodyPoststateV1, StructuredCustodyScratchV1, BASE_POSITION_TRANSFER_CPI_BYTES,
     MAX_CUSTODY_REPLAY_V3_WRITE_BYTES, POSITION_V3_WRITE_BYTES, STRUCTURED_CUSTODY_ACCOUNT_COUNT,
-    STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
-    STRUCTURED_CUSTODY_MARKET_BODY_DOMAIN_V1,
+    STRUCTURED_CUSTODY_CLAIM_LEDGER_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
+    STRUCTURED_CUSTODY_HOARD_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
+    STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1,
 };
 pub use dispatch::{dispatch_structured_claim_v1, StructuredClaimAccountLoaderV1};
 pub use envelope::{
@@ -65,9 +66,9 @@ pub use identity::{
 };
 pub use token2022_wire::{
     plan_token_2022_cpi_v1, wrapper_mint_parser_plan_v1, wrapper_token_parser_plan_v1,
-    Token2022InstructionPlanV1, WrapperMintParserPlanV1, WrapperTokenParserPlanV1,
-    TOKEN_2022_BASE_ACCOUNT_BYTES, TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES,
-    TOKEN_2022_INSTRUCTION_DATA_CAPACITY,
+    CanonicalToken2022DecoderV1, Token2022InstructionPlanV1, WrapperMintParserPlanV1,
+    WrapperTokenParserPlanV1, TOKEN_2022_BASE_ACCOUNT_BYTES,
+    TOKEN_2022_IMMUTABLE_OWNER_ACCOUNT_BYTES, TOKEN_2022_INSTRUCTION_DATA_CAPACITY,
 };
 
 /// The canonical semantic/runtime contract consumed by this adapter.

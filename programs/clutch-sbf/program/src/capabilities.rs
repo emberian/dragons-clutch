@@ -13,7 +13,7 @@
     not(feature = "profile-non-production-dealer-policy-catalog-lab"),
     not(feature = "non-production-product-series-lab")
 ))]
-pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v4-source-page";
+pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v5-source-ingest";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
@@ -21,7 +21,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v4-sourc
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v4-source-page";
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v5-source-ingest";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
@@ -35,7 +35,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-dealer-facility-init-bind-lab/v1";
+    "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lab/v6";
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
@@ -48,8 +48,8 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x60, 0x02, 0x0c, 0x9f, 0x26, 0xf2, 0xcc, 0xa8, 0xe0, 0xe5, 0xeb, 0x4e, 0xae, 0x4b, 0x35, 0x3f,
-    0x95, 0x16, 0xfa, 0x69, 0xba, 0xda, 0x88, 0x14, 0x43, 0x97, 0xbb, 0xbc, 0xf1, 0xd4, 0x9b, 0x1d,
+    0xec, 0xdd, 0xa1, 0x9b, 0x6a, 0xd7, 0x76, 0x94, 0x08, 0xa3, 0xa7, 0x1d, 0xaa, 0x9f, 0x42, 0x7b,
+    0x0b, 0x78, 0x8c, 0x9a, 0xdf, 0x70, 0x38, 0xd4, 0xdf, 0x66, 0xa6, 0xd4, 0xa3, 0xe4, 0xcf, 0xeb,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
@@ -58,8 +58,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0xb7, 0xa2, 0x30, 0x94, 0xd2, 0x7b, 0x4b, 0x02, 0x86, 0xf0, 0x8a, 0xf6, 0xb3, 0x59, 0xe7, 0xe8,
-    0x53, 0xcf, 0x35, 0x23, 0x4e, 0x84, 0x5c, 0x13, 0x4e, 0xbd, 0x38, 0x51, 0xcc, 0x3f, 0xd9, 0xba,
+    0xe1, 0x30, 0xe7, 0x01, 0x1f, 0xf6, 0xd8, 0xbd, 0xd0, 0x5e, 0xd2, 0x9e, 0x01, 0xd1, 0x93, 0x7a,
+    0x26, 0x9e, 0x71, 0xb1, 0x40, 0xd6, 0xe3, 0x7d, 0x4f, 0x01, 0xd6, 0xbc, 0x7d, 0x8b, 0xfc, 0x9c,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
@@ -79,8 +79,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x5a, 0xbd, 0xf5, 0x65, 0xa7, 0x09, 0x52, 0xe1, 0x15, 0xb5, 0x20, 0xa1, 0xe1, 0xd1, 0x9c, 0x50,
-    0xbd, 0xd3, 0x81, 0x43, 0x1b, 0x67, 0x63, 0xd2, 0x70, 0xe2, 0x13, 0x3b, 0x86, 0xa3, 0x11, 0x4e,
+    0x2c, 0x78, 0x0c, 0x81, 0x71, 0x89, 0x49, 0xb6, 0x5c, 0xdc, 0x54, 0x82, 0x2a, 0x9e, 0x30, 0x39,
+    0xa1, 0x3d, 0x66, 0x4d, 0x57, 0x09, 0xfa, 0xa9, 0x49, 0x55, 0x93, 0xd4, 0x54, 0x6a, 0xe4, 0x42,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -186,8 +186,9 @@ pub const fn extension_intent_action_allocated(
 /// Exact extension actions executable by this product.
 ///
 /// Full profiles execute artifact-authenticated Source release registration
-/// plus release-bound atomic SourceHead and OpenRawPage creation. Actions 4
-/// through 12 remain independently disabled.
+/// plus release-bound atomic SourceHead/OpenRawPage creation and receiver-
+/// authenticated parser ingestion. Actions 5 through 12 remain independently
+/// disabled.
 #[cfg(all(
     feature = "profile-full",
     not(any(
@@ -195,7 +196,8 @@ pub const fn extension_intent_action_allocated(
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
     ))
 ))]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[(77, 2, 1), (77, 2, 2), (77, 2, 3)];
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
+    &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
 
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(
@@ -207,7 +209,8 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[(77, 2, 1), (77, 2, 2),
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
-/// The laboratory enables policy publication plus exact facility initialization and Epoch binding.
+/// The laboratory enables typed Dealer catalog publication plus exact facility
+/// initialization, bounded LP funding, activation/recovery/refund, and Epoch binding.
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (76, 1, 1),
@@ -215,6 +218,12 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (76, 1, 3),
     (76, 1, 4),
     (76, 1, 5),
+    (76, 1, 6),
+    (76, 1, 7),
+    (76, 1, 8),
+    (76, 1, 9),
+    (76, 1, 10),
+    (76, 1, 11),
     (76, 1, 12),
 ];
 
@@ -359,12 +368,11 @@ mod tests {
                     );
                     let dealer_enabled = DEALER_POLICY_CATALOG_LAB
                         && family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
-                        && family_version
-                            == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
+                        && family_version == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
                         && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
                             .contains(&local_action)
-                            || matches!(local_action, 5 | 12));
+                            || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
                     let general_enabled = GENERAL_V2_IDENTITY_LAB
                         && family_tag == 74
                         && family_version == 1
@@ -377,7 +385,7 @@ mod tests {
                         && !GENERAL_V2_IDENTITY_LAB
                         && family_tag == 77
                         && family_version == 2
-                        && matches!(local_action, 1 | 2 | 3);
+                        && matches!(local_action, 1 | 2 | 3 | 4);
                     let expected_enabled =
                         dealer_enabled || general_enabled || source_runtime_enabled;
                     assert_eq!(

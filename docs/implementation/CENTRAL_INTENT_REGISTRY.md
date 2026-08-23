@@ -1,7 +1,8 @@
 # Central intent registry
 
-Status: General V2 remains registry-only. Dealer policy-catalog actions are
-executable only in one explicitly non-production laboratory profile.
+Status: General V2 remains profile-gated. Dealer immutable-catalog actions and
+the exact Initialize/BindEpoch slice are executable only in one explicitly
+non-production laboratory profile.
 
 ## Frozen legacy space
 
@@ -41,7 +42,7 @@ family version creates a new namespace; it does not inherit capability.
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
 
-General V2 reserves local actions 1 through 38, in order:
+General V2 reserves local actions 1 through 41, in order:
 
 1. `CreateMarket`
 2. `InitEpoch`
@@ -81,11 +82,15 @@ General V2 reserves local actions 1 through 38, in order:
 36. `ConsumeVirtualSplitReceiptEggs`
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
+39. `InitializeSettlementRoot`
+40. `FinalizeMergeReceiptPayment`
+41. `ReleaseUnfilledReservation`
 
 These names allocate local tags only. They do not freeze payload bytes, account
 lists, account codecs, or transition semantics. Dealer now allocates the
-following bounded policy transport without enabling any facility/economic
-action:
+following bounded immutable-catalog transport. The same strict transport
+admits exactly one typed body kind per stage: Dealer policy, Dealer action
+liveness schedule, or generic seven-compartment runtime-liveness policy.
 
 The collision ledger also reserves three same-tag General successors for the
 still-disabled cost-aware action 14/15 path: Window `24/5` (565 bytes),
@@ -101,12 +106,18 @@ separately reviewed counted settlement root.
 3. `SealPolicy`
 4. `AbortPolicy`
 
-The exact payload widths are 72, 228, 32, and 32 bytes. `WritePolicy` carries a
-192-byte padded chunk and a strict cursor. The account coordinates `0x7d/1`
-(1,288-byte stage) and `0x7e/1` (1,204-byte immutable catalog) are part of the
-same atomic allocation. The local action values do not reuse the pure Dealer
-runtime enum's zero-based representation. `SealPolicy` persists an unadmitted
-catalog artifact; it does not initialize liquidity.
+The exact payload widths are 80, 236, 40, and 40 bytes. Every payload begins
+with a one-byte artifact kind and seven zero padding bytes, followed by the
+full artifact identity. `WritePolicy` carries a 192-byte padded chunk and a
+strict cursor. The `0x7d/1` stage remains 1,288 bytes and persists the selected
+kind and its exact active body length. Policy seals to `0x7e/1`; schedule seals
+to `0x93/1`; runtime policy seals as its exact raw 1,132-byte canonical codec
+under a disjoint content-addressed Dealer PDA because the generic liveness
+adapter consumes that exact codec. The local action values do not reuse the
+pure Dealer runtime enum's zero-based representation. Catalog publication
+does not by itself initialize liquidity. Dealer Initialize separately consumes
+the published policy and schedule and atomically admits its seven segregated
+runtime-liveness compartment accounts from present native lamports.
 
 StructuredClaim `75/1` reserves actions 1 through 8:
 
@@ -148,7 +159,7 @@ These registry names allocate local tags only; this document does not freeze
 payload bytes, account lists, account codecs, transition semantics, or runtime
 capabilities. Action-specific contracts may do so separately. In particular,
 the non-production identity slice named below freezes a strict subset, and
-actions 35 through 38 have canonical payload contracts while remaining
+actions 35 through 41 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
@@ -195,16 +206,23 @@ FractionalRedemption 79/v1 reserves these local actions, all disabled:
 9. `SealClaimsExhausted`
 10. `CloseEmptyLedger`
 
-The corresponding account coordinates are `0xa4/1` for the immutable
+The current account coordinates are `0xa4/2` for the immutable
 Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
-credit and live-credit count, `0xa6/1` for one owner-scoped canonical numerator,
-and `0xa7/1` for the permanent zero-credit replay tombstone. Their exact body
+credit and live-credit count, `0xa6/2` for one owner-scoped canonical numerator,
+and `0xa7/2` for the permanent zero-credit replay tombstone. Their exact body
 widths are 296, 224, 296, and 232 bytes. Resolution owns the vector,
 ClaimLedger V3 owns native claim supply, Hoard V2 owns locked claim principal
 and cash classification, Position V3 and Replay V3 own internal
 custody/replay, and the Realm collateral adapter owns transfers. The fractional
 accounts copy none of those mutable facts; ClaimLedger and `0xa5` advance one
 sequence and exact cross-account semantic-ID receipt atomically.
+
+The earlier `0xa4/1`, `0xa6/1`, and `0xa7/1` allocations are withdrawn, not
+aliases. Their identity slots meant payout-vector digests; the current V2
+schemas instead commit the PDA-bound Resolution V5 data identity. No current
+decoder accepts V1, no migration is defined, and the policy/credit PDA and
+policy-state identity domains advance to V2. `0xa5/1` is unchanged because it
+never owned either identity and remains the sole aggregate-credit owner.
 
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
@@ -290,11 +308,16 @@ price artifacts, and present-funded liveness before capability admission.
 
 The central collision ledger is the sole allocation owner for the following
 coordinated successor block. Dealer policy transport rows are
-`NonProductionLab`; every other row is `ReservedDisabled`. An account codec or
-pure runtime elsewhere does not make a route executable.
+`NonProductionLab`; historical Reservation V5 is `Frozen`; current unactivated
+rows are `ReservedDisabled`; and rows named withdrawn remain occupied as
+`Withdrawn`. An account codec or pure runtime elsewhere does not make a route
+executable.
 
 | tag/version | owner | account |
 |---:|---|---|
+| `0x13/5` | retirement history | frozen counted General Reservation V5 (627 bytes); withdrawn from future creation and never reinterpreted |
+| `0x13/7` | retirement history | withdrawn provisional deletable General Reservation V7 (675 bytes); no live route and never reinterpreted |
+| `0x13/9` | General V2 | sole future rent-owned Reservation V9 (666 bytes); V4 live creation withdrawn |
 | `0x7d/1` | Dealer | staged policy |
 | `0x7e/1` | Dealer | immutable policy |
 | `0x7f/1` | Recurring Series | registry |
@@ -302,6 +325,7 @@ pure runtime elsewhere does not make a route executable.
 | `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
 | `0x81/2` | General V2 | withdrawn presence-explicit owner settlement V2; never a live alias |
 | `0x81/3` | General V2 | canonical Reservation-handoff owner settlement V3 |
+| `0x81/4` | General V2 | canonical counted merge-delivery owner settlement V4 (292 bytes) |
 | `0x82/1` | General V2 | selected fee record |
 | `0x83/1` | General V2 | owner fee carry |
 | `0x84/1` | General V2 | payer allocation |
@@ -310,9 +334,10 @@ pure runtime elsewhere does not make a route executable.
 | `0x87/1` | General V2 | settlement cash pot |
 | `0x88/1` | StructuredClaim | descriptor |
 | `0x89/1` | General V2 | FinalPot |
-| `0x8a/1` | SourcePlane V3 | release |
+| `0x8a/1` | SourcePlane V3 | historical release without receiver deployment authentication; never executable |
+| `0x8a/2` | SourcePlane V3 | receiver-release-authenticated release |
 | `0x8b/1` | SourcePlane V3 | head |
-| `0x8c/1` | SourcePlane V3 | reopen lineage |
+| `0x8c/2` | SourcePlane V3 | release/route-bound reopen lineage |
 | `0x8d/1` | SourcePlane V3 | open raw page |
 | `0x8e/1` | SourcePlane V3 | immutable raw page |
 | `0x8f/1` | SourcePlane V3 | window work |
@@ -334,9 +359,19 @@ pure runtime elsewhere does not make a route executable.
 | `0xa1/1` | Liveness | immutable runtime policy |
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
 | `0xa3/1` | Terminal/replay | failure-generation tombstone |
-| `0xaa/1` | Product | occurrence-scoped counted whole-Market lifecycle root |
+| `0xa4/1` | FractionalRedemption | withdrawn payout-vector-bound policy; never a V2 alias |
+| `0xa4/2` | FractionalRedemption | immutable Resolution-V5-data-bound policy (296 bytes) |
+| `0xa5/1` | FractionalRedemption | sole aggregate numerator-credit ledger (224 bytes) |
+| `0xa6/1` | FractionalRedemption | withdrawn payout-vector-bound credit; never a V2 alias |
+| `0xa6/2` | FractionalRedemption | Resolution-V5-data-bound exact numerator credit (296 bytes) |
+| `0xa7/1` | FractionalRedemption/replay | withdrawn payout-vector-bound tombstone; never a V2 alias |
+| `0xa7/2` | FractionalRedemption/replay | Resolution-V5-data-bound zero-credit tombstone (232 bytes) |
+| `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
+| `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
+| `0xaa/1` | Product | shared MarketLifecycleRoot V1 keyed by full MarketInstanceV2 |
 | `0xab/1` | Failure | mutable interval-consensus work (1,088 bytes) |
 | `0xac/1` | Failure/replay | permanent interval-consensus replay receipt (416 bytes) |
+| `0xad/1` | Product/Series | per-Series-ordinal SeriesMarketLink V1 |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local
@@ -393,9 +428,9 @@ A later activation must change the following atomically:
 5. update this registry and its collision tests without changing legacy golden
    bytes or packet limits.
 
-General V2 local actions 1 through 38 are allocated numeric coordinates, not a
+General V2 local actions 1 through 41 are allocated numeric coordinates, not a
 blanket activation. Actions 2, 6, 7, 8, 9, 10, 14, 15, 20, 21, and 32 are
-confined to the named non-production profile. Actions 35 through 38 have
+confined to the named non-production profile. Actions 35 through 41 have
 frozen canonical payload contracts but remain `ReservedDisabled`. Every other
 General V2 action remains allocation-only. Unlisted future local-action proposals, and
 every proposed account shape, stay outside the central ledger until their

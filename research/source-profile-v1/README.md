@@ -1,6 +1,7 @@
 # Objective crypto-price source profile V1 research
 
-Status: **conditional parser/model; not a production source profile**.
+Status: **reviewed parser primitives promoted into the Source V3 parser SBF;
+deployment release and chain evidence still required**.
 
 This directory asks a narrower question than “can Dragon's Clutch read an
 oracle?”: can a permissionless submitter be prevented from choosing whichever
@@ -20,9 +21,12 @@ parses the reviewed `PriceUpdateV2` account format, requires full verification,
 implements that crossing relation, and normalizes confidence intervals with
 outward integer rounding.
 
-It deliberately does **not** integrate with `clutch-sbf`. The executable
-authentication contract in [`src/auth_v2.rs`](src/auth_v2.rs) closes the model
-join, but four production facts remain open:
+The decoder, crossing rule, and normalization are now consumed by the separate
+read-only parser in
+[`programs/source-pyth-parser-sbf`](../../programs/source-pyth-parser-sbf).
+That does not make the older R2 immediate-post model in
+[`src/auth_v2.rs`](src/auth_v2.rs) production evidence. Its distinct chain
+facts remain open:
 
 1. the Pyth Core Solana migration is still changing program and signer
    provenance;

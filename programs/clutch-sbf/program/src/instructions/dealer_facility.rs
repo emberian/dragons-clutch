@@ -12,14 +12,19 @@ use crate::accounts::{expect_pda, require, require_count, require_signer, Outcom
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_dealer_runtime_contract::{
+    dealer_runtime_liveness_policy_id_v1,
     prepare_bind_epoch_v3, prepare_dealer_sponsor_funding_transfer_v1,
-    prepare_facility_initialization_v3, DealerActionReceiptV1, DealerChildCountsV2,
+    prepare_activate_dealer_v3, prepare_cancel_stale_funding_v3,
+    prepare_dealer_lp_share_transfer_v1, prepare_dealer_sponsor_refund_transfer_v1,
+    prepare_facility_initialization_v3, prepare_first_lp_page_v2,
+    prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
+    prepare_refund_cancelled_sponsor_v3, DealerActionReceiptV1, DealerChildCountsV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
     DealerLivenessCompartmentV1, DealerLivenessScheduleV1, DealerPhaseV2,
     DealerPositionMarketJoinV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransferPositionV3,
-    DeletableRentOwnerV1, FacilityPositionBindingV2, FixedCodec, Id, RootRentOwnerV1,
+    DeletableRentOwnerV1, FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, RootRentOwnerV1,
     SponsorCapitalDispositionV1,
 };
 use clutch_general_v2_contract::{
@@ -27,11 +32,16 @@ use clutch_general_v2_contract::{
     ECONOMIC_DOMAIN_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_BYTES, WINDOW_ACCOUNT_BYTES,
 };
 use clutch_liveness::runtime_adapter_v1::{
-    plan_runtime_transition_v1, RuntimePersistedAccountViewV1, RuntimeTransferRoleV1,
+    plan_runtime_transition_v1, RuntimeAtomicTransitionV1, RuntimePersistedAccountViewV1,
+    RuntimeReceiptObservationV1, RuntimeTransferRoleV1, RuntimeTransitionActionV1,
+    RuntimeTransitionIntentV1,
 };
 use clutch_liveness::runtime_v1::{
-    RuntimeCompartmentV1, RuntimeLivenessPolicyV1, RUNTIME_COMPARTMENT_COUNT_V1,
-    RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
+    PresentFundingSourceV1, PresentFundingV1, RuntimeCompartmentAdmissionV1,
+    RuntimeCompartmentIdentityV1, RuntimeCompartmentKindV1, RuntimeCompartmentV1,
+    RuntimeLivenessBundleV1, RuntimeLivenessPolicyV1, RUNTIME_COMPARTMENT_COUNT_V1,
+    RUNTIME_COMPARTMENT_ORDER_V1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+    RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
 use clutch_retirement::{
     project_dealer_position_v3, project_general_position_v3, AdapterPositionMarketBindingV3,
@@ -46,7 +56,9 @@ use clutch_solana_layout::registry::{
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES, DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG,
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION, DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
     DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG, DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
-    DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES, DEALER_STATE_V2_ACCOUNT_BYTES,
+    DEALER_LP_PAGE_V2_ACCOUNT_BYTES, DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+    DEALER_LP_PAGE_V2_ACCOUNT_VERSION, DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES,
+    DEALER_STATE_V2_ACCOUNT_BYTES,
     DEALER_STATE_V2_ACCOUNT_TAG, DEALER_STATE_V2_ACCOUNT_VERSION,
 };
 use solana_account_info::AccountInfo;
@@ -54,13 +66,22 @@ use solana_pubkey::Pubkey;
 
 use super::artifact::read_clock_slot;
 use super::collateral_position_v3::RuntimeSha256;
-use super::dealer_policy::{authenticate_catalog_policy, create_full_principal_pda, dealer_fault};
+use super::dealer_policy::{
+    authenticate_catalog_policy, create_exact_payer_debit_pda, create_full_principal_pda,
+    dealer_fault,
+};
 use super::dealer_runtime::{
     decode_dealer_account_body_v1, encode_dealer_account_body_v1, DealerRuntimePayloadV1,
 };
 use super::genesis::{read_rent, require_creatable, require_system_program};
 
 const INITIALIZE_ACCOUNT_COUNT: usize = 22;
+const CREATE_FIRST_LP_PAGE_ACCOUNT_COUNT: usize = 20;
+const CREATE_NEXT_LP_PAGE_ACCOUNT_COUNT: usize = 21;
+const LP_TRANSFER_ACCOUNT_COUNT: usize = 7;
+const ACTIVATE_ACCOUNT_COUNT: usize = 21;
+const CANCEL_FUNDING_ACCOUNT_COUNT: usize = 20;
+const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize = 20;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 
 fn id(key: &Pubkey) -> Id {
@@ -69,6 +90,88 @@ fn id(key: &Pubkey) -> Id {
 
 fn retirement_id(value: Id) -> Outcome<Identity32V1> {
     Identity32V1::new(value.bytes()).map_err(|_| ClutchError::MismatchedState.into())
+}
+
+fn liveness_id(value: Id) -> clutch_liveness::Id {
+    clutch_liveness::Id::from_bytes(value.bytes())
+}
+
+const fn runtime_kind_seed(kind: RuntimeCompartmentKindV1) -> u8 {
+    match kind {
+        RuntimeCompartmentKindV1::Source => 0,
+        RuntimeCompartmentKindV1::Candidate => 1,
+        RuntimeCompartmentKindV1::Clearing => 2,
+        RuntimeCompartmentKindV1::Settlement => 3,
+        RuntimeCompartmentKindV1::Resolution => 4,
+        RuntimeCompartmentKindV1::Retirement => 5,
+        RuntimeCompartmentKindV1::Recovery => 6,
+    }
+}
+
+#[inline(never)]
+fn prepare_runtime_compartment_admission(
+    program_id: &Pubkey,
+    facility_id: Id,
+    state_account_id: Id,
+    payer: &AccountInfo<'_>,
+    account: &AccountInfo<'_>,
+    policy: RuntimeLivenessPolicyV1,
+    kind: RuntimeCompartmentKindV1,
+    required_rent_principal: u64,
+) -> Outcome<(RuntimeCompartmentV1, u8)> {
+    require_creatable(account)?;
+    require(account.is_writable, ClutchError::NotWritable)?;
+    require(
+        !account.is_signer && !account.executable,
+        ClutchError::MismatchedState,
+    )?;
+    let compartment_policy = policy.compartment(kind);
+    require(
+        compartment_policy.account_rent_principal_lamports == required_rent_principal,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    let (address, bump) = seeds::dealer_runtime_liveness_account_pda(
+        program_id,
+        &facility_id.bytes(),
+        runtime_kind_seed(kind),
+    );
+    expect_pda(account.key, (address, bump), None)?;
+    let payer_debit = compartment_policy
+        .total_payer_debit_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let balance_before = account.lamports();
+    let balance_after = balance_before
+        .checked_add(payer_debit)
+        .ok_or(ClutchError::Arithmetic)?;
+    let semantic_owner = if kind == RuntimeCompartmentKindV1::Source {
+        compartment_policy.receipt_program_id
+    } else {
+        liveness_id(state_account_id)
+    };
+    let state = RuntimeCompartmentV1::admit(
+        policy,
+        RuntimeCompartmentAdmissionV1 {
+            kind,
+            identity: RuntimeCompartmentIdentityV1 {
+                policy_id: policy.policy_id,
+                lifecycle_id: liveness_id(facility_id),
+                account_id: clutch_liveness::Id::from_bytes(account.key.to_bytes()),
+                owner: semantic_owner,
+                payer: clutch_liveness::Id::from_bytes(payer.key.to_bytes()),
+                neutral_sink: policy.neutral_sink,
+                generation: 0,
+            },
+            funding: PresentFundingV1 {
+                payer: clutch_liveness::Id::from_bytes(payer.key.to_bytes()),
+                source: PresentFundingSourceV1::ExternalSignerNativeLamports,
+                payer_debit_lamports: payer_debit,
+                account_balance_before: balance_before,
+                account_balance_after: balance_after,
+            },
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok((state, bump))
 }
 
 #[inline(never)]
@@ -181,6 +284,35 @@ fn authenticate_schedule(
     Ok(schedule)
 }
 
+fn authenticate_lp_page(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<LpPageV2> {
+    let (bump, page) = dealer_body::<LpPageV2>(
+        program_id,
+        account,
+        true,
+        DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+        DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+        DEALER_LP_PAGE_V2_ACCOUNT_BYTES,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::dealer_lp_page_v2_pda(program_id, &page.facility_id.bytes(), page.page_ordinal),
+        Some(bump),
+    )?;
+    let floor = page
+        .rent
+        .refundable_principal
+        .checked_add(page.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        account.lamports() >= floor,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    Ok(page)
+}
+
 #[inline(never)]
 fn authenticate_position_and_replay(
     program_id: &Pubkey,
@@ -189,6 +321,7 @@ fn authenticate_position_and_replay(
     replay_account: &AccountInfo<'_>,
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
     state: &DealerStateV2,
+    position_writable: bool,
 ) -> Outcome<(
     FacilityPositionBindingV2,
     DealerPositionObservationV3,
@@ -204,8 +337,12 @@ fn authenticate_position_and_replay(
         ClutchError::WrongProgramOwner,
     )?;
     require(
-        !position_account.is_writable,
-        ClutchError::UnexpectedWritable,
+        position_account.is_writable == position_writable,
+        if position_writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
     )?;
     require(replay_account.is_writable, ClutchError::NotWritable)?;
     require(
@@ -342,6 +479,13 @@ fn authenticate_runtime_bundle(
     )?;
     let runtime_policy = RuntimeLivenessPolicyV1::decode(&policy_account.data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_policy_id = dealer_runtime_liveness_policy_id_v1(runtime_policy)
+        .map_err(dealer_fault)?;
+    expect_pda(
+        policy_account.key,
+        seeds::dealer_runtime_liveness_policy_pda(program_id, &runtime_policy_id.bytes()),
+        None,
+    )?;
     require(
         runtime_policy.policy_id.bytes() == dependency.bindings.runtime_liveness_policy_id.bytes(),
         ClutchError::MismatchedState,
@@ -390,6 +534,65 @@ fn authenticate_runtime_bundle(
     let binding = DealerRuntimeLivenessBindingV1::from_canonical(&runtime_policy, &states)
         .map_err(dealer_fault)?;
     Ok((runtime_policy, states, binding))
+}
+
+fn validate_runtime_dependency_join(
+    program_id: &Pubkey,
+    state_account: &AccountInfo<'_>,
+    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+    state: &DealerStateV2,
+    binding: &FacilityPositionBindingV2,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime_policy: RuntimeLivenessPolicyV1,
+    runtime_binding: DealerRuntimeLivenessBindingV1,
+) -> Outcome<()> {
+    require(
+        dependency.facility_position_binding_id == binding.binding_id().map_err(dealer_fault)?
+            && dependency.bindings.runtime_liveness_binding_digest
+                == runtime_binding.binding_digest().map_err(dealer_fault)?
+            && dependency.bindings.policy_id == state.policy_id
+            && dependency.bindings.facility_id == state.facility_id
+            && dependency.bindings.liveness_schedule_id
+                == schedule.schedule_id().map_err(dealer_fault)?.untyped()
+            && dependency.bindings.liveness_schedule_id == policy.liveness_policy_id
+            && dependency.bindings.runtime_liveness_policy_id
+                == runtime_binding.runtime_policy_id()
+            && runtime_binding.realm_id() == policy.realm_id
+            && runtime_binding.lifecycle_id() == state.facility_id
+            && runtime_binding.neutral_sink() == policy.neutral_sink
+            && dependency.bindings.fee_policy_id == policy.fee_policy_id
+            && dependency.bindings.collateral_mint == policy.collateral_mint
+            && dependency.bindings.token_program == policy.token_program
+            && dependency.bindings.asset_vault_authority_account_id == id(state_account.key)
+            && dependency.bindings.neutral_sink == policy.neutral_sink
+            && dependency.bindings.dealer_liveness_work_principal_lamports
+                == schedule
+                    .dealer_runtime_work_principal_lamports()
+                    .map_err(dealer_fault)?
+            && runtime_policy.policy_id.bytes()
+                == dependency.bindings.runtime_liveness_policy_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let mut runtime_index = 1usize;
+    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
+        let compartment = match runtime_index {
+            1 => DealerLivenessCompartmentV1::Candidate,
+            2 => DealerLivenessCompartmentV1::Clearing,
+            3 => DealerLivenessCompartmentV1::Settlement,
+            4 => DealerLivenessCompartmentV1::Resolution,
+            5 => DealerLivenessCompartmentV1::Retirement,
+            6 => DealerLivenessCompartmentV1::Recovery,
+            _ => return Err(ClutchError::MismatchedState.into()),
+        };
+        require(
+            runtime_binding.owner(compartment) == id(state_account.key)
+                && runtime_binding.receipt_program_id(compartment) == id(program_id),
+            ClutchError::MismatchedState,
+        )?;
+        runtime_index += 1;
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -481,10 +684,9 @@ fn require_initialize_aliases(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
 }
 
 #[inline(never)]
-fn authenticate_sponsor_position(
+fn authenticate_general_position(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    actor: Id,
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
 ) -> Outcome<(
     PositionAccountV3,
@@ -517,7 +719,6 @@ fn authenticate_sponsor_position(
     require(
         position.purpose() == PositionPurposeV3::General
             && position.lifecycle() == PositionLifecycleV3::Open
-            && position.controller().bytes() == actor.bytes()
             && position.market_instance_id().bytes() == policy.market_instance_v2_id.bytes()
             && position.realm_id().bytes() == policy.realm_id.bytes()
             && position.outcome_count() == policy.outcome_count,
@@ -539,6 +740,23 @@ fn authenticate_sponsor_position(
         },
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok((position, projection))
+}
+
+fn authenticate_controlled_general_position(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    actor: Id,
+    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+) -> Outcome<(
+    PositionAccountV3,
+    clutch_retirement::GeneralPositionProjectionV3,
+)> {
+    let (position, projection) = authenticate_general_position(program_id, account, policy)?;
+    require(
+        position.controller().bytes() == actor.bytes(),
+        ClutchError::MismatchedState,
+    )?;
     Ok((position, projection))
 }
 
@@ -568,6 +786,7 @@ fn apply_liveness_transition(
     )?;
     require(
         transition.account_id.bytes() == compartment.key.to_bytes()
+            && transition.account_balance_before == compartment.lamports()
             && transition.write_account_data
             && !transition.close_account,
         ClutchError::MismatchedState,
@@ -635,6 +854,148 @@ fn apply_liveness_transition(
     Ok(())
 }
 
+/// Authenticate one funded call while treating any balance above the last
+/// persisted observation as hostile donation, never as work principal.
+///
+/// The generic runtime deliberately makes donation observation an explicit
+/// transition. The SBF boundary composes that transition with the funded call
+/// before writing either postimage, so unsolicited lamports cannot stall the
+/// facility and cannot alter the keeper ceiling or payer refund.
+#[inline(never)]
+fn plan_liveness_spend_absorbing_donation(
+    program_id: &Pubkey,
+    policy_account: &AccountInfo<'_>,
+    compartment_account: &AccountInfo<'_>,
+    compartment: RuntimeCompartmentV1,
+    spend_intent: RuntimeTransitionIntentV1,
+    receipt: RuntimeReceiptObservationV1,
+) -> Outcome<RuntimeAtomicTransitionV1> {
+    require(
+        spend_intent.action == RuntimeTransitionActionV1::SpendWork
+            && spend_intent.account_id.bytes() == compartment_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let actual_balance = compartment_account.lamports();
+    let expected_balance = compartment
+        .expected_account_balance_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(actual_balance >= expected_balance, ClutchError::MismatchedState)?;
+    let account_balance_after = actual_balance
+        .checked_sub(spend_intent.call_ceiling_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let expected_runtime_program_id =
+        clutch_liveness::Id::from_bytes(program_id.to_bytes());
+    let expected_policy_account_id =
+        clutch_liveness::Id::from_bytes(policy_account.key.to_bytes());
+
+    if actual_balance == expected_balance {
+        let policy_data = policy_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let compartment_data = compartment_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        return plan_runtime_transition_v1(
+            expected_runtime_program_id,
+            expected_policy_account_id,
+            RuntimePersistedAccountViewV1 {
+                account_id: expected_policy_account_id,
+                owner_program_id: expected_runtime_program_id,
+                lamports: policy_account.lamports(),
+                data: &policy_data,
+                writable: false,
+            },
+            RuntimePersistedAccountViewV1 {
+                account_id: clutch_liveness::Id::from_bytes(
+                    compartment_account.key.to_bytes(),
+                ),
+                owner_program_id: expected_runtime_program_id,
+                lamports: actual_balance,
+                data: &compartment_data,
+                writable: true,
+            },
+            spend_intent,
+            Some(receipt),
+            account_balance_after,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState));
+    }
+
+    let donation_intent = RuntimeTransitionIntentV1 {
+        action: RuntimeTransitionActionV1::ObserveDonation,
+        kind: compartment.kind,
+        policy_id: compartment.identity.policy_id,
+        lifecycle_id: compartment.identity.lifecycle_id,
+        account_id: compartment.identity.account_id,
+        semantic_owner: compartment.identity.owner,
+        quote_schedule_id: compartment.quote_schedule_id,
+        receipt_id: clutch_liveness::Id::ZERO,
+        keeper: clutch_liveness::Id::ZERO,
+        generation: compartment.identity.generation,
+        call_ordinal: 0,
+        call_ceiling_lamports: 0,
+        keeper_payment_lamports: 0,
+        flags: 0,
+    };
+    let donation_transition = {
+        let policy_data = policy_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let compartment_data = compartment_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        plan_runtime_transition_v1(
+            expected_runtime_program_id,
+            expected_policy_account_id,
+            RuntimePersistedAccountViewV1 {
+                account_id: expected_policy_account_id,
+                owner_program_id: expected_runtime_program_id,
+                lamports: policy_account.lamports(),
+                data: &policy_data,
+                writable: false,
+            },
+            RuntimePersistedAccountViewV1 {
+                account_id: clutch_liveness::Id::from_bytes(
+                    compartment_account.key.to_bytes(),
+                ),
+                owner_program_id: expected_runtime_program_id,
+                lamports: actual_balance,
+                data: &compartment_data,
+                writable: true,
+            },
+            donation_intent,
+            None,
+            actual_balance,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+    };
+    let policy_data = policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    plan_runtime_transition_v1(
+        expected_runtime_program_id,
+        expected_policy_account_id,
+        RuntimePersistedAccountViewV1 {
+            account_id: expected_policy_account_id,
+            owner_program_id: expected_runtime_program_id,
+            lamports: policy_account.lamports(),
+            data: &policy_data,
+            writable: false,
+        },
+        RuntimePersistedAccountViewV1 {
+            account_id: clutch_liveness::Id::from_bytes(compartment_account.key.to_bytes()),
+            owner_program_id: expected_runtime_program_id,
+            lamports: actual_balance,
+            data: &donation_transition.post_account_data,
+            writable: true,
+        },
+        spend_intent,
+        Some(receipt),
+        account_balance_after,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
 #[inline(never)]
 fn initialize_facility(
     program_id: &Pubkey,
@@ -656,8 +1017,12 @@ fn initialize_facility(
     require_initialize_aliases(accounts)?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[2])?;
-    let (sponsor_position, sponsor_projection) =
-        authenticate_sponsor_position(program_id, &accounts[3], id(accounts[0].key), &policy)?;
+    let (sponsor_position, sponsor_projection) = authenticate_controlled_general_position(
+        program_id,
+        &accounts[3],
+        id(accounts[0].key),
+        &policy,
+    )?;
     let sponsor = Id::from_bytes(sponsor_position.owner().bytes());
     let genesis = DealerFacilityGenesisV1 {
         policy_id: Id::from_bytes(policy_id),
@@ -728,53 +1093,96 @@ fn initialize_facility(
         accounts[9].data_len() == RUNTIME_LIVENESS_POLICY_BYTES_V1,
         ClutchError::WrongDataLength,
     )?;
-    let preliminary_runtime_policy = RuntimeLivenessPolicyV1::decode(&accounts[9].data.borrow())
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let provisional_dependency = DealerFundedDependenciesV2 {
-        bindings: DealerFundedBudgetDependenciesV1 {
-            policy_id: Id::from_bytes(policy_id),
-            facility_id,
-            liveness_schedule_id: policy.liveness_policy_id,
-            runtime_liveness_policy_id: Id::from_bytes(
-                preliminary_runtime_policy.policy_id.bytes(),
-            ),
-            runtime_liveness_program_id: id(program_id),
-            runtime_liveness_policy_account_id: id(accounts[9].key),
-            runtime_liveness_binding_digest: Id::from_bytes([1; 32]),
-            fee_policy_id: policy.fee_policy_id,
-            collateral_mint: policy.collateral_mint,
-            token_program: policy.token_program,
-            asset_vault_authority_account_id: id(accounts[4].key),
-            neutral_sink: policy.neutral_sink,
-            counted_generation: 0,
-            dealer_liveness_work_principal_lamports: schedule
-                .dealer_runtime_work_principal_lamports()
-                .map_err(dealer_fault)?,
-        },
-        facility_position_binding_id: binding_id,
-        initialize_receipt_account_id: id(accounts[17].key),
-        initialize_receipt_semantic_id: Id::from_bytes([2; 32]),
-        rent: DeletableRentOwnerV1 {
-            payer: id(accounts[0].key),
-            neutral_sink: policy.neutral_sink,
-            refundable_principal: 1,
-            donation_floor: accounts[7].lamports(),
-        },
-    };
-    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
-        program_id,
-        &provisional_dependency,
-        &accounts[9],
-        &accounts[10..17],
-        DealerLivenessCompartmentV1::Clearing.index(),
+    require(
+        !accounts[9].is_writable && !accounts[9].is_signer && !accounts[9].executable,
+        ClutchError::MismatchedState,
     )?;
+    require_signer(&accounts[18])?;
+    require(accounts[18].is_writable, ClutchError::NotWritable)?;
+    let rent = read_rent(&accounts[20])?;
+    require_system_program(&accounts[21])?;
+    let runtime_policy = RuntimeLivenessPolicyV1::decode(&accounts[9].data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_policy_id = dealer_runtime_liveness_policy_id_v1(runtime_policy)
+        .map_err(dealer_fault)?;
+    expect_pda(
+        accounts[9].key,
+        seeds::dealer_runtime_liveness_policy_pda(program_id, &runtime_policy_id.bytes()),
+        None,
+    )?;
+    require(
+        accounts[9].lamports() >= rent.minimum_balance(RUNTIME_LIVENESS_POLICY_BYTES_V1)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    let runtime_account_rent = rent.minimum_balance(RUNTIME_LIVENESS_ACCOUNT_BYTES_V1)?;
+    let (first_runtime_state, first_runtime_bump) = prepare_runtime_compartment_admission(
+        program_id,
+        facility_id,
+        id(accounts[4].key),
+        &accounts[18],
+        &accounts[10],
+        runtime_policy,
+        RUNTIME_COMPARTMENT_ORDER_V1[0],
+        runtime_account_rent,
+    )?;
+    let mut runtime_states = [first_runtime_state; RUNTIME_COMPARTMENT_COUNT_V1];
+    let mut runtime_bumps = [first_runtime_bump; RUNTIME_COMPARTMENT_COUNT_V1];
+    let mut total_runtime_debit = runtime_policy
+        .compartment(RUNTIME_COMPARTMENT_ORDER_V1[0])
+        .total_payer_debit_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut runtime_index = 1usize;
+    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
+        let kind = RUNTIME_COMPARTMENT_ORDER_V1[runtime_index];
+        let (state, bump) = prepare_runtime_compartment_admission(
+            program_id,
+            facility_id,
+            id(accounts[4].key),
+            &accounts[18],
+            &accounts[10 + runtime_index],
+            runtime_policy,
+            kind,
+            runtime_account_rent,
+        )?;
+        runtime_states[runtime_index] = state;
+        runtime_bumps[runtime_index] = bump;
+        total_runtime_debit = total_runtime_debit
+            .checked_add(
+                runtime_policy
+                    .compartment(kind)
+                    .total_payer_debit_lamports()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            )
+            .ok_or(ClutchError::Arithmetic)?;
+        runtime_index += 1;
+    }
+    let runtime_bundle = RuntimeLivenessBundleV1 {
+        policy_id: runtime_policy.policy_id,
+        lifecycle_id: liveness_id(facility_id),
+        compartments: runtime_states,
+    };
+    runtime_bundle
+        .validate(runtime_policy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        total_runtime_debit
+            == runtime_policy
+                .total_payer_debit_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ClutchError::MismatchedState,
+    )?;
+    let runtime_binding = DealerRuntimeLivenessBindingV1::from_canonical(
+        &runtime_policy,
+        &runtime_states,
+    )
+    .map_err(dealer_fault)?;
     require(
         runtime_binding.realm_id() == policy.realm_id
             && runtime_binding.lifecycle_id() == facility_id
             && runtime_binding.neutral_sink() == policy.neutral_sink,
         ClutchError::MismatchedState,
     )?;
-    let mut runtime_index = 1usize;
+    runtime_index = 1;
     while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
         let compartment = match runtime_index {
             1 => DealerLivenessCompartmentV1::Candidate,
@@ -793,8 +1201,6 @@ fn initialize_facility(
         runtime_index += 1;
     }
 
-    let rent = read_rent(&accounts[20])?;
-    require_system_program(&accounts[21])?;
     require(
         accounts[8].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
         ClutchError::DealerPolicyRentMismatch,
@@ -1044,10 +1450,16 @@ fn initialize_facility(
     let liveness_observation = receipt
         .runtime_receipt_observation()
         .map_err(dealer_fault)?;
-    let clearing_after_balance = accounts[12]
-        .lamports()
+    let clearing_before_balance = clearing
+        .expected_account_balance_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let clearing_after_balance = clearing_before_balance
         .checked_sub(receipt.call_ceiling_lamports)
         .ok_or(ClutchError::Arithmetic)?;
+    let mut clearing_pre_data = [0u8; RUNTIME_LIVENESS_ACCOUNT_BYTES_V1];
+    clearing
+        .encode(&mut clearing_pre_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let liveness_transition = plan_runtime_transition_v1(
         clutch_liveness::Id::from_bytes(program_id.to_bytes()),
         clutch_liveness::Id::from_bytes(accounts[9].key.to_bytes()),
@@ -1061,8 +1473,8 @@ fn initialize_facility(
         RuntimePersistedAccountViewV1 {
             account_id: clutch_liveness::Id::from_bytes(accounts[12].key.to_bytes()),
             owner_program_id: clutch_liveness::Id::from_bytes(program_id.to_bytes()),
-            lamports: accounts[12].lamports(),
-            data: &accounts[12].data.borrow(),
+            lamports: clearing_before_balance,
+            data: &clearing_pre_data,
             writable: true,
         },
         liveness_intent,
@@ -1172,6 +1584,40 @@ fn initialize_facility(
             &[receipt_bump],
         ],
     )?;
+    runtime_index = 0;
+    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
+        let kind = RUNTIME_COMPARTMENT_ORDER_V1[runtime_index];
+        let kind_seed = [runtime_kind_seed(kind)];
+        let payer_debit = runtime_policy
+            .compartment(kind)
+            .total_payer_debit_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let donation = create_exact_payer_debit_pda(
+            program_id,
+            &accounts[18],
+            &accounts[10 + runtime_index],
+            &accounts[21],
+            payer_debit,
+            RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+            &[
+                seeds::SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT,
+                &facility_id.bytes(),
+                &kind_seed,
+                &[runtime_bumps[runtime_index]],
+            ],
+        )?;
+        require(
+            donation == runtime_states[runtime_index].donation_received_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let mut runtime_data = accounts[10 + runtime_index]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        runtime_states[runtime_index]
+            .encode(&mut runtime_data[..])
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        runtime_index += 1;
+    }
     apply_liveness_transition(
         &accounts[12],
         &accounts[0],
@@ -1259,6 +1705,7 @@ fn bind_epoch(
         &accounts[4],
         &policy,
         &state,
+        false,
     )?;
     require(
         replay.next_transition_ordinal() == payload.expected_replay_ordinal,
@@ -1273,49 +1720,17 @@ fn bind_epoch(
         &accounts[8..15],
         DealerLivenessCompartmentV1::Candidate.index(),
     )?;
-    require(
-        dependency.facility_position_binding_id == binding.binding_id().map_err(dealer_fault)?
-            && dependency.bindings.runtime_liveness_binding_digest
-                == runtime_binding.binding_digest().map_err(dealer_fault)?
-            && dependency.bindings.policy_id == state.policy_id
-            && dependency.bindings.facility_id == state.facility_id
-            && dependency.bindings.liveness_schedule_id
-                == schedule.schedule_id().map_err(dealer_fault)?.untyped()
-            && dependency.bindings.liveness_schedule_id == policy.liveness_policy_id
-            && dependency.bindings.runtime_liveness_policy_id
-                == runtime_binding.runtime_policy_id()
-            && runtime_binding.realm_id() == policy.realm_id
-            && runtime_binding.lifecycle_id() == state.facility_id
-            && runtime_binding.neutral_sink() == policy.neutral_sink
-            && dependency.bindings.fee_policy_id == policy.fee_policy_id
-            && dependency.bindings.collateral_mint == policy.collateral_mint
-            && dependency.bindings.token_program == policy.token_program
-            && dependency.bindings.asset_vault_authority_account_id == id(accounts[2].key)
-            && dependency.bindings.neutral_sink == policy.neutral_sink
-            && dependency.bindings.dealer_liveness_work_principal_lamports
-                == schedule
-                    .dealer_runtime_work_principal_lamports()
-                    .map_err(dealer_fault)?,
-        ClutchError::MismatchedState,
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
     )?;
-    let mut runtime_index = 1usize;
-    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
-        let compartment = match runtime_index {
-            1 => DealerLivenessCompartmentV1::Candidate,
-            2 => DealerLivenessCompartmentV1::Clearing,
-            3 => DealerLivenessCompartmentV1::Settlement,
-            4 => DealerLivenessCompartmentV1::Resolution,
-            5 => DealerLivenessCompartmentV1::Retirement,
-            6 => DealerLivenessCompartmentV1::Recovery,
-            _ => return Err(ClutchError::MismatchedState.into()),
-        };
-        require(
-            runtime_binding.owner(compartment) == id(accounts[2].key)
-                && runtime_binding.receipt_program_id(compartment) == id(program_id),
-            ClutchError::MismatchedState,
-        )?;
-        runtime_index += 1;
-    }
     let candidate = runtime_states[DealerLivenessCompartmentV1::Candidate.index()];
     require(
         candidate.identity.payer.bytes() == accounts[16].key.to_bytes(),
@@ -1373,32 +1788,14 @@ fn bind_epoch(
     let observation = receipt
         .runtime_receipt_observation()
         .map_err(dealer_fault)?;
-    let candidate_after_balance = accounts[9]
-        .lamports()
-        .checked_sub(receipt.call_ceiling_lamports)
-        .ok_or(ClutchError::Arithmetic)?;
-    let liveness_transition = plan_runtime_transition_v1(
-        clutch_liveness::Id::from_bytes(program_id.to_bytes()),
-        clutch_liveness::Id::from_bytes(accounts[7].key.to_bytes()),
-        RuntimePersistedAccountViewV1 {
-            account_id: clutch_liveness::Id::from_bytes(accounts[7].key.to_bytes()),
-            owner_program_id: clutch_liveness::Id::from_bytes(program_id.to_bytes()),
-            lamports: accounts[7].lamports(),
-            data: &accounts[7].data.borrow(),
-            writable: false,
-        },
-        RuntimePersistedAccountViewV1 {
-            account_id: clutch_liveness::Id::from_bytes(accounts[9].key.to_bytes()),
-            owner_program_id: clutch_liveness::Id::from_bytes(program_id.to_bytes()),
-            lamports: accounts[9].lamports(),
-            data: &accounts[9].data.borrow(),
-            writable: true,
-        },
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[7],
+        &accounts[9],
+        candidate,
         intent,
-        Some(observation),
-        candidate_after_balance,
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        observation,
+    )?;
     require(
         runtime_policy.policy_id.bytes() == dependency.bindings.runtime_liveness_policy_id.bytes(),
         ClutchError::MismatchedState,
@@ -1513,6 +1910,1029 @@ fn bind_epoch(
         .map_err(dealer_fault)
 }
 
+#[inline(never)]
+fn create_lp_page(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    let payload = DealerRuntimePayloadV1::decode(
+        DealerFacilityAction::CreateLpPage,
+        payload_bytes,
+    )
+    .map_err(dealer_fault)?;
+    let first_page = payload.page_ordinal == 0;
+    let expected_count = if first_page {
+        CREATE_FIRST_LP_PAGE_ACCOUNT_COUNT
+    } else {
+        CREATE_NEXT_LP_PAGE_ACCOUNT_COUNT
+    };
+    require_count(accounts, expected_count)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    let page_index = if first_page { 16 } else { 17 };
+    let payer_index = if first_page { 17 } else { 18 };
+    let rent_index = if first_page { 18 } else { 19 };
+    let system_index = if first_page { 19 } else { 20 };
+    require_aliases(accounts, (0, payer_index))?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, _position, replay, replay_binding) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &policy,
+        &state,
+        false,
+    )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let schedule = authenticate_schedule(program_id, &accounts[6])?;
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[7],
+        &accounts[8..15],
+        DealerLivenessCompartmentV1::Clearing.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let clearing = runtime_states[DealerLivenessCompartmentV1::Clearing.index()];
+    require(
+        clearing.identity.payer.bytes() == accounts[payer_index].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let rent = read_rent(&accounts[rent_index])?;
+    require_system_program(&accounts[system_index])?;
+    require(
+        accounts[6].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    require_creatable(&accounts[15])?;
+    require_creatable(&accounts[page_index])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(DealerLivenessCompartmentV1::Clearing),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Clearing),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Clearing),
+        receipt_account_id: id(accounts[15].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[4].key),
+        action: DealerRuntimeActionV1::CreateLpPage,
+        compartment: DealerLivenessCompartmentV1::Clearing,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Clearing),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports
+            [DealerRuntimeActionV1::CreateLpPage as usize],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[0].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[15].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[15].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &clearing)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[7],
+        &accounts[10],
+        clearing,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt
+            .runtime_receipt_observation()
+            .map_err(dealer_fault)?,
+    )?;
+
+    let (page_address, page_bump) = seeds::dealer_lp_page_v2_pda(
+        program_id,
+        &state.facility_id.bytes(),
+        payload.page_ordinal,
+    );
+    expect_pda(accounts[page_index].key, (page_address, page_bump), None)?;
+    let page_principal = rent.minimum_balance(DEALER_LP_PAGE_V2_ACCOUNT_BYTES)?;
+    let page_rent = DeletableRentOwnerV1 {
+        payer: id(accounts[0].key),
+        neutral_sink: policy.neutral_sink,
+        refundable_principal: page_principal,
+        donation_floor: accounts[page_index].lamports(),
+    };
+    let (page, state_after, replay_after, previous_page_after) = if first_page {
+        let prepared = prepare_first_lp_page_v2(
+            &policy,
+            &state,
+            id(accounts[2].key),
+            id(accounts[page_index].key),
+            page_rent,
+            &dependency,
+            &schedule,
+            &runtime_binding,
+            &authorization,
+            &replay,
+            replay_binding,
+        )
+        .map_err(dealer_fault)?;
+        (
+            prepared.page,
+            prepared.state_after,
+            prepared.replay.replay_post(),
+            None,
+        )
+    } else {
+        let previous_page = authenticate_lp_page(program_id, &accounts[16])?;
+        let prepared = prepare_next_lp_page_v2(
+            &policy,
+            &state,
+            id(accounts[2].key),
+            id(accounts[16].key),
+            &previous_page,
+            id(accounts[page_index].key),
+            page_rent,
+            &dependency,
+            &schedule,
+            &runtime_binding,
+            &authorization,
+            &replay,
+            replay_binding,
+        )
+        .map_err(dealer_fault)?;
+        (
+            prepared.page,
+            prepared.state_after,
+            prepared.replay.replay_post(),
+            Some(prepared.previous_page_after),
+        )
+    };
+    require(page.page_ordinal == payload.page_ordinal, ClutchError::MismatchedState)?;
+
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[15],
+        &accounts[system_index],
+        &rent,
+        DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_ACTION_RECEIPT,
+            &receipt_slot.bytes(),
+            &[receipt_bump],
+        ],
+    )?;
+    let page_ordinal_bytes = payload.page_ordinal.to_le_bytes();
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[page_index],
+        &accounts[system_index],
+        &rent,
+        DEALER_LP_PAGE_V2_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_LP_PAGE_V2,
+            &state.facility_id.bytes(),
+            &page_ordinal_bytes,
+            &[page_bump],
+        ],
+    )?;
+    apply_liveness_transition(
+        &accounts[10],
+        &accounts[0],
+        &accounts[payer_index],
+        &liveness_transition,
+    )?;
+    write_dealer_body(
+        &accounts[15],
+        DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+        DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        receipt_bump,
+        &receipt,
+    )?;
+    write_dealer_body(
+        &accounts[page_index],
+        DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+        DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+        page_bump,
+        &page,
+    )?;
+    if let Some(previous_page_after) = previous_page_after {
+        let previous_bump = accounts[16].data.borrow()[2];
+        write_dealer_body(
+            &accounts[16],
+            DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+            DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+            previous_bump,
+            &previous_page_after,
+        )?;
+    }
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &state_after,
+    )?;
+    replay_after
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
+#[inline(never)]
+fn transfer_lp_funding(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DealerFacilityAction,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, LP_TRANSFER_ACCOUNT_COUNT)?;
+    let payload = DealerRuntimePayloadV1::decode(action, payload_bytes).map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(!accounts[0].is_writable, ClutchError::UnexpectedWritable)?;
+    require_aliases(accounts, (accounts.len(), accounts.len()))?;
+
+    let runtime_action = match action {
+        DealerFacilityAction::Contribute => DealerRuntimeActionV1::Contribute,
+        DealerFacilityAction::WithdrawFunding => DealerRuntimeActionV1::WithdrawFunding,
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, facility_observation, replay, replay_binding) =
+        authenticate_position_and_replay(
+            program_id,
+            &accounts[2],
+            &accounts[3],
+            &accounts[4],
+            &policy,
+            &state,
+            true,
+        )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let (lp_position, lp_projection) = authenticate_controlled_general_position(
+        program_id,
+        &accounts[5],
+        id(accounts[0].key),
+        &policy,
+    )?;
+    let page = authenticate_lp_page(program_id, &accounts[6])?;
+    require(
+        page.page_ordinal == payload.page_ordinal,
+        ClutchError::MismatchedState,
+    )?;
+    let market = DealerPositionMarketJoinV1 {
+        market_instance_v2_id: policy.market_instance_v2_id,
+        realm_id: policy.realm_id,
+        collateral_policy_id: binding.collateral_policy_id,
+        collateral_release_id: binding.collateral_release_id,
+        outcome_count: policy.outcome_count,
+    };
+    let lp_owner = Id::from_bytes(lp_position.owner().bytes());
+    let transfer = prepare_dealer_lp_share_transfer_v1(
+        runtime_action,
+        &policy,
+        market,
+        lp_owner,
+        payload.share_delta,
+        DealerTransferPositionV3::General {
+            account_id: id(accounts[5].key),
+            position: lp_projection,
+        },
+        DealerTransferPositionV3::Facility {
+            account_id: id(accounts[3].key),
+            position: facility_observation.projection,
+        },
+    )
+    .map_err(dealer_fault)?;
+    let (page_after, state_after, replay_after, facility_post, lp_post) = match action {
+        DealerFacilityAction::Contribute => {
+            let prepared = prepare_lp_contribution_v2(
+                &policy,
+                &state,
+                id(accounts[2].key),
+                &page,
+                lp_owner,
+                payload.share_delta,
+                transfer,
+                &replay,
+                replay_binding,
+            )
+            .map_err(dealer_fault)?;
+            (
+                prepared.page_after,
+                prepared.state_after,
+                prepared.replay.replay_post(),
+                prepared.transfer.destination_post(),
+                prepared.transfer.source_post(),
+            )
+        }
+        DealerFacilityAction::WithdrawFunding => {
+            let prepared = prepare_lp_withdrawal_v2(
+                &policy,
+                &state,
+                id(accounts[2].key),
+                &page,
+                lp_owner,
+                payload.share_delta,
+                transfer,
+                &replay,
+                replay_binding,
+            )
+            .map_err(dealer_fault)?;
+            (
+                prepared.page_after,
+                prepared.state_after,
+                prepared.replay.replay_post(),
+                prepared.transfer.source_post(),
+                prepared.transfer.destination_post(),
+            )
+        }
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+
+    accounts[3]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &facility_post
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    accounts[5]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &lp_post
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    let page_bump = accounts[6].data.borrow()[2];
+    write_dealer_body(
+        &accounts[6],
+        DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+        DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+        page_bump,
+        &page_after,
+    )?;
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &state_after,
+    )?;
+    replay_after
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
+#[inline(never)]
+fn activate_facility(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, ACTIVATE_ACCOUNT_COUNT)?;
+    let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::Activate, payload_bytes)
+        .map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    require_aliases(accounts, (0, 17))?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, position, replay, replay_binding) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &policy,
+        &state,
+        false,
+    )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let schedule = authenticate_schedule(program_id, &accounts[6])?;
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[7],
+        &accounts[8..15],
+        DealerLivenessCompartmentV1::Clearing.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let clearing = runtime_states[DealerLivenessCompartmentV1::Clearing.index()];
+    require(
+        clearing.identity.payer.bytes() == accounts[17].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let tail = authenticate_lp_page(program_id, &accounts[16])?;
+    let current_slot = read_clock_slot(&accounts[18])?;
+    let rent = read_rent(&accounts[19])?;
+    require_system_program(&accounts[20])?;
+    require(
+        accounts[6].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    require_creatable(&accounts[15])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(DealerLivenessCompartmentV1::Clearing),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Clearing),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Clearing),
+        receipt_account_id: id(accounts[15].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[4].key),
+        action: DealerRuntimeActionV1::Activate,
+        compartment: DealerLivenessCompartmentV1::Clearing,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Clearing),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports
+            [DealerRuntimeActionV1::Activate as usize],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[0].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[15].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[15].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &clearing)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[7],
+        &accounts[10],
+        clearing,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt
+            .runtime_receipt_observation()
+            .map_err(dealer_fault)?,
+    )?;
+    let prepared = prepare_activate_dealer_v3(
+        &policy,
+        &binding,
+        &state,
+        id(accounts[2].key),
+        &dependency,
+        &schedule,
+        &runtime_binding,
+        &authorization,
+        current_slot,
+        &tail,
+        &position,
+        &replay,
+        replay_binding,
+    )
+    .map_err(dealer_fault)?;
+
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[15],
+        &accounts[20],
+        &rent,
+        DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_ACTION_RECEIPT,
+            &receipt_slot.bytes(),
+            &[receipt_bump],
+        ],
+    )?;
+    apply_liveness_transition(
+        &accounts[10],
+        &accounts[0],
+        &accounts[17],
+        &liveness_transition,
+    )?;
+    write_dealer_body(
+        &accounts[15],
+        DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+        DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        receipt_bump,
+        &receipt,
+    )?;
+    let tail_bump = accounts[16].data.borrow()[2];
+    write_dealer_body(
+        &accounts[16],
+        DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+        DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+        tail_bump,
+        &prepared.tail_page_after,
+    )?;
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &prepared.state_after,
+    )?;
+    prepared
+        .replay
+        .replay_post()
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
+#[inline(never)]
+fn cancel_stale_funding(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, CANCEL_FUNDING_ACCOUNT_COUNT)?;
+    let payload =
+        DealerRuntimePayloadV1::decode(DealerFacilityAction::CancelFunding, payload_bytes)
+            .map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    require_aliases(accounts, (0, 16))?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, position, replay, replay_binding) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &policy,
+        &state,
+        false,
+    )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let schedule = authenticate_schedule(program_id, &accounts[6])?;
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[7],
+        &accounts[8..15],
+        DealerLivenessCompartmentV1::Recovery.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let recovery = runtime_states[DealerLivenessCompartmentV1::Recovery.index()];
+    require(
+        recovery.identity.payer.bytes() == accounts[16].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let current_slot = read_clock_slot(&accounts[17])?;
+    let rent = read_rent(&accounts[18])?;
+    require_system_program(&accounts[19])?;
+    require(
+        accounts[6].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    require_creatable(&accounts[15])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(DealerLivenessCompartmentV1::Recovery),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Recovery),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Recovery),
+        receipt_account_id: id(accounts[15].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[4].key),
+        action: DealerRuntimeActionV1::CancelFunding,
+        compartment: DealerLivenessCompartmentV1::Recovery,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Recovery),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports
+            [DealerRuntimeActionV1::CancelFunding as usize],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[0].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[15].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[15].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &recovery)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[7],
+        &accounts[14],
+        recovery,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt
+            .runtime_receipt_observation()
+            .map_err(dealer_fault)?,
+    )?;
+    let prepared = prepare_cancel_stale_funding_v3(
+        &policy,
+        &binding,
+        &state,
+        id(accounts[2].key),
+        &dependency,
+        &schedule,
+        &runtime_binding,
+        &authorization,
+        current_slot,
+        &position,
+        &replay,
+        replay_binding,
+    )
+    .map_err(dealer_fault)?;
+
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[15],
+        &accounts[19],
+        &rent,
+        DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_ACTION_RECEIPT,
+            &receipt_slot.bytes(),
+            &[receipt_bump],
+        ],
+    )?;
+    apply_liveness_transition(
+        &accounts[14],
+        &accounts[0],
+        &accounts[16],
+        &liveness_transition,
+    )?;
+    write_dealer_body(
+        &accounts[15],
+        DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+        DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        receipt_bump,
+        &receipt,
+    )?;
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &prepared.state_after,
+    )?;
+    prepared
+        .replay
+        .replay_post()
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
+#[inline(never)]
+fn refund_cancelled_sponsor(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT)?;
+    let payload = DealerRuntimePayloadV1::decode(
+        DealerFacilityAction::RefundCancelledSponsor,
+        payload_bytes,
+    )
+    .map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    require_aliases(accounts, (0, 17))?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, position, replay, replay_binding) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[5],
+        &policy,
+        &state,
+        true,
+    )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let (refund_position, refund_projection) =
+        authenticate_general_position(program_id, &accounts[4], &policy)?;
+    let dependency = authenticate_dependency(program_id, &accounts[6], state.facility_id)?;
+    let schedule = authenticate_schedule(program_id, &accounts[7])?;
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[8],
+        &accounts[9..16],
+        DealerLivenessCompartmentV1::Recovery.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let recovery = runtime_states[DealerLivenessCompartmentV1::Recovery.index()];
+    require(
+        recovery.identity.payer.bytes() == accounts[17].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let rent = read_rent(&accounts[18])?;
+    require_system_program(&accounts[19])?;
+    require(
+        accounts[7].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    require_creatable(&accounts[16])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(DealerLivenessCompartmentV1::Recovery),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Recovery),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Recovery),
+        receipt_account_id: id(accounts[16].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[5].key),
+        action: DealerRuntimeActionV1::RefundCancelledSponsor,
+        compartment: DealerLivenessCompartmentV1::Recovery,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Recovery),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports
+            [DealerRuntimeActionV1::RefundCancelledSponsor as usize],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[0].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[16].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[16].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &recovery)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[8],
+        &accounts[15],
+        recovery,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt
+            .runtime_receipt_observation()
+            .map_err(dealer_fault)?,
+    )?;
+    let market = DealerPositionMarketJoinV1 {
+        market_instance_v2_id: policy.market_instance_v2_id,
+        realm_id: policy.realm_id,
+        collateral_policy_id: binding.collateral_policy_id,
+        collateral_release_id: binding.collateral_release_id,
+        outcome_count: policy.outcome_count,
+    };
+    let transfer = prepare_dealer_sponsor_refund_transfer_v1(
+        market,
+        state.sponsor_refund_recipient,
+        state.sponsor_capital_atoms,
+        DealerTransferPositionV3::Facility {
+            account_id: id(accounts[3].key),
+            position: position.projection,
+        },
+        DealerTransferPositionV3::General {
+            account_id: id(accounts[4].key),
+            position: refund_projection,
+        },
+    )
+    .map_err(dealer_fault)?;
+    require(
+        Id::from_bytes(refund_position.owner().bytes()) == state.sponsor_refund_recipient,
+        ClutchError::MismatchedState,
+    )?;
+    let prepared = prepare_refund_cancelled_sponsor_v3(
+        &policy,
+        &binding,
+        &state,
+        id(accounts[2].key),
+        &dependency,
+        &schedule,
+        &runtime_binding,
+        &authorization,
+        &position,
+        transfer,
+        &replay,
+        replay_binding,
+    )
+    .map_err(dealer_fault)?;
+
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[16],
+        &accounts[19],
+        &rent,
+        DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_ACTION_RECEIPT,
+            &receipt_slot.bytes(),
+            &[receipt_bump],
+        ],
+    )?;
+    apply_liveness_transition(
+        &accounts[15],
+        &accounts[0],
+        &accounts[17],
+        &liveness_transition,
+    )?;
+    accounts[3]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &prepared
+                .transfer
+                .source_post()
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    accounts[4]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &prepared
+                .transfer
+                .destination_post()
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    write_dealer_body(
+        &accounts[16],
+        DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+        DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        receipt_bump,
+        &receipt,
+    )?;
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &prepared.state_after,
+    )?;
+    prepared
+        .replay
+        .replay_post()
+        .encode_into(&mut accounts[5].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
 /// Execute one facility action admitted by the non-production profile.
 pub fn process(
     program_id: &Pubkey,
@@ -1524,6 +2944,21 @@ pub fn process(
     match action {
         DealerFacilityAction::Initialize => {
             initialize_facility(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::CreateLpPage => {
+            create_lp_page(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::Contribute | DealerFacilityAction::WithdrawFunding => {
+            transfer_lp_funding(program_id, accounts, sequence, action, payload)
+        }
+        DealerFacilityAction::Activate => {
+            activate_facility(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::CancelFunding => {
+            cancel_stale_funding(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::RefundCancelledSponsor => {
+            refund_cancelled_sponsor(program_id, accounts, sequence, payload)
         }
         DealerFacilityAction::BindEpoch => bind_epoch(program_id, accounts, sequence, payload),
         _ => super::dealer_runtime::process_reserved_disabled(action),

@@ -127,6 +127,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod full_width_collateral;
+pub use full_width_collateral::*;
+
 /* ------------------------------------------------------------------------ */
 /* Fixture constants                                                         */
 /* ------------------------------------------------------------------------ */

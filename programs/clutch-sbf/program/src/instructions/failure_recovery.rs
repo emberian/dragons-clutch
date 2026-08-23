@@ -59,7 +59,7 @@ use clutch_product_series::{
     NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, SeriesPlanV5,
 };
 use clutch_solana_layout::failure_recovery::{
-    account_metas_v1, decode_failure_account_body_v1, decode_payload_v1,
+    account_index_v1, account_metas_v1, decode_failure_account_body_v1, decode_payload_v1,
     encode_failure_account_header_v1, AcceptRecoveryWorkV1, AdvanceRecoveryScheduleV1,
     CloseFailureRootV1, CloseRecoveryFundingV1, FailureRecoveryPayloadV1,
     FailureReplayTombstonePhaseV1, FailureReplayTombstoneV1, RecoveryAccountRoleV1,
@@ -1274,7 +1274,9 @@ fn apply_work_transition_v1<'a>(
 
 /// Atomically apply the Failure-root and sole liveness Recovery mutation for
 /// one already authenticated interval-consensus chunk. The caller must commit
-/// the corresponding `0xab`/`0xac` poststates in the same instruction.
+/// the corresponding `0xab`/`0xac` poststates in the same instruction. This
+/// helper does not authenticate the shared Market root or initiating Series
+/// link; the live wrapper must consume Product's private receipts first.
 pub fn apply_interval_consensus_work_transition_v1<'a>(
     program_id: &Pubkey,
     accounts: &'a [AccountInfo<'a>],
@@ -1282,11 +1284,16 @@ pub fn apply_interval_consensus_work_transition_v1<'a>(
     plan: FailureIntervalConsensusAdvancePlanV1,
 ) -> Outcome<ExternalWorkMutationV2> {
     authenticate_ordered_metas_v1(RecoveryAction::AdvanceIntervalConsensus, accounts)?;
-    let root_account = &accounts[0];
-    let policy_account = &accounts[3];
-    let recovery_account = &accounts[4];
-    let keeper = &accounts[5];
-    let payer = &accounts[6];
+    let account = |role| {
+        account_index_v1(RecoveryAction::AdvanceIntervalConsensus, role)
+            .and_then(|index| accounts.get(index))
+            .ok_or(Refusal::Adapter(ClutchError::AccountCount))
+    };
+    let root_account = account(RecoveryAccountRoleV1::FailureRoot)?;
+    let policy_account = account(RecoveryAccountRoleV1::LivenessPolicy)?;
+    let recovery_account = account(RecoveryAccountRoleV1::RecoveryCompartment)?;
+    let keeper = account(RecoveryAccountRoleV1::Keeper)?;
+    let payer = account(RecoveryAccountRoleV1::RecoveryRefundOwner)?;
     let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let failure_plan = plan.failure_plan();
     let work = failure_plan
@@ -1296,7 +1303,11 @@ pub fn apply_interval_consensus_work_transition_v1<'a>(
         payload.reward_recipient == keeper.key.to_bytes()
             && work.reward_recipient().bytes() == payload.reward_recipient
             && work.scheduled_ceiling_lamports() == payload.scheduled_ceiling_lamports
-            && work.source_success_handoff_id().bytes().iter().any(|byte| *byte != 0),
+            && work
+                .source_success_handoff_id()
+                .bytes()
+                .iter()
+                .any(|byte| *byte != 0),
         ClutchError::MismatchedState,
     )?;
     let expected_after = recovery_account
