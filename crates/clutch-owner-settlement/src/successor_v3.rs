@@ -13,7 +13,8 @@ use crate::{
     owner_credit_atoms, owner_debit_atoms, owner_rounding_residue_price_units, Amount,
     AuthenticatedPositionV3, Error, OwnerSettlementCreateFundingV1,
     PositionSettlementPoststateV3, PresentConsiderationV2, Result, SelectedOwnerFeeV1,
-    SettlementCashPotV1, SettlementSideV1, MAX_ORDERS,
+    SettlementCashPotV1, SettlementSideV1, AuthenticatedSettlementReceiptEndV4,
+    OwnerSettlementReceiptAccountingProjectionV4, SettlementReceiptRouteV4, MAX_ORDERS,
 };
 
 /// Canonical General outer tag selecting an owner-settlement row.
@@ -527,7 +528,7 @@ impl AuthenticatedReservationHandoffV3 {
         Ok(value)
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         for identity in [
             self.reservation_account,
             self.reservation_semantic_id,
@@ -1670,6 +1671,56 @@ pub fn project_owner_receipt_end_v3(
     let mut next = account.accumulator;
     next.consume(&receipt)?;
     Ok(OwnerSettlementReceiptAccountingProjectionV3 {
+        owner_settlement_account: account.address,
+        owner_settlement_body: next.encode_body()?,
+        receipt: receipt.receipt,
+        receipt_data_id: receipt.receipt_data_id,
+        receipt_accounting_id: receipt.receipt_accounting_id,
+        receipt_accounted_end_mask: receipt.accounted_end_mask | receipt.side_mask(),
+        reservation_handoff: receipt.reservation_handoff,
+    })
+}
+
+/// Project one exact Receipt V4 end onto the canonical V3 owner row.
+///
+/// The internal accumulator operation is shared with historical Receipt V3
+/// because the owner-row accounting arithmetic is unchanged. The public input,
+/// output, data identity, and transition identity remain strictly V4; no V3
+/// receipt body or address is accepted by this path.
+pub fn project_owner_receipt_end_v4(
+    account: OwnerSettlementAccountProjectionV3,
+    receipt: AuthenticatedSettlementReceiptEndV4,
+) -> Result<OwnerSettlementReceiptAccountingProjectionV4> {
+    receipt.validate()?;
+    let legacy_route = match receipt.route {
+        SettlementReceiptRouteV4::Direct => SettlementReceiptRouteV3::Direct,
+        SettlementReceiptRouteV4::SplitToBuy => SettlementReceiptRouteV3::SplitToBuy,
+        SettlementReceiptRouteV4::SellToMerge => SettlementReceiptRouteV3::SellToMerge,
+    };
+    let accumulator_end = AuthenticatedSettlementReceiptEndV3 {
+        receipt: receipt.receipt,
+        receipt_data_id: SettlementReceiptDataIdV3(receipt.receipt_data_id.bytes()),
+        receipt_accounting_id: receipt.receipt_accounting_id,
+        market: receipt.market,
+        epoch: receipt.epoch,
+        candidate: receipt.candidate,
+        owner_order_set_digest: receipt.owner_order_set_digest,
+        owner: receipt.owner,
+        order_id: receipt.order_id,
+        order_index: receipt.order_index,
+        side: receipt.side,
+        route: legacy_route,
+        consideration_price_units: receipt.consideration_price_units,
+        completes_order: receipt.completes_order,
+        slice_index: receipt.slice_index,
+        sequence: receipt.sequence,
+        accounted_end_mask: receipt.accounted_end_mask,
+        expected_end_mask: receipt.expected_end_mask,
+        reservation_handoff: receipt.reservation_handoff,
+    };
+    let mut next = account.accumulator;
+    next.consume(&accumulator_end)?;
+    Ok(OwnerSettlementReceiptAccountingProjectionV4 {
         owner_settlement_account: account.address,
         owner_settlement_body: next.encode_body()?,
         receipt: receipt.receipt,
