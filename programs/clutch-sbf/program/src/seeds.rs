@@ -289,6 +289,10 @@ pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-work:v1";
 /// Permanent exhaustive interval-consensus replay receipt.
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY: &[u8] = b"dc:failure-interval-replay:v1";
+/// Reusable Market-scoped Failure interval cell V2.
+pub const SEED_FAILURE_MARKET_INTERVAL_CELL_V2: &[u8] = b"dc:fail-int-cell:v2";
+/// Append-only Market-scoped Failure interval history V2.
+pub const SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2: &[u8] = b"dc:fail-int-history:v2";
 /// Shared Product Market lifecycle root, keyed by Market and generation.
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root:v1";
 /// Zero-data Product foundation principal/donation vault.
@@ -528,6 +532,38 @@ pub fn failure_interval_consensus_replay_pda(
         program_id,
         &[
             SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Derive the reusable Market-scoped Failure interval cell V2.
+pub fn failure_market_interval_cell_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_INTERVAL_CELL_V2,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Derive the append-only Market-scoped Failure interval history V2.
+pub fn failure_market_interval_history_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
@@ -1888,6 +1924,8 @@ mod tests {
             SEED_FAILURE_EXTERNAL_ROOT,
             SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
             SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
+            SEED_FAILURE_MARKET_INTERVAL_CELL_V2,
+            SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2,
         ];
         for (index, prefix) in prefixes.iter().enumerate() {
             for later in prefixes.iter().skip(index + 1) {

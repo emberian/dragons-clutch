@@ -69,6 +69,95 @@ const MARKET_LIFECYCLE_ROOT_CLOSE_DOMAIN_V1: &[u8] =
 const MARKET_LIFECYCLE_ABORT_CLOSE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-lifecycle-abort-close/v1";
 
+/// Authenticate the fixed Product/General/Failure core of one immutable
+/// foundation account graph against the executing program's canonical PDAs.
+///
+/// Fractional policy/ledger, outcome mints, and outcome custody remain owned
+/// by their respective typed founding receipts because their PDA preimages
+/// include identities not repeated by the Product root. This helper must not
+/// guess those identities. It does make the common core non-caller-shaped,
+/// including the reusable V2 Failure interval cell and append-only history.
+fn require_canonical_market_foundation_core_v2(
+    program_id: &Pubkey,
+    root_account: Pubkey,
+    account_graph: &MarketFoundationAccountGraphV2,
+) -> Outcome<()> {
+    let market = account_graph.market_instance_id.bytes();
+    let generation = account_graph.generation;
+    let market_binding = account_graph
+        .account(MarketFoundationSlotV2::MarketBinding)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let fixed = [
+        (
+            MarketFoundationSlotV2::LifecycleRoot,
+            seeds::product_market_lifecycle_root_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV2::MarketBinding,
+            seeds::general_v2_market_binding_pda(program_id, &market).0,
+        ),
+        (
+            MarketFoundationSlotV2::MarketRuntime,
+            seeds::general_v2_market_runtime_pda(program_id, &market_binding.bytes()).0,
+        ),
+        (
+            MarketFoundationSlotV2::Hoard,
+            seeds::hoard_v2_pda(program_id, &market).0,
+        ),
+        (
+            MarketFoundationSlotV2::ClaimLedger,
+            seeds::claim_ledger_v3_pda(program_id, &market).0,
+        ),
+        (
+            MarketFoundationSlotV2::FailureAdmissionRoot,
+            seeds::failure_market_root_v2_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV2::FailureRuntimeRoot,
+            seeds::failure_external_root_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV2::FailureReplay,
+            seeds::failure_replay_tombstone_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV2::FailureIntervalWork,
+            seeds::failure_market_interval_cell_v2_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV2::FailureIntervalHistory,
+            seeds::failure_market_interval_history_v2_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV2::ResolutionV5,
+            seeds::resolution_v5_pda(program_id, &market).0,
+        ),
+        (
+            MarketFoundationSlotV2::ProductReplayAnchor,
+            seeds::product_market_lifecycle_replay_pda(program_id, &market, generation).0,
+        ),
+    ];
+    require(
+        account_graph
+            .account(MarketFoundationSlotV2::LifecycleRoot)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes()
+            == root_account.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    for (slot, expected) in fixed {
+        require(
+            account_graph
+                .account(slot)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == expected.to_bytes(),
+            ClutchError::MismatchedState,
+        )?;
+    }
+    Ok(())
+}
+
 /// Exact authenticated shared `0xaa/1` account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedMarketLifecycleRootV1<'state> {
@@ -1314,6 +1403,11 @@ pub(crate) fn authenticate_market_foundation_preallocation_v2(
     account_graph: &MarketFoundationAccountGraphV2,
     slot: MarketFoundationSlotV2,
 ) -> Outcome<AuthenticatedMarketFoundationPreallocationV2> {
+    require_canonical_market_foundation_core_v2(
+        root.owner_program(),
+        root.account(),
+        account_graph,
+    )?;
     let index = slot
         .index()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -1437,6 +1531,7 @@ pub(crate) fn debit_market_foundation_slot_v1<'a>(
     slot: MarketFoundationSlotV2,
 ) -> Outcome<AuthenticatedMarketFoundationDebitV1> {
     require_system_program(system_program)?;
+    require_canonical_market_foundation_core_v2(program_id, root.account(), account_graph)?;
     require_distinct(&[
         funding_quote_account.clone(),
         foundation_vault.clone(),
