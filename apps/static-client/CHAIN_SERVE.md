@@ -36,18 +36,19 @@ policy, and derives the workflow identity. Missing, planning, historical,
 unsealed, stale-decoder, or mismatched inputs fail closed.
 
 The central registry's exact enabled intent triples—not a second operatord or
-browser allocation table—select action 26 and current General, Source/Series,
-Dealer, Recovery, and Fractional surfaces. Current decoder families may still
-be projected without an enabled coordinate, but that state is explicitly
-non-actionable. Every output integer is a canonical decimal string. The
-composer reads no wallet or browser session and has no RPC, signing, submission,
-deployment, or persistence path.
+browser allocation table—select current Source/Series, Dealer, Recovery, and
+Fractional surfaces. No General action coordinate is enabled in this release;
+current General decoder families may still be projected, but that state is
+explicitly non-actionable and emits no keeper cursor. Every output integer is a
+canonical decimal string. The composer reads no wallet or browser session and
+has no RPC, signing, submission, deployment, or persistence path.
 
 The hostile decoder admits Source V3 runtime accounts and only the current
 Collateral Hoard V2, ClaimLedger V3, Resolution V5, and the current General
 successor versions (including Window V5, AdmissionNode V4/outer-v2,
 MarketBinding V2, ClearWork V3, rent-owned OwnerSettlement V5,
 SettlementReceipt V5, SettlementRoot V1, Reservation V9, and OrderPage V5).
+SelectedCandidate V1 is not a live decoder or browser mapping.
 The checked `fractional` family admits only Policy V2, Ledger V1,
 Credit V2, and Tombstone V2. The reinterpreted policy/credit/tombstone V1 bytes
 are withdrawn and invisible to live discovery.

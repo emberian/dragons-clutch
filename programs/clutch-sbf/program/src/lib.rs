@@ -80,6 +80,9 @@
 //! Neither has a rustdoc page: `bpf` is private and compiled only under
 //! `target_os = "solana"`, so no host doc build sees it.
 
+#[cfg(all(target_os = "solana", test))]
+compile_error!("host-forensic General fixtures cannot compile for Solana");
+
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
