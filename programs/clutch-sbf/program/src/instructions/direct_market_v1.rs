@@ -5,7 +5,7 @@
 //! `0xb1..=0xb4/v1` family while economic state and transition identities stay
 //! exclusively in `clutch-direct-market-runtime`.
 
-use crate::accounts::{expect_pda, require, Outcome};
+use crate::accounts::{expect_pda, require, require_count, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
@@ -21,8 +21,13 @@ use clutch_direct_market_runtime::codec_v1::{
 };
 use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
 use clutch_direct_market_runtime::selection_v1::DirectSelectionV1;
+use clutch_direct_market_runtime::selection_v1::{
+    begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
+    submit_direct_candidate_v1, verify_next_direct_candidate_v1,
+};
 use clutch_direct_market_runtime::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketErrorV1, DirectMarketRootV1,
+    DirectRootReplayPostV1,
 };
 use clutch_batch::relation_v2::{
     price_semantics_digest_v2, EconomicDomainV2, PricePreconditionV2,
@@ -37,8 +42,10 @@ use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
     DirectSelectionAccountV1, DIRECT_ACTION_REPLAY_BODY_BYTES_V1,
     DIRECT_MARKET_ROOT_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
-    DIRECT_SELECTION_BODY_BYTES_V1,
+    DIRECT_SELECTION_BODY_BYTES_V1, decode_direct_empty_payload_v1,
+    DirectSubmitCandidatePayloadV1,
 };
+use clutch_solana_layout::registry::DirectMarketAction;
 use clutch_solana_layout::{account_len, PriceGridAccount};
 use clutch_solana_layout::registry::{
     DIRECT_ACTION_REPLAY_ACCOUNT_BYTES, DIRECT_MARKET_ROOT_ACCOUNT_BYTES,
@@ -48,6 +55,7 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::product_artifact::authenticate_product_artifact_v1;
+use super::artifact::read_clock_slot;
 
 const DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/account-authentication/v1\0";
@@ -298,6 +306,100 @@ pub(crate) fn authenticate_direct_price_precondition_v1(
         price,
         authentication_id,
     })
+}
+
+/// Execute the complete persisted-selection sublifecycle (actions 5..=8).
+///
+/// Account order is exact and bounded: writable b1 root, writable permanent b3
+/// replay, writable b2 Selection, read-only Clock. No signer or caller index
+/// chooses a candidate during verification or finalization; b2's canonical
+/// cursor is the only traversal coordinate.
+pub(crate) fn process_direct_selection_lifecycle_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DirectMarketAction,
+    payload: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, 4)?;
+    require_distinct(accounts)?;
+    let root = authenticate_direct_market_root_writable_v1(program_id, &accounts[0])?;
+    let replay = authenticate_direct_action_replay_writable_v1(
+        program_id,
+        &accounts[1],
+        root,
+    )?;
+    let selection = authenticate_direct_selection_writable_v1(
+        program_id,
+        &accounts[2],
+        root,
+    )?;
+    let observed_slot = read_clock_slot(&accounts[3])?;
+    let state = DirectRootReplayPostV1 {
+        root: root.value(),
+        replay: replay.value(),
+    };
+    let plan = match action {
+        DirectMarketAction::SubmitCandidate => {
+            let candidate = DirectSubmitCandidatePayloadV1::decode(payload)?.candidate;
+            submit_direct_candidate_v1(
+                state,
+                selection.value(),
+                sequence,
+                observed_slot,
+                candidate,
+                &DirectRuntimeSha256V1,
+            )
+        }
+        DirectMarketAction::BeginVerification => {
+            decode_direct_empty_payload_v1(payload)?;
+            begin_direct_candidate_verification_v1(
+                state,
+                selection.value(),
+                sequence,
+                observed_slot,
+                &DirectRuntimeSha256V1,
+            )
+        }
+        DirectMarketAction::VerifyCandidate => {
+            decode_direct_empty_payload_v1(payload)?;
+            verify_next_direct_candidate_v1(
+                state,
+                selection.value(),
+                sequence,
+                observed_slot,
+                &DirectRuntimeSha256V1,
+            )
+        }
+        DirectMarketAction::FinalizeSelection => {
+            decode_direct_empty_payload_v1(payload)?;
+            finalize_direct_selection_v1(
+                state,
+                selection.value(),
+                sequence,
+                observed_slot,
+                &DirectRuntimeSha256V1,
+            )
+        }
+        _ => return Err(Refusal::Adapter(ClutchError::UnsupportedInstruction)),
+    }
+    .map_err(map_direct_error_v1)?;
+
+    // All hostile reads and all pure checks precede the first write. SVM
+    // transaction atomicity makes these three postimages one transition.
+    write_direct_market_root_v1(&accounts[0], root.bump(), plan.state.root)?;
+    write_direct_action_replay_v1(
+        &accounts[1],
+        replay.bump(),
+        plan.state.replay,
+        plan.state.root,
+    )?;
+    write_direct_selection_v1(
+        &accounts[2],
+        selection.bump(),
+        plan.selection,
+        plan.state.root,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
