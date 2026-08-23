@@ -54,6 +54,9 @@ pub const FRACTIONAL_CLAIM_REDEMPTION_DOMAIN_V3: &[u8] =
 /// Explicit absent-0xa5 founding join domain.
 pub const FRACTIONAL_CLAIM_LEDGER_FOUNDING_DOMAIN_V3: &[u8] =
     b"dragons-clutch/claim-ledger/fractional-founding/v3\0";
+/// Exhausted ClaimLedger/0xa5 retirement transition domain.
+pub const FRACTIONAL_CLAIM_LEDGER_RETIREMENT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/claim-ledger/fractional-retirement/v3\0";
 
 const HEADER_BYTES: usize = 16;
 const HOARD_ID_COUNT: usize = 7;
@@ -642,6 +645,120 @@ pub fn prepare_fractional_claim_ledger_founding_v3<B: PositionV3Sha256Backend>(
         claim_ledger_after,
         claim_ledger_after_id,
         transition_id,
+    })
+}
+
+/// Exact exhausted ClaimLedger successor paired with the final live 0xa5
+/// retirement successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalClaimLedgerRetirementPlanV3 {
+    claim_ledger_before_id: Id,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_retirement_id: Id,
+    claim_ledger_after: ClaimLedgerV3,
+    claim_ledger_after_id: Id,
+    transition_id: Id,
+    consumed_sequence: u64,
+}
+
+impl FractionalClaimLedgerRetirementPlanV3 {
+    /// Resolved ClaimLedger semantic ID before terminalization.
+    pub const fn claim_ledger_before_id(self) -> Id {
+        self.claim_ledger_before_id
+    }
+
+    /// Final live 0xa5 semantic ID before its retirement successor.
+    pub const fn fractional_ledger_before_id(self) -> Id {
+        self.fractional_ledger_before_id
+    }
+
+    /// Exact 0xa5 retirement successor semantic ID.
+    pub const fn fractional_ledger_retirement_id(self) -> Id {
+        self.fractional_ledger_retirement_id
+    }
+
+    /// Complete ClaimLedger successor in Retiring lifecycle.
+    pub const fn claim_ledger_after(self) -> ClaimLedgerV3 {
+        self.claim_ledger_after
+    }
+
+    /// Retiring ClaimLedger semantic ID.
+    pub const fn claim_ledger_after_id(self) -> Id {
+        self.claim_ledger_after_id
+    }
+
+    /// Shared terminal transition identity retained as the last latch.
+    pub const fn transition_id(self) -> Id {
+        self.transition_id
+    }
+
+    /// Exact consumed fractional sequence.
+    pub const fn consumed_sequence(self) -> u64 {
+        self.consumed_sequence
+    }
+}
+
+/// Move an exhausted resolved ClaimLedger to Retiring while committing the
+/// exact final 0xa5 successor. K and live-credit count remain authenticated by
+/// the Fractional owner; the SBF composer must prove both are zero before it
+/// may consume this pure plan and delete 0xa5.
+pub fn prepare_fractional_claim_ledger_retirement_v3<B: PositionV3Sha256Backend>(
+    claim_ledger: ClaimLedgerV3,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_retirement_id: Id,
+    consumed_sequence: u64,
+    backend: &B,
+) -> Result<FractionalClaimLedgerRetirementPlanV3> {
+    claim_ledger.validate()?;
+    fractional_ledger_before_id.require_live()?;
+    fractional_ledger_retirement_id.require_live()?;
+    if claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || claim_ledger.next_fractional_sequence != consumed_sequence
+        || fractional_ledger_before_id == fractional_ledger_retirement_id
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let mut index = 0usize;
+    while index < usize::from(claim_ledger.outcome_count) {
+        if claim_ledger.aggregate_internal_supply[index] != 0
+            || claim_ledger.aggregate_materialized_supply[index] != 0
+        {
+            return Err(Error::AggregateLiabilityInsufficient);
+        }
+        index += 1;
+    }
+    let claim_ledger_before_id = claim_ledger.semantic_id(backend)?;
+    let next_fractional_sequence = consumed_sequence.checked_add(1).ok_or(Error::Arithmetic)?;
+    let transition_id = digest(
+        FRACTIONAL_CLAIM_LEDGER_RETIREMENT_DOMAIN_V3,
+        &[
+            &claim_ledger.market_instance_id.bytes(),
+            &claim_ledger.fractional_policy_id.bytes(),
+            &claim_ledger.fractional_ledger_account.bytes(),
+            &fractional_ledger_before_id.bytes(),
+            &fractional_ledger_retirement_id.bytes(),
+            &claim_ledger_before_id.bytes(),
+            &consumed_sequence.to_le_bytes(),
+            &[MarketLiabilityLifecycleV1::Retiring as u8],
+        ],
+    );
+    transition_id.require_live()?;
+    let claim_ledger_after = ClaimLedgerV3 {
+        lifecycle: MarketLiabilityLifecycleV1::Retiring,
+        next_fractional_sequence,
+        last_fractional_transition_id: transition_id,
+        ..claim_ledger
+    };
+    claim_ledger_after.validate()?;
+    let claim_ledger_after_id = claim_ledger_after.semantic_id(backend)?;
+    Ok(FractionalClaimLedgerRetirementPlanV3 {
+        claim_ledger_before_id,
+        fractional_ledger_before_id,
+        fractional_ledger_retirement_id,
+        claim_ledger_after,
+        claim_ledger_after_id,
+        transition_id,
+        consumed_sequence,
     })
 }
 
