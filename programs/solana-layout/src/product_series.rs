@@ -4,9 +4,8 @@
 //! collateral profile, source runtime, failure admission, Clock, account owner,
 //! PDA, rent, or token balance. Those are SBF adapter obligations. In
 //! particular, decoding [`RegisterSeriesIntentV1`] cannot turn its registry
-//! fields into authority, and decoding [`SeriesFundingAccountV1`] cannot prove
-//! that its five physical custody compartments hold the balances in its pure
-//! state.
+//! fields into authority, and decoding either funding wrapper cannot prove
+//! that its physical custody compartments hold the balances in its pure state.
 //!
 //! The six Series local action tags `13..=18` are allocated by
 //! [`crate::registry`]. SourcePlane V3 exclusively owns this shared family's
@@ -17,10 +16,11 @@
 use clutch_product_series::{
     CompiledProductSeriesBundleV5Id, ContentId, FixedCodec, MarketInstanceV2Id,
     MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1, SeriesFundingComponentV1,
-    SeriesFundingStateV1, SeriesFundingTermsV2Id, SeriesMarketLinkV1, SeriesPlanV5Id,
-    SourceOccurrenceV1Id,
+    SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTermsV2Id, SeriesMarketLinkV1,
+    SeriesPlanV5Id, SourceOccurrenceV1Id,
     MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
     SERIES_FUNDING_COMPONENT_COUNT, SERIES_FUNDING_STATE_BYTES, SERIES_MARKET_LINK_BYTES_V1,
+    SERIES_FUNDING_STATE_BYTES_V2,
 };
 
 use crate::{digest, is_zero, registry, CodecError, Hash32, Result, HASH_BYTES};
@@ -32,6 +32,9 @@ const SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V1: &[u8] =
 /// V2 intentionally retains the address to make V1 presence a replay refusal,
 /// never an alias or an in-place schema rewrite.
 pub const SERIES_REGISTRY_PDA_PREFIX_V1: &[u8] = b"dc:series-registry:v1";
+/// Canonical SeriesFunding PDA prefix. FundingV2 retains this address so a
+/// historical V1 account permanently prevents successor recreation.
+pub const SERIES_FUNDING_PDA_PREFIX_V1: &[u8] = b"dc:series-funding:v1";
 
 /// Exact immutable registered-Series account width.
 pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
@@ -41,6 +44,11 @@ pub const SERIES_REGISTRY_ACCOUNT_BYTES_V2: usize = 172;
 /// Exact mutable Series-funding account width.
 pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize =
     4 + 8 + (8 * SERIES_FUNDING_COMPONENT_COUNT) + SERIES_FUNDING_STATE_BYTES;
+/// Exact current Series funding wrapper width. SeriesAdmission is lamport-only,
+/// so the five release-selected collateral-vault rent principals remain
+/// separate from the six-component semantic state.
+pub const SERIES_FUNDING_ACCOUNT_BYTES_V2: usize =
+    4 + 8 + (8 * SERIES_FUNDING_COMPONENT_COUNT) + SERIES_FUNDING_STATE_BYTES_V2;
 /// Exact common header before one Product market/link semantic body.
 pub const PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1: usize = 16;
 /// Exact framed shared MarketLifecycleRoot account width.
@@ -446,7 +454,7 @@ impl SeriesFundingAccountV1 {
             return Err(CodecError::TrailingBytes);
         }
         out[0] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG;
-        out[1] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION;
+        out[1] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1;
         out[2] = self.stored_bump;
         out[3] = self.flags;
         out[4..12].copy_from_slice(&self.rent_principal_lamports.to_le_bytes());
@@ -465,7 +473,7 @@ impl SeriesFundingAccountV1 {
         if input[0] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION {
+        if input[1] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1 {
             return Err(CodecError::WrongVersion);
         }
         let mut at = 12;
@@ -481,6 +489,83 @@ impl SeriesFundingAccountV1 {
             collateral_vault_rent_principal_lamports,
             stored_bump: input[2],
             flags: input[3],
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Program-owned current Series funding wrapper.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesFundingAccountV2 {
+    /// Sole current six-component semantic state.
+    pub state: SeriesFundingStateV2,
+    /// Refundable payer-owned funding-account rent principal.
+    pub rent_principal_lamports: u64,
+    /// Refundable payer-owned rent for the five collateral-capable vaults.
+    pub collateral_vault_rent_principal_lamports: [u64; SERIES_FUNDING_COMPONENT_COUNT],
+    /// Canonical account PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesFundingAccountV2 {
+    /// Validate exact semantic state and rent ownership.
+    pub fn validate(&self) -> Result<()> {
+        if self.rent_principal_lamports == 0
+            || self
+                .collateral_vault_rent_principal_lamports
+                .iter()
+                .any(|principal| *principal == 0)
+        {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(())
+    }
+
+    /// Encode exact 0x80/version2 bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        if out.len() < SERIES_FUNDING_ACCOUNT_BYTES_V2 {
+            return Err(CodecError::OutputTooSmall);
+        }
+        if out.len() > SERIES_FUNDING_ACCOUNT_BYTES_V2 {
+            return Err(CodecError::TrailingBytes);
+        }
+        out.fill(0);
+        out[0] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG;
+        out[1] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2;
+        out[2] = self.stored_bump;
+        let mut at = 4;
+        put_u64(out, &mut at, self.rent_principal_lamports);
+        for principal in self.collateral_vault_rent_principal_lamports {
+            put_u64(out, &mut at, principal);
+        }
+        self.state
+            .encode_into(&mut out[at..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact current wrapper and semantic body.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_FUNDING_ACCOUNT_BYTES_V2)?;
+        if input[0] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..4])?;
+        let mut at = 4;
+        let rent_principal_lamports = take_u64(input, &mut at);
+        let mut collateral_vault_rent_principal_lamports = [0; SERIES_FUNDING_COMPONENT_COUNT];
+        for principal in &mut collateral_vault_rent_principal_lamports {
+            *principal = take_u64(input, &mut at);
+        }
+        let value = Self {
+            state: SeriesFundingStateV2::decode(&input[at..]).map_err(map_product_error)?,
+            rent_principal_lamports,
+            collateral_vault_rent_principal_lamports,
+            stored_bump: input[2],
         };
         value.validate()?;
         Ok(value)
@@ -931,10 +1016,79 @@ impl SeriesFundingAssetV1 {
 pub struct ObserveSeriesDonationIntentV1 {
     /// Exact registered Series.
     pub series_plan_id: SeriesPlanV5Id,
-    /// One of the five quote-owned components.
+    /// One of the five historical quote-owned components.
     pub component: SeriesFundingComponentV1,
     /// Physical asset balance being observed.
     pub asset: SeriesFundingAssetV1,
+}
+
+/// Current donation intent with explicit V2 component ordering.
+///
+/// Byte 34 is schema `2`, making this disjoint from the historical V1 payload
+/// whose entire six-byte tail had to be zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObserveSeriesDonationIntentV2 {
+    /// Exact registered Series.
+    pub series_plan_id: SeriesPlanV5Id,
+    /// One of the six QuoteV4 components.
+    pub component: clutch_product_series::SeriesFundingComponentV2,
+    /// Physical asset balance being observed.
+    pub asset: SeriesFundingAssetV1,
+}
+
+impl ObserveSeriesDonationIntentV2 {
+    /// Encode the exact current action payload.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        self.series_plan_id.validate().map_err(map_product_error)?;
+        if out.len() < OBSERVE_SERIES_DONATION_PAYLOAD_BYTES_V1 {
+            return Err(CodecError::OutputTooSmall);
+        }
+        if out.len() > OBSERVE_SERIES_DONATION_PAYLOAD_BYTES_V1 {
+            return Err(CodecError::TrailingBytes);
+        }
+        out.fill(0);
+        out[..HASH_BYTES].copy_from_slice(&self.series_plan_id.bytes());
+        out[HASH_BYTES] = match self.component {
+            clutch_product_series::SeriesFundingComponentV2::MarketCore => 0,
+            clutch_product_series::SeriesFundingComponentV2::SeriesAdmission => 1,
+            clutch_product_series::SeriesFundingComponentV2::RecoveryReserve => 2,
+            clutch_product_series::SeriesFundingComponentV2::SourceWork => 3,
+            clutch_product_series::SeriesFundingComponentV2::LiquidityFacility => 4,
+            clutch_product_series::SeriesFundingComponentV2::WrapperSet => 5,
+        };
+        out[HASH_BYTES + 1] = self.asset.byte();
+        out[HASH_BYTES + 2] = 2;
+        Ok(())
+    }
+
+    /// Hostile-decode only the explicit current schema.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, OBSERVE_SERIES_DONATION_PAYLOAD_BYTES_V1)?;
+        if input[HASH_BYTES + 2] != 2 {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[HASH_BYTES + 3..])?;
+        let component = match input[HASH_BYTES] {
+            0 => clutch_product_series::SeriesFundingComponentV2::MarketCore,
+            1 => clutch_product_series::SeriesFundingComponentV2::SeriesAdmission,
+            2 => clutch_product_series::SeriesFundingComponentV2::RecoveryReserve,
+            3 => clutch_product_series::SeriesFundingComponentV2::SourceWork,
+            4 => clutch_product_series::SeriesFundingComponentV2::LiquidityFacility,
+            5 => clutch_product_series::SeriesFundingComponentV2::WrapperSet,
+            _ => return Err(CodecError::InvalidEnum),
+        };
+        let value = Self {
+            series_plan_id: SeriesPlanV5Id::from_bytes(
+                input[..HASH_BYTES]
+                    .try_into()
+                    .map_err(|_| CodecError::Truncated)?,
+            ),
+            component,
+            asset: SeriesFundingAssetV1::decode(input[HASH_BYTES + 1])?,
+        };
+        value.series_plan_id.validate().map_err(map_product_error)?;
+        Ok(value)
+    }
 }
 
 impl ObserveSeriesDonationIntentV1 {
@@ -1032,6 +1186,42 @@ mod tests {
         }
     }
 
+    fn funding_v2() -> SeriesFundingAccountV2 {
+        SeriesFundingAccountV2 {
+            state: SeriesFundingStateV2 {
+                series_plan_id: SeriesPlanV5Id::from_bytes([1; HASH_BYTES]),
+                funding_terms_id: SeriesFundingTermsV2Id::from_bytes([2; HASH_BYTES]),
+                funding_quote_id: clutch_product_series::SeriesFundingQuoteV4Id::from_bytes([
+                    3;
+                    HASH_BYTES
+                ]),
+                attachment_plan_id: clutch_product_series::SeriesAttachmentPlanV4Id::from_bytes([
+                    4;
+                    HASH_BYTES
+                ]),
+                compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([5; HASH_BYTES]),
+                instance_count: 1,
+                next_ordinal: 0,
+                lapsed_count: 0,
+                transition_sequence: 0,
+                phase: clutch_product_series::SeriesFundingPhaseV2::Active,
+                pending_disposition: None,
+                pending_market_instance_id: ContentId::ZERO,
+                pending_source_occurrence_id: ContentId::ZERO,
+                pending_series_market_link_id: ContentId::ZERO,
+                pending_ordinal: 0,
+                pending_reservation_receipt_id: ContentId::ZERO,
+                pending_debits: [clutch_product_series::ComponentDebitV1::ZERO;
+                    clutch_product_series::SERIES_FUNDING_COMPONENT_COUNT_V2],
+                components: [clutch_product_series::SeriesComponentCapitalV2::ZERO;
+                    clutch_product_series::SERIES_FUNDING_COMPONENT_COUNT_V2],
+            },
+            rent_principal_lamports: 7,
+            collateral_vault_rent_principal_lamports: [8; SERIES_FUNDING_COMPONENT_COUNT],
+            stored_bump: 9,
+        }
+    }
+
     #[test]
     fn registry_v2_round_trips_every_owned_byte() {
         let value = registry_v2();
@@ -1058,6 +1248,19 @@ mod tests {
         assert_eq!(
             SeriesRegistryAccountV2::decode(&body),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn funding_v2_round_trips_and_refuses_v1_version() {
+        let value = funding_v2();
+        let mut body = [0; SERIES_FUNDING_ACCOUNT_BYTES_V2];
+        value.encode(&mut body).unwrap();
+        assert_eq!(SeriesFundingAccountV2::decode(&body), Ok(value));
+        body[1] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1;
+        assert_eq!(
+            SeriesFundingAccountV2::decode(&body),
+            Err(CodecError::WrongVersion)
         );
     }
 }

@@ -48,6 +48,7 @@ The global account ledger reserves:
 | `0x7f/1` | 168 | withdrawn historical Series registration anchor |
 | `0x7f/2` | 172 | current BundleV5-retaining Series registration/replay anchor |
 | `0x80/1` | 376 | withdrawn QuoteV1-shaped funding/lifecycle wrapper |
+| `0x80/2` | 716 | current BundleV5/QuoteV4 six-compartment funding wrapper |
 
 The current 172-byte registration stores SeriesPlanV5Id, FundingTermsV2Id,
 RegistryReleaseId, CapabilityProfileId, its exact payer-owned rent principal,
@@ -66,6 +67,12 @@ tag 0x80 | version 1 | bump | zero flags | rent principal LE u64
 | five collateral-vault rent principals LE u64 in component order
 | SeriesFundingStateV1 (324)
 ```
+
+The current 716-byte funding account wraps the exact 664-byte
+`SeriesFundingStateV2`, retains BundleV5/QuoteV4/AttachmentV4 identities, owns
+six component ledgers including SeriesAdmission, and represents one pending
+ordinal explicitly. Five collateral-vault rent principals remain because
+SeriesAdmission is lamport-only.
 
 The wrappers add no phase, cursor, component amounts, or terminal ownership.
 Each stores the exact state-account rent principal, and the funding wrapper also
