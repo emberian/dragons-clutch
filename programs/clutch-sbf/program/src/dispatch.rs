@@ -53,7 +53,10 @@ use crate::instructions::dealer_policy;
 ))]
 use crate::instructions::direct_selection_v3;
 #[cfg(any(
-    feature = "profile-full",
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 use crate::instructions::general_v2_direct_v5;
@@ -113,7 +116,10 @@ enum Route {
     #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
     DealerPolicy,
     #[cfg(any(
-        feature = "profile-full",
+        all(
+            feature = "profile-full",
+            not(feature = "profile-non-production-dealer-policy-catalog-lab")
+        ),
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
     ))]
     GeneralV2,
@@ -229,7 +235,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 Route::FractionalRedemption
             }
             #[cfg(any(
-                feature = "profile-full",
+                all(
+                    feature = "profile-full",
+                    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+                ),
                 feature = "profile-non-production-general-v2-empty-book-identity-lab"
             ))]
             Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
@@ -424,7 +433,10 @@ pub fn process(
         #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
         #[cfg(any(
-            feature = "profile-full",
+            all(
+                feature = "profile-full",
+                not(feature = "profile-non-production-dealer-policy-catalog-lab")
+            ),
             feature = "profile-non-production-general-v2-empty-book-identity-lab"
         ))]
         Route::GeneralV2 => process_general_v2(program_id, accounts, instruction_data),
@@ -589,7 +601,10 @@ fn disabled_dealer_facility_action(
 /// the historical identity actions remain confined to their laboratory.
 #[inline(never)]
 #[cfg(any(
-    feature = "profile-full",
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 fn process_general_v2(
