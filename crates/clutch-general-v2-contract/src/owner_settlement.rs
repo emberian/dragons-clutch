@@ -9,7 +9,8 @@
 use crate::{
     CodecError, Reader, Writer, OWNER_SETTLEMENT_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_TAG,
     OWNER_SETTLEMENT_ACCOUNT_VERSION, OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
-    OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
+    OWNER_SETTLEMENT_ACCOUNT_VERSION_V2, OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
+    OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
 };
 
 pub use clutch_owner_settlement::{
@@ -18,6 +19,13 @@ pub use clutch_owner_settlement::{
     OwnerSettlementDispositionV1, OwnerSettlementExpectationV1, SelectedOwnerFeeV1,
     SettlementCashPotExpectationV1, SettlementCashPotV1, SettlementSideV1,
     VerifiedSettlementOrderV1, OWNER_SETTLEMENT_BODY_V1_BYTES, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+};
+pub use clutch_owner_settlement::{
+    build_owner_settlement_expectation_basis_book_v4, OwnerSettlementAccumulatorV4,
+    OwnerSettlementExpectationBasisBookV4, OwnerSettlementExpectationBasisV4,
+    OwnerSettlementExpectationV4, OwnerSettlementStateV4, VerifiedSettlementOrderV4,
+    OWNER_SETTLEMENT_BODY_V4_BYTES, OWNER_SETTLEMENT_OUTER_TAG_V4,
+    OWNER_SETTLEMENT_OUTER_VERSION_V4,
 };
 pub use clutch_owner_settlement::{
     build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v2,
@@ -202,7 +210,7 @@ impl OwnerSettlementV3AccountV1 {
             .map_err(|_| CodecError::InvalidState)?;
         let mut writer = Writer::exact(output, OWNER_SETTLEMENT_ACCOUNT_BYTES)?;
         writer.u8(OWNER_SETTLEMENT_ACCOUNT_TAG)?;
-        writer.u8(OWNER_SETTLEMENT_ACCOUNT_VERSION)?;
+        writer.u8(OWNER_SETTLEMENT_ACCOUNT_VERSION_V3)?;
         writer.bytes(&semantic)?;
         writer.u8(self.stored_bump)?;
         writer.u8(self.flags)?;
@@ -217,7 +225,7 @@ impl OwnerSettlementV3AccountV1 {
             return Err(CodecError::WrongTag);
         }
         let version = reader.u8()?;
-        if version != OWNER_SETTLEMENT_ACCOUNT_VERSION {
+        if version != OWNER_SETTLEMENT_ACCOUNT_VERSION_V3 {
             return Err(CodecError::WrongVersion);
         }
         let semantic_body: [u8; OWNER_SETTLEMENT_BODY_V3_BYTES] = reader.array()?;
@@ -234,9 +242,78 @@ impl OwnerSettlementV3AccountV1 {
 }
 
 const _: () = assert!(OWNER_SETTLEMENT_ACCOUNT_TAG == OWNER_SETTLEMENT_OUTER_TAG_V3);
-const _: () = assert!(OWNER_SETTLEMENT_ACCOUNT_VERSION == OWNER_SETTLEMENT_OUTER_VERSION_V3);
+const _: () =
+    assert!(OWNER_SETTLEMENT_ACCOUNT_VERSION_V3 == OWNER_SETTLEMENT_OUTER_VERSION_V3);
 const _: () = assert!(OWNER_SETTLEMENT_BODY_V3_BYTES == 288);
 const _: () = assert!(OWNER_SETTLEMENT_ACCOUNT_BYTES == 2 + OWNER_SETTLEMENT_BODY_V3_BYTES + 2);
+
+/// Sole future General envelope around the delivery-complete V4 semantic body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementV4AccountV1 {
+    /// Exact canonical 288-byte V4 owner-settlement semantic owner.
+    pub semantic: OwnerSettlementAccumulatorV4,
+    /// Stored fresh V4 PDA bump.
+    pub stored_bump: u8,
+    /// Reserved zero flags.
+    pub flags: u8,
+}
+
+impl OwnerSettlementV4AccountV1 {
+    /// Validate the authoritative V4 body and reserved outer byte.
+    pub fn validate(self) -> Result<(), CodecError> {
+        self.semantic
+            .validate()
+            .map_err(|_| CodecError::InvalidState)?;
+        if self.flags != 0 {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(())
+    }
+
+    /// Encode the exact tag-`0x81`, version-4, 292-byte account.
+    pub fn encode(self, output: &mut [u8]) -> Result<(), CodecError> {
+        self.validate()?;
+        let semantic = self
+            .semantic
+            .encode_body()
+            .map_err(|_| CodecError::InvalidState)?;
+        let mut writer = Writer::exact(output, OWNER_SETTLEMENT_ACCOUNT_BYTES)?;
+        writer.u8(OWNER_SETTLEMENT_ACCOUNT_TAG)?;
+        writer.u8(OWNER_SETTLEMENT_ACCOUNT_VERSION)?;
+        writer.bytes(&semantic)?;
+        writer.u8(self.stored_bump)?;
+        writer.u8(self.flags)?;
+        writer.finish()
+    }
+
+    /// Strictly decode only the exact V4 envelope and authoritative V4 body.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, OWNER_SETTLEMENT_ACCOUNT_BYTES)?;
+        let tag = reader.u8()?;
+        if tag != OWNER_SETTLEMENT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        let version = reader.u8()?;
+        if version != OWNER_SETTLEMENT_ACCOUNT_VERSION_V4 {
+            return Err(CodecError::WrongVersion);
+        }
+        let semantic_body: [u8; OWNER_SETTLEMENT_BODY_V4_BYTES] = reader.array()?;
+        let value = Self {
+            semantic: OwnerSettlementAccumulatorV4::decode_body(tag, version, &semantic_body)
+                .map_err(|_| CodecError::InvalidState)?,
+            stored_bump: reader.u8()?,
+            flags: reader.u8()?,
+        };
+        reader.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+const _: () = assert!(OWNER_SETTLEMENT_ACCOUNT_TAG == OWNER_SETTLEMENT_OUTER_TAG_V4);
+const _: () = assert!(OWNER_SETTLEMENT_ACCOUNT_VERSION == OWNER_SETTLEMENT_OUTER_VERSION_V4);
+const _: () = assert!(OWNER_SETTLEMENT_BODY_V4_BYTES == 288);
+const _: () = assert!(OWNER_SETTLEMENT_ACCOUNT_BYTES == 2 + OWNER_SETTLEMENT_BODY_V4_BYTES + 2);
 
 /// Capability-disabled outer account for the buyer-first candidate cash pot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
