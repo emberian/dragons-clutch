@@ -3782,6 +3782,248 @@ pub fn decode_clear_work_v3_filled_legs(
     Ok(filled_legs)
 }
 
+/// One exact real-order debit performed while checking a settlement slice.
+///
+/// The active-width Work matrix changes meaning only after RelationV2 has
+/// reached phase two: every cell then records the remaining, not yet covered,
+/// filled leg for that order and outcome.  This keeps slice resumption exact
+/// without adding a second `orders * outcomes` matrix or reviving the fixed-
+/// width Work account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClearWorkSliceDebitV1 {
+    /// Dense live-order index from the sealed CandidateFeed.
+    pub order_index: u8,
+    /// Active native outcome moved by the slice.
+    pub outcome: u8,
+    /// Positive Egg quantity covered by this real leg.
+    pub quantity: u64,
+}
+
+/// The at-most-two real legs covered by one canonical settlement slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClearWorkSliceDebitsV1 {
+    /// Buy-side real order, absent for a merge-to-sell slice.
+    pub buy: Option<ClearWorkSliceDebitV1>,
+    /// Sell-side real order, absent for a split-to-buy slice.
+    pub sell: Option<ClearWorkSliceDebitV1>,
+}
+
+impl ClearWorkSliceDebitsV1 {
+    /// Empty debits used only when a checked-invalid slice terminalizes Work.
+    pub const NONE: Self = Self {
+        buy: None,
+        sell: None,
+    };
+}
+
+/// Atomically advance one active-width settlement-slice checkpoint.
+///
+/// All header, reward, debit, and terminal-zero checks run before the first
+/// output byte changes.  A checked-invalid slice changes only the header to a
+/// terminal refused disposition; a successful slice debits exactly its real
+/// legs from the phase-scoped remainder matrix.  Aggregate RelationV2 flows
+/// and the SHA continuation remain immutable so terminal ScoreV2-Q can be
+/// recomputed from authenticated Work state.
+pub fn replace_clear_work_v3_slice_state(
+    account: &mut [u8],
+    pre: ClearWorkV3AccountV1,
+    post: ClearWorkV3AccountV1,
+    debits: ClearWorkSliceDebitsV1,
+    accepted_slice: bool,
+    exact_reward: u64,
+) -> Result<(), CodecError> {
+    if ClearWorkV3AccountV1::decode_account(account)? != pre {
+        return Err(CodecError::MismatchedBinding);
+    }
+    post.validate()?;
+    if exact_reward == 0
+        || pre.phase != 2
+        || pre.verification_state != ClearWorkVerificationStateV1::Valid
+        || pre.slice_cursor >= pre.slice_count
+        || post.epoch != pre.epoch
+        || post.node != pre.node
+        || post.market != pre.market
+        || post.order_set != pre.order_set
+        || post.feed != pre.feed
+        || post.candidate_bundle_digest != pre.candidate_bundle_digest
+        || post.settlement_candidate_id != pre.settlement_candidate_id
+        || post.base_relation_candidate_id != pre.base_relation_candidate_id
+        || post.relation_policy_id != pre.relation_policy_id
+        || post.economic_domain_digest != pre.economic_domain_digest
+        || post.native_claim_basis_id != pre.native_claim_basis_id
+        || post.candidate_price_digest != pre.candidate_price_digest
+        || post.price_measure_policy_v1_id != pre.price_measure_policy_v1_id
+        || post.score_policy_id != pre.score_policy_id
+        || post.price_body_digest != pre.price_body_digest
+        || post.previous_order_id != pre.previous_order_id
+        || post.epoch_generation != pre.epoch_generation
+        || post.rent != pre.rent
+        || post.page_count != pre.page_count
+        || post.page_cursor != pre.page_cursor
+        || post.order_count != pre.order_count
+        || post.order_cursor != pre.order_cursor
+        || post.slot_cursor != pre.slot_cursor
+        || post.outcome_count != pre.outcome_count
+        || post.slice_count != pre.slice_count
+        || post.candidate_kind != pre.candidate_kind
+        || post.price_witness_schema != pre.price_witness_schema
+        || post.quantized_semantics_version != pre.quantized_semantics_version
+        || post.stored_bump != pre.stored_bump
+        || post.flags != pre.flags
+        || post.sha256 != pre.sha256
+        || Some(post.reward_remaining) != pre.reward_remaining.checked_sub(exact_reward)
+        || Some(post.reward_earned) != pre.reward_earned.checked_add(exact_reward)
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+
+    let buy = validate_slice_debit(pre, debits.buy)?;
+    let sell = validate_slice_debit(pre, debits.sell)?;
+    if accepted_slice {
+        let next = pre
+            .slice_cursor
+            .checked_add(1)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let terminal = next == pre.slice_count;
+        if (buy.is_none() && sell.is_none())
+            || post.slice_cursor != next
+            || post.verification_state != ClearWorkVerificationStateV1::Valid
+            || post.phase != if terminal { 3 } else { 2 }
+        {
+            return Err(CodecError::InvalidState);
+        }
+    } else if buy.is_some()
+        || sell.is_some()
+        || post.slice_cursor != pre.slice_cursor
+        || post.phase != 3
+        || post.verification_state != ClearWorkVerificationStateV1::Refused
+    {
+        return Err(CodecError::InvalidState);
+    }
+
+    let (buy_at, buy_pre, buy_post) = debit_projection(account, buy, sell)?;
+    let (sell_at, sell_pre, sell_post) = if buy.map(|value| value.0) == sell.map(|value| value.0) {
+        (None, 0, 0)
+    } else {
+        debit_projection(account, sell, None)?
+    };
+
+    if accepted_slice && post.slice_cursor == post.slice_count {
+        let matrix_at = clear_work_v3_matrix_offset(pre)?;
+        let matrix_cells = usize::from(pre.order_count)
+            .checked_mul(usize::from(pre.outcome_count))
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        let mut cell = 0usize;
+        while cell < matrix_cells {
+            let at = matrix_at
+                .checked_add(cell.checked_mul(8).ok_or(CodecError::ArithmeticOverflow)?)
+                .ok_or(CodecError::ArithmeticOverflow)?;
+            let observed = if buy_at == Some(at) {
+                buy_post
+            } else if sell_at == Some(at) {
+                sell_post
+            } else {
+                read_u64_at(account, at)?
+            };
+            if observed != 0 {
+                return Err(CodecError::MismatchedBinding);
+            }
+            cell += 1;
+        }
+    }
+
+    let mut encoded_header = [0u8; CLEAR_WORK_V3_HEADER_BYTES];
+    post.encode(&mut encoded_header)?;
+    if let Some(at) = buy_at {
+        debug_assert!(buy_pre >= buy_post);
+        account[at..at + 8].copy_from_slice(&buy_post.to_le_bytes());
+    }
+    if let Some(at) = sell_at {
+        debug_assert!(sell_pre >= sell_post);
+        account[at..at + 8].copy_from_slice(&sell_post.to_le_bytes());
+    }
+    account[..CLEAR_WORK_V3_HEADER_BYTES].copy_from_slice(&encoded_header);
+    Ok(())
+}
+
+/// Require a terminal valid Work body to have covered every real filled leg.
+pub fn clear_work_v3_slice_remainders_complete(input: &[u8]) -> Result<(), CodecError> {
+    let header = ClearWorkV3AccountV1::decode_account(input)?;
+    if header.phase != 3
+        || header.verification_state != ClearWorkVerificationStateV1::Valid
+        || header.slice_cursor != header.slice_count
+    {
+        return Err(CodecError::InvalidState);
+    }
+    let matrix_at = clear_work_v3_matrix_offset(header)?;
+    if input[matrix_at..].iter().any(|byte| *byte != 0) {
+        return Err(CodecError::MismatchedBinding);
+    }
+    Ok(())
+}
+
+fn validate_slice_debit(
+    header: ClearWorkV3AccountV1,
+    debit: Option<ClearWorkSliceDebitV1>,
+) -> Result<Option<(usize, u64)>, CodecError> {
+    match debit {
+        Some(value)
+            if value.order_index < header.order_count
+                && value.outcome < header.outcome_count
+                && value.quantity != 0 =>
+        {
+            Ok(Some((clear_work_v3_cell_offset(header, value)?, value.quantity)))
+        }
+        Some(_) => Err(CodecError::InvalidState),
+        None => Ok(None),
+    }
+}
+
+fn debit_projection(
+    account: &[u8],
+    debit: Option<(usize, u64)>,
+    second: Option<(usize, u64)>,
+) -> Result<(Option<usize>, u64, u64), CodecError> {
+    let Some((at, quantity)) = debit else {
+        return Ok((None, 0, 0));
+    };
+    let total = if second.map(|value| value.0) == Some(at) {
+        quantity
+            .checked_add(second.map(|value| value.1).unwrap_or(0))
+            .ok_or(CodecError::ArithmeticOverflow)?
+    } else {
+        quantity
+    };
+    let observed = read_u64_at(account, at)?;
+    let remaining = observed
+        .checked_sub(total)
+        .ok_or(CodecError::MismatchedBinding)?;
+    Ok((Some(at), observed, remaining))
+}
+
+fn clear_work_v3_matrix_offset(header: ClearWorkV3AccountV1) -> Result<usize, CodecError> {
+    CLEAR_WORK_V3_HEADER_BYTES
+        .checked_add(
+            usize::from(header.outcome_count)
+                .checked_mul(16)
+                .ok_or(CodecError::ArithmeticOverflow)?,
+        )
+        .ok_or(CodecError::ArithmeticOverflow)
+}
+
+fn clear_work_v3_cell_offset(
+    header: ClearWorkV3AccountV1,
+    debit: ClearWorkSliceDebitV1,
+) -> Result<usize, CodecError> {
+    let cell = usize::from(debit.order_index)
+        .checked_mul(usize::from(header.outcome_count))
+        .and_then(|value| value.checked_add(usize::from(debit.outcome)))
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    clear_work_v3_matrix_offset(header)?
+        .checked_add(cell.checked_mul(8).ok_or(CodecError::ArithmeticOverflow)?)
+        .ok_or(CodecError::ArithmeticOverflow)
+}
+
 /// Atomically encode one private runtime-owned RelationV2 order result into
 /// the existing V3 Work frame.
 ///
@@ -5939,6 +6181,151 @@ mod tests {
             decode_clear_work_v3_filled_legs(&folded_v3_bytes, 1),
             Err(CodecError::InvalidState)
         );
+    }
+
+    #[test]
+    fn v3_slice_debits_are_exact_phase_scoped_and_atomic() {
+        let mut pre = work_v3_header();
+        pre.outcome_count = 2;
+        pre.order_count = 2;
+        pre.order_cursor = 2;
+        pre.previous_order_id = id(42);
+        pre.slice_count = 2;
+        pre.slice_cursor = 0;
+        pre.page_count = 1;
+        pre.page_cursor = 1;
+        pre.phase = 2;
+        pre.verification_state = ClearWorkVerificationStateV1::Valid;
+        pre.reward_remaining = 12;
+        pre.reward_earned = 2;
+        let mut account = [0u8; CLEAR_WORK_V3_HEADER_BYTES + 32 + 32];
+        pre.encode(&mut account[..CLEAR_WORK_V3_HEADER_BYTES])
+            .unwrap();
+        let buy = ClearWorkSliceDebitV1 {
+            order_index: 0,
+            outcome: 0,
+            quantity: 3,
+        };
+        let sell = ClearWorkSliceDebitV1 {
+            order_index: 1,
+            outcome: 0,
+            quantity: 3,
+        };
+        let buy_at = clear_work_v3_cell_offset(pre, buy).unwrap();
+        let sell_at = clear_work_v3_cell_offset(pre, sell).unwrap();
+        account[buy_at..buy_at + 8].copy_from_slice(&5u64.to_le_bytes());
+        account[sell_at..sell_at + 8].copy_from_slice(&5u64.to_le_bytes());
+        assert_eq!(ClearWorkV3AccountV1::decode_account(&account), Ok(pre));
+
+        let first_post = ClearWorkV3AccountV1 {
+            reward_remaining: 11,
+            reward_earned: 3,
+            slice_cursor: 1,
+            ..pre
+        };
+        replace_clear_work_v3_slice_state(
+            &mut account,
+            pre,
+            first_post,
+            ClearWorkSliceDebitsV1 {
+                buy: Some(buy),
+                sell: Some(sell),
+            },
+            true,
+            1,
+        )
+        .unwrap();
+        assert_eq!(read_u64_at(&account, buy_at), Ok(2));
+        assert_eq!(read_u64_at(&account, sell_at), Ok(2));
+
+        let second_pre = ClearWorkV3AccountV1::decode_account(&account).unwrap();
+        let second_post = ClearWorkV3AccountV1 {
+            reward_remaining: 10,
+            reward_earned: 4,
+            slice_cursor: 2,
+            phase: 3,
+            ..second_pre
+        };
+        replace_clear_work_v3_slice_state(
+            &mut account,
+            second_pre,
+            second_post,
+            ClearWorkSliceDebitsV1 {
+                buy: Some(ClearWorkSliceDebitV1 { quantity: 2, ..buy }),
+                sell: Some(ClearWorkSliceDebitV1 {
+                    quantity: 2,
+                    ..sell
+                }),
+            },
+            true,
+            1,
+        )
+        .unwrap();
+        assert_eq!(clear_work_v3_slice_remainders_complete(&account), Ok(()));
+        assert_eq!(read_u64_at(&account, buy_at), Ok(0));
+        assert_eq!(read_u64_at(&account, sell_at), Ok(0));
+
+        let mut hostile = [0u8; CLEAR_WORK_V3_HEADER_BYTES + 32 + 32];
+        pre.encode(&mut hostile[..CLEAR_WORK_V3_HEADER_BYTES])
+            .unwrap();
+        hostile[buy_at..buy_at + 8].copy_from_slice(&2u64.to_le_bytes());
+        hostile[sell_at..sell_at + 8].copy_from_slice(&2u64.to_le_bytes());
+        let before = hostile;
+        assert_eq!(
+            replace_clear_work_v3_slice_state(
+                &mut hostile,
+                pre,
+                first_post,
+                ClearWorkSliceDebitsV1 {
+                    buy: Some(buy),
+                    sell: Some(sell),
+                },
+                true,
+                1,
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(hostile, before, "late refusal must not partially debit");
+
+        let final_pre = ClearWorkV3AccountV1 {
+            slice_cursor: 1,
+            ..pre
+        };
+        let mut incomplete = [0u8; CLEAR_WORK_V3_HEADER_BYTES + 32 + 32];
+        final_pre
+            .encode(&mut incomplete[..CLEAR_WORK_V3_HEADER_BYTES])
+            .unwrap();
+        incomplete[buy_at..buy_at + 8].copy_from_slice(&2u64.to_le_bytes());
+        incomplete[sell_at..sell_at + 8].copy_from_slice(&2u64.to_le_bytes());
+        let incomplete_before = incomplete;
+        let incomplete_final = ClearWorkV3AccountV1 {
+            reward_remaining: 11,
+            reward_earned: 3,
+            slice_cursor: 2,
+            phase: 3,
+            ..final_pre
+        };
+        assert_eq!(
+            replace_clear_work_v3_slice_state(
+                &mut incomplete,
+                final_pre,
+                incomplete_final,
+                ClearWorkSliceDebitsV1 {
+                    buy: Some(ClearWorkSliceDebitV1 {
+                        quantity: 1,
+                        ..buy
+                    }),
+                    sell: Some(ClearWorkSliceDebitV1 {
+                        quantity: 1,
+                        ..sell
+                    }),
+                },
+                true,
+                1,
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(incomplete, incomplete_before);
     }
 
     #[test]
