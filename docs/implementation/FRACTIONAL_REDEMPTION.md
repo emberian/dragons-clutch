@@ -1,10 +1,11 @@
 # Exact fractional redemption for native B-spline Eggs
 
-Status: **RUNTIME CONTRACT PROMOTED / SBF DISABLED** (2026-08-23).
+Status: **RUNTIME CONTRACT PROMOTED / COMPLETE ROUTES STAGED-DISABLED** (2026-08-23).
 `crates/clutch-fractional-redemption-runtime` now owns the safe `no_std`,
 no-allocation, fixed-layout transition and account contract. Intent family
 79/v1 and current accounts `0xa4/v2`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2`
-remain `ReservedDisabled`; no Solana route or release capability is enabled.
+remain `ReservedDisabled`; the complete exact-internal, exact-bearer, and
+claims-exhausted handlers are present, but no release capability is enabled.
 `research/fractional-redemption` remains the
 derivation and exhaustive small-domain model, not a second runtime truth.
 
@@ -312,10 +313,12 @@ The claimant must present or create the credit PDA. In one Solana transaction:
 1. authenticate Market, terms, immutable native Resolution, complete mint
    vector, Hoard, claimant source/destination, credit, aggregate credit ledger,
    and replay state;
-2. bind canonical ClaimLedger V3 materialized supply and reject any unprocessed
-   direct-burn donation delta;
+2. bind canonical ClaimLedger V3 materialized supply, synchronize it downward
+   to the full authenticated Token-2022 mint vector for prior direct holder
+   burns, and refuse any observed increase or inactive-outcome supply;
 3. compute and validate the entire prospective state;
-4. burn exactly `q` bearer Eggs with claimant authority;
+4. burn exactly `q` bearer Eggs with claimant authority and accept the exact
+   selected mint/source deltas before exposing a collateral request;
 5. externally transfer exactly `paid` collateral atoms from the Hoard under an
    accepted release-selected receipt (zero emits no CPI);
 6. commit claim supply, Hoard accounting, credit numerator, aggregate `K`, and
@@ -391,7 +394,12 @@ bind the Market, generation, both physical accounts, both terminal state IDs,
 and the ClaimLedger retirement transition before either account is deleted.
 Each account refunds only its own stored rent payer; hostile or unsolicited
 lamports go to the frozen neutral sink. The executable route remains disabled
-until that typed Product authorization seam is integrated.
+until that typed Product authorization seam is integrated. Fractional projects
+the terminal receipt, committing both physical accounts and terminal state
+IDs, the ClaimLedger post/transition IDs, both exact payer/neutral rent splits,
+and a separately adapter-authenticated Fractional runtime/capability release
+ID. Product consumes that receipt; it cannot invent a substitute release or
+reuse the Realm collateral release retained by the policy.
 
 ## 6. Selected runtime contract and activation boundary
 
@@ -416,18 +424,22 @@ arithmetic truth. The runtime does not claim that a particular reachable
 B-spline family has a smaller universal lot without the corresponding gcd
 evidence.
 
-The exact-internal SBF action-2 handler is present but capability-disabled
-until Product lands the canonical Foundation, Resolution activation, and
-five-family admission producers needed by action 1. Bearer activation still
-requires the real Token-2022 burn adapter, Realm-selected collateral CPI
-composer, canonical Resolution projection, Position/Replay V3 writer,
-ClaimLedger V3/Hoard V2 atomic writeback, rent admission, release capability,
-and local-bank adversarial execution. Family 79/v1 stays
+The exact-internal action-2, exact-bearer action-3, and claims-exhausted
+action-9 SBF handlers are present but capability-disabled until Product lands
+the canonical Foundation, Resolution activation, and five-family admission
+producer needed by action 1. Action 3 already composes the real Token-2022
+burn adapter and Realm-selected collateral CPI, orders burn acceptance before
+collateral request exposure, and writes `0xa5`, ClaimLedger V3, and Hoard V2
+atomically. Action 9 advances only `0xa5` and ClaimLedger after exact canonical
+supply reaches zero; it requires neither a signer nor bearer-release authority.
+Release-profile admission and local-bank adversarial execution remain open.
+Family 79/v1 stays
 `ReservedDisabled` until those boundaries are integrated and reviewed.
 
-## 7. Executed evidence
+## 7. Evidence and intentionally deferred validation
 
-The standalone crate currently has 13 host tests:
+The standalone research model's prior promotion evidence includes 13 host
+tests:
 
 - exhaustive resolved and reachable-family gcd lot minimality through `D=24`;
 - exhaustive structured universal-lot minimality over small integer simplexes;
@@ -447,3 +459,11 @@ The standalone crate currently has 13 host tests:
 
 This is **HOST-TESTED model evidence**, not a proof, SBF execution, audit,
 deployment, or source-to-runtime refinement result.
+
+The promoted runtime contract now also carries 17 authored adversarial tests.
+This tranche adds exact two-phase bearer-burn binding, prior direct-burn supply
+synchronization, hostile observed-supply refusal, full post-burn vector
+refusal, dynamic account-geometry checks, and release-bound terminal/rent
+receipt checks. Per the implementation-cycle instruction, none of those tests,
+the build, or a validator was run for this tranche; validation is deliberately
+deferred rather than implied by their presence.
