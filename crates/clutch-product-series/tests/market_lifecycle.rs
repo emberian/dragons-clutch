@@ -138,6 +138,37 @@ fn obligation_admission_is_exact_and_replay_sequenced() {
 }
 
 #[test]
+fn live_wrapper_terminal_persists_only_the_product_projection_receipt() {
+    let link = active_link();
+    let admitted = link
+        .admit_obligation(SeriesLinkObligationAdmissionProjectionV1 {
+            link_semantic_id: link.semantic_id().unwrap(),
+            obligation: SeriesLinkObligationV1::Wrapper,
+            link_transition_sequence: 2,
+            owner_admission_receipt_id: id(29),
+        })
+        .unwrap();
+    let terminal = SeriesLinkObligationTerminalProjectionV1 {
+        link_semantic_id: admitted.semantic_id().unwrap(),
+        obligation: SeriesLinkObligationV1::Wrapper,
+        disposition: SeriesLinkObligationDispositionV1::Terminal,
+        link_transition_sequence: 3,
+        owner_terminal_receipt_id: id(30),
+    };
+    let terminal_projection_id = terminal.id().unwrap();
+    let retired = admitted.consume_obligation(terminal).unwrap();
+
+    assert_eq!(
+        retired.obligation_terminal_receipt_id(SeriesLinkObligationV1::Wrapper),
+        terminal_projection_id
+    );
+    assert_eq!(
+        retired.consume_obligation(terminal),
+        Err(Error::WorkStateMismatch)
+    );
+}
+
+#[test]
 fn disabled_and_enabled_unfounded_require_authenticated_absence() {
     let link = active_link();
     let wrong = SeriesLinkObligationTerminalProjectionV1 {
