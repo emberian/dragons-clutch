@@ -1130,6 +1130,26 @@ pub(crate) trait AuthenticatedSeriesFailureArchivePostwriteV2 {
     }
 }
 
+/// Default-refusing Failure Begin owner for the sole exclusive link pin.
+pub(crate) trait AuthenticatedSeriesFailureSessionBeginV2 {
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_series_failure_session_begin_v2(
+        &self,
+        _root_account: Pubkey,
+        _root_authentication_id: ContentId,
+        _link_account: Pubkey,
+        _link_authentication_id: ContentId,
+        _series_plan_id: SeriesPlanV5Id,
+        _ordinal: u32,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _source_occurrence_id: SourceOccurrenceV1Id,
+        _begin_admission_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
 /// Private Product postwrite proving one exact Failure session pin was released.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSeriesFailureSessionReleaseV1 {
@@ -3499,28 +3519,100 @@ pub(crate) fn terminalize_series_wrapper_obligation_v1<
     })
 }
 
-/// Promote an authenticated active link into a private Failure pin successor.
-pub(crate) fn pin_series_market_link_failure_v1<'next>(
+/// Promote an exact unresolved Market/link pair into one exclusive Failure pin.
+///
+/// The root is hostile-reauthenticated read-only in this call. Once Resolution
+/// has been recorded, its three persistent fields permanently refuse another
+/// subordinate session even after a prior cell was archived and the link pin
+/// released.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pin_series_market_link_failure_v1<
+    'next,
+    A: AuthenticatedSeriesFailureSessionBeginV2 + ?Sized,
+>(
     program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    authenticated: AuthenticatedSeriesMarketLinkV1<'_>,
-    failure_begin_receipt_id: ContentId,
-    rebound_output: &'next mut SeriesMarketLinkAccountV1,
+    root_account: &AccountInfo<'_>,
+    authenticated_root: AuthenticatedMarketLifecycleRootV1<'_>,
+    link_account: &AccountInfo<'_>,
+    authenticated_link: AuthenticatedSeriesMarketLinkV1<'_>,
+    begin_admission_receipt_id: ContentId,
+    authority: &A,
+    root_rebound_output: &mut MarketLifecycleRootAccountV1,
+    link_rebound_output: &'next mut SeriesMarketLinkAccountV1,
 ) -> Outcome<AuthenticatedSeriesMarketLinkV1<'next>> {
+    require_live_content_id(begin_admission_receipt_id)?;
+    let root_binding = authenticated_root.state().binding();
+    let live_root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        root_account,
+        root_binding.market_instance_id,
+        root_binding.generation,
+        false,
+        root_rebound_output,
+    )?;
+    let link_binding = authenticated_link.state().binding();
+    let root_binding_id = root_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_unresolved_market_resolution_v1(
+        live_root.state().resolution_semantic_id(),
+        live_root.state().resolution_data_id(),
+        live_root.state().resolution_activation_receipt_id(),
+    )?;
     require(
-        authenticated.state().phase() == SeriesMarketLinkPhaseV1::Active,
+        !authenticated_root.is_writable()
+            && live_root.account() == authenticated_root.account()
+            && live_root.owner_program() == authenticated_root.owner_program()
+            && live_root.state() == authenticated_root.state()
+            && live_root.observed_lamports() == authenticated_root.observed_lamports()
+            && live_root.data_id() == authenticated_root.data_id()
+            && live_root.authentication_id() == authenticated_root.authentication_id()
+            && root_account.key != link_account.key
+            && live_root.state().phase() == MarketLifecyclePhaseV1::Active
+            && authenticated_link.is_writable()
+            && authenticated_link.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && authenticated_link.state().active_failure_sessions() == 0
+            && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+            && link_binding.market_binding_id == root_binding_id
+            && link_binding.market_instance_id == root_binding.market_instance_id
+            && link_binding.generation == root_binding.generation,
         ClutchError::MismatchedState,
     )?;
-    let successor = authenticated
+    authority.authenticate_series_failure_session_begin_v2(
+        *root_account.key,
+        live_root.authentication_id(),
+        *link_account.key,
+        authenticated_link.authentication_id(),
+        link_binding.series_plan_id,
+        link_binding.ordinal,
+        link_binding.market_instance_id,
+        link_binding.generation,
+        link_binding.source_occurrence_id,
+        begin_admission_receipt_id,
+    )?;
+    let successor = authenticated_link
         .state()
-        .pin_failure_session(failure_begin_receipt_id)
+        .pin_failure_session(begin_admission_receipt_id)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     write_series_market_link_v1(
         program_id,
-        account,
-        authenticated,
+        link_account,
+        authenticated_link,
         &successor,
-        rebound_output,
+        link_rebound_output,
+    )
+}
+
+fn require_unresolved_market_resolution_v1(
+    resolution_semantic_id: ContentId,
+    resolution_data_id: ContentId,
+    resolution_activation_receipt_id: ContentId,
+) -> Outcome<()> {
+    require(
+        resolution_semantic_id == ContentId::ZERO
+            && resolution_data_id == ContentId::ZERO
+            && resolution_activation_receipt_id == ContentId::ZERO,
+        ClutchError::MismatchedState,
     )
 }
 
@@ -3674,4 +3766,26 @@ const fn series_link_status_byte(status: SeriesLinkObligationStatusV1) -> u8 {
 
 fn liveness_id(key: &Pubkey) -> LivenessId {
     LivenessId::from_bytes(key.to_bytes())
+}
+
+#[cfg(test)]
+mod adversarial_resolution_repin_tests {
+    use super::*;
+
+    #[test]
+    fn any_persisted_resolution_field_permanently_refuses_failure_repin() {
+        assert!(require_unresolved_market_resolution_v1(
+            ContentId::ZERO,
+            ContentId::ZERO,
+            ContentId::ZERO,
+        )
+        .is_ok());
+        for fields in [
+            (ContentId::from_bytes([1; 32]), ContentId::ZERO, ContentId::ZERO),
+            (ContentId::ZERO, ContentId::from_bytes([2; 32]), ContentId::ZERO),
+            (ContentId::ZERO, ContentId::ZERO, ContentId::from_bytes([3; 32])),
+        ] {
+            assert!(require_unresolved_market_resolution_v1(fields.0, fields.1, fields.2).is_err());
+        }
+    }
 }
