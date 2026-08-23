@@ -10,7 +10,8 @@
 
 use crate::{
     owner_credit_atoms, owner_debit_atoms, owner_rounding_residue_price_units, Amount, Error,
-    OwnerSettlementCreateFundingV1, OwnerSettlementDispositionV1, Result, SelectedOwnerFeeV1,
+    AuthenticatedPositionV3, OwnerSettlementCreateFundingV1, OwnerSettlementDispositionV1,
+    PositionSettlementPoststateV3, Result, SelectedOwnerFeeV1, SettlementCashPotV1,
     SettlementSideV1, MAX_ORDERS,
 };
 
@@ -310,6 +311,29 @@ pub struct OwnerSettlementAccumulatorV2 {
     pub state: u8,
 }
 
+/// Immutable terminal projection from one exact finalized V2 row.
+///
+/// This value contains no account/PDA authority. Retirement and fee adapters
+/// must bind its exact body to the strictly decoded `0x81/2` account and the
+/// canonical finalized-row data ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementTerminalProjectionV2 {
+    expectation: OwnerSettlementExpectationV2,
+    finalized_body: [u8; OWNER_SETTLEMENT_BODY_V2_BYTES],
+}
+
+impl OwnerSettlementTerminalProjectionV2 {
+    /// Immutable presence-explicit selected expectation.
+    pub const fn expectation(&self) -> OwnerSettlementExpectationV2 {
+        self.expectation
+    }
+
+    /// Exact canonical state-one row body.
+    pub const fn finalized_body(&self) -> &[u8; OWNER_SETTLEMENT_BODY_V2_BYTES] {
+        &self.finalized_body
+    }
+}
+
 impl OwnerSettlementAccumulatorV2 {
     /// Create an empty V2 accumulator.
     pub fn new(expectation: OwnerSettlementExpectationV2) -> Result<Self> {
@@ -322,6 +346,18 @@ impl OwnerSettlementAccumulatorV2 {
             completed_sell_order_mask: 0,
             consumed_slice_count: 0,
             state: 0,
+        })
+    }
+
+    /// Project one finalized row for typed fee and retirement joins.
+    pub fn terminal_projection(self) -> Result<OwnerSettlementTerminalProjectionV2> {
+        self.validate()?;
+        if self.state != 1 {
+            return Err(Error::Incomplete);
+        }
+        Ok(OwnerSettlementTerminalProjectionV2 {
+            expectation: self.expectation,
+            finalized_body: self.encode_body()?,
         })
     }
 
@@ -1579,6 +1615,173 @@ pub fn project_owner_receipt_end_v2(
         receipt_data_id: receipt.receipt_data_id,
         receipt_accounting_id: receipt.receipt_accounting_id,
         receipt_accounted_end_mask: receipt.accounted_end_mask | receipt.side_mask(),
+    })
+}
+
+/// Hash boundary for the canonical finalized V2 owner-row data ID.
+pub trait OwnerFinalizedRowDataHashV2 {
+    /// Compute SHA-256 over the exact domain followed by the exact row body.
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32];
+}
+
+/// Derive the action-38 transition identity from one exact terminal row body.
+pub fn derive_owner_finalized_row_data_id_v2<H: OwnerFinalizedRowDataHashV2>(
+    finalized_body: &[u8; OWNER_SETTLEMENT_BODY_V2_BYTES],
+    hash: &H,
+) -> Result<[u8; 32]> {
+    let row = OwnerSettlementAccumulatorV2::decode_body(finalized_body)?;
+    if row.state != 1 {
+        return Err(Error::Incomplete);
+    }
+    let data_id = hash.sha256(OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V2, finalized_body);
+    if data_id == [0; 32] {
+        return Err(Error::InvalidIdentity);
+    }
+    Ok(data_id)
+}
+
+/// Structural V2 row, Position, and cash-pot realization.
+///
+/// This plan is not execution authority. The live General composer must
+/// rederive it from strictly decoded accounts, join the fee runtime's typed
+/// payer-allocation deletion, and bind purpose Replay V3 before any write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerCashRealizationPlanV2 {
+    owner_settlement_account: [u8; 32],
+    expectation: OwnerSettlementExpectationV2,
+    owner_settlement_body: [u8; OWNER_SETTLEMENT_BODY_V2_BYTES],
+    finalized_row_data_id: [u8; 32],
+    position: PositionSettlementPoststateV3,
+    settlement_cash_pot: SettlementCashPotV1,
+    disposition: OwnerSettlementDispositionV1,
+}
+
+impl OwnerCashRealizationPlanV2 {
+    /// V2 owner row to compare-and-write.
+    pub const fn owner_settlement_account(&self) -> [u8; 32] {
+        self.owner_settlement_account
+    }
+
+    /// Exact immutable expectation selected before accounting began.
+    pub const fn expectation(&self) -> OwnerSettlementExpectationV2 {
+        self.expectation
+    }
+
+    /// Exact finalized 288-byte V2 row body.
+    pub const fn owner_settlement_body(&self) -> &[u8; OWNER_SETTLEMENT_BODY_V2_BYTES] {
+        &self.owner_settlement_body
+    }
+
+    /// Canonical action-38 transition identity derived from the final row.
+    pub const fn finalized_row_data_id(&self) -> [u8; 32] {
+        self.finalized_row_data_id
+    }
+
+    /// Exact canonical Position V3 successor.
+    pub const fn position(&self) -> PositionSettlementPoststateV3 {
+        self.position
+    }
+
+    /// Exact candidate-wide cash-pot successor.
+    pub const fn settlement_cash_pot(&self) -> SettlementCashPotV1 {
+        self.settlement_cash_pot
+    }
+
+    /// Exact Floor/Ceil owner disposition used for every poststate.
+    pub const fn disposition(&self) -> OwnerSettlementDispositionV1 {
+        self.disposition
+    }
+}
+
+/// Structurally realize one complete presence-explicit owner row.
+///
+/// The row's immutable expectation is the only fee amount consumed here. A
+/// sell-heavy owner refuses without consuming state until prior buyer debits
+/// or opening merge proceeds make its exact credit executable. Finalization
+/// never persists another opaque ID in the 288-byte row.
+pub fn prepare_realize_owner_cash_v2<H: OwnerFinalizedRowDataHashV2>(
+    account: OwnerSettlementAccountProjectionV2,
+    position: AuthenticatedPositionV3,
+    pot: SettlementCashPotV1,
+    hash: &H,
+) -> Result<OwnerCashRealizationPlanV2> {
+    pot.validate()?;
+    position.validate_writable()?;
+    let position_prestate = position;
+    let expected = account.accumulator.expectation;
+    expected.validate()?;
+    let position_fields = position.semantic.fields();
+    if pot.state != 0
+        || position.general_market_runtime != expected.market
+        || position_fields.owner.bytes() != expected.owner
+        || pot.expectation.market != expected.market
+        || pot.expectation.epoch != expected.epoch
+        || pot.expectation.candidate != expected.candidate
+        || pot.expectation.owner_order_set_digest != expected.owner_order_set_digest
+        || account.address == position.account
+    {
+        return Err(Error::AuthorityUnavailable);
+    }
+
+    let mut next_row = account.accumulator;
+    let disposition = next_row.finalize(
+        position_fields.cash_atoms,
+        position_fields.reserved_cash_atoms,
+    )?;
+    if disposition.selected_fee_atoms != expected.selected_fee_atoms {
+        return Err(Error::InvariantViolation);
+    }
+    let consideration_debit = disposition
+        .debit_atoms
+        .checked_sub(disposition.selected_fee_atoms)
+        .ok_or(Error::InvariantViolation)?;
+    let available_consideration_atoms = pot
+        .available_consideration_atoms
+        .checked_add(consideration_debit)
+        .ok_or(Error::ArithmeticOverflow)?
+        .checked_sub(disposition.credit_atoms)
+        .ok_or(Error::SettlementLiquidityUnavailable)?;
+    let mut next_pot = pot;
+    next_pot.available_consideration_atoms = available_consideration_atoms;
+    next_pot.collected_fee_atoms = next_pot
+        .collected_fee_atoms
+        .checked_add(disposition.selected_fee_atoms)
+        .ok_or(Error::ArithmeticOverflow)?;
+    next_pot.realized_rounding_price_units = next_pot
+        .realized_rounding_price_units
+        .checked_add(disposition.residue_price_units)
+        .ok_or(Error::ArithmeticOverflow)?;
+    next_pot.finalized_owner_count = next_pot
+        .finalized_owner_count
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if next_pot.finalized_owner_count == next_pot.expectation.owner_count {
+        next_pot.state = 1;
+    }
+    next_pot.validate()?;
+
+    let position = position_prestate.settlement_poststate(
+        disposition.position_cash_atoms,
+        disposition.position_reserved_cash_atoms,
+        position_fields.native_eggs,
+    )?;
+    position.validate_successor_of(
+        position_prestate,
+        disposition.position_cash_atoms,
+        disposition.position_reserved_cash_atoms,
+        position_fields.native_eggs,
+    )?;
+    let owner_settlement_body = next_row.encode_body()?;
+    let finalized_row_data_id =
+        derive_owner_finalized_row_data_id_v2(&owner_settlement_body, hash)?;
+    Ok(OwnerCashRealizationPlanV2 {
+        owner_settlement_account: account.address,
+        expectation: expected,
+        owner_settlement_body,
+        finalized_row_data_id,
+        position,
+        settlement_cash_pot: next_pot,
+        disposition,
     })
 }
 

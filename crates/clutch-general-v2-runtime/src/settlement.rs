@@ -1194,8 +1194,6 @@ pub struct AccountReceiptEndTransitionInputV2<'a> {
     pub settlement: &'a CandidateSettlementProjectionV1,
     /// Initial Reservation bindings from the same frozen order set.
     pub reservation_book: &'a AuthenticatedReservationBookV1,
-    /// Canonical real-end ordinal derived from the settlement witness.
-    pub receipt_end_index: u16,
     /// Exact authenticated receipt prestate.
     pub receipt: AuthenticatedSettlementReceiptV2,
     /// Exact authenticated V2 owner-row prestate.
@@ -1333,12 +1331,45 @@ pub fn prepare_account_receipt_end_transition_v2(
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
 
-    let receipt_end = settlement.bind_receipt_end_account(
-        input.receipt_end_index,
-        input.receipt,
-    )?;
+    let mut receipt_end_index = None;
+    let mut candidate_end_index = 0u16;
+    while candidate_end_index < settlement.receipt_end_count {
+        let candidate_end = settlement
+            .receipt_end(candidate_end_index)
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        let candidate_order = settlement
+            .settlement_order_membership(candidate_end.order_index)
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        let expected_order_id = match candidate_end.side {
+            SettlementSideV1::Buy => input.receipt.buy_order_id,
+            SettlementSideV1::Sell => input.receipt.sell_order_id,
+        };
+        let expected_route = match candidate_end.route {
+            SettlementRouteV1::Direct => SettlementReceiptRouteV2::Direct,
+            SettlementRouteV1::SplitToBuy => SettlementReceiptRouteV2::SplitToBuy,
+            SettlementRouteV1::SellToMerge => SettlementReceiptRouteV2::SellToMerge,
+        };
+        if candidate_end.slice_index == input.receipt.slice_index
+            && candidate_end.owner.bytes() == input.owner_row.accumulator.expectation.owner
+            && candidate_order.order_id == expected_order_id
+            && input.receipt.route == expected_route
+            && input.receipt.outcome == candidate_end.outcome
+            && input.receipt.quantity == candidate_end.quantity
+        {
+            if receipt_end_index.is_some() {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            receipt_end_index = Some(candidate_end_index);
+        }
+        candidate_end_index = candidate_end_index
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    let receipt_end_index =
+        receipt_end_index.ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let receipt_end = settlement.bind_receipt_end_account(receipt_end_index, input.receipt)?;
     let derived_end = settlement
-        .receipt_end(input.receipt_end_index)
+        .receipt_end(receipt_end_index)
         .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
     let order = settlement
         .settlement_order_membership(derived_end.order_index)
