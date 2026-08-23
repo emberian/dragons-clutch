@@ -24,7 +24,7 @@ use crate::runtime_contract::{
 use crate::{is_zero, AdapterSha256V1, BoundDescriptorV1, Error, Key, Result};
 
 /// Maximum accounts accepted by any structured-claim route contract.
-pub const MAX_ROUTE_ACCOUNTS: usize = 21;
+pub const MAX_ROUTE_ACCOUNTS: usize = 32;
 
 /// One semantic role in the strict structured-claim account frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,6 +76,16 @@ pub enum AccountRoleV1 {
     VaultTombstone,
     /// Immutable General V2 MarketBinding PDA used by action 35.
     MarketBinding,
+    /// Immutable Realm selecting collateral semantics.
+    Realm,
+    /// Immutable Profile V2 selected by the Realm.
+    Profile,
+    /// Exact sealed CollateralPolicy V2 artifact.
+    CollateralPolicy,
+    /// Collateral token executable selected by the immutable Profile.
+    CollateralTokenProgram,
+    /// Stable General V2 MarketRuntime selected by MarketBinding.
+    MarketRuntime,
     /// Source full-width Position V3 for action 35.
     SourcePositionV3,
     /// Source purpose-owned Replay V3 for action 35.
@@ -94,6 +104,10 @@ pub enum AccountRoleV1 {
     NativeClaimBasisArtifact,
     /// Exact MarketInstanceV2 preimage artifact.
     MarketInstanceArtifact,
+    /// Full-width Hoard V2 aggregate owner.
+    HoardV2,
+    /// Full-width ClaimLedger V3 aggregate owner.
+    ClaimLedgerV3,
 }
 
 /// Borrowed Solana account metadata and bytes.
