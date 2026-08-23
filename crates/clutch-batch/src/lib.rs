@@ -27,11 +27,14 @@
 //! Both are IMPLEMENTED host-model code.  Neither is verified, and neither is
 //! the SVM relation.
 
+pub mod dealer_leg_v2;
 pub mod relation_v1;
 pub mod relation_v1_stream;
 pub mod relation_v1_stream_v2;
 pub mod relation_v2;
 
+#[cfg(test)]
+mod dealer_leg_v2_tests;
 #[cfg(test)]
 mod relation_v1_stream_v2_tests;
 #[cfg(test)]

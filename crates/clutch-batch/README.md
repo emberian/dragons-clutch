@@ -91,6 +91,28 @@ allocation, fees, dealer transitions, account codecs, settlement authorization,
 lifecycle/SBF dispatch, and beneficial-controller identity are not implemented
 by this core.
 
+## Pure covered-dealer join (`dealer_leg_v2`)
+
+`src/dealer_leg_v2.rs` is an additive, registry-independent relation over a
+validated RelationV2 candidate. It derives the unique net dealer buy or sell in
+each outcome; a candidate cannot choose gross same-outcome dealer churn. The
+legacy RelationV2 verifier is unchanged as a public acceptance boundary and
+continues to refuse flows that need this counterparty.
+
+`MinimumGrossHamiltonV1` derives per-order cash from immutable sorted order IDs,
+dealer-filled units, residual buyer maxima, residual seller minima, and one net
+aggregate receipt. Buyer cash is Hamilton-allocated by residual capacity;
+seller excess above exact minima is Hamilton-allocated by native Egg atoms.
+Equal remainders prefer the smaller order ID. Candidate-supplied per-user cash
+does not exist, and any settlement copy can be checked against recomputation.
+Fees are summed and digest-bound separately and never enter dealer cash.
+
+The joined digest commits the RelationV2 semantic digest, immutable facility
+and policy identities, pre-generation, policy version, receipt, derived trade,
+and every canonical row. It excludes proof bodies and derived allocation bytes.
+This module still contains no accounts, custody, token logic, registry lookup,
+authorization, lifecycle transition, or SBF dispatch.
+
 Not implemented, and refused rather than guessed: portfolio marginal lot
 rationing (`P-b` returns `PolicyVariantUnimplemented`), the `N-c` owner-aware
 decreasing-fixed-point capping rule (infeasible candidates are refused, not

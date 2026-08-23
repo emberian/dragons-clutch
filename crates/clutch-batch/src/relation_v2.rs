@@ -351,6 +351,22 @@ pub struct VerifiedEconomicsV2 {
     pub score: ScoreV2,
 }
 
+/// Validated owner-blind order flow before a counterparty relation closes it.
+///
+/// This is a crate-internal composition seam, not a weaker public verdict.
+/// [`verify_economic_candidate_v2`] still accepts only flows closed by the
+/// original RelationV2 equation. The covered dealer extension consumes this
+/// value and supplies its own independently checked conservation equation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnbalancedEconomicsV2 {
+    /// Aggregate filled user buy legs.
+    pub aggregate_buy_flow: [u64; MAX_OUTCOMES],
+    /// Aggregate filled user sell legs.
+    pub aggregate_sell_flow: [u64; MAX_OUTCOMES],
+    /// Full RelationV2 identity before any counterparty extension.
+    pub economic_candidate_digest: [u8; 32],
+}
+
 /// Every deterministic refusal in the first owner-blind core.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EconomicErrorV2 {
@@ -428,6 +444,74 @@ pub fn verify_economic_candidate_v2(
     price: &PricePreconditionV2,
     candidate: &EconomicCandidateV2,
 ) -> Result<VerifiedEconomicsV2, EconomicErrorV2> {
+    let unbalanced = derive_unbalanced_economics_v2(domain, book, price, candidate)?;
+    let buy_flow = unbalanced.aggregate_buy_flow;
+    let sell_flow = unbalanced.aggregate_sell_flow;
+
+    let mut direct_flow = [0u64; MAX_OUTCOMES];
+    let mut outcome = 0usize;
+    while outcome < domain.outcomes() {
+        let from_buy = buy_flow[outcome]
+            .checked_sub(candidate.virtual_split)
+            .ok_or(EconomicErrorV2::VirtualSplitExceedsBuy {
+                outcome: bounded_index(outcome)?,
+            })?;
+        let from_sell = sell_flow[outcome]
+            .checked_sub(candidate.virtual_merge)
+            .ok_or(EconomicErrorV2::VirtualMergeExceedsSell {
+                outcome: bounded_index(outcome)?,
+            })?;
+        let left = buy_flow[outcome]
+            .checked_add(candidate.virtual_merge)
+            .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
+        let right = sell_flow[outcome]
+            .checked_add(candidate.virtual_split)
+            .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
+        if left != right || from_buy != from_sell {
+            return Err(EconomicErrorV2::OutcomeConservationMismatch {
+                outcome: bounded_index(outcome)?,
+            });
+        }
+        direct_flow[outcome] = from_buy;
+        outcome += 1;
+    }
+
+    let digest = unbalanced.economic_candidate_digest;
+    let delta = CandidateDeltaV2 {
+        normalization_policy: NormalizationPolicyV2::OwnerBlindAggregate,
+        outcome_count: domain.outcome_count,
+        aggregate_buy_flow: buy_flow,
+        aggregate_sell_flow: sell_flow,
+        claimed_direct_flow: direct_flow,
+        virtual_split: candidate.virtual_split,
+        virtual_merge: candidate.virtual_merge,
+        candidate_digest: digest,
+    };
+    let score = score_candidate_v2(&delta).map_err(EconomicErrorV2::Score)?;
+    Ok(VerifiedEconomicsV2 {
+        outcome_count: domain.outcome_count,
+        aggregate_buy_flow: buy_flow,
+        aggregate_sell_flow: sell_flow,
+        direct_flow,
+        virtual_split: candidate.virtual_split,
+        virtual_merge: candidate.virtual_merge,
+        economic_candidate_digest: digest,
+        score,
+    })
+}
+
+/// Validate every RelationV2 input and derive user flow without declaring it
+/// conserved.
+///
+/// Only crate-owned counterparty relations may consume this seam. Returning a
+/// value here is not candidate acceptance: it deliberately carries no score or
+/// public verified type.
+pub(crate) fn derive_unbalanced_economics_v2(
+    domain: &EconomicDomainV2,
+    book: &EconomicBookV2,
+    price: &PricePreconditionV2,
+    candidate: &EconomicCandidateV2,
+) -> Result<UnbalancedEconomicsV2, EconomicErrorV2> {
     domain.validate()?;
     book.validate(domain)?;
     price.validate(domain)?;
@@ -523,55 +607,11 @@ pub fn verify_economic_candidate_v2(
         order_index += 1;
     }
 
-    let mut direct_flow = [0u64; MAX_OUTCOMES];
-    let mut outcome = 0usize;
-    while outcome < domain.outcomes() {
-        let from_buy = buy_flow[outcome]
-            .checked_sub(candidate.virtual_split)
-            .ok_or(EconomicErrorV2::VirtualSplitExceedsBuy {
-                outcome: bounded_index(outcome)?,
-            })?;
-        let from_sell = sell_flow[outcome]
-            .checked_sub(candidate.virtual_merge)
-            .ok_or(EconomicErrorV2::VirtualMergeExceedsSell {
-                outcome: bounded_index(outcome)?,
-            })?;
-        let left = buy_flow[outcome]
-            .checked_add(candidate.virtual_merge)
-            .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
-        let right = sell_flow[outcome]
-            .checked_add(candidate.virtual_split)
-            .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
-        if left != right || from_buy != from_sell {
-            return Err(EconomicErrorV2::OutcomeConservationMismatch {
-                outcome: bounded_index(outcome)?,
-            });
-        }
-        direct_flow[outcome] = from_buy;
-        outcome += 1;
-    }
-
     let digest = economic_candidate_digest(domain, book, price, candidate)?;
-    let delta = CandidateDeltaV2 {
-        normalization_policy: NormalizationPolicyV2::OwnerBlindAggregate,
-        outcome_count: domain.outcome_count,
+    Ok(UnbalancedEconomicsV2 {
         aggregate_buy_flow: buy_flow,
         aggregate_sell_flow: sell_flow,
-        claimed_direct_flow: direct_flow,
-        virtual_split: candidate.virtual_split,
-        virtual_merge: candidate.virtual_merge,
-        candidate_digest: digest,
-    };
-    let score = score_candidate_v2(&delta).map_err(EconomicErrorV2::Score)?;
-    Ok(VerifiedEconomicsV2 {
-        outcome_count: domain.outcome_count,
-        aggregate_buy_flow: buy_flow,
-        aggregate_sell_flow: sell_flow,
-        direct_flow,
-        virtual_split: candidate.virtual_split,
-        virtual_merge: candidate.virtual_merge,
         economic_candidate_digest: digest,
-        score,
     })
 }
 
@@ -682,7 +722,7 @@ const fn partial_byte(policy: PartialPolicy) -> u8 {
 /// Small, allocation-free SHA-256 state used solely for canonical semantic
 /// identities. The implementation follows FIPS 180-4 and has independent
 /// known-answer tests. It is ordinary safe Rust, not an FFI or runtime syscall.
-struct Sha256V2 {
+pub(crate) struct Sha256V2 {
     state: [u32; 8],
     block: [u8; 64],
     block_len: usize,
@@ -690,7 +730,7 @@ struct Sha256V2 {
 }
 
 impl Sha256V2 {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             state: [
                 0x6a09_e667,
@@ -708,7 +748,7 @@ impl Sha256V2 {
         }
     }
 
-    fn update(&mut self, input: &[u8]) -> Result<(), EconomicErrorV2> {
+    pub(crate) fn update(&mut self, input: &[u8]) -> Result<(), EconomicErrorV2> {
         let input_len =
             u64::try_from(input.len()).map_err(|_| EconomicErrorV2::ArithmeticOverflow)?;
         self.message_len = self
@@ -738,7 +778,7 @@ impl Sha256V2 {
         Ok(())
     }
 
-    fn finalize(mut self) -> Result<[u8; 32], EconomicErrorV2> {
+    pub(crate) fn finalize(mut self) -> Result<[u8; 32], EconomicErrorV2> {
         let bit_len = self
             .message_len
             .checked_mul(8)
