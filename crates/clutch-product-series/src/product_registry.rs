@@ -15,10 +15,9 @@ use clutch_source_plane_v3::{
 use crate::codec::{Reader, Writer};
 use crate::{
     content_id, CapabilitySemanticOwnersV2, ContentId, Error, EvidenceOnlyRecoveryPolicyId,
-    FixedCodec, MarketFamilyV1, NativeClaimBasisId, PriceMeasurePolicyV1Id,
-    QuantizedIntervalConsensusProfileV1, RealmCollateralProjectionV1,
-    RegistryCapabilityProfileV2Id, RegistryCapabilityProjectionV2, RegistryProgramReleaseV1Id,
-    Result, SeriesLinkObligationV1,
+    FixedCodec, NativeClaimBasisId, PriceMeasurePolicyV1Id, QuantizedIntervalConsensusProfileV1,
+    RealmCollateralProjectionV1, RegistryCapabilityProfileV2Id, RegistryCapabilityProjectionV2,
+    RegistryProgramReleaseV1Id, Result,
 };
 
 const PROFILE_MAGIC: [u8; 8] = *b"DCRCAPV2";
@@ -196,32 +195,6 @@ impl RegistryCapabilityProfileV2 {
         };
         profile.validate()?;
         Ok(profile)
-    }
-
-    /// Whether one occurrence family must emit a live terminal summary.
-    ///
-    /// Required families always return true. The only V2 optional families are
-    /// Dealer, Fractional, and Structured; false requires a live adapter to
-    /// authenticate their canonical zero-admission absence summary.
-    pub const fn market_family_enabled(&self, family: MarketFamilyV1) -> bool {
-        match family {
-            MarketFamilyV1::Fractional => self.enabled_optional_occurrence_families[1],
-            MarketFamilyV1::ClaimLedger
-            | MarketFamilyV1::Hoard
-            | MarketFamilyV1::General
-            | MarketFamilyV1::Failure
-            | MarketFamilyV1::Source
-            | MarketFamilyV1::Position => true,
-        }
-    }
-
-    /// Whether one Series-link-scoped attachment family is enabled.
-    pub const fn series_link_obligation_enabled(&self, obligation: SeriesLinkObligationV1) -> bool {
-        match obligation {
-            SeriesLinkObligationV1::Dealer => self.enabled_optional_occurrence_families[0],
-            SeriesLinkObligationV1::Structured => self.enabled_optional_occurrence_families[2],
-            SeriesLinkObligationV1::Liquidity | SeriesLinkObligationV1::Wrapper => true,
-        }
     }
 
     fn projection_with_id(

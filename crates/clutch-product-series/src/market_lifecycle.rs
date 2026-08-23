@@ -10,10 +10,12 @@
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    content_id, ContentId, Error, FixedCodec, MarketFoundationScheduleV1,
-    MarketFoundationScheduleV1Id, MarketInstanceV2Id, Result, SeriesFundingQuoteV2Id,
-    SeriesFundingTermsV2Id, SeriesMarketDispositionV1, SeriesMarketLinkV1Id, SeriesPlanV5Id,
-    SourceOccurrenceV1Id, MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
+    content_id, AuthenticatedMarketFamilyAuthorityV1, ContentId, Error, FixedCodec,
+    MarketFamilyAggregatorPhaseV1, MarketFamilyAggregatorV1, MarketFamilyV1,
+    MarketFoundationScheduleV1, MarketFoundationScheduleV1Id, MarketInstanceV2Id, Result,
+    SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id, SeriesMarketDispositionV1,
+    SeriesMarketLinkV1Id, SeriesPlanV5Id, SourceOccurrenceV1Id, MARKET_FAMILY_AGGREGATOR_BYTES_V1,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
     MARKET_FOUNDATION_SLOT_COUNT_V1,
 };
 
@@ -22,16 +24,16 @@ const ROOT_VERSION_V1: u16 = 1;
 const LINK_MAGIC_V1: [u8; 8] = *b"DCSMLKV1";
 const LINK_VERSION_V1: u16 = 1;
 const MARKET_BINDING_ID_COUNT_V1: usize = 30;
-const LINK_BINDING_ID_COUNT_V1: usize = 23;
+const LINK_BINDING_ID_COUNT_V1: usize = 25;
 
-/// Exact number of market-scoped terminal family summaries.
-pub const MARKET_FAMILY_COUNT_V1: usize = 7;
+/// Exact number of mandatory shared-core terminal owners outside the product-family aggregator.
+pub const MARKET_SHARED_CORE_COUNT_V1: usize = 5;
 /// Exact number of Series-link-scoped attachment obligations.
 pub const SERIES_LINK_OBLIGATION_COUNT_V1: usize = 4;
 /// Exact shared `0xaa` semantic body width.
-pub const MARKET_LIFECYCLE_ROOT_BYTES_V1: usize = 1_812;
+pub const MARKET_LIFECYCLE_ROOT_BYTES_V1: usize = 2_352;
 /// Exact per-Series `0xad` semantic body width.
-pub const SERIES_MARKET_LINK_BYTES_V1: usize = 1_080;
+pub const SERIES_MARKET_LINK_BYTES_V1: usize = 1_104;
 
 /// Shared Market binding identity domain.
 pub const MARKET_LIFECYCLE_BINDING_DOMAIN_V1: &[u8] = b"dragons-clutch/market-lifecycle-binding/v1";
@@ -478,37 +480,31 @@ impl MarketFoundationStepProjectionV1 {
     }
 }
 
-/// Independently owned market-scoped family summary.
+/// Mandatory shared-core owner outside the optional product-family aggregator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub enum MarketFamilyV1 {
-    /// Aggregate native-claim liability owner.
+pub enum MarketSharedCoreV1 {
+    /// Aggregate native ClaimLedger V3.
     ClaimLedger = 0,
-    /// Classified collateral/custody owner.
+    /// Hoard V2 collateral/custody root.
     Hoard = 1,
-    /// Exhaustive General market summary over every admitted Epoch/root.
-    General = 2,
-    /// Exhaustive Failure market summary over every interval session.
-    Failure = 3,
-    /// Exhaustive Source market summary over every admitted generation/window.
-    Source = 4,
-    /// Exhaustive Position-family market summary.
-    Position = 5,
-    /// Fractional a4/a5 retirement owner.
-    Fractional = 6,
+    /// Exhaustive Failure market root.
+    Failure = 2,
+    /// Exhaustive Source market root.
+    Source = 3,
+    /// Exhaustive Position market root.
+    Position = 4,
 }
 
-impl MarketFamilyV1 {
+impl MarketSharedCoreV1 {
     /// Stable array index.
     pub const fn index(self) -> usize {
         match self {
             Self::ClaimLedger => 0,
             Self::Hoard => 1,
-            Self::General => 2,
-            Self::Failure => 3,
-            Self::Source => 4,
-            Self::Position => 5,
-            Self::Fractional => 6,
+            Self::Failure => 2,
+            Self::Source => 3,
+            Self::Position => 4,
         }
     }
 
@@ -516,140 +512,72 @@ impl MarketFamilyV1 {
         match self {
             Self::ClaimLedger => 0,
             Self::Hoard => 1,
-            Self::General => 2,
-            Self::Failure => 3,
-            Self::Source => 4,
-            Self::Position => 5,
-            Self::Fractional => 6,
-        }
-    }
-
-    fn decode(value: u8) -> Result<Self> {
-        match value {
-            0 => Ok(Self::ClaimLedger),
-            1 => Ok(Self::Hoard),
-            2 => Ok(Self::General),
-            3 => Ok(Self::Failure),
-            4 => Ok(Self::Source),
-            5 => Ok(Self::Position),
-            6 => Ok(Self::Fractional),
-            _ => Err(Error::InvalidParameter),
+            Self::Failure => 2,
+            Self::Source => 3,
+            Self::Position => 4,
         }
     }
 }
 
-/// How a market family discharged its exhaustive summary.
+/// Typed structural terminal evidence for one mandatory shared-core owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum MarketFamilyDispositionV1 {
-    /// Enabled family proved every admitted child terminal.
-    Terminal = 1,
-    /// Capability-disabled optional family proved canonical absence/zero admissions.
-    Absent = 2,
-}
-
-impl MarketFamilyDispositionV1 {
-    const fn byte(self) -> u8 {
-        match self {
-            Self::Terminal => 1,
-            Self::Absent => 2,
-        }
-    }
-}
-
-/// Structural family projection promoted privately by the SBF owner adapter.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MarketFamilyTerminalProjectionV1 {
+pub struct MarketSharedCoreTerminalProjectionV1 {
     id: ContentId,
-    binding_id: ContentId,
-    family: MarketFamilyV1,
-    disposition: MarketFamilyDispositionV1,
+    market_binding_id: ContentId,
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
-    root_transition_sequence: u64,
-    owner_program_id: ContentId,
-    owner_release_id: ContentId,
+    owner: MarketSharedCoreV1,
     owner_account_id: ContentId,
+    owner_release_id: ContentId,
     owner_terminal_receipt_id: ContentId,
-    terminal_state_ids: [ContentId; 2],
+    root_transition_sequence: u64,
 }
 
-impl MarketFamilyTerminalProjectionV1 {
-    /// Construct a deterministic structural projection.
+impl MarketSharedCoreTerminalProjectionV1 {
+    /// Construct a deterministic projection; live SBF promotes it only from a private owner receipt.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         binding: MarketLifecycleBindingV1,
-        family: MarketFamilyV1,
-        disposition: MarketFamilyDispositionV1,
-        root_transition_sequence: u64,
-        owner_program_id: ContentId,
-        owner_release_id: ContentId,
+        owner: MarketSharedCoreV1,
         owner_account_id: ContentId,
+        owner_release_id: ContentId,
         owner_terminal_receipt_id: ContentId,
-        terminal_state_ids: [ContentId; 2],
+        root_transition_sequence: u64,
     ) -> Result<Self> {
         binding.validate()?;
+        let ids = [
+            owner_account_id,
+            owner_release_id,
+            owner_terminal_receipt_id,
+        ];
+        for id in ids {
+            id.validate()?;
+        }
+        require_pairwise_distinct(&ids)?;
         if root_transition_sequence == 0 {
             return Err(Error::InvalidParameter);
         }
-        let owner_ids = [
-            owner_program_id,
-            owner_release_id,
-            owner_account_id,
-            owner_terminal_receipt_id,
-        ];
-        for id in owner_ids {
-            id.validate()?;
-        }
-        require_pairwise_distinct(&owner_ids)?;
-        if family == MarketFamilyV1::Fractional {
-            if disposition == MarketFamilyDispositionV1::Terminal {
-                terminal_state_ids[0].validate()?;
-                terminal_state_ids[1].validate()?;
-                if terminal_state_ids[0] == terminal_state_ids[1] {
-                    return Err(Error::MismatchedArtifact);
-                }
-            } else if terminal_state_ids != [ContentId::ZERO; 2] {
-                return Err(Error::NonCanonicalPadding);
-            }
-        } else if terminal_state_ids != [ContentId::ZERO; 2] {
-            return Err(Error::NonCanonicalPadding);
-        }
-        let binding_id = binding.id()?;
-        let mut body = [0u8; 282];
-        body[0] = family.byte();
-        body[1] = disposition.byte();
-        body[2..34].copy_from_slice(&binding_id.bytes());
-        body[34..66].copy_from_slice(&binding.market_instance_id.bytes());
-        body[66..74].copy_from_slice(&binding.generation.to_le_bytes());
-        body[74..82].copy_from_slice(&root_transition_sequence.to_le_bytes());
-        let ids = [
-            owner_program_id,
-            owner_release_id,
-            owner_account_id,
-            owner_terminal_receipt_id,
-            terminal_state_ids[0],
-            terminal_state_ids[1],
-        ];
-        let mut at = 82usize;
-        for id in ids {
-            body[at..at + 32].copy_from_slice(&id.bytes());
-            at += 32;
-        }
-        let id = content_id(b"dragons-clutch/market-family-terminal/v1", &body);
+        let market_binding_id = binding.id()?;
+        let mut body = [0u8; 177];
+        body[0] = owner.byte();
+        body[1..33].copy_from_slice(&market_binding_id.bytes());
+        body[33..65].copy_from_slice(&binding.market_instance_id.bytes());
+        body[65..73].copy_from_slice(&binding.generation.to_le_bytes());
+        body[73..105].copy_from_slice(&owner_account_id.bytes());
+        body[105..137].copy_from_slice(&owner_release_id.bytes());
+        body[137..169].copy_from_slice(&owner_terminal_receipt_id.bytes());
+        body[169..177].copy_from_slice(&root_transition_sequence.to_le_bytes());
+        let id = content_id(b"dragons-clutch/market-shared-core-terminal/v1", &body);
         Ok(Self {
             id,
-            binding_id,
-            family,
-            disposition,
+            market_binding_id,
             market_instance_id: binding.market_instance_id,
             generation: binding.generation,
-            root_transition_sequence,
-            owner_program_id,
-            owner_release_id,
+            owner,
             owner_account_id,
+            owner_release_id,
             owner_terminal_receipt_id,
-            terminal_state_ids,
+            root_transition_sequence,
         })
     }
 
@@ -657,49 +585,37 @@ impl MarketFamilyTerminalProjectionV1 {
     pub const fn id(self) -> ContentId {
         self.id
     }
-    /// Binding identity.
-    pub const fn binding_id(self) -> ContentId {
-        self.binding_id
+    /// Shared Market binding.
+    pub const fn market_binding_id(self) -> ContentId {
+        self.market_binding_id
     }
-    /// Market family.
-    pub const fn family(self) -> MarketFamilyV1 {
-        self.family
-    }
-    /// Terminal or authenticated absence.
-    pub const fn disposition(self) -> MarketFamilyDispositionV1 {
-        self.disposition
-    }
-    /// Full Market identity.
+    /// Shared Market.
     pub const fn market_instance_id(self) -> MarketInstanceV2Id {
         self.market_instance_id
     }
-    /// Failure/Resolution generation.
+    /// Failure/Source generation.
     pub const fn generation(self) -> u64 {
         self.generation
+    }
+    /// Mandatory core owner.
+    pub const fn owner(self) -> MarketSharedCoreV1 {
+        self.owner
+    }
+    /// Exact owner account.
+    pub const fn owner_account_id(self) -> ContentId {
+        self.owner_account_id
+    }
+    /// Exact owner release.
+    pub const fn owner_release_id(self) -> ContentId {
+        self.owner_release_id
+    }
+    /// Exact terminal receipt.
+    pub const fn owner_terminal_receipt_id(self) -> ContentId {
+        self.owner_terminal_receipt_id
     }
     /// Expected Product root transition.
     pub const fn root_transition_sequence(self) -> u64 {
         self.root_transition_sequence
-    }
-    /// Owner program.
-    pub const fn owner_program_id(self) -> ContentId {
-        self.owner_program_id
-    }
-    /// Owner release.
-    pub const fn owner_release_id(self) -> ContentId {
-        self.owner_release_id
-    }
-    /// Owner account.
-    pub const fn owner_account_id(self) -> ContentId {
-        self.owner_account_id
-    }
-    /// Owner terminal receipt.
-    pub const fn owner_terminal_receipt_id(self) -> ContentId {
-        self.owner_terminal_receipt_id
-    }
-    /// Family-owned exact terminal state IDs.
-    pub const fn terminal_state_ids(self) -> [ContentId; 2] {
-        self.terminal_state_ids
     }
 }
 
@@ -757,6 +673,116 @@ impl SeriesLinkObligationDispositionV1 {
     }
 }
 
+/// Exhaustive immutable/current state of one Series-link obligation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SeriesLinkObligationStatusV1 {
+    /// The central capability profile excludes the obligation.
+    CapabilityDisabled = 0,
+    /// The capability exists, but the immutable attachment admits no child.
+    EnabledNeverFounded = 1,
+    /// The attachment admitted a child which still has work or custody.
+    Live = 2,
+    /// The exact live child terminated or authenticated absence was consumed.
+    Terminal = 3,
+}
+
+impl SeriesLinkObligationStatusV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::CapabilityDisabled => 0,
+            Self::EnabledNeverFounded => 1,
+            Self::Live => 2,
+            Self::Terminal => 3,
+        }
+    }
+
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::CapabilityDisabled),
+            1 => Ok(Self::EnabledNeverFounded),
+            2 => Ok(Self::Live),
+            3 => Ok(Self::Terminal),
+            _ => Err(Error::InvalidParameter),
+        }
+    }
+}
+
+/// Immutable capability/profile and attachment-derived obligation configuration.
+///
+/// The pure value is structural only. A live adapter must construct it from the
+/// authenticated central capability profile and exact attachment artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesLinkObligationConfigurationV1 {
+    /// Authenticated central capability profile.
+    pub capability_profile_id: ContentId,
+    /// Exact Series attachment plan.
+    pub attachment_plan_id: ContentId,
+    /// Exhaustive initial states in [`SeriesLinkObligationV1`] order.
+    pub initial_statuses: [SeriesLinkObligationStatusV1; SERIES_LINK_OBLIGATION_COUNT_V1],
+}
+
+impl SeriesLinkObligationConfigurationV1 {
+    /// Validate that every obligation begins in a nonterminal, explicit state.
+    pub fn validate(self) -> Result<()> {
+        self.capability_profile_id.validate()?;
+        self.attachment_plan_id.validate()?;
+        if self.capability_profile_id == self.attachment_plan_id
+            || self
+                .initial_statuses
+                .iter()
+                .any(|status| *status == SeriesLinkObligationStatusV1::Terminal)
+        {
+            return Err(Error::InvalidParameter);
+        }
+        Ok(())
+    }
+
+    /// Typed content identity of this immutable configuration.
+    pub fn id(self) -> Result<SeriesLinkObligationConfigurationV1Id> {
+        self.validate()?;
+        let mut body = [0_u8; 68];
+        body[..32].copy_from_slice(&self.capability_profile_id.bytes());
+        body[32..64].copy_from_slice(&self.attachment_plan_id.bytes());
+        let mut index = 0_usize;
+        while index < SERIES_LINK_OBLIGATION_COUNT_V1 {
+            body[64 + index] = self.initial_statuses[index].byte();
+            index += 1;
+        }
+        Ok(SeriesLinkObligationConfigurationV1Id(content_id(
+            b"dragons-clutch/series-link-obligation-configuration/v1",
+            &body,
+        )))
+    }
+}
+
+/// Typed identity of one immutable Series-link obligation configuration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct SeriesLinkObligationConfigurationV1Id(ContentId);
+
+impl SeriesLinkObligationConfigurationV1Id {
+    /// Construct from exact digest bytes without claiming authenticity.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(ContentId::from_bytes(bytes))
+    }
+
+    /// Return exact digest bytes.
+    pub const fn bytes(self) -> [u8; 32] {
+        self.0.bytes()
+    }
+
+    /// Return through the generic content-ID boundary.
+    pub const fn content_id(self) -> ContentId {
+        self.0
+    }
+
+    /// Refuse the all-zero reserved identity.
+    pub fn validate(self) -> Result<()> {
+        self.0.validate()
+    }
+}
+
 /// Complete immutable Series/ordinal/Source admission binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesMarketLinkBindingV1 {
@@ -778,6 +804,10 @@ pub struct SeriesMarketLinkBindingV1 {
     pub funding_quote_id: SeriesFundingQuoteV2Id,
     /// Attachment plan.
     pub attachment_plan_id: ContentId,
+    /// Exact central capability profile inherited from the shared Market.
+    pub capability_profile_id: ContentId,
+    /// Exact capability/attachment-derived obligation configuration.
+    pub obligation_configuration_id: SeriesLinkObligationConfigurationV1Id,
     /// Compiler output bundle.
     pub compiler_output_id: ContentId,
     /// Exact compiled Source occurrence.
@@ -826,6 +856,7 @@ impl SeriesMarketLinkBindingV1 {
         self.funding_terms_id.validate()?;
         self.funding_quote_id.validate()?;
         self.source_occurrence_id.validate()?;
+        self.obligation_configuration_id.validate()?;
         if self.generation == 0
             || self.source_repair_generation == 0
             || self.funding_transition_sequence == 0
@@ -842,7 +873,7 @@ impl SeriesMarketLinkBindingV1 {
     /// Immutable link-binding identity.
     pub fn id(self) -> Result<ContentId> {
         self.validate()?;
-        let mut body = [0u8; 765];
+        let mut body = [0u8; 829];
         let mut at = 0usize;
         for id in self.identity_ids() {
             body[at..at + 32].copy_from_slice(&id.bytes());
@@ -872,6 +903,8 @@ impl SeriesMarketLinkBindingV1 {
             self.funding_terms_id.content_id(),
             self.funding_quote_id.content_id(),
             self.attachment_plan_id,
+            self.capability_profile_id,
+            self.obligation_configuration_id.content_id(),
             self.compiler_output_id,
             self.source_occurrence_id.content_id(),
             self.source_occurrence_account_id,
@@ -978,9 +1011,7 @@ pub struct SeriesMarketLinkV1 {
     rent_principal_lamports: u64,
     donation_floor_lamports: u64,
     current_donation_lamports: u64,
-    expected: [u32; SERIES_LINK_OBLIGATION_COUNT_V1],
-    live: [u32; SERIES_LINK_OBLIGATION_COUNT_V1],
-    terminal: [u32; SERIES_LINK_OBLIGATION_COUNT_V1],
+    obligation_statuses: [SeriesLinkObligationStatusV1; SERIES_LINK_OBLIGATION_COUNT_V1],
     terminal_receipts: [ContentId; SERIES_LINK_OBLIGATION_COUNT_V1],
     active_failure_sessions: u32,
     failure_session_transcript_id: ContentId,
@@ -990,23 +1021,24 @@ impl SeriesMarketLinkV1 {
     /// Create one pending link from exact SeriesAdmission principal.
     pub fn initialize_pending(
         binding: SeriesMarketLinkBindingV1,
-        enabled_obligations: [bool; SERIES_LINK_OBLIGATION_COUNT_V1],
+        obligation_configuration: SeriesLinkObligationConfigurationV1,
         rent_principal_lamports: u64,
         donation_floor_lamports: u64,
     ) -> Result<Self> {
         binding.validate()?;
+        obligation_configuration.validate()?;
+        if binding.attachment_plan_id != obligation_configuration.attachment_plan_id
+            || binding.capability_profile_id != obligation_configuration.capability_profile_id
+            || binding.obligation_configuration_id != obligation_configuration.id()?
+        {
+            return Err(Error::MismatchedArtifact);
+        }
         if rent_principal_lamports == 0 {
             return Err(Error::InsufficientPrepayment);
         }
         rent_principal_lamports
             .checked_add(donation_floor_lamports)
             .ok_or(Error::ArithmeticOverflow)?;
-        let mut expected = [0u32; SERIES_LINK_OBLIGATION_COUNT_V1];
-        let mut index = 0usize;
-        while index < SERIES_LINK_OBLIGATION_COUNT_V1 {
-            expected[index] = if enabled_obligations[index] { 1 } else { 0 };
-            index += 1;
-        }
         let value = Self {
             binding,
             phase: SeriesMarketLinkPhaseV1::PendingMarket,
@@ -1016,9 +1048,7 @@ impl SeriesMarketLinkV1 {
             rent_principal_lamports,
             donation_floor_lamports,
             current_donation_lamports: donation_floor_lamports,
-            expected,
-            live: expected,
-            terminal: [0; SERIES_LINK_OBLIGATION_COUNT_V1],
+            obligation_statuses: obligation_configuration.initial_statuses,
             terminal_receipts: [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1],
             active_failure_sessions: 0,
             failure_session_transcript_id: ContentId::ZERO,
@@ -1120,8 +1150,11 @@ impl MarketLifecycleRootV1 {
         Ok(next)
     }
 
-    /// Disable new links and enter market-family retirement.
-    pub fn begin_retirement(self) -> Result<Self> {
+    /// Disable new links and delegate product-family admission sealing.
+    pub fn begin_retirement<A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized>(
+        self,
+        authority: &A,
+    ) -> Result<Self> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV1::Active
             || self.live_series_links != 0
@@ -1131,26 +1164,28 @@ impl MarketLifecycleRootV1 {
         {
             return Err(Error::WorkIncomplete);
         }
+        let product_families = self.product_families.begin_retirement(authority)?;
         let next = Self {
             phase: MarketLifecyclePhaseV1::Retiring,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
+            product_families,
             ..self
         };
         next.validate()?;
         Ok(next)
     }
 
-    /// Consume one authenticated exhaustive Market-family summary.
-    pub fn consume_family_terminal(
+    /// Consume one mandatory shared-core terminal receipt exactly once.
+    pub fn consume_shared_core_terminal(
         self,
-        projection: MarketFamilyTerminalProjectionV1,
+        projection: MarketSharedCoreTerminalProjectionV1,
     ) -> Result<Self> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV1::Retiring
-            || projection.binding_id != self.binding.id()?
+            || projection.market_binding_id != self.binding.id()?
             || projection.market_instance_id != self.binding.market_instance_id
             || projection.generation != self.binding.generation
             || projection.root_transition_sequence
@@ -1161,34 +1196,20 @@ impl MarketLifecycleRootV1 {
         {
             return Err(Error::UnauthenticatedAuthority);
         }
-        let index = projection.family.index();
-        if self.family_live[index] != 1 || self.family_terminal[index] != 0 {
-            return Err(Error::WorkStateMismatch);
-        }
-        if self
-            .family_terminal_receipts
-            .iter()
-            .any(|seen| *seen == projection.id)
+        let index = projection.owner.index();
+        if self.shared_core_terminal_receipts[index] != ContentId::ZERO
+            || self
+                .shared_core_terminal_receipts
+                .iter()
+                .any(|seen| *seen == projection.id)
         {
             return Err(Error::UnauthenticatedAuthority);
         }
-        let mut live = self.family_live;
-        let mut terminal = self.family_terminal;
-        let mut receipts = self.family_terminal_receipts;
-        live[index] = 0;
-        terminal[index] = 1;
+        let mut receipts = self.shared_core_terminal_receipts;
         receipts[index] = projection.id;
-        let fractional_terminal_state_ids = if projection.family == MarketFamilyV1::Fractional {
-            projection.terminal_state_ids
-        } else {
-            self.fractional_terminal_state_ids
-        };
         let next = Self {
             transition_sequence: projection.root_transition_sequence,
-            family_live: live,
-            family_terminal: terminal,
-            family_terminal_receipts: receipts,
-            fractional_terminal_state_ids,
+            shared_core_terminal_receipts: receipts,
             ..self
         };
         next.validate()?;
@@ -1199,27 +1220,36 @@ impl MarketLifecycleRootV1 {
     pub fn finalize_terminal(self) -> Result<(Self, MarketInstanceTerminalProjectionV1)> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV1::Retiring
-            || !counts_complete(self.family_expected, self.family_live, self.family_terminal)?
+            || self
+                .shared_core_terminal_receipts
+                .iter()
+                .any(|receipt| receipt.is_zero())
         {
             return Err(Error::WorkIncomplete);
         }
+        let (product_families, product_family_projection) =
+            self.product_families.finalize_terminal()?;
         let next = Self {
             phase: MarketLifecyclePhaseV1::Terminal,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
+            product_families,
             ..self
         };
         next.validate()?;
         let root_semantic_id = next.semantic_id()?;
-        let mut body = [0u8; 412];
+        let product_family_terminal_projection_id = product_family_projection.id()?.content_id();
+        let mut body = [0u8; 444];
         body[..32].copy_from_slice(&root_semantic_id.bytes());
         body[32..64].copy_from_slice(&next.binding.market_instance_id.bytes());
         body[64..72].copy_from_slice(&next.binding.generation.to_le_bytes());
         body[72..80].copy_from_slice(&next.transition_sequence.to_le_bytes());
         let mut at = 80usize;
-        for receipt in next.family_terminal_receipts {
+        body[80..112].copy_from_slice(&product_family_terminal_projection_id.bytes());
+        let mut at = 112usize;
+        for receipt in next.shared_core_terminal_receipts {
             body[at..at + 32].copy_from_slice(&receipt.bytes());
             at += 32;
         }
@@ -1227,9 +1257,11 @@ impl MarketLifecycleRootV1 {
             body[at..at + 32].copy_from_slice(&id.bytes());
             at += 32;
         }
-        body[368..400].copy_from_slice(&next.resolution_activation_receipt_id.bytes());
-        body[400..404].copy_from_slice(&next.admitted_series_links.to_le_bytes());
-        body[404..412].copy_from_slice(&next.capital.principal_total_lamports.to_le_bytes());
+        body[336..368].copy_from_slice(&next.resolution_semantic_id.bytes());
+        body[368..400].copy_from_slice(&next.resolution_data_id.bytes());
+        body[400..432].copy_from_slice(&next.resolution_activation_receipt_id.bytes());
+        body[432..436].copy_from_slice(&next.admitted_series_links.to_le_bytes());
+        body[436..444].copy_from_slice(&next.capital.principal_total_lamports.to_le_bytes());
         let id = content_id(MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1, &body);
         let projection = MarketInstanceTerminalProjectionV1 {
             id,
@@ -1237,7 +1269,8 @@ impl MarketLifecycleRootV1 {
             market_instance_id: next.binding.market_instance_id,
             generation: next.binding.generation,
             final_transition_sequence: next.transition_sequence,
-            family_terminal_receipts: next.family_terminal_receipts,
+            product_family_terminal_projection_id,
+            shared_core_terminal_receipts: next.shared_core_terminal_receipts,
             fractional_terminal_state_ids: next.fractional_terminal_state_ids,
             resolution_semantic_id: next.resolution_semantic_id,
             resolution_data_id: next.resolution_data_id,
@@ -1410,6 +1443,14 @@ impl MarketLifecycleRootV1 {
     pub const fn retired_series_links(self) -> u32 {
         self.retired_series_links
     }
+    /// Embedded exhaustive product-family semantic owner.
+    pub const fn product_families(&self) -> &MarketFamilyAggregatorV1 {
+        &self.product_families
+    }
+    /// Mandatory shared-core terminal receipts in [`MarketSharedCoreV1`] order.
+    pub const fn shared_core_terminal_receipts(self) -> [ContentId; MARKET_SHARED_CORE_COUNT_V1] {
+        self.shared_core_terminal_receipts
+    }
     /// Resolution semantic identity, zero before activation.
     pub const fn resolution_semantic_id(self) -> ContentId {
         self.resolution_semantic_id
@@ -1501,18 +1542,48 @@ impl MarketLifecycleRootV1 {
         {
             return Err(Error::WorkStateMismatch);
         }
-        validate_counts(self.family_expected, self.family_live, self.family_terminal)?;
-        if self.family_expected != [1u32; MARKET_FAMILY_COUNT_V1] {
-            return Err(Error::WorkStateMismatch);
+        self.product_families.validate()?;
+        if self.product_families.binding().market_instance_id != self.binding.market_instance_id
+            || self.product_families.binding().generation != self.binding.generation
+            || self
+                .product_families
+                .binding()
+                .registry_release_id
+                .content_id()
+                != self.binding.registry_release_id
+            || self
+                .product_families
+                .binding()
+                .capability_profile_id
+                .content_id()
+                != self.binding.capability_profile_id
+        {
+            return Err(Error::MismatchedArtifact);
         }
-        let mut index = 0usize;
-        while index < MARKET_FAMILY_COUNT_V1 {
-            if (self.family_terminal[index] == 0)
-                != (self.family_terminal_receipts[index] == ContentId::ZERO)
-            {
-                return Err(Error::WorkStateMismatch);
+        let mut index = 0_usize;
+        while index < MARKET_SHARED_CORE_COUNT_V1 {
+            let receipt = self.shared_core_terminal_receipts[index];
+            if receipt != ContentId::ZERO {
+                receipt.validate()?;
+                let mut prior = 0_usize;
+                while prior < index {
+                    if self.shared_core_terminal_receipts[prior] == receipt {
+                        return Err(Error::MismatchedArtifact);
+                    }
+                    prior += 1;
+                }
             }
             index += 1;
+        }
+        let expected_aggregator_phase = match self.phase {
+            MarketLifecyclePhaseV1::Founding
+            | MarketLifecyclePhaseV1::Active
+            | MarketLifecyclePhaseV1::Aborting => MarketFamilyAggregatorPhaseV1::Open,
+            MarketLifecyclePhaseV1::Retiring => MarketFamilyAggregatorPhaseV1::Retiring,
+            MarketLifecyclePhaseV1::Terminal => MarketFamilyAggregatorPhaseV1::Terminal,
+        };
+        if self.product_families.phase() != expected_aggregator_phase {
+            return Err(Error::WorkStateMismatch);
         }
         let resolution = [
             self.resolution_semantic_id,
@@ -1530,7 +1601,10 @@ impl MarketLifecycleRootV1 {
         match self.phase {
             MarketLifecyclePhaseV1::Founding => {
                 if !resolution_absent
-                    || self.family_terminal.iter().any(|count| *count != 0)
+                    || self
+                        .shared_core_terminal_receipts
+                        .iter()
+                        .any(|receipt| *receipt != ContentId::ZERO)
                     || self.foundation.abort_closed_bitmap != 0
                 {
                     return Err(Error::WorkStateMismatch);
@@ -1540,7 +1614,11 @@ impl MarketLifecycleRootV1 {
                 if !self.foundation.complete()
                     || self.capital.principal_remaining_lamports != 0
                     || self.admitted_series_links == 0
-                    || self.family_terminal.iter().any(|count| *count != 0)
+                    || !self.product_families.activation_ready()?
+                    || self
+                        .shared_core_terminal_receipts
+                        .iter()
+                        .any(|receipt| *receipt != ContentId::ZERO)
                 {
                     return Err(Error::WorkStateMismatch);
                 }
@@ -1553,11 +1631,10 @@ impl MarketLifecycleRootV1 {
             MarketLifecyclePhaseV1::Terminal => {
                 if !resolution_live
                     || self.live_series_links != 0
-                    || !counts_complete(
-                        self.family_expected,
-                        self.family_live,
-                        self.family_terminal,
-                    )?
+                    || self
+                        .shared_core_terminal_receipts
+                        .iter()
+                        .any(|receipt| *receipt == ContentId::ZERO)
                 {
                     return Err(Error::WorkStateMismatch);
                 }
@@ -1567,19 +1644,27 @@ impl MarketLifecycleRootV1 {
                     || self.capital.principal_remaining_lamports != 0
                     || self.admitted_series_links != 1
                     || self.retired_series_links != 0
-                    || self.family_terminal.iter().any(|count| *count != 0)
+                    || self
+                        .shared_core_terminal_receipts
+                        .iter()
+                        .any(|receipt| *receipt != ContentId::ZERO)
                 {
                     return Err(Error::WorkStateMismatch);
                 }
             }
         }
-        let fractional_consumed = self.family_terminal[MarketFamilyV1::Fractional.index()] == 1;
+        let fractional_terminal_count = self
+            .product_families
+            .family(MarketFamilyV1::Fractional)
+            .counts()
+            .terminal;
         let fractional_absent = self.fractional_terminal_state_ids == [ContentId::ZERO; 2];
         let fractional_live = self.fractional_terminal_state_ids[0].validate().is_ok()
             && self.fractional_terminal_state_ids[1].validate().is_ok()
             && self.fractional_terminal_state_ids[0] != self.fractional_terminal_state_ids[1];
-        if (!fractional_consumed && !fractional_absent)
-            || (fractional_consumed && !fractional_absent && !fractional_live)
+        if (fractional_terminal_count == 0 && !fractional_absent)
+            || (fractional_terminal_count == 1 && !fractional_live)
+            || fractional_terminal_count > 1
         {
             return Err(Error::WorkStateMismatch);
         }
@@ -1595,7 +1680,8 @@ pub struct MarketInstanceTerminalProjectionV1 {
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
     final_transition_sequence: u64,
-    family_terminal_receipts: [ContentId; MARKET_FAMILY_COUNT_V1],
+    product_family_terminal_projection_id: ContentId,
+    shared_core_terminal_receipts: [ContentId; MARKET_SHARED_CORE_COUNT_V1],
     fractional_terminal_state_ids: [ContentId; 2],
     resolution_semantic_id: ContentId,
     resolution_data_id: ContentId,
@@ -1624,9 +1710,13 @@ impl MarketInstanceTerminalProjectionV1 {
     pub const fn final_transition_sequence(self) -> u64 {
         self.final_transition_sequence
     }
-    /// Exact family receipts.
-    pub const fn family_terminal_receipts(self) -> [ContentId; MARKET_FAMILY_COUNT_V1] {
-        self.family_terminal_receipts
+    /// Exact terminal projection of the embedded five-family aggregator.
+    pub const fn product_family_terminal_projection_id(self) -> ContentId {
+        self.product_family_terminal_projection_id
+    }
+    /// Exact ClaimLedger/Hoard/Failure/Source/Position terminal receipts.
+    pub const fn shared_core_terminal_receipts(self) -> [ContentId; MARKET_SHARED_CORE_COUNT_V1] {
+        self.shared_core_terminal_receipts
     }
     /// Fractional terminal a4/a5 IDs.
     pub const fn fractional_terminal_state_ids(self) -> [ContentId; 2] {
@@ -1693,12 +1783,11 @@ impl FixedCodec for MarketLifecycleRootV1 {
         writer.u32(self.retired_series_links);
         writer.reserved(4);
         writer.id(self.series_link_transcript_id);
-        for counts in [self.family_expected, self.family_live, self.family_terminal] {
-            for count in counts {
-                writer.u32(count);
-            }
-        }
-        for receipt in self.family_terminal_receipts {
+        let mut product_family_body = [0_u8; MARKET_FAMILY_AGGREGATOR_BYTES_V1];
+        self.product_families
+            .encode_into(&mut product_family_body)?;
+        writer.bytes(&product_family_body);
+        for receipt in self.shared_core_terminal_receipts {
             writer.id(receipt);
         }
         for id in self.fractional_terminal_state_ids {
@@ -1761,16 +1850,10 @@ impl FixedCodec for MarketLifecycleRootV1 {
         let retired_series_links = reader.u32();
         reader.reserved(4)?;
         let series_link_transcript_id = reader.id();
-        let mut family_expected = [0u32; MARKET_FAMILY_COUNT_V1];
-        let mut family_live = [0u32; MARKET_FAMILY_COUNT_V1];
-        let mut family_terminal = [0u32; MARKET_FAMILY_COUNT_V1];
-        for counts in [&mut family_expected, &mut family_live, &mut family_terminal] {
-            for count in counts {
-                *count = reader.u32();
-            }
-        }
-        let mut family_terminal_receipts = [ContentId::ZERO; MARKET_FAMILY_COUNT_V1];
-        for receipt in &mut family_terminal_receipts {
+        let product_families =
+            MarketFamilyAggregatorV1::decode(&reader.bytes::<MARKET_FAMILY_AGGREGATOR_BYTES_V1>())?;
+        let mut shared_core_terminal_receipts = [ContentId::ZERO; MARKET_SHARED_CORE_COUNT_V1];
+        for receipt in &mut shared_core_terminal_receipts {
             *receipt = reader.id();
         }
         let fractional_terminal_state_ids = [reader.id(), reader.id()];
@@ -1789,10 +1872,8 @@ impl FixedCodec for MarketLifecycleRootV1 {
             live_series_links,
             retired_series_links,
             series_link_transcript_id,
-            family_expected,
-            family_live,
-            family_terminal,
-            family_terminal_receipts,
+            product_families,
+            shared_core_terminal_receipts,
             fractional_terminal_state_ids,
             resolution_semantic_id,
             resolution_data_id,
@@ -1832,11 +1913,10 @@ impl FixedCodec for SeriesMarketLinkV1 {
         writer.u64(self.rent_principal_lamports);
         writer.u64(self.donation_floor_lamports);
         writer.u64(self.current_donation_lamports);
-        for counts in [self.expected, self.live, self.terminal] {
-            for count in counts {
-                writer.u32(count);
-            }
+        for status in self.obligation_statuses {
+            writer.u8(status.byte());
         }
+        writer.reserved(4);
         for receipt in self.terminal_receipts {
             writer.id(receipt);
         }
@@ -1877,14 +1957,12 @@ impl FixedCodec for SeriesMarketLinkV1 {
         let rent_principal_lamports = reader.u64();
         let donation_floor_lamports = reader.u64();
         let current_donation_lamports = reader.u64();
-        let mut expected = [0u32; SERIES_LINK_OBLIGATION_COUNT_V1];
-        let mut live = [0u32; SERIES_LINK_OBLIGATION_COUNT_V1];
-        let mut terminal = [0u32; SERIES_LINK_OBLIGATION_COUNT_V1];
-        for counts in [&mut expected, &mut live, &mut terminal] {
-            for count in counts {
-                *count = reader.u32();
-            }
+        let mut obligation_statuses =
+            [SeriesLinkObligationStatusV1::CapabilityDisabled; SERIES_LINK_OBLIGATION_COUNT_V1];
+        for status in &mut obligation_statuses {
+            *status = SeriesLinkObligationStatusV1::decode(reader.u8())?;
         }
+        reader.reserved(4)?;
         let mut terminal_receipts = [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1];
         for receipt in &mut terminal_receipts {
             *receipt = reader.id();
@@ -1902,9 +1980,7 @@ impl FixedCodec for SeriesMarketLinkV1 {
             rent_principal_lamports,
             donation_floor_lamports,
             current_donation_lamports,
-            expected,
-            live,
-            terminal,
+            obligation_statuses,
             terminal_receipts,
             active_failure_sessions,
             failure_session_transcript_id,
@@ -1981,22 +2057,26 @@ fn link_binding_from_ids(
         funding_terms_id: SeriesFundingTermsV2Id::from_bytes(ids[4].bytes()),
         funding_quote_id: SeriesFundingQuoteV2Id::from_bytes(ids[5].bytes()),
         attachment_plan_id: ids[6],
-        compiler_output_id: ids[7],
-        source_occurrence_id: SourceOccurrenceV1Id::from_bytes(ids[8].bytes()),
-        source_occurrence_account_id: ids[9],
-        source_occurrence_account_authentication_id: ids[10],
-        source_occurrence_receipt_id: ids[11],
-        source_release_id: ids[12],
-        source_route_id: ids[13],
-        clock_policy_id: ids[14],
-        source_plane_contract_id: ids[15],
-        source_spec_id: ids[16],
-        window_spec_id: ids[17],
-        statistic_key_id: ids[18],
-        funding_state_account_id: ids[19],
-        funding_debit_receipt_id: ids[20],
-        rent_refund_owner: ids[21],
-        neutral_lamport_sink: ids[22],
+        capability_profile_id: ids[7],
+        obligation_configuration_id: SeriesLinkObligationConfigurationV1Id::from_bytes(
+            ids[8].bytes(),
+        ),
+        compiler_output_id: ids[9],
+        source_occurrence_id: SourceOccurrenceV1Id::from_bytes(ids[10].bytes()),
+        source_occurrence_account_id: ids[11],
+        source_occurrence_account_authentication_id: ids[12],
+        source_occurrence_receipt_id: ids[13],
+        source_release_id: ids[14],
+        source_route_id: ids[15],
+        clock_policy_id: ids[16],
+        source_plane_contract_id: ids[17],
+        source_spec_id: ids[18],
+        window_spec_id: ids[19],
+        statistic_key_id: ids[20],
+        funding_state_account_id: ids[21],
+        funding_debit_receipt_id: ids[22],
+        rent_refund_owner: ids[23],
+        neutral_lamport_sink: ids[24],
         generation,
         source_repair_generation,
         funding_transition_sequence,
@@ -2059,42 +2139,6 @@ fn highest_set_index(bitmap: u64) -> Option<usize> {
         }
     }
     None
-}
-
-fn validate_counts<const N: usize>(
-    expected: [u32; N],
-    live: [u32; N],
-    terminal: [u32; N],
-) -> Result<()> {
-    let mut index = 0usize;
-    while index < N {
-        if expected[index] > 1
-            || live[index]
-                .checked_add(terminal[index])
-                .ok_or(Error::ArithmeticOverflow)?
-                != expected[index]
-        {
-            return Err(Error::WorkStateMismatch);
-        }
-        index += 1;
-    }
-    Ok(())
-}
-
-fn counts_complete<const N: usize>(
-    expected: [u32; N],
-    live: [u32; N],
-    terminal: [u32; N],
-) -> Result<bool> {
-    validate_counts(expected, live, terminal)?;
-    let mut index = 0usize;
-    while index < N {
-        if live[index] != 0 || terminal[index] != expected[index] {
-            return Ok(false);
-        }
-        index += 1;
-    }
-    Ok(true)
 }
 
 fn require_pairwise_distinct<const N: usize>(ids: &[ContentId; N]) -> Result<()> {
@@ -2198,7 +2242,15 @@ impl SeriesMarketLinkV1 {
             return Err(Error::UnauthenticatedAuthority);
         }
         let index = projection.obligation.index();
-        if self.expected[index] == 0 || self.live[index] != 1 || self.terminal[index] != 0 {
+        let expected_disposition = match self.obligation_statuses[index] {
+            SeriesLinkObligationStatusV1::CapabilityDisabled
+            | SeriesLinkObligationStatusV1::EnabledNeverFounded => {
+                SeriesLinkObligationDispositionV1::Absent
+            }
+            SeriesLinkObligationStatusV1::Live => SeriesLinkObligationDispositionV1::Terminal,
+            SeriesLinkObligationStatusV1::Terminal => return Err(Error::WorkStateMismatch),
+        };
+        if projection.disposition != expected_disposition {
             return Err(Error::WorkStateMismatch);
         }
         let receipt = projection.id()?;
@@ -2207,14 +2259,11 @@ impl SeriesMarketLinkV1 {
             return Err(Error::UnauthenticatedAuthority);
         }
         terminal_receipts[index] = receipt;
-        let mut live = self.live;
-        let mut terminal = self.terminal;
-        live[index] = 0;
-        terminal[index] = 1;
+        let mut obligation_statuses = self.obligation_statuses;
+        obligation_statuses[index] = SeriesLinkObligationStatusV1::Terminal;
         let next = Self {
             transition_sequence: projection.link_transition_sequence,
-            live,
-            terminal,
+            obligation_statuses,
             terminal_receipts,
             ..self
         };
@@ -2227,7 +2276,10 @@ impl SeriesMarketLinkV1 {
         self.validate()?;
         if self.phase != SeriesMarketLinkPhaseV1::Active
             || self.active_failure_sessions != 0
-            || !counts_complete(self.expected, self.live, self.terminal)?
+            || self
+                .obligation_statuses
+                .iter()
+                .any(|status| *status != SeriesLinkObligationStatusV1::Terminal)
         {
             return Err(Error::WorkIncomplete);
         }
@@ -2323,6 +2375,17 @@ impl SeriesMarketLinkV1 {
     pub const fn active_failure_sessions(self) -> u32 {
         self.active_failure_sessions
     }
+    /// Persistent transcript proving whether any Failure session was ever pinned.
+    pub const fn failure_session_transcript_id(self) -> ContentId {
+        self.failure_session_transcript_id
+    }
+    /// Exhaustive current state of one attachment obligation.
+    pub const fn obligation_status(
+        self,
+        obligation: SeriesLinkObligationV1,
+    ) -> SeriesLinkObligationStatusV1 {
+        self.obligation_statuses[obligation.index()]
+    }
     /// Link transition sequence.
     pub const fn transition_sequence(self) -> u64 {
         self.transition_sequence
@@ -2360,7 +2423,6 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::InvalidParameter);
         }
-        validate_counts(self.expected, self.live, self.terminal)?;
         let admitted = self.market_admission_receipt_id != ContentId::ZERO;
         match self.phase {
             SeriesMarketLinkPhaseV1::PendingMarket => {
@@ -2385,7 +2447,10 @@ impl SeriesMarketLinkV1 {
                     || !admitted
                     || self.market_admission_sequence != 0
                     || self.active_failure_sessions != 0
-                    || self.terminal.iter().any(|count| *count != 0)
+                    || self
+                        .obligation_statuses
+                        .iter()
+                        .any(|status| *status == SeriesLinkObligationStatusV1::Terminal)
                 {
                     return Err(Error::WorkStateMismatch);
                 }
@@ -2393,15 +2458,24 @@ impl SeriesMarketLinkV1 {
         }
         let mut index = 0usize;
         while index < SERIES_LINK_OBLIGATION_COUNT_V1 {
-            if (self.terminal[index] == 0) != (self.terminal_receipts[index] == ContentId::ZERO) {
+            if (self.obligation_statuses[index] != SeriesLinkObligationStatusV1::Terminal)
+                != (self.terminal_receipts[index] == ContentId::ZERO)
+            {
                 return Err(Error::WorkStateMismatch);
             }
             index += 1;
         }
-        if (self.active_failure_sessions == 0)
-            != (self.failure_session_transcript_id == ContentId::ZERO
-                && self.transition_sequence <= 1)
-            && self.failure_session_transcript_id == ContentId::ZERO
+        if matches!(
+            self.phase,
+            SeriesMarketLinkPhaseV1::Retiring | SeriesMarketLinkPhaseV1::Retired
+        ) && self
+            .obligation_statuses
+            .iter()
+            .any(|status| *status != SeriesLinkObligationStatusV1::Terminal)
+        {
+            return Err(Error::WorkStateMismatch);
+        }
+        if self.active_failure_sessions > 0 && self.failure_session_transcript_id == ContentId::ZERO
         {
             return Err(Error::WorkStateMismatch);
         }
@@ -2482,6 +2556,7 @@ impl SeriesMarketAdmissionProjectionV1 {
         if link.phase != SeriesMarketLinkPhaseV1::PendingMarket
             || link.binding.market_instance_id != market_binding.market_instance_id
             || link.binding.market_binding_id != market_binding.id()?
+            || link.binding.capability_profile_id != market_binding.capability_profile_id
             || link.binding.generation != market_binding.generation
             || admission_sequence == 0
         {
@@ -2728,10 +2803,8 @@ pub struct MarketLifecycleRootV1 {
     live_series_links: u32,
     retired_series_links: u32,
     series_link_transcript_id: ContentId,
-    family_expected: [u32; MARKET_FAMILY_COUNT_V1],
-    family_live: [u32; MARKET_FAMILY_COUNT_V1],
-    family_terminal: [u32; MARKET_FAMILY_COUNT_V1],
-    family_terminal_receipts: [ContentId; MARKET_FAMILY_COUNT_V1],
+    product_families: MarketFamilyAggregatorV1,
+    shared_core_terminal_receipts: [ContentId; MARKET_SHARED_CORE_COUNT_V1],
     fractional_terminal_state_ids: [ContentId; 2],
     resolution_semantic_id: ContentId,
     resolution_data_id: ContentId,
@@ -2744,13 +2817,25 @@ impl MarketLifecycleRootV1 {
         binding: MarketLifecycleBindingV1,
         schedule: MarketFoundationScheduleV1,
         mut capital: MarketFoundationCapitalV1,
+        product_families: MarketFamilyAggregatorV1,
         root_poststate_receipt_id: ContentId,
     ) -> Result<Self> {
         binding.validate()?;
         schedule.validate()?;
+        product_families.validate()?;
         root_poststate_receipt_id.validate()?;
         if binding.foundation_schedule_id != schedule.id()?
             || binding.outcome_count != schedule.outcome_count
+            || product_families.phase() != MarketFamilyAggregatorPhaseV1::Open
+            || product_families.binding().market_instance_id != binding.market_instance_id
+            || product_families.binding().generation != binding.generation
+            || product_families.binding().registry_release_id.content_id()
+                != binding.registry_release_id
+            || product_families
+                .binding()
+                .capability_profile_id
+                .content_id()
+                != binding.capability_profile_id
         {
             return Err(Error::MismatchedArtifact);
         }
@@ -2775,7 +2860,6 @@ impl MarketLifecycleRootV1 {
                 1,
             ),
         };
-        let expected = [1u32; MARKET_FAMILY_COUNT_V1];
         let value = Self {
             binding,
             phase: MarketLifecyclePhaseV1::Founding,
@@ -2786,10 +2870,8 @@ impl MarketLifecycleRootV1 {
             live_series_links: 0,
             retired_series_links: 0,
             series_link_transcript_id: ContentId::ZERO,
-            family_expected: expected,
-            family_live: expected,
-            family_terminal: [0; MARKET_FAMILY_COUNT_V1],
-            family_terminal_receipts: [ContentId::ZERO; MARKET_FAMILY_COUNT_V1],
+            product_families,
+            shared_core_terminal_receipts: [ContentId::ZERO; MARKET_SHARED_CORE_COUNT_V1],
             fractional_terminal_state_ids: [ContentId::ZERO; 2],
             resolution_semantic_id: ContentId::ZERO,
             resolution_data_id: ContentId::ZERO,
@@ -2856,100 +2938,206 @@ impl MarketLifecycleRootV1 {
         next.validate_against_schedule(schedule)?;
         Ok(next)
     }
-}
 
-/// Admit one pending `0xad` exactly once while Founding or Active.
-pub fn admit_series_link(self, admission: SeriesMarketAdmissionProjectionV1) -> Result<Self> {
-    self.validate()?;
-    if !matches!(
-        self.phase,
-        MarketLifecyclePhaseV1::Founding | MarketLifecyclePhaseV1::Active
-    ) || admission.market_binding_id != self.binding.id()?
-        || admission.market_instance_id != self.binding.market_instance_id
-        || admission.admission_sequence
-            != u64::from(self.admitted_series_links)
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?
-        || self.admitted_series_links >= self.binding.maximum_series_links
-        || (self.admitted_series_links == 0
-            && admission.disposition != SeriesMarketDispositionV1::Founder)
-        || (self.admitted_series_links != 0
-            && admission.disposition != SeriesMarketDispositionV1::Converger)
-        || (self.phase == MarketLifecyclePhaseV1::Founding
-            && admission.disposition != SeriesMarketDispositionV1::Founder)
-    {
-        return Err(Error::UnauthenticatedAuthority);
-    }
-    let next_count = self
-        .admitted_series_links
-        .checked_add(1)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let sequence = self
-        .transition_sequence
-        .checked_add(1)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let next = Self {
-        transition_sequence: sequence,
-        admitted_series_links: next_count,
-        live_series_links: self
-            .live_series_links
+    /// Admit one pending `0xad` exactly once while Founding or Active.
+    pub fn admit_series_link(self, admission: SeriesMarketAdmissionProjectionV1) -> Result<Self> {
+        self.validate()?;
+        if !matches!(
+            self.phase,
+            MarketLifecyclePhaseV1::Founding | MarketLifecyclePhaseV1::Active
+        ) || admission.market_binding_id != self.binding.id()?
+            || admission.market_instance_id != self.binding.market_instance_id
+            || admission.admission_sequence
+                != u64::from(self.admitted_series_links)
+                    .checked_add(1)
+                    .ok_or(Error::ArithmeticOverflow)?
+            || self.admitted_series_links >= self.binding.maximum_series_links
+            || (self.admitted_series_links == 0
+                && admission.disposition != SeriesMarketDispositionV1::Founder)
+            || (self.admitted_series_links != 0
+                && admission.disposition != SeriesMarketDispositionV1::Converger)
+            || (self.phase == MarketLifecyclePhaseV1::Founding
+                && admission.disposition != SeriesMarketDispositionV1::Founder)
+        {
+            return Err(Error::UnauthenticatedAuthority);
+        }
+        let next_count = self
+            .admitted_series_links
             .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow)?,
-        series_link_transcript_id: rolling_id(
-            b"dragons-clutch/market-series-link-transcript/v1",
-            self.series_link_transcript_id,
-            admission.id,
-            sequence,
-        ),
-        ..self
-    };
-    next.validate()?;
-    Ok(next)
-}
-
-/// Activate trading only after every shared slot is accepted and founder link admitted.
-pub fn activate(
-    self,
-    schedule: MarketFoundationScheduleV1,
-    accepted_market_core_receipt_id: ContentId,
-    general_founding_receipt_id: ContentId,
-) -> Result<Self> {
-    self.validate_against_schedule(schedule)?;
-    accepted_market_core_receipt_id.validate()?;
-    general_founding_receipt_id.validate()?;
-    if self.phase != MarketLifecyclePhaseV1::Founding
-        || !self.foundation.complete()
-        || self.capital.principal_remaining_lamports != 0
-        || self.admitted_series_links != 1
-        || self.live_series_links != 1
-    {
-        return Err(Error::WorkIncomplete);
+            .ok_or(Error::ArithmeticOverflow)?;
+        let sequence = self
+            .transition_sequence
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let next = Self {
+            transition_sequence: sequence,
+            admitted_series_links: next_count,
+            live_series_links: self
+                .live_series_links
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?,
+            series_link_transcript_id: rolling_id(
+                b"dragons-clutch/market-series-link-transcript/v1",
+                self.series_link_transcript_id,
+                admission.id,
+                sequence,
+            ),
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
     }
-    let sequence = self
-        .transition_sequence
-        .checked_add(1)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let combined = rolling_id(
-        b"dragons-clutch/market-foundation-activation/v1",
-        self.foundation.transcript_id,
-        accepted_market_core_receipt_id,
-        sequence,
-    );
-    let foundation = MarketFoundationProgressV1 {
-        transcript_id: rolling_id(
-            b"dragons-clutch/market-foundation-activation/v1",
-            combined,
-            general_founding_receipt_id,
-            sequence,
-        ),
-        ..self.foundation
-    };
-    let next = Self {
-        phase: MarketLifecyclePhaseV1::Active,
-        transition_sequence: sequence,
-        foundation,
-        ..self
-    };
-    next.validate_against_schedule(schedule)?;
-    Ok(next)
+
+    /// Delegate one authenticated product-family child admission to the embedded owner.
+    pub fn admit_product_family_child<A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized>(
+        self,
+        authority: &A,
+        family: MarketFamilyV1,
+        family_admission_sequence: u32,
+        admission_receipt_id: ContentId,
+    ) -> Result<Self> {
+        self.validate()?;
+        if !matches!(
+            self.phase,
+            MarketLifecyclePhaseV1::Founding | MarketLifecyclePhaseV1::Active
+        ) {
+            return Err(Error::WorkStateMismatch);
+        }
+        let product_families = self.product_families.admit_child(
+            authority,
+            family,
+            family_admission_sequence,
+            admission_receipt_id,
+        )?;
+        let next = Self {
+            transition_sequence: self
+                .transition_sequence
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?,
+            product_families,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Delegate one authenticated product-family child terminal transition.
+    pub fn terminalize_product_family_child<A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized>(
+        self,
+        authority: &A,
+        family: MarketFamilyV1,
+        family_terminal_sequence: u32,
+        terminal_receipt_id: ContentId,
+    ) -> Result<Self> {
+        self.validate()?;
+        if !matches!(
+            self.phase,
+            MarketLifecyclePhaseV1::Active | MarketLifecyclePhaseV1::Retiring
+        ) || family == MarketFamilyV1::Fractional
+        {
+            return Err(Error::WorkStateMismatch);
+        }
+        let product_families = self.product_families.terminalize_child(
+            authority,
+            family,
+            family_terminal_sequence,
+            terminal_receipt_id,
+        )?;
+        let next = Self {
+            transition_sequence: self
+                .transition_sequence
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?,
+            product_families,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Terminalize the single market-scoped Fractional owner and retain exact a4/a5 states.
+    pub fn terminalize_fractional_family<A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized>(
+        self,
+        authority: &A,
+        family_terminal_sequence: u32,
+        terminal_receipt_id: ContentId,
+        fractional_policy_terminal_state_id: ContentId,
+        fractional_ledger_terminal_state_id: ContentId,
+    ) -> Result<Self> {
+        self.validate()?;
+        if !matches!(
+            self.phase,
+            MarketLifecyclePhaseV1::Active | MarketLifecyclePhaseV1::Retiring
+        ) || self.fractional_terminal_state_ids != [ContentId::ZERO; 2]
+            || fractional_policy_terminal_state_id == fractional_ledger_terminal_state_id
+        {
+            return Err(Error::WorkStateMismatch);
+        }
+        fractional_policy_terminal_state_id.validate()?;
+        fractional_ledger_terminal_state_id.validate()?;
+        let fractional = self.product_families.family(MarketFamilyV1::Fractional);
+        if fractional.counts().admitted != 1 || fractional.counts().live != 1 {
+            return Err(Error::WorkStateMismatch);
+        }
+        let product_families = self.product_families.terminalize_child(
+            authority,
+            MarketFamilyV1::Fractional,
+            family_terminal_sequence,
+            terminal_receipt_id,
+        )?;
+        let next = Self {
+            transition_sequence: self
+                .transition_sequence
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?,
+            product_families,
+            fractional_terminal_state_ids: [
+                fractional_policy_terminal_state_id,
+                fractional_ledger_terminal_state_id,
+            ],
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Activate trading only after every shared slot is accepted and founder link admitted.
+    pub fn activate(
+        self,
+        schedule: MarketFoundationScheduleV1,
+        accepted_market_core_receipt_id: ContentId,
+    ) -> Result<Self> {
+        self.validate_against_schedule(schedule)?;
+        accepted_market_core_receipt_id.validate()?;
+        if self.phase != MarketLifecyclePhaseV1::Founding
+            || !self.foundation.complete()
+            || self.capital.principal_remaining_lamports != 0
+            || self.admitted_series_links != 1
+            || self.live_series_links != 1
+            || !self.product_families.activation_ready()?
+        {
+            return Err(Error::WorkIncomplete);
+        }
+        let sequence = self
+            .transition_sequence
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let foundation = MarketFoundationProgressV1 {
+            transcript_id: rolling_id(
+                b"dragons-clutch/market-foundation-activation/v1",
+                self.foundation.transcript_id,
+                accepted_market_core_receipt_id,
+                sequence,
+            ),
+            ..self.foundation
+        };
+        let next = Self {
+            phase: MarketLifecyclePhaseV1::Active,
+            transition_sequence: sequence,
+            foundation,
+            ..self
+        };
+        next.validate_against_schedule(schedule)?;
+        Ok(next)
+    }
 }

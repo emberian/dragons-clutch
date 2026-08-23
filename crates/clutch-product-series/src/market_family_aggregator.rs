@@ -2,13 +2,13 @@
 //!
 //! This module owns only Market-scoped family facts. Series admission plans,
 //! occurrence identities, funding, and child-owned lifecycle facts remain in
-//! their respective semantic owners. A Product/Market root may retain the
-//! typed summary identities derived here; it must not copy their counts.
+//! their respective semantic owners. `MarketLifecycleRootV1` embeds this owner
+//! exactly once and must not copy its counts or summary identities.
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    content_id, ContentId, Error, FixedCodec, MarketInstanceV2Id,
-    RegistryCapabilityProfileV2Id, RegistryProgramReleaseV1Id, Result,
+    content_id, ContentId, Error, FixedCodec, MarketInstanceV2Id, RegistryCapabilityProfileV2Id,
+    RegistryProgramReleaseV1Id, Result,
 };
 
 const MARKET_FAMILY_AGGREGATOR_MAGIC_V1: [u8; 8] = *b"DCMFAGV1";
@@ -17,17 +17,14 @@ const MARKET_FAMILY_TERMINAL_PROJECTION_MAGIC_V1: [u8; 8] = *b"DCMFTPV1";
 const MARKET_FAMILY_SCHEMA_V1: u16 = 1;
 
 /// Semantic-ID domain for one canonical shared-Market family aggregator.
-pub const MARKET_FAMILY_AGGREGATOR_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/market-family-aggregator/v1";
+pub const MARKET_FAMILY_AGGREGATOR_DOMAIN_V1: &[u8] = b"dragons-clutch/market-family-aggregator/v1";
 /// Semantic-ID domain for the immutable aggregator binding.
 pub const MARKET_FAMILY_AGGREGATOR_BINDING_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-family-aggregator-binding/v1";
 /// Semantic-ID domain for one authenticated family admission transition.
-pub const MARKET_FAMILY_ADMISSION_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/market-family-admission/v1";
+pub const MARKET_FAMILY_ADMISSION_DOMAIN_V1: &[u8] = b"dragons-clutch/market-family-admission/v1";
 /// Semantic-ID domain for one authenticated family terminal transition.
-pub const MARKET_FAMILY_TERMINAL_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/market-family-terminal/v1";
+pub const MARKET_FAMILY_TERMINAL_DOMAIN_V1: &[u8] = b"dragons-clutch/market-family-terminal/v1";
 /// Semantic-ID domain for one exhaustive family summary.
 pub const MARKET_FAMILY_EXHAUSTIVE_SUMMARY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-family-exhaustive-summary/v1";
@@ -363,10 +360,7 @@ pub trait AuthenticatedMarketFamilyAuthorityV1 {
     }
 
     /// Authenticate the Market authority that irrevocably seals admissions.
-    fn authenticate_begin_retirement(
-        &self,
-        _current: &MarketFamilyAggregatorV1,
-    ) -> Result<()> {
+    fn authenticate_begin_retirement(&self, _current: &MarketFamilyAggregatorV1) -> Result<()> {
         Err(Error::UnauthenticatedAuthority)
     }
 }
@@ -543,10 +537,9 @@ impl MarketFamilyAggregatorV1 {
         }
         let general = self.family(MarketFamilyV1::General).status;
         let direct = self.family(MarketFamilyV1::Direct).status;
-        let at_least_one_live = general == MarketFamilyStatusV1::Live
-            || direct == MarketFamilyStatusV1::Live;
-        let no_enabled_primary_unfounded = general
-            != MarketFamilyStatusV1::EnabledNeverFounded
+        let at_least_one_live =
+            general == MarketFamilyStatusV1::Live || direct == MarketFamilyStatusV1::Live;
+        let no_enabled_primary_unfounded = general != MarketFamilyStatusV1::EnabledNeverFounded
             && direct != MarketFamilyStatusV1::EnabledNeverFounded;
         Ok(at_least_one_live && no_enabled_primary_unfounded)
     }
@@ -735,9 +728,7 @@ impl MarketFamilyAggregatorV1 {
     }
 
     /// Finalize an already-retiring root after every live child is terminal.
-    pub fn finalize_terminal(
-        &self,
-    ) -> Result<(Self, MarketFamilyAggregatorTerminalProjectionV1)> {
+    pub fn finalize_terminal(&self) -> Result<(Self, MarketFamilyAggregatorTerminalProjectionV1)> {
         self.validate()?;
         if self.phase != MarketFamilyAggregatorPhaseV1::Retiring {
             return Err(Error::SeriesNotClosed);
@@ -780,10 +771,7 @@ impl MarketFamilyAggregatorV1 {
         self.validate()?;
         let mut body = [0_u8; MARKET_FAMILY_AGGREGATOR_BYTES_V1];
         self.encode_into(&mut body)?;
-        let id = MarketFamilyAggregatorV1Id(content_id(
-            MARKET_FAMILY_AGGREGATOR_DOMAIN_V1,
-            &body,
-        ));
+        let id = MarketFamilyAggregatorV1Id(content_id(MARKET_FAMILY_AGGREGATOR_DOMAIN_V1, &body));
         id.validate()?;
         Ok(id)
     }
@@ -836,8 +824,7 @@ impl FixedCodec for MarketFamilyAggregatorV1 {
         reader.reserved(4)?;
         let market_instance_id = MarketInstanceV2Id::from_bytes(reader.id().bytes());
         let registry_release_id = RegistryProgramReleaseV1Id::from_bytes(reader.id().bytes());
-        let capability_profile_id =
-            RegistryCapabilityProfileV2Id::from_bytes(reader.id().bytes());
+        let capability_profile_id = RegistryCapabilityProfileV2Id::from_bytes(reader.id().bytes());
         let mut family_root_ids = [ContentId::ZERO; MARKET_FAMILY_COUNT_V1];
         let mut index = 0_usize;
         while index < MARKET_FAMILY_COUNT_V1 {
@@ -1225,17 +1212,12 @@ impl MarketFamilyAggregatorTerminalProjectionV1 {
     }
 
     /// Typed current summary identity for one family.
-    pub const fn summary_id(
-        &self,
-        family: MarketFamilyV1,
-    ) -> MarketFamilyExhaustiveSummaryV1Id {
+    pub const fn summary_id(&self, family: MarketFamilyV1) -> MarketFamilyExhaustiveSummaryV1Id {
         self.summary_ids[family.index()]
     }
 
     /// All summary identities in canonical family order.
-    pub const fn summary_ids(
-        &self,
-    ) -> [MarketFamilyExhaustiveSummaryV1Id; MARKET_FAMILY_COUNT_V1] {
+    pub const fn summary_ids(&self) -> [MarketFamilyExhaustiveSummaryV1Id; MARKET_FAMILY_COUNT_V1] {
         self.summary_ids
     }
 
@@ -1312,8 +1294,7 @@ impl FixedCodec for MarketFamilyAggregatorTerminalProjectionV1 {
             [MarketFamilyExhaustiveSummaryV1Id(ContentId::ZERO); MARKET_FAMILY_COUNT_V1];
         let mut index = 0_usize;
         while index < MARKET_FAMILY_COUNT_V1 {
-            summary_ids[index] =
-                MarketFamilyExhaustiveSummaryV1Id::from_bytes(reader.id().bytes());
+            summary_ids[index] = MarketFamilyExhaustiveSummaryV1Id::from_bytes(reader.id().bytes());
             index += 1;
         }
         reader.finish()?;
