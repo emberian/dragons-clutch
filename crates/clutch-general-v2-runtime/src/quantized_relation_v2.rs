@@ -434,7 +434,83 @@ mod tests {
         verify_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2, EconomicDomainV2,
         PricePreconditionV2, ECONOMIC_RELATION_VERSION_V2,
     };
+    use clutch_price_measure::{
+        verify_quantized_atom_mixture_v1, BoundQuantizedSplineV1,
+        QuantizedAtomMixtureBindingsV1, QuantizedAtomMixtureCertificateV1,
+        QuantizedPayoutPriceVectorV1,
+    };
     use crate::relation_v2_policy_id_v1;
+
+    fn exact_price_authority_fixture() -> (
+        EconomicDomainV2,
+        PricePreconditionV2,
+        VerifiedQuantizedAtomMixtureV1,
+    ) {
+        let mut knots = [0u128; 16];
+        knots[..3].copy_from_slice(&[0, 2, 4]);
+        let basis = QuantizedBasisSpecV1 {
+            outcome_count: 4,
+            degree: 2,
+            knot_count: 3,
+            uniform_log2_spacing: 1,
+            denominator: 12,
+            domain_max: 4,
+            edge_policy: QuantizedEdgePolicyV1::Clamp,
+            knots,
+        };
+        let prices = basis.evaluate(1).unwrap().weights;
+        let domain = EconomicDomainV2 {
+            relation_version: ECONOMIC_RELATION_VERSION_V2,
+            market_semantics_digest: [1; 32],
+            epoch_semantics_digest: [2; 32],
+            relation_policy_digest: quantized_relation_v2_policy_id_v2().unwrap().bytes(),
+            price_policy_digest: [3; 32],
+            epoch_index: 9,
+            outcome_count: 4,
+            price_scale: 12,
+        };
+        let price_digest = price_semantics_digest_v2(&domain, &prices).unwrap();
+        let price = PricePreconditionV2 {
+            policy_digest: domain.price_policy_digest,
+            semantic_price_digest: price_digest,
+            prices,
+        };
+        let bindings = QuantizedAtomMixtureBindingsV1 {
+            market_id: [4; 32],
+            terms_id: [5; 32],
+            basis_id: [6; 32],
+            price_id: price_digest,
+        };
+        let bound = BoundQuantizedSplineV1 {
+            bindings,
+            coordinate_domain_min: 0,
+            coordinate_domain_max: 4,
+            basis,
+        };
+        let payout_price = QuantizedPayoutPriceVectorV1 {
+            price_id: price_digest,
+            outcome_count: 4,
+            prices,
+        };
+        let mut coordinates = [0u128; 16];
+        coordinates[0] = 1;
+        let mut masses = [0u64; 16];
+        masses[0] = 1;
+        let certificate = QuantizedAtomMixtureCertificateV1::new(
+            bindings,
+            2,
+            4,
+            12,
+            1,
+            1,
+            coordinates,
+            masses,
+        )
+        .unwrap();
+        let verified =
+            verify_quantized_atom_mixture_v1(&bound, &payout_price, &certificate).unwrap();
+        (domain, price, verified)
+    }
 
     #[test]
     fn successor_policy_commits_exact_finite_profile_and_is_breaking() {
@@ -467,6 +543,38 @@ mod tests {
         assert_eq!(
             validate_quantized_relation_profile_v2(2, 16, 1_000, 1_000),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn exact_certificate_is_required_against_the_same_policy_and_price_digest() {
+        let (domain, price, certificate) = exact_price_authority_fixture();
+        assert!(bind_quantized_relation_price_certificate_v2(domain, price, certificate).is_ok());
+
+        let wrong_policy_domain = EconomicDomainV2 {
+            relation_policy_digest: relation_v2_policy_id_v1().unwrap().bytes(),
+            ..domain
+        };
+        assert_eq!(
+            bind_quantized_relation_price_certificate_v2(
+                wrong_policy_domain,
+                price,
+                certificate,
+            ),
+            Err(GeneralV2RuntimeError::BindingMismatch)
+        );
+
+        let forged_price_identity = PricePreconditionV2 {
+            semantic_price_digest: [9; 32],
+            ..price
+        };
+        assert_eq!(
+            bind_quantized_relation_price_certificate_v2(
+                domain,
+                forged_price_identity,
+                certificate,
+            ),
+            Err(GeneralV2RuntimeError::BindingMismatch)
         );
     }
 
