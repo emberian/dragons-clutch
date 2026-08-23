@@ -598,6 +598,47 @@ where
     Ok(())
 }
 
+/// Validate a live account list while deriving its bounded active-outcome
+/// width from the canonical variable suffix.
+///
+/// Fixed-width actions return `1`; their physical contract is independent of
+/// market width. Variable-width actions return the exact nonzero suffix width
+/// admitted by the same central role contract. This lets runtimes admit count,
+/// privileges, and aliases before indexing any hostile account slice.
+pub fn validate_inferred_collateral_account_metas_with_v3<F>(
+    action: CollateralActionV3,
+    selected_outcome: Option<u8>,
+    observed_len: usize,
+    observed_at: F,
+) -> Result<u8>
+where
+    F: FnMut(usize) -> Option<ObservedCollateralAccountMetaV3>,
+{
+    let outcome_count = if action.has_outcome_mint_suffix() {
+        let prefix = match action {
+            CollateralActionV3::Materialize | CollateralActionV3::Dematerialize => {
+                CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3
+            }
+            CollateralActionV3::RedeemExternal => EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3,
+            _ => return Err(CodecError::InvalidTag),
+        };
+        let suffix_len = observed_len
+            .checked_sub(prefix)
+            .ok_or(CodecError::Truncated)?;
+        u8::try_from(suffix_len).map_err(|_| CodecError::InvalidCount)?
+    } else {
+        1
+    };
+    validate_collateral_account_metas_with_v3(
+        action,
+        outcome_count,
+        selected_outcome,
+        observed_len,
+        observed_at,
+    )?;
+    Ok(outcome_count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,6 +703,40 @@ mod tests {
                 .unwrap()
                 .len(),
             EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3 + 16
+        );
+    }
+
+    #[test]
+    fn inferred_validator_owns_fixed_and_variable_counts() {
+        let fixed = observed(CollateralActionV3::Endow, 2, None);
+        assert_eq!(
+            validate_inferred_collateral_account_metas_with_v3(
+                CollateralActionV3::Endow,
+                None,
+                fixed.len(),
+                |index| fixed.get(index).copied(),
+            ),
+            Ok(1)
+        );
+
+        let variable = observed(CollateralActionV3::Materialize, 2, Some(1));
+        assert_eq!(
+            validate_inferred_collateral_account_metas_with_v3(
+                CollateralActionV3::Materialize,
+                Some(1),
+                variable.len(),
+                |index| variable.get(index).copied(),
+            ),
+            Ok(2)
+        );
+        assert_eq!(
+            validate_inferred_collateral_account_metas_with_v3(
+                CollateralActionV3::Materialize,
+                Some(1),
+                CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3,
+                |_| None,
+            ),
+            Err(CodecError::InvalidCount)
         );
     }
 

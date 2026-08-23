@@ -7,7 +7,7 @@
 //! Product artifact, Realm-selected collateral release, HoardV2, PositionV3,
 //! and GEN1 Replay before any token CPI is authorized.
 
-use crate::accounts::{require, require_count, require_distinct, require_signer, Outcome};
+use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_collateral_adapter_v2::{
@@ -134,10 +134,7 @@ fn create_fully_funded_pda<'a>(
     signer_seeds: &[&[u8]],
 ) -> Outcome<()> {
     require(
-        target.is_writable
-            && !target.executable
-            && target.data_len() == 0
-            && *target.owner == SYSTEM_PROGRAM_ID,
+        !target.executable && target.data_len() == 0 && *target.owner == SYSTEM_PROGRAM_ID,
         ClutchError::AlreadyInitialized,
     )?;
     let payer_before = payer.lamports();
@@ -407,10 +404,7 @@ pub fn process_endow_v3(
     request: &Request,
 ) -> Outcome<()> {
     let request = decode_endow_request(request)?;
-    require_count(accounts, ENDOW_ACCOUNT_COUNT_V3)?;
-    require_signer(&accounts[ix::ACTOR])?;
-    require(accounts[ix::ACTOR].is_writable, ClutchError::NotWritable)?;
-    require_distinct(accounts)?;
+    validate_full_width_collateral_accounts_v3(accounts, CollateralActionV3::Endow, None)?;
     require(
         accounts[ix::ACTOR].key.to_bytes() == request.owner.bytes(),
         ClutchError::UnauthorizedActor,
@@ -429,12 +423,6 @@ pub fn process_endow_v3(
         &accounts[ix::CLAIM_LEDGER],
         true,
         false,
-    )?;
-    validate_full_width_collateral_accounts_v3(
-        accounts,
-        CollateralActionV3::Endow,
-        liabilities.hoard.outcome_count,
-        None,
     )?;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()
@@ -666,9 +654,7 @@ pub fn process_withdraw_cash_v3(
     request: &Request,
 ) -> Outcome<()> {
     let request = decode_withdraw_request(request)?;
-    require_count(accounts, WITHDRAW_ACCOUNT_COUNT_V3)?;
-    require_signer(&accounts[ix::ACTOR])?;
-    require_distinct(accounts)?;
+    validate_full_width_collateral_accounts_v3(accounts, CollateralActionV3::WithdrawCash, None)?;
     require(
         accounts[ix::ACTOR].key.to_bytes() == request.owner.bytes()
             && accounts[ix::DESTINATION].key.to_bytes() == request.destination.bytes(),
@@ -688,12 +674,6 @@ pub fn process_withdraw_cash_v3(
         &accounts[ix::CLAIM_LEDGER],
         true,
         false,
-    )?;
-    validate_full_width_collateral_accounts_v3(
-        accounts,
-        CollateralActionV3::WithdrawCash,
-        liabilities.hoard.outcome_count,
-        None,
     )?;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()

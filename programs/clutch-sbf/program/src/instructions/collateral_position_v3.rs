@@ -25,7 +25,8 @@ use clutch_retirement::{
     PositionV3Sha256Backend, ReplayV3HashBackend, POSITION_V3_BYTES,
 };
 use clutch_solana_layout::collateral_v3_accounts::{
-    validate_collateral_account_metas_with_v3, CollateralActionV3, ObservedCollateralAccountMetaV3,
+    validate_inferred_collateral_account_metas_with_v3, CollateralActionV3,
+    ObservedCollateralAccountMetaV3,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -41,12 +42,10 @@ use super::product_artifact::authenticate_product_artifact_v1;
 pub(crate) fn validate_full_width_collateral_accounts_v3(
     accounts: &[AccountInfo<'_>],
     action: CollateralActionV3,
-    outcome_count: u8,
     selected_outcome: Option<u8>,
-) -> Outcome<()> {
-    validate_collateral_account_metas_with_v3(
+) -> Outcome<u8> {
+    validate_inferred_collateral_account_metas_with_v3(
         action,
-        outcome_count,
         selected_outcome,
         accounts.len(),
         |index| {
