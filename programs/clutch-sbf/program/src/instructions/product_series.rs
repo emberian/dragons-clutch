@@ -39,6 +39,9 @@ use clutch_solana_layout::product_series::{
     SeriesFundingAccountV1, SeriesRegistryAccountV1, SERIES_FUNDING_ACCOUNT_BYTES_V1,
     SERIES_REGISTRY_ACCOUNT_BYTES_V1,
 };
+use clutch_source_plane_v3_runtime::{
+    AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, ClockSnapshotV1,
+};
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
@@ -169,6 +172,24 @@ pub struct AuthenticatedSeriesTerminalV1 {
     activation_generation: u64,
     projection: SeriesFundingTerminalProjectionV1,
     receipt_id: ContentId,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AuthenticatedSeriesClockAuthorityV1 {
+    series_plan_id: SeriesPlanV5Id,
+    clock: AuthenticatedClockBucketV1,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV1 for AuthenticatedSeriesClockAuthorityV1 {
+    fn authenticated_current_bucket(
+        &self,
+        series: &SeriesPlanV5,
+    ) -> clutch_product_series::Result<u64> {
+        if series.id()? != self.series_plan_id {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(self.clock.bucket())
+    }
 }
 
 impl AuthenticatedSeriesTerminalV1 {
@@ -1262,20 +1283,22 @@ pub fn authenticate_series_terminal(
     let mut funding_body = [0; SERIES_FUNDING_ACCOUNT_BYTES_V1];
     funding_value.encode(&mut funding_body)?;
     let generation = SERIES_ACTIVATION_GENERATION_V1.to_le_bytes();
+    let registry_account = registry.account();
+    let funding_account = funding.account();
     let receipt_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             SERIES_TERMINAL_RECEIPT_DOMAIN_V1,
-            registry.account().as_ref(),
+            registry_account.as_ref(),
             &registry_body,
-            funding.account().as_ref(),
+            funding_account.as_ref(),
             &funding_body,
             &generation,
         ])
         .to_bytes(),
     );
     Ok(AuthenticatedSeriesTerminalV1 {
-        registry_account: registry.account(),
-        funding_account: funding.account(),
+        registry_account,
+        funding_account,
         series_plan_id,
         funding_terms_id,
         funding_quote_id,
@@ -1283,6 +1306,109 @@ pub fn authenticate_series_terminal(
         projection,
         receipt_id,
     })
+}
+
+fn authenticate_series_clock(
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+    source_release: AuthenticatedSourceReleaseV1,
+    clock_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSeriesClockAuthorityV1> {
+    require(
+        *clock_account.key == crate::instructions::artifact::CLOCK_SYSVAR_ID
+            && clock_account.owner.to_bytes() == crate::instructions_sysvar::SYSVAR_OWNER_ID,
+        ClutchError::WrongClockSysvar,
+    )?;
+    require(
+        !clock_account.is_signer
+            && !clock_account.is_writable
+            && !clock_account.executable
+            && clock_account.data_len() == crate::instructions::artifact::CLOCK_SYSVAR_LEN,
+        ClutchError::WrongClockSysvar,
+    )?;
+    let manifest = source_release.manifest();
+    require(
+        manifest.source_plane_contract_id == artifacts.template.source_plane_contract_id
+            && manifest.source_spec_id == artifacts.template.source_spec_id,
+        ClutchError::MismatchedState,
+    )?;
+    let data = clock_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let slot = u64::from_le_bytes(
+        data[..8]
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?,
+    );
+    let unix_timestamp_signed = i64::from_le_bytes(
+        data[32..40]
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?,
+    );
+    let unix_timestamp = u64::try_from(unix_timestamp_signed)
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
+    let clock = AuthenticatedClockBucketV1::from_snapshot(
+        &source_release.clock_policy(),
+        ClockSnapshotV1 {
+            slot,
+            unix_timestamp,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedSeriesClockAuthorityV1 {
+        series_plan_id,
+        clock,
+    })
+}
+
+/// Apply the free elapsed-occurrence transition from the real Solana Clock and
+/// the sole ClockPolicy embedded in an authenticated Source release.
+///
+/// This transition emits no liveness work authorization and consumes no
+/// component principal. The caller cannot provide a current bucket or shadow
+/// Clock policy. Central registry-release authentication remains a separate
+/// missing join, so this helper is not dispatched.
+#[allow(clippy::too_many_arguments)]
+pub fn lapse_series_occurrence(
+    funding_account: &AccountInfo<'_>,
+    funding: AuthenticatedSeriesFundingAccountV1,
+    registry: AuthenticatedSeriesRegistryAccountV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+    source_release: AuthenticatedSourceReleaseV1,
+    clock_account: &AccountInfo<'_>,
+    expected_ordinal: u32,
+) -> Outcome<u32> {
+    require(registry.activation_consumed(), ClutchError::Replay)?;
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        registry.value().series_plan_id == series_plan_id
+            && registry.value().funding_terms_id
+                == artifacts
+                    .funding_terms
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && funding.value().state.series_plan_id == series_plan_id
+            && funding.value().state.funding_quote_id
+                == artifacts
+                    .quote
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ClutchError::MismatchedState,
+    )?;
+    let authority = authenticate_series_clock(artifacts, source_release, clock_account)?;
+    let mut next = funding.value().state;
+    let ordinal = next
+        .lapse(&authority, &artifacts.series, &artifacts.quote)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(ordinal == expected_ordinal, ClutchError::Replay)?;
+    write_series_funding_state(funding_account, funding, next)?;
+    Ok(ordinal)
 }
 
 fn require_lamport_vault_metadata(

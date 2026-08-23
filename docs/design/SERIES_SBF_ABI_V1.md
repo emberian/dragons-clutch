@@ -166,13 +166,18 @@ need any missing semantic receipt:
 - Realm-selected creation and hostile-byte admission of five legacy-SPL or
   Token-2022-base collateral vaults, with prefund swept to neutral before the
   payer supplies each separately persisted exact rent principal;
+- free lapse from the real Solana Clock sysvar and the sole ClockPolicy body
+  embedded in an authenticated content-addressed Source release, with no
+  caller-provided bucket, shadow policy account, or liveness-work spend;
 - exact-delta payer funding and PDA-signed component disbursement/refund;
 - a private typed donation authority minted only from an observed positive
   lamport-vault surplus, which can authorize no other pure transition; and
+- a private terminal receipt binding the consumed registry replay anchor, exact
+  closed funding PDA/body, and authenticated FundingTerms/quote graph; and
 - account close that returns only stored rent principal to its owner and sends
   account surplus to the distinct neutral sink.
 
 These helpers are deliberately not dispatched. Collateral-vault post-deltas,
-complete activation, Clock-to-bucket authentication, occurrence fulfillment,
-and terminal multi-asset ordering still depend on typed runtime joins under
-active development.
+complete activation, occurrence fulfillment, terminal multi-asset ordering,
+and authoritative central registry-release authentication still depend on
+typed runtime joins under active development.

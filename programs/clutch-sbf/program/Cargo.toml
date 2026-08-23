@@ -40,6 +40,7 @@ laboratory-fixtures = []
 non-production-product-series-lab = [
     "dep:clutch-collateral-adapter-v2",
     "dep:clutch-product-series",
+    "dep:clutch-source-plane-v3-runtime",
     "clutch-solana-layout/non-production-product-series-lab",
 ]
 # Mutually exclusive deployable products. Each forwards the same identity to
@@ -81,6 +82,10 @@ clutch-kernel = { path = "../../../crates/clutch-kernel" }
 # transitions from the Position close route instead of restating them.
 clutch-liveness = { path = "../../../crates/clutch-liveness" }
 clutch-product-series = { path = "../../../crates/clutch-product-series", optional = true }
+clutch-source-plane-v3-runtime = {
+    path = "../../../crates/clutch-source-plane-v3-runtime",
+    optional = true,
+}
 clutch-solana-layout = { path = "../../solana-layout", default-features = false }
 clutch-solana-reference = { path = "../../solana-reference", default-features = false }
 solana-account-info = "=3.1.1"
