@@ -34,7 +34,8 @@ use clutch_general_v2_contract::{
     ConsumeDirectReceiptEggsPayloadV1, ConsumeVirtualMergeReceiptEggsPayloadV1,
     ConsumeVirtualSplitReceiptEggsPayloadV1, DeletableRentOwnerV1, EconomicDomainV2AccountV1,
     FinalPotV1AccountV1, GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1,
-    GeneralReservationSeedTupleV3, Id32, MarketBindingV1, OwnerSettlementSeedTupleV4,
+    GeneralReservationSeedTupleV3, GeneralReservationSeedTupleV9, Id32, MarketBindingV1,
+    OwnerSettlementSeedTupleV4,
     SettlementCashPotV1AccountV1, SettlementReceiptSeedTupleV3,
     SettlementReceiptSeedTupleV4, SettlementRootChildStateV1, SettlementRootPhaseV1,
     SettlementRootV1AccountV1,
@@ -82,6 +83,9 @@ use clutch_retirement::{
 use clutch_solana_layout::reservation::{
     canonical_reservation_id, ReservationAccount, ReservationPlan, RESERVATION_ACCOUNT_BYTES,
     RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED,
+};
+use clutch_solana_layout::reservation_v9::{
+    canonical_reservation_id_v9, ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9,
 };
 use clutch_solana_layout::settlement_receipt_v3::{
     project_settlement_receipt_evidence_v3, SettlementReceiptAccountV3,
@@ -160,6 +164,16 @@ pub struct MaterializationReservationInputV3<'a> {
     /// Canonical Reservation PDA authenticated by the outer adapter.
     pub account: Id32,
     /// Exact hostile canonical Reservation bytes at the current cursor.
+    pub encoded_body: &'a [u8],
+}
+
+/// One SBF-authenticated rent-owned Reservation V9 presented to the live V4
+/// settlement materializer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaterializationReservationInputV9<'a> {
+    /// Canonical Reservation V9 PDA authenticated by the outer adapter.
+    pub account: Id32,
+    /// Exact hostile 666-byte Reservation V9 prestate.
     pub encoded_body: &'a [u8],
 }
 
@@ -2553,7 +2567,7 @@ pub struct AccountReceiptEndTransitionPlanV4 {
     owner_settlement_poststate_body: [u8; OWNER_SETTLEMENT_BODY_V4_BYTES],
     reservation_account: Id32,
     reservation_semantic_id: Id32,
-    reservation_poststate_body: [u8; RESERVATION_ACCOUNT_BYTES],
+    reservation_poststate_body: [u8; RESERVATION_ACCOUNT_BYTES_V9],
     reservation_body_changed: bool,
     reservation_handoff: Option<AuthenticatedReservationHandoffV3>,
     position_account: Id32,
@@ -2635,7 +2649,7 @@ impl AccountReceiptEndTransitionPlanV4 {
     }
 
     /// Exact canonical Reservation successor body.
-    pub const fn reservation_poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES] {
+    pub const fn reservation_poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES_V9] {
         &self.reservation_poststate_body
     }
 
@@ -2802,7 +2816,8 @@ pub fn prepare_account_receipt_end_transition_v4(
     let slot = verified_slot.slot;
     let position_generation = verified_slot.position_generation;
 
-    let mut reservation = ReservationAccount::decode(input.reservation_body)?;
+    let reservation_v9 = ReservationAccountV9::decode(input.reservation_body)?;
+    let mut reservation = reservation_v9.body();
     let order_id = slot.order_id();
     let owner = slot.owner();
     let order_generation = slot.generation();
@@ -2836,7 +2851,7 @@ pub fn prepare_account_receipt_end_transition_v4(
         || reservation.owner != owner
         || reservation.order_id != order_id
         || reservation.reservation
-            != canonical_reservation_id(
+            != canonical_reservation_id_v9(
                 reservation.market,
                 reservation.epoch,
                 owner,
@@ -2928,11 +2943,9 @@ pub fn prepare_account_receipt_end_transition_v4(
         input.reservation_account,
         &mut reservation,
     )?;
-    let mut reservation_poststate_body = [0u8; RESERVATION_ACCOUNT_BYTES];
-    let written = reservation.encode(&mut reservation_poststate_body)?;
-    if written != RESERVATION_ACCOUNT_BYTES {
-        return Err(SettlementAdapterErrorV1::OutputLengthMismatch);
-    }
+    let reservation_poststate = ReservationAccountV9::new(reservation, reservation_v9.rent())?;
+    let mut reservation_poststate_body = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
+    reservation_poststate.encode(&mut reservation_poststate_body)?;
     let reservation_body_changed = reservation_poststate_body != input.reservation_body;
     let handed_cash = reservation_handoff.map(|handoff| handoff.cash_atoms());
     if reservation_body_changed != matches!(handed_cash, Some(amount) if amount != 0) {
@@ -3273,7 +3286,7 @@ pub struct EggDeliveryEndpointPlanV4 {
     position_generation: u64,
     reservation_account: Id32,
     reservation_semantic_id: Id32,
-    reservation_poststate_body: [u8; RESERVATION_ACCOUNT_BYTES],
+    reservation_poststate_body: [u8; RESERVATION_ACCOUNT_BYTES_V9],
     position_account: Id32,
     position_prestate_semantic_id: Id32,
     position_poststate_semantic_id: Id32,
@@ -3328,7 +3341,7 @@ impl EggDeliveryEndpointPlanV4 {
     }
 
     /// Exact canonical Reservation successor body.
-    pub const fn reservation_poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES] {
+    pub const fn reservation_poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES_V9] {
         &self.reservation_poststate_body
     }
 
@@ -3704,7 +3717,8 @@ fn stage_egg_delivery_endpoint_v4(
             return Err(SettlementAdapterErrorV1::BindingMismatch)
         }
     };
-    let mut reservation = ReservationAccount::decode(input.reservation_body)?;
+    let reservation_v9 = ReservationAccountV9::decode(input.reservation_body)?;
+    let mut reservation = reservation_v9.body();
     let reservation_plan = ReservationPlan::for_order(
         &slot,
         feed.outcome_count,
@@ -3716,7 +3730,7 @@ fn stage_egg_delivery_endpoint_v4(
         || reservation.owner.bytes() != owner.bytes()
         || reservation.order_id != order_id
         || reservation.reservation
-            != canonical_reservation_id(
+            != canonical_reservation_id_v9(
                 reservation.market,
                 reservation.epoch,
                 reservation.owner,
@@ -3810,10 +3824,9 @@ fn stage_egg_delivery_endpoint_v4(
             }
         }
     }
-    let mut reservation_poststate_body = [0u8; RESERVATION_ACCOUNT_BYTES];
-    if reservation.encode(&mut reservation_poststate_body)? != RESERVATION_ACCOUNT_BYTES {
-        return Err(SettlementAdapterErrorV1::OutputLengthMismatch);
-    }
+    let reservation_poststate = ReservationAccountV9::new(reservation, reservation_v9.rent())?;
+    let mut reservation_poststate_body = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
+    reservation_poststate.encode(&mut reservation_poststate_body)?;
     let position_poststate = position.settlement_poststate(
         position_body.cash_atoms(),
         position_body.reserved_cash_atoms(),
@@ -5356,7 +5369,7 @@ pub fn derive_settlement_traversal_projection_v4(
             let position_generation = order_projection
                 .position_generation(order_index)
                 .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
-            let reservation = canonical_reservation_id(
+            let reservation = canonical_reservation_id_v9(
                 LayoutHash32(frozen_identity(projection.market())),
                 LayoutHash32(frozen_identity(projection.epoch())),
                 LayoutHash32(frozen_identity(frozen.owner())),
@@ -5488,33 +5501,10 @@ pub fn derive_candidate_entitlement_projection_v4(
     settlement_root: &SettlementRootV1AccountV1,
     traversal: &SettlementTraversalProjectionV4,
 ) -> Result<CandidateEntitlementProjectionV4, SettlementAdapterErrorV1> {
-    settlement_root.validate()?;
-    let feed = traversal.feed;
+    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)?;
     let counts = settlement_root.counts();
-    if settlement_root_account.is_zero()
-        || settlement_root.phase() != SettlementRootPhaseV1::Materializing
+    if settlement_root.phase() != SettlementRootPhaseV1::Materializing
         || counts.admitted_receipts >= counts.expected_receipts
-        || settlement_root.retained_feed() != traversal.selected_feed_account
-        || settlement_root.candidate_bundle_digest() != traversal.candidate_bundle_digest
-        || settlement_root.epoch() != feed.epoch
-        || settlement_root.market() != feed.market
-        || settlement_root.source_admission_node() != feed.node
-        || settlement_root.order_set() != feed.order_set
-        || settlement_root.settlement_candidate_id() != feed.settlement_candidate_id
-        || settlement_root.settlement_witness_digest() != feed.settlement_witness_digest
-        || settlement_root.epoch_generation() != feed.epoch_generation
-        || settlement_root.outcome_count() != feed.outcome_count
-        || settlement_root.order_count() != feed.order_count
-        || settlement_root.owner_order_set_digest() != traversal.owner_order_set_digest
-        || settlement_root.market_instance_v2_id().bytes()
-            != traversal.position_market_binding.market_instance_id.bytes()
-        || settlement_root.virtual_cash_direction() != traversal.virtual_cash_direction
-        || settlement_root.virtual_cash_atoms() != traversal.virtual_cash_atoms
-        || counts.expected_receipts != feed.slice_count
-        || counts.expected_owner_rows != traversal.owner_basis.owner_count()
-        || counts.expected_reservations != traversal.expected_reservation_count
-        || counts.expected_filled_reservations != traversal.expected_filled_reservation_count
-        || counts.expected_merge_payments != traversal.expected_merge_payment_count
     {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
@@ -5555,6 +5545,64 @@ pub fn derive_candidate_entitlement_projection_v4(
         current_buy_first_owner,
         current_sell_first_owner,
     })
+}
+
+/// Rebind one semantic owner to the exhaustive action-39 traversal after the
+/// counted root exists. This returns immutable BasisV4 only; it grants no
+/// cursor, fee, cash, replay, or account-write authority.
+pub fn derive_root_owner_basis_v4(
+    settlement_root_account: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    traversal: &SettlementTraversalProjectionV4,
+    owner: Id32,
+) -> Result<OwnerSettlementExpectationBasisV4, SettlementAdapterErrorV1> {
+    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)?;
+    if !matches!(
+        settlement_root.phase(),
+        SettlementRootPhaseV1::Materializing | SettlementRootPhaseV1::Settling
+    ) {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    traversal
+        .owner_basis
+        .row_for_owner(owner.bytes())
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)
+}
+
+fn require_root_traversal_binding_v4(
+    settlement_root_account: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    traversal: &SettlementTraversalProjectionV4,
+) -> Result<(), SettlementAdapterErrorV1> {
+    settlement_root.validate()?;
+    let feed = traversal.feed;
+    let counts = settlement_root.counts();
+    if settlement_root_account.is_zero()
+        || settlement_root.retained_feed() != traversal.selected_feed_account
+        || settlement_root.candidate_bundle_digest() != traversal.candidate_bundle_digest
+        || settlement_root.epoch() != feed.epoch
+        || settlement_root.market() != feed.market
+        || settlement_root.source_admission_node() != feed.node
+        || settlement_root.order_set() != feed.order_set
+        || settlement_root.settlement_candidate_id() != feed.settlement_candidate_id
+        || settlement_root.settlement_witness_digest() != feed.settlement_witness_digest
+        || settlement_root.epoch_generation() != feed.epoch_generation
+        || settlement_root.outcome_count() != feed.outcome_count
+        || settlement_root.order_count() != feed.order_count
+        || settlement_root.owner_order_set_digest() != traversal.owner_order_set_digest
+        || settlement_root.market_instance_v2_id().bytes()
+            != traversal.position_market_binding.market_instance_id.bytes()
+        || settlement_root.virtual_cash_direction() != traversal.virtual_cash_direction
+        || settlement_root.virtual_cash_atoms() != traversal.virtual_cash_atoms
+        || counts.expected_receipts != feed.slice_count
+        || counts.expected_owner_rows != traversal.owner_basis.owner_count()
+        || counts.expected_reservations != traversal.expected_reservation_count
+        || counts.expected_filled_reservations != traversal.expected_filled_reservation_count
+        || counts.expected_merge_payments != traversal.expected_merge_payment_count
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    Ok(())
 }
 
 const fn frozen_identity(value: Id32) -> [u8; 32] {
@@ -5719,7 +5767,7 @@ impl ReceiptCreatePlanV4 {
 }
 
 /// Candidate-fee evidence for one fresh V4 owner row.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OwnerRowFeeEvidenceV4 {
     /// Candidate has a counted fee record; even a zero-fee owner carries its
     /// exact authenticated payer-snapshot projection.
@@ -5763,7 +5811,7 @@ pub struct EntitlementEndpointInputV4<'a> {
     /// Dense frozen V5 order index; route order is derived, never selected.
     pub order_index: u8,
     /// Exact canonical Reservation account and hostile current body.
-    pub reservation: MaterializationReservationInputV3<'a>,
+    pub reservation: MaterializationReservationInputV9<'a>,
     /// Exact canonical General Position V3 account and hostile current body.
     pub position: PositionAccountInputV3<'a>,
     /// Exact V4 owner-row create or pristine-existing facts.
@@ -5833,11 +5881,11 @@ impl OwnerRowMaterializationDispositionV4 {
 pub struct ReservationMaterializationPlanV4 {
     account: Id32,
     semantic_id: Id32,
-    seed: GeneralReservationSeedTupleV3,
+    seed: GeneralReservationSeedTupleV9,
     order_index: u8,
     first_occurrence: bool,
-    prestate_body: [u8; RESERVATION_ACCOUNT_BYTES],
-    poststate_body: [u8; RESERVATION_ACCOUNT_BYTES],
+    prestate_body: [u8; RESERVATION_ACCOUNT_BYTES_V9],
+    poststate_body: [u8; RESERVATION_ACCOUNT_BYTES_V9],
 }
 
 impl ReservationMaterializationPlanV4 {
@@ -5851,8 +5899,8 @@ impl ReservationMaterializationPlanV4 {
         self.semantic_id
     }
 
-    /// Canonical General Reservation V3 seed tuple.
-    pub const fn seed(&self) -> GeneralReservationSeedTupleV3 {
+    /// Canonical rent-owned General Reservation V9 seed tuple.
+    pub const fn seed(&self) -> GeneralReservationSeedTupleV9 {
         self.seed
     }
 
@@ -5867,12 +5915,12 @@ impl ReservationMaterializationPlanV4 {
     }
 
     /// Exact current canonical Reservation body.
-    pub const fn prestate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES] {
+    pub const fn prestate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES_V9] {
         &self.prestate_body
     }
 
     /// Exact canonical Reservation successor body.
-    pub const fn poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES] {
+    pub const fn poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES_V9] {
         &self.poststate_body
     }
 }
@@ -6285,7 +6333,8 @@ fn prepare_entitlement_endpoint_v4(
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
 
-    let reservation = ReservationAccount::decode(input.reservation.encoded_body)?;
+    let reservation_v9 = ReservationAccountV9::decode(input.reservation.encoded_body)?;
+    let reservation = reservation_v9.body();
     let reservation_plan = ReservationPlan::for_order(
         frozen.slot(),
         feed.outcome_count,
@@ -6343,16 +6392,14 @@ fn prepare_entitlement_endpoint_v4(
         reservation_poststate.entitled_units = membership.entitled_units;
     }
     reservation_poststate.validate()?;
-    let mut reservation_prestate_body = [0u8; RESERVATION_ACCOUNT_BYTES];
-    let mut reservation_poststate_body = [0u8; RESERVATION_ACCOUNT_BYTES];
-    if reservation.encode(&mut reservation_prestate_body)? != RESERVATION_ACCOUNT_BYTES
-        || reservation_poststate.encode(&mut reservation_poststate_body)?
-            != RESERVATION_ACCOUNT_BYTES
-    {
-        return Err(SettlementAdapterErrorV1::OutputLengthMismatch);
-    }
+    let reservation_poststate_v9 =
+        ReservationAccountV9::new(reservation_poststate, reservation_v9.rent())?;
+    let mut reservation_prestate_body = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
+    let mut reservation_poststate_body = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
+    reservation_v9.encode(&mut reservation_prestate_body)?;
+    reservation_poststate_v9.encode(&mut reservation_poststate_body)?;
     let reservation_semantic_id = Id32::new(reservation.reservation.bytes())?;
-    let reservation_seed = GeneralReservationSeedTupleV3::new(reservation_semantic_id)?;
+    let reservation_seed = GeneralReservationSeedTupleV9::new(reservation_semantic_id)?;
     let reservation_output = ReservationMaterializationPlanV4 {
         account: input.reservation.account,
         semantic_id: reservation_semantic_id,
