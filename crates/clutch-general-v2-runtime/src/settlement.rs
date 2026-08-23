@@ -5326,15 +5326,19 @@ pub fn prepare_release_unfilled_reservation_v1(
         reservation.order_generation,
         release_generation,
     )?;
-    let mut root_prestate_body = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    let mut root_poststate_body = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    input.settlement_root.encode(&mut root_prestate_body)?;
-    settlement_root_poststate.encode(&mut root_poststate_body)?;
+    let root_prestate_data_id = settlement_root_release_data_id_v1(
+        input.settlement_root,
+        input.settlement_root_account,
+    )?;
+    let root_poststate_data_id = settlement_root_release_data_id_v1(
+        &settlement_root_poststate,
+        input.settlement_root_account,
+    )?;
     let transition_evidence_id = derive_unfilled_reservation_release_evidence_id_v1(
         transition_id,
         input.settlement_root_account,
-        &root_prestate_body,
-        &root_poststate_body,
+        root_prestate_data_id,
+        root_poststate_data_id,
         input.traversal.selected_feed_account,
         input.order_page_account,
         input.reservation_account,
@@ -5419,6 +5423,17 @@ pub fn prepare_release_unfilled_reservation_v1(
     })
 }
 
+/// Derive one exact root data identity in an isolated frame so action 41 never
+/// keeps two 980-byte encoded roots live in its planner frame.
+#[inline(never)]
+fn settlement_root_release_data_id_v1(
+    root: &SettlementRootV1AccountV1,
+    settlement_root_account: Id32,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    root.data_id(&CanonicalSha256, settlement_root_account)
+        .map_err(SettlementAdapterErrorV1::Contract)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn derive_unfilled_reservation_release_transition_id_v1(
     settlement_root_account: Id32,
@@ -5462,8 +5477,8 @@ fn derive_unfilled_reservation_release_transition_id_v1(
 fn derive_unfilled_reservation_release_evidence_id_v1(
     transition_id: Id32,
     settlement_root_account: Id32,
-    root_prestate_body: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES],
-    root_poststate_body: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES],
+    root_prestate_data_id: Id32,
+    root_poststate_data_id: Id32,
     retained_feed_account: Id32,
     order_page_account: Id32,
     reservation_account: Id32,
@@ -5488,8 +5503,8 @@ fn derive_unfilled_reservation_release_evidence_id_v1(
     hash.update(UNFILLED_RESERVATION_RELEASE_EVIDENCE_DOMAIN_V1);
     hash.update(transition_id.bytes());
     hash.update(settlement_root_account.bytes());
-    hash.update(root_prestate_body);
-    hash.update(root_poststate_body);
+    hash.update(root_prestate_data_id.bytes());
+    hash.update(root_poststate_data_id.bytes());
     hash.update(retained_feed_account.bytes());
     hash.update(order_page_account.bytes());
     hash.update(reservation_account.bytes());
@@ -6933,20 +6948,18 @@ mod scalable_receipt_end_tests {
 
     #[test]
     fn action41_evidence_commits_root_and_exact_rent_poststates() {
-        let mut root_pre = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-        let mut root_post = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-        root_pre[0] = 1;
-        root_post[0] = 2;
-        let derive = |post: &[u8; SETTLEMENT_ROOT_ACCOUNT_BYTES], payer_after| {
+        let root_pre = id(21);
+        let root_post = id(22);
+        let derive = |post: Id32, payer_after| {
             derive_unfilled_reservation_release_evidence_id_v1(
-                id(1), id(2), &root_pre, post, id(3), id(4), id(5), id(6), id(7), id(8),
+                id(1), id(2), root_pre, post, id(3), id(4), id(5), id(6), id(7), id(8),
                 id(9), id(10), id(11), 12, id(13), 14, 15, payer_after, id(16), 17, 18,
                 35, 31,
             )
             .unwrap()
         };
-        let canonical = derive(&root_post, 29);
-        assert_ne!(canonical, derive(&root_pre, 29));
-        assert_ne!(canonical, derive(&root_post, 30));
+        let canonical = derive(root_post, 29);
+        assert_ne!(canonical, derive(root_pre, 29));
+        assert_ne!(canonical, derive(root_post, 30));
     }
 }

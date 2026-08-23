@@ -90,6 +90,15 @@ pub mod general_v2_direct_v5;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_merge_payment_v5;
+/// Staged-disabled selected zero-fill Reservation release and atomic close.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -110,7 +119,13 @@ pub(crate) mod general_v2_position_replay;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_receipt_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
 pub mod general_v2_settlement_root;
 pub mod genesis;
 pub mod market_init;
