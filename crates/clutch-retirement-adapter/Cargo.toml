@@ -11,13 +11,24 @@ path = "src/lib.rs"
 
 [features]
 default = ["profile-full"]
-profile-full = ["clutch-solana-layout/profile-full"]
-profile-direct-v3-source-v2-point = ["clutch-solana-layout/profile-direct-v3-source-v2-point"]
-profile-general-source-v2-point = ["clutch-solana-layout/profile-general-source-v2-point"]
+profile-full = [
+    "clutch-solana-layout/profile-full",
+    "clutch-solana-reference/profile-full",
+]
+profile-direct-v3-source-v2-point = [
+    "clutch-solana-layout/profile-direct-v3-source-v2-point",
+    "clutch-solana-reference/profile-direct-v3-source-v2-point",
+]
+profile-general-source-v2-point = [
+    "clutch-solana-layout/profile-general-source-v2-point",
+    "clutch-solana-reference/profile-general-source-v2-point",
+]
 
 [dependencies]
+clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
 clutch-retirement = { path = "../clutch-retirement" }
 clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }
+clutch-solana-reference = { path = "../../programs/solana-reference", default-features = false }
 
 [dev-dependencies]
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }

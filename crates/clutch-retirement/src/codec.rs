@@ -6,8 +6,8 @@ use crate::{
     EPOCH_RETIREMENT_TAIL_V1_BYTES, GENERAL_EPOCH_TOMBSTONE_TAG, GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
     GENERAL_EPOCH_TOMBSTONE_VERSION_V1, IDENTITY_BYTES, MARKET_EPOCH_CURSOR_V1_BYTES,
     POSITION_RETIREMENT_TAIL_V1_BYTES, POSITION_TOMBSTONE_TAG, POSITION_TOMBSTONE_V1_BYTES,
-    POSITION_TOMBSTONE_VERSION_V1, RENT_SPLIT_V2_BYTES, RESERVATION_COUNT_TAIL_V1_BYTES,
-    RESERVATION_RETIREMENT_TAIL_V2_BYTES,
+    POSITION_TOMBSTONE_V2_BYTES, POSITION_TOMBSTONE_VERSION_V1, POSITION_TOMBSTONE_VERSION_V2,
+    RENT_SPLIT_V2_BYTES, RESERVATION_COUNT_TAIL_V1_BYTES, RESERVATION_RETIREMENT_TAIL_V2_BYTES,
 };
 
 fn exact(input: &[u8], expected: usize) -> Result<(), RetirementErrorV1> {
@@ -626,6 +626,88 @@ impl PositionTombstoneV1 {
         };
         value.validate()?;
         Ok(value)
+    }
+}
+
+/// Permanent Position identity with an explicit retained-rent principal.
+///
+/// V1 omitted this amount and therefore cannot prove rent ownership across a
+/// later reopen. Production successor close/reopen paths use V2; V1 remains a
+/// frozen decode-only compatibility shape.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PositionTombstoneV2 {
+    /// Market identity.
+    pub market: Identity32V1,
+    /// Position owner identity.
+    pub owner: Identity32V1,
+    /// Closed generation; reopen increments it exactly once.
+    pub generation: u64,
+    /// Stored canonical PDA bump.
+    pub stored_bump: u8,
+    /// Exact permanent principal retained at close and never refunded.
+    pub permanent_tombstone_principal: u64,
+}
+
+impl PositionTombstoneV2 {
+    /// Validate the mandatory permanent funding compartment.
+    pub const fn validate(self) -> Result<(), RetirementErrorV2> {
+        if self.permanent_tombstone_principal == 0 {
+            Err(RetirementErrorV2::NonCanonicalState)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Encode exactly 84 bytes. Byte 74 is CLOSED, byte 75 is the bump, and
+    /// bytes 76..84 persist the retained principal.
+    pub fn encode(self) -> Result<[u8; POSITION_TOMBSTONE_V2_BYTES], RetirementErrorV2> {
+        self.validate()?;
+        let mut out = [0u8; POSITION_TOMBSTONE_V2_BYTES];
+        out[0] = POSITION_TOMBSTONE_TAG;
+        out[1] = POSITION_TOMBSTONE_VERSION_V2;
+        out[2..34].copy_from_slice(&self.market.bytes());
+        out[34..66].copy_from_slice(&self.owner.bytes());
+        out[66..74].copy_from_slice(&self.generation.to_le_bytes());
+        out[74] = 1;
+        out[75] = self.stored_bump;
+        out[76..84].copy_from_slice(&self.permanent_tombstone_principal.to_le_bytes());
+        Ok(out)
+    }
+
+    /// Decode one exact successor tombstone and refuse V1, malformed phase,
+    /// zero identities, zero principal, truncation, and trailing bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, RetirementErrorV2> {
+        exact(input, POSITION_TOMBSTONE_V2_BYTES).map_err(retirement_error_v2_from_v1)?;
+        if input[0] != POSITION_TOMBSTONE_TAG {
+            return Err(RetirementErrorV2::WrongTag);
+        }
+        if input[1] != POSITION_TOMBSTONE_VERSION_V2 {
+            return Err(RetirementErrorV2::WrongVersion);
+        }
+        if input[74] != 1 {
+            return Err(RetirementErrorV2::InvalidEnum);
+        }
+        let value = Self {
+            market: read_identity(input, 2).map_err(retirement_error_v2_from_v1)?,
+            owner: read_identity(input, 34).map_err(retirement_error_v2_from_v1)?,
+            generation: read_u64(input, 66),
+            stored_bump: input[75],
+            permanent_tombstone_principal: read_u64(input, 76),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Project identity fields into the frozen V1 pure lifecycle shape after
+    /// V2 authentication. The separately retained principal must remain bound
+    /// to the reopen funding calculation.
+    pub const fn identity_v1(self) -> PositionTombstoneV1 {
+        PositionTombstoneV1 {
+            market: self.market,
+            owner: self.owner,
+            generation: self.generation,
+            stored_bump: self.stored_bump,
+        }
     }
 }
 
