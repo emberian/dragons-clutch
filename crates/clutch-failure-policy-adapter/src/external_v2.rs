@@ -202,11 +202,28 @@ pub fn authenticate_external_root_v2(
     expected_program_id: AccountId,
     root: AccountView<'_>,
 ) -> ExternalResultV2<AuthenticatedExternalRootV2> {
-    if root.owner != expected_program_id {
-        return Err(ExternalAdapterErrorV2::WrongOwner);
-    }
     if !root.is_writable {
         return Err(ExternalAdapterErrorV2::NotWritable);
+    }
+    authenticate_external_root_contents_v2(expected_program_id, root)
+}
+
+/// Authenticate owner, root key, complete codec, and digest without claiming
+/// write authority. The account-facing adapter separately enforces a read-only
+/// meta for transitions which preserve the semantic root byte-for-byte.
+pub fn authenticate_external_root_readonly_v2(
+    expected_program_id: AccountId,
+    root: AccountView<'_>,
+) -> ExternalResultV2<AuthenticatedExternalRootV2> {
+    authenticate_external_root_contents_v2(expected_program_id, root)
+}
+
+fn authenticate_external_root_contents_v2(
+    expected_program_id: AccountId,
+    root: AccountView<'_>,
+) -> ExternalResultV2<AuthenticatedExternalRootV2> {
+    if root.owner != expected_program_id {
+        return Err(ExternalAdapterErrorV2::WrongOwner);
     }
     let decoded = decode_root(root.data)?;
     if root.key.bytes() != decoded.runtime.semantic_state_id().bytes() {

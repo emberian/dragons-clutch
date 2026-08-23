@@ -104,19 +104,19 @@ typed_external_id!(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedRelationResultV2 {
     /// Exact failure-policy binding.
-    pub binding_id: FailurePolicyBindingId,
+    binding_id: FailurePolicyBindingId,
     /// Exact full-width occurrence.
-    pub market_instance_id: MarketInstanceV2Id,
+    market_instance_id: MarketInstanceV2Id,
     /// Exact failure/recovery generation.
-    pub generation: u64,
+    generation: u64,
     /// Exact authenticated source success handoff.
-    pub source_success_handoff_id: SourceContentId,
+    source_success_handoff_id: SourceContentId,
     /// Frozen relation policy implementation/content identity.
-    pub relation_policy_id: [u8; 32],
+    relation_policy_id: [u8; 32],
     /// Nonzero authenticated relation record.
-    pub relation_record_id: [u8; 32],
+    relation_record_id: [u8; 32],
     /// Accepted relation or one closed deterministic refusal.
-    pub disposition: RelationDispositionV2,
+    disposition: RelationDispositionV2,
 }
 
 /// Exhaustive relation disposition consumed by failure policy.
@@ -744,7 +744,7 @@ impl FailureRuntimeExternalV2 {
 
     /// Advance expired recovery attempts; final expiry deterministically enters
     /// dormancy without moving externally owned funds.
-    pub fn plan_advance_schedule(
+    fn plan_advance_schedule(
         &self,
         clock: RecoveryClock,
     ) -> Result<FailureExternalTransitionPlanV2> {

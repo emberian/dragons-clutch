@@ -21,7 +21,8 @@ use crate::seeds;
 use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
 use clutch_evidence_recovery::Identity as RecoveryIdentity;
 use clutch_failure_policy_adapter::external_v2::{
-    authenticate_external_root_v2, initialize_external_root_v2, project_external_recovery_close_v2,
+    authenticate_external_root_readonly_v2, authenticate_external_root_v2,
+    initialize_external_root_v2, project_external_recovery_close_v2,
     project_external_semantic_transition_v2, project_external_work_transition_v2,
     AuthenticatedExternalRootV2, ExternalAdapterErrorV2, ExternalRecoveryCloseV2,
     ExternalRootFundingObservationV2, ExternalRootInitializationV2, ExternalSemanticMutationV2,
@@ -628,6 +629,23 @@ pub fn authenticate_failure_root_v1(
     root: &AccountInfo<'_>,
     common: RecoveryCommonV1,
 ) -> Outcome<AuthenticatedExternalRootV2> {
+    authenticate_failure_root_access_v1(program_id, root, common, true)
+}
+
+fn authenticate_failure_root_readonly_v1(
+    program_id: &Pubkey,
+    root: &AccountInfo<'_>,
+    common: RecoveryCommonV1,
+) -> Outcome<AuthenticatedExternalRootV2> {
+    authenticate_failure_root_access_v1(program_id, root, common, false)
+}
+
+fn authenticate_failure_root_access_v1(
+    program_id: &Pubkey,
+    root: &AccountInfo<'_>,
+    common: RecoveryCommonV1,
+    require_writable: bool,
+) -> Outcome<AuthenticatedExternalRootV2> {
     let authenticated = {
         let data = root
             .try_borrow_data()
@@ -644,16 +662,18 @@ pub fn authenticate_failure_root_v1(
             common.generation,
         );
         expect_pda(root.key, (expected, bump), Some(frame.stored_bump))?;
-        authenticate_external_root_v2(
-            id(program_id),
-            AccountView {
-                key: id(root.key),
-                owner: id(root.owner),
-                lamports: root.lamports(),
-                data: frame.body,
-                is_writable: root.is_writable,
-            },
-        )
+        let view = AccountView {
+            key: id(root.key),
+            owner: id(root.owner),
+            lamports: root.lamports(),
+            data: frame.body,
+            is_writable: root.is_writable,
+        };
+        if require_writable {
+            authenticate_external_root_v2(id(program_id), view)
+        } else {
+            authenticate_external_root_readonly_v2(id(program_id), view)
+        }
         .map_err(map_external_error)?
     };
     common.validate_for_runtime(authenticated.runtime())?;
@@ -885,7 +905,7 @@ pub fn apply_recovery_close_v1<'a>(
             && receipt.transition_nonce() == payload.common.expected_transition_nonce,
         ClutchError::Replay,
     )?;
-    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
+    let root = authenticate_failure_root_readonly_v1(program_id, root_account, payload.common)?;
     let close = project_close_with_framed_accounts(
         program_id,
         policy_account,

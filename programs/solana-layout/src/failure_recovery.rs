@@ -581,7 +581,7 @@ pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
 ];
 /// Exact ordered account contract for closing only Recovery funding.
 pub const CLOSE_RECOVERY_FUNDING_METAS_V1: &[RecoveryAccountMetaV1] = &[
-    meta(RecoveryAccountRoleV1::FailureRoot, true, false),
+    meta(RecoveryAccountRoleV1::FailureRoot, false, false),
     meta(RecoveryAccountRoleV1::LivenessPolicy, false, false),
     meta(RecoveryAccountRoleV1::RecoveryCompartment, true, false),
     meta(RecoveryAccountRoleV1::RecoveryPayer, true, false),
