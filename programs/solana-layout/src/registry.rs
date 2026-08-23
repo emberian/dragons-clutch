@@ -432,14 +432,18 @@ pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
 pub const FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES: usize = 232;
 /// Mutable exhaustive quantized interval-consensus work discriminator.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG: u8 = 0xab;
-/// Interval-consensus work account version.
-pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn one-shot interval-consensus work account version.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION: u8 = 1;
+/// Reusable Market-scoped interval-consensus cell account version.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION: u8 = 2;
 /// Exact framed interval-consensus work account bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES: usize = 1_088;
 /// Permanent interval-consensus transition/replay receipt discriminator.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG: u8 = 0xac;
-/// Permanent interval-consensus replay account version.
-pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn one-shot interval-consensus replay account version.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION: u8 = 1;
+/// Append-only Market-scoped interval-consensus history account version.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 2;
 /// Exact permanent interval-consensus replay account bytes.
 pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 512;
 /// Immutable, deletable Dealer action-work receipt discriminator.
@@ -469,6 +473,10 @@ pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// Exact attachment bytes including the Dealer global envelope.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
     DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 5_436;
+/// Permanent compact Product Market-lifecycle replay receipt discriminator.
+pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
+/// First Product Market-lifecycle replay receipt version.
+pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -476,6 +484,7 @@ pub const MAX_EXTENSION_PAYLOAD_BYTES: usize = MAX_INTENT_BYTES - EXTENSION_ENVE
 
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 74);
 const _: () = assert!(DEALER_COVERED_SELECTION_ACCOUNT_TAG == 0xae);
+const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb0);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -1494,10 +1503,28 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "failure-interval-consensus-work-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
             version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "failure-interval-consensus-work-v1-account",
+        name: "failure-interval-consensus-work-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "failure-interval-consensus-replay-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1506,7 +1533,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             version: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "failure-interval-consensus-replay-v1-account",
+        name: "failure-interval-consensus-replay-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1525,6 +1552,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-covered-selection-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+            version: PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-market-lifecycle-replay-v1-account",
     },
 ];
 

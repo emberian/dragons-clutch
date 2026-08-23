@@ -11,12 +11,13 @@ use crate::loader_state::{decode_loader_pair_v1, LoaderAccountViewV1};
 use crate::seeds;
 use clutch_product_series::{
     CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3,
-    ContentId, EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2,
-    MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
-    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProjectionV2,
-    RegistryProgramReleaseV1, SeriesAttachmentPlanV1, SeriesAttachmentPlanV2,
-    SeriesAttachmentPlanV3, SeriesFundingQuoteV1, SeriesFundingQuoteV2, SeriesFundingQuoteV3,
-    SeriesFundingTermsV2, SeriesPlanV5, SeriesPlanV5Id,
+    CompiledProductSeriesBundleV4, ContentId, EvidenceOnlyRecoveryPolicyV1, FixedCodec,
+    MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    ProductTemplateV4, RegistryCapabilityProfileV2, RegistryCapabilityProfileV3,
+    RegistryCapabilityProjectionV2, RegistryProgramReleaseV1, SeriesAttachmentPlanV1,
+    SeriesAttachmentPlanV2, SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesFundingQuoteV1,
+    SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4, SeriesFundingTermsV2,
+    SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
@@ -69,6 +70,9 @@ product_artifact_type!(SeriesAttachmentPlanV2, SeriesAttachmentPlanV2);
 product_artifact_type!(SeriesFundingQuoteV3, SeriesFundingQuoteV3);
 product_artifact_type!(CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV3);
 product_artifact_type!(SeriesAttachmentPlanV3, SeriesAttachmentPlanV3);
+product_artifact_type!(SeriesFundingQuoteV4, SeriesFundingQuoteV4);
+product_artifact_type!(CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV4);
+product_artifact_type!(SeriesAttachmentPlanV4, SeriesAttachmentPlanV4);
 
 impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
     const KIND: ArtifactKind = ArtifactKind::NativeClaimBasisV1;

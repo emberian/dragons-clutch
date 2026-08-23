@@ -1282,7 +1282,7 @@ fn series_collateral_binding(
     require_series_collateral_authority(program_id, series, authority)?;
     expect_pda(
         vault.key,
-        seeds::series_collateral_vault_pda(program_id, &series.bytes(), component as u8),
+        seeds::series_collateral_vault_pda(program_id, &series.bytes(), component.byte()),
         None,
     )?;
     require(vault.is_writable, ClutchError::NotWritable)?;
@@ -1291,7 +1291,7 @@ fn series_collateral_binding(
         account: collateral_id(vault.key),
         owner_authority: collateral_id(authority.key),
         semantic_owner: CollateralId::from_bytes(series.bytes()),
-        compartment: u16::from(component as u8) + 1,
+        compartment: u16::from(component.byte()) + 1,
         owner_guard: bound.release().owner_guard,
         owner_authority_is_program_derived: true,
     };
@@ -1684,7 +1684,7 @@ pub fn fund_series_collateral_component<'a>(
     let request = series_segregated_funding_request_v2(
         authenticated.bound(),
         authenticated.join(),
-        u16::from(component as u8) + 1,
+        u16::from(component.byte()) + 1,
         binding,
         collateral_id(payer_token_authority.key),
         authority,
@@ -1774,7 +1774,7 @@ fn transfer_series_terminal_collateral<'a>(
         SeriesCollateralTerminalMovementV1::PrincipalRefund => series_principal_refund_request_v2(
             funding.bound(),
             authenticated.join(),
-            u16::from(component as u8) + 1,
+            u16::from(component.byte()) + 1,
             binding,
             funding.authority(),
             amount_atoms,
@@ -1783,7 +1783,7 @@ fn transfer_series_terminal_collateral<'a>(
             series_donation_disposition_request_v2(
                 funding.bound(),
                 authenticated.join(),
-                u16::from(component as u8) + 1,
+                u16::from(component.byte()) + 1,
                 binding,
                 funding.authority(),
                 amount_atoms,
@@ -1934,7 +1934,7 @@ pub fn close_series_collateral_vault<'a>(
         .collateral_vault_rent_principal_lamports[component.index()];
     let request = SeriesCollateralVaultCloseRequestV2 {
         terminal: authenticated.join(),
-        component: u16::from(component as u8) + 1,
+        component: u16::from(component.byte()) + 1,
         vault: binding,
         component_lamport_vault: collateral_id(component_lamport_vault.key),
         stored_vault_rent_principal_lamports: stored_rent_principal,
@@ -2326,9 +2326,9 @@ pub fn create_series_collateral_vault<'a>(
         ClutchError::AccountAlias,
     )?;
 
-    let component_seed = [component as u8];
+    let component_seed = [component.byte()];
     let series_seed = series.bytes();
-    let (_, bump) = seeds::series_collateral_vault_pda(program_id, &series_seed, component as u8);
+    let (_, bump) = seeds::series_collateral_vault_pda(program_id, &series_seed, component.byte());
     let bump_seed = [bump];
     let signer_seeds: &[&[u8]] = &[
         seeds::SEED_SERIES_COLLATERAL_VAULT_V1,
@@ -3273,7 +3273,7 @@ fn require_lamport_vault_metadata(
     )?;
     expect_pda(
         account.key,
-        seeds::series_lamport_vault_pda(program_id, &series.bytes(), component as u8),
+        seeds::series_lamport_vault_pda(program_id, &series.bytes(), component.byte()),
         None,
     )?;
     Ok(())
@@ -3532,9 +3532,9 @@ pub fn transfer_from_lamport_custody<'a>(
                 AccountMeta::new(*destination.key, false),
             ],
         );
-        let component_seed = [component as u8];
+        let component_seed = [component.byte()];
         let (_, bump) =
-            seeds::series_lamport_vault_pda(program_id, &series.bytes(), component as u8);
+            seeds::series_lamport_vault_pda(program_id, &series.bytes(), component.byte());
         let series_seed = series.bytes();
         let bump_seed = [bump];
         invoke_signed(
@@ -3624,7 +3624,7 @@ pub fn close_authenticated_series_funding<'a>(
             rent_receipt.terminal_receipt.bytes() == terminal_receipt.bytes()
                 && rent_receipt.series_plan.bytes()
                     == authenticated.funding().join().series_plan.bytes()
-                && rent_receipt.component == u16::from(component as u8) + 1,
+                && rent_receipt.component == u16::from(component.byte()) + 1,
             ClutchError::MismatchedState,
         )?;
         let lamport_receipt = settle_series_lamport_component(

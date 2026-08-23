@@ -12,11 +12,11 @@ use crate::codec::{Reader, Writer};
 use crate::{
     content_id, AuthenticatedMarketFamilyAuthorityV1, ContentId, Error, FixedCodec,
     MarketFamilyAggregatorPhaseV1, MarketFamilyAggregatorV1, MarketFamilyV1,
-    MarketFoundationAccountGraphV1Id, MarketFoundationScheduleV1, MarketFoundationScheduleV1Id,
-    MarketInstanceV2Id, Result, SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id,
+    MarketFoundationAccountGraphV2Id, MarketFoundationScheduleV2, MarketFoundationScheduleV2Id,
+    MarketInstanceV2Id, Result, SeriesFundingQuoteV4Id, SeriesFundingTermsV2Id,
     SeriesMarketDispositionV1, SeriesMarketLinkV1Id, SeriesPlanV5Id, SourceOccurrenceV1Id,
-    MARKET_FAMILY_AGGREGATOR_BYTES_V1, MARKET_FOUNDATION_CORE_SLOT_COUNT_V1,
-    MARKET_FOUNDATION_MAX_OUTCOMES_V1, MARKET_FOUNDATION_SLOT_COUNT_V1,
+    MARKET_FAMILY_AGGREGATOR_BYTES_V1, MARKET_FOUNDATION_CORE_SLOT_COUNT_V2,
+    MARKET_FOUNDATION_MAX_OUTCOMES_V2, MARKET_FOUNDATION_SLOT_COUNT_V2,
 };
 
 const ROOT_MAGIC_V1: [u8; 8] = *b"DCMKRTV1";
@@ -50,7 +50,7 @@ pub const MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1: &[u8] =
 
 /// Canonical ordered shared foundation slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MarketFoundationSlotV1 {
+pub enum MarketFoundationSlotV2 {
     /// Product `0xaa` root.
     LifecycleRoot,
     /// General MarketBinding account.
@@ -67,9 +67,9 @@ pub enum MarketFoundationSlotV1 {
     FailureRuntimeRoot,
     /// Permanent Failure root replay receipt.
     FailureReplay,
-    /// Reusable exclusive Failure interval session cell; retained until Market terminal.
+    /// Failure `0xab/v2` reusable exclusive Idle/session cell; retained until Market terminal.
     FailureIntervalWork,
-    /// Append-only Failure interval aggregate history; folded before each session reset.
+    /// Failure `0xac/v2` append-only aggregate history; folded before every session reset.
     FailureIntervalHistory,
     /// Full-width Resolution V5 account.
     ResolutionV5,
@@ -77,13 +77,15 @@ pub enum MarketFoundationSlotV1 {
     FractionalPolicy,
     /// Fractional ledger.
     FractionalLedger,
+    /// Compact permanent Product Market-lifecycle replay anchor.
+    ProductReplayAnchor,
     /// One outcome mint, `0..outcome_count`.
     OutcomeMint(u8),
     /// One release-selected custody account, `0..outcome_count`.
     OutcomeCustody(u8),
 }
 
-impl MarketFoundationSlotV1 {
+impl MarketFoundationSlotV2 {
     /// Exact fixed slot-table index.
     pub fn index(self) -> Result<usize> {
         match self {
@@ -100,22 +102,23 @@ impl MarketFoundationSlotV1 {
             Self::ResolutionV5 => Ok(10),
             Self::FractionalPolicy => Ok(11),
             Self::FractionalLedger => Ok(12),
+            Self::ProductReplayAnchor => Ok(13),
             Self::OutcomeMint(outcome) => {
                 let index = usize::from(outcome);
-                if index >= MARKET_FOUNDATION_MAX_OUTCOMES_V1 {
+                if index >= MARKET_FOUNDATION_MAX_OUTCOMES_V2 {
                     return Err(Error::InvalidParameter);
                 }
-                MARKET_FOUNDATION_CORE_SLOT_COUNT_V1
+                MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
                     .checked_add(index)
                     .ok_or(Error::ArithmeticOverflow)
             }
             Self::OutcomeCustody(outcome) => {
                 let index = usize::from(outcome);
-                if index >= MARKET_FOUNDATION_MAX_OUTCOMES_V1 {
+                if index >= MARKET_FOUNDATION_MAX_OUTCOMES_V2 {
                     return Err(Error::InvalidParameter);
                 }
-                MARKET_FOUNDATION_CORE_SLOT_COUNT_V1
-                    .checked_add(MARKET_FOUNDATION_MAX_OUTCOMES_V1)
+                MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+                    .checked_add(MARKET_FOUNDATION_MAX_OUTCOMES_V2)
                     .and_then(|base| base.checked_add(index))
                     .ok_or(Error::ArithmeticOverflow)
             }
@@ -137,15 +140,16 @@ impl MarketFoundationSlotV1 {
             10 => Ok(Self::ResolutionV5),
             11 => Ok(Self::FractionalPolicy),
             12 => Ok(Self::FractionalLedger),
-            13..=28 => Ok(Self::OutcomeMint(
-                u8::try_from(index - MARKET_FOUNDATION_CORE_SLOT_COUNT_V1)
+            13 => Ok(Self::ProductReplayAnchor),
+            14..=29 => Ok(Self::OutcomeMint(
+                u8::try_from(index - MARKET_FOUNDATION_CORE_SLOT_COUNT_V2)
                     .map_err(|_| Error::InvalidParameter)?,
             )),
-            29..=44 => Ok(Self::OutcomeCustody(
+            30..=45 => Ok(Self::OutcomeCustody(
                 u8::try_from(
                     index
-                        - MARKET_FOUNDATION_CORE_SLOT_COUNT_V1
-                        - MARKET_FOUNDATION_MAX_OUTCOMES_V1,
+                        - MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+                        - MARKET_FOUNDATION_MAX_OUTCOMES_V2,
                 )
                 .map_err(|_| Error::InvalidParameter)?,
             )),
@@ -161,20 +165,20 @@ impl MarketFoundationSlotV1 {
 /// dynamic Failure runtime, replay accounts, custody, and all other roles can
 /// never alias one another.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MarketFoundationAccountGraphV1 {
+pub struct MarketFoundationAccountGraphV2 {
     /// Full-width shared Market.
     pub market_instance_id: MarketInstanceV2Id,
     /// Exact shared generation.
     pub generation: u64,
     /// Exact quote-owned slot schedule.
-    pub foundation_schedule_id: MarketFoundationScheduleV1Id,
-    /// Accounts in [`MarketFoundationSlotV1`] order.
-    pub account_ids: [ContentId; MARKET_FOUNDATION_SLOT_COUNT_V1],
+    pub foundation_schedule_id: MarketFoundationScheduleV2Id,
+    /// Accounts in [`MarketFoundationSlotV2`] order.
+    pub account_ids: [ContentId; MARKET_FOUNDATION_SLOT_COUNT_V2],
 }
 
-impl MarketFoundationAccountGraphV1 {
+impl MarketFoundationAccountGraphV2 {
     /// Validate exact active/zero-tail presence and pairwise role separation.
-    pub fn validate(self, schedule: MarketFoundationScheduleV1) -> Result<()> {
+    pub fn validate(&self, schedule: &MarketFoundationScheduleV2) -> Result<()> {
         self.market_instance_id.validate()?;
         self.foundation_schedule_id.validate()?;
         schedule.validate()?;
@@ -183,7 +187,7 @@ impl MarketFoundationAccountGraphV1 {
         }
         let expected = expected_foundation_bitmap(schedule.outcome_count)?;
         let mut index = 0usize;
-        while index < MARKET_FOUNDATION_SLOT_COUNT_V1 {
+        while index < MARKET_FOUNDATION_SLOT_COUNT_V2 {
             let active = (expected & slot_bit(index)?) != 0;
             if active != (self.account_ids[index] != ContentId::ZERO) {
                 return Err(Error::NonCanonicalPadding);
@@ -205,11 +209,11 @@ impl MarketFoundationAccountGraphV1 {
 
     /// Typed identity of the exact Market/generation/schedule/account graph.
     pub fn id(
-        self,
-        schedule: MarketFoundationScheduleV1,
-    ) -> Result<MarketFoundationAccountGraphV1Id> {
+        &self,
+        schedule: &MarketFoundationScheduleV2,
+    ) -> Result<MarketFoundationAccountGraphV2Id> {
         self.validate(schedule)?;
-        let mut body = [0u8; 1_512];
+        let mut body = [0u8; 1_544];
         body[..32].copy_from_slice(&self.market_instance_id.bytes());
         body[32..40].copy_from_slice(&self.generation.to_le_bytes());
         body[40..72].copy_from_slice(&self.foundation_schedule_id.bytes());
@@ -218,13 +222,13 @@ impl MarketFoundationAccountGraphV1 {
             body[at..at + 32].copy_from_slice(&account.bytes());
             at += 32;
         }
-        Ok(MarketFoundationAccountGraphV1Id::from_bytes(
-            content_id(b"dragons-clutch/market-foundation-account-graph/v1", &body).bytes(),
+        Ok(MarketFoundationAccountGraphV2Id::from_bytes(
+            content_id(b"dragons-clutch/market-foundation-account-graph/v2", &body).bytes(),
         ))
     }
 
     /// Exact account occupying one canonical active slot.
-    pub fn account(self, slot: MarketFoundationSlotV1) -> Result<ContentId> {
+    pub fn account(&self, slot: MarketFoundationSlotV2) -> Result<ContentId> {
         let account = self.account_ids[slot.index()?];
         account.validate()?;
         Ok(account)
@@ -332,9 +336,9 @@ pub struct MarketLifecycleBindingV1 {
     /// Market-scoped FoundationVault PDA.
     pub foundation_vault_id: ContentId,
     /// Canonical pairwise-distinct physical foundation account graph.
-    pub foundation_account_graph_id: MarketFoundationAccountGraphV1Id,
+    pub foundation_account_graph_id: MarketFoundationAccountGraphV2Id,
     /// Exact itemized foundation schedule.
-    pub foundation_schedule_id: MarketFoundationScheduleV1Id,
+    pub foundation_schedule_id: MarketFoundationScheduleV2Id,
     /// Accepted collateral liability founding plan.
     pub market_liability_founding_id: ContentId,
     /// Exact claim-mint founding plan.
@@ -361,7 +365,7 @@ impl MarketLifecycleBindingV1 {
         self.foundation_schedule_id.validate()?;
         if self.generation == 0
             || self.outcome_count == 0
-            || usize::from(self.outcome_count) > MARKET_FOUNDATION_MAX_OUTCOMES_V1
+            || usize::from(self.outcome_count) > MARKET_FOUNDATION_MAX_OUTCOMES_V2
             || self.maximum_series_links == 0
             || self.founding_deadline_bucket == 0
             || self.maximum_interval_width == u64::MAX
@@ -466,7 +470,7 @@ pub struct MarketFoundationCapitalV1 {
 }
 
 impl MarketFoundationCapitalV1 {
-    fn validate(self, schedule: MarketFoundationScheduleV1) -> Result<()> {
+    fn validate(self, schedule: &MarketFoundationScheduleV2) -> Result<()> {
         self.founder_link_id.validate()?;
         let ids = [
             self.market_core_debit_receipt_id,
@@ -517,11 +521,11 @@ impl MarketFoundationProgressV1 {
 
 /// Structural projection for one adapter-authenticated FoundationVault spend/postwrite.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MarketFoundationStepProjectionV1 {
+pub struct MarketFoundationStepProjectionV2 {
     /// Exact Market binding.
     pub binding_id: ContentId,
     /// Exact next slot.
-    pub slot: MarketFoundationSlotV1,
+    pub slot: MarketFoundationSlotV2,
     /// Root transition sequence after this step.
     pub root_transition_sequence: u64,
     /// Exact quote-owned principal spent.
@@ -540,7 +544,7 @@ pub struct MarketFoundationStepProjectionV1 {
     pub accepted_poststate_receipt_id: ContentId,
 }
 
-impl MarketFoundationStepProjectionV1 {
+impl MarketFoundationStepProjectionV2 {
     /// Content identity used in the rolling founding transcript.
     pub fn id(self) -> Result<ContentId> {
         let slot = self.slot.index()?;
@@ -565,7 +569,7 @@ impl MarketFoundationStepProjectionV1 {
         body[81..113].copy_from_slice(&self.account_id.bytes());
         body[113..145].copy_from_slice(&self.accepted_poststate_receipt_id.bytes());
         Ok(content_id(
-            b"dragons-clutch/market-foundation-step/v1",
+            b"dragons-clutch/market-foundation-step/v2",
             &body,
         ))
     }
@@ -893,8 +897,8 @@ pub struct SeriesMarketLinkBindingV1 {
     pub disposition: SeriesMarketDispositionV1,
     /// Series funding ownership terms.
     pub funding_terms_id: SeriesFundingTermsV2Id,
-    /// Six-compartment V2 quote.
-    pub funding_quote_id: SeriesFundingQuoteV2Id,
+    /// Current six-compartment V4 quote.
+    pub funding_quote_id: SeriesFundingQuoteV4Id,
     /// Attachment plan.
     pub attachment_plan_id: ContentId,
     /// Exact central capability profile inherited from the shared Market.
@@ -1146,6 +1150,34 @@ pub struct SeriesMarketLinkV1 {
 }
 
 impl SeriesMarketLinkV1 {
+    /// Invalid storage used only as an adapter out-parameter decode target.
+    pub fn decode_buffer() -> Self {
+        Self {
+            binding: link_binding_from_ids(
+                [ContentId::ZERO; LINK_BINDING_ID_COUNT_V1],
+                0,
+                SeriesMarketDispositionV1::Founder,
+                0,
+                0,
+                0,
+            ),
+            phase: SeriesMarketLinkPhaseV1::PendingMarket,
+            transition_sequence: 0,
+            market_admission_sequence: 0,
+            market_admission_receipt_id: ContentId::ZERO,
+            rent_principal_lamports: 0,
+            donation_floor_lamports: 0,
+            current_donation_lamports: 0,
+            obligation_statuses: [SeriesLinkObligationStatusV1::CapabilityDisabled;
+                SERIES_LINK_OBLIGATION_COUNT_V1],
+            admission_receipts: [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1],
+            terminal_receipts: [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1],
+            active_failure_sessions: 0,
+            failure_sessions_started: 0,
+            failure_session_transcript_id: ContentId::ZERO,
+        }
+    }
+
     /// Create one pending link from exact SeriesAdmission principal.
     pub fn initialize_pending(
         binding: SeriesMarketLinkBindingV1,
@@ -1211,6 +1243,87 @@ impl SeriesMarketLinkV1 {
 }
 
 impl MarketLifecycleRootV1 {
+    /// Invalid zeroed storage used only as an adapter out-parameter decode
+    /// target. No caller may treat this value as state unless decode returns
+    /// success after replacing every field.
+    pub const fn decode_buffer() -> Self {
+        Self {
+            binding: MarketLifecycleBindingV1 {
+                market_instance_id: MarketInstanceV2Id::from_bytes([0; 32]),
+                generation: 0,
+                outcome_count: 0,
+                maximum_series_links: 0,
+                product_template_id: ContentId::ZERO,
+                native_claim_basis_id: ContentId::ZERO,
+                recovery_policy_id: ContentId::ZERO,
+                price_measure_policy_id: ContentId::ZERO,
+                market_genesis_profile_id: ContentId::ZERO,
+                registry_release_id: ContentId::ZERO,
+                capability_profile_id: ContentId::ZERO,
+                realm_id: ContentId::ZERO,
+                collateral_profile_id: ContentId::ZERO,
+                collateral_policy_id: ContentId::ZERO,
+                collateral_release_id: ContentId::ZERO,
+                source_release_id: ContentId::ZERO,
+                source_route_id: ContentId::ZERO,
+                clock_policy_id: ContentId::ZERO,
+                source_plane_contract_id: ContentId::ZERO,
+                source_spec_id: ContentId::ZERO,
+                primary_window_id: ContentId::ZERO,
+                statistic_key_id: ContentId::ZERO,
+                market_failure_policy_binding_id: ContentId::ZERO,
+                recovery_state_id: ContentId::ZERO,
+                interval_consensus_profile_id: ContentId::ZERO,
+                failure_liveness_policy_id: ContentId::ZERO,
+                failure_liveness_quote_schedule_id: ContentId::ZERO,
+                resolution_account_id: ContentId::ZERO,
+                foundation_vault_id: ContentId::ZERO,
+                foundation_account_graph_id: MarketFoundationAccountGraphV2Id::from_bytes([0; 32]),
+                foundation_schedule_id: MarketFoundationScheduleV2Id::from_bytes([0; 32]),
+                market_liability_founding_id: ContentId::ZERO,
+                claim_mint_founding_plan_id: ContentId::ZERO,
+                claim_issuance_binding_id: ContentId::ZERO,
+                general_founding_capability_id: ContentId::ZERO,
+                founding_abort_policy_id: ContentId::ZERO,
+                founding_deadline_bucket: 0,
+                maximum_interval_width: 0,
+                maximum_coordinates_per_advance: 0,
+            },
+            phase: MarketLifecyclePhaseV1::Founding,
+            transition_sequence: 0,
+            capital: MarketFoundationCapitalV1 {
+                founder_link_id: SeriesMarketLinkV1Id::from_bytes([0; 32]),
+                market_core_debit_receipt_id: ContentId::ZERO,
+                recovery_debit_receipt_id: ContentId::ZERO,
+                rent_refund_owner: ContentId::ZERO,
+                neutral_lamport_sink: ContentId::ZERO,
+                principal_total_lamports: 0,
+                principal_remaining_lamports: 0,
+                vault_donation_floor_lamports: 0,
+                vault_current_donation_lamports: 0,
+                recovery_work_principal_lamports: 0,
+                recovery_rent_principal_lamports: 0,
+            },
+            foundation: MarketFoundationProgressV1 {
+                expected_bitmap: 0,
+                initialized_bitmap: 0,
+                abort_closed_bitmap: 0,
+                sequence: 0,
+                transcript_id: ContentId::ZERO,
+            },
+            admitted_series_links: 0,
+            live_series_links: 0,
+            retired_series_links: 0,
+            series_link_transcript_id: ContentId::ZERO,
+            product_families: MarketFamilyAggregatorV1::decode_buffer(),
+            shared_core_terminal_receipts: [ContentId::ZERO; MARKET_SHARED_CORE_COUNT_V1],
+            fractional_terminal_state_ids: [ContentId::ZERO; 2],
+            resolution_semantic_id: ContentId::ZERO,
+            resolution_data_id: ContentId::ZERO,
+            resolution_activation_receipt_id: ContentId::ZERO,
+        }
+    }
+
     /// Record finalized Resolution V5 once while the Market is Active.
     pub fn record_resolution_activation(
         self,
@@ -1376,7 +1489,7 @@ impl MarketLifecycleRootV1 {
     ///
     /// This is structural only. A live adapter must first authenticate the
     /// exact program owner, PDA, full account bytes, Market, and generation.
-    pub fn terminal_projection(self) -> Result<MarketInstanceTerminalProjectionV1> {
+    pub fn terminal_projection(&self) -> Result<MarketInstanceTerminalProjectionV1> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV1::Terminal {
             return Err(Error::WorkIncomplete);
@@ -1428,8 +1541,27 @@ impl MarketLifecycleRootV1 {
     pub fn begin_abort(
         self,
         authenticated_current_bucket: u64,
+        observed_vault_donation_lamports: u64,
         vault_refund_receipt_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.begin_abort_into(
+            authenticated_current_bucket,
+            observed_vault_donation_lamports,
+            vault_refund_receipt_id,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Frame-bounded timeout-abort transition into caller-owned storage.
+    pub fn begin_abort_into(
+        &self,
+        authenticated_current_bucket: u64,
+        observed_vault_donation_lamports: u64,
+        vault_refund_receipt_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         vault_refund_receipt_id.validate()?;
         if self.phase != MarketLifecyclePhaseV1::Founding
@@ -1437,6 +1569,7 @@ impl MarketLifecycleRootV1 {
             || self.admitted_series_links != 1
             || self.retired_series_links != 0
             || self.resolution_activation_receipt_id != ContentId::ZERO
+            || observed_vault_donation_lamports < self.capital.vault_current_donation_lamports
         {
             return Err(Error::WorkStateMismatch);
         }
@@ -1446,6 +1579,7 @@ impl MarketLifecycleRootV1 {
             .ok_or(Error::ArithmeticOverflow)?;
         let mut capital = self.capital;
         capital.principal_remaining_lamports = 0;
+        capital.vault_current_donation_lamports = observed_vault_donation_lamports;
         let mut foundation = self.foundation;
         foundation.sequence = foundation
             .sequence
@@ -1457,21 +1591,18 @@ impl MarketLifecycleRootV1 {
             vault_refund_receipt_id,
             sequence,
         );
-        let next = Self {
-            phase: MarketLifecyclePhaseV1::Aborting,
-            transition_sequence: sequence,
-            capital,
-            foundation,
-            ..self
-        };
-        next.validate()?;
-        Ok(next)
+        *output = *self;
+        output.phase = MarketLifecyclePhaseV1::Aborting;
+        output.transition_sequence = sequence;
+        output.capital = capital;
+        output.foundation = foundation;
+        output.validate()
     }
 
     /// Close one initialized non-root slot in exact reverse slot order.
     pub fn record_abort_close(
         self,
-        slot: MarketFoundationSlotV1,
+        slot: MarketFoundationSlotV2,
         close_receipt_id: ContentId,
     ) -> Result<Self> {
         self.validate()?;
@@ -1480,12 +1611,12 @@ impl MarketLifecycleRootV1 {
             return Err(Error::WorkStateMismatch);
         }
         let index = slot.index()?;
-        if index == MarketFoundationSlotV1::LifecycleRoot.index()? {
+        if index == MarketFoundationSlotV2::LifecycleRoot.index()? {
             return Err(Error::InvalidParameter);
         }
         let remaining = self.foundation.initialized_bitmap
             & !self.foundation.abort_closed_bitmap
-            & !slot_bit(MarketFoundationSlotV1::LifecycleRoot.index()?)?;
+            & !slot_bit(MarketFoundationSlotV2::LifecycleRoot.index()?)?;
         let expected = highest_set_index(remaining).ok_or(Error::WorkIncomplete)?;
         if index != expected {
             return Err(Error::WorkStateMismatch);
@@ -1518,7 +1649,7 @@ impl MarketLifecycleRootV1 {
     /// Authorize atomic root close and pending Series reservation restoration.
     pub fn finalize_abort(self) -> Result<MarketFoundingAbortProjectionV1> {
         self.validate()?;
-        let root_bit = slot_bit(MarketFoundationSlotV1::LifecycleRoot.index()?)?;
+        let root_bit = slot_bit(MarketFoundationSlotV2::LifecycleRoot.index()?)?;
         if self.phase != MarketLifecyclePhaseV1::Aborting
             || self.capital.principal_remaining_lamports != 0
             || self.foundation.abort_closed_bitmap
@@ -1556,35 +1687,35 @@ impl MarketLifecycleRootV1 {
     }
 
     /// Immutable Market binding.
-    pub const fn binding(self) -> MarketLifecycleBindingV1 {
+    pub const fn binding(&self) -> MarketLifecycleBindingV1 {
         self.binding
     }
     /// Lifecycle phase.
-    pub const fn phase(self) -> MarketLifecyclePhaseV1 {
+    pub const fn phase(&self) -> MarketLifecyclePhaseV1 {
         self.phase
     }
     /// Transition sequence.
-    pub const fn transition_sequence(self) -> u64 {
+    pub const fn transition_sequence(&self) -> u64 {
         self.transition_sequence
     }
     /// Founder capitalization and Recovery decomposition.
-    pub const fn capital(self) -> MarketFoundationCapitalV1 {
+    pub const fn capital(&self) -> MarketFoundationCapitalV1 {
         self.capital
     }
     /// Bounded founding progress.
-    pub const fn foundation(self) -> MarketFoundationProgressV1 {
+    pub const fn foundation(&self) -> MarketFoundationProgressV1 {
         self.foundation
     }
     /// Total admitted Series links.
-    pub const fn admitted_series_links(self) -> u32 {
+    pub const fn admitted_series_links(&self) -> u32 {
         self.admitted_series_links
     }
     /// Links not yet retired.
-    pub const fn live_series_links(self) -> u32 {
+    pub const fn live_series_links(&self) -> u32 {
         self.live_series_links
     }
     /// Links retired into this root.
-    pub const fn retired_series_links(self) -> u32 {
+    pub const fn retired_series_links(&self) -> u32 {
         self.retired_series_links
     }
     /// Embedded exhaustive product-family semantic owner.
@@ -1592,38 +1723,38 @@ impl MarketLifecycleRootV1 {
         &self.product_families
     }
     /// Mandatory shared-core terminal receipts in [`MarketSharedCoreV1`] order.
-    pub const fn shared_core_terminal_receipts(self) -> [ContentId; MARKET_SHARED_CORE_COUNT_V1] {
+    pub const fn shared_core_terminal_receipts(&self) -> [ContentId; MARKET_SHARED_CORE_COUNT_V1] {
         self.shared_core_terminal_receipts
     }
     /// Exact terminal receipt consumed for one mandatory shared-core owner.
-    pub const fn shared_core_terminal_receipt(self, owner: MarketSharedCoreV1) -> ContentId {
+    pub const fn shared_core_terminal_receipt(&self, owner: MarketSharedCoreV1) -> ContentId {
         self.shared_core_terminal_receipts[owner.index()]
     }
     /// Exact exhaustive Failure-family receipt consumed before Market terminality.
-    pub const fn failure_terminal_receipt_id(self) -> ContentId {
+    pub const fn failure_terminal_receipt_id(&self) -> ContentId {
         self.shared_core_terminal_receipt(MarketSharedCoreV1::Failure)
     }
     /// Resolution semantic identity, zero before activation.
-    pub const fn resolution_semantic_id(self) -> ContentId {
+    pub const fn resolution_semantic_id(&self) -> ContentId {
         self.resolution_semantic_id
     }
     /// Resolution data identity, zero before activation.
-    pub const fn resolution_data_id(self) -> ContentId {
+    pub const fn resolution_data_id(&self) -> ContentId {
         self.resolution_data_id
     }
     /// Once-only Resolution activation receipt.
-    pub const fn resolution_activation_receipt_id(self) -> ContentId {
+    pub const fn resolution_activation_receipt_id(&self) -> ContentId {
         self.resolution_activation_receipt_id
     }
 
     /// Domain-separated complete state identity.
-    pub fn semantic_id(self) -> Result<ContentId> {
+    pub fn semantic_id(&self) -> Result<ContentId> {
         let mut body = [0u8; MARKET_LIFECYCLE_ROOT_BYTES_V1];
         self.encode_into(&mut body)?;
         Ok(content_id(MARKET_LIFECYCLE_ROOT_DOMAIN_V1, &body))
     }
 
-    fn validate_against_schedule(self, schedule: MarketFoundationScheduleV1) -> Result<()> {
+    fn validate_against_schedule(&self, schedule: &MarketFoundationScheduleV2) -> Result<()> {
         self.validate()?;
         schedule.validate()?;
         if schedule.id()? != self.binding.foundation_schedule_id
@@ -1635,7 +1766,7 @@ impl MarketLifecycleRootV1 {
         if self.phase != MarketLifecyclePhaseV1::Aborting {
             let mut spent = 0u64;
             let mut index = 0usize;
-            while index < MARKET_FOUNDATION_SLOT_COUNT_V1 {
+            while index < MARKET_FOUNDATION_SLOT_COUNT_V2 {
                 if (self.foundation.initialized_bitmap & slot_bit(index)?) != 0 {
                     spent = spent
                         .checked_add(schedule.slot_principal_lamports[index])
@@ -1668,7 +1799,7 @@ impl MarketLifecycleRootV1 {
             id.validate()?;
         }
         let expected_bitmap = expected_foundation_bitmap(self.binding.outcome_count)?;
-        let root_bit = slot_bit(MarketFoundationSlotV1::LifecycleRoot.index()?)?;
+        let root_bit = slot_bit(MarketFoundationSlotV2::LifecycleRoot.index()?)?;
         if self.foundation.expected_bitmap != expected_bitmap
             || (self.foundation.initialized_bitmap & !expected_bitmap) != 0
             || (self.foundation.abort_closed_bitmap & !self.foundation.initialized_bitmap) != 0
@@ -1953,6 +2084,16 @@ impl FixedCodec for MarketLifecycleRootV1 {
     }
 
     fn decode(input: &[u8]) -> Result<Self> {
+        let mut value = Self::decode_buffer();
+        Self::decode_into(input, &mut value)?;
+        Ok(value)
+    }
+}
+
+impl MarketLifecycleRootV1 {
+    /// Hostile-decode into caller-owned storage so an SBF adapter need not
+    /// retain a second 2,448-byte root value on its frame.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
         reader.magic(&ROOT_MAGIC_V1)?;
         if reader.u16() != ROOT_VERSION_V1 {
@@ -2014,25 +2155,22 @@ impl FixedCodec for MarketLifecycleRootV1 {
         let resolution_activation_receipt_id = reader.id();
         let transition_sequence = reader.u64();
         reader.finish()?;
-        let value = Self {
-            binding,
-            phase,
-            transition_sequence,
-            capital,
-            foundation,
-            admitted_series_links,
-            live_series_links,
-            retired_series_links,
-            series_link_transcript_id,
-            product_families,
-            shared_core_terminal_receipts,
-            fractional_terminal_state_ids,
-            resolution_semantic_id,
-            resolution_data_id,
-            resolution_activation_receipt_id,
-        };
-        value.validate()?;
-        Ok(value)
+        output.binding = binding;
+        output.phase = phase;
+        output.transition_sequence = transition_sequence;
+        output.capital = capital;
+        output.foundation = foundation;
+        output.admitted_series_links = admitted_series_links;
+        output.live_series_links = live_series_links;
+        output.retired_series_links = retired_series_links;
+        output.series_link_transcript_id = series_link_transcript_id;
+        output.product_families = product_families;
+        output.shared_core_terminal_receipts = shared_core_terminal_receipts;
+        output.fractional_terminal_state_ids = fractional_terminal_state_ids;
+        output.resolution_semantic_id = resolution_semantic_id;
+        output.resolution_data_id = resolution_data_id;
+        output.resolution_activation_receipt_id = resolution_activation_receipt_id;
+        output.validate()
     }
 }
 
@@ -2082,6 +2220,15 @@ impl FixedCodec for SeriesMarketLinkV1 {
     }
 
     fn decode(input: &[u8]) -> Result<Self> {
+        let mut value = Self::decode_buffer();
+        Self::decode_into(input, &mut value)?;
+        Ok(value)
+    }
+}
+
+impl SeriesMarketLinkV1 {
+    /// Hostile-decode into caller-owned storage for frame-bounded adapters.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
         reader.magic(&LINK_MAGIC_V1)?;
         if reader.u16() != LINK_VERSION_V1 {
@@ -2130,24 +2277,21 @@ impl FixedCodec for SeriesMarketLinkV1 {
         let failure_sessions_started = reader.u32();
         let failure_session_transcript_id = reader.id();
         reader.finish()?;
-        let value = Self {
-            binding,
-            phase,
-            transition_sequence,
-            market_admission_sequence,
-            market_admission_receipt_id,
-            rent_principal_lamports,
-            donation_floor_lamports,
-            current_donation_lamports,
-            obligation_statuses,
-            admission_receipts,
-            terminal_receipts,
-            active_failure_sessions,
-            failure_sessions_started,
-            failure_session_transcript_id,
-        };
-        value.validate()?;
-        Ok(value)
+        output.binding = binding;
+        output.phase = phase;
+        output.transition_sequence = transition_sequence;
+        output.market_admission_sequence = market_admission_sequence;
+        output.market_admission_receipt_id = market_admission_receipt_id;
+        output.rent_principal_lamports = rent_principal_lamports;
+        output.donation_floor_lamports = donation_floor_lamports;
+        output.current_donation_lamports = current_donation_lamports;
+        output.obligation_statuses = obligation_statuses;
+        output.admission_receipts = admission_receipts;
+        output.terminal_receipts = terminal_receipts;
+        output.active_failure_sessions = active_failure_sessions;
+        output.failure_sessions_started = failure_sessions_started;
+        output.failure_session_transcript_id = failure_session_transcript_id;
+        output.validate()
     }
 }
 
@@ -2190,8 +2334,8 @@ fn binding_from_ids(
         failure_liveness_quote_schedule_id: ids[23],
         resolution_account_id: ids[24],
         foundation_vault_id: ids[25],
-        foundation_account_graph_id: MarketFoundationAccountGraphV1Id::from_bytes(ids[26].bytes()),
-        foundation_schedule_id: MarketFoundationScheduleV1Id::from_bytes(ids[27].bytes()),
+        foundation_account_graph_id: MarketFoundationAccountGraphV2Id::from_bytes(ids[26].bytes()),
+        foundation_schedule_id: MarketFoundationScheduleV2Id::from_bytes(ids[27].bytes()),
         market_liability_founding_id: ids[28],
         claim_mint_founding_plan_id: ids[29],
         claim_issuance_binding_id: ids[30],
@@ -2219,7 +2363,7 @@ fn link_binding_from_ids(
         market_binding_id: ids[3],
         disposition,
         funding_terms_id: SeriesFundingTermsV2Id::from_bytes(ids[4].bytes()),
-        funding_quote_id: SeriesFundingQuoteV2Id::from_bytes(ids[5].bytes()),
+        funding_quote_id: SeriesFundingQuoteV4Id::from_bytes(ids[5].bytes()),
         attachment_plan_id: ids[6],
         capability_profile_id: ids[7],
         obligation_configuration_id: SeriesLinkObligationConfigurationV1Id::from_bytes(
@@ -2257,25 +2401,25 @@ fn read_ids<const N: usize>(reader: &mut Reader<'_>) -> [ContentId; N] {
 
 fn expected_foundation_bitmap(outcome_count: u8) -> Result<u64> {
     let outcomes = usize::from(outcome_count);
-    if outcomes == 0 || outcomes > MARKET_FOUNDATION_MAX_OUTCOMES_V1 {
+    if outcomes == 0 || outcomes > MARKET_FOUNDATION_MAX_OUTCOMES_V2 {
         return Err(Error::InvalidParameter);
     }
     let mut bitmap = 0u64;
     let mut index = 0usize;
-    while index < MARKET_FOUNDATION_CORE_SLOT_COUNT_V1 {
+    while index < MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 {
         bitmap |= slot_bit(index)?;
         index += 1;
     }
     index = 0;
     while index < outcomes {
         bitmap |= slot_bit(
-            MARKET_FOUNDATION_CORE_SLOT_COUNT_V1
+            MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
                 .checked_add(index)
                 .ok_or(Error::ArithmeticOverflow)?,
         )?;
         bitmap |= slot_bit(
-            MARKET_FOUNDATION_CORE_SLOT_COUNT_V1
-                .checked_add(MARKET_FOUNDATION_MAX_OUTCOMES_V1)
+            MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+                .checked_add(MARKET_FOUNDATION_MAX_OUTCOMES_V2)
                 .and_then(|base| base.checked_add(index))
                 .ok_or(Error::ArithmeticOverflow)?,
         )?;
@@ -2285,7 +2429,7 @@ fn expected_foundation_bitmap(outcome_count: u8) -> Result<u64> {
 }
 
 fn slot_bit(index: usize) -> Result<u64> {
-    if index >= MARKET_FOUNDATION_SLOT_COUNT_V1 {
+    if index >= MARKET_FOUNDATION_SLOT_COUNT_V2 {
         return Err(Error::InvalidParameter);
     }
     let shift = u32::try_from(index).map_err(|_| Error::InvalidParameter)?;
@@ -2293,7 +2437,7 @@ fn slot_bit(index: usize) -> Result<u64> {
 }
 
 fn highest_set_index(bitmap: u64) -> Option<usize> {
-    let mut index = MARKET_FOUNDATION_SLOT_COUNT_V1;
+    let mut index = MARKET_FOUNDATION_SLOT_COUNT_V2;
     while index > 0 {
         index -= 1;
         if let Ok(bit) = slot_bit(index) {
@@ -3054,10 +3198,10 @@ impl MarketLifecycleRootV1 {
     /// Create an inert root and consume only the root-account slot principal.
     pub fn initialize_founder(
         binding: MarketLifecycleBindingV1,
-        schedule: MarketFoundationScheduleV1,
-        account_graph: MarketFoundationAccountGraphV1,
+        schedule: &MarketFoundationScheduleV2,
+        account_graph: &MarketFoundationAccountGraphV2,
         mut capital: MarketFoundationCapitalV1,
-        product_families: MarketFamilyAggregatorV1,
+        product_families: &MarketFamilyAggregatorV1,
         root_poststate_receipt_id: ContentId,
     ) -> Result<Self> {
         binding.validate()?;
@@ -3084,7 +3228,7 @@ impl MarketLifecycleRootV1 {
             return Err(Error::MismatchedArtifact);
         }
         capital.validate(schedule)?;
-        let root_index = MarketFoundationSlotV1::LifecycleRoot.index()?;
+        let root_index = MarketFoundationSlotV2::LifecycleRoot.index()?;
         let root_principal = schedule.slot_principal_lamports[root_index];
         capital.principal_remaining_lamports = capital
             .principal_total_lamports
@@ -3114,7 +3258,7 @@ impl MarketLifecycleRootV1 {
             live_series_links: 0,
             retired_series_links: 0,
             series_link_transcript_id: ContentId::ZERO,
-            product_families,
+            product_families: *product_families,
             shared_core_terminal_receipts: [ContentId::ZERO; MARKET_SHARED_CORE_COUNT_V1],
             fractional_terminal_state_ids: [ContentId::ZERO; 2],
             resolution_semantic_id: ContentId::ZERO,
@@ -3128,10 +3272,23 @@ impl MarketLifecycleRootV1 {
     /// Spend one itemized slot from FoundationVault and count its accepted postwrite.
     pub fn record_foundation_step(
         self,
-        schedule: MarketFoundationScheduleV1,
-        account_graph: MarketFoundationAccountGraphV1,
-        step: MarketFoundationStepProjectionV1,
+        schedule: &MarketFoundationScheduleV2,
+        account_graph: &MarketFoundationAccountGraphV2,
+        step: MarketFoundationStepProjectionV2,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.record_foundation_step_into(schedule, account_graph, step, &mut output)?;
+        Ok(output)
+    }
+
+    /// Frame-bounded foundation-step transition into caller-owned storage.
+    pub fn record_foundation_step_into(
+        &self,
+        schedule: &MarketFoundationScheduleV2,
+        account_graph: &MarketFoundationAccountGraphV2,
+        step: MarketFoundationStepProjectionV2,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate_against_schedule(schedule)?;
         account_graph.validate(schedule)?;
         if self.phase != MarketLifecyclePhaseV1::Founding
@@ -3159,7 +3316,7 @@ impl MarketLifecycleRootV1 {
                     .principal_before_lamports
                     .checked_sub(step.principal_lamports)
                     .ok_or(Error::InsufficientPrepayment)?
-            || step.donation_before_lamports != self.capital.vault_current_donation_lamports
+            || step.donation_before_lamports < self.capital.vault_current_donation_lamports
             || step.donation_after_lamports != step.donation_before_lamports
         {
             return Err(Error::InvalidComponentStatus);
@@ -3179,14 +3336,12 @@ impl MarketLifecycleRootV1 {
         );
         let mut capital = self.capital;
         capital.principal_remaining_lamports = step.principal_after_lamports;
-        let next = Self {
-            transition_sequence: step.root_transition_sequence,
-            capital,
-            foundation,
-            ..self
-        };
-        next.validate_against_schedule(schedule)?;
-        Ok(next)
+        capital.vault_current_donation_lamports = step.donation_after_lamports;
+        *output = *self;
+        output.transition_sequence = step.root_transition_sequence;
+        output.capital = capital;
+        output.foundation = foundation;
+        output.validate_against_schedule(schedule)
     }
 
     /// Admit one pending `0xad` exactly once while Founding or Active.
@@ -3354,7 +3509,7 @@ impl MarketLifecycleRootV1 {
     /// Activate trading only after every shared slot is accepted and founder link admitted.
     pub fn activate(
         self,
-        schedule: MarketFoundationScheduleV1,
+        schedule: &MarketFoundationScheduleV2,
         accepted_market_core_receipt_id: ContentId,
     ) -> Result<Self> {
         self.validate_against_schedule(schedule)?;

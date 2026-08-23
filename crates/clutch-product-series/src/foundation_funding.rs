@@ -8,8 +8,9 @@
 use crate::codec::{Reader, Writer};
 use crate::{
     content_id, ComponentDebitV1, ContentId, Error, FixedCodec, MarketFoundationScheduleV1Id,
-    RecoveryAttemptFundingV1, Result, SeriesAttachmentPlanId, SeriesAttachmentPlanV3Id,
-    SeriesFundingQuoteV2Id, SeriesFundingQuoteV3Id, MAX_RECOVERY_ATTEMPTS,
+    MarketFoundationScheduleV2Id, RecoveryAttemptFundingV1, Result, SeriesAttachmentPlanId,
+    SeriesAttachmentPlanV3Id, SeriesAttachmentPlanV4Id, SeriesFundingQuoteV2Id,
+    SeriesFundingQuoteV3Id, SeriesFundingQuoteV4Id, MAX_RECOVERY_ATTEMPTS,
 };
 
 const QUOTE_MAGIC_V2: [u8; 8] = *b"DCFQUOT2";
@@ -20,15 +21,26 @@ const QUOTE_MAGIC_V3: [u8; 8] = *b"DCFQUOT3";
 const QUOTE_SCHEMA_V3: u16 = 3;
 const ATTACHMENT_MAGIC_V3: [u8; 8] = *b"DCSATTV3";
 const ATTACHMENT_SCHEMA_V3: u16 = 3;
+const QUOTE_MAGIC_V4: [u8; 8] = *b"DCFQUOT4";
+const QUOTE_SCHEMA_V4: u16 = 4;
+const ATTACHMENT_MAGIC_V4: [u8; 8] = *b"DCSATTV4";
+const ATTACHMENT_SCHEMA_V4: u16 = 4;
 
 /// Semantic identity domain for the six-compartment funding quote.
 pub const SERIES_FUNDING_QUOTE_V2_DOMAIN: &[u8] = b"dragons-clutch/series-funding-quote/v2";
 /// Semantic identity domain for the QuoteV2-bound attachment plan.
 pub const SERIES_ATTACHMENT_PLAN_V2_DOMAIN: &[u8] = b"dragons-clutch/series-attachment-plan/v2";
-/// Semantic identity domain for the current six-compartment funding quote.
+/// Semantic identity domain for the withdrawn provisional V3 funding quote.
 pub const SERIES_FUNDING_QUOTE_V3_DOMAIN: &[u8] = b"dragons-clutch/series-funding-quote/v3";
-/// Semantic identity domain for the QuoteV3-bound attachment plan.
+/// Semantic identity domain for the withdrawn provisional V3 attachment plan.
 pub const SERIES_ATTACHMENT_PLAN_V3_DOMAIN: &[u8] = b"dragons-clutch/series-attachment-plan/v3";
+/// Semantic identity domain for the current 46-slot funding quote.
+pub const SERIES_FUNDING_QUOTE_V4_DOMAIN: &[u8] = b"dragons-clutch/series-funding-quote/v4";
+/// Semantic identity domain for the QuoteV4-bound attachment plan.
+pub const SERIES_ATTACHMENT_PLAN_V4_DOMAIN: &[u8] = b"dragons-clutch/series-attachment-plan/v4";
+/// Semantic identity domain for the 46-slot foundation schedule.
+pub const MARKET_FOUNDATION_SCHEDULE_V2_DOMAIN: &[u8] =
+    b"dragons-clutch/market-foundation-schedule/v2";
 
 /// Maximum outcome count represented by the bounded foundation schedule.
 pub const MARKET_FOUNDATION_MAX_OUTCOMES_V1: usize = 16;
@@ -37,6 +49,13 @@ pub const MARKET_FOUNDATION_CORE_SLOT_COUNT_V1: usize = 13;
 /// Thirteen core, sixteen mint, and sixteen custody slots.
 pub const MARKET_FOUNDATION_SLOT_COUNT_V1: usize =
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V1 + 2 * MARKET_FOUNDATION_MAX_OUTCOMES_V1;
+/// Fourteen current core roles, ending with ProductReplayAnchor at index 13.
+pub const MARKET_FOUNDATION_CORE_SLOT_COUNT_V2: usize = 14;
+/// Maximum outcome count represented by the current foundation schedule.
+pub const MARKET_FOUNDATION_MAX_OUTCOMES_V2: usize = 16;
+/// Fourteen core, sixteen mint, and sixteen custody slots.
+pub const MARKET_FOUNDATION_SLOT_COUNT_V2: usize =
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 2 * MARKET_FOUNDATION_MAX_OUTCOMES_V2;
 /// Six disjoint Series funding compartments.
 pub const SERIES_FUNDING_COMPONENT_COUNT_V2: usize = 6;
 /// Exact historical hostile-codec width of [`SeriesFundingQuoteV2`].
@@ -47,6 +66,25 @@ pub const SERIES_ATTACHMENT_PLAN_BYTES_V2: usize = 112;
 pub const SERIES_FUNDING_QUOTE_BYTES_V3: usize = 584;
 /// Exact hostile-codec width of [`SeriesAttachmentPlanV3`].
 pub const SERIES_ATTACHMENT_PLAN_BYTES_V3: usize = 112;
+/// Exact hostile-codec width of [`SeriesFundingQuoteV4`].
+pub const SERIES_FUNDING_QUOTE_BYTES_V4: usize = 16
+    + 3 * 32
+    + SERIES_FUNDING_COMPONENT_COUNT_V2 * 16
+    + MARKET_FOUNDATION_SLOT_COUNT_V2 * 8
+    + 8
+    + 8;
+/// Exact hostile-codec width of [`SeriesAttachmentPlanV4`].
+pub const SERIES_ATTACHMENT_PLAN_BYTES_V4: usize = 112;
+
+const MARKET_FOUNDATION_SCHEDULE_V2_PREIMAGE_BYTES: usize =
+    16 + MARKET_FOUNDATION_SLOT_COUNT_V2 * 8;
+
+const _: () = {
+    assert!(MARKET_FOUNDATION_SLOT_COUNT_V2 == 46);
+    assert!(MARKET_FOUNDATION_SCHEDULE_V2_PREIMAGE_BYTES == 384);
+    assert!(SERIES_FUNDING_QUOTE_BYTES_V4 == SERIES_FUNDING_QUOTE_BYTES_V3 + 8);
+    assert!(SERIES_FUNDING_QUOTE_BYTES_V4 == 592);
+};
 
 /// Stable six-compartment funding order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -181,10 +219,87 @@ impl MarketFoundationScheduleV1 {
     }
 }
 
+/// Current exact quote-owned principal for all 46 foundation accounts.
+///
+/// Core index 13 is the ProductReplayAnchor. Outcome mints occupy indices
+/// 14..29 and matching custody accounts occupy indices 30..45. Every active
+/// slot owns one account and exactly one independently checked principal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketFoundationScheduleV2 {
+    /// Active outcome count; inactive mint/custody tails are zero.
+    pub outcome_count: u8,
+    /// Canonical one-account/one-principal slot array.
+    pub slot_principal_lamports: [u64; MARKET_FOUNDATION_SLOT_COUNT_V2],
+    /// Finite timeout after which an inert foundation may abort.
+    pub founding_timeout_buckets: u64,
+}
+
+impl MarketFoundationScheduleV2 {
+    /// Validate exact core presence, active outcome presence, and zero tails.
+    pub fn validate(&self) -> Result<()> {
+        let outcomes = usize::from(self.outcome_count);
+        if outcomes == 0
+            || outcomes > MARKET_FOUNDATION_MAX_OUTCOMES_V2
+            || self.founding_timeout_buckets == 0
+        {
+            return Err(Error::InvalidParameter);
+        }
+        let mint_end = MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+            .checked_add(outcomes)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let custody_start = MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+            .checked_add(MARKET_FOUNDATION_MAX_OUTCOMES_V2)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let custody_end = custody_start
+            .checked_add(outcomes)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut index = 0usize;
+        while index < MARKET_FOUNDATION_SLOT_COUNT_V2 {
+            let active = index < MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+                || (index >= MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 && index < mint_end)
+                || (index >= custody_start && index < custody_end);
+            if active != (self.slot_principal_lamports[index] != 0) {
+                return Err(Error::NonCanonicalPadding);
+            }
+            index += 1;
+        }
+        self.total_principal_lamports()?;
+        Ok(())
+    }
+
+    /// Checked sum of all active one-account principals.
+    pub fn total_principal_lamports(&self) -> Result<u64> {
+        let mut total = 0u64;
+        for amount in self.slot_principal_lamports {
+            total = total.checked_add(amount).ok_or(Error::ArithmeticOverflow)?;
+        }
+        if total == 0 {
+            return Err(Error::InsufficientPrepayment);
+        }
+        Ok(total)
+    }
+
+    /// Typed identity of the exact 46-slot itemization and timeout.
+    pub fn id(&self) -> Result<MarketFoundationScheduleV2Id> {
+        self.validate()?;
+        let mut body = [0u8; MARKET_FOUNDATION_SCHEDULE_V2_PREIMAGE_BYTES];
+        body[0] = self.outcome_count;
+        body[8..16].copy_from_slice(&self.founding_timeout_buckets.to_le_bytes());
+        let mut at = 16usize;
+        for amount in self.slot_principal_lamports {
+            body[at..at + 8].copy_from_slice(&amount.to_le_bytes());
+            at += 8;
+        }
+        Ok(MarketFoundationScheduleV2Id::from_bytes(
+            content_id(MARKET_FOUNDATION_SCHEDULE_V2_DOMAIN, &body).bytes(),
+        ))
+    }
+}
+
 /// Withdrawn historical six-compartment quote and founder-only itemization.
 ///
 /// This exact 648-byte codec remains available only so already-persisted kind
-/// 48 artifacts can be decoded and audited. New registration must use V3.
+/// 48 artifacts can be decoded and audited. New registration must use V4.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesFundingQuoteV2 {
     /// Exact evidence-only Recovery policy.
@@ -402,7 +517,7 @@ impl FixedCodec for SeriesAttachmentPlanV2 {
     }
 }
 
-/// Current six-compartment quote and founder-only account itemization.
+/// Withdrawn provisional six-compartment quote and 45-slot itemization.
 ///
 /// V3 removes the duplicate per-attempt pricing table from withdrawn V2 and
 /// instead binds the single immutable market-liveness policy and its exact
@@ -527,10 +642,10 @@ impl FixedCodec for SeriesFundingQuoteV3 {
     }
 }
 
-/// Operational attachment choices bound to one exact current QuoteV3.
+/// Withdrawn provisional attachment choices bound to QuoteV3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesAttachmentPlanV3 {
-    /// Exact current six-compartment quote.
+    /// Exact withdrawn provisional six-compartment quote.
     pub funding_quote_id: SeriesFundingQuoteV3Id,
     /// Exact liquidity-facility plan.
     pub liquidity_facility_plan_id: ContentId,
@@ -587,6 +702,194 @@ impl FixedCodec for SeriesAttachmentPlanV3 {
         reader.reserved(6)?;
         let value = Self {
             funding_quote_id: SeriesFundingQuoteV3Id::from_bytes(reader.id().bytes()),
+            liquidity_facility_plan_id: reader.id(),
+            wrapper_recipe_set_id: reader.id(),
+        };
+        reader.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Current funding quote with an exhaustive 46-slot Market foundation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesFundingQuoteV4 {
+    /// Exact evidence-only Recovery policy.
+    pub evidence_only_recovery_policy_id: ContentId,
+    /// Existing market-scoped runtime-liveness policy semantic owner.
+    pub failure_liveness_policy_id: ContentId,
+    /// Exact Recovery-compartment schedule owned by that liveness policy.
+    pub failure_recovery_quote_schedule_id: ContentId,
+    /// Six independently accounted maxima. SeriesAdmission is per ordinal;
+    /// MarketCore and RecoveryReserve are consumed only by the founder.
+    pub components: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    /// Sole decomposition of MarketCore into 46 one-account principals.
+    pub foundation: MarketFoundationScheduleV2,
+    /// Separately named Recovery account rent principal.
+    pub recovery_rent_principal_lamports: u64,
+}
+
+impl SeriesFundingQuoteV4 {
+    /// Validate compartment separation and exact Recovery/Foundation sums.
+    pub fn validate(&self) -> Result<()> {
+        self.evidence_only_recovery_policy_id.validate()?;
+        self.failure_liveness_policy_id.validate()?;
+        self.failure_recovery_quote_schedule_id.validate()?;
+        self.foundation.validate()?;
+        let market_core = self.components[SeriesFundingComponentV2::MarketCore.index()];
+        let admission = self.components[SeriesFundingComponentV2::SeriesAdmission.index()];
+        let recovery = self.components[SeriesFundingComponentV2::RecoveryReserve.index()];
+        if market_core.collateral_atoms != 0
+            || market_core.lamports != self.foundation.total_principal_lamports()?
+            || admission.lamports == 0
+            || admission.collateral_atoms != 0
+            || recovery.collateral_atoms != 0
+            || self.recovery_rent_principal_lamports == 0
+            || recovery.lamports <= self.recovery_rent_principal_lamports
+            || self.evidence_only_recovery_policy_id == self.failure_liveness_policy_id
+            || self.evidence_only_recovery_policy_id == self.failure_recovery_quote_schedule_id
+            || self.failure_liveness_policy_id == self.failure_recovery_quote_schedule_id
+        {
+            return Err(Error::InvalidParameter);
+        }
+        Ok(())
+    }
+
+    /// Typed identity of the exact canonical V4 body.
+    pub fn id(&self) -> Result<SeriesFundingQuoteV4Id> {
+        let mut body = [0u8; SERIES_FUNDING_QUOTE_BYTES_V4];
+        self.encode_into(&mut body)?;
+        Ok(SeriesFundingQuoteV4Id::from_bytes(
+            content_id(SERIES_FUNDING_QUOTE_V4_DOMAIN, &body).bytes(),
+        ))
+    }
+}
+
+impl FixedCodec for SeriesFundingQuoteV4 {
+    const ENCODED_LEN: usize = SERIES_FUNDING_QUOTE_BYTES_V4;
+
+    fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
+        writer.bytes(&QUOTE_MAGIC_V4);
+        writer.u16(QUOTE_SCHEMA_V4);
+        writer.u8(self.foundation.outcome_count);
+        writer.reserved(5);
+        writer.id(self.evidence_only_recovery_policy_id);
+        writer.id(self.failure_liveness_policy_id);
+        writer.id(self.failure_recovery_quote_schedule_id);
+        for component in self.components {
+            writer.u64(component.lamports);
+            writer.u64(component.collateral_atoms);
+        }
+        for principal in self.foundation.slot_principal_lamports {
+            writer.u64(principal);
+        }
+        writer.u64(self.foundation.founding_timeout_buckets);
+        writer.u64(self.recovery_rent_principal_lamports);
+        writer.finish()
+    }
+
+    fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.magic(&QUOTE_MAGIC_V4)?;
+        if reader.u16() != QUOTE_SCHEMA_V4 {
+            return Err(Error::BadVersion);
+        }
+        let outcome_count = reader.u8();
+        reader.reserved(5)?;
+        let evidence_only_recovery_policy_id = reader.id();
+        let failure_liveness_policy_id = reader.id();
+        let failure_recovery_quote_schedule_id = reader.id();
+        let mut components = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        for component in &mut components {
+            component.lamports = reader.u64();
+            component.collateral_atoms = reader.u64();
+        }
+        let mut slot_principal_lamports = [0u64; MARKET_FOUNDATION_SLOT_COUNT_V2];
+        for principal in &mut slot_principal_lamports {
+            *principal = reader.u64();
+        }
+        let founding_timeout_buckets = reader.u64();
+        let recovery_rent_principal_lamports = reader.u64();
+        reader.finish()?;
+        let value = Self {
+            evidence_only_recovery_policy_id,
+            failure_liveness_policy_id,
+            failure_recovery_quote_schedule_id,
+            components,
+            foundation: MarketFoundationScheduleV2 {
+                outcome_count,
+                slot_principal_lamports,
+                founding_timeout_buckets,
+            },
+            recovery_rent_principal_lamports,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Operational attachment choices bound to one exact current QuoteV4.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesAttachmentPlanV4 {
+    /// Exact current 46-slot funding quote.
+    pub funding_quote_id: SeriesFundingQuoteV4Id,
+    /// Exact liquidity-facility plan.
+    pub liquidity_facility_plan_id: ContentId,
+    /// Exact canonical wrapper-recipe set.
+    pub wrapper_recipe_set_id: ContentId,
+}
+
+impl SeriesAttachmentPlanV4 {
+    /// Validate typed nonzero references and refuse role aliasing.
+    pub fn validate(&self) -> Result<()> {
+        self.funding_quote_id.validate()?;
+        self.liquidity_facility_plan_id.validate()?;
+        self.wrapper_recipe_set_id.validate()?;
+        if self.funding_quote_id.content_id() == self.liquidity_facility_plan_id
+            || self.funding_quote_id.content_id() == self.wrapper_recipe_set_id
+            || self.liquidity_facility_plan_id == self.wrapper_recipe_set_id
+        {
+            return Err(Error::MismatchedArtifact);
+        }
+        Ok(())
+    }
+
+    /// Typed identity of this exact V4 attachment body.
+    pub fn id(&self) -> Result<SeriesAttachmentPlanV4Id> {
+        let mut body = [0u8; SERIES_ATTACHMENT_PLAN_BYTES_V4];
+        self.encode_into(&mut body)?;
+        Ok(SeriesAttachmentPlanV4Id::from_bytes(
+            content_id(SERIES_ATTACHMENT_PLAN_V4_DOMAIN, &body).bytes(),
+        ))
+    }
+}
+
+impl FixedCodec for SeriesAttachmentPlanV4 {
+    const ENCODED_LEN: usize = SERIES_ATTACHMENT_PLAN_BYTES_V4;
+
+    fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
+        writer.bytes(&ATTACHMENT_MAGIC_V4);
+        writer.u16(ATTACHMENT_SCHEMA_V4);
+        writer.reserved(6);
+        writer.id(self.funding_quote_id.content_id());
+        writer.id(self.liquidity_facility_plan_id);
+        writer.id(self.wrapper_recipe_set_id);
+        writer.finish()
+    }
+
+    fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.magic(&ATTACHMENT_MAGIC_V4)?;
+        if reader.u16() != ATTACHMENT_SCHEMA_V4 {
+            return Err(Error::BadVersion);
+        }
+        reader.reserved(6)?;
+        let value = Self {
+            funding_quote_id: SeriesFundingQuoteV4Id::from_bytes(reader.id().bytes()),
             liquidity_facility_plan_id: reader.id(),
             wrapper_recipe_set_id: reader.id(),
         };
@@ -659,6 +962,36 @@ mod tests {
         }
     }
 
+    fn quote_v4() -> SeriesFundingQuoteV4 {
+        let mut slot_principal_lamports = [0u64; MARKET_FOUNDATION_SLOT_COUNT_V2];
+        for principal in &mut slot_principal_lamports[..MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 2] {
+            *principal = 10;
+        }
+        let custody_start =
+            MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + MARKET_FOUNDATION_MAX_OUTCOMES_V2;
+        for principal in &mut slot_principal_lamports[custody_start..custody_start + 2] {
+            *principal = 10;
+        }
+        let foundation = MarketFoundationScheduleV2 {
+            outcome_count: 2,
+            slot_principal_lamports,
+            founding_timeout_buckets: 40,
+        };
+        let mut components = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        components[SeriesFundingComponentV2::MarketCore.index()].lamports =
+            foundation.total_principal_lamports().unwrap();
+        components[SeriesFundingComponentV2::SeriesAdmission.index()].lamports = 20;
+        components[SeriesFundingComponentV2::RecoveryReserve.index()].lamports = 31;
+        SeriesFundingQuoteV4 {
+            evidence_only_recovery_policy_id: id(1),
+            failure_liveness_policy_id: id(2),
+            failure_recovery_quote_schedule_id: id(3),
+            components,
+            foundation,
+            recovery_rent_principal_lamports: 10,
+        }
+    }
+
     #[test]
     fn withdrawn_v2_quote_and_attachment_remain_exactly_decodable() {
         let quote = quote_v2();
@@ -699,6 +1032,62 @@ mod tests {
             Ok(attachment)
         );
         assert_eq!(&attachment_bytes[..8], b"DCSATTV3");
+    }
+
+    #[test]
+    fn v4_quote_owns_product_replay_anchor_and_exact_46_slot_schedule() {
+        let quote = quote_v4();
+        let mut quote_bytes = [0u8; SERIES_FUNDING_QUOTE_BYTES_V4];
+        quote.encode_into(&mut quote_bytes).unwrap();
+        assert_eq!(SeriesFundingQuoteV4::decode(&quote_bytes), Ok(quote));
+        assert_eq!(&quote_bytes[..8], b"DCFQUOT4");
+        assert_ne!(quote.foundation.slot_principal_lamports[13], 0);
+
+        let attachment = SeriesAttachmentPlanV4 {
+            funding_quote_id: quote.id().unwrap(),
+            liquidity_facility_plan_id: id(4),
+            wrapper_recipe_set_id: id(5),
+        };
+        let mut attachment_bytes = [0u8; SERIES_ATTACHMENT_PLAN_BYTES_V4];
+        attachment.encode_into(&mut attachment_bytes).unwrap();
+        assert_eq!(
+            SeriesAttachmentPlanV4::decode(&attachment_bytes),
+            Ok(attachment)
+        );
+        assert_eq!(&attachment_bytes[..8], b"DCSATTV4");
+    }
+
+    #[test]
+    fn v4_refuses_missing_or_shifted_product_replay_principal() {
+        let mut missing = quote_v4();
+        missing.foundation.slot_principal_lamports[13] = 0;
+        assert_eq!(missing.validate(), Err(Error::NonCanonicalPadding));
+
+        let mut shifted = quote_v4();
+        shifted.foundation.slot_principal_lamports[14 + 4] = 1;
+        assert_eq!(shifted.validate(), Err(Error::NonCanonicalPadding));
+    }
+
+    #[test]
+    fn provisional_v3_and_current_v4_never_cross_decode() {
+        let mut v3 = [0u8; SERIES_FUNDING_QUOTE_BYTES_V3];
+        quote_v3().encode_into(&mut v3).unwrap();
+        let mut v4 = [0u8; SERIES_FUNDING_QUOTE_BYTES_V4];
+        quote_v4().encode_into(&mut v4).unwrap();
+        assert_eq!(SeriesFundingQuoteV4::decode(&v3), Err(Error::Truncated));
+        assert_eq!(SeriesFundingQuoteV3::decode(&v4), Err(Error::TrailingBytes));
+
+        let provisional = SeriesAttachmentPlanV3 {
+            funding_quote_id: quote_v3().id().unwrap(),
+            liquidity_facility_plan_id: id(4),
+            wrapper_recipe_set_id: id(5),
+        };
+        let mut provisional_bytes = [0u8; SERIES_ATTACHMENT_PLAN_BYTES_V3];
+        provisional.encode_into(&mut provisional_bytes).unwrap();
+        assert_eq!(
+            SeriesAttachmentPlanV4::decode(&provisional_bytes),
+            Err(Error::BadMagic)
+        );
     }
 
     #[test]

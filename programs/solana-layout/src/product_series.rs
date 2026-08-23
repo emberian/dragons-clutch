@@ -15,13 +15,17 @@
 //! wired.
 
 use clutch_product_series::{
-    ContentId, FixedCodec, MarketInstanceV2Id, MarketLifecycleRootV1, SeriesFundingComponentV1,
-    SeriesFundingStateV1, SeriesFundingTermsV2Id, SeriesMarketLinkV1, SeriesPlanV5Id,
-    SourceOccurrenceV1Id, MARKET_LIFECYCLE_ROOT_BYTES_V1, SERIES_FUNDING_COMPONENT_COUNT,
-    SERIES_FUNDING_STATE_BYTES, SERIES_MARKET_LINK_BYTES_V1,
+    ContentId, FixedCodec, MarketInstanceV2Id, MarketLifecycleReplayReceiptV1,
+    MarketLifecycleRootV1, SeriesFundingComponentV1, SeriesFundingStateV1, SeriesFundingTermsV2Id,
+    SeriesMarketLinkV1, SeriesPlanV5Id, SourceOccurrenceV1Id,
+    MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
+    SERIES_FUNDING_COMPONENT_COUNT, SERIES_FUNDING_STATE_BYTES, SERIES_MARKET_LINK_BYTES_V1,
 };
 
-use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
+use crate::{digest, is_zero, registry, CodecError, Hash32, Result, HASH_BYTES};
+
+const SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-market-link-account-authentication/v1";
 
 /// Exact immutable registered-Series account width.
 pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
@@ -33,9 +37,36 @@ pub const PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1: usize = 16;
 /// Exact framed shared MarketLifecycleRoot account width.
 pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_ROOT_BYTES_V1;
+/// Exact permanent Product Market-lifecycle replay account width.
+pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1;
 /// Exact framed per-Series SeriesMarketLink account width.
 pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V1;
+
+/// Recompute the sole shared authentication identity for one exact Product
+/// SeriesMarketLink account. Product and standalone attachment adapters must
+/// call this function rather than duplicating its preimage assembly.
+pub fn series_market_link_authentication_id_v1(
+    account: [u8; HASH_BYTES],
+    owner_program: [u8; HASH_BYTES],
+    framed_data_id: [u8; HASH_BYTES],
+    semantic_id: [u8; HASH_BYTES],
+    market_root: [u8; HASH_BYTES],
+    observed_lamports: u64,
+) -> Hash32 {
+    digest(
+        SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V1,
+        &[
+            &account,
+            &owner_program,
+            &framed_data_id,
+            &semantic_id,
+            &market_root,
+            &observed_lamports.to_le_bytes(),
+        ],
+    )
+}
 
 /// Exact `RegisterSeries` payload width.
 pub const REGISTER_SERIES_PAYLOAD_BYTES_V1: usize = 4 * HASH_BYTES;
@@ -353,24 +384,55 @@ pub struct MarketLifecycleRootAccountV1 {
 }
 
 impl MarketLifecycleRootAccountV1 {
+    /// Invalid storage used only as an out-parameter decode target.
+    pub const fn decode_buffer() -> Self {
+        Self {
+            state: MarketLifecycleRootV1::decode_buffer(),
+            rent_principal_lamports: 0,
+            stored_bump: 0,
+        }
+    }
+
     /// Encode the exact hostile account frame and semantic body.
     pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        Self::encode_parts(
+            &self.state,
+            self.rent_principal_lamports,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Encode from borrowed state without copying the 2,448-byte semantic root.
+    pub fn encode_parts(
+        state: &MarketLifecycleRootV1,
+        rent_principal_lamports: u64,
+        stored_bump: u8,
+        output: &mut [u8],
+    ) -> Result<()> {
         require_exact(output, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1)?;
-        if self.rent_principal_lamports == 0 {
+        if rent_principal_lamports == 0 {
             return Err(CodecError::ZeroValue);
         }
         output.fill(0);
         output[0] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG;
         output[1] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION;
-        output[2] = self.stored_bump;
-        output[8..16].copy_from_slice(&self.rent_principal_lamports.to_le_bytes());
-        self.state
+        output[2] = stored_bump;
+        output[8..16].copy_from_slice(&rent_principal_lamports.to_le_bytes());
+        state
             .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
             .map_err(map_product_error)
     }
 
     /// Decode the exact frame and fully validate the embedded lifecycle owner.
     pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut value = Self::decode_buffer();
+        Self::decode_into(input, &mut value)?;
+        Ok(value)
+    }
+
+    /// Hostile-decode into caller-owned storage for frame-bounded adapters.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
         require_exact(input, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1)?;
         if input[0] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
@@ -379,15 +441,70 @@ impl MarketLifecycleRootAccountV1 {
             return Err(CodecError::WrongVersion);
         }
         require_reserved(&input[3..8])?;
+        MarketLifecycleRootV1::decode_into(
+            &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            &mut output.state,
+        )
+        .map_err(map_product_error)?;
+        output.rent_principal_lamports =
+            u64::from_le_bytes(input[8..16].try_into().map_err(|_| CodecError::Truncated)?);
+        output.stored_bump = input[2];
+        if output.rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(())
+    }
+}
+
+/// Program-owned frame for the compact permanent Product Market replay anchor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLifecycleReplayAccountV1 {
+    /// Sole field-level semantic owner.
+    pub receipt: MarketLifecycleReplayReceiptV1,
+    /// Exact permanent replay-account rent principal.
+    pub permanent_rent_principal_lamports: u64,
+    /// Canonical replay PDA bump.
+    pub stored_bump: u8,
+}
+
+impl MarketLifecycleReplayAccountV1 {
+    /// Encode the exact 16-byte frame plus Product-owned semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        require_exact(output, MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1)?;
+        if self.permanent_rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION;
+        output[2] = self.stored_bump;
+        output[8..16].copy_from_slice(&self.permanent_rent_principal_lamports.to_le_bytes());
+        self.receipt
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact frame and complete Product semantic receipt.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1)?;
+        if input[0] != registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
         let value = Self {
-            state: MarketLifecycleRootV1::decode(&input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
-                .map_err(map_product_error)?,
-            rent_principal_lamports: u64::from_le_bytes(
+            receipt: MarketLifecycleReplayReceiptV1::decode(
+                &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            )
+            .map_err(map_product_error)?,
+            permanent_rent_principal_lamports: u64::from_le_bytes(
                 input[8..16].try_into().map_err(|_| CodecError::Truncated)?,
             ),
             stored_bump: input[2],
         };
-        if value.rent_principal_lamports == 0 {
+        if value.permanent_rent_principal_lamports == 0 {
             return Err(CodecError::ZeroValue);
         }
         Ok(value)
@@ -404,20 +521,44 @@ pub struct SeriesMarketLinkAccountV1 {
 }
 
 impl SeriesMarketLinkAccountV1 {
+    /// Invalid storage used only as an out-parameter decode target.
+    pub fn decode_buffer() -> Self {
+        Self {
+            state: SeriesMarketLinkV1::decode_buffer(),
+            stored_bump: 0,
+        }
+    }
+
     /// Encode the exact hostile account frame and semantic body.
     pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        Self::encode_parts(&self.state, self.stored_bump, output)
+    }
+
+    /// Encode from borrowed state without copying the 1,232-byte link body.
+    pub fn encode_parts(
+        state: &SeriesMarketLinkV1,
+        stored_bump: u8,
+        output: &mut [u8],
+    ) -> Result<()> {
         require_exact(output, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?;
         output.fill(0);
         output[0] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG;
         output[1] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION;
-        output[2] = self.stored_bump;
-        self.state
+        output[2] = stored_bump;
+        state
             .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
             .map_err(map_product_error)
     }
 
     /// Decode the exact frame and fully validate the embedded link owner.
     pub fn decode(input: &[u8]) -> Result<Self> {
+        let mut value = Self::decode_buffer();
+        Self::decode_into(input, &mut value)?;
+        Ok(value)
+    }
+
+    /// Hostile-decode into caller-owned storage for frame-bounded adapters.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<()> {
         require_exact(input, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?;
         if input[0] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
@@ -426,12 +567,13 @@ impl SeriesMarketLinkAccountV1 {
             return Err(CodecError::WrongVersion);
         }
         require_reserved(&input[3..8])?;
-        let value = Self {
-            state: SeriesMarketLinkV1::decode(&input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
-                .map_err(map_product_error)?,
-            stored_bump: input[2],
-        };
-        Ok(value)
+        SeriesMarketLinkV1::decode_into(
+            &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+            &mut output.state,
+        )
+        .map_err(map_product_error)?;
+        output.stored_bump = input[2];
+        Ok(())
     }
 }
 
@@ -651,6 +793,14 @@ pub enum SeriesFundingAssetV1 {
 }
 
 impl SeriesFundingAssetV1 {
+    /// Stable hostile-wire byte without an unchecked enum cast.
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Lamports => 1,
+            Self::Collateral => 2,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::Lamports),
@@ -684,8 +834,8 @@ impl ObserveSeriesDonationIntentV1 {
         }
         out.fill(0);
         out[..HASH_BYTES].copy_from_slice(&self.series_plan_id.bytes());
-        out[HASH_BYTES] = self.component as u8;
-        out[HASH_BYTES + 1] = self.asset as u8;
+        out[HASH_BYTES] = self.component.byte();
+        out[HASH_BYTES + 1] = self.asset.byte();
         Ok(())
     }
 
