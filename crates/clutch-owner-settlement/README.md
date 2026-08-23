@@ -25,6 +25,18 @@ reservations, or any mismatch with the candidate's owner count, buy/sell
 price-unit totals, fee atoms, rounding pot, and receipt-end count. Output rows
 are lexicographically owner-sorted for canonical account creation and paging.
 
+The account-neutral adapter contract binds each row to the ordered
+`owner-settlement:v1`, Epoch, final-candidate, owner PDA preimage; creates it
+with pre-fund-safe rent ownership; and stages each receipt-end accounting latch
+for an atomic join with the complete Egg/reservation transition. Terminal cash
+realization is buyer-first:
+consideration enters a candidate-wide liability pot before seller credit can
+leave it, while selected fees and exact rounding price units remain segregated.
+The pot may become allocation-complete, but no API retires it or the rows: the
+distinct General V2 FinalPot terminal/disposition authority is not yet owned,
+and rounding or virtual-claim principal cannot be sent to the neutral donation
+sink.
+
 This crate contains no Solana SDK, account memory, hashing implementation,
 dynamic allocation, fee policy selection, or persisted DTO. It does not make
 General V1 accept shapes that its current per-order realization cannot settle;
