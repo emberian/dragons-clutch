@@ -23,8 +23,8 @@ pub use adapter::{
     AuthenticatedPositionCashV1, AuthenticatedSettlementReceiptEndV1, OwnerCashRealizationPlanV1,
     OwnerSettlementAccountViewV1, OwnerSettlementCreateFundingV1, OwnerSettlementCreatePlanV1,
     OwnerSettlementReceiptAccountingPlanV1, SelectedOwnerRowAuthorityV1,
-    SettlementCashPotExpectationV1, SettlementCashPotV1, OWNER_SETTLEMENT_PDA_DOMAIN_V1,
-    SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+    SettlementCashPotExpectationV1, SettlementCashPotV1, VirtualCashDirectionV1,
+    OWNER_SETTLEMENT_PDA_DOMAIN_V1, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
 };
 
 pub use builder::{

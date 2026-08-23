@@ -32,6 +32,12 @@ for an atomic join with the complete Egg/reservation transition. Terminal cash
 realization is buyer-first:
 consideration enters a candidate-wide liability pot before seller credit can
 leave it, while selected fees and exact rounding price units remain segregated.
+The same 256-byte body carries a typed virtual-cash direction in formerly
+reserved space. A split names terminal principal left after owner realization;
+a merge names actual opening proceeds that must exist before seller
+realization. Its exact closure is `buyer debit + merge proceeds = seller credit
++ split principal + whole-atom rounding`, so the amount cannot be silently
+reinterpreted in the opposite direction.
 The pot may become allocation-complete, but no API retires it or the rows: the
 distinct General V2 FinalPot terminal/disposition authority is not yet owned,
 and rounding or virtual-claim principal cannot be sent to the neutral donation
