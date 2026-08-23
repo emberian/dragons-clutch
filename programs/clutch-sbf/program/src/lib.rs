@@ -133,6 +133,7 @@ pub mod source_archive;
 pub mod source_archive_v2;
 pub mod source_generation;
 pub mod source_identity;
+pub mod source_plane_v3;
 pub mod source_v2;
 pub mod token;
 

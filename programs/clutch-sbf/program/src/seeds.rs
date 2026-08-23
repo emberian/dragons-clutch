@@ -143,6 +143,8 @@ pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
 /// Per-window authenticated source-archive account seed prefix.
 pub const SEED_SOURCE_ARCHIVE: &[u8] = crate::source_archive::SOURCE_ARCHIVE_SEED_V1;
+/// Product-owned immutable Source occurrence seed prefix for SourceSeries 77/v2.
+pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Per-Realm revenue-policy record seed prefix; exactly 32 bytes (the seed
 /// cap), the string `docs/design/REVENUE_POLICY_V1.md` §3 names.
 pub const SEED_REVENUE_POLICY: &[u8] = b"dragons-clutch:revenue-policy:v1";
@@ -196,6 +198,15 @@ pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
 /// Disabled buyer-first candidate settlement cash-pot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
+
+/// Single-custody failure semantic root, keyed by V2 market and generation.
+pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
+/// Immutable runtime-liveness policy account.
+pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
+/// Sole external Recovery work/rent custody account.
+pub const SEED_FAILURE_EXTERNAL_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
+/// Permanent failure-generation replay tombstone.
+pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -253,6 +264,59 @@ pub fn replay_pda(
     )
 }
 
+/// Canonical single-custody failure semantic root.
+pub fn failure_external_root_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_EXTERNAL_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical immutable runtime-liveness policy account.
+pub fn failure_liveness_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_FAILURE_LIVENESS_POLICY, policy_id])
+}
+
+/// Canonical sole Recovery work/rent custody account.
+pub fn failure_external_recovery_pda(
+    program_id: &Pubkey,
+    lifecycle_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_EXTERNAL_RECOVERY,
+            lifecycle_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical permanent replay tombstone for one failure generation.
+pub fn failure_replay_tombstone_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_REPLAY_TOMBSTONE,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
 /// Canonical market-wide supply-ledger address and bump.
 ///
 /// One ledger per market, not per position: the two-term ledger is a
@@ -276,6 +340,14 @@ pub fn source_spec_pda(program_id: &Pubkey, feed: &[u8; 32]) -> (Pubkey, u8) {
 /// Canonical sealed source-archive address and bump for one exact window.
 pub fn source_archive_pda(program_id: &Pubkey, feed: &[u8; 32], window: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_SOURCE_ARCHIVE, feed, window])
+}
+
+/// Canonical Product-owned Source occurrence address by exact 184-byte body identity.
+pub fn source_occurrence_pda(program_id: &Pubkey, occurrence_record_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SOURCE_OCCURRENCE_V1, occurrence_record_id],
+    )
 }
 
 /// Canonical single-active-work address for one Market.

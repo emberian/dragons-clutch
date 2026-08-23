@@ -629,7 +629,7 @@ const fn liveness_mode_byte(mode: DealerTransitionLivenessModeV1) -> u8 {
     }
 }
 
-const fn action_byte(action: DealerRuntimeActionV1) -> u8 {
+pub(crate) const fn action_byte(action: DealerRuntimeActionV1) -> u8 {
     match action {
         DealerRuntimeActionV1::CreatePolicy => 0,
         DealerRuntimeActionV1::Initialize => 1,
@@ -656,7 +656,7 @@ const fn action_byte(action: DealerRuntimeActionV1) -> u8 {
     }
 }
 
-fn decode_action(value: u8) -> Result<DealerRuntimeActionV1> {
+pub(crate) fn decode_action(value: u8) -> Result<DealerRuntimeActionV1> {
     match value {
         0 => Ok(DealerRuntimeActionV1::CreatePolicy),
         1 => Ok(DealerRuntimeActionV1::Initialize),

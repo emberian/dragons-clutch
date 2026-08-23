@@ -81,6 +81,17 @@ General V2 reserves local actions 1 through 38, in order:
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
 
+StructuredClaim `75/1` reserves actions 1 through 8:
+
+1. `CreateDescriptor`
+2. `WrapCanonical`
+3. `WrapFull`
+4. `UnwrapCanonical`
+5. `UnwrapFull`
+6. `CompactDonation`
+7. `RedeemTerminal`
+8. `RetireDescriptor`
+
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:
 
@@ -114,33 +125,9 @@ actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
-Source/Series V2 partitions its action namespace without aliases. SourcePlane
-V3 exclusively owns local actions 1 through 12:
-
-1. `RegisterRelease`
-2. `InitializeHead`
-3. `OpenRawPage`
-4. `IngestBoundaryBatch`
-5. `SealRawPage`
-6. `InitializeWindowWork`
-7. `FoldWindowPages`
-8. `SealWindow`
-9. `EvaluateStatistic`
-10. `EmitFailureHandoff`
-11. `ReopenGeneration`
-12. `CloseGeneration`
-
-Recurring Series exclusively owns local actions 13 through 18, whose exact
-laboratory payload codecs live in `clutch_solana_layout::product_series`:
-
-13. `RegisterSeries`
-14. `ActivateFunding`
-15. `AdvanceOccurrence`
-16. `LapseOccurrence`
-17. `ObserveDonation`
-18. `CloseFunding`
-
-Allocation still grants no execution capability. The program's executable
+The exact recurring-Series laboratory payload codecs live in
+`clutch_solana_layout::product_series`. Allocation still grants no execution
+capability. The program's executable
 Source/Series set remains empty. In particular, a decoded registry release ID
 or capability-profile ID is not authority: registration stays disabled until
 the adapter authenticates the authoritative central release, and every
@@ -156,9 +143,22 @@ refundable account-rent principal, and five release-selected collateral-vault
 rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
 copy its cursor or component-balance facts.
 
-The Structured, Dealer, and Recovery family action spaces remain empty: every
-local action is unknown until an atomic design wave fixes its payload and
-capability contract.
+Recovery 78/v1 reserves these local actions, all disabled:
+
+1. `InitializeFailureRoot`
+2. `TriggerSourceFailure`
+3. `TriggerRelationRefusal`
+4. `AdvanceRecoverySchedule`
+5. `AcceptRecoveryWork`
+6. `ResolveCallerFunded`
+7. `ResolvePaidRecovery`
+8. `CloseRecoveryFunding`
+9. `CloseFailureRoot`
+
+The Dealer family action space remains empty. StructuredClaim payload codecs
+are owned by its separately integrated runtime and adapter, while Recovery
+payload/account contracts are owned by its dedicated modules; this central
+allocation duplicates neither contract and activates none of these actions.
 
 ## Coordinated successor account block
 
@@ -190,6 +190,16 @@ or pure runtime elsewhere does not make a route executable.
 | `0x90/1` | SourcePlane V3 | window seal |
 | `0x91/1` | SourcePlane V3 | statistic result |
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
+| `0xa0/1` | Failure | external semantic root; root rent only |
+| `0xa1/1` | Liveness | immutable runtime policy |
+| `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
+| `0xa3/1` | Terminal/replay | failure-generation tombstone |
+
+Tags `0x93..=0x9e` remain outside this wave's ownership for the coordinated
+Dealer design, and `0x9f` deliberately remains unallocated. The failure root
+never aliases `0xa2`, holds recovery work principal, or emits a keeper transfer.
+Accepted work rewrites the failure root and Recovery compartment atomically;
+only the latter is debited for the keeper payment and payer headroom refund.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
