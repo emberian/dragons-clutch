@@ -583,6 +583,32 @@ class CapabilityProfileTests(unittest.TestCase):
             ],
         )
 
+    def test_nonproduction_source_identities_cannot_be_deployable(self) -> None:
+        for source_identity in (
+            "non-production-mock-source-lab",
+            "non-production-real-pyth-lab",
+        ):
+            with self.subTest(source_identity=source_identity), self.assertRaisesRegex(
+                checker.ProfileError, "non-production source identity cannot be deployable"
+            ):
+                checker.validate_manifest(
+                    manifest(
+                        source_identity=source_identity,
+                        classification="deployable",
+                    ),
+                    repo=ROOT,
+                )
+
+    def test_runtime_real_pyth_release_never_enables_a_fixture_feature(self) -> None:
+        inert = checker.validate_manifest(manifest(), repo=ROOT)
+        runtime = checker.validate_manifest(
+            manifest(source_identity="runtime-real-pyth-release"), repo=ROOT
+        )
+        self.assertNotEqual(
+            inert["profile_identity_sha256"], runtime["profile_identity_sha256"]
+        )
+        self.assertEqual(inert["cargo_features"], runtime["cargo_features"])
+
     def test_full_profile_records_cargo_default_identity_marker(self) -> None:
         full = checker.validate_manifest(
             manifest(profile_feature="profile-full"), repo=ROOT

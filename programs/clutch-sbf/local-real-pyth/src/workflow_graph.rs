@@ -104,7 +104,11 @@ impl std::error::Error for WorkflowGraphError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReleasedProgram {
     pub program_id: Address,
+    /// Source V3 account-bound digest of the complete Program account bytes.
+    pub program_account_data_id: [u8; 32],
     pub program_data: Address,
+    /// Source V3 account-bound digest of complete ProgramData bytes, including ELF.
+    pub programdata_account_data_id: [u8; 32],
     pub deployment_slot: u64,
     pub elf_sha256: [u8; 32],
 }
@@ -114,10 +118,135 @@ impl ReleasedProgram {
         if self.program_id == Address::default()
             || self.program_data == Address::default()
             || self.program_id == self.program_data
+            || self.program_account_data_id == [0; 32]
+            || self.programdata_account_data_id == [0; 32]
+            || self.program_account_data_id == self.programdata_account_data_id
             || self.deployment_slot == 0
             || self.elf_sha256 == [0; 32]
         {
             Err(WorkflowGraphError::ZeroIdentity)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// One immutable Config body admitted by the operator release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReleasedConfigAccount {
+    pub account: Address,
+    pub owner: Address,
+    /// Source V3 account-bound digest of the complete Config body.
+    pub account_data_id: [u8; 32],
+    /// Raw SHA-256 used by the release dossier and operator file manifest.
+    pub body_sha256: [u8; 32],
+}
+
+impl ReleasedConfigAccount {
+    fn validate(self) -> Result<()> {
+        if self.account == Address::default()
+            || self.owner == Address::default()
+            || self.account == self.owner
+            || self.account_data_id == [0; 32]
+            || self.body_sha256 == [0; 32]
+        {
+            Err(WorkflowGraphError::ZeroIdentity)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Exact Product/Realm selection which is allowed to use one real-Pyth route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperatorSourcePolicySelectionV1 {
+    pub registry_release_id: [u8; 32],
+    pub capability_profile_id: [u8; 32],
+    pub compiled_product_bundle_id: [u8; 32],
+    pub realm_id: [u8; 32],
+    pub profile_id: [u8; 32],
+    pub collateral_policy_id: [u8; 32],
+    pub source_release_manifest_id: [u8; 32],
+    pub source_plane_contract_id: [u8; 32],
+    pub source_spec_id: [u8; 32],
+    pub source_spec_account_data_id: [u8; 32],
+}
+
+impl OperatorSourcePolicySelectionV1 {
+    fn validate(self) -> Result<()> {
+        let identities = [
+            self.registry_release_id,
+            self.capability_profile_id,
+            self.compiled_product_bundle_id,
+            self.realm_id,
+            self.profile_id,
+            self.collateral_policy_id,
+            self.source_release_manifest_id,
+            self.source_plane_contract_id,
+            self.source_spec_id,
+            self.source_spec_account_data_id,
+        ];
+        if identities.iter().any(|identity| *identity == [0; 32])
+            || self.realm_id == self.profile_id
+        {
+            Err(WorkflowGraphError::ZeroIdentity)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Explicit real-Pyth release route. Absence means the operator manifest is
+/// source-empty; no mock, legacy, or ambient provider route is inferred.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RealPythOperatorRouteV1 {
+    pub parser: ReleasedProgram,
+    pub parser_config: ReleasedConfigAccount,
+    pub receiver: ReleasedProgram,
+    pub receiver_config: ReleasedConfigAccount,
+    pub transport: ReleasedProgram,
+    pub feed_account: Address,
+    pub provider_feed_id: [u8; 32],
+    pub source_policy: OperatorSourcePolicySelectionV1,
+}
+
+impl RealPythOperatorRouteV1 {
+    fn validate(self) -> Result<()> {
+        self.parser.validate()?;
+        self.parser_config.validate()?;
+        self.receiver.validate()?;
+        self.receiver_config.validate()?;
+        self.transport.validate()?;
+        self.source_policy.validate()?;
+        let programs = [
+            self.parser.program_id,
+            self.receiver.program_id,
+            self.transport.program_id,
+        ];
+        let programdata = [
+            self.parser.program_data,
+            self.receiver.program_data,
+            self.transport.program_data,
+        ];
+        if self.feed_account == Address::default()
+            || self.provider_feed_id == [0; 32]
+            || self.parser_config.owner != self.parser.program_id
+            || self.receiver_config.owner != self.receiver.program_id
+            || self.parser_config.account == self.receiver_config.account
+            || self.parser_config.account == self.feed_account
+            || self.receiver_config.account == self.feed_account
+            || programs.iter().enumerate().any(|(index, identity)| {
+                programs[..index]
+                    .iter()
+                    .any(|previous| previous == identity)
+            })
+            || programdata.iter().enumerate().any(|(index, identity)| {
+                programdata[..index]
+                    .iter()
+                    .any(|previous| previous == identity)
+            })
+        {
+            Err(WorkflowGraphError::WrongProgramRelease)
         } else {
             Ok(())
         }
@@ -129,12 +258,8 @@ impl ReleasedProgram {
 pub struct ExplicitOperatorReleaseManifest {
     pub manifest_sha256: [u8; 32],
     pub clutch: ReleasedProgram,
-    /// Exact first-party read-only Pyth parser release selected by Source.
-    pub pyth_parser: ReleasedProgram,
-    /// Exact captured Pyth receiver release admitted by the Source release.
-    pub pyth_receiver: ReleasedProgram,
-    /// Exact captured Pyth router release used to authenticate VAA transport.
-    pub pyth_router: ReleasedProgram,
+    /// Exact real-Pyth route, absent in the source-empty default release.
+    pub real_pyth: Option<RealPythOperatorRouteV1>,
     pub semantic_releases: Vec<SemanticOwner>,
 }
 
@@ -144,31 +269,25 @@ impl ExplicitOperatorReleaseManifest {
             return Err(WorkflowGraphError::ZeroIdentity);
         }
         self.clutch.validate()?;
-        self.pyth_parser.validate()?;
-        self.pyth_receiver.validate()?;
-        self.pyth_router.validate()?;
-        let programs = [
-            self.clutch.program_id,
-            self.pyth_parser.program_id,
-            self.pyth_receiver.program_id,
-            self.pyth_router.program_id,
-        ];
-        let programdata = [
-            self.clutch.program_data,
-            self.pyth_parser.program_data,
-            self.pyth_receiver.program_data,
-            self.pyth_router.program_data,
-        ];
-        if programs.iter().enumerate().any(|(index, identity)| {
-            programs[..index]
-                .iter()
-                .any(|previous| previous == identity)
-        }) || programdata.iter().enumerate().any(|(index, identity)| {
-            programdata[..index]
-                .iter()
-                .any(|previous| previous == identity)
-        }) || self.semantic_releases.is_empty()
-        {
+        if let Some(route) = self.real_pyth {
+            route.validate()?;
+            if [
+                route.parser.program_id,
+                route.receiver.program_id,
+                route.transport.program_id,
+            ]
+            .contains(&self.clutch.program_id)
+                || [
+                    route.parser.program_data,
+                    route.receiver.program_data,
+                    route.transport.program_data,
+                ]
+                .contains(&self.clutch.program_data)
+            {
+                return Err(WorkflowGraphError::WrongProgramRelease);
+            }
+        }
+        if self.semantic_releases.is_empty() {
             return Err(WorkflowGraphError::WrongProgramRelease);
         }
         let mut releases = BTreeSet::new();
@@ -1052,6 +1171,9 @@ pub struct SourceCrankObservation<'a> {
 
 impl SourceCrankObservation<'_> {
     fn validate(self, manifest: &ExplicitOperatorReleaseManifest) -> Result<()> {
+        let route = manifest
+            .real_pyth
+            .ok_or(WorkflowGraphError::WrongProgramRelease)?;
         if self.generation == 0
             || self.observed_state_sha256 == [0; 32]
             || self.lineages.is_empty()
@@ -1083,19 +1205,53 @@ impl SourceCrankObservation<'_> {
         {
             return Err(WorkflowGraphError::ActionStateMismatch);
         }
+        let source_plane_id = self
+            .release
+            .base
+            .source_plane
+            .id()
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
         if self.release.base.adapter.program.bytes() != manifest.clutch.program_id.to_bytes()
+            || self.release.base.adapter.program_account_data_id.bytes()
+                != manifest.clutch.program_account_data_id
             || self.release.base.adapter.programdata.bytes()
                 != manifest.clutch.program_data.to_bytes()
+            || self.release.base.adapter.programdata_account_data_id.bytes()
+                != manifest.clutch.programdata_account_data_id
             || self.release.base.adapter.deployment_slot != manifest.clutch.deployment_slot
             || self.release.base.parser.program.bytes()
-                != manifest.pyth_parser.program_id.to_bytes()
+                != route.parser.program_id.to_bytes()
+            || self.release.base.parser.program_account_data_id.bytes()
+                != route.parser.program_account_data_id
             || self.release.base.parser.programdata.bytes()
-                != manifest.pyth_parser.program_data.to_bytes()
-            || self.release.base.parser.deployment_slot != manifest.pyth_parser.deployment_slot
-            || self.release.receiver.program.bytes() != manifest.pyth_receiver.program_id.to_bytes()
+                != route.parser.program_data.to_bytes()
+            || self.release.base.parser.programdata_account_data_id.bytes()
+                != route.parser.programdata_account_data_id
+            || self.release.base.parser.deployment_slot != route.parser.deployment_slot
+            || self.release.base.parser_config.bytes() != route.parser_config.account.to_bytes()
+            || self.release.base.parser_config_owner.bytes()
+                != route.parser_config.owner.to_bytes()
+            || self.release.base.parser_config_data_id.bytes()
+                != route.parser_config.account_data_id
+            || self.release.receiver.program.bytes() != route.receiver.program_id.to_bytes()
+            || self.release.receiver.program_account_data_id.bytes()
+                != route.receiver.program_account_data_id
             || self.release.receiver.programdata.bytes()
-                != manifest.pyth_receiver.program_data.to_bytes()
-            || self.release.receiver.deployment_slot != manifest.pyth_receiver.deployment_slot
+                != route.receiver.program_data.to_bytes()
+            || self.release.receiver.programdata_account_data_id.bytes()
+                != route.receiver.programdata_account_data_id
+            || self.release.receiver.deployment_slot != route.receiver.deployment_slot
+            || self.release.receiver_config.bytes() != route.receiver_config.account.to_bytes()
+            || self.release.receiver_config_owner.bytes()
+                != route.receiver_config.owner.to_bytes()
+            || self.release.receiver_config_data_id.bytes()
+                != route.receiver_config.account_data_id
+            || self.release.base.feed.bytes() != route.feed_account.to_bytes()
+            || release_id.bytes() != route.source_policy.source_release_manifest_id
+            || source_plane_id.bytes() != route.source_policy.source_plane_contract_id
+            || self.release.base.source_spec_id.bytes() != route.source_policy.source_spec_id
+            || self.release.base.source_spec_account_data_id.bytes()
+                != route.source_policy.source_spec_account_data_id
         {
             return Err(WorkflowGraphError::WrongProgramRelease);
         }
@@ -2303,6 +2459,111 @@ pub fn owner_accounting_is_complete(owner: &OwnerSettlementAccumulatorV1) -> Res
         && owner.consumed_sell_price_units == owner.expectation.expected_sell_price_units
         && owner.completed_buy_order_mask == owner.expectation.expected_buy_order_mask
         && owner.completed_sell_order_mask == owner.expectation.expected_sell_order_mask)
+}
+
+#[cfg(test)]
+mod operator_release_manifest_tests {
+    use super::*;
+
+    fn address(byte: u8) -> Address {
+        Address::new_from_array([byte; 32])
+    }
+
+    fn program(program: u8, programdata: u8, digest: u8) -> ReleasedProgram {
+        ReleasedProgram {
+            program_id: address(program),
+            program_account_data_id: [digest; 32],
+            program_data: address(programdata),
+            programdata_account_data_id: [digest + 1; 32],
+            deployment_slot: u64::from(digest),
+            elf_sha256: [digest + 2; 32],
+        }
+    }
+
+    fn config(account: u8, owner: u8, digest: u8) -> ReleasedConfigAccount {
+        ReleasedConfigAccount {
+            account: address(account),
+            owner: address(owner),
+            account_data_id: [digest; 32],
+            body_sha256: [digest + 1; 32],
+        }
+    }
+
+    fn policy() -> OperatorSourcePolicySelectionV1 {
+        OperatorSourcePolicySelectionV1 {
+            registry_release_id: [30; 32],
+            capability_profile_id: [31; 32],
+            compiled_product_bundle_id: [32; 32],
+            realm_id: [33; 32],
+            profile_id: [34; 32],
+            collateral_policy_id: [35; 32],
+            source_release_manifest_id: [36; 32],
+            source_plane_contract_id: [37; 32],
+            source_spec_id: [38; 32],
+            source_spec_account_data_id: [39; 32],
+        }
+    }
+
+    fn real_pyth() -> RealPythOperatorRouteV1 {
+        RealPythOperatorRouteV1 {
+            parser: program(3, 4, 40),
+            parser_config: config(5, 3, 50),
+            receiver: program(6, 7, 60),
+            receiver_config: config(8, 6, 70),
+            transport: program(9, 10, 80),
+            feed_account: address(11),
+            provider_feed_id: [90; 32],
+            source_policy: policy(),
+        }
+    }
+
+    fn manifest(route: Option<RealPythOperatorRouteV1>) -> ExplicitOperatorReleaseManifest {
+        ExplicitOperatorReleaseManifest {
+            manifest_sha256: [1; 32],
+            clutch: program(1, 2, 20),
+            real_pyth: route,
+            semantic_releases: vec![SemanticOwner {
+                package: "clutch-source-plane-v3-runtime".into(),
+                schema: "source-release-manifest-v2".into(),
+                release_sha256: [2; 32],
+            }],
+        }
+    }
+
+    #[test]
+    fn source_empty_operator_manifest_is_explicitly_valid() {
+        assert!(manifest(None).validate().is_ok());
+    }
+
+    #[test]
+    fn real_pyth_route_refuses_missing_programdata_body_identity() {
+        let mut route = real_pyth();
+        route.receiver.programdata_account_data_id = [0; 32];
+        assert_eq!(
+            manifest(Some(route)).validate(),
+            Err(WorkflowGraphError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn real_pyth_route_refuses_config_owned_by_another_release() {
+        let mut route = real_pyth();
+        route.receiver_config.owner = route.transport.program_id;
+        assert_eq!(
+            manifest(Some(route)).validate(),
+            Err(WorkflowGraphError::WrongProgramRelease)
+        );
+    }
+
+    #[test]
+    fn real_pyth_route_refuses_realm_profile_alias() {
+        let mut route = real_pyth();
+        route.source_policy.profile_id = route.source_policy.realm_id;
+        assert_eq!(
+            manifest(Some(route)).validate(),
+            Err(WorkflowGraphError::ZeroIdentity)
+        );
+    }
 }
 
 #[cfg(test)]

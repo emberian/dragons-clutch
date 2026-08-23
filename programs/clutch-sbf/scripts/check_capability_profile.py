@@ -52,6 +52,10 @@ PROFILE_FEATURES = frozenset(
 )
 SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
     "production-inert": None,
+    # SourcePlane V3 admits only a separately authenticated content-addressed
+    # SourceReleaseManifestV2. It changes the checked capability-profile
+    # identity but never compiles a fixture registry row into the ELF.
+    "runtime-real-pyth-release": None,
     "non-production-mock-source-lab": "non-production-mock-source",
     "non-production-real-pyth-lab": "non-production-real-pyth-lab",
 }
@@ -1395,6 +1399,12 @@ def validate_manifest(
         classification in {"planning", "deployable"},
         "profile.classification: unknown state",
     )
+    if classification == "deployable":
+        require(
+            build_contract["source_identity"]
+            in {"production-inert", "runtime-real-pyth-release"},
+            "profile: non-production source identity cannot be deployable",
+        )
 
     build_contract = validate_build_contract(data["build_contract"])
     capabilities = validate_capabilities(data["capabilities"])
