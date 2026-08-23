@@ -95,6 +95,8 @@ pub const GENERAL_V2_FEED_ACCOUNT_VERSION: u8 = 2;
 pub const GENERAL_V2_WINDOW_ACCOUNT_TAG: u8 = 24;
 /// General V2 Window successor account version.
 pub const GENERAL_V2_WINDOW_ACCOUNT_VERSION: u8 = 4;
+/// General V2 full-rank Window successor version.
+pub const GENERAL_V2_WINDOW_ACCOUNT_VERSION_V2: u8 = 5;
 /// General V2 active-width feed-stage successor account discriminator.
 pub const GENERAL_V2_FEED_STAGE_ACCOUNT_TAG: u8 = 25;
 /// General V2 active-width feed-stage successor account version.
@@ -103,6 +105,8 @@ pub const GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION: u8 = 2;
 pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG: u8 = 0x77;
 /// Funded General V2 admission-node account version.
 pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION: u8 = 1;
+/// General V2 cost-certificate AdmissionNode successor version.
+pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION_V2: u8 = 2;
 /// General V2 epoch-budget account discriminator.
 pub const GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG: u8 = 0x78;
 /// General V2 epoch-budget account version.
@@ -111,6 +115,8 @@ pub const GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG: u8 = 0x79;
 /// General V2 immutable Market-binding account version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
+/// General V2 immutable candidate-cost Market-binding successor version.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
 /// Counted-retirement Replay-successor account discriminator.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
@@ -672,6 +678,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_WINDOW_ACCOUNT_TAG,
+            version: GENERAL_V2_WINDOW_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-window-v5-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_FEED_STAGE_ACCOUNT_TAG,
             version: GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION,
         },
@@ -690,6 +705,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG,
+            version: GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-admission-node-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG,
             version: GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION,
         },
@@ -704,6 +728,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-market-binding-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-binding-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2028,6 +2061,10 @@ mod tests {
                 GENERAL_V2_WINDOW_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_WINDOW_ACCOUNT_TAG,
+                GENERAL_V2_WINDOW_ACCOUNT_VERSION_V2,
+            ),
+            (
                 GENERAL_V2_FEED_STAGE_ACCOUNT_TAG,
                 GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION,
             ),
@@ -2036,12 +2073,20 @@ mod tests {
                 GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG,
+                GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION_V2,
+            ),
+            (
                 GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG,
                 GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2,
             ),
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,

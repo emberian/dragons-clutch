@@ -647,8 +647,6 @@ pub fn validate_facility_initialization_v3(
         || state.facility_position_binding_id != binding_id
         || state.facility_position_id != position.semantic_id
         || state.facility_position_account_id != position.account_id
-        || state.facility_position_account_id != binding.facility_position_account_id
-        || state.facility_replay_account_id != binding.facility_replay_account_id
         || Id::from_bytes(canonical.replay_account().bytes())
             != state.facility_replay_account_id
         || state.sponsor != genesis.sponsor

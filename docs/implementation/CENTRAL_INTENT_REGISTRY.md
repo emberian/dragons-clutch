@@ -86,6 +86,15 @@ lists, account codecs, or transition semantics. Dealer now allocates the
 following bounded policy transport without enabling any facility/economic
 action:
 
+The collision ledger also reserves three same-tag General successors for the
+still-disabled cost-aware action 14/15 path: Window `24/5` (565 bytes),
+AdmissionNode `0x77/2` (775 bytes, adding only the checked cost-certificate
+content ID), and MarketBinding `0x79/2` (572 bytes, adding only immutable
+`batch_policy_id`). They do not enable those actions. No minimal
+SelectedCandidate successor is allocated: action 15 remains unable to mint
+legacy `0x7c/1` and must eventually hand the winning certificate into the
+separately reviewed counted settlement root.
+
 1. `BeginPolicy`
 2. `WritePolicy`
 3. `SealPolicy`

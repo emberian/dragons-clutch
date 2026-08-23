@@ -38,8 +38,9 @@ use clutch_solana_layout::{
 };
 
 use crate::{
-    relation_v2_policy_id_v1, score_v2_q_policy_id_v1, CanonicalSha256, GeneralV2RuntimeError,
-    QuantizedBasisProjectionV1, QuantizedWitnessBodyV1,
+    relation_v2_policy_id_v1, score_v2_q_cost_policy_id_v1, score_v2_q_policy_id_v1,
+    CanonicalSha256, GeneralV2RuntimeError, QuantizedBasisProjectionV1,
+    QuantizedWitnessBodyV1,
 };
 
 /// Largest coordinate sample retained by the fixed-memory searcher.
@@ -248,6 +249,34 @@ pub struct SmoothDirectBuilderInputsV1<'a> {
     pub book_projection: &'a OwnerBlindBookProjectionV1,
 }
 
+/// Cost-aware successor inputs bound to MarketBinding V2 and the V5 owner
+/// projection used by the preselection certificate.
+#[derive(Clone, Copy, Debug)]
+pub struct SmoothDirectCostedBuilderInputsV1<'a> {
+    /// Prospective canonical feed account identity.
+    pub candidate_feed_identity: Id32,
+    /// Immutable General EconomicDomain owner.
+    pub economic_domain_account: &'a EconomicDomainV2AccountV1,
+    /// Single owner of immutable batch and score policy selection.
+    pub market_binding: &'a clutch_general_v2_contract::MarketBindingV2,
+    /// Frozen exact PriceGrid.
+    pub price_grid: &'a PriceGridAccount,
+    /// Immutable Product template.
+    pub product_template: &'a ProductTemplateV4,
+    /// Product-owned native claim basis.
+    pub native_basis: &'a NativeClaimBasisV1,
+    /// Product-selected exact price-measure policy.
+    pub price_measure_policy: &'a PriceMeasurePolicyV1,
+    /// Immutable market Genesis profile.
+    pub genesis: &'a MarketGenesisProfileV2,
+    /// Immutable recurring market instance.
+    pub market_instance: &'a MarketInstancePreimageV2,
+    /// Registry-authenticated edge policy selected by the basis.
+    pub authenticated_edge_policy: QuantizedEdgePolicyV1,
+    /// Exact V5 page projection retaining private owner membership.
+    pub book_projection: &'a OwnerBlindBookProjectionV2,
+}
+
 /// One checker-accepted candidate chosen from a named bounded search family.
 ///
 /// Fields are private so callers cannot replace the exact price, atoms,
@@ -372,7 +401,6 @@ impl BuiltDirectCandidateV1 {
             || admission_node.epoch != economic_domain_account.epoch
             || admission_node.market != market_binding.market
             || admission_node.relation_policy_id != relation_v2_policy_id_v1()?
-            || admission_node.score_policy_id != score_v2_q_policy_id_v1()?
             || admission_node.admission_policy_id != market_binding.admission_policy_id
             || market_binding.relation_policy_id != admission_node.relation_policy_id
             || market_binding.score_policy_id != admission_node.score_policy_id
@@ -508,6 +536,35 @@ impl BuiltDirectCandidateV1 {
             return Err(CandidateBuilderErrorV1::BindingMismatch);
         }
         Ok(header)
+    }
+
+    /// Cost-aware sealed-feed encoder using the same canonical CandidateFeedV2
+    /// bytes and the relation projection of MarketBinding/AdmissionNode
+    /// successors. No duplicate feed schema or rank fact is introduced.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_sealed_candidate_feed_costed_v1(
+        &self,
+        output: &mut [u8],
+        candidate_feed_identity: Id32,
+        admission_node: &clutch_general_v2_contract::AdmissionNodeV4AccountV1,
+        market_binding: &clutch_general_v2_contract::MarketBindingV2,
+        economic_domain_account: &EconomicDomainV2AccountV1,
+        settlement_tail: SettlementTailV1<'_>,
+        rent: DeletableRentOwnerV1,
+        stored_bump: u8,
+    ) -> Result<CandidateFeedHeaderV2, CandidateBuilderErrorV1> {
+        market_binding.validate()?;
+        admission_node.validate()?;
+        self.encode_sealed_candidate_feed_v2(
+            output,
+            candidate_feed_identity,
+            admission_node.base(),
+            &market_binding.relation_projection(),
+            economic_domain_account,
+            settlement_tail,
+            rent,
+            stored_bump,
+        )
     }
 }
 
@@ -958,6 +1015,46 @@ pub fn project_owner_blind_book_v3(
     market_binding: &MarketBindingV1,
     price_grid: &PriceGridAccount,
 ) -> Result<OwnerBlindBookProjectionV2, CandidateBuilderErrorV1> {
+    project_owner_blind_book_with_score_v1(
+        pages,
+        expected_order_set,
+        economic_domain_account,
+        market_binding,
+        price_grid,
+        score_v2_q_policy_id_v1()?,
+    )
+}
+
+/// Project V5 pages under the immutable owner-net cost-aware MarketBinding
+/// successor without inventing a second owner table or market DTO.
+pub fn project_owner_blind_book_costed_v1(
+    pages: &[GeneralOrderPageInputV5<'_>],
+    expected_order_set: Id32,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &clutch_general_v2_contract::MarketBindingV2,
+    price_grid: &PriceGridAccount,
+) -> Result<OwnerBlindBookProjectionV2, CandidateBuilderErrorV1> {
+    market_binding.validate()?;
+    let projection = market_binding.relation_projection();
+    project_owner_blind_book_with_score_v1(
+        pages,
+        expected_order_set,
+        economic_domain_account,
+        &projection,
+        price_grid,
+        score_v2_q_cost_policy_id_v1()?,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_owner_blind_book_with_score_v1(
+    pages: &[GeneralOrderPageInputV5<'_>],
+    expected_order_set: Id32,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    price_grid: &PriceGridAccount,
+    expected_score_policy_id: Id32,
+) -> Result<OwnerBlindBookProjectionV2, CandidateBuilderErrorV1> {
     economic_domain_account.validate()?;
     market_binding.validate()?;
     price_grid.validate()?;
@@ -977,7 +1074,7 @@ pub fn project_owner_blind_book_v3(
         || market_binding.native_claim_basis_id
             != economic_domain_account.transcript.native_claim_basis_id
         || market_binding.relation_policy_id != relation_v2_policy_id_v1()?
-        || market_binding.score_policy_id != score_v2_q_policy_id_v1()?
+        || market_binding.score_policy_id != expected_score_policy_id
     {
         return Err(CandidateBuilderErrorV1::BindingMismatch);
     }
@@ -1110,8 +1207,54 @@ pub fn build_best_valid_submitted_candidate_v1(
     supplied_atom_proposals: &[QuantizedAtomProposalV1],
     plan: BoundedSearchPlanV1,
 ) -> Result<BuiltDirectCandidateV1, CandidateBuilderErrorV1> {
+    build_best_valid_submitted_candidate_with_score_v1(
+        inputs,
+        supplied_atom_proposals,
+        plan,
+        score_v2_q_policy_id_v1()?,
+    )
+}
+
+/// Search the same named bounded family under the immutable cost-aware score
+/// policy. This remains a best-valid-submitted heuristic, never optimality.
+pub fn build_best_valid_submitted_costed_candidate_v1(
+    inputs: SmoothDirectCostedBuilderInputsV1<'_>,
+    supplied_atom_proposals: &[QuantizedAtomProposalV1],
+    plan: BoundedSearchPlanV1,
+) -> Result<BuiltDirectCandidateV1, CandidateBuilderErrorV1> {
+    inputs.market_binding.validate()?;
+    let relation_binding = inputs.market_binding.relation_projection();
+    if inputs.book_projection.base().market_binding() != &relation_binding {
+        return Err(CandidateBuilderErrorV1::BindingMismatch);
+    }
+    build_best_valid_submitted_candidate_with_score_v1(
+        SmoothDirectBuilderInputsV1 {
+            candidate_feed_identity: inputs.candidate_feed_identity,
+            economic_domain_account: inputs.economic_domain_account,
+            market_binding: &relation_binding,
+            price_grid: inputs.price_grid,
+            product_template: inputs.product_template,
+            native_basis: inputs.native_basis,
+            price_measure_policy: inputs.price_measure_policy,
+            genesis: inputs.genesis,
+            market_instance: inputs.market_instance,
+            authenticated_edge_policy: inputs.authenticated_edge_policy,
+            book_projection: inputs.book_projection.base(),
+        },
+        supplied_atom_proposals,
+        plan,
+        score_v2_q_cost_policy_id_v1()?,
+    )
+}
+
+fn build_best_valid_submitted_candidate_with_score_v1(
+    inputs: SmoothDirectBuilderInputsV1<'_>,
+    supplied_atom_proposals: &[QuantizedAtomProposalV1],
+    plan: BoundedSearchPlanV1,
+    expected_score_policy_id: Id32,
+) -> Result<BuiltDirectCandidateV1, CandidateBuilderErrorV1> {
     plan.validate()?;
-    let context = PreparedBuilderContextV1::new(inputs)?;
+    let context = PreparedBuilderContextV1::new(inputs, expected_score_policy_id)?;
     if plan.maximum_pair_denominator > context.price_measure_policy.maximum_witness_denominator {
         return Err(CandidateBuilderErrorV1::InvalidSearchPlan);
     }
@@ -1271,7 +1414,10 @@ impl QuantizedBasisProjectionV1 {
 }
 
 impl<'a> PreparedBuilderContextV1<'a> {
-    fn new(inputs: SmoothDirectBuilderInputsV1<'a>) -> Result<Self, CandidateBuilderErrorV1> {
+    fn new(
+        inputs: SmoothDirectBuilderInputsV1<'a>,
+        score_policy_id: Id32,
+    ) -> Result<Self, CandidateBuilderErrorV1> {
         if inputs.candidate_feed_identity.is_zero() {
             return Err(CandidateBuilderErrorV1::Contract(CodecError::ZeroIdentity));
         }
@@ -1302,7 +1448,6 @@ impl<'a> PreparedBuilderContextV1<'a> {
         let market_instance_id = inputs.market_instance.id()?.bytes();
         let genesis_id = inputs.genesis.id()?.bytes();
         let relation_policy_id = relation_v2_policy_id_v1()?;
-        let score_policy_id = score_v2_q_policy_id_v1()?;
         let transcript = inputs.economic_domain_account.transcript;
         let domain_digest = economic_domain_digest_v2(&CanonicalSha256, transcript)?;
         let domain = relation_domain_from_account(inputs.economic_domain_account)?;
