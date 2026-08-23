@@ -19,6 +19,7 @@
 mod artifacts;
 mod codec;
 mod compile;
+mod compiler_output;
 mod funding;
 mod funding_state;
 mod product_registry;
@@ -40,6 +41,10 @@ pub use artifacts::{
 pub use clutch_bspline::{BasisSpec as QuantizedBasisSpecV1, EdgePolicy as QuantizedEdgePolicyV1};
 pub use compile::{
     compile_ordinal, AbsoluteRecoveryAttemptV1, CompiledOrdinalV1, CompiledScheduleV1,
+};
+pub use compiler_output::{
+    CompiledProductSeriesBundleV1, COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN,
 };
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
@@ -166,6 +171,10 @@ typed_id!(
     "Typed identity of one `SeriesAttachmentPlanV1`."
 );
 typed_id!(SeriesPlanId, "Typed identity of one `SeriesPlanV4`.");
+typed_id!(
+    CompiledProductSeriesBundleV1Id,
+    "Typed identity of one `CompiledProductSeriesBundleV1` compiler output."
+);
 typed_id!(
     SeriesFundingQuoteId,
     "Typed identity of one `SeriesFundingQuoteV1`."

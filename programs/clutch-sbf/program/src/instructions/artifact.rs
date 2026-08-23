@@ -32,9 +32,10 @@ use solana_pubkey::Pubkey;
 
 #[cfg(all(target_os = "solana", feature = "non-production-product-series-lab"))]
 use clutch_product_series::{
-    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductCapabilityRegistryV2, ProductTemplateV4, SeriesAttachmentPlanV1,
-    SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5, MARKET_GENESIS_PROFILE_V2_DOMAIN,
+    CompiledProductSeriesBundleV1, EvidenceOnlyRecoveryPolicyV1, FixedCodec,
+    MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductCapabilityRegistryV2,
+    ProductTemplateV4, SeriesAttachmentPlanV1, SeriesFundingQuoteV1, SeriesFundingTermsV2,
+    SeriesPlanV5, COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN, MARKET_GENESIS_PROFILE_V2_DOMAIN,
     NATIVE_CLAIM_BASIS_DOMAIN, PRICE_MEASURE_POLICY_DOMAIN, PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN,
     PRODUCT_TEMPLATE_DOMAIN, RECOVERY_POLICY_DOMAIN, SERIES_ATTACHMENT_PLAN_DOMAIN,
     SERIES_FUNDING_QUOTE_DOMAIN, SERIES_FUNDING_TERMS_V2_DOMAIN, SERIES_PLAN_V5_DOMAIN,
@@ -415,7 +416,8 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
         | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::ProductCapabilityRegistryV2) => {
+        | ArtifactKind::ProductCapabilityRegistryV2
+        | ArtifactKind::CompiledProductSeriesBundleV1) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -538,6 +540,13 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
                     PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN,
                 );
             }
+            ArtifactKind::CompiledProductSeriesBundleV1 => {
+                return validate_product::<CompiledProductSeriesBundleV1>(
+                    binding,
+                    body,
+                    COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN,
+                );
+            }
             _ => {}
         }
     }
@@ -649,7 +658,8 @@ fn create_final<'a>(
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
         | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::ProductCapabilityRegistryV2) => {
+        | ArtifactKind::ProductCapabilityRegistryV2
+        | ArtifactKind::CompiledProductSeriesBundleV1) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,

@@ -40,7 +40,8 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_product_series::{
     compile_source_occurrence_v3, AuthenticatedSeriesFundingAuthorityV1,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
+    AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV1,
+    CompiledProductSeriesBundleV1Id, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductCapabilityRegistryV2, ProductTemplateV4,
     RegistryCapabilityProjectionV2, SeriesActivationContextV1, SeriesAttachmentPlanV1,
@@ -147,8 +148,9 @@ pub fn process(
 
 /// Registration account contract: payer, Series registry PDA, neutral lamport
 /// sink, System, Rent, executing program, linked ProgramData, shared Product
-/// capability-registry artifact, Source release, then the nine Series artifacts.
-const REGISTER_SERIES_ACCOUNT_COUNT_V1: usize = 9 + SERIES_ARTIFACT_ACCOUNT_COUNT_V1;
+/// capability-registry artifact, Source release, exact compiler-output bundle,
+/// then the nine Series artifacts referenced by that bundle.
+const REGISTER_SERIES_ACCOUNT_COUNT_V1: usize = 10 + SERIES_ARTIFACT_ACCOUNT_COUNT_V1;
 const IX_REGISTER_PAYER: usize = 0;
 const IX_REGISTER_TARGET: usize = 1;
 const IX_REGISTER_NEUTRAL_LAMPORT_SINK: usize = 2;
@@ -158,7 +160,8 @@ const IX_REGISTER_PROGRAM: usize = 5;
 const IX_REGISTER_PROGRAMDATA: usize = 6;
 const IX_REGISTER_PRODUCT_REGISTRY: usize = 7;
 const IX_REGISTER_SOURCE_RELEASE: usize = 8;
-const IX_REGISTER_ARTIFACTS: usize = 9;
+const IX_REGISTER_COMPILER_OUTPUT: usize = 9;
+const IX_REGISTER_ARTIFACTS: usize = 10;
 
 fn process_register_series(
     program_id: &Pubkey,
@@ -189,6 +192,13 @@ fn process_register_series(
         &accounts[IX_REGISTER_SOURCE_RELEASE],
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    authenticate_compiled_product_series_bundle_v1(
+        program_id,
+        &accounts[IX_REGISTER_COMPILER_OUTPUT],
+        registry,
+        source_release,
+        &artifacts,
+    )?;
     let authority = AuthenticatedProductSourceAuthorityV1::new(registry, source_release)?;
     let registration =
         authenticate_series_registration(&authority, &artifacts, &registry.projection(), request)?;
@@ -412,6 +422,35 @@ impl AuthenticatedProductCapabilityRegistryV2 {
     /// Registry-owned compiler projection derived from the artifact identity.
     pub const fn projection(self) -> RegistryCapabilityProjectionV2 {
         self.projection
+    }
+}
+
+/// Authenticated typed compiler output for one exact Product/Series artifact graph.
+///
+/// Private fields ensure callers cannot turn a proposed manifest into
+/// authority. Construction recomputes every identity from the authenticated
+/// registry release, Source release, and reopened Product/Series artifacts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedCompiledProductSeriesBundleV1 {
+    artifact_account: Pubkey,
+    bundle: CompiledProductSeriesBundleV1,
+    bundle_id: CompiledProductSeriesBundleV1Id,
+}
+
+impl AuthenticatedCompiledProductSeriesBundleV1 {
+    /// Exact content-addressed compiler-output artifact account.
+    pub const fn artifact_account(self) -> Pubkey {
+        self.artifact_account
+    }
+
+    /// Complete typed graph reconstructed from authenticated semantic owners.
+    pub const fn bundle(self) -> CompiledProductSeriesBundleV1 {
+        self.bundle
+    }
+
+    /// Content identity of the exact reconstructed compiler output.
+    pub const fn bundle_id(self) -> CompiledProductSeriesBundleV1Id {
+        self.bundle_id
     }
 }
 
@@ -972,6 +1011,86 @@ pub fn authenticate_product_capability_registry_v2(
         artifact_account: *registry_artifact.key,
         registry: *registry,
         projection,
+    })
+}
+
+fn reconstruct_compiled_product_series_bundle_v1(
+    registry: AuthenticatedProductCapabilityRegistryV2,
+    source_release: AuthenticatedSourceReleaseV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+) -> Outcome<CompiledProductSeriesBundleV1> {
+    Ok(CompiledProductSeriesBundleV1 {
+        registry_release_id: registry.projection().registry_release_id,
+        capability_profile_id: registry.projection().capability_profile_id,
+        source_release_manifest_id: source_release.manifest_id(),
+        source_plane_contract_id: artifacts.template.source_plane_contract_id,
+        source_spec_id: artifacts.template.source_spec_id,
+        summary_program_id: artifacts.template.summary_program_id,
+        product_compiler_release_id: artifacts.template.compiler_release_id,
+        native_claim_basis_id: artifacts
+            .basis
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        evidence_only_recovery_policy_id: artifacts
+            .recovery
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        product_template_id: artifacts
+            .template
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        price_measure_policy_id: artifacts
+            .price_policy
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        market_genesis_profile_id: artifacts
+            .genesis
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        funding_quote_id: artifacts
+            .quote
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        attachment_plan_id: artifacts
+            .attachment
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        series_plan_id: artifacts
+            .series
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        funding_terms_id: artifacts
+            .funding_terms
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    })
+}
+
+/// Authenticate an untrusted compiler-output artifact against the exact
+/// registry, Source release, and Product/Series bodies admitted in this call.
+pub fn authenticate_compiled_product_series_bundle_v1(
+    program_id: &Pubkey,
+    bundle_artifact: &AccountInfo<'_>,
+    registry: AuthenticatedProductCapabilityRegistryV2,
+    source_release: AuthenticatedSourceReleaseV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+) -> Outcome<AuthenticatedCompiledProductSeriesBundleV1> {
+    let expected =
+        reconstruct_compiled_product_series_bundle_v1(registry, source_release, artifacts)?;
+    let expected_id = expected
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let decoded = decode_product_artifact::<CompiledProductSeriesBundleV1>(
+        program_id,
+        bundle_artifact,
+        ArtifactKind::CompiledProductSeriesBundleV1,
+        expected_id.content_id(),
+    )?;
+    require(*decoded == expected, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedCompiledProductSeriesBundleV1 {
+        artifact_account: *bundle_artifact.key,
+        bundle: expected,
+        bundle_id: expected_id,
     })
 }
 
