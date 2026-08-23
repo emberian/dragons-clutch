@@ -38,7 +38,8 @@ pub use builder::{
 pub use position::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 
 pub use successor::{
-    build_owner_settlement_book_v2, derive_settlement_receipt_data_id_v2,
+    build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v2,
+    derive_settlement_receipt_data_id_v2,
     derive_owner_finalized_row_data_id_v2, prepare_create_owner_settlement_account_v2,
     prepare_realize_owner_cash_v2, project_owner_receipt_end_v2,
     project_owner_settlement_account_v2, AuthenticatedOrderMembershipV2,
@@ -47,6 +48,7 @@ pub use successor::{
     OwnerSettlementAccountProjectionV2, OwnerSettlementAccountViewV2, OwnerSettlementAccumulatorV2,
     OwnerCashRealizationPlanV2, OwnerFinalizedRowDataHashV2, OwnerSettlementBookV2,
     OwnerSettlementCreatePlanV2, OwnerSettlementExpectationV2, OwnerSettlementPdaProjectionV2,
+    OwnerSettlementExpectationBasisBookV2, OwnerSettlementExpectationBasisV2,
     OwnerSettlementReceiptAccountingProjectionV2, OwnerSettlementTerminalProjectionV2,
     PresentConsiderationV2, PresentPriceV2, SelectedOwnerRowAuthorityV2,
     SettlementReceiptDataHashV2, SettlementReceiptRouteV2, VerifiedSettlementOrderV2,
