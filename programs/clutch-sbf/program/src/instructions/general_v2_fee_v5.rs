@@ -2,12 +2,11 @@
 //!
 //! This module authenticates the immutable selected fee record, terminal
 //! owner carry, persisted payer-allocation snapshot, and both policy
-//! preimages before entering the fee semantic owner's V4 projection.  It does
-//! not expose a dispatcher route, freeze an action account order, mutate a
-//! [`clutch_general_v2_contract::SettlementRootV1AccountV1`] counter, or move
-//! value.  General must supply a privately derived root/traversal owner
-//! context and atomically compose the returned evidence with the current
-//! rent-owned owner-row successor.
+//! preimages before entering the fee semantic owner's V4 projection. It then
+//! composes those facts with the canonical counted-root V5 row, Position,
+//! Replay prestate, and cash-pot realization. It does not freeze General's
+//! positional account ABI or perform writes; the General handler owns the
+//! atomic account mutation and root-counter capability.
 //!
 //! The returned evidence proves fee selection and payer allocation only.  In
 //! particular it proves no current Reservation balance, Position cash,
@@ -33,20 +32,23 @@ use clutch_fee_runtime_contract::projection::{
 use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
 use clutch_general_v2_contract::{
-    payer_allocation_account_data_id_v1, Id32, OwnerFeeCarryV1AccountV1,
-    DeletableRentOwnerV1, OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1,
-    PayerAllocationV1AccountV1, SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1,
-    SettlementRootPhaseV1, SettlementRootV1AccountV1, Sha256BackendV1,
+    payer_allocation_account_data_id_v1, GeneralPositionReplayPrestateV1, Id32,
+    OwnerFeeCarryV1AccountV1, DeletableRentOwnerV1, OwnerSettlementSeedTupleV5,
+    OwnerSettlementV5AccountV1, PayerAllocationV1AccountV1, SelectedFeeRecordV1AccountV1,
+    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
+    Sha256BackendV1,
     OWNER_FEE_CARRY_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
 };
 use clutch_general_v2_runtime::{
-    derive_root_owner_basis_v4, CandidateEntitlementProjectionV4, OwnerRowFeeEvidenceV4,
-    SettlementTraversalProjectionV4,
+    derive_root_owner_basis_v4, prepare_realize_owner_cash_v5,
+    project_owner_settlement_account_v5, CandidateEntitlementProjectionV4,
+    OwnerCashRealizationPlanV5, OwnerRowFeeEvidenceV4, OwnerSettlementAccountProjectionV5,
+    OwnerSettlementAccountViewV5, SettlementTraversalProjectionV4,
 };
 use clutch_owner_settlement::{
     OwnerSettlementExpectationBasisV4, OwnerSettlementExpectationV4, OwnerSettlementStateV4,
-    SelectedOwnerFeeV1,
+    SelectedOwnerFeeV1, SettlementCashPotV1,
 };
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use solana_account_info::AccountInfo;
@@ -66,12 +68,12 @@ impl Sha256BackendV1 for RuntimeSha256 {
     }
 }
 
-/// Named account frame shared by disabled action-24 and action-38 composers.
+/// Named account frame shared by current action-24 and action-38 composers.
 ///
 /// The struct deliberately defines no positional ABI.  The eventual General
 /// handler must select these roles from its own frozen action account list.
 #[derive(Clone, Copy, Debug)]
-pub struct OwnerFeeSnapshotAccountFrameV4<'a, 'info> {
+pub struct OwnerFeeSnapshotAccountFrameV5<'a, 'info> {
     /// Fresh or existing canonical rent-owned owner-row successor.
     pub owner_row: &'a AccountInfo<'info>,
     /// Immutable candidate-wide selected composite-fee record.
@@ -88,12 +90,12 @@ pub struct OwnerFeeSnapshotAccountFrameV4<'a, 'info> {
 
 /// Presence-explicit fee account input selected only from the counted root.
 #[derive(Clone, Copy, Debug)]
-pub enum OwnerFeeAccountInputV4<'a, 'info> {
+pub enum OwnerFeeAccountInputV5<'a, 'info> {
     /// A live root fee record requires the complete real account graph and its
     /// registered revenue-policy preimage.
     CandidateFee {
         /// Exact named fee account frame; no remaining-account tail.
-        frame: OwnerFeeSnapshotAccountFrameV4<'a, 'info>,
+        frame: OwnerFeeSnapshotAccountFrameV5<'a, 'info>,
         /// Registered immutable policy preimage whose digest is rederived.
         revenue_policy: &'a RevenuePolicyV1,
     },
@@ -103,7 +105,7 @@ pub enum OwnerFeeAccountInputV4<'a, 'info> {
 
 /// How the caller will use the authenticated snapshot accounts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OwnerFeeSnapshotUseV4 {
+pub(crate) enum OwnerFeeSnapshotUseV5 {
     /// Action 24 reads the terminal fee snapshot while creating a row.
     Materialize,
     /// Action 38 consumes the payer snapshot and transitions the carry.
@@ -117,7 +119,7 @@ pub(crate) enum OwnerFeeSnapshotUseV4 {
 /// action-24/action-38 root binders once the rent-owned row successor is
 /// integrated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RootDerivedOwnerFeeContextV4<'a> {
+pub(crate) struct RootDerivedOwnerFeeContextV5<'a> {
     root_account: Id32,
     root: &'a SettlementRootV1AccountV1,
     realm: Id32,
@@ -125,7 +127,7 @@ pub(crate) struct RootDerivedOwnerFeeContextV4<'a> {
     basis: OwnerSettlementExpectationBasisV4,
 }
 
-impl<'a> RootDerivedOwnerFeeContextV4<'a> {
+impl<'a> RootDerivedOwnerFeeContextV5<'a> {
     fn new(
         root_account: Id32,
         root: &'a SettlementRootV1AccountV1,
@@ -156,7 +158,7 @@ impl<'a> RootDerivedOwnerFeeContextV4<'a> {
 
 /// Private-construction fee evidence ready for one General atomic composer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedOwnerFeeSnapshotV4 {
+pub struct PreparedOwnerFeeSnapshotV5 {
     root_account: Id32,
     owner_row: Id32,
     selected_fee: AuthenticatedSelectedOwnerFeeV4,
@@ -164,13 +166,13 @@ pub struct PreparedOwnerFeeSnapshotV4 {
 
 /// Exact canonical absence proof for one zero-fee owner row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedNoFeeOwnerV4 {
+pub struct PreparedNoFeeOwnerV5 {
     root_account: Id32,
     owner_row: Id32,
     expectation: OwnerSettlementExpectationV4,
 }
 
-impl PreparedNoFeeOwnerV4 {
+impl PreparedNoFeeOwnerV5 {
     /// Exact authenticated counted SettlementRoot account.
     pub const fn settlement_root_account(&self) -> Id32 {
         self.root_account
@@ -189,12 +191,12 @@ impl PreparedNoFeeOwnerV4 {
 
 /// Disjoint fee-bearing or canonical no-fee evidence for one owner row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PreparedOwnerFeeEvidenceV4 {
+pub enum PreparedOwnerFeeEvidenceV5 {
     /// A real selected fee record and all three owner/candidate fee accounts exist.
-    CandidateFee(PreparedOwnerFeeSnapshotV4),
+    CandidateFee(PreparedOwnerFeeSnapshotV5),
     /// The counted root says the candidate has no fee record; no phantom fee
     /// account appears in this variant.
-    NoFeeRecord(PreparedNoFeeOwnerV4),
+    NoFeeRecord(PreparedNoFeeOwnerV5),
 }
 
 /// Root-bound allocation-only result for one action-24 V5 row creation.
@@ -202,47 +204,86 @@ pub enum PreparedOwnerFeeEvidenceV4 {
 pub struct PreparedOwnerFeeAction24V5 {
     owner_row_seed: OwnerSettlementSeedTupleV5,
     owner_row_bump: u8,
-    evidence: PreparedOwnerFeeEvidenceV4,
+    evidence: PreparedOwnerFeeEvidenceV5,
 }
 
 /// Root-bound authenticated V5 owner-row/fee prestate for action 38.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedOwnerFeeAction38V5 {
-    owner_row_account: Id32,
-    owner_row: OwnerSettlementV5AccountV1,
-    owner_row_prestate_data_id: Id32,
-    evidence: PreparedOwnerFeeEvidenceV4,
+    owner_row: OwnerSettlementAccountProjectionV5,
+    evidence: PreparedOwnerFeeEvidenceV5,
 }
 
 impl PreparedOwnerFeeAction38V5 {
     /// Canonical writable V5 owner-row PDA.
     pub const fn owner_row_account(&self) -> Id32 {
-        self.owner_row_account
+        self.owner_row.account()
     }
 
     /// Exact hostile-byte-decoded V5 outer and V4 semantic prestate.
     pub const fn owner_row(&self) -> OwnerSettlementV5AccountV1 {
-        self.owner_row
+        self.owner_row.envelope()
+    }
+
+    /// Canonical full-rent V5 account projection consumed by pure settlement.
+    pub const fn owner_row_projection(&self) -> &OwnerSettlementAccountProjectionV5 {
+        &self.owner_row
     }
 
     /// Complete-data identity of the exact 340-byte owner-row prestate.
     pub const fn owner_row_prestate_data_id(&self) -> Id32 {
-        self.owner_row_prestate_data_id
+        self.owner_row.data_id()
     }
 
     /// Exact root/policy/payer evidence with an explicit no-fee branch.
-    pub const fn evidence(&self) -> PreparedOwnerFeeEvidenceV4 {
+    pub const fn evidence(&self) -> PreparedOwnerFeeEvidenceV5 {
         self.evidence
     }
 
     /// Complete payer-prestate data identity only when a real fee record exists.
     pub const fn payer_allocation_data_id(&self) -> Option<FeeId> {
         match self.evidence {
-            PreparedOwnerFeeEvidenceV4::CandidateFee(value) => {
+            PreparedOwnerFeeEvidenceV5::CandidateFee(value) => {
                 Some(value.payer_allocation_data_id())
             }
-            PreparedOwnerFeeEvidenceV4::NoFeeRecord(_) => None,
+            PreparedOwnerFeeEvidenceV5::NoFeeRecord(_) => None,
         }
+    }
+}
+
+/// Complete current semantic action-38 composition before atomic SBF writes.
+///
+/// The General handler must still authenticate and advance GEN1 Replay and,
+/// for the candidate-fee branch only, replace the carry with its `0x83/2`
+/// terminal receipt while deleting the payer snapshot. This plan already owns
+/// the exact row, Position, pot, and counted-root successors; it cannot be
+/// constructed from a caller balance summary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedOwnerSettlementAction38V5 {
+    fee: PreparedOwnerFeeAction38V5,
+    realization: OwnerCashRealizationPlanV5,
+}
+
+impl PreparedOwnerSettlementAction38V5 {
+    /// Exact current V5 fee and row prestate.
+    pub const fn fee(&self) -> &PreparedOwnerFeeAction38V5 {
+        &self.fee
+    }
+
+    /// Canonical V5 row/Position/pot/root successor plan.
+    pub const fn realization(&self) -> &OwnerCashRealizationPlanV5 {
+        &self.realization
+    }
+
+    /// Whether this atomic transition must mint a real `0x83/2` successor.
+    pub const fn fee_finalization_required(&self) -> bool {
+        self.realization.fee_finalization_required()
+    }
+
+    /// Complete payer prestate ID for GEN1 and fee-finalization evidence.
+    /// The zero-fee route has no payer account and returns `None`.
+    pub const fn payer_allocation_data_id(&self) -> Option<FeeId> {
+        self.fee.payer_allocation_data_id()
     }
 }
 
@@ -258,22 +299,22 @@ impl PreparedOwnerFeeAction24V5 {
     }
 
     /// Exact root/policy/payer evidence with an explicit no-fee branch.
-    pub const fn evidence(&self) -> PreparedOwnerFeeEvidenceV4 {
+    pub const fn evidence(&self) -> PreparedOwnerFeeEvidenceV5 {
         self.evidence
     }
 
     /// Dependency-ready input for the pure General row materializer.
     pub const fn owner_row_fee_evidence(&self) -> OwnerRowFeeEvidenceV4 {
         match self.evidence {
-            PreparedOwnerFeeEvidenceV4::CandidateFee(value) => {
+            PreparedOwnerFeeEvidenceV5::CandidateFee(value) => {
                 OwnerRowFeeEvidenceV4::CandidateFee(value.selected_fee())
             }
-            PreparedOwnerFeeEvidenceV4::NoFeeRecord(_) => OwnerRowFeeEvidenceV4::NoFeeRecord,
+            PreparedOwnerFeeEvidenceV5::NoFeeRecord(_) => OwnerRowFeeEvidenceV4::NoFeeRecord,
         }
     }
 }
 
-impl PreparedOwnerFeeEvidenceV4 {
+impl PreparedOwnerFeeEvidenceV5 {
     /// Exact authenticated counted SettlementRoot account.
     pub const fn settlement_root_account(&self) -> Id32 {
         match self {
@@ -306,7 +347,7 @@ impl PreparedOwnerFeeEvidenceV4 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ExpectedSelectedFeeBindingV4 {
+struct ExpectedSelectedFeeBindingV5 {
     fee_record: Id32,
     realm: Id32,
     market: Id32,
@@ -318,7 +359,7 @@ struct ExpectedSelectedFeeBindingV4 {
     outcome_count: u8,
 }
 
-impl PreparedOwnerFeeSnapshotV4 {
+impl PreparedOwnerFeeSnapshotV5 {
     /// Exact authenticated counted SettlementRoot account.
     pub const fn settlement_root_account(&self) -> Id32 {
         self.root_account
@@ -397,7 +438,7 @@ fn require_distinct_keys(keys: &[[u8; 32]; 7]) -> Outcome<()> {
 
 fn require_distinct_frame(
     root_account: Id32,
-    frame: &OwnerFeeSnapshotAccountFrameV4<'_, '_>,
+    frame: &OwnerFeeSnapshotAccountFrameV5<'_, '_>,
 ) -> Outcome<()> {
     require_distinct_keys(&[
         root_account.bytes(),
@@ -414,9 +455,9 @@ fn map_fee<T>(result: clutch_fee_runtime_contract::Result<T>) -> Outcome<T> {
     result.map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
-fn prepare_no_fee_owner_v4(
-    context: RootDerivedOwnerFeeContextV4<'_>,
-) -> Outcome<PreparedOwnerFeeEvidenceV4> {
+fn prepare_no_fee_owner_v5(
+    context: RootDerivedOwnerFeeContextV5<'_>,
+) -> Outcome<PreparedOwnerFeeEvidenceV5> {
     let cash = context.root.cash_pot_expectation()?;
     require(
         context.root.fee_record_state() == SettlementRootChildStateV1::Absent
@@ -432,8 +473,8 @@ fn prepare_no_fee_owner_v4(
             fee_atoms: 0,
         })
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(PreparedOwnerFeeEvidenceV4::NoFeeRecord(
-        PreparedNoFeeOwnerV4 {
+    Ok(PreparedOwnerFeeEvidenceV5::NoFeeRecord(
+        PreparedNoFeeOwnerV5 {
             root_account: context.root_account,
             owner_row: context.owner_row,
             expectation,
@@ -441,10 +482,10 @@ fn prepare_no_fee_owner_v4(
     ))
 }
 
-fn require_selected_fee_binding_v4(
+fn require_selected_fee_binding_v5(
     selected: &SelectedCompositeFeeV1,
     revenue_record: &RevenuePolicyRecordV1,
-    expected: ExpectedSelectedFeeBindingV4,
+    expected: ExpectedSelectedFeeBindingV5,
 ) -> Outcome<()> {
     require(
         selected.fee_record().0 == expected.fee_record.bytes()
@@ -483,13 +524,13 @@ fn require_owner_row_rent_v5(
 }
 
 #[inline(never)]
-fn authenticate_owner_fee_snapshot_v4(
+fn authenticate_owner_fee_snapshot_v5(
     program_id: &Pubkey,
-    context: RootDerivedOwnerFeeContextV4<'_>,
-    frame: OwnerFeeSnapshotAccountFrameV4<'_, '_>,
+    context: RootDerivedOwnerFeeContextV5<'_>,
+    frame: OwnerFeeSnapshotAccountFrameV5<'_, '_>,
     revenue_policy: &RevenuePolicyV1,
-    usage: OwnerFeeSnapshotUseV4,
-) -> Outcome<PreparedOwnerFeeSnapshotV4> {
+    usage: OwnerFeeSnapshotUseV5,
+) -> Outcome<PreparedOwnerFeeSnapshotV5> {
     require_distinct_frame(context.root_account, &frame)?;
     require(!frame.owner_row.executable, ClutchError::ExecutableAccount)?;
     require(frame.owner_row.is_writable, ClutchError::NotWritable)?;
@@ -509,7 +550,7 @@ fn authenticate_owner_fee_snapshot_v4(
         frame.revenue_policy_record,
         REVENUE_POLICY_RECORD_BYTES,
     )?;
-    let snapshot_writable = usage == OwnerFeeSnapshotUseV4::Finalize;
+    let snapshot_writable = usage == OwnerFeeSnapshotUseV5::Finalize;
     require_snapshot_state(
         program_id,
         frame.owner_fee_carry,
@@ -575,10 +616,10 @@ fn authenticate_owner_fee_snapshot_v4(
             && cash_expectation.fee_record == frame.selected_fee_record.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    require_selected_fee_binding_v4(
+    require_selected_fee_binding_v5(
         &selected,
         &revenue_record,
-        ExpectedSelectedFeeBindingV4 {
+        ExpectedSelectedFeeBindingV5 {
             fee_record: id(frame.selected_fee_record.key),
             realm: context.realm,
             market: context.root.market(),
@@ -658,25 +699,25 @@ fn authenticate_owner_fee_snapshot_v4(
             == context.root.owner_order_set_digest().bytes(),
         ClutchError::MismatchedState,
     )?;
-    Ok(PreparedOwnerFeeSnapshotV4 {
+    Ok(PreparedOwnerFeeSnapshotV5 {
         root_account: context.root_account,
         owner_row: context.owner_row,
         selected_fee,
     })
 }
 
-fn prepare_root_owner_fee_evidence_v4(
+fn prepare_root_owner_fee_evidence_v5(
     program_id: &Pubkey,
-    context: RootDerivedOwnerFeeContextV4<'_>,
-    accounts: OwnerFeeAccountInputV4<'_, '_>,
-    usage: OwnerFeeSnapshotUseV4,
-) -> Outcome<PreparedOwnerFeeEvidenceV4> {
+    context: RootDerivedOwnerFeeContextV5<'_>,
+    accounts: OwnerFeeAccountInputV5<'_, '_>,
+    usage: OwnerFeeSnapshotUseV5,
+) -> Outcome<PreparedOwnerFeeEvidenceV5> {
     match accounts {
-        OwnerFeeAccountInputV4::CandidateFee {
+        OwnerFeeAccountInputV5::CandidateFee {
             frame,
             revenue_policy,
-        } => Ok(PreparedOwnerFeeEvidenceV4::CandidateFee(
-            authenticate_owner_fee_snapshot_v4(
+        } => Ok(PreparedOwnerFeeEvidenceV5::CandidateFee(
+            authenticate_owner_fee_snapshot_v5(
                 program_id,
                 context,
                 frame,
@@ -684,7 +725,7 @@ fn prepare_root_owner_fee_evidence_v4(
                 usage,
             )?,
         )),
-        OwnerFeeAccountInputV4::NoFeeRecord => prepare_no_fee_owner_v4(context),
+        OwnerFeeAccountInputV5::NoFeeRecord => prepare_no_fee_owner_v5(context),
     }
 }
 
@@ -701,7 +742,7 @@ pub fn prepare_owner_fee_action24_v5(
     entitlement: &CandidateEntitlementProjectionV4,
     owner: Id32,
     owner_row: &AccountInfo<'_>,
-    fee_accounts: OwnerFeeAccountInputV4<'_, '_>,
+    fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
 ) -> Outcome<PreparedOwnerFeeAction24V5> {
     require(
         authenticated_root.account() == entitlement.settlement_root_account()
@@ -733,18 +774,18 @@ pub fn prepare_owner_fee_action24_v5(
     require(!owner_row.executable, ClutchError::ExecutableAccount)?;
     require(owner_row.is_writable, ClutchError::NotWritable)?;
     require(*owner_row.key == derived.0, ClutchError::WrongPda)?;
-    let context = RootDerivedOwnerFeeContextV4::new(
+    let context = RootDerivedOwnerFeeContextV5::new(
         authenticated_root.account(),
         authenticated_root.root(),
         Id32::from_bytes(entitlement.position_market_binding().realm_id.bytes()),
         id(owner_row.key),
         basis,
     )?;
-    let evidence = prepare_root_owner_fee_evidence_v4(
+    let evidence = prepare_root_owner_fee_evidence_v5(
         program_id,
         context,
         fee_accounts,
-        OwnerFeeSnapshotUseV4::Materialize,
+        OwnerFeeSnapshotUseV5::Materialize,
     )?;
     Ok(PreparedOwnerFeeAction24V5 {
         owner_row_seed,
@@ -766,7 +807,8 @@ pub fn prepare_owner_fee_action38_v5(
     authenticated_root: &AuthenticatedGeneralSettlementRootV1,
     traversal: &SettlementTraversalProjectionV4,
     owner_row: &AccountInfo<'_>,
-    fee_accounts: OwnerFeeAccountInputV4<'_, '_>,
+    owner_row_rent_minimum: u64,
+    fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
 ) -> Outcome<PreparedOwnerFeeAction38V5> {
     require(
         authenticated_root.root().phase() == SettlementRootPhaseV1::Settling,
@@ -779,7 +821,9 @@ pub fn prepare_owner_fee_action38_v5(
         owner_row.data_len() == OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
         ClutchError::WrongDataLength,
     )?;
-    let decoded = OwnerSettlementV5AccountV1::decode(&borrow_data(owner_row)?)?;
+    require(owner_row_rent_minimum != 0, ClutchError::MismatchedState)?;
+    let owner_row_data = borrow_data(owner_row)?;
+    let decoded = OwnerSettlementV5AccountV1::decode(&owner_row_data)?;
     let expectation = decoded.semantic.expectation();
     let owner = Id32::from_bytes(expectation.owner());
     let owner_row_seed = OwnerSettlementSeedTupleV5::new(
@@ -787,17 +831,18 @@ pub fn prepare_owner_fee_action38_v5(
         authenticated_root.root().settlement_candidate_id(),
         owner,
     )?;
+    let derived_owner_row = seeds::find(
+        program_id,
+        &[
+            owner_row_seed.domain(),
+            owner_row_seed.epoch(),
+            owner_row_seed.settlement_candidate(),
+            owner_row_seed.owner(),
+        ],
+    );
     expect_pda(
         owner_row.key,
-        seeds::find(
-            program_id,
-            &[
-                owner_row_seed.domain(),
-                owner_row_seed.epoch(),
-                owner_row_seed.settlement_candidate(),
-                owner_row_seed.owner(),
-            ],
-        ),
+        derived_owner_row,
         Some(decoded.stored_bump),
     )?;
     require_owner_row_rent_v5(
@@ -806,6 +851,21 @@ pub fn prepare_owner_fee_action38_v5(
         authenticated_root.account(),
         owner_row.lamports(),
     )?;
+    let owner_row_projection = project_owner_settlement_account_v5(
+        OwnerSettlementAccountViewV5 {
+            account: id(owner_row.key),
+            program_owner: id(owner_row.owner),
+            exact_body: &owner_row_data,
+            lamports: owner_row.lamports(),
+            rent_minimum: owner_row_rent_minimum,
+            canonical_bump: derived_owner_row.1,
+            writable: owner_row.is_writable,
+        },
+        id(program_id),
+        owner_row_seed,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(owner_row_data);
     require(
         decoded.semantic.state() == OwnerSettlementStateV4::AccountingComplete
             && decoded
@@ -822,29 +882,81 @@ pub fn prepare_owner_fee_action38_v5(
         owner,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let context = RootDerivedOwnerFeeContextV4::new(
+    let context = RootDerivedOwnerFeeContextV5::new(
         authenticated_root.account(),
         authenticated_root.root(),
         Id32::from_bytes(traversal.position_market_binding().realm_id.bytes()),
         id(owner_row.key),
         basis,
     )?;
-    let evidence = prepare_root_owner_fee_evidence_v4(
+    let evidence = prepare_root_owner_fee_evidence_v5(
         program_id,
         context,
         fee_accounts,
-        OwnerFeeSnapshotUseV4::Finalize,
+        OwnerFeeSnapshotUseV5::Finalize,
     )?;
     require(
         evidence.expectation() == expectation,
         ClutchError::MismatchedState,
     )?;
     Ok(PreparedOwnerFeeAction38V5 {
-        owner_row_account: id(owner_row.key),
-        owner_row: decoded,
-        owner_row_prestate_data_id: decoded.data_id(&RuntimeSha256)?,
+        owner_row: owner_row_projection,
         evidence,
     })
+}
+
+/// Compose the current V5 action-38 row/Position/pot/root transition.
+///
+/// `position_replay` and `pot_before` must come from General's exact account
+/// loaders. This function re-enters the dependency-lower V5 realization and
+/// exact-joins its selected fee with the authenticated payer-or-absence
+/// branch. It creates no zero-fee carry or payer identity and performs no
+/// write, close, transfer, or SettlementRoot counter mutation on its own.
+#[allow(clippy::too_many_arguments)]
+pub fn compose_owner_settlement_action38_v5(
+    program_id: &Pubkey,
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
+    traversal: &SettlementTraversalProjectionV4,
+    owner_row: &AccountInfo<'_>,
+    owner_row_rent_minimum: u64,
+    fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
+    settlement_cash_pot_account: Id32,
+    position_replay: GeneralPositionReplayPrestateV1,
+    pot_before: SettlementCashPotV1,
+) -> Outcome<PreparedOwnerSettlementAction38V5> {
+    let fee = prepare_owner_fee_action38_v5(
+        program_id,
+        authenticated_root,
+        traversal,
+        owner_row,
+        owner_row_rent_minimum,
+        fee_accounts,
+    )?;
+    let realization = prepare_realize_owner_cash_v5(
+        authenticated_root.account(),
+        authenticated_root.root(),
+        traversal,
+        fee.owner_row_projection(),
+        settlement_cash_pot_account,
+        position_replay,
+        pot_before,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_fee_atoms = fee.evidence().expectation().selected_fee_atoms();
+    require(
+        realization.settlement_root_account() == authenticated_root.account()
+            && realization.owner_settlement_account() == fee.owner_row_account()
+            && realization.owner_settlement_prestate_data_id()
+                == fee.owner_row_prestate_data_id()
+            && realization.semantic().expectation() == fee.evidence().expectation()
+            && realization.disposition().selected_fee_atoms() == expected_fee_atoms
+            && realization.fee_finalization_required()
+                == fee.evidence().fee_record_present()
+            && fee.payer_allocation_data_id().is_some()
+                == realization.fee_finalization_required(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(PreparedOwnerSettlementAction38V5 { fee, realization })
 }
 
 #[cfg(test)]
@@ -901,7 +1013,7 @@ mod tests {
     fn selected_and_binding() -> (
         SelectedCompositeFeeV1,
         RevenuePolicyRecordV1,
-        ExpectedSelectedFeeBindingV4,
+        ExpectedSelectedFeeBindingV5,
     ) {
         let batch = rated_policy();
         let revenue = revenue_policy();
@@ -930,7 +1042,7 @@ mod tests {
             stored_bump: 7,
             flags: 0,
         };
-        let expected = ExpectedSelectedFeeBindingV4 {
+        let expected = ExpectedSelectedFeeBindingV5 {
             fee_record: Id32::from_bytes([1; 32]),
             realm: Id32::from_bytes([2; 32]),
             market: Id32::from_bytes([3; 32]),
@@ -948,7 +1060,7 @@ mod tests {
     fn exact_selected_policy_chain_is_accepted() {
         let (selected, record, expected) = selected_and_binding();
         assert_eq!(
-            require_selected_fee_binding_v4(&selected, &record, expected),
+            require_selected_fee_binding_v5(&selected, &record, expected),
             Ok(())
         );
     }
@@ -959,13 +1071,13 @@ mod tests {
         let mut wrong_batch = expected;
         wrong_batch.batch_policy = Id32::from_bytes([21; 32]);
         assert_eq!(
-            require_selected_fee_binding_v4(&selected, &record, wrong_batch),
+            require_selected_fee_binding_v5(&selected, &record, wrong_batch),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
         let mut wrong_realm = expected;
         wrong_realm.realm = Id32::from_bytes([22; 32]);
         assert_eq!(
-            require_selected_fee_binding_v4(&selected, &record, wrong_realm),
+            require_selected_fee_binding_v5(&selected, &record, wrong_realm),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
         let hostile_record = RevenuePolicyRecordV1 {
@@ -973,7 +1085,7 @@ mod tests {
             ..record
         };
         assert_eq!(
-            require_selected_fee_binding_v4(&selected, &hostile_record, expected),
+            require_selected_fee_binding_v5(&selected, &hostile_record, expected),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
     }
