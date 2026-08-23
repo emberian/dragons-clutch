@@ -1152,8 +1152,8 @@ impl WindowWorkV3 {
             || self.next_window_bucket < window.start_bucket
             || self.next_window_bucket > window.end_bucket_exclusive
             || (self.has_page != (self.evidence_page_count > 0))
-            || (self.has_page != !self.first_page_id.is_zero())
-            || (self.has_page != !self.last_page_id.is_zero())
+            || (self.has_page == self.first_page_id.is_zero())
+            || (self.has_page == self.last_page_id.is_zero())
         {
             return Err(Error::MismatchedArtifact);
         }
@@ -1181,8 +1181,8 @@ impl WindowWorkV3 {
         self.record_stream_root.validate()?;
         let has_pages = self.evidence_page_count > 0;
         if self.has_page != has_pages
-            || self.has_page != !self.first_page_id.is_zero()
-            || self.has_page != !self.last_page_id.is_zero()
+            || self.has_page == self.first_page_id.is_zero()
+            || self.has_page == self.last_page_id.is_zero()
             || (!self.has_page
                 && (self.mature
                     || self.last_page_index != 0
