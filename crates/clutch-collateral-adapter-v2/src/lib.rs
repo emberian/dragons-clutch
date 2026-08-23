@@ -29,6 +29,7 @@ mod binding;
 mod claim;
 mod close;
 mod codec;
+mod market_ledger;
 mod policy;
 mod position_v3;
 mod reclassification;
@@ -41,6 +42,7 @@ pub use account::*;
 pub use binding::*;
 pub use claim::*;
 pub use close::*;
+pub use market_ledger::*;
 pub use policy::*;
 pub use position_v3::*;
 pub use reclassification::*;
@@ -158,6 +160,8 @@ pub enum Error {
     RentPrincipalNotCovered,
     /// A Series funding or one-shot terminal receipt join was inconsistent.
     SeriesJoinMismatch,
+    /// An aggregate Market liability compartment could not cover a debit.
+    AggregateLiabilityInsufficient,
 }
 
 /// Result alias for the V2 collateral contract.
