@@ -206,6 +206,15 @@ FractionalRedemption 79/v1 reserves these local actions, all disabled:
 9. `SealClaimsExhausted`
 10. `CloseEmptyLedger`
 
+Actions 2, 3, and 9 have complete staged SBF handlers, but this does not alter
+their central status: all ten tuples remain `ReservedDisabled`. Action 3 binds
+the full authenticated outcome-mint vector, accepts the exact independent
+Token-2022 burn before exposing the Realm collateral request, and atomically
+writes Hoard/ClaimLedger/`0xa5`. Action 9 advances only ClaimLedger and `0xa5`
+after canonical supply is exactly zero. Product's exact action-1 family
+admission producer and an explicit deployable release profile remain required
+before any tuple can be enabled.
+
 The current account coordinates are `0xa4/2` for the immutable
 Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
 credit and live-credit count, `0xa6/2` for one owner-scoped canonical numerator,

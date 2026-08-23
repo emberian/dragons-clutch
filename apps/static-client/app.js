@@ -47,22 +47,8 @@
   const short = (value, head = 8, tail = 6) => value && value.length > head + tail + 2 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
 
   const readConfigurationForm = () => ({
-    decoderSet: $("decoder-set").value.trim(),
     operatorUrl: $("operator-url").value.trim(),
-    clusterName: $("cluster-name").value.trim(),
-    genesisHash: $("genesis-hash").value.trim(),
-    rpcHttpUrl: $("rpc-http-url").value.trim(),
-    rpcWebsocketUrl: $("rpc-websocket-url").value.trim(),
     commitment: $("commitment").value,
-    release: {
-      programId: $("program-id").value.trim(),
-      programData: $("program-data").value.trim(),
-      deploymentSlot: $("deployment-slot").value.trim(),
-      elfSha256: $("elf-sha256").value.trim(),
-      releaseManifestSha256: $("release-manifest-sha256").value.trim(),
-      sourceCommit: $("source-commit").value.trim(),
-      capabilityProfileId: $("capability-profile-id").value.trim()
-    },
     bounds: {
       maximumAccounts: $("maximum-accounts").value.trim(),
       maximumResponseBytes: $("maximum-response-bytes").value.trim(),
@@ -77,12 +63,12 @@
     state.compilerProposal = null;
     state.construction = null;
     const status = $("configuration-status");
-    status.className = "status-panel ready";
-    status.textContent = `Explicit target recorded for ${configuration.clusterKey}. No endpoint has been contacted yet.`;
+    status.className = "status-panel incomplete";
+    status.textContent = "Explicit operatord target recorded. Cluster, RPC identity, decoder set, and release remain unknown until bounded acquisition.";
     $("configuration-json").textContent = JSON.stringify(CHAIN.redactedConfiguration(configuration), null, 2);
     $("read-chain").disabled = false;
     $("export-configuration").disabled = false;
-    resetProjection("No operatord projection acquired for this configuration.");
+    resetProjection("No daemon-projected chain release has been acquired from this operatord.");
     resetCompiler("waiting for pure Rust compiler output");
   };
 
@@ -233,8 +219,11 @@
   };
 
   const renderSnapshot = async (snapshot) => {
+    state.configuration = snapshot.sourceConfiguration;
     state.snapshot = snapshot;
     state.construction = null;
+    $("configuration-status").textContent = `Daemon projects ${snapshot.configuration.clusterKey} and release ${short(snapshot.release.observed.releaseKey)}. This remains untrusted browser state.`;
+    $("configuration-json").textContent = JSON.stringify(CHAIN.redactedConfiguration(state.configuration), null, 2);
     const status = $("projection-status");
     const unsafe = snapshot.finality.unsafeForkAccountCount !== "0";
     const stale = snapshot.finality.staleAccountCount !== "0";
@@ -273,7 +262,7 @@
   const prepareCompilerRequest = async () => {
     const configuration = state.configuration;
     const revision = compilerRevision;
-    if (!configuration) throw new Error("Apply an explicit release configuration before binding compiler output.");
+    if (!configuration || !configuration.release) throw new Error("Acquire the daemon-projected checked release before binding compiler output.");
     const definitionValue = COMPILER.validateDefinition(parseJsonField("compiler-definition", "Exact rational payoff definition"));
     const compilerReleaseSha256 = $("compiler-release-sha256").value.trim();
     const request = COMPILER.buildRequest(
@@ -300,7 +289,7 @@
     );
     const profileId = proposal.compiledProductSeriesBundle.identities.capabilityProfileId;
     if (profileId !== context.configuration.release.capabilityProfileId) {
-      throw new Error("Compiler output capabilityProfileId differs from the explicitly selected release profile.");
+      throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
     }
 
     state.compilerProposal = Object.freeze({
@@ -361,6 +350,11 @@
     const keeper = keeperForSelection();
     const coordinate = requireKeeperJoin(draft, keeper);
     const transaction = BUILDER.build(draft, state.configuration, $("packet-limit").value.trim());
+    const enabledCoordinates = new Set(state.configuration.release.enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
+    for (const instruction of transaction.instructionCoordinates) {
+      const key = `${instruction.familyTag}:${instruction.familyVersion}:${instruction.localAction}`;
+      if (!enabledCoordinates.has(key)) throw new Error(`Successor coordinate ${key} is not enabled by the daemon-projected checked central registry; disabled capabilities are non-actionable.`);
+    }
     const transactionSha256 = await digest(fromHex(transaction.serializedTransactionHex));
     const output = Object.freeze({
       schema: "dragons-clutch/operator/resumable-workflow-node/v1",

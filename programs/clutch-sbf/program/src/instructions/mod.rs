@@ -81,6 +81,24 @@ pub mod fractional_redemption;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_direct_v5;
+/// Staged-disabled exact merge-payment composer and atomic writer.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_merge_payment_v5;
+/// Staged-disabled selected zero-fill Reservation release and atomic close.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]

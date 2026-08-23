@@ -457,7 +457,7 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
     let http = public_rpc_endpoint_binding(&plan.cluster.rpc_http_url);
     let websocket = public_rpc_endpoint_binding(&plan.cluster.rpc_websocket_url);
     json!({
-        "schema": "dragons-clutch/operator-rpc-transport-binding/v2",
+        "schema": "dragons-clutch/operator-rpc-transport-binding/v3",
         "verificationDisposition": "last-complete-untrusted-http-release-bracket",
         "authorityEligible": false,
         "clusterName": plan.cluster.cluster_name,

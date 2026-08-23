@@ -19,9 +19,8 @@ const browserRealm = (...scripts) => {
 };
 
 test("startup_has_no_embedded_chain_program_release_or_fixture_truth", () => {
-  for (const id of ["operator-url", "cluster-name", "genesis-hash", "rpc-http-url", "rpc-websocket-url", "decoder-set", "program-id", "program-data", "deployment-slot", "elf-sha256", "release-manifest-sha256", "source-commit", "capability-profile-id"]) {
-    assert.match(html, new RegExp(`id="${id}"`));
-  }
+  assert.match(html, /id="operator-url"/);
+  for (const id of ["cluster-name", "genesis-hash", "rpc-http-url", "rpc-websocket-url", "decoder-set", "program-id", "program-data", "deployment-slot", "elf-sha256", "release-manifest-sha256", "source-commit", "capability-profile-id"]) assert.doesNotMatch(html, new RegExp(`id="${id}"`));
   assert.doesNotMatch(html, /<script src="(?:embedded-data|protocol-client|protocol-contracts|native-bspline-v1)\.js"/);
   assert.doesNotMatch(html, /value="(?:https?:\/\/|wss?:\/\/|[1-9][0-9]*|[1-9A-HJ-NP-Za-km-z]{32,44}|[0-9a-f]{40,64})"/);
   assert.match(app, /Nothing is inferred from fixtures or defaults/);
@@ -29,7 +28,7 @@ test("startup_has_no_embedded_chain_program_release_or_fixture_truth", () => {
   for (const obsolete of ["manifest.json", "terms.json", "successor-registry.js"]) assert.equal(fs.existsSync(path.join(root, obsolete)), false, obsolete);
 });
 
-test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_configuration_only", () => {
+test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection_only", () => {
   assert.match(chain, /method:\s*"GET"/);
   assert.match(chain, /credentials:\s*"omit"/);
   assert.match(chain, /redirect:\s*"error"/);
@@ -37,32 +36,27 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_configuration_onl
   assert.match(chain, /operatord-only; browser does not call validator RPC/);
   assert.doesNotMatch(chain, /method:\s*"(?:POST|PUT|PATCH|DELETE)"/);
   for (const endpoint of ["/v1/health", "/v1/acquisition", "/v1/releases", "/v1/accounts?commitment=", "/v1/keeper/next?commitment=", "/v1/forks"]) assert.match(chain, new RegExp(endpoint.replace(/[?]/g, "\\?")));
+  assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
+  assert.match(chain, /transportBinding must expose exactly one composed release/);
+  assert.match(chain, /release key does not bind its exact coordinates and manifest/);
 });
 
-test("explicit_configuration_preserves_full_width_fields_as_decimal_strings", () => {
+test("browser_target_contains_only_operatord_commitment_and_local_bounds", () => {
   const context = browserRealm("successor-builder.js", "chain-client.js");
   const output = vm.runInContext(`(() => {
     const bytes = (fill) => GlassSuccessorBuilder.encodeBase58(new Uint8Array(32).fill(fill));
     return GlassChainClient.validateConfiguration({
-      decoderSet: "dragons-clutch/canonical-account-decoders/v1-source-v3-current",
       operatorUrl: "http://127.0.0.1:9898",
-      clusterName: "private-local",
-      genesisHash: bytes(4),
-      rpcHttpUrl: "http://127.0.0.1:8899",
-      rpcWebsocketUrl: "ws://127.0.0.1:8900",
       commitment: "processed",
-      release: {
-        programId: bytes(2), programData: bytes(3), deploymentSlot: "18446744073709551615",
-        elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32),
-        sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32)
-      },
       bounds: { maximumAccounts: "4096", maximumResponseBytes: "8388608", timeoutMilliseconds: "10000", maximumSlotLag: "150" }
     });
   })()`, context);
-  assert.equal(output.release.deploymentSlot, "18446744073709551615");
   assert.equal(output.bounds.maximumResponseBytes, "8388608");
   assert.equal(output.commitment, "processed");
-  assert.match(output.release.releaseKey, /:18446744073709551615:/);
+  assert.equal(output.authority, "explicit-user-selected-operatord-only");
+  assert.equal("release" in output, false);
+  assert.equal("genesisHash" in output, false);
+  assert.equal("rpcHttpUrl" in output, false);
 });
 
 test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_transaction", () => {
@@ -96,6 +90,7 @@ test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
   assert.doesNotMatch(builder, /runtimeAdmission\s*=|raw\.runtimeAdmission|enabled\s*:\s*raw/);
   assert.match(builder, /Unbalanced exact equation/);
   assert.match(builder, /No release-authenticated runtime capability verdict/);
+  assert.match(app, /disabled capabilities are non-actionable/);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {

@@ -78,11 +78,33 @@ fn observe_mints(
     outcome_count: u8,
     selected_outcome: u8,
 ) -> Outcome<ObservedMintSupplies> {
-    claim_truth::observe_outcome_mints_v2(
+    observe_outcome_mints_for_bearer_v3(
         program_id,
         accounts,
         ix::OUTCOME_MINTS,
-        *accounts[ix::MARKET_RUNTIME].key,
+        &accounts[ix::MARKET_RUNTIME],
+        market_instance_id,
+        outcome_count,
+        selected_outcome,
+    )
+}
+
+/// Reparse every active outcome mint for a bearer burn under an explicit
+/// account suffix. Returned values are observations, never claim authority.
+pub(crate) fn observe_outcome_mints_for_bearer_v3(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    first_mint: usize,
+    market_runtime: &AccountInfo<'_>,
+    market_instance_id: [u8; 32],
+    outcome_count: u8,
+    selected_outcome: u8,
+) -> Outcome<ObservedMintSupplies> {
+    claim_truth::observe_outcome_mints_v2(
+        program_id,
+        accounts,
+        first_mint,
+        *market_runtime.key,
         market_instance_id,
         outcome_count,
         Some(selected_outcome),
@@ -94,14 +116,28 @@ fn bearer_observation(
     outcome: u8,
 ) -> Outcome<AdapterBearerClaimObservationV3> {
     let mint = &accounts[ix::OUTCOME_MINTS + usize::from(outcome)];
-    let source = &accounts[ix::SOURCE];
+    bearer_claim_observation_v3(
+        mint,
+        &accounts[ix::SOURCE],
+        &accounts[ix::CLAIMANT],
+        &accounts[ix::MARKET_RUNTIME],
+    )
+}
+
+/// Authenticate one selected mint and bearer source under explicit roles.
+pub(crate) fn bearer_claim_observation_v3(
+    mint: &AccountInfo<'_>,
+    source: &AccountInfo<'_>,
+    claimant: &AccountInfo<'_>,
+    market_runtime: &AccountInfo<'_>,
+) -> Outcome<AdapterBearerClaimObservationV3> {
     let mint_observation = token::admit_mint(
         mint,
-        &token::MintPolicy::outcome(*mint.key, *accounts[ix::MARKET_RUNTIME].key),
+        &token::MintPolicy::outcome(*mint.key, *market_runtime.key),
     )?;
     let source_observation = token::admit_token_account(
         source,
-        &token::TokenAccountPolicy::holder(*mint.key, *accounts[ix::CLAIMANT].key),
+        &token::TokenAccountPolicy::holder(*mint.key, *claimant.key),
     )?;
     let mint_authority = mint_observation
         .mint_authority
@@ -116,7 +152,10 @@ fn bearer_observation(
     })
 }
 
-fn runtime_account_view<'a>(account: &AccountInfo<'_>, data: &'a [u8]) -> RuntimeAccountViewV2<'a> {
+pub(crate) fn runtime_account_view<'a>(
+    account: &AccountInfo<'_>,
+    data: &'a [u8],
+) -> RuntimeAccountViewV2<'a> {
     RuntimeAccountViewV2 {
         key: CollateralId::from_bytes(account.key.to_bytes()),
         owner_program: CollateralId::from_bytes(account.owner.to_bytes()),
@@ -136,7 +175,7 @@ fn cpi_account_meta(value: CpiAccountMetaV2) -> AccountMeta {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn invoke_claim_collateral_payout<'a>(
+pub(crate) fn invoke_claim_collateral_payout<'a>(
     prepared: PreparedClaimRedemptionCollateralV2,
     mint: &AccountInfo<'a>,
     hoard: &AccountInfo<'a>,
@@ -188,7 +227,7 @@ fn invoke_claim_collateral_payout<'a>(
     .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))
 }
 
-fn accept_zero_claim_collateral_payout(
+pub(crate) fn accept_zero_claim_collateral_payout(
     prepared: PreparedZeroClaimRedemptionCollateralV2,
     mint: &AccountInfo<'_>,
     hoard: &AccountInfo<'_>,

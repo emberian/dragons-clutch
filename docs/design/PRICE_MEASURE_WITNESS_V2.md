@@ -9,9 +9,13 @@ certificate interfaces. The continuous per-span Bernstein witness reproduces
 integer-coordinate, largest-remainder-quantized `clutch-bspline` payout map.
 Both are safe, `no_std`, allocation-free, fixed-capacity Rust. The isolated
 General SBF source now selects the finite production atom-mixture checker before
-creating resumable work and on its empty-book completion path. It persists no
-parallel verified-price truth; the immutable feed/body/price/policy identities
-are the resumed-work binding. Production capability profiles remain disabled.
+creating resumable work, on every streamed order and settlement-slice resume,
+and at terminal completion. It persists no parallel verified-price truth. Because
+ClearWork V3 predates this exact policy, retained feed/body/price/policy IDs are
+necessary joins but not sufficient proof that the full Product/Grid tuple was
+checked. Every successor resume remints a private capability from that full
+tuple and exact-joins it to the retained Work identities. Production
+capability profiles remain disabled.
 
 `crates/clutch-general-v2-runtime` now composes the V3 quantized checker with
 the sealed General V2 feed codec, exact Product V2 bodies, canonical
@@ -261,9 +265,10 @@ settlement, or vice versa.
 
 Before a production SBF profile selects the finite checker:
 
-1. atomically adopt the staged 17-account nonempty Work tuple in shared
-   account-meta/capability ownership and retain its checked identities through
-   completion;
+1. rotate the non-production capability manifest for the hardened
+   `15 + page_count` action-12/action-13 tuple; every resumed and terminal call
+   already remints the exact Product/Grid capability rather than trusting a
+   policy bit;
 2. independently generate the transfer templates and derivation manifest;
 3. add a solver that emits exact continuous moments or quantized atoms without
    treating floating residuals as consensus evidence;
