@@ -1964,7 +1964,7 @@ mod tests {
         ComponentDebitV1, EvidenceOnlyRecoveryPolicyId, MarketGenesisProfileV2Id,
         NativeClaimBasisId, PriceMeasurePolicyV1Id, ProductTemplateId,
         QuantizedIntervalConsensusProfileV1Id, RecoveryAttemptFundingV1,
-        RegistryCapabilityProfileV4Id, RegistryProgramReleaseV1Id, SeriesFundingQuoteV1,
+        RegistryCapabilityProfileV4Id, RegistryProgramReleaseV2Id, SeriesFundingQuoteV1,
         SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id, SeriesLinkObligationConfigurationV1,
         SeriesLinkObligationStatusV1, SeriesMarketDispositionV1, SeriesMarketLinkBindingV1,
         MAX_RECOVERY_ATTEMPTS,
@@ -2117,7 +2117,7 @@ mod tests {
             price_measure_policy_id: PriceMeasurePolicyV1Id::from_bytes([5; 32]),
             market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes([6; 32]),
             relation_policy_id: ProductContentId::from_bytes([7; 32]),
-            registry_release_id: RegistryProgramReleaseV1Id::from_bytes([8; 32]),
+            registry_release_id: RegistryProgramReleaseV2Id::from_bytes([8; 32]),
             capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes([9; 32]),
             interval_consensus_profile_id: QuantizedIntervalConsensusProfileV1Id::from_bytes(
                 [10; 32],
