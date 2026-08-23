@@ -35,7 +35,7 @@ use crate::{Side, MAX_ORDERS};
 /// Exact semantic version of this account-ready portfolio authority.
 pub const PORTFOLIO_EXECUTION_VERSION_V2: u8 = 2;
 /// Canonical bytes of one selected-order membership record.
-pub const SELECTED_PORTFOLIO_ORDER_V2_BYTES: usize = 568;
+pub const SELECTED_PORTFOLIO_ORDER_V2_BYTES: usize = 560;
 /// Canonical bytes of one exact-pair transition receipt preimage.
 pub const PORTFOLIO_PAIR_RECEIPT_V2_BYTES: usize = 680;
 
@@ -106,7 +106,6 @@ pub struct SelectedPortfolioOrderRecordV2 {
     pub traversal_index: u16,
     pub page_index: u16,
     pub settlement_root_epoch_generation: u64,
-    pub page_generation: u64,
     pub position_generation: u64,
     pub selected_fill_units: u64,
     pub market_semantics_digest: PortfolioIdentityV2,
@@ -145,11 +144,10 @@ impl SelectedPortfolioOrderRecordV2 {
         output[14..16].copy_from_slice(&self.traversal_index.to_le_bytes());
         output[16..18].copy_from_slice(&self.page_index.to_le_bytes());
         output[24..32].copy_from_slice(&self.settlement_root_epoch_generation.to_le_bytes());
-        output[32..40].copy_from_slice(&self.page_generation.to_le_bytes());
-        output[40..48].copy_from_slice(&self.position_generation.to_le_bytes());
-        output[48..56].copy_from_slice(&self.selected_fill_units.to_le_bytes());
+        output[32..40].copy_from_slice(&self.position_generation.to_le_bytes());
+        output[40..48].copy_from_slice(&self.selected_fill_units.to_le_bytes());
         let identities = self.identities();
-        let mut cursor = 56usize;
+        let mut cursor = 48usize;
         let mut index = 0usize;
         while index < identities.len() {
             output[cursor..cursor + 32].copy_from_slice(identities[index]);
@@ -174,7 +172,7 @@ impl SelectedPortfolioOrderRecordV2 {
             _ => return Err(PortfolioExecutionErrorV2::UnknownSourceOrderKind),
         };
         let side = decode_side(input[11])?;
-        let mut cursor = 56usize;
+        let mut cursor = 48usize;
         let mut next_identity = || -> Result<PortfolioIdentityV2, PortfolioExecutionErrorV2> {
             let end = cursor
                 .checked_add(32)
@@ -197,9 +195,8 @@ impl SelectedPortfolioOrderRecordV2 {
             traversal_index: read_u16(input, 14)?,
             page_index: read_u16(input, 16)?,
             settlement_root_epoch_generation: read_u64(input, 24)?,
-            page_generation: read_u64(input, 32)?,
-            position_generation: read_u64(input, 40)?,
-            selected_fill_units: read_u64(input, 48)?,
+            position_generation: read_u64(input, 32)?,
+            selected_fill_units: read_u64(input, 40)?,
             market_semantics_digest: next_identity()?,
             epoch_semantics_digest: next_identity()?,
             economic_candidate_digest: next_identity()?,
@@ -254,7 +251,6 @@ impl SelectedPortfolioOrderRecordV2 {
         }
         if self.selected_fill_units == 0
             || self.settlement_root_epoch_generation == 0
-            || self.page_generation == 0
             || self.position_generation == 0
         {
             return Err(PortfolioExecutionErrorV2::InvalidGenerationOrUnits);
@@ -455,7 +451,9 @@ pub fn authenticate_selected_portfolio_order_v2<A: PortfolioAdapterV2>(
             account_id: record.order_page_account_id,
             owner_program_id,
             data_semantic_id: record.order_page_semantic_id,
-            generation: Some(record.page_generation),
+            // OrderPage V5 owns no page-incarnation generation. Its exact PDA,
+            // canonical body, and V5 page digest are the complete authority.
+            generation: None,
             writable: false,
             must_exist: true,
         },

@@ -25,7 +25,7 @@
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
 //! | [`source_ingest_v2`] | `Intent::InitSourceSpecV2`, `Intent::InitSourceArchiveV2`, `Intent::AppendSourceArchiveV2`, `Intent::SealSourceArchiveV2` |
 //! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
-//! | `general_v2_fee_terminal` | capability-disabled exact pre/post seam for General action 38; no dispatch route |
+//! | `general_v2_fee_v5` | current counted-root/rent-owned V5 owner fee authentication and action-38 composition; account order remains General-owned |
 //! | `general_v2_receipt_v5` | exact SettlementRoot/retained-Feed/PDA authentication for rent-owned General Receipt V5 |
 //! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
@@ -70,9 +70,11 @@ pub mod failure_market_admission;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
-pub mod general_v2_fee_terminal;
+pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_identity;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub(crate) mod general_v2_position_replay;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_receipt_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]

@@ -15,9 +15,9 @@ use clutch_source_plane_v3::{
 use crate::codec::{Reader, Writer};
 use crate::{
     content_id, CapabilitySemanticOwnersV2, ContentId, Error, EvidenceOnlyRecoveryPolicyId,
-    FixedCodec, NativeClaimBasisId, PriceMeasurePolicyV1Id, RealmCollateralProjectionV1,
-    RegistryCapabilityProfileV2Id, RegistryCapabilityProjectionV2, RegistryProgramReleaseV1Id,
-    Result,
+    FixedCodec, NativeClaimBasisId, PriceMeasurePolicyV1Id, QuantizedIntervalConsensusProfileV1,
+    RealmCollateralProjectionV1, RegistryCapabilityProfileV2Id, RegistryCapabilityProjectionV2,
+    RegistryProgramReleaseV1Id, Result,
 };
 
 const PROFILE_MAGIC: [u8; 8] = *b"DCRCAPV2";
@@ -177,6 +177,18 @@ impl RegistryCapabilityProfileV2 {
     pub fn projection(&self) -> Result<RegistryCapabilityProjectionV2> {
         self.validate()?;
         Ok(self.projection_with_id(self.id()?.content_id()))
+    }
+
+    /// Derive the sole interval-consensus work profile from authenticated bounds.
+    pub fn interval_consensus_profile(&self) -> Result<QuantizedIntervalConsensusProfileV1> {
+        self.validate()?;
+        let profile = QuantizedIntervalConsensusProfileV1 {
+            capability_profile_id: self.id()?.content_id(),
+            maximum_interval_width: self.maximum_interval_width,
+            maximum_coordinates_per_advance: self.maximum_coordinates_per_advance,
+        };
+        profile.validate()?;
+        Ok(profile)
     }
 
     fn projection_with_id(

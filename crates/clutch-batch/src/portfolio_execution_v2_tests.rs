@@ -187,7 +187,6 @@ fn pair_fixture(quantity: u64) -> PairFixture {
         traversal_index: 10,
         page_index: 9,
         settlement_root_epoch_generation: 12,
-        page_generation: 5,
         position_generation: 4,
         selected_fill_units: quantity,
         market_semantics_digest: domain.market_semantics_digest,

@@ -274,8 +274,8 @@ impl CandidateFeePdaSeedTupleV1 {
 /// Exact pre/post account identities and bump facts authenticated by the SBF loader.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnerFeeAction38AccountsV2 {
-    /// SelectedCandidate PDA named by the action selector.
-    pub selected_candidate_account: Id32,
+    /// Counted SettlementRoot PDA named by the action selector.
+    pub settlement_root_account: Id32,
     /// Selected fee-record PDA.
     pub fee_record_account: Id32,
     /// Existing carry PDA, retained across the version transition.
@@ -301,7 +301,7 @@ pub struct OwnerFeeAction38AccountsV2 {
 impl OwnerFeeAction38AccountsV2 {
     fn validate(&self) -> Result<(), CodecError> {
         distinct(&[
-            self.selected_candidate_account,
+            self.settlement_root_account,
             self.fee_record_account,
             self.carry_account,
             self.payer_allocation_account,
@@ -482,7 +482,7 @@ where
         payer_allocation_data_id,
         backend,
     )?;
-    if request.selected_candidate != accounts.selected_candidate_account
+    if request.settlement_root != accounts.settlement_root_account
         || request.owner_settlement != accounts.owner_settlement_account
         || request.position != accounts.position_account
         || request.settlement_cash_pot != accounts.settlement_cash_pot_account
