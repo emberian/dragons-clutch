@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use crate::{Error, FailurePolicyBindingId, Result};
 
 const MARKET_POLICY_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-policy/v1";
+const MARKET_RECOVERY_FUNDING_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/failure-market-recovery-funding/v1";
 
 /// Typed physical account identity used by the Market policy join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +36,23 @@ impl FailureMarketAccountIdV1 {
     }
 
     /// Exact account-key bytes.
+    pub const fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+/// Typed identity of one present market Recovery funding admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct FailureMarketRecoveryFundingReceiptIdV1([u8; 32]);
+
+impl FailureMarketRecoveryFundingReceiptIdV1 {
+    /// Construct from exact digest bytes without claiming authenticity.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return exact digest bytes.
     pub const fn bytes(self) -> [u8; 32] {
         self.0
     }
@@ -154,6 +173,127 @@ pub fn admit_failure_market_policy_v1<A: AuthenticatedFailureMarketPolicyV1 + ?S
         return Err(Error::BindingMismatch);
     }
     Ok(FailureMarketPolicyBindingV1 { id, facts })
+}
+
+/// Exact initial liveness Recovery account facts authenticated at admission.
+///
+/// This projection contains no funding source. Product's prepaid Series
+/// custody and the liveness adapter own the debit and account mutation; this
+/// receipt proves only that the sole Recovery custody is presently funded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRecoveryFundingFactsV1 {
+    /// Exact shared Market policy receiving the budget.
+    pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Sole liveness Recovery custody account.
+    pub recovery_compartment_account_id: LivenessId,
+    /// Exact liveness policy.
+    pub liveness_policy_id: LivenessId,
+    /// Exact Market lifecycle shared with liveness.
+    pub liveness_lifecycle_id: LivenessId,
+    /// Exact immutable recovery quote schedule.
+    pub recovery_quote_schedule_id: LivenessId,
+    /// Nonzero shared generation.
+    pub generation: u64,
+    /// Present prepaid work principal; all of it is initially unspent.
+    pub work_principal_lamports: u64,
+    /// Present separately owned rent principal.
+    pub rent_principal_lamports: u64,
+    /// Current third-party donation balance, never principal.
+    pub donation_lamports: u64,
+    /// Exact observed Recovery account balance.
+    pub observed_balance_lamports: u64,
+    /// Finite maximum paid calls admitted by liveness.
+    pub maximum_calls: u32,
+    /// Independently enforced ceiling for any one call.
+    pub maximum_lamports_per_call: u64,
+}
+
+/// Private-field present-funding receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRecoveryFundingReceiptV1 {
+    id: FailureMarketRecoveryFundingReceiptIdV1,
+    facts: FailureMarketRecoveryFundingFactsV1,
+}
+
+impl FailureMarketRecoveryFundingReceiptV1 {
+    /// Complete authenticated funding identity.
+    pub const fn id(self) -> FailureMarketRecoveryFundingReceiptIdV1 {
+        self.id
+    }
+
+    /// Exact admitted initial account facts.
+    pub const fn facts(self) -> FailureMarketRecoveryFundingFactsV1 {
+        self.facts
+    }
+}
+
+/// Adapter-owned authentication of the sole persisted liveness custody.
+///
+/// The live implementor must privately bind owner, PDA, full account body,
+/// quote schedule, initial zero progress, balances, and the Product prepaid
+/// debit receipt. The default refuses. Hoard and future fees are not inputs.
+pub trait AuthenticatedFailureMarketRecoveryFundingV1 {
+    /// Authenticate every expected initial funding fact.
+    fn authenticate_failure_market_recovery_funding(
+        &self,
+        _expected: FailureMarketRecoveryFundingFactsV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Admit the presently funded sole Recovery account for one Market policy.
+pub fn admit_failure_market_recovery_funding_v1<
+    A: AuthenticatedFailureMarketRecoveryFundingV1 + ?Sized,
+>(
+    authority: &A,
+    binding: FailureMarketPolicyBindingV1,
+    facts: FailureMarketRecoveryFundingFactsV1,
+) -> Result<FailureMarketRecoveryFundingReceiptV1> {
+    let policy = binding.facts;
+    let expected_balance = facts
+        .work_principal_lamports
+        .checked_add(facts.rent_principal_lamports)
+        .and_then(|subtotal| subtotal.checked_add(facts.donation_lamports))
+        .ok_or(Error::BindingMismatch)?;
+    let maximum_capacity = u64::from(facts.maximum_calls)
+        .checked_mul(facts.maximum_lamports_per_call)
+        .ok_or(Error::BindingMismatch)?;
+    if facts.failure_policy_binding_id != binding.id
+        || facts.recovery_compartment_account_id != policy.recovery_compartment_account_id
+        || facts.liveness_policy_id != policy.liveness_policy_id
+        || facts.liveness_lifecycle_id != policy.liveness_lifecycle_id
+        || facts.recovery_quote_schedule_id != policy.recovery_quote_schedule_id
+        || facts.generation != policy.generation
+        || facts.work_principal_lamports == 0
+        || facts.rent_principal_lamports == 0
+        || facts.maximum_calls == 0
+        || facts.maximum_lamports_per_call == 0
+        || facts.work_principal_lamports > maximum_capacity
+        || facts.observed_balance_lamports != expected_balance
+    {
+        return Err(Error::BindingMismatch);
+    }
+    authority.authenticate_failure_market_recovery_funding(facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(MARKET_RECOVERY_FUNDING_DOMAIN_V1);
+    hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.recovery_compartment_account_id.bytes());
+    hasher.update(facts.liveness_policy_id.bytes());
+    hasher.update(facts.liveness_lifecycle_id.bytes());
+    hasher.update(facts.recovery_quote_schedule_id.bytes());
+    hasher.update(facts.generation.to_le_bytes());
+    hasher.update(facts.work_principal_lamports.to_le_bytes());
+    hasher.update(facts.rent_principal_lamports.to_le_bytes());
+    hasher.update(facts.donation_lamports.to_le_bytes());
+    hasher.update(facts.observed_balance_lamports.to_le_bytes());
+    hasher.update(facts.maximum_calls.to_le_bytes());
+    hasher.update(facts.maximum_lamports_per_call.to_le_bytes());
+    let id = FailureMarketRecoveryFundingReceiptIdV1::from_bytes(hasher.finalize().into());
+    if id.bytes().iter().all(|byte| *byte == 0) {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(FailureMarketRecoveryFundingReceiptV1 { id, facts })
 }
 
 fn validate_facts(facts: FailureMarketPolicyFactsV1) -> Result<()> {
@@ -283,6 +423,24 @@ mod tests {
 
     impl AuthenticatedFailureMarketPolicyV1 for Refusing {}
 
+    #[derive(Clone, Copy, Debug)]
+    struct ExactFunding(FailureMarketRecoveryFundingFactsV1);
+
+    impl AuthenticatedFailureMarketRecoveryFundingV1 for ExactFunding {
+        fn authenticate_failure_market_recovery_funding(
+            &self,
+            expected: FailureMarketRecoveryFundingFactsV1,
+        ) -> Result<()> {
+            if self.0 == expected {
+                Ok(())
+            } else {
+                Err(Error::BindingMismatch)
+            }
+        }
+    }
+
+    impl AuthenticatedFailureMarketRecoveryFundingV1 for Refusing {}
+
     fn facts() -> FailureMarketPolicyFactsV1 {
         let mut next = 1u8;
         let mut id = || {
@@ -324,6 +482,24 @@ mod tests {
         }
     }
 
+    fn funding(binding: FailureMarketPolicyBindingV1) -> FailureMarketRecoveryFundingFactsV1 {
+        let policy = binding.facts();
+        FailureMarketRecoveryFundingFactsV1 {
+            failure_policy_binding_id: binding.id(),
+            recovery_compartment_account_id: policy.recovery_compartment_account_id,
+            liveness_policy_id: policy.liveness_policy_id,
+            liveness_lifecycle_id: policy.liveness_lifecycle_id,
+            recovery_quote_schedule_id: policy.recovery_quote_schedule_id,
+            generation: policy.generation,
+            work_principal_lamports: 1_000,
+            rent_principal_lamports: 200,
+            donation_lamports: 7,
+            observed_balance_lamports: 1_207,
+            maximum_calls: 10,
+            maximum_lamports_per_call: 100,
+        }
+    }
+
     #[test]
     fn default_authority_cannot_mint_a_market_policy() {
         assert_eq!(
@@ -355,6 +531,48 @@ mod tests {
         unbounded.maximum_interval_width = u64::MAX;
         assert_eq!(
             admit_failure_market_policy_v1(&Exact(unbounded), unbounded),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn recovery_funding_requires_exact_present_balance_and_private_authority() {
+        let policy_facts = facts();
+        let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
+        let funding = funding(binding);
+        assert_eq!(
+            admit_failure_market_recovery_funding_v1(&Refusing, binding, funding),
+            Err(Error::BindingMismatch)
+        );
+        let receipt =
+            admit_failure_market_recovery_funding_v1(&ExactFunding(funding), binding, funding)
+                .unwrap();
+        assert_eq!(receipt.facts(), funding);
+
+        let mut missing_donation = funding;
+        missing_donation.observed_balance_lamports -= funding.donation_lamports;
+        assert_eq!(
+            admit_failure_market_recovery_funding_v1(
+                &ExactFunding(missing_donation),
+                binding,
+                missing_donation,
+            ),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn recovery_work_must_fit_the_finite_call_capacity() {
+        let policy_facts = facts();
+        let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
+        let mut underprovisioned = funding(binding);
+        underprovisioned.maximum_calls = 9;
+        assert_eq!(
+            admit_failure_market_recovery_funding_v1(
+                &ExactFunding(underprovisioned),
+                binding,
+                underprovisioned,
+            ),
             Err(Error::BindingMismatch)
         );
     }
