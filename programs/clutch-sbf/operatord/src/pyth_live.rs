@@ -3,19 +3,25 @@
 //! This mode does not load a retained transcript and it does not make the
 //! browser a signer. It starts the repository's clean-HEAD, loopback-only
 //! `joined-multiboundary-v1` producer as a child and admits only its opt-in,
-//! versioned JSON events. The child still owns temporary keys, validator RPC,
-//! transaction construction, exact provider binaries, and cleanup.
+//! versioned JSON events. The daemon owns one private session directory and
+//! its child validator/key lifecycle. After terminal state is independently
+//! rediscovered, the daemon also rebuilds and signs one typed transaction to
+//! prove local signer continuity. It never submits or exports that wire.
 
 use crate::{http, integer, rpc, toolchain, Bus};
+use clutch_local_real_pyth::session_builder::{LocalTradingBuilder, SignerRole, PLAN_SCHEMA};
 use clutch_solana_layout::{account_len, registry, SupplyLedgerAccount};
 use serde_json::{json, Map, Value};
+use solana_keypair::{Keypair, Signer};
 use std::collections::BTreeSet;
+use std::fs;
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -28,6 +34,7 @@ const MANIFEST_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-manifest/v
 const RESULT_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-result/v1";
 const RUN_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-run/v1";
 const CHAIN_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-chain-discovery/v1";
+const BUILDER_SIGNING_SCHEMA: &str = "dragons-clutch/operator/local-real-builder-signing/v1";
 const EVENT_PREFIX: &str = "CLUTCH_OPERATOR_EVENT ";
 const PROFILE: &str = "NON-PRODUCTION-non-production-real-pyth-lab";
 const MAX_OUTPUT_LINE_BYTES: usize = 16 * 1024;
@@ -41,8 +48,209 @@ pub struct Options {
     pub faucet_port: u16,
     pub gossip_port: u16,
     pub dynamic_port_range: String,
+    pub work: Option<PathBuf>,
     pub statics: PathBuf,
     pub exit_when_done: bool,
+}
+
+struct LocalSessionOwner {
+    root: PathBuf,
+    campaign_work: PathBuf,
+    control: PathBuf,
+    session_id: String,
+}
+
+struct OwnedSigners {
+    payer: Keypair,
+    second_owner: Keypair,
+}
+
+impl LocalSessionOwner {
+    fn create(requested_base: Option<&PathBuf>) -> Result<Self> {
+        let base = requested_base.cloned().unwrap_or_else(std::env::temp_dir);
+        fs::create_dir_all(&base)?;
+        let base_metadata = fs::symlink_metadata(&base)?;
+        if base_metadata.file_type().is_symlink() || !base_metadata.is_dir() {
+            return Err("local session work base must be a non-symlink directory".into());
+        }
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let session_id = format!("{}-{stamp}", std::process::id());
+        let root = base.join(format!("clutch-pyth-live-session.{session_id}"));
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700).create(&root)?;
+        let campaign_work = root.join("campaign");
+        let control = root.join("control");
+        fs::DirBuilder::new().mode(0o700).create(&campaign_work)?;
+        fs::DirBuilder::new().mode(0o700).create(&control)?;
+        let marker = root.join("owner-v1");
+        fs::write(&marker, b"dragons-clutch/operator/local-session-owner/v1\n")?;
+        fs::set_permissions(&marker, fs::Permissions::from_mode(0o600))?;
+        Ok(Self {
+            root,
+            campaign_work,
+            control,
+            session_id,
+        })
+    }
+
+    fn configure(&self, command: &mut Command) {
+        command
+            .env("CLUTCH_LOCAL_REAL_PYTH_CALLER_OWNS_WORK", "1")
+            .env(
+                "CLUTCH_LOCAL_REAL_PYTH_CALLER_WORK_DIR",
+                &self.campaign_work,
+            )
+            .env("CLUTCH_LOCAL_REAL_PYTH_CONTROL_DIR", &self.control);
+    }
+
+    fn request_stop(&self) -> Result<()> {
+        fs::write(self.control.join("stop"), b"stop\n")?;
+        Ok(())
+    }
+
+    fn retain_public_restart(&self, descriptor: &Value) -> Result<()> {
+        let path = self.root.join("public-restart.json");
+        fs::write(&path, serde_json::to_vec_pretty(descriptor)?)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        Ok(())
+    }
+
+    fn load_signer(&self, role: &str, filename: &str) -> Result<Keypair> {
+        let secrets = self.campaign_work.join("lab-secrets");
+        let secrets_metadata = fs::symlink_metadata(&secrets)?;
+        if secrets_metadata.file_type().is_symlink()
+            || !secrets_metadata.is_dir()
+            || secrets_metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err("owned local signer directory has unsafe metadata".into());
+        }
+        let path = secrets.join(filename);
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(format!("owned local signer {role} has unsafe file metadata").into());
+        }
+        solana_keypair::read_keypair_file(&path)
+            .map_err(|error| format!("read owned local signer {role}: {error}").into())
+    }
+
+    fn load_signers(&self) -> Result<OwnedSigners> {
+        Ok(OwnedSigners {
+            payer: self.load_signer("payer", "payer.json")?,
+            second_owner: self.load_signer("second_owner", "second-owner.json")?,
+        })
+    }
+
+    fn signer_event(&self) -> Result<Value> {
+        let signers = self.load_signers()?;
+        let actors = [
+            ("payer", signers.payer.pubkey()),
+            ("second_owner", signers.second_owner.pubkey()),
+        ]
+        .into_iter()
+        .map(|(role, public_key)| {
+            json!({
+                "role": role,
+                "public_key": public_key.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+        Ok(json!({
+            "type": "live-local-session-owner",
+            "schema": "dragons-clutch/operator/local-session-owner/v1",
+            "session_id": self.session_id,
+            "lifecycle": "daemon-owned child, validator, work directory, and ephemeral signer roster",
+            "actors": actors,
+            "private_paths_exported": false,
+            "private_key_material_exported": false,
+            "browser_signing": false,
+            "daemon_signing_seam": "owner-scoped local signers; typed result-bound plan is signed only after the terminal chain check and is never submitted",
+        }))
+    }
+
+    fn builder_signing_event(&self, result: &Value, options: &Options) -> Result<Value> {
+        let signers = self.load_signers()?;
+        let records = field_array(result, "archive_records", "live result")?;
+        let first = records
+            .first()
+            .ok_or("live result has no first source record")?;
+        let last = records
+            .last()
+            .ok_or("live result has no last source record")?;
+        let start_bucket =
+            u64::try_from(canonical_unsigned(first, "bucket", "first source record")?)?;
+        let end_bucket_exclusive = u64::try_from(
+            canonical_unsigned(last, "bucket", "last source record")?
+                .checked_add(1)
+                .ok_or("live source window end overflows")?,
+        )?;
+        let builder = LocalTradingBuilder::campaign(
+            signers.payer.pubkey(),
+            signers.second_owner.pubkey(),
+            start_bucket,
+            end_bucket_exclusive,
+        )?;
+        let admitted_archive = string(
+            result
+                .get("source_archive")
+                .ok_or("live result has no source archive")?,
+            "key",
+            "source archive",
+        )?;
+        if builder.source_archive_address().to_string() != admitted_archive {
+            return Err("typed local builder does not derive the admitted SourceArchive".into());
+        }
+        let plan = builder.freeze_epoch()?;
+        if plan.schema != PLAN_SCHEMA || plan.required_signers != [SignerRole::Payer] {
+            return Err("typed local builder emitted an unexpected signing contract".into());
+        }
+        let url = format!("http://127.0.0.1:{}", options.rpc_port);
+        let signed = rpc::sign_transaction(
+            &plan.unsigned_transaction,
+            rpc::latest_blockhash(&url)?,
+            &[&signers.payer],
+        )?;
+        Ok(json!({
+            "type": "live-local-builder-signing",
+            "schema": BUILDER_SIGNING_SCHEMA,
+            "session_id": self.session_id,
+            "boundary": "DAEMON-OWNED LOCAL SIGNING / NOT SUBMITTED / NO BROWSER KEY MATERIAL",
+            "plan_schema": plan.schema,
+            "family": plan.family,
+            "source_archive": admitted_archive,
+            "market": builder.market_address().to_string(),
+            "source_window": {
+                "start_bucket": start_bucket.to_string(),
+                "end_bucket_exclusive": end_bucket_exclusive.to_string(),
+            },
+            "required_signers": ["payer"],
+            "unsigned_transaction_sha256": body_sha256(&plan.unsigned_transaction),
+            "signed_transaction_sha256": body_sha256(&signed),
+            "signed_transaction_bytes": signed.len().to_string(),
+            "blockhash_source": "confirmed loopback getLatestBlockhash",
+            "submitted": false,
+            "submission_signature": Value::Null,
+            "signed_bytes_exported": false,
+            "private_key_material_exported": false,
+            "browser_signing": false,
+            "transaction_admission": "not exposed; this terminal-state plan proves only builder and signer continuity",
+        }))
+    }
+}
+
+impl Drop for LocalSessionOwner {
+    fn drop(&mut self) {
+        let safe_name = self
+            .root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("clutch-pyth-live-session."));
+        if safe_name {
+            let _ignored = fs::remove_dir_all(&self.root);
+        }
+    }
 }
 
 struct ChildGuard(Child);
@@ -56,9 +264,10 @@ impl ChildGuard {
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
-            // The supervised runner owns a validator and ephemeral keys. Give
-            // its EXIT/TERM trap time to stop the validator and remove its
-            // private directory before falling back to an uncatchable kill.
+            // The supervised runner owns the validator process while the
+            // daemon owns its private session root. Give the runner's
+            // EXIT/TERM trap time to stop the validator before the enclosing
+            // session owner removes only that marked root.
             let pid = self.0.id().to_string();
             let _ignored = Command::new("kill").args(["-TERM", &pid]).status();
             for _ in 0..50 {
@@ -224,6 +433,8 @@ fn admitted_progress_line(stream: &str, line: &str) -> bool {
             | "== probe the same warped validator Clock before proof generation =="
             | "== start explicitly selected validator =="
             | "== real provider / joined Clutch campaign =="
+            | "local_session_owner=ready"
+            | "local_session_owner=stopping"
     ) || line == MULTIBOUNDARY_PASS
     {
         return true;
@@ -859,7 +1070,12 @@ fn discovered_account(
 /// bank before the campaign child is allowed to exit and remove its ledger.
 /// Addresses come from the already-admitted result; owner, executable, bytes,
 /// and one shared RPC context come from a root-bracketed chain read.
-fn discover_terminal_chain(result: &Value, manifest: &Value, options: &Options) -> Result<Value> {
+fn discover_terminal_chain(
+    result: &Value,
+    manifest: &Value,
+    options: &Options,
+    owner: &LocalSessionOwner,
+) -> Result<Value> {
     let archive = result
         .get("source_archive")
         .ok_or("live result has no source archive")?;
@@ -978,6 +1194,7 @@ fn discover_terminal_chain(result: &Value, manifest: &Value, options: &Options) 
         "accounts": accounts,
         "restart_descriptor": {
             "schema": "dragons-clutch/operator/local-session-restart-descriptor/v1",
+            "session_id": owner.session_id,
             "genesis_hash": string(result, "genesis_hash", "live result")?,
             "repository_head": string(manifest, "repository_head", "live manifest")?,
             "rpc_url": url,
@@ -987,7 +1204,7 @@ fn discover_terminal_chain(result: &Value, manifest: &Value, options: &Options) 
             "outcome_mints": mint_addresses,
             "public_only": true,
             "signer_material": "not exported",
-            "restart_capability": "read-only rediscovery while the owned child is live; transaction continuity not yet available",
+            "restart_capability": "read-only rediscovery while the daemon-owned child is live; local signer continuity is owner-scoped but transaction admission is not yet exposed",
         }
     }))
 }
@@ -1041,6 +1258,7 @@ fn publish_line(
     manifest: &mut Option<Value>,
     result: &mut Option<Value>,
     options: &Options,
+    owner: &LocalSessionOwner,
 ) -> Result<()> {
     match message {
         ReaderMessage::Error { stream, detail } => {
@@ -1058,6 +1276,7 @@ fn publish_line(
                                 return Err("live child emitted a second manifest event".into());
                             }
                             bus.publish(&event);
+                            bus.publish(&owner.signer_event()?);
                             bus.publish(&identity(&event, options, "IN_FLIGHT", None));
                             bus.publish(&run_event(options, "running"));
                         }
@@ -1068,13 +1287,24 @@ fn publish_line(
                                     "live child emitted a result before its admitted manifest",
                                 )?,
                                 options,
+                                owner,
                             )?;
+                            let builder_signing = owner.builder_signing_event(&event, options)?;
                             if result.replace(event.clone()).is_some() {
                                 return Err("live child emitted a second result event".into());
                             }
+                            owner.retain_public_restart(
+                                discovery
+                                    .get("restart_descriptor")
+                                    .ok_or("chain discovery has no restart descriptor")?,
+                            )?;
                             bus.publish(&discovery);
+                            bus.publish(&builder_signing);
                             bus.publish(&event);
-                            bus.publish(&run_event(options, "validating-exit"));
+                            bus.publish(&run_event(options, "session-ready"));
+                            if options.exit_when_done {
+                                owner.request_stop()?;
+                            }
                         }
                         _ => unreachable!("parse_operator_event admitted the event"),
                     }
@@ -1099,9 +1329,11 @@ fn publish_line(
 }
 
 fn supervise(options: &Options, bus: &Bus) -> Result<(Value, Value, ExitStatus)> {
+    let owner = LocalSessionOwner::create(options.work.as_ref())?;
     let script =
         crate::repo_path("programs/clutch-sbf/scripts/run_local_multiboundary_pyth_lifecycle.sh");
     let mut command = Command::new(&script);
+    owner.configure(&mut command);
     command
         .current_dir(crate::repo_path("."))
         .env("CLUTCH_LOCAL_REAL_PYTH_OPERATOR_EVENTS", "1")
@@ -1153,6 +1385,7 @@ fn supervise(options: &Options, bus: &Bus) -> Result<(Value, Value, ExitStatus)>
                 &mut manifest,
                 &mut result,
                 options,
+                &owner,
             )?,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1179,6 +1412,7 @@ fn supervise(options: &Options, bus: &Bus) -> Result<(Value, Value, ExitStatus)>
             &mut manifest,
             &mut result,
             options,
+            &owner,
         )?;
     }
     Ok((
@@ -1444,6 +1678,7 @@ mod tests {
             faucet_port: 9139,
             gossip_port: 9200,
             dynamic_port_range: "9201-9250".to_string(),
+            work: None,
             statics: PathBuf::from("unused"),
             exit_when_done: true,
         };
@@ -1463,6 +1698,8 @@ mod tests {
             "campaign_mode=joined-multiboundary-v1",
             "campaign_clock_settled=1787540520",
             "prepared 29 exact genesis accounts",
+            "local_session_owner=ready",
+            "local_session_owner=stopping",
             "waiting reason=best-valid-submitted-candidate selection slot=40 target=50",
             "step=router-initialize slot=10 cu=34183 error=null",
             "step=wrong-feed-post-update-plus-append-rollback slot=11 cu=81604 error={\"InstructionError\":[2,{\"Custom\":122}]}",

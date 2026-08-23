@@ -6,6 +6,7 @@ import { encodeIntent, INTEGER_TRANSPORT } from "../action.js";
 import {
   createStore,
   eventHasSafeNumbers,
+  liveBuilderSigningIsPresentable,
   liveResultIsPresentable,
   liveRunIsPresentable,
 } from "../stream.js";
@@ -396,6 +397,29 @@ const liveResult = () => ({
   },
 });
 
+const liveBuilderSigning = () => ({
+  type: "live-local-builder-signing",
+  schema: "dragons-clutch/operator/local-real-builder-signing/v1",
+  session_id: "123-456",
+  boundary: "DAEMON-OWNED LOCAL SIGNING / NOT SUBMITTED / NO BROWSER KEY MATERIAL",
+  plan_schema: "dragons-clutch/operator/local-real-transaction-plan/v1",
+  family: "freeze-epoch",
+  source_archive: "3R9qSxN4uBLeubEyUvLGmTGkLQTPAXyP5Dk72H4Ybx9z",
+  market: "p2YiDXJNN89JVt4BZmZo6TJQBfCNfHTgJZ8Y5F6LnMZ",
+  source_window: { start_bucket: "10", end_bucket_exclusive: "12" },
+  required_signers: ["payer"],
+  unsigned_transaction_sha256: "a".repeat(64),
+  signed_transaction_sha256: "b".repeat(64),
+  signed_transaction_bytes: "321",
+  blockhash_source: "confirmed loopback getLatestBlockhash",
+  submitted: false,
+  submission_signature: null,
+  signed_bytes_exported: false,
+  private_key_material_exported: false,
+  browser_signing: false,
+  transaction_admission: "not exposed; this terminal-state plan proves only builder and signer continuity",
+});
+
 test("live Pyth projection admits only exact unretained terminal closure", () => {
   const run = {
     type: "live-real-pyth-run",
@@ -430,6 +454,25 @@ test("live Pyth projection admits only exact unretained terminal closure", () =>
   assert.equal(liveResultIsPresentable(residue), false);
 });
 
+test("local real-Pyth builder proof is exact, linked, and unsubmitted", () => {
+  const owner = { session_id: "123-456" };
+  const chain = { root_address: liveBuilderSigning().source_archive };
+  assert.equal(liveBuilderSigningIsPresentable(liveBuilderSigning(), owner, chain), true);
+
+  const submitted = liveBuilderSigning();
+  submitted.submitted = true;
+  assert.equal(liveBuilderSigningIsPresentable(submitted, owner, chain), false);
+
+  const exported = liveBuilderSigning();
+  exported.signed_bytes_exported = true;
+  assert.equal(liveBuilderSigningIsPresentable(exported, owner, chain), false);
+
+  assert.equal(
+    liveBuilderSigningIsPresentable(liveBuilderSigning(), { session_id: "123-457" }, chain),
+    false,
+  );
+});
+
 test("the live Pyth page is read-only and the launcher disables transcript retention", async () => {
   const [app, live, launcher, daemon] = await Promise.all([
     source("app.js"),
@@ -442,7 +485,8 @@ test("the live Pyth page is read-only and the launcher disables transcript reten
   for (const phrase of [
     "LIVE, NOT RETAINED",
     "real captured router/receiver laboratory",
-    "Ephemeral payer and owner keys remain inside",
+    "daemon-owned local session retains its ephemeral payer and owner keys",
+    "SIGNED LOCALLY / NOT ADMITTED / NOT SUBMITTED",
     "does not independently query RPC",
   ]) {
     assert.match(live, new RegExp(phrase));

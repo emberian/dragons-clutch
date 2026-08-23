@@ -42,6 +42,7 @@ const phaseCard = (state) => {
 const identityCard = (state) => {
   const identity = state.identity;
   const manifest = state.liveManifest;
+  const owner = state.liveOwner;
   const section = el("section", "card");
   section.append(el("h2", null, "Live build and provider identity"));
   if (!identity || !manifest) {
@@ -58,9 +59,11 @@ const identityCard = (state) => {
       ["Program id", digest(identity.program_id)],
       ["Genesis prerequisites", numeric(String(manifest.genesis_prerequisite_roles.length))],
       ["Provider loader accounts", numeric(String(manifest.provider.length))],
+      ["Local session owner", owner ? owner.session_id : "NOT YET OBSERVED"],
+      ["Daemon-held ephemeral signers", owner ? numeric(String(owner.actors.length)) : "NOT YET OBSERVED"],
       ["Evidence scope", identity.evidence_scope]
     ]),
-    el("p", "muted", "The browser receives public identities only. Ephemeral payer and owner keys remain inside the supervised runner's private temporary directory and are removed by that runner.")
+    el("p", "muted", "The browser receives public identities only. The daemon-owned local session retains its ephemeral payer and owner keys in a private directory for the lifetime of the child, then removes that exact session directory. Paths and private bytes are never events.")
   );
   return section;
 };
@@ -85,6 +88,34 @@ const chainCard = (chain) => {
       el("span", null, chain.restart_descriptor.restart_capability)
     ),
     el("p", "muted", "The daemon fetched these complete envelopes in one same-context batch bracketed by the unchanged SourceArchive root. It checked owners, executability, exact lengths/codecs, body hashes, and zero mint/supply state. The descriptor contains addresses and identities only: signer material is not exported.")
+  );
+  return section;
+};
+
+const builderCard = (builder) => {
+  const section = el("section", "card");
+  const heading = el("div", "card-heading");
+  heading.append(el("h2", null, "Owned local builder and signer seam"), chip("NOT SUBMITTED"));
+  section.append(
+    heading,
+    row(
+      "callout callout-warn",
+      el("strong", null, "SIGNED LOCALLY / NOT ADMITTED / NOT SUBMITTED"),
+      el("span", null, "The daemon rebuilt one typed transaction against the admitted source identity, fetched a loopback blockhash, and signed it with its owner-scoped payer. It did not expose the wire or signature and did not send the transaction.")
+    ),
+    fields("", [
+      ["Plan family", builder.family],
+      ["Market", digest(builder.market)],
+      ["Source archive", digest(builder.source_archive)],
+      ["Source buckets", `${numeric(builder.source_window.start_bucket)}–${numeric(builder.source_window.end_bucket_exclusive)} (exclusive)`],
+      ["Required signer role", builder.required_signers.join(" / ")],
+      ["Unsigned wire sha256", digest(builder.unsigned_transaction_sha256)],
+      ["Signed wire sha256", digest(builder.signed_transaction_sha256)],
+      ["Signed bytes", numeric(builder.signed_transaction_bytes)],
+      ["Blockhash source", builder.blockhash_source],
+      ["Submission", builder.submitted ? "submitted" : "NOT SUBMITTED"]
+    ]),
+    el("p", "muted", builder.transaction_admission)
   );
   return section;
 };
@@ -186,6 +217,7 @@ const outputCard = (state) => {
 export const renderLivePyth = (state) => {
   const cards = [phaseCard(state), identityCard(state)];
   if (state.liveChain) cards.push(chainCard(state.liveChain));
+  if (state.liveBuilder) cards.push(builderCard(state.liveBuilder));
   if (state.liveResult) {
     const scope = state.identity?.evidence_scope === "SBF_EXECUTED" ? "SBF_EXECUTED" : "IN_FLIGHT";
     cards.push(sourceCard(state.liveResult, scope), terminalCard(state.liveResult));

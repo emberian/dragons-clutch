@@ -4,8 +4,9 @@
 # The daemon supervises the tracked local-real runner. That child deploys the
 # exact captured Pyth receiver/router Program and ProgramData accounts into a
 # fresh loopback validator, submits the signed SourceV2 + settled-trade
-# lifecycle, and removes its ephemeral keys and ledger. The browser is only a
-# live telemetry reader; it receives no key material and has no campaign verb.
+# lifecycle. The daemon owns the child's private session directory, signers,
+# validator hold/stop contract, and exact cleanup. The browser is only a live
+# telemetry reader; it receives no key material and has no campaign verb.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +18,7 @@ faucet_port="${CLUTCH_OPERATOR_PYTH_LIVE_FAUCET_PORT:-9139}"
 gossip_port="${CLUTCH_OPERATOR_PYTH_LIVE_GOSSIP_PORT:-9200}"
 dynamic_port_range="${CLUTCH_OPERATOR_PYTH_LIVE_DYNAMIC_PORT_RANGE:-9201-9250}"
 exit_when_done="${CLUTCH_OPERATOR_PYTH_LIVE_EXIT_WHEN_DONE:-0}"
+work_base="${CLUTCH_OPERATOR_PYTH_LIVE_WORK_BASE:-}"
 daemon_pid=""
 
 cleanup() {
@@ -27,8 +29,14 @@ cleanup() {
     for child_pid in $(pgrep -P "$daemon_pid" 2>/dev/null || true); do
       kill -TERM "$child_pid" 2>/dev/null || true
     done
-    kill -TERM "$daemon_pid" 2>/dev/null || true
+    # The daemon observes child exit and drops only its marked private session
+    # root. Give that owner cleanup a bounded chance before forcing it down.
     for _ in $(seq 1 50); do
+      kill -0 "$daemon_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -TERM "$daemon_pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do
       kill -0 "$daemon_pid" 2>/dev/null || break
       sleep 0.1
     done
@@ -60,6 +68,9 @@ args=(
 )
 if [ "$exit_when_done" = 1 ]; then
   args+=(--exit-when-done)
+fi
+if [ -n "$work_base" ]; then
+  args+=(--work "$work_base")
 fi
 
 echo "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE"

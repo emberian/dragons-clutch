@@ -163,15 +163,13 @@ fn dispatch(options: Options) -> Result<()> {
                     "pyth-live refuses --transcript; use pyth-local for retained evidence".into(),
                 );
             }
-            if options.work.is_some() {
-                return Err("pyth-live refuses --work; the supervised runner owns and removes its private temporary directory".into());
-            }
             pyth_live::serve(pyth_live::Options {
                 port: options.port,
                 rpc_port: options.rpc_port,
                 faucet_port: options.faucet_port,
                 gossip_port: options.gossip_port,
                 dynamic_port_range: options.dynamic_port_range,
+                work: options.work,
                 statics: options.statics,
                 exit_when_done: options.exit_when_done,
             })

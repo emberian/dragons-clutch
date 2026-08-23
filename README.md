@@ -345,6 +345,14 @@ The daemon, not the browser, holds ephemeral local test signers and builds
 transactions through the canonical harness. This is test infrastructure, not a
 wallet architecture.
 
+The separate `pyth-live` mode uses the real captured local receiver/router
+plane. Its daemon owns a private reusable session root and keeps the loopback
+validator and signer roster alive after the fixed campaign reaches terminal
+state. It also rebuilds and locally signs one result-bound typed plan without
+submitting or exporting it. That proves builder/signer continuity only; the
+browser remains read-only and there is not yet an admitted interactive trading
+endpoint.
+
 ## Architecture in five minutes
 
 - [`crates/clutch-kernel`](crates/clutch-kernel) — Eggcrate's collateral and

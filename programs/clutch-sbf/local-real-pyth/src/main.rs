@@ -2,6 +2,7 @@
 
 #![recursion_limit = "256"]
 
+mod capture;
 mod plane;
 mod provider;
 mod rpc;

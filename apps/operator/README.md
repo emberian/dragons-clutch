@@ -75,7 +75,9 @@ exits after the child passes. Listener overrides are
 `CLUTCH_OPERATOR_PYTH_LIVE_PORT`, `CLUTCH_OPERATOR_PYTH_LIVE_RPC_PORT`,
 `CLUTCH_OPERATOR_PYTH_LIVE_FAUCET_PORT`,
 `CLUTCH_OPERATOR_PYTH_LIVE_GOSSIP_PORT`, and
-`CLUTCH_OPERATOR_PYTH_LIVE_DYNAMIC_PORT_RANGE`.
+`CLUTCH_OPERATOR_PYTH_LIVE_DYNAMIC_PORT_RANGE`. An optional
+`CLUTCH_OPERATOR_PYTH_LIVE_WORK_BASE` selects the parent of the daemon-owned
+private session root; it does not retain or expose that session.
 
 To retain a new source-only campaign, choose a new empty directory with
 `CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR` when running
@@ -99,9 +101,10 @@ the Trade wrapper's listeners with `CLUTCH_OPERATOR_TRADE_PORT`,
 `CLUTCH_OPERATOR_*` names. Both wrappers pass explicit, disjoint gossip and
 dynamic port ranges so the validator never falls back to Solana's broad
 implicit local range.
-The wrapper stops its daemon/validator and the daemon removes orderly-run
-ephemeral signer files; a force-killed standalone daemon may leave its printed
-temporary work directory for manual inspection and cleanup.
+The wrapper first stops the exact supervised child so the daemon can remove its
+private session root, then stops the daemon. An uncatchably killed standalone
+daemon can still leave a `clutch-pyth-live-session.*` root under the selected
+work parent for manual inspection and cleanup.
 
 Trade mode follows the program's real local clock. The default session waits
 for its short 260-slot freeze window and then the protocol's fixed 1,000-slot
@@ -160,7 +163,7 @@ the semantic owners of persisted facts.
 
 | screen | what it reads |
 | --- | --- |
-| **Live campaign** | versioned, opt-in events emitted by the currently running campaign child: clean repository/build and captured provider identities; loopback endpoints; two exact SourceV2 archive records; retained archive envelope/commitment facts; complete wrong-config, wrong-feed, and out-of-order rollback objects whose ephemeral receiver accounts are absent and whose SourceArchive/treasury full-state hashes are unchanged; settled trade; and terminal two-owner conservation including zero internal, external-ledger, aggregate, and four Token-2022 mint supplies. The daemon rejects JSON numbers, unexpected provider identities, nonconsecutive records, incomplete rollback closure, and nonzero terminal liabilities. It independently rediscovers the SourceArchive, SupplyLedger, and four outcome mints from loopback RPC in one root-bracketed same-context snapshot before admitting the result. It promotes the final scope to `SBF_EXECUTED` only after the child exits successfully, including the runner's final listener-isolation probe. Only structurally allowlisted milestones, waits, and step results reach the browser; stderr, paths, arbitrary text, and retained result JSON stay process-local. |
+| **Live campaign** | versioned, opt-in events emitted by the currently running campaign child: clean repository/build and captured provider identities; loopback endpoints; two exact SourceV2 archive records; retained archive envelope/commitment facts; complete wrong-config, wrong-feed, and out-of-order rollback objects whose ephemeral receiver accounts are absent and whose SourceArchive/treasury full-state hashes are unchanged; settled trade; and terminal two-owner conservation including zero internal, external-ledger, aggregate, and four Token-2022 mint supplies. The daemon rejects JSON numbers, unexpected provider identities, nonconsecutive records, incomplete rollback closure, and nonzero terminal liabilities. It independently rediscovers the SourceArchive, SupplyLedger, and four outcome mints from loopback RPC in one root-bracketed same-context snapshot before admitting the result. It then rebuilds a typed transaction for the exact source window, requires its SourceArchive derivation to match, supplies a confirmed loopback blockhash, and signs it with the daemon-owned local payer. That wire is deliberately not admitted for execution, not submitted, and not exported. The daemon promotes the final scope to `SBF_EXECUTED` only after the child exits successfully, including the runner's final listener-isolation probe. Only structurally allowlisted milestones, waits, and step results reach the browser; stderr, paths, arbitrary text, signed wire bytes, and retained result JSON stay process-local. |
 
 This screen is a live daemon-validated projection, not an independently
 authenticated RPC client and not retained evidence. Its provider binaries are
@@ -169,12 +172,24 @@ claim about provider availability, devnet, mainnet, or value. There is no
 start/retry/reorder/sign action in the page. The launcher is the authority to
 start the single fixed campaign and owns graceful cleanup.
 
-The chain-discovery event also carries a public restart descriptor: genesis,
-repository/program identity, RPC URL, and the six discovered addresses. It
-contains no signer material. At this stage it supports read-only rediscovery
-only while the owned child is alive; it does not claim transaction continuity
-after a daemon or child restart. Moving validator and signer lifecycle into a
-reusable local session owner is the next runtime boundary.
+The daemon now creates one mode-private session root, delegates its marked
+campaign/control children to the runner, and keeps the validator and ephemeral
+signer roster alive after the fixed campaign reaches terminal state. The
+chain-discovery event carries a public restart descriptor: owner session ID,
+genesis, repository/program identity, RPC URL, and the six discovered
+addresses. It contains no signer material. `--work DIR` (or the launcher's
+`CLUTCH_OPERATOR_PYTH_LIVE_WORK_BASE`) chooses only the parent under which the
+daemon creates that private root; it is never the campaign directory itself.
+The daemon removes the exact marked root when the child exits normally or is
+gracefully stopped.
+
+This is signer continuity, not an interactive transaction service. The one
+signed `freeze-epoch` plan is a terminal-state, non-submitted proof that the
+real-source builder and owner-scoped signer seam are connected. The public
+restart descriptor permits read-only rediscovery only while the child is
+alive. A future admission surface still needs chain-derived preterminal state,
+intent validation, simulation/receipt policy, and explicit stop/restart
+semantics before it may submit anything.
 
 ### Pyth local mode
 

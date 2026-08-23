@@ -1,6 +1,6 @@
 //! Test-only categorical market/source planes and instructions.
 
-use crate::provider;
+use crate::capture;
 use clutch_batch::relation_v1::{
     canonical_candidate, canonical_pairing, BookV1, LegRefV1, RelationDomainV1,
 };
@@ -29,9 +29,11 @@ use clutch_solana_layout::{
     MAX_PAYOUTS, PAYOUT_INDEX_UNRESOLVED, PAYOUT_MAP_UNUSED,
 };
 use clutch_solana_reference::{KernelAccount, STAT_TERMINAL_01};
+#[cfg(test)]
+use clutch_svm_fixture::MARKET_NONCE;
 use clutch_svm_fixture::{
-    build_plane, fixture_terms, layout_request, GenesisAccount, Mode, Pda, Plane, MARKET_NONCE,
-    PROGRAM_ID, RENT_SYSVAR, SYSTEM_PROGRAM, TOKEN_2022,
+    build_plane, fixture_terms, layout_request, GenesisAccount, Mode, Pda, Plane, PROGRAM_ID,
+    RENT_SYSVAR, SYSTEM_PROGRAM, TOKEN_2022,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -56,6 +58,8 @@ pub enum MarketPrestate {
 
 pub struct LabPlane {
     pub plane: Plane,
+    /// The immutable nonce used to derive this plane's market identity.
+    pub market_nonce: u64,
     /// The canonical final PriceGrid PDA. It is deliberately absent from
     /// `plane.accounts`: joined campaigns create it through the signed typed
     /// artifact transport before opening an epoch.
@@ -117,7 +121,7 @@ fn one_hot_payouts() -> ([PayoutVectorBytes; MAX_PAYOUTS], PayoutSet) {
 }
 
 pub fn real_spec() -> Result<SourceSpecV2, Box<dyn std::error::Error>> {
-    let config = provider::fixture("receiver-config.account")?;
+    let config = capture::fixture("receiver-config.account")?;
     let digest = clutch_sbf::pyth_receiver::config_byte_digest(&config);
     if digest != real_pyth_lab::CONFIG_DIGEST {
         return Err("local-real receiver Config does not match the compiled release".into());
@@ -345,6 +349,7 @@ pub fn build(
 
     LabPlane {
         plane,
+        market_nonce,
         grid,
         grid_value,
         grid_bytes,
@@ -1332,7 +1337,7 @@ pub fn create_market(actor: Address, lab: &LabPlane) -> Instruction {
             Intent::CreateMarket {
                 realm: lab.plane.realm_id,
                 profile: lab.plane.profile_id,
-                market_nonce: MARKET_NONCE,
+                market_nonce: lab.market_nonce,
                 outcome_count: OUTCOMES,
                 terms: lab.plane.terms_id,
                 feed: lab.plane.feed_id,

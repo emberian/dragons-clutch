@@ -31,6 +31,8 @@ const EMPTY = Object.freeze({
   candidateTrials: [],
   pyth: null,
   liveRun: null,
+  liveOwner: null,
+  liveBuilder: null,
   liveManifest: null,
   liveChain: null,
   liveResult: null,
@@ -57,6 +59,7 @@ const LIVE_RUN_SCHEMA = "dragons-clutch/operator/live-real-pyth-run/v1";
 const LIVE_MANIFEST_SCHEMA = "dragons-clutch/operator/live-real-pyth-manifest/v1";
 const LIVE_RESULT_SCHEMA = "dragons-clutch/operator/live-real-pyth-result/v1";
 const LIVE_CHAIN_SCHEMA = "dragons-clutch/operator/live-real-pyth-chain-discovery/v1";
+const LIVE_BUILDER_SIGNING_SCHEMA = "dragons-clutch/operator/local-real-builder-signing/v1";
 const LIVE_CLAIM = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
 const LIVE_CAMPAIGN_MODE = "joined-multiboundary-v1";
 const LIVE_TRANSCRIPT_SCHEMA = "dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1";
@@ -86,7 +89,7 @@ export const liveRunIsPresentable = (event) => Boolean(
   && event.type === "live-real-pyth-run"
   && event.schema === LIVE_RUN_SCHEMA
   && event.mode === "pyth-live"
-  && ["starting", "running", "validating-exit", "passed", "failed"].includes(event.phase)
+  && ["starting", "running", "session-ready", "passed", "failed"].includes(event.phase)
   && event.campaign_mode === LIVE_CAMPAIGN_MODE
   && event.retained_transcript === false
   && /^http:\/\/127\.0\.0\.1:[0-9]+$/.test(event.rpc_url)
@@ -96,6 +99,74 @@ export const liveRunIsPresentable = (event) => Boolean(
   && /^[0-9]+-[0-9]+$/.test(event.dynamic_port_range)
   && event.authority === "read-only live child telemetry; no retained transcript; no browser key material"
 );
+
+const liveOwnerIsPresentable = (event) => Boolean(
+  eventUsesExactDecimalTransport(event)
+  && hasExactKeys(event, [
+    "type", "schema", "session_id", "lifecycle", "actors", "private_paths_exported",
+    "private_key_material_exported", "browser_signing", "daemon_signing_seam",
+  ])
+  && event.type === "live-local-session-owner"
+  && event.schema === "dragons-clutch/operator/local-session-owner/v1"
+  && /^[0-9]+-[0-9]+$/.test(event.session_id)
+  && event.lifecycle === "daemon-owned child, validator, work directory, and ephemeral signer roster"
+  && Array.isArray(event.actors)
+  && event.actors.length === 2
+  && event.actors.every((actor, index) => (
+    hasExactKeys(actor, ["role", "public_key"])
+    && actor.role === ["payer", "second_owner"][index]
+    && SOLANA_ADDRESS.test(actor.public_key)
+  ))
+  && event.actors[0].public_key !== event.actors[1].public_key
+  && event.private_paths_exported === false
+  && event.private_key_material_exported === false
+  && event.browser_signing === false
+  && event.daemon_signing_seam === "owner-scoped local signers; typed result-bound plan is signed only after the terminal chain check and is never submitted"
+);
+
+export const liveBuilderSigningIsPresentable = (event, owner = null, chain = null) => {
+  const sourceWindow = event?.source_window;
+  return Boolean(
+    eventUsesExactDecimalTransport(event)
+    && hasExactKeys(event, [
+      "type", "schema", "session_id", "boundary", "plan_schema", "family",
+      "source_archive", "market", "source_window", "required_signers",
+      "unsigned_transaction_sha256", "signed_transaction_sha256",
+      "signed_transaction_bytes", "blockhash_source", "submitted",
+      "submission_signature", "signed_bytes_exported", "private_key_material_exported",
+      "browser_signing", "transaction_admission",
+    ])
+    && event.type === "live-local-builder-signing"
+    && event.schema === LIVE_BUILDER_SIGNING_SCHEMA
+    && /^[0-9]+-[0-9]+$/.test(event.session_id)
+    && event.boundary === "DAEMON-OWNED LOCAL SIGNING / NOT SUBMITTED / NO BROWSER KEY MATERIAL"
+    && event.plan_schema === "dragons-clutch/operator/local-real-transaction-plan/v1"
+    && event.family === "freeze-epoch"
+    && SOLANA_ADDRESS.test(event.source_archive)
+    && SOLANA_ADDRESS.test(event.market)
+    && hasExactKeys(sourceWindow, ["start_bucket", "end_bucket_exclusive"])
+    && CANONICAL_INTEGER.test(sourceWindow.start_bucket)
+    && CANONICAL_INTEGER.test(sourceWindow.end_bucket_exclusive)
+    && BigInt(sourceWindow.end_bucket_exclusive) === BigInt(sourceWindow.start_bucket) + 2n
+    && Array.isArray(event.required_signers)
+    && event.required_signers.length === 1
+    && event.required_signers[0] === "payer"
+    && LOWER_HEX_64.test(event.unsigned_transaction_sha256)
+    && LOWER_HEX_64.test(event.signed_transaction_sha256)
+    && event.unsigned_transaction_sha256 !== event.signed_transaction_sha256
+    && CANONICAL_INTEGER.test(event.signed_transaction_bytes)
+    && BigInt(event.signed_transaction_bytes) > 0n
+    && event.blockhash_source === "confirmed loopback getLatestBlockhash"
+    && event.submitted === false
+    && event.submission_signature === null
+    && event.signed_bytes_exported === false
+    && event.private_key_material_exported === false
+    && event.browser_signing === false
+    && event.transaction_admission === "not exposed; this terminal-state plan proves only builder and signer continuity"
+    && (!owner || event.session_id === owner.session_id)
+    && (!chain || event.source_archive === chain.root_address)
+  );
+};
 
 const liveManifestIsPresentable = (event) => Boolean(
   event
@@ -259,11 +330,12 @@ export const liveChainIsPresentable = (event) => {
   return accountsValid
     && event.accounts[0].address === event.root_address
     && hasExactKeys(restart, [
-      "schema", "genesis_hash", "repository_head", "rpc_url", "program_id",
+      "schema", "session_id", "genesis_hash", "repository_head", "rpc_url", "program_id",
       "source_archive", "supply_ledger", "outcome_mints", "public_only",
       "signer_material", "restart_capability",
     ])
     && restart.schema === "dragons-clutch/operator/local-session-restart-descriptor/v1"
+    && /^[0-9]+-[0-9]+$/.test(restart.session_id)
     && typeof restart.genesis_hash === "string"
     && restart.genesis_hash.length > 0
     && /^[0-9a-f]{40}$/.test(restart.repository_head)
@@ -276,7 +348,7 @@ export const liveChainIsPresentable = (event) => {
     && restart.outcome_mints.every((address, index) => address === event.accounts[index + 2].address)
     && restart.public_only === true
     && restart.signer_material === "not exported"
-    && restart.restart_capability === "read-only rediscovery while the owned child is live; transaction continuity not yet available";
+    && restart.restart_capability === "read-only rediscovery while the daemon-owned child is live; local signer continuity is owner-scoped but transaction admission is not yet exposed";
 };
 
 export const liveResultIsPresentable = (event, chain = null) => {
@@ -545,6 +617,26 @@ export const createStore = () => {
           break;
         }
         state.liveManifest = event;
+        break;
+      case "live-local-session-owner":
+        if (!liveOwnerIsPresentable(event)) {
+          state.fault = {
+            type: "fault",
+            text: "UNTRUSTED PROJECTION REFUSED: malformed local session owner boundary"
+          };
+          break;
+        }
+        state.liveOwner = event;
+        break;
+      case "live-local-builder-signing":
+        if (!state.liveOwner || !state.liveChain || !liveBuilderSigningIsPresentable(event, state.liveOwner, state.liveChain)) {
+          state.fault = {
+            type: "fault",
+            text: "UNTRUSTED PROJECTION REFUSED: malformed local builder/signing boundary"
+          };
+          break;
+        }
+        state.liveBuilder = event;
         break;
       case "live-real-pyth-result":
         if (!state.liveChain || !liveResultIsPresentable(event, state.liveChain)) {
