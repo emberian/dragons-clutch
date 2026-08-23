@@ -70,6 +70,10 @@ A pair query reads two locator rows and only the two grouped adjacency ranges.
 It returns the exact pair slice prefix, candidate-wide buy/sell entitled totals,
 and whether either order trades with another real counterparty or a virtual
 split/merge. It does not scan unrelated pages or unrelated witness slices.
+The bounded sealed-account reader rechecks both constant headers, both local
+locations and aggregates, every selected local edge, and direct-edge symmetry.
+It requires an unforgeable root/account read authority; no constructor exists
+until the counted-root successor and program-owner/PDA adapter join lands.
 
 Standalone decoding rechecks:
 

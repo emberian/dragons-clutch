@@ -1031,6 +1031,31 @@ pub struct IndexedPairCoverageV1 {
     sell_elsewhere: bool,
 }
 
+/// Unforgeable placeholder for a future counted-root immutable-read authority.
+///
+/// Its private fields will be populated only by the later SBF join after it
+/// authenticates both program-owned sealed PDAs and the root successor's exact
+/// plane/account bindings.  This keeps the cheap local-row reader unavailable
+/// to a live route until that trust boundary exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CountedExactIndexReadAuthorityV1 {
+    plane_id: Id32,
+    locator_account: Id32,
+    adjacency_account: Id32,
+    _private: (),
+}
+
+/// Exact sealed account bodies consumed by the bounded pair reader.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealedExactIndexPairInputV1<'a> {
+    /// Unforgeable root + account-owner/PDA read authority.
+    pub authority: CountedExactIndexReadAuthorityV1,
+    /// Exact active locator account body.
+    pub locator_body: &'a [u8],
+    /// Exact active adjacency account body.
+    pub adjacency_body: &'a [u8],
+}
+
 impl IndexedPairCoverageV1 {
     /// Active exact pair-slice prefix followed by zero padding.
     pub const fn pair_slice_indices(&self) -> &[u16; MAX_OUTCOMES] {
@@ -1573,6 +1598,257 @@ pub fn indexed_pair_coverage_v1(
         buy_elsewhere: buy.virtual_edge_count != 0 || buy.distinct_real_counterparties != 1,
         sell_elsewhere: sell.virtual_edge_count != 0 || sell.distinct_real_counterparties != 1,
     })
+}
+
+/// Read only two locator rows and two grouped adjacency ranges from sealed PDAs.
+///
+/// Full account validation belongs to one-time construction. This read still
+/// hostile-decodes both constant headers and every selected local edge, but it
+/// does not walk unrelated page locations, order directories, or slice edges.
+/// The unforgeable authority represents the later adapter's proof that both
+/// immutable accounts are program-owned canonical PDAs named by a counted root
+/// successor. There is intentionally no authority constructor today.
+pub fn indexed_pair_coverage_from_sealed_accounts_v1(
+    input: SealedExactIndexPairInputV1<'_>,
+    buy_order: u8,
+    sell_order: u8,
+) -> Result<IndexedPairCoverageV1, ExactIndexPlaneErrorV1> {
+    if input.locator_body.len() < EXACT_INDEX_COMMON_HEADER_BYTES_V1
+        || input.adjacency_body.len() < EXACT_INDEX_COMMON_HEADER_BYTES_V1
+    {
+        return Err(ExactIndexPlaneErrorV1::WrongLength);
+    }
+    let mut locator_reader = ExactReader::new(input.locator_body);
+    let locator_common = decode_common(&mut locator_reader, FROZEN_ORDER_LOCATOR_MAGIC_V1)?;
+    let mut adjacency_reader = ExactReader::new(input.adjacency_body);
+    let adjacency_common = decode_common(
+        &mut adjacency_reader,
+        CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1,
+    )?;
+    if input.locator_body.len() != locator_encoded_len(locator_common.order_count)?
+        || input.adjacency_body.len()
+            != adjacency_encoded_len(adjacency_common.order_count, adjacency_common.edge_count)?
+        || !locator_common.semantic_eq(&adjacency_common)
+        || locator_common.plane_id != input.authority.plane_id
+        || locator_common.sibling_account != input.authority.adjacency_account
+        || adjacency_common.sibling_account != input.authority.locator_account
+        || buy_order >= locator_common.order_count
+        || sell_order >= locator_common.order_count
+        || buy_order == sell_order
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    read_one_locator(input.locator_body, &locator_common, buy_order)?;
+    read_one_locator(input.locator_body, &locator_common, sell_order)?;
+    let buy = read_one_aggregate(input.adjacency_body, &adjacency_common, buy_order)?;
+    let sell = read_one_aggregate(input.adjacency_body, &adjacency_common, sell_order)?;
+    if buy.side != ExactIndexOrderSideV1::Buy || sell.side != ExactIndexOrderSideV1::Sell {
+        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+    }
+    let mut pair_slice_indices = [0u16; MAX_OUTCOMES];
+    let mut pair_outcomes = [0u8; MAX_OUTCOMES];
+    let mut pair_quantities = [0u64; MAX_OUTCOMES];
+    let (buy_pair_count, buy_elsewhere) = scan_local_edge_group(
+        input.adjacency_body,
+        &adjacency_common,
+        buy_order,
+        sell_order,
+        buy,
+        &mut pair_slice_indices,
+        &mut pair_outcomes,
+        &mut pair_quantities,
+    )?;
+    if buy_pair_count == 0 {
+        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+    }
+    let mut sell_pair_slices = [0u16; MAX_OUTCOMES];
+    let mut sell_pair_outcomes = [0u8; MAX_OUTCOMES];
+    let mut sell_pair_quantities = [0u64; MAX_OUTCOMES];
+    let (sell_pair_count, sell_elsewhere) = scan_local_edge_group(
+        input.adjacency_body,
+        &adjacency_common,
+        sell_order,
+        buy_order,
+        sell,
+        &mut sell_pair_slices,
+        &mut sell_pair_outcomes,
+        &mut sell_pair_quantities,
+    )?;
+    if buy_pair_count != sell_pair_count {
+        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+    }
+    let mut pair = 0usize;
+    while pair < usize::from(buy_pair_count) {
+        if pair_slice_indices[pair] != sell_pair_slices[pair]
+            || pair_outcomes[pair] != sell_pair_outcomes[pair]
+            || pair_quantities[pair] != sell_pair_quantities[pair]
+        {
+            return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+        }
+        pair += 1;
+    }
+    Ok(IndexedPairCoverageV1 {
+        pair_slice_indices,
+        pair_slice_count: buy_pair_count,
+        buy_total: buy.total_quantity,
+        sell_total: sell.total_quantity,
+        buy_elsewhere,
+        sell_elsewhere,
+    })
+}
+
+fn read_one_locator(
+    body: &[u8],
+    common: &ExactIndexCommonV1,
+    order: u8,
+) -> Result<FrozenOrderLocatorRowV1, ExactIndexPlaneErrorV1> {
+    let relative = usize::from(order)
+        .checked_mul(FROZEN_ORDER_LOCATOR_ROW_BYTES_V1)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    let at = EXACT_INDEX_COMMON_HEADER_BYTES_V1
+        .checked_add(relative)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    let mut reader = ExactReader { input: body, at };
+    let row = FrozenOrderLocatorRowV1 {
+        page_index: reader.u16()?,
+        page_slot: reader.u8()?,
+    };
+    reader.reserved(1)?;
+    if usize::from(row.page_index) >= usize::from(common.page_count)
+        || row.page_slot >= common.page_slot_counts[usize::from(row.page_index)]
+    {
+        return Err(ExactIndexPlaneErrorV1::InvalidLocator);
+    }
+    Ok(row)
+}
+
+fn read_one_aggregate(
+    body: &[u8],
+    common: &ExactIndexCommonV1,
+    order: u8,
+) -> Result<CandidateOrderAggregateRowV1, ExactIndexPlaneErrorV1> {
+    let relative = usize::from(order)
+        .checked_mul(CANDIDATE_ORDER_AGGREGATE_ROW_BYTES_V1)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    let at = EXACT_INDEX_COMMON_HEADER_BYTES_V1
+        .checked_add(relative)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    let mut reader = ExactReader { input: body, at };
+    let row = decode_aggregate(&mut reader)?;
+    let end = row
+        .first_edge
+        .checked_add(row.edge_count)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    if end > common.edge_count || row.entitled_quantity != row.total_quantity {
+        return Err(ExactIndexPlaneErrorV1::AggregateMismatch);
+    }
+    Ok(row)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_local_edge_group(
+    body: &[u8],
+    common: &ExactIndexCommonV1,
+    owner_order: u8,
+    selected_counterparty: u8,
+    aggregate: CandidateOrderAggregateRowV1,
+    pair_slices: &mut [u16; MAX_OUTCOMES],
+    pair_outcomes: &mut [u8; MAX_OUTCOMES],
+    pair_quantities: &mut [u64; MAX_OUTCOMES],
+) -> Result<(u8, bool), ExactIndexPlaneErrorV1> {
+    let aggregate_tail = usize::from(common.order_count)
+        .checked_mul(CANDIDATE_ORDER_AGGREGATE_ROW_BYTES_V1)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    let edges_at = EXACT_INDEX_COMMON_HEADER_BYTES_V1
+        .checked_add(aggregate_tail)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    let end = aggregate
+        .first_edge
+        .checked_add(aggregate.edge_count)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    let mut cursor = aggregate.first_edge;
+    let mut prior_slice = None;
+    let mut total = 0u64;
+    let mut pair_count = 0usize;
+    let mut elsewhere = false;
+    let mut distinct_seen = [false; MAX_ORDERS];
+    let mut distinct_real = 0u16;
+    let mut virtual_count = 0u16;
+    while cursor < end {
+        let relative = usize::from(cursor)
+            .checked_mul(CANDIDATE_ORDER_SLICE_EDGE_BYTES_V1)
+            .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+        let at = edges_at
+            .checked_add(relative)
+            .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+        let mut reader = ExactReader { input: body, at };
+        let edge = decode_edge(&mut reader)?;
+        if edge.quantity == 0
+            || edge.side != aggregate.side
+            || edge.outcome >= common.outcome_count
+            || edge.slice_index >= common.slice_count
+            || prior_slice.is_some_and(|prior| edge.slice_index <= prior)
+        {
+            return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+        }
+        match (aggregate.side, edge.counterparty_kind) {
+            (ExactIndexOrderSideV1::Buy, ExactIndexCounterpartyV1::Order)
+            | (ExactIndexOrderSideV1::Sell, ExactIndexCounterpartyV1::Order) => {
+                if edge.counterparty_order >= common.order_count
+                    || edge.counterparty_order == owner_order
+                {
+                    return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+                }
+                let counterparty = usize::from(edge.counterparty_order);
+                if !distinct_seen[counterparty] {
+                    distinct_seen[counterparty] = true;
+                    distinct_real = distinct_real
+                        .checked_add(1)
+                        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+                }
+                if edge.counterparty_order == selected_counterparty {
+                    if pair_count >= usize::from(common.outcome_count)
+                        || pair_count >= MAX_OUTCOMES
+                    {
+                        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+                    }
+                    pair_slices[pair_count] = edge.slice_index;
+                    pair_outcomes[pair_count] = edge.outcome;
+                    pair_quantities[pair_count] = edge.quantity;
+                    pair_count += 1;
+                } else {
+                    elsewhere = true;
+                }
+            }
+            (ExactIndexOrderSideV1::Buy, ExactIndexCounterpartyV1::Split)
+            | (ExactIndexOrderSideV1::Sell, ExactIndexCounterpartyV1::Merge) => {
+                if edge.counterparty_order != 0 {
+                    return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+                }
+                virtual_count = virtual_count
+                    .checked_add(1)
+                    .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+                elsewhere = true;
+            }
+            _ => return Err(ExactIndexPlaneErrorV1::InvalidAdjacency),
+        }
+        total = total
+            .checked_add(edge.quantity)
+            .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+        prior_slice = Some(edge.slice_index);
+        cursor = cursor
+            .checked_add(1)
+            .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    }
+    if total != aggregate.total_quantity
+        || distinct_real != aggregate.distinct_real_counterparties
+        || virtual_count != aggregate.virtual_edge_count
+    {
+        return Err(ExactIndexPlaneErrorV1::AggregateMismatch);
+    }
+    let pair_count = u8::try_from(pair_count)
+        .map_err(|_| ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    Ok((pair_count, elsewhere))
 }
 
 fn count_order_edge(
@@ -2536,6 +2812,22 @@ mod tests {
         assert_eq!(coverage.sell_total(), 7);
         assert!(!coverage.buy_elsewhere());
         assert!(!coverage.sell_elsewhere());
+        let sealed = indexed_pair_coverage_from_sealed_accounts_v1(
+            SealedExactIndexPairInputV1 {
+                authority: CountedExactIndexReadAuthorityV1 {
+                    plane_id: locator.plane_id(),
+                    locator_account,
+                    adjacency_account,
+                    _private: (),
+                },
+                locator_body: &locator_bytes,
+                adjacency_body: &adjacency_bytes,
+            },
+            0,
+            1,
+        )
+        .expect("bounded sealed read");
+        assert_eq!(sealed, coverage);
     }
 
     #[test]
@@ -2606,6 +2898,58 @@ mod tests {
         assert_eq!(
             adjacency.validate(),
             Err(ExactIndexPlaneErrorV1::AggregateMismatch)
+        );
+    }
+
+    #[test]
+    fn bounded_sealed_read_refuses_local_edge_tampering_and_wrong_root_authority() {
+        let (locator_account, locator, adjacency_account, adjacency) = pair();
+        let mut locator_bytes = vec![0; locator.encoded_len().expect("locator width")];
+        locator.encode(&mut locator_bytes).expect("locator encode");
+        let mut adjacency_bytes = vec![0; adjacency.encoded_len().expect("adjacency width")];
+        adjacency
+            .encode(&mut adjacency_bytes)
+            .expect("adjacency encode");
+        let authority = CountedExactIndexReadAuthorityV1 {
+            plane_id: locator.plane_id(),
+            locator_account,
+            adjacency_account,
+            _private: (),
+        };
+        let first_edge_quantity = EXACT_INDEX_COMMON_HEADER_BYTES_V1
+            + (2 * CANDIDATE_ORDER_AGGREGATE_ROW_BYTES_V1)
+            + 8;
+        adjacency_bytes[first_edge_quantity] = 8;
+        assert_eq!(
+            indexed_pair_coverage_from_sealed_accounts_v1(
+                SealedExactIndexPairInputV1 {
+                    authority,
+                    locator_body: &locator_bytes,
+                    adjacency_body: &adjacency_bytes,
+                },
+                0,
+                1,
+            ),
+            Err(ExactIndexPlaneErrorV1::AggregateMismatch)
+        );
+
+        adjacency
+            .encode(&mut adjacency_bytes)
+            .expect("restore adjacency");
+        assert_eq!(
+            indexed_pair_coverage_from_sealed_accounts_v1(
+                SealedExactIndexPairInputV1 {
+                    authority: CountedExactIndexReadAuthorityV1 {
+                        plane_id: id(60),
+                        ..authority
+                    },
+                    locator_body: &locator_bytes,
+                    adjacency_body: &adjacency_bytes,
+                },
+                0,
+                1,
+            ),
+            Err(ExactIndexPlaneErrorV1::BindingMismatch)
         );
     }
 
