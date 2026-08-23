@@ -293,16 +293,30 @@ fn operator_result_event(result: &Value) -> Result<Value> {
         "live Operator result did not settle the signed trade",
     )?;
     let terminal = required_value(lifecycle, "terminal", "campaign lifecycle")?;
-    let rollback = required_value(result, "out_of_order_boundary_rollback", "campaign result")?;
+    let liabilities = required_value(terminal, "liabilities", "campaign terminal")?;
     require(
-        rollback.get("ok").and_then(Value::as_bool) == Some(true)
-            && rollback
-                .get("skipped_update_absent_after_refusal")
-                .and_then(Value::as_bool)
-                == Some(true)
-            && rollback.get("snapshots_equal").and_then(Value::as_bool) == Some(true),
-        "live Operator result did not retain the complete out-of-order rollback closure",
+        liabilities.get("all_zero").and_then(Value::as_bool) == Some(true),
+        "live Operator result did not retain the complete zero-liability closure",
     )?;
+    let wrong_config_rollback = required_value(result, "wrong_config_rollback", "campaign result")?;
+    let wrong_feed_rollback = required_value(result, "wrong_feed_rollback", "campaign result")?;
+    let out_of_order_rollback =
+        required_value(result, "out_of_order_boundary_rollback", "campaign result")?;
+    for (role, rollback) in [
+        ("wrong-config", wrong_config_rollback),
+        ("wrong-feed", wrong_feed_rollback),
+        ("out-of-order", out_of_order_rollback),
+    ] {
+        require(
+            rollback.get("ok").and_then(Value::as_bool) == Some(true)
+                && rollback
+                    .get("ephemeral_update_absent_after_refusal")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && rollback.get("snapshots_equal").and_then(Value::as_bool) == Some(true),
+            format!("live Operator result did not retain the complete {role} rollback closure"),
+        )?;
+    }
     require(
         result.get("sealed").and_then(Value::as_bool) == Some(true),
         "live Operator result did not seal the source archive",
@@ -322,7 +336,9 @@ fn operator_result_event(result: &Value) -> Result<Value> {
         "resolved_payout": required_value(result, "resolved_payout", "campaign result")?,
         "archive_records": required_value(result, "archive_records", "campaign result")?,
         "source_archive": required_value(result, "source_archive", "campaign result")?,
-        "out_of_order_boundary_rollback": rollback,
+        "wrong_config_rollback": wrong_config_rollback,
+        "wrong_feed_rollback": wrong_feed_rollback,
+        "out_of_order_boundary_rollback": out_of_order_rollback,
         "trade_status": "settled",
         "collateral_atoms": required_string(lifecycle, "collateral_atoms", "campaign lifecycle")?,
         "terminal": terminal,
@@ -3966,9 +3982,23 @@ mod argument_tests {
                 "window_id": "3".repeat(64),
                 "record_count": 2,
             },
+            "wrong_config_rollback": {
+                "ok": true,
+                "ephemeral_update_absent_after_refusal": true,
+                "snapshots_equal": true,
+                "before_snapshot_sha256": snapshot,
+                "after_snapshot_sha256": snapshot,
+            },
+            "wrong_feed_rollback": {
+                "ok": true,
+                "ephemeral_update_absent_after_refusal": true,
+                "snapshots_equal": true,
+                "before_snapshot_sha256": snapshot,
+                "after_snapshot_sha256": snapshot,
+            },
             "out_of_order_boundary_rollback": {
                 "ok": true,
-                "skipped_update_absent_after_refusal": true,
+                "ephemeral_update_absent_after_refusal": true,
                 "snapshots_equal": true,
                 "before_snapshot_sha256": snapshot,
                 "after_snapshot_sha256": snapshot,
@@ -3980,6 +4010,7 @@ mod argument_tests {
                     "buyer_token_atoms": "76",
                     "seller_token_atoms": "52",
                     "hoard_token_atoms": "0",
+                    "liabilities": {"all_zero": true},
                 },
             },
         });
@@ -3989,6 +4020,9 @@ mod argument_tests {
         assert_eq!(published["step_count"], "56");
         assert_eq!(published["resolved_payout"], "1");
         assert_eq!(published["archive_records"][0]["index"], "0");
+        assert_eq!(published["wrong_config_rollback"]["ok"], true);
+        assert_eq!(published["wrong_feed_rollback"]["ok"], true);
+        assert_eq!(published["terminal"]["liabilities"]["all_zero"], true);
         assert_eq!(
             published["source_archive"]["data_len"],
             u64::MAX.to_string()

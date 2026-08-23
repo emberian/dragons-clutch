@@ -65,9 +65,37 @@ const identityCard = (state) => {
   return section;
 };
 
+const chainCard = (chain) => {
+  const section = el("section", "card");
+  const heading = el("div", "card-heading");
+  heading.append(el("h2", null, "Chain-discovered terminal roots"), chip("RPC OBSERVED"));
+  section.append(
+    heading,
+    fields("", [
+      ["Context slot", numeric(chain.context_slot)],
+      ["Root brackets", numeric(chain.attempts)],
+      ["Root", digest(chain.root_address)],
+      ["Program owner", digest(chain.program_id)],
+      ["Token owner", digest(chain.token_program)],
+      ["Accounts", numeric(String(chain.accounts.length))]
+    ]),
+    row(
+      "callout callout-warn",
+      el("strong", null, "PUBLIC RESTART DESCRIPTOR / READ-ONLY ONLY"),
+      el("span", null, chain.restart_descriptor.restart_capability)
+    ),
+    el("p", "muted", "The daemon fetched these complete envelopes in one same-context batch bracketed by the unchanged SourceArchive root. It checked owners, executability, exact lengths/codecs, body hashes, and zero mint/supply state. The descriptor contains addresses and identities only: signer material is not exported.")
+  );
+  return section;
+};
+
 const sourceCard = (result, evidenceScope) => {
   const archive = result.source_archive;
-  const rollback = result.out_of_order_boundary_rollback;
+  const rollbacks = [
+    ["WRONG CONFIG", result.wrong_config_rollback],
+    ["WRONG FEED", result.wrong_feed_rollback],
+    ["OUT OF ORDER", result.out_of_order_boundary_rollback],
+  ];
   const section = el("section", "card");
   const heading = el("div", "card-heading");
   heading.append(el("h2", null, "Authenticated two-boundary source"), chip(evidenceScope));
@@ -104,19 +132,20 @@ const sourceCard = (result, evidenceScope) => {
     body.append(line);
   });
   table.append(head, body);
-  section.append(
-    table,
-    row(
+  section.append(table);
+  rollbacks.forEach(([label, rollback]) => {
+    section.append(row(
       "callout",
-      el("strong", null, "OUT-OF-ORDER REFUSAL CLOSED"),
-      el("span", null, `Skipped receiver account ${rollback.skipped_update_account} remained absent; archive and treasury full-state hashes are equal at ${rollback.before_snapshot_sha256}.`)
-    )
-  );
+      el("strong", null, `${label} REFUSAL CLOSED`),
+      el("span", null, `Ephemeral receiver account ${rollback.ephemeral_update_account} remained absent; the SourceArchive and receiver treasury full-state snapshot is unchanged at ${rollback.before_snapshot_sha256}.`)
+    ));
+  });
   return section;
 };
 
 const terminalCard = (result) => {
   const terminal = result.terminal;
+  const liabilities = terminal.liabilities;
   const section = el("section", "card");
   section.append(
     el("h2", null, "Terminal conservation"),
@@ -127,9 +156,13 @@ const terminalCard = (result) => {
       ["Hoard token residue", numeric(terminal.hoard_token_atoms)],
       ["Hoard liability residue", numeric(terminal.hoard_collateral_atoms)],
       ["Buyer cash residue", numeric(terminal.buyer_position_cash_atoms)],
-      ["Seller cash residue", numeric(terminal.seller_position_cash_atoms)]
+      ["Seller cash residue", numeric(terminal.seller_position_cash_atoms)],
+      ["SupplyLedger", digest(liabilities.supply_ledger.address)],
+      ["Internal supply", liabilities.supply_ledger.internal_supply.map(numeric).join(" / ")],
+      ["External supply", liabilities.supply_ledger.external_supply.map(numeric).join(" / ")],
+      ["Mint supplies", liabilities.outcome_mints.map((mint) => numeric(mint.supply)).join(" / ")]
     ]),
-    el("p", "muted", "These are live producer-validated terminal account facts from the same child process. The page does not independently query RPC and does not promote them into retained evidence.")
+    el("p", "muted", "These are live producer-validated terminal account facts from the same child process, including zero internal, external-ledger, aggregate, and Token-2022 mint liabilities. The page does not independently query RPC and does not promote them into retained evidence.")
   );
   return section;
 };
@@ -152,6 +185,7 @@ const outputCard = (state) => {
 
 export const renderLivePyth = (state) => {
   const cards = [phaseCard(state), identityCard(state)];
+  if (state.liveChain) cards.push(chainCard(state.liveChain));
   if (state.liveResult) {
     const scope = state.identity?.evidence_scope === "SBF_EXECUTED" ? "SBF_EXECUTED" : "IN_FLIGHT";
     cards.push(sourceCard(state.liveResult, scope), terminalCard(state.liveResult));

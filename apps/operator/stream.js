@@ -32,6 +32,7 @@ const EMPTY = Object.freeze({
   pyth: null,
   liveRun: null,
   liveManifest: null,
+  liveChain: null,
   liveResult: null,
   liveOutput: [],
   boot: [],
@@ -55,10 +56,21 @@ const CANONICAL_INTEGER = /^(0|[1-9][0-9]*)$/;
 const LIVE_RUN_SCHEMA = "dragons-clutch/operator/live-real-pyth-run/v1";
 const LIVE_MANIFEST_SCHEMA = "dragons-clutch/operator/live-real-pyth-manifest/v1";
 const LIVE_RESULT_SCHEMA = "dragons-clutch/operator/live-real-pyth-result/v1";
+const LIVE_CHAIN_SCHEMA = "dragons-clutch/operator/live-real-pyth-chain-discovery/v1";
 const LIVE_CLAIM = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
 const LIVE_CAMPAIGN_MODE = "joined-multiboundary-v1";
 const LIVE_TRANSCRIPT_SCHEMA = "dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1";
 const LOWER_HEX_64 = /^[0-9a-f]{64}$/;
+const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const SOLANA_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
+const ROLLBACK_DOMAIN = "dragons-clutch/local-real-pyth/rollback-snapshot/v1";
+const ROLLBACK_ENCODING = "domain || target_count:u64-le || repeated(key:32 || present:u8 || if-present(lamports:u64-le || owner:32 || executable:u8 || data_len:u64-le || data))";
+const hasExactKeys = (value, keys) => Boolean(
+  value
+  && typeof value === "object"
+  && !Array.isArray(value)
+  && Object.keys(value).sort().join("\0") === [...keys].sort().join("\0")
+);
 const eventUsesExactDecimalTransport = (value) => {
   if (typeof value === "number") return false;
   if (Array.isArray(value)) return value.every(eventUsesExactDecimalTransport);
@@ -114,10 +126,170 @@ const liveManifestIsPresentable = (event) => Boolean(
   && event.genesis_prerequisite_roles.every((role) => typeof role === "string" && role.length > 0)
 );
 
-export const liveResultIsPresentable = (event) => {
+const liveRollbackIsPresentable = (rollback, kind, label) => {
+  if (!(
+    hasExactKeys(rollback, [
+      "ok", "attempt_kind", "attempt_identity", "ephemeral_update_account",
+      "ephemeral_update_absent_after_refusal", "refusal_step_label", "refusal_signature",
+      "instruction_error", "snapshot_encoding", "snapshot_domain", "watched_accounts",
+      "before_snapshot_sha256", "after_snapshot_sha256", "snapshots_equal",
+    ])
+    && rollback.ok === true
+    && rollback.attempt_kind === kind
+    && SOLANA_ADDRESS.test(rollback.ephemeral_update_account)
+    && rollback.ephemeral_update_absent_after_refusal === true
+    && rollback.refusal_step_label === label
+    && SOLANA_SIGNATURE.test(rollback.refusal_signature)
+    && hasExactKeys(rollback.instruction_error, ["instruction_index", "custom_code", "custom_code_hex"])
+    && rollback.instruction_error.instruction_index === "2"
+    && rollback.instruction_error.custom_code === "122"
+    && rollback.instruction_error.custom_code_hex === "0x7a"
+    && rollback.snapshot_encoding === ROLLBACK_ENCODING
+    && rollback.snapshot_domain === ROLLBACK_DOMAIN
+    && Array.isArray(rollback.watched_accounts)
+    && rollback.watched_accounts.length === 2
+    && rollback.watched_accounts.every((row, index) => (
+      hasExactKeys(row, ["role", "address"])
+      && row.role === ["source_archive", "receiver_treasury"][index]
+      && SOLANA_ADDRESS.test(row.address)
+    ))
+    && rollback.watched_accounts[0].address !== rollback.watched_accounts[1].address
+    && LOWER_HEX_64.test(rollback.before_snapshot_sha256)
+    && rollback.before_snapshot_sha256 === rollback.after_snapshot_sha256
+    && rollback.snapshots_equal === true
+  )) return false;
+  const identity = rollback.attempt_identity;
+  if (kind === "wrong_config") {
+    return hasExactKeys(identity, ["attempted_config_account", "registered_config_account"])
+      && SOLANA_ADDRESS.test(identity.attempted_config_account)
+      && SOLANA_ADDRESS.test(identity.registered_config_account)
+      && identity.attempted_config_account !== identity.registered_config_account;
+  }
+  if (kind === "wrong_feed") {
+    return hasExactKeys(identity, ["attempted_provider_feed_id", "registered_provider_feed_id", "verified_vaa_account"])
+      && LOWER_HEX_64.test(identity.attempted_provider_feed_id)
+      && LOWER_HEX_64.test(identity.registered_provider_feed_id)
+      && identity.attempted_provider_feed_id !== identity.registered_provider_feed_id
+      && SOLANA_ADDRESS.test(identity.verified_vaa_account);
+  }
+  return kind === "out_of_order_boundary"
+    && hasExactKeys(identity, ["attempted_boundary_index", "expected_next_boundary_index", "attempted_publish_time", "expected_next_publish_time"])
+    && identity.attempted_boundary_index === "1"
+    && identity.expected_next_boundary_index === "0"
+    && CANONICAL_INTEGER.test(identity.attempted_publish_time)
+    && CANONICAL_INTEGER.test(identity.expected_next_publish_time)
+    && BigInt(identity.attempted_publish_time) === BigInt(identity.expected_next_publish_time) + 60n;
+};
+
+const liveLiabilitiesArePresentable = (terminal) => {
+  const liabilities = terminal?.liabilities;
+  const ledger = liabilities?.supply_ledger;
+  const zeroVector = (vector) => Array.isArray(vector)
+    && vector.length === 4
+    && vector.every((atom) => atom === "0");
+  return Boolean(
+    hasExactKeys(liabilities, ["all_zero", "supply_ledger", "outcome_mints"])
+    && liabilities.all_zero === true
+    && hasExactKeys(ledger, ["address", "outcome_count", "internal_supply", "external_supply", "aggregate_supply"])
+    && SOLANA_ADDRESS.test(ledger.address)
+    && ledger.outcome_count === "4"
+    && zeroVector(ledger.internal_supply)
+    && zeroVector(ledger.external_supply)
+    && zeroVector(ledger.aggregate_supply)
+    && Array.isArray(liabilities.outcome_mints)
+    && liabilities.outcome_mints.length === 4
+    && new Set(liabilities.outcome_mints.map((mint) => mint.address)).size === 4
+    && liabilities.outcome_mints.every((mint, index) => (
+      hasExactKeys(mint, ["outcome_index", "address", "supply"])
+      && mint.outcome_index === String(index)
+      && SOLANA_ADDRESS.test(mint.address)
+      && mint.supply === "0"
+    ))
+  );
+};
+
+export const liveChainIsPresentable = (event) => {
+  if (!(
+    eventUsesExactDecimalTransport(event)
+    && hasExactKeys(event, [
+      "type", "schema", "mode", "authority", "context_slot", "attempts",
+      "root_role", "root_address", "program_id", "token_program", "accounts",
+      "restart_descriptor",
+    ])
+    && event.type === "live-real-pyth-chain-discovery"
+    && event.schema === LIVE_CHAIN_SCHEMA
+    && event.mode === "pyth-live"
+    && event.authority === "loopback RPC graph-root-bracketed same-context account envelopes"
+    && CANONICAL_INTEGER.test(event.context_slot)
+    && /^(1|2|3)$/.test(event.attempts)
+    && event.root_role === "source_archive"
+    && SOLANA_ADDRESS.test(event.root_address)
+    && SOLANA_ADDRESS.test(event.program_id)
+    && SOLANA_ADDRESS.test(event.token_program)
+    && Array.isArray(event.accounts)
+    && event.accounts.length === 6
+  )) return false;
+  const expectedRoles = [
+    "source_archive", "supply_ledger", "outcome_mint.0", "outcome_mint.1",
+    "outcome_mint.2", "outcome_mint.3",
+  ];
+  const addresses = new Set();
+  const accountsValid = event.accounts.every((account, index) => (
+    hasExactKeys(account, [
+      "role", "address", "address_source", "owner", "executable", "lamports",
+      "data_len", "body_sha256", "account_schema",
+    ])
+    && account.role === expectedRoles[index]
+    && SOLANA_ADDRESS.test(account.address)
+    && !addresses.has(account.address)
+    && (addresses.add(account.address) || true)
+    && account.address_source === "admitted-live-result"
+    && account.owner === (index < 2 ? event.program_id : event.token_program)
+    && account.executable === false
+    && CANONICAL_INTEGER.test(account.lamports)
+    && account.data_len === (index === 0 ? "2560" : index === 1 ? "333" : "82")
+    && LOWER_HEX_64.test(account.body_sha256)
+    && account.account_schema === (index === 0
+      ? "source-archive-v2/exact-2560"
+      : index === 1
+        ? "supply-ledger/v2-exact"
+        : "token-2022-base-mint/exact-82")
+  ));
+  const restart = event.restart_descriptor;
+  return accountsValid
+    && event.accounts[0].address === event.root_address
+    && hasExactKeys(restart, [
+      "schema", "genesis_hash", "repository_head", "rpc_url", "program_id",
+      "source_archive", "supply_ledger", "outcome_mints", "public_only",
+      "signer_material", "restart_capability",
+    ])
+    && restart.schema === "dragons-clutch/operator/local-session-restart-descriptor/v1"
+    && typeof restart.genesis_hash === "string"
+    && restart.genesis_hash.length > 0
+    && /^[0-9a-f]{40}$/.test(restart.repository_head)
+    && /^http:\/\/127\.0\.0\.1:[0-9]+$/.test(restart.rpc_url)
+    && restart.program_id === event.program_id
+    && restart.source_archive === event.accounts[0].address
+    && restart.supply_ledger === event.accounts[1].address
+    && Array.isArray(restart.outcome_mints)
+    && restart.outcome_mints.length === 4
+    && restart.outcome_mints.every((address, index) => address === event.accounts[index + 2].address)
+    && restart.public_only === true
+    && restart.signer_material === "not exported"
+    && restart.restart_capability === "read-only rediscovery while the owned child is live; transaction continuity not yet available";
+};
+
+export const liveResultIsPresentable = (event, chain = null) => {
   if (!(
     event
     && eventUsesExactDecimalTransport(event)
+    && hasExactKeys(event, [
+      "type", "schema", "claim", "campaign_mode", "transcript_schema",
+      "retained_transcript", "genesis_hash", "boundary_count", "step_count",
+      "sealed", "resolved_payout", "archive_records", "source_archive",
+      "wrong_config_rollback", "wrong_feed_rollback", "out_of_order_boundary_rollback",
+      "trade_status", "collateral_atoms", "terminal",
+    ])
     && event.type === "live-real-pyth-result"
     && event.schema === LIVE_RESULT_SCHEMA
     && event.claim === LIVE_CLAIM
@@ -136,27 +308,15 @@ export const liveResultIsPresentable = (event) => {
     && event.source_archive.executable === false
     && event.source_archive.data_len === "2560"
     && event.source_archive.record_count === "2"
-    && typeof event.source_archive.key === "string"
-    && event.source_archive.key.length > 0
-    && typeof event.source_archive.owner === "string"
-    && event.source_archive.owner.length > 0
+    && SOLANA_ADDRESS.test(event.source_archive.key)
+    && SOLANA_ADDRESS.test(event.source_archive.owner)
     && LOWER_HEX_64.test(event.source_archive.body_sha256)
     && LOWER_HEX_64.test(event.source_archive.page_commitment)
     && LOWER_HEX_64.test(event.source_archive.feed_id)
     && LOWER_HEX_64.test(event.source_archive.window_id)
-    && event.out_of_order_boundary_rollback
-    && event.out_of_order_boundary_rollback.ok === true
-    && event.out_of_order_boundary_rollback.skipped_update_absent_after_refusal === true
-    && typeof event.out_of_order_boundary_rollback.skipped_update_account === "string"
-    && event.out_of_order_boundary_rollback.skipped_update_account.length > 0
-    && event.out_of_order_boundary_rollback.snapshots_equal === true
-    && LOWER_HEX_64.test(event.out_of_order_boundary_rollback.before_snapshot_sha256)
-    && event.out_of_order_boundary_rollback.before_snapshot_sha256
-      === event.out_of_order_boundary_rollback.after_snapshot_sha256
-    && event.out_of_order_boundary_rollback.instruction_error
-    && event.out_of_order_boundary_rollback.instruction_error.instruction_index === "2"
-    && event.out_of_order_boundary_rollback.instruction_error.custom_code === "122"
-    && event.out_of_order_boundary_rollback.instruction_error.custom_code_hex === "0x7a"
+    && liveRollbackIsPresentable(event.wrong_config_rollback, "wrong_config", "wrong-config-post-update-plus-append-rollback")
+    && liveRollbackIsPresentable(event.wrong_feed_rollback, "wrong_feed", "wrong-feed-post-update-plus-append-rollback")
+    && liveRollbackIsPresentable(event.out_of_order_boundary_rollback, "out_of_order_boundary", "out-of-order-boundary-post-update-plus-append-rollback")
     && event.terminal
     && event.terminal.buyer_token_atoms === "76"
     && event.terminal.seller_token_atoms === "52"
@@ -169,8 +329,9 @@ export const liveResultIsPresentable = (event) => {
       event.terminal.seller_position_internal,
       event.terminal.supply_internal,
     ].every((vector) => Array.isArray(vector) && vector.length === 4 && vector.every((atom) => atom === "0"))
+    && liveLiabilitiesArePresentable(event.terminal)
   )) return false;
-  return event.archive_records.every((record, index, records) => {
+  const recordsPresentable = event.archive_records.every((record, index, records) => {
     const shape = record.index === String(index)
       && CANONICAL_INTEGER.test(record.bucket)
       && CANONICAL_INTEGER.test(record.lower)
@@ -185,6 +346,15 @@ export const liveResultIsPresentable = (event) => {
     return BigInt(record.bucket) === BigInt(previous.bucket) + 1n
       && BigInt(record.publish_time) === BigInt(previous.publish_time) + 60n;
   });
+  if (!recordsPresentable || chain === null) return recordsPresentable;
+  return liveChainIsPresentable(chain)
+    && chain.restart_descriptor.genesis_hash === event.genesis_hash
+    && chain.accounts[0].address === event.source_archive.key
+    && chain.accounts[0].body_sha256 === event.source_archive.body_sha256
+    && chain.accounts[1].address === event.terminal.liabilities.supply_ledger.address
+    && chain.accounts.slice(2).every((account, index) => (
+      account.address === event.terminal.liabilities.outcome_mints[index].address
+    ));
 };
 
 const validatedSnapshotStates = (event) => {
@@ -377,7 +547,7 @@ export const createStore = () => {
         state.liveManifest = event;
         break;
       case "live-real-pyth-result":
-        if (!liveResultIsPresentable(event)) {
+        if (!state.liveChain || !liveResultIsPresentable(event, state.liveChain)) {
           state.fault = {
             type: "fault",
             text: "UNTRUSTED PROJECTION REFUSED: malformed live real-Pyth result"
@@ -385,6 +555,16 @@ export const createStore = () => {
           break;
         }
         state.liveResult = event;
+        break;
+      case "live-real-pyth-chain-discovery":
+        if (!liveChainIsPresentable(event)) {
+          state.fault = {
+            type: "fault",
+            text: "UNTRUSTED PROJECTION REFUSED: malformed live chain discovery"
+          };
+          break;
+        }
+        state.liveChain = event;
         break;
       case "live-output":
         if (

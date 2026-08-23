@@ -288,6 +288,26 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
   assert.doesNotMatch(pyth, /\bact\s*\(|fetch\s*\(|EventSource|signTransaction|sendTransaction/);
 });
 
+const liveRollback = (kind, label, identity, ephemeral) => ({
+  ok: true,
+  attempt_kind: kind,
+  attempt_identity: identity,
+  ephemeral_update_account: ephemeral,
+  ephemeral_update_absent_after_refusal: true,
+  refusal_step_label: label,
+  refusal_signature: "3".repeat(88),
+  instruction_error: { instruction_index: "2", custom_code: "122", custom_code_hex: "0x7a" },
+  snapshot_encoding: "domain || target_count:u64-le || repeated(key:32 || present:u8 || if-present(lamports:u64-le || owner:32 || executable:u8 || data_len:u64-le || data))",
+  snapshot_domain: "dragons-clutch/local-real-pyth/rollback-snapshot/v1",
+  watched_accounts: [
+    { role: "source_archive", address: "3R9qSxN4uBLeubEyUvLGmTGkLQTPAXyP5Dk72H4Ybx9z" },
+    { role: "receiver_treasury", address: "8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh" },
+  ],
+  before_snapshot_sha256: "e".repeat(64),
+  after_snapshot_sha256: "e".repeat(64),
+  snapshots_equal: true,
+});
+
 const liveResult = () => ({
   type: "live-real-pyth-result",
   schema: "dragons-clutch/operator/live-real-pyth-result/v1",
@@ -305,8 +325,8 @@ const liveResult = () => ({
     { index: "1", bucket: "11", lower: "998", upper: "1002", sequence: "180", write_slot: "21", publish_time: "180" },
   ],
   source_archive: {
-    key: "archive-address",
-    owner: "clutch-program",
+    key: "3R9qSxN4uBLeubEyUvLGmTGkLQTPAXyP5Dk72H4Ybx9z",
+    owner: "p2YiDXJNN89JVt4BZmZo6TJQBfCNfHTgJZ8Y5F6LnMZ",
     executable: false,
     data_len: "2560",
     body_sha256: "a".repeat(64),
@@ -315,16 +335,36 @@ const liveResult = () => ({
     window_id: "d".repeat(64),
     record_count: "2",
   },
-  out_of_order_boundary_rollback: {
-    ok: true,
-    skipped_update_account: "skipped-receiver-account",
-    skipped_update_absent_after_refusal: true,
-    instruction_error: { instruction_index: "2", custom_code: "122", custom_code_hex: "0x7a" },
-    watched_accounts: [],
-    before_snapshot_sha256: "e".repeat(64),
-    after_snapshot_sha256: "e".repeat(64),
-    snapshots_equal: true,
-  },
+  wrong_config_rollback: liveRollback(
+    "wrong_config",
+    "wrong-config-post-update-plus-append-rollback",
+    {
+      attempted_config_account: "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+      registered_config_account: "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+    },
+    "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+  ),
+  wrong_feed_rollback: liveRollback(
+    "wrong_feed",
+    "wrong-feed-post-update-plus-append-rollback",
+    {
+      attempted_provider_feed_id: "9".repeat(64),
+      registered_provider_feed_id: "a".repeat(64),
+      verified_vaa_account: "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+    },
+    "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+  ),
+  out_of_order_boundary_rollback: liveRollback(
+    "out_of_order_boundary",
+    "out-of-order-boundary-post-update-plus-append-rollback",
+    {
+      attempted_boundary_index: "1",
+      expected_next_boundary_index: "0",
+      attempted_publish_time: "180",
+      expected_next_publish_time: "120",
+    },
+    "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+  ),
   trade_status: "settled",
   collateral_atoms: "128",
   terminal: {
@@ -337,6 +377,22 @@ const liveResult = () => ({
     hoard_token_atoms: "0",
     buyer_token_atoms: "76",
     seller_token_atoms: "52",
+    liabilities: {
+      all_zero: true,
+      supply_ledger: {
+        address: "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
+        outcome_count: "4",
+        internal_supply: ["0", "0", "0", "0"],
+        external_supply: ["0", "0", "0", "0"],
+        aggregate_supply: ["0", "0", "0", "0"],
+      },
+      outcome_mints: [
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX",
+        "9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x",
+        "8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh",
+      ].map((address, outcome_index) => ({ outcome_index: String(outcome_index), address, supply: "0" })),
+    },
   },
 });
 
@@ -364,13 +420,13 @@ test("live Pyth projection admits only exact unretained terminal closure", () =>
   numericSubstitution.out_of_order_boundary_rollback.watched_accounts.push({ lamports: 1 });
   assert.equal(liveResultIsPresentable(numericSubstitution), false);
   const wrongRefusal = liveResult();
-  wrongRefusal.out_of_order_boundary_rollback.instruction_error.custom_code = "121";
+  wrongRefusal.wrong_feed_rollback.instruction_error.custom_code = "121";
   assert.equal(liveResultIsPresentable(wrongRefusal), false);
   const skippedBucket = liveResult();
   skippedBucket.archive_records[1].bucket = "12";
   assert.equal(liveResultIsPresentable(skippedBucket), false);
   const residue = liveResult();
-  residue.terminal.supply_internal[2] = "1";
+  residue.terminal.liabilities.supply_ledger.external_supply[2] = "1";
   assert.equal(liveResultIsPresentable(residue), false);
 });
 

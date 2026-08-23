@@ -7,6 +7,7 @@
 //! transaction construction, exact provider binaries, and cleanup.
 
 use crate::{http, integer, rpc, toolchain, Bus};
+use clutch_solana_layout::{account_len, registry, SupplyLedgerAccount};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader};
@@ -26,9 +27,12 @@ const TRANSCRIPT_SCHEMA: &str =
 const MANIFEST_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-manifest/v1";
 const RESULT_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-result/v1";
 const RUN_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-run/v1";
+const CHAIN_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-chain-discovery/v1";
 const EVENT_PREFIX: &str = "CLUTCH_OPERATOR_EVENT ";
 const PROFILE: &str = "NON-PRODUCTION-non-production-real-pyth-lab";
 const MAX_OUTPUT_LINE_BYTES: usize = 16 * 1024;
+const ROLLBACK_SNAPSHOT_DOMAIN: &str = "dragons-clutch/local-real-pyth/rollback-snapshot/v1";
+const ROLLBACK_SNAPSHOT_ENCODING: &str = "domain || target_count:u64-le || repeated(key:32 || present:u8 || if-present(lamports:u64-le || owner:32 || executable:u8 || data_len:u64-le || data))";
 const MULTIBOUNDARY_PASS: &str = "PASS: signed PriceGrid/policy artifacts -> CreateMarket -> two-owner funded general book -> freeze -> best valid submitted candidate verification/selection -> entitlement/settlement -> real router/receiver source window -> Resolve(1) -> two-owner redemption/withdrawal";
 
 pub struct Options {
@@ -162,6 +166,28 @@ fn lowercase_hex(value: &Value, field: &str, bytes: usize, role: &str) -> Result
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
         return Err(format!("{role}.{field} is not lowercase {bytes}-byte hex").into());
+    }
+    Ok(())
+}
+
+fn canonical_address(value: &Value, field: &str, role: &str) -> Result<[u8; 32]> {
+    let address = string(value, field, role)?;
+    let bytes = rpc::base58_decode_32(address)?;
+    if clutch_sbf_harness::base58_of(&bytes) != address {
+        return Err(format!("{role}.{field} is not canonical Solana base58").into());
+    }
+    Ok(bytes)
+}
+
+fn base58_signature_shape(value: &Value, field: &str, role: &str) -> Result<()> {
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let signature = string(value, field, role)?;
+    if !(64..=88).contains(&signature.len())
+        || !signature.bytes().all(|byte| ALPHABET.contains(&byte))
+    {
+        return Err(
+            format!("{role}.{field} is not a Solana signature-shaped base58 string").into(),
+        );
     }
     Ok(())
 }
@@ -344,6 +370,253 @@ fn validate_manifest(value: &Value) -> Result<()> {
     Ok(())
 }
 
+fn validate_rollback(
+    value: &Value,
+    role: &str,
+    expected_kind: &str,
+    expected_step: &str,
+) -> Result<()> {
+    exact_keys(
+        object(value, role)?,
+        &[
+            "ok",
+            "attempt_kind",
+            "attempt_identity",
+            "ephemeral_update_account",
+            "ephemeral_update_absent_after_refusal",
+            "refusal_step_label",
+            "refusal_signature",
+            "instruction_error",
+            "snapshot_encoding",
+            "snapshot_domain",
+            "watched_accounts",
+            "before_snapshot_sha256",
+            "after_snapshot_sha256",
+            "snapshots_equal",
+        ],
+        role,
+    )?;
+    if !boolean(value, "ok", role)?
+        || !boolean(value, "ephemeral_update_absent_after_refusal", role)?
+        || !boolean(value, "snapshots_equal", role)?
+        || string(value, "attempt_kind", role)? != expected_kind
+        || string(value, "refusal_step_label", role)? != expected_step
+        || string(value, "snapshot_domain", role)? != ROLLBACK_SNAPSHOT_DOMAIN
+        || string(value, "snapshot_encoding", role)? != ROLLBACK_SNAPSHOT_ENCODING
+    {
+        return Err(format!("{role} identity or closure differs").into());
+    }
+    let ephemeral = canonical_address(value, "ephemeral_update_account", role)?;
+    if ephemeral.iter().all(|byte| *byte == 0) {
+        return Err(format!("{role} ephemeral update account is zero").into());
+    }
+    base58_signature_shape(value, "refusal_signature", role)?;
+    lowercase_hex(value, "before_snapshot_sha256", 32, role)?;
+    lowercase_hex(value, "after_snapshot_sha256", 32, role)?;
+    if string(value, "before_snapshot_sha256", role)?
+        != string(value, "after_snapshot_sha256", role)?
+    {
+        return Err(format!("{role} full-state hashes differ").into());
+    }
+
+    let instruction = field_object(value, "instruction_error", role)?;
+    let instruction = Value::Object(instruction.clone());
+    exact_keys(
+        object(&instruction, "rollback instruction error")?,
+        &["instruction_index", "custom_code", "custom_code_hex"],
+        "rollback instruction error",
+    )?;
+    if canonical_unsigned(&instruction, "instruction_index", role)? != 2
+        || canonical_unsigned(&instruction, "custom_code", role)? != 122
+        || string(&instruction, "custom_code_hex", role)? != "0x7a"
+    {
+        return Err(format!("{role} refusal differs").into());
+    }
+
+    let watched = field_array(value, "watched_accounts", role)?;
+    if watched.len() != 2 {
+        return Err(format!("{role} does not bind two rollback targets").into());
+    }
+    let mut watched_addresses = Vec::with_capacity(2);
+    for (index, (row, expected_role)) in watched
+        .iter()
+        .zip(["source_archive", "receiver_treasury"])
+        .enumerate()
+    {
+        let row_role = format!("{role} watched account {index}");
+        exact_keys(object(row, &row_role)?, &["role", "address"], &row_role)?;
+        if string(row, "role", &row_role)? != expected_role {
+            return Err(format!("{row_role} role differs").into());
+        }
+        let address = canonical_address(row, "address", &row_role)?;
+        if address.iter().all(|byte| *byte == 0) {
+            return Err(format!("{row_role} address is zero").into());
+        }
+        watched_addresses.push(address);
+    }
+    if watched_addresses[0] == watched_addresses[1] {
+        return Err(format!("{role} aliases its watched accounts").into());
+    }
+
+    let identity = field_object(value, "attempt_identity", role)?;
+    let identity = Value::Object(identity.clone());
+    match expected_kind {
+        "wrong_config" => {
+            exact_keys(
+                object(&identity, "wrong-config identity")?,
+                &["attempted_config_account", "registered_config_account"],
+                "wrong-config identity",
+            )?;
+            let attempted = canonical_address(
+                &identity,
+                "attempted_config_account",
+                "wrong-config identity",
+            )?;
+            let registered = canonical_address(
+                &identity,
+                "registered_config_account",
+                "wrong-config identity",
+            )?;
+            if attempted == registered {
+                return Err("wrong-config rollback substitutes the registered config".into());
+            }
+        }
+        "wrong_feed" => {
+            exact_keys(
+                object(&identity, "wrong-feed identity")?,
+                &[
+                    "attempted_provider_feed_id",
+                    "registered_provider_feed_id",
+                    "verified_vaa_account",
+                ],
+                "wrong-feed identity",
+            )?;
+            lowercase_hex(
+                &identity,
+                "attempted_provider_feed_id",
+                32,
+                "wrong-feed identity",
+            )?;
+            lowercase_hex(
+                &identity,
+                "registered_provider_feed_id",
+                32,
+                "wrong-feed identity",
+            )?;
+            if string(
+                &identity,
+                "attempted_provider_feed_id",
+                "wrong-feed identity",
+            )? == string(
+                &identity,
+                "registered_provider_feed_id",
+                "wrong-feed identity",
+            )? {
+                return Err("wrong-feed rollback substitutes the registered feed".into());
+            }
+            canonical_address(&identity, "verified_vaa_account", "wrong-feed identity")?;
+        }
+        "out_of_order_boundary" => {
+            exact_keys(
+                object(&identity, "out-of-order identity")?,
+                &[
+                    "attempted_boundary_index",
+                    "expected_next_boundary_index",
+                    "attempted_publish_time",
+                    "expected_next_publish_time",
+                ],
+                "out-of-order identity",
+            )?;
+            if canonical_unsigned(
+                &identity,
+                "attempted_boundary_index",
+                "out-of-order identity",
+            )? != 1
+                || canonical_unsigned(
+                    &identity,
+                    "expected_next_boundary_index",
+                    "out-of-order identity",
+                )? != 0
+            {
+                return Err("out-of-order rollback boundary relation differs".into());
+            }
+            let attempted =
+                canonical_unsigned(&identity, "attempted_publish_time", "out-of-order identity")?;
+            let expected = canonical_unsigned(
+                &identity,
+                "expected_next_publish_time",
+                "out-of-order identity",
+            )?;
+            if expected.checked_add(60) != Some(attempted) {
+                return Err("out-of-order rollback publish-time relation differs".into());
+            }
+        }
+        _ => return Err("unsupported rollback kind".into()),
+    }
+    Ok(())
+}
+
+fn validate_liabilities(terminal: &Value) -> Result<()> {
+    let liabilities = field_object(terminal, "liabilities", "terminal lifecycle")?;
+    let liabilities = Value::Object(liabilities.clone());
+    exact_keys(
+        object(&liabilities, "terminal liabilities")?,
+        &["all_zero", "supply_ledger", "outcome_mints"],
+        "terminal liabilities",
+    )?;
+    if !boolean(&liabilities, "all_zero", "terminal liabilities")? {
+        return Err("terminal liabilities are not all zero".into());
+    }
+    let ledger = field_object(&liabilities, "supply_ledger", "terminal liabilities")?;
+    let ledger = Value::Object(ledger.clone());
+    exact_keys(
+        object(&ledger, "terminal SupplyLedger")?,
+        &[
+            "address",
+            "outcome_count",
+            "internal_supply",
+            "external_supply",
+            "aggregate_supply",
+        ],
+        "terminal SupplyLedger",
+    )?;
+    let ledger_address = canonical_address(&ledger, "address", "terminal SupplyLedger")?;
+    if ledger_address.iter().all(|byte| *byte == 0)
+        || canonical_unsigned(&ledger, "outcome_count", "terminal SupplyLedger")? != 4
+    {
+        return Err("terminal SupplyLedger identity differs".into());
+    }
+    for field in ["internal_supply", "external_supply", "aggregate_supply"] {
+        let values = field_array(&ledger, field, "terminal SupplyLedger")?;
+        if values.len() != 4 || values.iter().any(|value| value.as_str() != Some("0")) {
+            return Err(format!("terminal SupplyLedger.{field} is not exactly zero").into());
+        }
+    }
+    let mints = field_array(&liabilities, "outcome_mints", "terminal liabilities")?;
+    if mints.len() != 4 {
+        return Err("terminal liabilities do not bind four outcome mints".into());
+    }
+    let mut addresses = BTreeSet::new();
+    for (index, mint) in mints.iter().enumerate() {
+        let role = format!("terminal outcome mint {index}");
+        exact_keys(
+            object(mint, &role)?,
+            &["outcome_index", "address", "supply"],
+            &role,
+        )?;
+        if canonical_unsigned(mint, "outcome_index", &role)? != index as u128
+            || canonical_unsigned(mint, "supply", &role)? != 0
+        {
+            return Err(format!("{role} index or supply differs").into());
+        }
+        let address = canonical_address(mint, "address", &role)?;
+        if address.iter().all(|byte| *byte == 0) || !addresses.insert(address) {
+            return Err(format!("{role} address is zero or aliased").into());
+        }
+    }
+    Ok(())
+}
+
 fn validate_result(value: &Value) -> Result<()> {
     let role = "live real-Pyth result";
     exact_keys(
@@ -362,6 +635,8 @@ fn validate_result(value: &Value) -> Result<()> {
             "resolved_payout",
             "archive_records",
             "source_archive",
+            "wrong_config_rollback",
+            "wrong_feed_rollback",
             "out_of_order_boundary_rollback",
             "trade_status",
             "collateral_atoms",
@@ -474,36 +749,30 @@ fn validate_result(value: &Value) -> Result<()> {
         }
     }
 
-    let rollback = field_object(value, "out_of_order_boundary_rollback", role)?;
-    let rollback_value = Value::Object(rollback.clone());
-    if !boolean(&rollback_value, "ok", "rollback")?
-        || !boolean(
-            &rollback_value,
-            "skipped_update_absent_after_refusal",
-            "rollback",
-        )?
-        || !boolean(&rollback_value, "snapshots_equal", "rollback")?
-    {
-        return Err("live real-Pyth rollback closure differs".into());
-    }
-    let before = string(&rollback_value, "before_snapshot_sha256", "rollback")?;
-    let after = string(&rollback_value, "after_snapshot_sha256", "rollback")?;
-    lowercase_hex(&rollback_value, "before_snapshot_sha256", 32, "rollback")?;
-    lowercase_hex(&rollback_value, "after_snapshot_sha256", 32, "rollback")?;
-    if before != after {
-        return Err("live real-Pyth rollback snapshots differ".into());
-    }
-    let refusal = rollback
-        .get("instruction_error")
-        .and_then(Value::as_object)
-        .ok_or("live real-Pyth rollback has no instruction error")?;
-    let refusal_value = Value::Object(refusal.clone());
-    if canonical_unsigned(&refusal_value, "instruction_index", "rollback refusal")? != 2
-        || canonical_unsigned(&refusal_value, "custom_code", "rollback refusal")? != 122
-        || string(&refusal_value, "custom_code_hex", "rollback refusal")? != "0x7a"
-    {
-        return Err("live real-Pyth rollback refusal differs".into());
-    }
+    validate_rollback(
+        value
+            .get("wrong_config_rollback")
+            .ok_or("live result has no wrong-config rollback")?,
+        "wrong-config rollback",
+        "wrong_config",
+        "wrong-config-post-update-plus-append-rollback",
+    )?;
+    validate_rollback(
+        value
+            .get("wrong_feed_rollback")
+            .ok_or("live result has no wrong-feed rollback")?,
+        "wrong-feed rollback",
+        "wrong_feed",
+        "wrong-feed-post-update-plus-append-rollback",
+    )?;
+    validate_rollback(
+        value
+            .get("out_of_order_boundary_rollback")
+            .ok_or("live result has no out-of-order rollback")?,
+        "out-of-order rollback",
+        "out_of_order_boundary",
+        "out-of-order-boundary-post-update-plus-append-rollback",
+    )?;
 
     let terminal = field_object(value, "terminal", role)?;
     let terminal_value = Value::Object(terminal.clone());
@@ -532,6 +801,7 @@ fn validate_result(value: &Value) -> Result<()> {
             return Err(format!("terminal lifecycle.{field} is not zero").into());
         }
     }
+    validate_liabilities(&terminal_value)?;
     Ok(())
 }
 
@@ -547,6 +817,179 @@ fn parse_operator_event(line: &str) -> Result<Option<Value>> {
         other => return Err(format!("unknown live Operator event type {other:?}").into()),
     }
     Ok(Some(event))
+}
+
+fn body_sha256(data: &[u8]) -> String {
+    clutch_sbf_harness::hex_encode(solana_sha256_hasher::hash(data).to_bytes().as_slice())
+}
+
+fn required_envelope<'a>(
+    snapshot: &'a rpc::GraphSnapshotV2,
+    address: &str,
+    role: &str,
+) -> Result<&'a rpc::AccountEnvelope> {
+    snapshot
+        .accounts
+        .get(address)
+        .ok_or_else(|| format!("chain discovery omitted {role} {address}"))?
+        .as_ref()
+        .ok_or_else(|| format!("chain discovery found {role} {address} absent").into())
+}
+
+fn discovered_account(
+    role: &str,
+    address: &str,
+    envelope: &rpc::AccountEnvelope,
+    account_schema: &str,
+) -> Value {
+    json!({
+        "role": role,
+        "address": address,
+        "address_source": "admitted-live-result",
+        "owner": envelope.owner,
+        "executable": envelope.executable,
+        "lamports": envelope.lamports.to_string(),
+        "data_len": envelope.data.len().to_string(),
+        "body_sha256": body_sha256(&envelope.data),
+        "account_schema": account_schema,
+    })
+}
+
+/// Independently rediscover the terminal source/liability roots from the live
+/// bank before the campaign child is allowed to exit and remove its ledger.
+/// Addresses come from the already-admitted result; owner, executable, bytes,
+/// and one shared RPC context come from a root-bracketed chain read.
+fn discover_terminal_chain(result: &Value, manifest: &Value, options: &Options) -> Result<Value> {
+    let archive = result
+        .get("source_archive")
+        .ok_or("live result has no source archive")?;
+    let archive_address = string(archive, "key", "source archive")?;
+    let expected_program = string(manifest, "program_id", "live manifest")?;
+    if string(archive, "owner", "source archive")? != expected_program {
+        return Err("source archive result owner differs from the admitted program".into());
+    }
+    let terminal = result
+        .get("terminal")
+        .ok_or("live result has no terminal lifecycle")?;
+    let liabilities = terminal
+        .get("liabilities")
+        .ok_or("terminal lifecycle has no liabilities")?;
+    let ledger = liabilities
+        .get("supply_ledger")
+        .ok_or("terminal liabilities have no SupplyLedger")?;
+    let ledger_address = string(ledger, "address", "terminal SupplyLedger")?.to_string();
+    let mints = field_array(liabilities, "outcome_mints", "terminal liabilities")?;
+    let mint_addresses = mints
+        .iter()
+        .enumerate()
+        .map(|(index, mint)| {
+            Ok(string(mint, "address", &format!("terminal outcome mint {index}"))?.to_string())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut children = Vec::with_capacity(5);
+    children.push(ledger_address.clone());
+    children.extend(mint_addresses.iter().cloned());
+    let url = format!("http://127.0.0.1:{}", options.rpc_port);
+    let snapshot = rpc::graph_snapshot_v2(&url, archive_address, &children)?;
+
+    let archive_envelope = required_envelope(&snapshot, archive_address, "SourceArchive")?;
+    if archive_envelope.owner != expected_program
+        || archive_envelope.executable
+        || archive_envelope.data.len()
+            != clutch_sbf::source_archive_v2::SOURCE_ARCHIVE_ACCOUNT_V2_BYTES
+        || archive_envelope.data.first().copied() != Some(registry::SOURCE_ARCHIVE_V2_ACCOUNT_TAG)
+        || archive_envelope.data.get(1).copied()
+            != Some(registry::SOURCE_ARCHIVE_V2_ACCOUNT_VERSION)
+        || body_sha256(&archive_envelope.data) != string(archive, "body_sha256", "source archive")?
+    {
+        return Err("chain-discovered SourceArchive envelope or bytes differ".into());
+    }
+
+    let ledger_envelope = required_envelope(&snapshot, &ledger_address, "SupplyLedger")?;
+    if ledger_envelope.owner != expected_program
+        || ledger_envelope.executable
+        || ledger_envelope.data.len() != account_len::SUPPLY_LEDGER
+    {
+        return Err("chain-discovered SupplyLedger envelope differs".into());
+    }
+    let decoded_ledger = SupplyLedgerAccount::decode(&ledger_envelope.data)
+        .map_err(|error| format!("chain-discovered SupplyLedger does not decode: {error:?}"))?;
+    decoded_ledger
+        .validate()
+        .map_err(|error| format!("chain-discovered SupplyLedger is invalid: {error:?}"))?;
+    if decoded_ledger.outcome_count != 4
+        || decoded_ledger.internal_supply[..4]
+            .iter()
+            .chain(&decoded_ledger.external_supply[..4])
+            .any(|amount| *amount != 0)
+    {
+        return Err("chain-discovered SupplyLedger retains a liability".into());
+    }
+
+    let token_program =
+        clutch_sbf_harness::base58_of(&clutch_solana_layout::collateral::TOKEN_2022_PROGRAM);
+    let mut accounts = vec![
+        discovered_account(
+            "source_archive",
+            archive_address,
+            archive_envelope,
+            "source-archive-v2/exact-2560",
+        ),
+        discovered_account(
+            "supply_ledger",
+            &ledger_address,
+            ledger_envelope,
+            "supply-ledger/v2-exact",
+        ),
+    ];
+    for (index, address) in mint_addresses.iter().enumerate() {
+        let role = format!("outcome_mint.{index}");
+        let envelope = required_envelope(&snapshot, address, &role)?;
+        if envelope.owner != token_program || envelope.executable || envelope.data.len() != 82 {
+            return Err(format!("chain-discovered {role} envelope differs").into());
+        }
+        let observation = clutch_sbf::token::observe_mint(&envelope.data).map_err(|error| {
+            format!("chain-discovered {role} is not a canonical mint: {error:?}")
+        })?;
+        if observation.supply != 0 || observation.decimals != 0 || observation.extensions != 0 {
+            return Err(
+                format!("chain-discovered {role} retains supply or a widened shape").into(),
+            );
+        }
+        accounts.push(discovered_account(
+            &role,
+            address,
+            envelope,
+            "token-2022-base-mint/exact-82",
+        ));
+    }
+
+    Ok(json!({
+        "type": "live-real-pyth-chain-discovery",
+        "schema": CHAIN_SCHEMA,
+        "mode": MODE,
+        "authority": "loopback RPC graph-root-bracketed same-context account envelopes",
+        "context_slot": snapshot.context_slot.to_string(),
+        "attempts": snapshot.attempts.to_string(),
+        "root_role": "source_archive",
+        "root_address": archive_address,
+        "program_id": expected_program,
+        "token_program": token_program,
+        "accounts": accounts,
+        "restart_descriptor": {
+            "schema": "dragons-clutch/operator/local-session-restart-descriptor/v1",
+            "genesis_hash": string(result, "genesis_hash", "live result")?,
+            "repository_head": string(manifest, "repository_head", "live manifest")?,
+            "rpc_url": url,
+            "program_id": expected_program,
+            "source_archive": archive_address,
+            "supply_ledger": ledger_address,
+            "outcome_mints": mint_addresses,
+            "public_only": true,
+            "signer_material": "not exported",
+            "restart_capability": "read-only rediscovery while the owned child is live; transaction continuity not yet available",
+        }
+    }))
 }
 
 fn run_event(options: &Options, phase: &str) -> Value {
@@ -619,9 +1062,17 @@ fn publish_line(
                             bus.publish(&run_event(options, "running"));
                         }
                         Some("live-real-pyth-result") => {
+                            let discovery = discover_terminal_chain(
+                                &event,
+                                manifest.as_ref().ok_or(
+                                    "live child emitted a result before its admitted manifest",
+                                )?,
+                                options,
+                            )?;
                             if result.replace(event.clone()).is_some() {
                                 return Err("live child emitted a second result event".into());
                             }
+                            bus.publish(&discovery);
                             bus.publish(&event);
                             bus.publish(&run_event(options, "validating-exit"));
                         }
@@ -843,8 +1294,34 @@ mod tests {
         })
     }
 
-    fn result() -> Value {
+    fn test_address(byte: u8) -> String {
+        clutch_sbf_harness::base58_of(&[byte; 32])
+    }
+
+    fn rollback(kind: &str, label: &str, identity: Value, ephemeral: u8) -> Value {
         let snapshot = "e".repeat(64);
+        json!({
+            "ok":true,
+            "attempt_kind":kind,
+            "attempt_identity":identity,
+            "ephemeral_update_account":test_address(ephemeral),
+            "ephemeral_update_absent_after_refusal":true,
+            "refusal_step_label":label,
+            "refusal_signature":"3".repeat(88),
+            "instruction_error":{"instruction_index":"2","custom_code":"122","custom_code_hex":"0x7a"},
+            "snapshot_encoding":ROLLBACK_SNAPSHOT_ENCODING,
+            "snapshot_domain":ROLLBACK_SNAPSHOT_DOMAIN,
+            "watched_accounts":[
+                {"role":"source_archive","address":test_address(40)},
+                {"role":"receiver_treasury","address":test_address(41)}
+            ],
+            "before_snapshot_sha256":snapshot,
+            "after_snapshot_sha256":snapshot,
+            "snapshots_equal":true
+        })
+    }
+
+    fn result() -> Value {
         json!({
             "type": "live-real-pyth-result",
             "schema": RESULT_SCHEMA,
@@ -872,20 +1349,36 @@ mod tests {
                 "window_id":"8".repeat(64),
                 "record_count":"2"
             },
-            "out_of_order_boundary_rollback": {
-                "ok":true,
-                "skipped_boundary_index":"1",
-                "skipped_update_account":"8opHzTAnfzRpPEx21XtnrVTX28YQuCpAjcn1PczScKh",
-                "skipped_update_absent_after_refusal":true,
-                "refusal_signature":"signature",
-                "instruction_error":{"instruction_index":"2","custom_code":"122","custom_code_hex":"0x7a"},
-                "snapshot_encoding":"encoding",
-                "snapshot_domain":"domain",
-                "watched_accounts":[],
-                "before_snapshot_sha256":snapshot,
-                "after_snapshot_sha256":snapshot,
-                "snapshots_equal":true
-            },
+            "wrong_config_rollback": rollback(
+                "wrong_config",
+                "wrong-config-post-update-plus-append-rollback",
+                json!({
+                    "attempted_config_account":test_address(42),
+                    "registered_config_account":test_address(43)
+                }),
+                44,
+            ),
+            "wrong_feed_rollback": rollback(
+                "wrong_feed",
+                "wrong-feed-post-update-plus-append-rollback",
+                json!({
+                    "attempted_provider_feed_id":"9".repeat(64),
+                    "registered_provider_feed_id":"a".repeat(64),
+                    "verified_vaa_account":test_address(45)
+                }),
+                46,
+            ),
+            "out_of_order_boundary_rollback": rollback(
+                "out_of_order_boundary",
+                "out-of-order-boundary-post-update-plus-append-rollback",
+                json!({
+                    "attempted_boundary_index":"1",
+                    "expected_next_boundary_index":"0",
+                    "attempted_publish_time":"1787540460",
+                    "expected_next_publish_time":"1787540400"
+                }),
+                47,
+            ),
             "trade_status":"settled",
             "collateral_atoms":"128",
             "terminal": {
@@ -897,7 +1390,22 @@ mod tests {
                 "hoard_collateral_atoms":"0",
                 "hoard_token_atoms":"0",
                 "buyer_token_atoms":"76",
-                "seller_token_atoms":"52"
+                "seller_token_atoms":"52",
+                "liabilities": {
+                    "all_zero":true,
+                    "supply_ledger":{
+                        "address":test_address(48),
+                        "outcome_count":"4",
+                        "internal_supply":["0","0","0","0"],
+                        "external_supply":["0","0","0","0"],
+                        "aggregate_supply":["0","0","0","0"]
+                    },
+                    "outcome_mints":[0_u8,1,2,3].into_iter().map(|index| json!({
+                        "outcome_index":index.to_string(),
+                        "address":test_address(50 + index),
+                        "supply":"0"
+                    })).collect::<Vec<_>>()
+                }
             }
         })
     }

@@ -160,7 +160,7 @@ the semantic owners of persisted facts.
 
 | screen | what it reads |
 | --- | --- |
-| **Live campaign** | versioned, opt-in events emitted by the currently running campaign child: clean repository/build and captured provider identities; loopback endpoints; two exact SourceV2 archive records; retained archive envelope/commitment facts; the out-of-order rollback's equal full-state hashes and absent skipped account; settled trade; and terminal two-owner conservation. The daemon rejects JSON numbers, unexpected provider identities, nonconsecutive records, incomplete rollback closure, and nonzero terminal liabilities. It promotes the final scope to `SBF_EXECUTED` only after the child exits successfully, including the runner's final listener-isolation probe. Only structurally allowlisted milestones, waits, and step results reach the browser; stderr, paths, arbitrary text, and retained result JSON stay process-local. |
+| **Live campaign** | versioned, opt-in events emitted by the currently running campaign child: clean repository/build and captured provider identities; loopback endpoints; two exact SourceV2 archive records; retained archive envelope/commitment facts; complete wrong-config, wrong-feed, and out-of-order rollback objects whose ephemeral receiver accounts are absent and whose SourceArchive/treasury full-state hashes are unchanged; settled trade; and terminal two-owner conservation including zero internal, external-ledger, aggregate, and four Token-2022 mint supplies. The daemon rejects JSON numbers, unexpected provider identities, nonconsecutive records, incomplete rollback closure, and nonzero terminal liabilities. It independently rediscovers the SourceArchive, SupplyLedger, and four outcome mints from loopback RPC in one root-bracketed same-context snapshot before admitting the result. It promotes the final scope to `SBF_EXECUTED` only after the child exits successfully, including the runner's final listener-isolation probe. Only structurally allowlisted milestones, waits, and step results reach the browser; stderr, paths, arbitrary text, and retained result JSON stay process-local. |
 
 This screen is a live daemon-validated projection, not an independently
 authenticated RPC client and not retained evidence. Its provider binaries are
@@ -168,6 +168,13 @@ captured local account bodies and its observations are synthetic: it makes no
 claim about provider availability, devnet, mainnet, or value. There is no
 start/retry/reorder/sign action in the page. The launcher is the authority to
 start the single fixed campaign and owns graceful cleanup.
+
+The chain-discovery event also carries a public restart descriptor: genesis,
+repository/program identity, RPC URL, and the six discovered addresses. It
+contains no signer material. At this stage it supports read-only rediscovery
+only while the owned child is alive; it does not claim transaction continuity
+after a daemon or child restart. Moving validator and signer lifecycle into a
+reusable local session owner is the next runtime boundary.
 
 ### Pyth local mode
 
