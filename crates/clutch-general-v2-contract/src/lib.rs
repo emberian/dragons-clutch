@@ -13,6 +13,7 @@
 mod codec;
 mod candidate_rank_v2;
 mod fee_accounts;
+mod fee_rent_v3;
 mod fee_terminal;
 mod final_pot;
 mod market_binding_v2;
@@ -27,6 +28,7 @@ mod transition;
 pub use codec::{CodecError, Reader, Writer};
 pub use candidate_rank_v2::*;
 pub use fee_accounts::*;
+pub use fee_rent_v3::*;
 pub use fee_terminal::*;
 pub use final_pot::*;
 pub use market_binding_v2::*;
@@ -871,12 +873,24 @@ pub const OWNER_FEE_CARRY_ACCOUNT_BYTES: usize = 132;
 pub const OWNER_FEE_FINALIZATION_ACCOUNT_VERSION: u8 = 2;
 /// Exact terminal fee-finalization outer bytes.
 pub const OWNER_FEE_FINALIZATION_ACCOUNT_BYTES: usize = 500;
+/// Sole future rent-owned live carry version at the unchanged owner fee-carry PDA.
+pub const OWNER_FEE_CARRY_ACCOUNT_VERSION_V3: u8 = 3;
+/// Exact rent-owned live carry outer bytes.
+pub const OWNER_FEE_CARRY_ACCOUNT_BYTES_V3: usize = 180;
+/// Sole future rent-owned terminal successor at the unchanged carry PDA.
+pub const OWNER_FEE_FINALIZATION_ACCOUNT_VERSION_V4: u8 = 4;
+/// Exact rent-owned terminal fee-finalization outer bytes.
+pub const OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4: usize = 548;
 /// Fresh disabled owner payer-allocation envelope tag.
 pub const PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
 /// First owner payer-allocation envelope version.
 pub const PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact owner payer-allocation outer bytes.
 pub const PAYER_ALLOCATION_ACCOUNT_BYTES: usize = 2_684;
+/// Sole future rent-owned payer-allocation envelope version.
+pub const PAYER_ALLOCATION_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact rent-owned payer-allocation outer bytes.
+pub const PAYER_ALLOCATION_ACCOUNT_BYTES_V2: usize = 2_732;
 /// Fresh disabled candidate-wide recipient-allocation envelope tag.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x85;
 /// First candidate-wide recipient-allocation envelope version.
@@ -966,7 +980,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 31] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 34] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1023,9 +1037,24 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 31] = [
         owner: "clutch-general-v2-contract/OwnerFeeFinalizationV2AccountV1",
     },
     AccountAllocationV1 {
+        tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
+        version: OWNER_FEE_CARRY_ACCOUNT_VERSION_V3,
+        owner: "clutch-general-v2-contract/OwnerFeeCarryV3AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
+        version: OWNER_FEE_FINALIZATION_ACCOUNT_VERSION_V4,
+        owner: "clutch-general-v2-contract/OwnerFeeFinalizationV4AccountV1",
+    },
+    AccountAllocationV1 {
         tag: PAYER_ALLOCATION_ACCOUNT_TAG,
         version: PAYER_ALLOCATION_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/PayerAllocationV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: PAYER_ALLOCATION_ACCOUNT_TAG,
+        version: PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/PayerAllocationV2AccountV1",
     },
     AccountAllocationV1 {
         tag: RECIPIENT_ALLOCATION_ACCOUNT_TAG,

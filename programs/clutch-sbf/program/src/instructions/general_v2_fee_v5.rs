@@ -34,11 +34,11 @@ use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
 use clutch_general_v2_contract::{
     payer_allocation_account_data_id_v1, project_general_replay_transition_v1,
     GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
-    GeneralReplayTransitionPlanV1, Id32, OwnerFeeCarryV1AccountV1, DeletableRentOwnerV1,
-    OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1, PayerAllocationV1AccountV1,
+    GeneralReplayTransitionPlanV1, Id32, OwnerFeeCarryV3AccountV1, DeletableRentOwnerV1,
+    OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1, PayerAllocationV2AccountV1,
     SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
     SettlementRootV1AccountV1, Sha256BackendV1,
-    OWNER_FEE_CARRY_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_BYTES,
+    OWNER_FEE_CARRY_ACCOUNT_BYTES_V3, PAYER_ALLOCATION_ACCOUNT_BYTES_V2,
     SELECTED_FEE_RECORD_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
 };
 use clutch_general_v2_runtime::{
@@ -269,7 +269,7 @@ impl PreparedOwnerFeeAction38V5 {
 /// Complete current semantic action-38 composition before atomic SBF writes.
 ///
 /// The General handler must atomically apply the returned GEN1 Replay and, for
-/// the candidate-fee branch only, replace the carry with its `0x83/2` terminal
+/// the candidate-fee branch only, replace the carry with its `0x83/4` terminal
 /// receipt while deleting the payer snapshot. This plan already owns the exact
 /// row, Position, pot, Replay, and counted-root successors; it cannot be
 /// constructed from a caller balance summary.
@@ -302,7 +302,7 @@ impl PreparedOwnerSettlementAction38V5 {
         self.replay
     }
 
-    /// Whether this atomic transition must mint a real `0x83/2` successor.
+    /// Whether this atomic transition must mint a real `0x83/4` successor.
     pub const fn fee_finalization_required(&self) -> bool {
         self.realization.fee_finalization_required()
     }
@@ -581,13 +581,13 @@ fn authenticate_owner_fee_snapshot_v5(
     require_snapshot_state(
         program_id,
         frame.owner_fee_carry,
-        OWNER_FEE_CARRY_ACCOUNT_BYTES,
+        OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
         snapshot_writable,
     )?;
     require_snapshot_state(
         program_id,
         frame.payer_allocation,
-        PAYER_ALLOCATION_ACCOUNT_BYTES,
+        PAYER_ALLOCATION_ACCOUNT_BYTES_V2,
         snapshot_writable,
     )?;
 
@@ -659,7 +659,7 @@ fn authenticate_owner_fee_snapshot_v5(
         },
     )?;
 
-    let carry_account = OwnerFeeCarryV1AccountV1::decode(
+    let carry_account = OwnerFeeCarryV3AccountV1::decode(
         &borrow_data(frame.owner_fee_carry)?,
         &selected,
     )?;
@@ -674,7 +674,7 @@ fn authenticate_owner_fee_snapshot_v5(
         Some(carry_account.stored_bump),
     )?;
     let payer_account =
-        PayerAllocationV1AccountV1::decode_persisted(&borrow_data(frame.payer_allocation)?)?;
+        PayerAllocationV2AccountV1::decode_persisted(&borrow_data(frame.payer_allocation)?)?;
     expect_pda(
         frame.payer_allocation.key,
         seeds::general_v2_payer_allocation_pda(
