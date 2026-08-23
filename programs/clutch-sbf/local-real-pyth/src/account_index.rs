@@ -64,12 +64,11 @@ use clutch_source_plane_v3::{
 };
 use clutch_source_plane_v3_runtime::{
     decode_runtime_account, ReopenLineageV1, RuntimeKey, SourceReleaseManifestV1,
-    SourceWorkReceiptAccountV1,
-    OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
-    REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_TAG,
-    SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
-    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, STATISTIC_RESULT_ACCOUNT_TAG,
-    WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
+    SourceWorkReceiptAccountV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
+    REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
+    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
+    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
+    STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
 };
 use clutch_structured_claim_runtime_contract::{
     DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
@@ -1272,6 +1271,13 @@ impl ForkLedger {
             return Err(AccountIndexError::RootRegression);
         }
         let hash = self.unique_hash_at(slot)?.to_string();
+        if self
+            .finalized_root
+            .as_ref()
+            .is_some_and(|(_, prior)| !self.is_ancestor(prior, &hash))
+        {
+            return Err(AccountIndexError::InvalidFork);
+        }
         if self.branch_contains_dead_slot(&hash) {
             return Err(AccountIndexError::InvalidFork);
         }
@@ -1319,6 +1325,15 @@ impl ForkLedger {
     #[must_use]
     pub fn is_dead(&self, slot: u64) -> bool {
         self.dead_slots.contains(&slot)
+    }
+
+    #[must_use]
+    pub fn slot_is_on_dead_branch(&self, slot: u64) -> bool {
+        self.hashes_by_slot.get(&slot).is_some_and(|hashes| {
+            hashes
+                .iter()
+                .any(|hash| self.branch_contains_dead_slot(hash))
+        })
     }
 
     #[must_use]
@@ -1471,6 +1486,43 @@ impl CanonicalAccountIndex {
         self.forks.finalize_root(slot)
     }
 
+    /// Invalidate every non-final subscription observation after a transport
+    /// disconnect. Finalized scans remain available, while fork topology and
+    /// processed versions are rebuilt only from a complete new subscription
+    /// generation. Rooted subscription rows are deliberately dropped too:
+    /// the next finalized scan, not a disconnected feed, owns their promotion.
+    pub fn rollback_processed_transport(&mut self) -> usize {
+        let mut removed = 0_usize;
+        self.versions.retain(|_, versions| {
+            let before = versions.len();
+            versions.retain(|version| matches!(&version.branch, IndexedBranch::FinalizedScan));
+            removed = removed.saturating_add(before.saturating_sub(versions.len()));
+            !versions.is_empty()
+        });
+        self.forks = ForkLedger::default();
+        removed
+    }
+
+    /// Remove already-indexed rows on every branch whose ancestry now contains
+    /// a dead slot. Finalized-scan baselines are never removed by a processed
+    /// rollback observation.
+    pub fn rollback_dead_processed_versions(&mut self) -> usize {
+        let forks = &self.forks;
+        let mut removed = 0_usize;
+        self.versions.retain(|_, versions| {
+            let before = versions.len();
+            versions.retain(|version| match &version.branch {
+                IndexedBranch::FinalizedScan => true,
+                IndexedBranch::Processed { blockhash } => {
+                    !forks.branch_contains_dead_slot(blockhash)
+                }
+            });
+            removed = removed.saturating_add(before.saturating_sub(versions.len()));
+            !versions.is_empty()
+        });
+        removed
+    }
+
     pub fn ingest(&mut self, account: ObservedRpcAccount) -> Result<()> {
         let branch = match account.provenance.commitment {
             RpcCommitment::Finalized => IndexedBranch::FinalizedScan,
@@ -1490,14 +1542,14 @@ impl CanonicalAccountIndex {
             return Err(AccountIndexError::CapacityExceeded);
         }
         let versions = self.versions.entry(account.address).or_default();
-        if versions.len() >= self.capacity.maximum_versions_per_address {
-            versions.remove(0);
-        }
         if versions.last().is_some_and(|previous| {
             previous.account.provenance.receive_sequence >= account.provenance.receive_sequence
                 && previous.account.provenance.slot >= account.provenance.slot
         }) {
             return Err(AccountIndexError::StaleObservation);
+        }
+        if versions.len() >= self.capacity.maximum_versions_per_address {
+            versions.remove(0);
         }
         versions.push(IndexedAccountVersion {
             account,
@@ -1550,28 +1602,29 @@ impl CanonicalAccountIndex {
                 let tip = self.forks.processed_tip();
                 versions
                     .iter()
-                    .rev()
-                    .find(|version| match (&version.branch, tip) {
+                    .filter(|version| match (&version.branch, tip) {
                         (IndexedBranch::FinalizedScan, _) => true,
                         (IndexedBranch::Processed { blockhash }, Some(tip)) => {
                             self.forks.is_ancestor(blockhash, tip)
                         }
                         _ => false,
                     })
-            }
-            RpcCommitment::Finalized => {
-                let root = self.forks.finalized_root().map(|(_, hash)| hash);
-                versions
-                    .iter()
-                    .rev()
-                    .find(|version| match (&version.branch, root) {
-                        (IndexedBranch::FinalizedScan, _) => true,
-                        (IndexedBranch::Processed { blockhash }, Some(root)) => {
-                            self.forks.is_ancestor(blockhash, root)
-                        }
-                        _ => false,
+                    .max_by_key(|version| {
+                        (
+                            version.account.provenance.slot,
+                            version.account.provenance.receive_sequence,
+                        )
                     })
             }
+            RpcCommitment::Finalized => versions
+                .iter()
+                .filter(|version| matches!(&version.branch, IndexedBranch::FinalizedScan))
+                .max_by_key(|version| {
+                    (
+                        version.account.provenance.slot,
+                        version.account.provenance.receive_sequence,
+                    )
+                }),
         };
         selected.filter(|version| {
             self.finalized_absences.get(&address).is_none_or(|absence| {
@@ -1619,5 +1672,77 @@ impl CanonicalAccountIndex {
     #[must_use]
     pub fn cluster_key(&self) -> String {
         self.plan.cluster.key()
+    }
+}
+
+#[cfg(test)]
+mod processed_fork_tests {
+    use super::*;
+
+    const CLUSTER: &str = "test:genesis";
+
+    fn slot(slot: u64, parent_slot: u64, blockhash: &str, previous: &str) -> ObservedSlot {
+        ObservedSlot {
+            cluster_key: CLUSTER.to_string(),
+            slot,
+            parent_slot,
+            blockhash: blockhash.to_string(),
+            previous_blockhash: previous.to_string(),
+            commitment: RpcCommitment::Processed,
+            receive_sequence: slot,
+        }
+    }
+
+    #[test]
+    fn later_root_must_descend_from_the_previous_root() {
+        let mut ledger = ForkLedger::default();
+        ledger
+            .observe(slot(10, 9, "root-10", "unknown-9"), CLUSTER)
+            .unwrap();
+        ledger.finalize_root(10).unwrap();
+        ledger
+            .observe(slot(12, 11, "orphan-12", "orphan-11"), CLUSTER)
+            .unwrap();
+        assert_eq!(
+            ledger.finalize_root(12),
+            Err(AccountIndexError::InvalidFork)
+        );
+        let mut valid = ForkLedger::default();
+        valid
+            .observe(slot(10, 9, "root-10", "unknown-9"), CLUSTER)
+            .unwrap();
+        valid.finalize_root(10).unwrap();
+        valid
+            .observe(slot(11, 10, "child-11", "root-10"), CLUSTER)
+            .unwrap();
+        valid
+            .observe(slot(12, 11, "child-12", "child-11"), CLUSTER)
+            .unwrap();
+        assert_eq!(valid.finalize_root(12), Ok(()));
+    }
+
+    #[test]
+    fn dead_ancestor_marks_its_known_descendants_rollbackable() {
+        let mut ledger = ForkLedger::default();
+        ledger
+            .observe(slot(20, 19, "branch-20", "unknown-19"), CLUSTER)
+            .unwrap();
+        ledger
+            .observe(slot(21, 20, "branch-21", "branch-20"), CLUSTER)
+            .unwrap();
+        ledger
+            .observe_update(
+                ObservedSlotUpdate {
+                    cluster_key: CLUSTER.to_string(),
+                    slot: 20,
+                    parent_slot: Some(19),
+                    kind: ObservedSlotUpdateKind::Dead,
+                    receive_sequence: 22,
+                },
+                CLUSTER,
+            )
+            .unwrap();
+        assert!(ledger.slot_is_on_dead_branch(20));
+        assert!(ledger.slot_is_on_dead_branch(21));
     }
 }

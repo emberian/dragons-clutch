@@ -63,6 +63,9 @@ solana-address = { version = "=2.6.1", features = ["curve25519"] }
 # banner cannot show a digest a stale manifest remembers.  Same pin and same
 # host-only `sha2` selection the harness uses.
 solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"] }
+# Bounded, read-only processed subscription transport. The transport owns one
+# ordered WebSocket reader and never exposes signing or submission primitives.
+tungstenite = { version = "=0.28.0", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 
 [lints.rust]
 unsafe_code = "forbid"
