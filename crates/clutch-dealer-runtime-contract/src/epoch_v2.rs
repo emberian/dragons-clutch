@@ -658,26 +658,50 @@ fn validate_live_replay(state: &DealerStateV2, replay: &DealerFacilityReplayV1) 
 }
 
 /// Close a leased Epoch after the Lease/Pot pair has atomically terminated.
+///
+/// The Epoch binding itself retains the historical Lease account and selected
+/// candidate. State proves that Lease and Pot are gone, while the mandatory
+/// Retirement receipt funds this separately executable cleanup without
+/// requiring deleted Lease bytes to be supplied again.
+#[allow(clippy::too_many_arguments)]
 pub fn retire_epoch_after_lease_v2(
     policy: &DealerPolicyV1,
     state_after_lease: &DealerStateV2,
+    state_account_id: Id,
     epoch: &DealerEpochBindingV2,
-    lease: &DealerLeaseV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    retire: &DealerActionLivenessAuthorizationV1,
     rent: DealerEpochCloseRentV2,
 ) -> Result<DealerStateV2> {
     state_after_lease.validate_against_policy(policy)?;
     epoch.validate()?;
-    lease.validate()?;
+    retire.validate_against(schedule, runtime)?;
+    let post_generation = epoch
+        .counted_generation
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
     if epoch.phase != DealerEpochBindingPhaseV2::Leased
         || epoch.epoch_binding_account_id != state_after_lease.active_epoch_binding_account_id
         || epoch.epoch_id != state_after_lease.active_epoch_id
-        || epoch.active_lease_account_id != lease.lease_account_id
-        || epoch.settlement_candidate_id != lease.settlement_candidate_id
+        || epoch.dealer_state_account_id != state_account_id
+        || epoch.policy_id != state_after_lease.policy_id
+        || epoch.facility_id != state_after_lease.facility_id
+        || epoch.facility_position_binding_id
+            != state_after_lease.facility_position_binding_id
+        || epoch.funded_dependencies_id != state_after_lease.funded_dependencies_id
+        || epoch.runtime_liveness_policy_id != runtime.runtime_policy_id
+        || epoch.runtime_liveness_binding_digest != runtime.binding_digest()?
+        || epoch.dealer_liveness_schedule_id != schedule.schedule_id()?.untyped()
         || state_after_lease.children.epoch_bindings != 1
         || state_after_lease.children.leases != 0
         || state_after_lease.children.settlement_pots != 0
         || !state_after_lease.active_lease_id.is_zero()
-        || state_after_lease.generation != lease.post_generation
+        || state_after_lease.generation != post_generation
+        || retire.action != DealerRuntimeActionV1::Retire
+        || retire.owner != state_account_id
+        || retire.lifecycle_id != state_after_lease.facility_id
+        || retire.facility_generation != state_after_lease.generation
     {
         return Err(Error::InvalidChildGraph);
     }

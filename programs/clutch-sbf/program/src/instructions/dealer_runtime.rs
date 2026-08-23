@@ -4,7 +4,7 @@
 //!
 //! This module freezes strict payload parsing, the global eight-byte Dealer
 //! account envelope, and ordered semantic account roles for the PositionV3
-//! funding/activation/unwind slice. It deliberately exposes no executable
+//! funding/activation/unwind/retirement slice. It deliberately exposes no executable
 //! handler: capability dispatch refuses every Dealer facility action before
 //! reading accounts.
 
@@ -251,6 +251,8 @@ pub struct DealerRuntimePayloadV1 {
     pub external_liveness: bool,
     /// Retire target selector; zero outside Retire.
     pub retire_target: u8,
+    /// Whether a terminal page close also closes singleton ClaimWork.
+    pub terminal_last_page: bool,
     /// Exact share delta for contribution, withdrawal, or queueing.
     pub share_delta: u64,
     /// Facility disambiguator for Initialize; zero otherwise.
@@ -296,6 +298,7 @@ impl DealerRuntimePayloadV1 {
             existing_ticket: false,
             external_liveness: false,
             retire_target: 0,
+            terminal_last_page: false,
             share_delta: 0,
             facility_nonce: 0,
             row_start: 0,
@@ -347,13 +350,33 @@ impl DealerRuntimePayloadV1 {
             }
             DealerFacilityAction::Retire => {
                 value.retire_target = input[16];
+                value.terminal_last_page = decode_bool(input[17])?;
                 if !(DEALER_RETIRE_EXIT_TICKET_V1..=DEALER_RETIRE_STATE_ROOT_V1)
                     .contains(&value.retire_target)
-                    || input[17..20].iter().any(|byte| *byte != 0)
                 {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+                if input[18..20].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
                 }
+                if value.retire_target != DEALER_RETIRE_TERMINAL_PAGE_V1
+                    && value.terminal_last_page
+                {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
                 value.page_ordinal = read_u32(input, 20);
+                let page_target = matches!(
+                    value.retire_target,
+                    DEALER_RETIRE_EXIT_TICKET_V1
+                        | DEALER_RETIRE_EMPTY_LP_PAGE_V1
+                        | DEALER_RETIRE_TERMINAL_PAGE_V1
+                );
+                if (page_target
+                    && value.page_ordinal >= clutch_dealer_runtime_contract::MAX_LP_PAGES)
+                    || (!page_target && value.page_ordinal != 0)
+                {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
             }
             _ => {}
         }
@@ -437,6 +460,10 @@ pub enum DealerMetaRoleV1 {
     PreviousLpPage,
     /// Unique owner-scoped ExitTicket.
     ExitTicket,
+    /// Immutable terminal allocation for one LP page.
+    TerminalAllocation,
+    /// Singleton terminal allocation/claim/page-close work owner.
+    ClaimWork,
     /// Newly created or existing Dealer Epoch-binding account.
     EpochBinding,
     /// Authenticated General V2 Epoch.
@@ -447,6 +474,8 @@ pub enum DealerMetaRoleV1 {
     PriceMeasurePolicy,
     /// Sole refundable-rent recipient.
     RentPayer,
+    /// Present-funding/rent recipient retained by one liveness compartment.
+    LivenessPayer,
     /// Canonical neutral sink.
     NeutralSink,
     /// Sponsor refund-recipient PositionV3.
@@ -679,6 +708,103 @@ const RETIRE_EMPTY_NEXT_PAGE: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
 ];
 
+const RETIRE_EPOCH_BINDING: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+];
+
+const RETIRE_TERMINAL_PAGE: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LpPage, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::TerminalAllocation, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::ClaimWork, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+];
+
+const RETIRE_LAST_TERMINAL_PAGE: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LpPage, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::TerminalAllocation, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::ClaimWork, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+];
+
+const RETIRE_FUNDED_DEPENDENCIES: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+];
+
+const RETIRE_POSITION_REPLAY: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+];
+
+const RETIRE_STATE_ROOT: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, false),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+];
+
 const QUEUE_NEW_CALLER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -775,13 +901,46 @@ pub fn meta_contract_v1(
         {
             Some(RETIRE_EMPTY_NEXT_PAGE)
         }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_EPOCH_BINDING_V1 =>
+        {
+            Some(RETIRE_EPOCH_BINDING)
+        }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_TERMINAL_PAGE_V1
+                && payload.terminal_last_page =>
+        {
+            Some(RETIRE_LAST_TERMINAL_PAGE)
+        }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_TERMINAL_PAGE_V1 =>
+        {
+            Some(RETIRE_TERMINAL_PAGE)
+        }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_FUNDED_DEPENDENCIES_V1 =>
+        {
+            Some(RETIRE_FUNDED_DEPENDENCIES)
+        }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_POSITION_REPLAY_V1 =>
+        {
+            Some(RETIRE_POSITION_REPLAY)
+        }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_STATE_ROOT_V1 =>
+        {
+            Some(RETIRE_STATE_ROOT)
+        }
         _ => None,
     }
 }
 
 /// Enforce the V1 alias rule: every ordered runtime account is nonzero and
-/// pairwise distinct. Rent-payer, LP-owner, sponsor, and keeper identities may
-/// coincide only as fields/signers; no two physical account roles may alias.
+/// semantic-owner accounts are pairwise distinct. Recipient slots may alias
+/// one another or the keeper because independent rent/liveness principals can
+/// legitimately share a payer; the pure transition still proves every exact
+/// credit independently and forbids every payer/sink collapse.
 pub fn validate_meta_keys_distinct_v1(
     contract: &[DealerMetaSpecV1],
     keys: &[[u8; 32]],
@@ -799,7 +958,9 @@ pub fn validate_meta_keys_distinct_v1(
         }
         let mut prior = 0usize;
         while prior < index {
-            if keys[index] == keys[prior] {
+            if keys[index] == keys[prior]
+                && !recipient_alias_allowed_v1(contract[index].role, contract[prior].role)
+            {
                 return Err(DealerRuntimeContractErrorV1::InvalidField);
             }
             prior += 1;
@@ -807,6 +968,20 @@ pub fn validate_meta_keys_distinct_v1(
         index += 1;
     }
     Ok(())
+}
+
+const fn recipient_alias_allowed_v1(left: DealerMetaRoleV1, right: DealerMetaRoleV1) -> bool {
+    matches!(
+        (left, right),
+        (DealerMetaRoleV1::RentPayer, DealerMetaRoleV1::RentPayer)
+            | (DealerMetaRoleV1::LivenessPayer, DealerMetaRoleV1::LivenessPayer)
+            | (DealerMetaRoleV1::RentPayer, DealerMetaRoleV1::LivenessPayer)
+            | (DealerMetaRoleV1::LivenessPayer, DealerMetaRoleV1::RentPayer)
+            | (DealerMetaRoleV1::Actor, DealerMetaRoleV1::RentPayer)
+            | (DealerMetaRoleV1::RentPayer, DealerMetaRoleV1::Actor)
+            | (DealerMetaRoleV1::Actor, DealerMetaRoleV1::LivenessPayer)
+            | (DealerMetaRoleV1::LivenessPayer, DealerMetaRoleV1::Actor)
+    )
 }
 
 /// Fail-closed placeholder called only if dispatch is incorrectly widened.
