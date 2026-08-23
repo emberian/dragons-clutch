@@ -156,9 +156,21 @@ refundable account-rent principal, and five release-selected collateral-vault
 rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
 copy its cursor or component-balance facts.
 
-The Structured, Dealer, and Recovery family action spaces remain empty: every
-local action is unknown until an atomic design wave fixes its payload and
-capability contract.
+Recovery 78/v1 reserves these local actions, all disabled:
+
+1. `InitializeFailureRoot`
+2. `TriggerSourceFailure`
+3. `TriggerRelationRefusal`
+4. `AdvanceRecoverySchedule`
+5. `AcceptRecoveryWork`
+6. `ResolveCallerFunded`
+7. `ResolvePaidRecovery`
+8. `CloseRecoveryFunding`
+9. `CloseFailureRoot`
+
+The Structured and Dealer family action spaces remain empty: every local action
+is unknown until an atomic design wave fixes its payload and capability
+contract.
 
 ## Coordinated successor account block
 
@@ -190,6 +202,16 @@ or pure runtime elsewhere does not make a route executable.
 | `0x90/1` | SourcePlane V3 | window seal |
 | `0x91/1` | SourcePlane V3 | statistic result |
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
+| `0xa0/1` | Failure | external semantic root; root rent only |
+| `0xa1/1` | Liveness | immutable runtime policy |
+| `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
+| `0xa3/1` | Terminal/replay | failure-generation tombstone |
+
+Tags `0x93..=0x9e` remain outside this wave's ownership for the coordinated
+Dealer design, and `0x9f` deliberately remains unallocated. The failure root
+never aliases `0xa2`, holds recovery work principal, or emits a keeper transfer.
+Accepted work rewrites the failure root and Recovery compartment atomically;
+only the latter is debited for the keeper payment and payer headroom refund.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
