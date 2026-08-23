@@ -14,8 +14,8 @@
 //! | module | intents and actions |
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
-//! | [`cash_exit`] | `Intent::WithdrawCash` |
-//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::Endow`, `Intent::CloseRevenuePolicyRecord` |
+//! | [`collateral_cash_v3`] | `Intent::Endow`, `Intent::WithdrawCash` over full-width PositionV3/HoardV2/GEN1 |
+//! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::CloseRevenuePolicyRecord` |
 //! | [`split`] | `Intent::Split` |
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
 //! | [`market_init`] | `Intent::CreateMarket` |
@@ -26,8 +26,9 @@
 //! | `general_v2_fee_terminal` | capability-disabled exact pre/post seam for General action 38; no dispatch route |
 //! | `general_v2_receipt_v3` | capability-disabled exact Selected/Feed/PDA authentication for General Receipt V3; no dispatch route |
 //!
-//! Implemented: genesis (the five account-creating initializers plus `Endow`),
-//! split, merge_materialize (Merge/Materialize/Dematerialize), market_init,
+//! Implemented: genesis (the five account-creating initializers), full-width
+//! collateral_cash_v3 (Endow/WithdrawCash), merge_materialize
+//! (Materialize/Dematerialize), complete_set_v3 (Split/Merge), market_init,
 //! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and the whole Tier 2
 //! general clearing lifecycle in orders_batch: funded placement and
 //! cancellation, the general epoch open/freeze, the on-chain streaming walk
@@ -43,7 +44,9 @@
 
 pub mod artifact;
 pub mod cash_exit;
+pub mod collateral_cash_v3;
 pub(crate) mod collateral_position_v3;
+pub mod complete_set_v3;
 pub mod construction;
 /// Non-production immutable Dealer-policy catalog transport.
 pub mod dealer_policy;

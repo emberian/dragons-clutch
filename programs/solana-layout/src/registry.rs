@@ -352,6 +352,18 @@ pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION: u8 = 1;
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
 /// Permanent failure-generation replay tombstone version.
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Mutable exhaustive quantized interval-consensus work discriminator.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG: u8 = 0xab;
+/// Interval-consensus work account version.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION: u8 = 1;
+/// Exact framed interval-consensus work account bytes.
+pub const FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES: usize = 1_088;
+/// Permanent interval-consensus transition/replay receipt discriminator.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG: u8 = 0xac;
+/// Permanent interval-consensus replay account version.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Exact permanent interval-consensus replay account bytes.
+pub const FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES: usize = 416;
 /// Immutable, deletable Dealer action-work receipt discriminator.
 pub const DEALER_ACTION_RECEIPT_ACCOUNT_TAG: u8 = 0xa8;
 /// Dealer action-work receipt account version.
@@ -405,6 +417,8 @@ const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
 const _: () = assert!(PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG == 0xaa);
+const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
+const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1191,6 +1205,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         status: AllocationStatus::ReservedDisabled,
         name: "product-occurrence-root-v1-account",
     },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-interval-consensus-work-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG,
+            version: FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-interval-consensus-replay-v1-account",
+    },
 ];
 
 /// One reserved successor intent family.
@@ -1813,13 +1845,21 @@ pub enum RecoveryAction {
     CloseRecoveryFunding = 8,
     /// Close the resolved semantic root after retirement/source/replay joins.
     CloseFailureRoot = 9,
+    /// Create one dedicated exhaustive interval-consensus work lifecycle.
+    BeginIntervalConsensus = 10,
+    /// Evaluate one bounded exact coordinate chunk and pay through liveness.
+    AdvanceIntervalConsensus = 11,
+    /// Restore the authenticated Product capability and resolve atomically.
+    ResolveIntervalConsensus = 12,
+    /// Close deletable consensus work while retaining permanent replay.
+    CloseIntervalConsensusWork = 13,
 }
 
 impl RecoveryAction {
     /// First Recovery-owned local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last Recovery-owned local action tag.
-    pub const LAST_TAG: u8 = 9;
+    pub const LAST_TAG: u8 = 13;
 
     /// Return the family-local action tag.
     pub const fn tag(self) -> u8 {
@@ -1838,6 +1878,10 @@ impl RecoveryAction {
             7 => Some(Self::ResolvePaidRecovery),
             8 => Some(Self::CloseRecoveryFunding),
             9 => Some(Self::CloseFailureRoot),
+            10 => Some(Self::BeginIntervalConsensus),
+            11 => Some(Self::AdvanceIntervalConsensus),
+            12 => Some(Self::ResolveIntervalConsensus),
+            13 => Some(Self::CloseIntervalConsensusWork),
             _ => None,
         }
     }

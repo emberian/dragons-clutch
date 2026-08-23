@@ -12,6 +12,7 @@
 //! evidence recovery followed by recoverable dormancy.
 
 pub mod external_v2;
+pub mod interval_consensus_v1;
 pub mod relation_execution_v1;
 pub mod retirement_v1;
 

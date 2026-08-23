@@ -120,6 +120,10 @@ clutch-source-plane-v3-runtime = { path = "../../../crates/clutch-source-plane-v
 clutch-solana-layout = { path = "../../solana-layout", default-features = false }
 clutch-solana-reference = { path = "../../solana-reference", default-features = false }
 solana-account-info = "=3.1.1"
+solana-clock = { version = "=3.1.1", default-features = false, features = [
+    "sysvar",
+] }
+solana-get-sysvar = "=1.0.0"
 
 # Cross-program invocation, added by the Token-2022 lane.  Both resolve from
 # this host's offline cache and both survive `cargo-build-sbf`, which resolves

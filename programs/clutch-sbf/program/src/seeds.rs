@@ -260,6 +260,10 @@ pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 pub const SEED_FAILURE_EXTERNAL_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
 /// Permanent failure-generation replay tombstone.
 pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
+/// Dedicated exhaustive interval-consensus work lifecycle.
+pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-work:v1";
+/// Permanent exhaustive interval-consensus replay receipt.
+pub const SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY: &[u8] = b"dc:failure-interval-replay:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -374,6 +378,38 @@ pub fn failure_replay_tombstone_pda(
         program_id,
         &[
             SEED_FAILURE_REPLAY_TOMBSTONE,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical mutable interval-consensus work PDA for one Failure generation.
+pub fn failure_interval_consensus_work_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical permanent interval-consensus replay PDA for one Failure generation.
+pub fn failure_interval_consensus_replay_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
