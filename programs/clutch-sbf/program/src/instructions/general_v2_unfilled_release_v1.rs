@@ -1,11 +1,9 @@
 //! Staged-disabled action-41 SBF composition and atomic Reservation close.
 //!
-//! The positional ABI is deliberately not frozen here. Action 41 requires the
-//! same exhaustive retained-Feed/complete-PageV5 traversal as action 39, and
-//! that shared SBF authenticator is not yet committed. This module therefore
-//! accepts its dependency-lower structural traversal only from a crate-private
-//! caller, authenticates every mutable endpoint and close destination itself,
-//! and owns the final root/Position/Replay/write plus ReservationV9 close.
+//! The positional ABI is deliberately not frozen here. Action 41 consumes the
+//! single shared action-39/24/41 traversal authenticator, then authenticates
+//! every mutable endpoint and close destination itself and owns the final
+//! root/Position/Replay write plus ReservationV9 close.
 //!
 //! The selected 4,140-byte page is always borrowed. The returned pure bundle
 //! is boxed, and all four data destinations plus all three lamport destinations
@@ -41,9 +39,9 @@ use crate::seeds;
 use super::collateral_position_v3::GeneralPositionReplayAuthorityV2;
 use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
 use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
+use super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5;
 
-/// Named action-41 endpoint and close frame below the not-yet-frozen traversal
-/// account prefix.
+/// Named action-41 endpoint and close frame below the shared traversal prefix.
 #[derive(Clone, Copy, Debug)]
 pub struct ReleaseUnfilledReservationAccountFrameV1<'a, 'info> {
     /// Writable counted SettlementRoot already authenticated by the shared prefix.
@@ -331,22 +329,24 @@ fn apply_release_bundle_v1(
     )
 }
 
-/// Compose and atomically apply action 41 after the shared General traversal
-/// authenticator has reconstructed `traversal` and `collateral`.
+/// Compose and atomically apply action 41 after the single shared General
+/// authenticator has equality-bound the writable root and exhaustive traversal.
 ///
-/// This is crate-private because neither structural projection is execution
-/// authority. The eventual positional handler must obtain both from the single
-/// shared action-39/24/41 SBF seam and must decode the strict 64-byte selector
-/// before calling this function.
+/// This is crate-private because the action remains staged-disabled. The
+/// eventual positional handler must obtain `authenticated` from
+/// `authenticate_writable_root_settlement_traversal_v5` and decode the strict
+/// 64-byte selector before calling this function.
 #[inline(never)]
 pub(crate) fn compose_and_apply_release_unfilled_reservation_v1(
     program_id: &Pubkey,
     payload: ReleaseUnfilledReservationPayloadV1,
-    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
-    traversal: &SettlementTraversalProjectionV4,
-    collateral: BoundCollateralProfileV2,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_>,
     frame: ReleaseUnfilledReservationAccountFrameV1<'_, '_>,
 ) -> Outcome<()> {
+    let authenticated_root = authenticated.root();
+    let authenticated_traversal = authenticated.traversal();
+    let traversal = authenticated_traversal.traversal();
+    let collateral = authenticated_traversal.collateral();
     require_distinct_frame(frame)?;
     require_program_state(
         program_id,
