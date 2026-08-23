@@ -19,7 +19,11 @@ use clutch_retirement_adapter::{
     AccountAccessV2 as RetirementAccountAccessV2, AccountViewV2 as RetirementAccountViewV2,
     CanonicalPdaV1,
 };
-use clutch_solana_layout::MarketAccount;
+use clutch_solana_layout::{
+    registry::{ExtensionAction, ExtensionEnvelope, ExtensionFamily, GeneralV2Action},
+    MarketAccount,
+};
+use clutch_solana_reference::ExtensionRequest;
 use clutch_structured_claim::MarketPhase;
 #[cfg(not(target_os = "solana"))]
 use sha2::{Digest, Sha256};
@@ -29,8 +33,7 @@ use crate::runtime_contract::{
     AtomicPositionAssetTransferRequestV1, DescriptorStateV1, PositionAssetTransferAuthorityKindV1,
     PositionAssetTransferPayloadV1, PositionProjectionV1, StructuredClaimActionV1,
     StructuredClaimReplayDeltaV1, StructuredClaimReplayExtensionV1,
-    StructuredClaimReplayTransitionV1, StructuredCustodyCallProjectionV1, GENERAL_V2_FAMILY_TAG,
-    GENERAL_V2_FAMILY_VERSION, GENERAL_V2_TRANSFER_POSITION_ASSETS_ACTION,
+    StructuredClaimReplayTransitionV1, StructuredCustodyCallProjectionV1,
     POSITION_ASSET_TRANSFER_PAYLOAD_BYTES, STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
     STRUCTURED_CUSTODY_CALL_V1_DOMAIN,
@@ -51,8 +54,8 @@ pub const STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-custody/market-binding-body/v1\0";
 /// Exact account count for structured custody through General action 35.
 pub const STRUCTURED_CUSTODY_ACCOUNT_COUNT: usize = 17;
-/// Exact General family header plus canonical 298-byte action body.
-pub const BASE_POSITION_TRANSFER_CPI_BYTES: usize = 3 + POSITION_ASSET_TRANSFER_PAYLOAD_BYTES;
+/// Exact outer base request, General family envelope, and 298-byte action body.
+pub const BASE_POSITION_TRANSFER_CPI_BYTES: usize = 314;
 /// Exact canonical Position V3 account width staged by action 35.
 pub const POSITION_V3_WRITE_BYTES: usize = 480;
 /// Largest Replay V3 body staged by this bridge (common prefix + SCV1).
@@ -102,7 +105,7 @@ impl CpiAccountMetaV1 {
 pub struct BasePositionTransferCpiV1 {
     /// Exact base program selected by the immutable descriptor.
     pub program_id: Key,
-    /// `74 || 1 || 35 || canonical_298_byte_payload`.
+    /// Canonical base `ExtensionRequest(sequence=0, GeneralV2/1/action35/payload298)`.
     pub data: [u8; BASE_POSITION_TRANSFER_CPI_BYTES],
     /// Frozen common prefix followed by every reconstruction input.
     pub accounts: [CpiAccountMetaV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT],
@@ -1178,13 +1181,25 @@ fn build_cpi(
     accounts: &[RawAccountV1<'_>],
     transfer: PositionAssetTransferPayloadV1,
 ) -> Result<BasePositionTransferCpiV1> {
+    if accounts.len() != STRUCTURED_CUSTODY_ACCOUNT_COUNT {
+        return Err(Error::InvalidAccounts);
+    }
     let mut data = [0_u8; BASE_POSITION_TRANSFER_CPI_BYTES];
-    data[..3].copy_from_slice(&[
-        GENERAL_V2_FAMILY_TAG,
-        GENERAL_V2_FAMILY_VERSION,
-        GENERAL_V2_TRANSFER_POSITION_ASSETS_ACTION,
-    ]);
-    data[3..].copy_from_slice(&transfer.encode()?);
+    let payload = transfer.encode()?;
+    let request = ExtensionRequest {
+        sequence: 0,
+        envelope: ExtensionEnvelope {
+            family: ExtensionFamily::GeneralV2,
+            action: ExtensionAction::GeneralV2(GeneralV2Action::TransferPositionAssets),
+            payload: &payload,
+        },
+    };
+    let written = request
+        .encode(&mut data)
+        .map_err(|_| Error::InvalidInstruction)?;
+    if written != BASE_POSITION_TRANSFER_CPI_BYTES {
+        return Err(Error::InvalidInstruction);
+    }
     let mut metas = [CpiAccountMetaV1::EMPTY; STRUCTURED_CUSTODY_ACCOUNT_COUNT];
     let mut index = 0_usize;
     while index < accounts.len() {
@@ -1202,5 +1217,5 @@ fn build_cpi(
     })
 }
 
-const _: () = assert!(BASE_POSITION_TRANSFER_CPI_BYTES == 301);
+const _: () = assert!(BASE_POSITION_TRANSFER_CPI_BYTES == 13 + 3 + 298);
 const _: () = assert!(STRUCTURED_CUSTODY_ACCOUNT_COUNT == 17);
