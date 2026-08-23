@@ -178,6 +178,10 @@ pub const SEED_GENERAL_V2_SELECTED: &[u8] =
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
     clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
+/// Presence-explicit General V2 owner-settlement successor prefix.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub const SEED_GENERAL_V2_OWNER_SETTLEMENT_V2: &[u8] =
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
 /// Disabled selected composite-fee record seed prefix.
 pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
     clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
@@ -451,6 +455,67 @@ pub fn general_v2_owner_settlement_pda(
             epoch,
             settlement_candidate,
             owner,
+        ],
+    )
+}
+
+/// Canonical presence-explicit V2 owner-settlement address.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn general_v2_owner_settlement_v2_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_OWNER_SETTLEMENT_V2,
+            epoch,
+            settlement_candidate,
+            owner,
+        ],
+    )
+}
+
+/// Canonical global Position V3 address for one General owner.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn position_v3_pda(
+    program_id: &Pubkey,
+    market_instance: &[u8; 32],
+    owner: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::POSITION_V3_PDA_PREFIX,
+            market_instance,
+            owner,
+            &purpose_seed,
+            purpose_binding,
+        ],
+    )
+}
+
+/// Canonical purpose-owned Replay V3 address paired with one Position.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn purpose_replay_v3_pda(
+    program_id: &Pubkey,
+    position: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::PURPOSE_REPLAY_V3_PDA_PREFIX,
+            position,
+            &purpose_seed,
+            purpose_binding,
         ],
     )
 }
