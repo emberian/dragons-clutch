@@ -7840,6 +7840,39 @@ mod occurrence_completion_v2_adversarial_tests {
         .is_err());
 
         assert!(require_series_occurrence_completion_join_v2(&state, id(17), facts).is_err());
+
+        substituted = facts;
+        substituted.series_plan_id = SeriesPlanV5Id::from_bytes([20; 32]);
+        assert!(require_series_occurrence_completion_join_v2(
+            &state,
+            facts.link_activation_id,
+            substituted,
+        )
+        .is_err());
+
+        substituted = facts;
+        substituted.ordinal = facts.ordinal + 1;
+        assert!(require_series_occurrence_completion_join_v2(
+            &state,
+            facts.link_activation_id,
+            substituted,
+        )
+        .is_err());
+
+        for zeroed in 0..3 {
+            substituted = facts;
+            match zeroed {
+                0 => substituted.link_activation_id = ContentId::ZERO,
+                1 => substituted.market_admission_receipt_id = ContentId::ZERO,
+                _ => substituted.generation = 0,
+            }
+            assert!(require_series_occurrence_completion_join_v2(
+                &state,
+                substituted.link_activation_id,
+                substituted,
+            )
+            .is_err());
+        }
     }
 
     #[test]
