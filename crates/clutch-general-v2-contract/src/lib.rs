@@ -15,6 +15,7 @@ mod fee_accounts;
 mod final_pot;
 mod owner_settlement;
 mod payload;
+mod position_replay;
 mod rank;
 mod state;
 mod transition;
@@ -24,6 +25,7 @@ pub use fee_accounts::*;
 pub use final_pot::*;
 pub use owner_settlement::*;
 pub use payload::*;
+pub use position_replay::*;
 pub use rank::{
     encode_score_v2_q_first_admitted_tie_v1, FirstAdmittedTieV1, ScoreV2QComponentsV1,
     SCORE_V2_Q_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
