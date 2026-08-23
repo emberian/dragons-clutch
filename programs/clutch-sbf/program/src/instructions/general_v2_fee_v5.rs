@@ -31,15 +31,21 @@ use clutch_fee_runtime_contract::projection::{
 };
 use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
+use clutch_fee_runtime_contract::terminal::{
+    OwnerFeeFinalizationBindingsV2, OwnerFeeFinalizationReceiptV1,
+};
 use clutch_general_v2_contract::{
-    payer_allocation_account_data_id_v1, project_general_replay_transition_v1,
+    fee_runtime_semantic_release_id_v1, payer_allocation_account_data_id_v1,
+    prepare_owner_fee_rent_transition_v3, project_general_replay_transition_v1,
     GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
-    GeneralReplayTransitionPlanV1, Id32, OwnerFeeCarryV3AccountV1, DeletableRentOwnerV1,
-    OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1, PayerAllocationV2AccountV1,
-    SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
-    SettlementRootV1AccountV1, Sha256BackendV1,
-    OWNER_FEE_CARRY_ACCOUNT_BYTES_V3, PAYER_ALLOCATION_ACCOUNT_BYTES_V2,
-    SELECTED_FEE_RECORD_ACCOUNT_BYTES, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
+    GeneralReplayTransitionPlanV1, Id32, MarketBindingV2, OwnerFeeCarryV3AccountV1,
+    OwnerFeeFinalizationV4AccountV1, OwnerFeeRentTransitionAccountsV3,
+    OwnerFeeRentTransitionPlanV3, DeletableRentOwnerV1, OwnerSettlementSeedTupleV5,
+    OwnerSettlementV5AccountV1, PayerAllocationV2AccountV1, SelectedFeeRecordV1AccountV1,
+    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
+    Sha256BackendV1, MARKET_BINDING_ACCOUNT_BYTES_V2, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
+    OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
+    PAYER_ALLOCATION_ACCOUNT_BYTES_V2, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
 };
 use clutch_general_v2_runtime::{
     derive_root_owner_basis_v4, derive_zero_fee_owner_finalization_evidence_v5,
@@ -101,6 +107,33 @@ pub struct OwnerFeeSnapshotAccountFrameV5<'a, 'info> {
     pub batch_policy: &'a AccountInfo<'info>,
     /// Realm-owned immutable revenue-policy record.
     pub revenue_policy_record: &'a AccountInfo<'info>,
+}
+
+/// Named native-rent accounts used only by fee-bearing action 38.
+#[derive(Clone, Copy, Debug)]
+pub struct OwnerFeeRentAccountFrameV5<'a, 'info> {
+    /// Exact immutable MarketBinding V2 that owns the neutral sink.
+    pub market_binding: &'a AccountInfo<'info>,
+    /// Persisted carry rent payer and sole possible realloc top-up signer.
+    pub carry_rent_payer: &'a AccountInfo<'info>,
+    /// Persisted payer-snapshot rent principal recipient.
+    pub payer_rent_refund_owner: &'a AccountInfo<'info>,
+    /// MarketBinding-owned destination for donation and hostile surplus.
+    pub neutral_sink: &'a AccountInfo<'info>,
+}
+
+/// Presence-explicit action-38 rent input.
+#[derive(Clone, Copy, Debug)]
+pub enum OwnerFeeTerminalRentInputV5<'a, 'info> {
+    /// Exact native-rent graph and authenticated 548-byte rent minimum.
+    CandidateFee {
+        /// Named current fee-rent accounts.
+        frame: OwnerFeeRentAccountFrameV5<'a, 'info>,
+        /// Rent-sysvar minimum for the exact 0x83/v4 terminal width.
+        carry_terminal_rent_minimum_lamports: u64,
+    },
+    /// Canonical zero-fee route with no fee rent accounts.
+    NoFeeRecord,
 }
 
 /// Presence-explicit fee account input selected only from the counted root.
@@ -176,6 +209,11 @@ impl<'a> RootDerivedOwnerFeeContextV5<'a> {
 pub struct PreparedOwnerFeeSnapshotV5 {
     root_account: Id32,
     owner_row: Id32,
+    selected: SelectedCompositeFeeV1,
+    carry: clutch_fee_runtime_contract::selected::OwnerFeeCarryV1,
+    carry_rent: DeletableRentOwnerV1,
+    payer_rent: DeletableRentOwnerV1,
+    carry_bump: u8,
     selected_fee: AuthenticatedSelectedOwnerFeeV4,
 }
 
@@ -279,6 +317,31 @@ pub struct PreparedOwnerSettlementAction38V5 {
     realization: OwnerCashRealizationPlanV5,
     transition_evidence_id: Id32,
     replay: GeneralReplayTransitionPlanV1,
+    finalization: Option<PreparedOwnerFeeFinalizationV5>,
+}
+
+/// Exact fee-bearing terminal receipt plus present-funded native-rent plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedOwnerFeeFinalizationV5 {
+    terminal: OwnerFeeFinalizationV4AccountV1,
+    rent: OwnerFeeRentTransitionPlanV3,
+}
+
+impl PreparedOwnerFeeFinalizationV5 {
+    /// Exact 0x83/v4 poststate to write at the unchanged carry PDA.
+    pub const fn terminal(&self) -> OwnerFeeFinalizationV4AccountV1 {
+        self.terminal
+    }
+
+    /// Exact carry realloc and payer close/refund/donation plan.
+    pub const fn rent(&self) -> OwnerFeeRentTransitionPlanV3 {
+        self.rent
+    }
+
+    /// Exact terminal account width used for rent and realloc postchecks.
+    pub const fn terminal_account_bytes(&self) -> usize {
+        OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4
+    }
 }
 
 impl PreparedOwnerSettlementAction38V5 {
@@ -300,6 +363,11 @@ impl PreparedOwnerSettlementAction38V5 {
     /// Canonical purpose-owned Replay successor paired with the Position write.
     pub const fn replay(&self) -> GeneralReplayTransitionPlanV1 {
         self.replay
+    }
+
+    /// Real terminal fee state only for the candidate-fee branch.
+    pub const fn finalization(&self) -> Option<PreparedOwnerFeeFinalizationV5> {
+        self.finalization
     }
 
     /// Whether this atomic transition must mint a real `0x83/4` successor.
@@ -400,6 +468,31 @@ impl PreparedOwnerFeeSnapshotV5 {
     /// Allocation-only candidate-fee evidence for the pure General composer.
     pub const fn selected_fee(&self) -> AuthenticatedSelectedOwnerFeeV4 {
         self.selected_fee
+    }
+
+    /// Exact selected composite-fee semantic record.
+    pub const fn selected(&self) -> SelectedCompositeFeeV1 {
+        self.selected
+    }
+
+    /// Exact terminal carry semantic prestate.
+    pub const fn carry(&self) -> clutch_fee_runtime_contract::selected::OwnerFeeCarryV1 {
+        self.carry
+    }
+
+    /// Persisted live carry rent owner.
+    pub const fn carry_rent(&self) -> DeletableRentOwnerV1 {
+        self.carry_rent
+    }
+
+    /// Persisted payer-snapshot rent owner.
+    pub const fn payer_rent(&self) -> DeletableRentOwnerV1 {
+        self.payer_rent
+    }
+
+    /// Stored canonical bump retained by the in-place terminal successor.
+    pub const fn carry_bump(&self) -> u8 {
+        self.carry_bump
     }
 
     /// Exact complete-data identity of the temporary payer outer.
@@ -550,6 +643,26 @@ fn require_owner_row_rent_v5(
     )
 }
 
+fn require_fee_account_rent_v5(
+    rent: DeletableRentOwnerV1,
+    fee_account: Id32,
+    settlement_root: Id32,
+    current_lamports: u64,
+) -> Outcome<()> {
+    rent.validate()?;
+    let recorded_balance_floor = rent
+        .refundable_principal
+        .checked_add(rent.donation_floor)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        rent.payer != fee_account
+            && rent.payer != settlement_root
+            && fee_account != settlement_root
+            && current_lamports >= recorded_balance_floor,
+        ClutchError::MismatchedState,
+    )
+}
+
 #[inline(never)]
 fn authenticate_owner_fee_snapshot_v5(
     program_id: &Pubkey,
@@ -663,6 +776,12 @@ fn authenticate_owner_fee_snapshot_v5(
         &borrow_data(frame.owner_fee_carry)?,
         &selected,
     )?;
+    require_fee_account_rent_v5(
+        carry_account.rent,
+        id(frame.owner_fee_carry.key),
+        context.root_account,
+        frame.owner_fee_carry.lamports(),
+    )?;
     let owner = carry_account.semantic.owner();
     expect_pda(
         frame.owner_fee_carry.key,
@@ -675,6 +794,12 @@ fn authenticate_owner_fee_snapshot_v5(
     )?;
     let payer_account =
         PayerAllocationV2AccountV1::decode_persisted(&borrow_data(frame.payer_allocation)?)?;
+    require_fee_account_rent_v5(
+        payer_account.rent,
+        id(frame.payer_allocation.key),
+        context.root_account,
+        frame.payer_allocation.lamports(),
+    )?;
     expect_pda(
         frame.payer_allocation.key,
         seeds::general_v2_payer_allocation_pda(
@@ -729,6 +854,11 @@ fn authenticate_owner_fee_snapshot_v5(
     Ok(PreparedOwnerFeeSnapshotV5 {
         root_account: context.root_account,
         owner_row: context.owner_row,
+        selected,
+        carry: carry_account.semantic,
+        carry_rent: carry_account.rent,
+        payer_rent: payer_account.rent,
+        carry_bump: carry_account.stored_bump,
         selected_fee,
     })
 }
@@ -932,6 +1062,134 @@ pub fn prepare_owner_fee_action38_v5(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn prepare_owner_fee_finalization_v5(
+    program_id: &Pubkey,
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
+    fee: &PreparedOwnerFeeAction38V5,
+    fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
+    rent_input: OwnerFeeTerminalRentInputV5<'_, '_>,
+    realization: &OwnerCashRealizationPlanV5,
+    replay: GeneralReplayTransitionPlanV1,
+) -> Outcome<Option<PreparedOwnerFeeFinalizationV5>> {
+    let (
+        PreparedOwnerFeeEvidenceV5::CandidateFee(snapshot),
+        OwnerFeeAccountInputV5::CandidateFee {
+            frame: fee_frame, ..
+        },
+        OwnerFeeTerminalRentInputV5::CandidateFee {
+            frame: rent_frame,
+            carry_terminal_rent_minimum_lamports,
+        },
+    ) = (fee.evidence(), fee_accounts, rent_input)
+    else {
+        return match (fee.evidence(), fee_accounts, rent_input) {
+            (
+                PreparedOwnerFeeEvidenceV5::NoFeeRecord(_),
+                OwnerFeeAccountInputV5::NoFeeRecord,
+                OwnerFeeTerminalRentInputV5::NoFeeRecord,
+            ) => Ok(None),
+            _ => Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        };
+    };
+
+    require_read_only_program_state(
+        program_id,
+        rent_frame.market_binding,
+        MARKET_BINDING_ACCOUNT_BYTES_V2,
+    )?;
+    let market_binding = MarketBindingV2::decode(&borrow_data(rent_frame.market_binding)?)?;
+    let binding = market_binding.base();
+    expect_pda(
+        rent_frame.market_binding.key,
+        seeds::general_v2_market_binding_pda(
+            program_id,
+            &binding.market_instance_v2_id.bytes(),
+        ),
+        Some(binding.stored_bump),
+    )?;
+    require(
+        id(rent_frame.market_binding.key) == authenticated_root.root().market_binding()
+            && binding.market == authenticated_root.root().market()
+            && binding.market_instance_v2_id
+                == authenticated_root.root().market_instance_v2_id()
+            && market_binding.batch_policy_id() == authenticated_root.root().batch_policy_id()
+            && id(rent_frame.neutral_sink.key) == binding.neutral_sink,
+        ClutchError::MismatchedState,
+    )?;
+    for destination in [
+        rent_frame.carry_rent_payer,
+        rent_frame.payer_rent_refund_owner,
+        rent_frame.neutral_sink,
+    ] {
+        require(!destination.executable, ClutchError::ExecutableAccount)?;
+        require(destination.is_writable, ClutchError::NotWritable)?;
+    }
+    require(
+        id(rent_frame.carry_rent_payer.key) == snapshot.carry_rent().payer
+            && id(rent_frame.payer_rent_refund_owner.key) == snapshot.payer_rent().payer
+            && rent_frame.neutral_sink.key != fee_frame.owner_fee_carry.key
+            && rent_frame.neutral_sink.key != fee_frame.payer_allocation.key
+            && rent_frame.carry_rent_payer.key != fee_frame.owner_fee_carry.key
+            && rent_frame.carry_rent_payer.key != fee_frame.payer_allocation.key
+            && rent_frame.payer_rent_refund_owner.key != fee_frame.owner_fee_carry.key
+            && rent_frame.payer_rent_refund_owner.key != fee_frame.payer_allocation.key,
+        ClutchError::AccountAlias,
+    )?;
+    let rent = prepare_owner_fee_rent_transition_v3(
+        OwnerFeeRentTransitionAccountsV3 {
+            carry_account: id(fee_frame.owner_fee_carry.key),
+            payer_allocation_account: id(fee_frame.payer_allocation.key),
+            neutral_sink: id(rent_frame.neutral_sink.key),
+        },
+        snapshot.carry_rent(),
+        snapshot.payer_rent(),
+        fee_frame.owner_fee_carry.lamports(),
+        fee_frame.payer_allocation.lamports(),
+        carry_terminal_rent_minimum_lamports,
+        &RuntimeSha256,
+    )?;
+    require(
+        rent.carry_top_up().lamports() == 0 || rent_frame.carry_rent_payer.is_signer,
+        ClutchError::MissingSignature,
+    )?;
+    let runtime_release = fee_runtime_semantic_release_id_v1(&RuntimeSha256)?;
+    let bindings = OwnerFeeFinalizationBindingsV2 {
+        runtime_release: FeeId(runtime_release.bytes()),
+        payer_allocation_data_id: snapshot.payer_allocation_data_id(),
+        owner_settlement_account: FeeId(realization.owner_settlement_account().bytes()),
+        owner_settlement_final_data_id: FeeId(
+            realization.finalized_owner_row_data_id().bytes(),
+        ),
+        settlement_cash_pot: FeeId(realization.settlement_cash_pot_account().bytes()),
+        position_poststate_semantic_id: FeeId(
+            replay.position_poststate_semantic_id().bytes(),
+        ),
+        replay_poststate_semantic_id: FeeId(replay.replay_poststate_semantic_id().bytes()),
+        replay_next_sequence: replay.next_sequence(),
+        settlement_cash_pot_poststate_data_id: FeeId(
+            realization.pot_poststate_data_id().bytes(),
+        ),
+        rent_disposition: rent.semantic(),
+    };
+    let semantic = OwnerFeeFinalizationReceiptV1::settle_delivery_complete_v4(
+        &snapshot.selected(),
+        &snapshot.selected_fee(),
+        &snapshot.carry(),
+        bindings,
+        realization.semantic(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(Some(PreparedOwnerFeeFinalizationV5 {
+        terminal: OwnerFeeFinalizationV4AccountV1 {
+            semantic,
+            rent: rent.carry_rent_after(),
+            stored_bump: snapshot.carry_bump(),
+        },
+        rent,
+    }))
+}
+
 /// Compose the current V5 action-38 row/Position/pot/root transition.
 ///
 /// `position_replay` and `pot_before` must come from General's exact account
@@ -947,6 +1205,7 @@ pub fn compose_owner_settlement_action38_v5(
     owner_row: &AccountInfo<'_>,
     owner_row_rent_minimum: u64,
     fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
+    fee_rent: OwnerFeeTerminalRentInputV5<'_, '_>,
     settlement_cash_pot_account: Id32,
     position_replay: GeneralPositionReplayPrestateV1,
     pot_before: SettlementCashPotV1,
@@ -996,11 +1255,25 @@ pub fn compose_owner_settlement_action38_v5(
                 == realization.fee_finalization_required(),
         ClutchError::MismatchedState,
     )?;
+    let finalization = prepare_owner_fee_finalization_v5(
+        program_id,
+        authenticated_root,
+        &fee,
+        fee_accounts,
+        fee_rent,
+        &realization,
+        replay,
+    )?;
+    require(
+        finalization.is_some() == realization.fee_finalization_required(),
+        ClutchError::MismatchedState,
+    )?;
     Ok(PreparedOwnerSettlementAction38V5 {
         fee,
         realization,
         transition_evidence_id,
         replay,
+        finalization,
     })
 }
 

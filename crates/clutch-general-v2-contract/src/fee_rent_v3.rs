@@ -10,12 +10,65 @@
 
 use clutch_fee_runtime_contract::terminal::OwnerFeeRentDispositionV2;
 use clutch_fee_runtime_contract::Id as FeeId;
+use clutch_fee_runtime_contract::codec::{
+    FEE_RECORD_ACCOUNT_V1_BYTES, FEE_RECORD_MAGIC_V1, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
+    OWNER_FEE_CARRY_MAGIC_V1, PAYER_ALLOCATION_ACCOUNT_V1_BYTES, PAYER_ALLOCATION_MAGIC_V1,
+    RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES, RECIPIENT_ALLOCATION_MAGIC_V1,
+};
+use clutch_fee_runtime_contract::terminal::{
+    OWNER_FEE_FINALIZATION_BODY_V2_BYTES, OWNER_FEE_FINALIZATION_MAGIC_V2,
+    OWNER_FEE_FINALIZATION_VERSION_V2,
+};
 
 use crate::{CodecError, DeletableRentOwnerV1, Id32, Sha256BackendV1};
 
 /// Data-ID domain for the rent-owned fee-account transition.
 pub const OWNER_FEE_RENT_TRANSITION_DATA_ID_DOMAIN_V3: &[u8] =
     b"dragons-clutch/owner-fee-rent-transition/v3\0";
+/// Content domain for the exact reviewed fee semantic schema bundle.
+pub const FEE_RUNTIME_SEMANTIC_RELEASE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fee-runtime-semantic-release/v1\0";
+
+/// Derive the exact fee semantic schema release committed by terminal state.
+///
+/// This identifies the fixed fee bodies and terminal rounding contract, not
+/// an SBF ELF, deployment, URL, or official release manifest. It is derived
+/// internally so no caller can substitute a free-form release identity.
+pub fn fee_runtime_semantic_release_id_v1<B: Sha256BackendV1>(
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    let fee_record_bytes = u64::try_from(FEE_RECORD_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let carry_bytes = u64::try_from(OWNER_FEE_CARRY_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let payer_bytes = u64::try_from(PAYER_ALLOCATION_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let recipient_bytes = u64::try_from(RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    let terminal_version = OWNER_FEE_FINALIZATION_VERSION_V2.to_le_bytes();
+    let terminal_bytes = u64::try_from(OWNER_FEE_FINALIZATION_BODY_V2_BYTES)
+        .map_err(|_| CodecError::ArithmeticOverflow)?
+        .to_le_bytes();
+    Id32::new(backend.sha256(&[
+        FEE_RUNTIME_SEMANTIC_RELEASE_DOMAIN_V1,
+        &FEE_RECORD_MAGIC_V1,
+        &fee_record_bytes,
+        &OWNER_FEE_CARRY_MAGIC_V1,
+        &carry_bytes,
+        &PAYER_ALLOCATION_MAGIC_V1,
+        &payer_bytes,
+        &RECIPIENT_ALLOCATION_MAGIC_V1,
+        &recipient_bytes,
+        &OWNER_FEE_FINALIZATION_MAGIC_V2,
+        &terminal_version,
+        &terminal_bytes,
+        b"terminal-owner-ceil/canonical-owner-rows/exact-u128-carry",
+    ]))
+}
 
 /// Exact named identities for one carry realloc and payer close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
