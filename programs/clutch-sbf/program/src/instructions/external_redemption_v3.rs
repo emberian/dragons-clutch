@@ -33,7 +33,8 @@ use super::collateral_position_v3::{
 };
 
 /// Fixed account prefix before one mint per active native outcome.
-pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize = 17;
+pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize =
+    clutch_solana_layout::collateral_v3_accounts::EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3;
 
 const IX_CLAIMANT: usize = 0;
 const IX_REALM: usize = 1;

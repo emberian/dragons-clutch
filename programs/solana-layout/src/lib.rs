@@ -35,6 +35,7 @@ compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
 pub mod artifact;
 pub mod clearing;
 pub mod collateral;
+pub mod collateral_v3_accounts;
 pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod failure_recovery;
