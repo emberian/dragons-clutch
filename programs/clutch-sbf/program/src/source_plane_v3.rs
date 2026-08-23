@@ -19,25 +19,41 @@ use clutch_liveness::{
     runtime_v1::RuntimeCompartmentKindV1,
     Id as LivenessId,
 };
-use clutch_source_plane_v3::{ContentId, StatisticKeyV3, WindowSpecV3};
+use clutch_product_series::{CompiledSourceOccurrenceV3, FixedCodec as ProductFixedCodec};
+use clutch_source_plane_v3::{
+    ContentId, OpenRawPageV3, RawPageV3, SourceHeadV3, StatisticKeyV3, SummaryProgramV3,
+    WindowSpecV3,
+};
 use clutch_source_plane_v3_adapter::{PdaRecipeV3, MAX_PDA_SEEDS};
 use clutch_source_plane_v3_runtime::{
-    account_data_id, authenticate_boundary, authenticate_source_release_account,
-    authenticate_source_route, authenticate_source_work_receipt_account, join_source_occurrence,
-    source_occurrence_record_id, AdapterInvocationV1, AuthenticatedBoundaryV1,
-    AuthenticatedClockBucketV1, AuthenticatedEvaluationV1, AuthenticatedSourceReleaseV1,
+    account_data_id, authenticate_boundary, authenticate_open_raw_page_account,
+    authenticate_raw_page_account, authenticate_reopen_lineage_account,
+    authenticate_source_head_account, authenticate_source_release_account,
+    authenticate_source_route, authenticate_source_work_receipt_account,
+    authenticate_statistic_result_absence, authenticate_statistic_result_account,
+    authenticate_window_seal_account, authenticate_window_work_account, decode_runtime_account,
+    join_source_occurrence, AdapterInvocationV1, AuthenticatedBoundaryV1,
+    AuthenticatedClockBucketV1, AuthenticatedOpenRawPageV1, AuthenticatedRawPageV1,
+    AuthenticatedReopenLineageV1, AuthenticatedSourceHeadV1, AuthenticatedSourceReleaseV1,
     AuthenticatedSourceRouteV1, AuthenticatedSourceWorkReceiptV1,
-    AuthenticatedStatisticResultAbsenceV1, AuthenticatedWindowEvidenceV1, ClockSnapshotV1,
-    FailurePolicySourceHandoffV1, OccurrenceDispositionV1, OccurrenceSourceReceiptV1,
-    ParserOutputV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
-    SourceReceiptDispositionV1, SourceReleaseManifestV1, SourceWorkReceiptAccountV1,
-    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
-    SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
+    AuthenticatedStatisticResultAbsenceV1, AuthenticatedStatisticResultAccountV1,
+    AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
+    ClockSnapshotV1, FailurePolicySourceHandoffV1, LineageAccessV1, OccurrenceDispositionV1,
+    OccurrenceSourceReceiptV1, ParserOutputV1, ReopenLineageV1, RuntimeAccountViewV1,
+    RuntimeDerivedPdaV1, RuntimeKey, SourceReceiptDispositionV1, SourceReleaseManifestV1,
+    SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
+    OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
+    REOPEN_LINEAGE_ACCOUNT_VERSION, RUNTIME_ACCOUNT_GLOBAL_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
+    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_TAG,
+    SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
+    WINDOW_WORK_ACCOUNT_TAG,
 };
 use solana_account_info::AccountInfo;
 use solana_instruction::Instruction;
 use solana_pubkey::Pubkey;
 
+use crate::accounts::Outcome;
+use crate::error::ClutchError;
 use crate::source_identity::CLOCK_SYSVAR_ID;
 use crate::source_v2::auth::{decode_clock_view, AccountViewV2, AuthV2Error};
 
@@ -47,9 +63,85 @@ const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 
+/// Route one centrally allocated SourcePlane action to its reserved-disabled handler.
+///
+/// This boundary is deliberately account-free. The dispatcher calls it before
+/// account inspection, so merely allocating actions 1 through 12 cannot make a
+/// partially implemented transition executable. The exhaustive match also
+/// prevents a newly allocated Source action from inheriting this refusal
+/// without an explicit review here.
+#[inline(never)]
+pub fn process_reserved_disabled(
+    action: clutch_solana_layout::registry::SourceSeriesAction,
+) -> Outcome<()> {
+    use clutch_solana_layout::registry::SourceSeriesAction;
+
+    match action {
+        SourceSeriesAction::RegisterRelease
+        | SourceSeriesAction::InitializeHead
+        | SourceSeriesAction::OpenRawPage
+        | SourceSeriesAction::IngestBoundaryBatch
+        | SourceSeriesAction::SealRawPage
+        | SourceSeriesAction::InitializeWindowWork
+        | SourceSeriesAction::FoldWindowPages
+        | SourceSeriesAction::SealWindow
+        | SourceSeriesAction::EvaluateStatistic
+        | SourceSeriesAction::EmitFailureHandoff
+        | SourceSeriesAction::ReopenGeneration
+        | SourceSeriesAction::CloseGeneration => Err(ClutchError::UnsupportedInstruction.into()),
+    }
+}
+
 const _: () = assert!(
     SOURCE_WORK_RECEIPT_ACCOUNT_TAG
         == clutch_solana_layout::registry::SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG
+);
+const _: () = assert!(
+    SOURCE_RELEASE_ACCOUNT_TAG == clutch_solana_layout::registry::SOURCE_V3_RELEASE_ACCOUNT_TAG
+);
+const _: () = assert!(
+    SOURCE_RELEASE_ACCOUNT_VERSION
+        == clutch_solana_layout::registry::SOURCE_V3_RELEASE_ACCOUNT_VERSION
+);
+const _: () =
+    assert!(SOURCE_HEAD_ACCOUNT_TAG == clutch_solana_layout::registry::SOURCE_V3_HEAD_ACCOUNT_TAG);
+const _: () = assert!(
+    REOPEN_LINEAGE_ACCOUNT_TAG
+        == clutch_solana_layout::registry::SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_TAG
+);
+const _: () = assert!(
+    REOPEN_LINEAGE_ACCOUNT_VERSION
+        == clutch_solana_layout::registry::SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION
+);
+const _: () = assert!(
+    OPEN_RAW_PAGE_ACCOUNT_TAG
+        == clutch_solana_layout::registry::SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_TAG
+);
+const _: () =
+    assert!(RAW_PAGE_ACCOUNT_TAG == clutch_solana_layout::registry::SOURCE_V3_RAW_PAGE_ACCOUNT_TAG);
+const _: () = assert!(
+    WINDOW_WORK_ACCOUNT_TAG == clutch_solana_layout::registry::SOURCE_V3_WINDOW_WORK_ACCOUNT_TAG
+);
+const _: () = assert!(
+    WINDOW_SEAL_ACCOUNT_TAG == clutch_solana_layout::registry::SOURCE_V3_WINDOW_SEAL_ACCOUNT_TAG
+);
+const _: () = assert!(
+    STATISTIC_RESULT_ACCOUNT_TAG
+        == clutch_solana_layout::registry::SOURCE_V3_STATISTIC_RESULT_ACCOUNT_TAG
+);
+const _: () = assert!(
+    RUNTIME_ACCOUNT_GLOBAL_VERSION
+        == clutch_solana_layout::registry::SOURCE_V3_HEAD_ACCOUNT_VERSION
+        && RUNTIME_ACCOUNT_GLOBAL_VERSION
+            == clutch_solana_layout::registry::SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_VERSION
+        && RUNTIME_ACCOUNT_GLOBAL_VERSION
+            == clutch_solana_layout::registry::SOURCE_V3_RAW_PAGE_ACCOUNT_VERSION
+        && RUNTIME_ACCOUNT_GLOBAL_VERSION
+            == clutch_solana_layout::registry::SOURCE_V3_WINDOW_WORK_ACCOUNT_VERSION
+        && RUNTIME_ACCOUNT_GLOBAL_VERSION
+            == clutch_solana_layout::registry::SOURCE_V3_WINDOW_SEAL_ACCOUNT_VERSION
+        && RUNTIME_ACCOUNT_GLOBAL_VERSION
+            == clutch_solana_layout::registry::SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION
 );
 const _: () = assert!(
     SOURCE_WORK_RECEIPT_ACCOUNT_VERSION
@@ -152,6 +244,196 @@ pub fn authenticate_release(
     .map_err(Into::into)
 }
 
+/// Authenticate one globally tagged persistent reopen-lineage PDA.
+pub fn authenticate_lineage(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    lineage_account: &AccountInfo<'_>,
+    access: LineageAccessV1,
+) -> SourceV3SbfResult<AuthenticatedReopenLineageV1> {
+    let data = lineage_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let lineage = ReopenLineageV1::decode(&data)?;
+    let recipe = PdaRecipeV3::reopen_lineage(lineage.recipe_id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_reopen_lineage_account(
+        route,
+        runtime_account_view(lineage_account, &data),
+        derived,
+        access,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate one globally tagged mutable SourceHead PDA and lineage.
+pub fn authenticate_head(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    head_account: &AccountInfo<'_>,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedSourceHeadV1> {
+    let data = head_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let (_, head) = decode_runtime_account::<SourceHeadV3>(&data, route.neutral_sink())?;
+    let recipe = PdaRecipeV3::source_head(
+        route.source_plane_contract_id(),
+        route.source_spec_id(),
+        head.repair_generation,
+    )?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_source_head_account(
+        route,
+        runtime_account_view(head_account, &data),
+        derived,
+        lineage,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate one globally tagged mutable OpenRawPage PDA and lineage.
+pub fn authenticate_open_page(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    head: AuthenticatedSourceHeadV1,
+    open_account: &AccountInfo<'_>,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedOpenRawPageV1> {
+    let data = open_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let (_, open) = decode_runtime_account::<OpenRawPageV3>(&data, route.neutral_sink())?;
+    let recipe = PdaRecipeV3::open_raw_page(
+        route.source_plane_contract_id(),
+        route.source_spec_id(),
+        open.repair_generation,
+        open.page_index,
+    )?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_open_raw_page_account(
+        route,
+        head,
+        runtime_account_view(open_account, &data),
+        derived,
+        lineage,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate one globally tagged immutable RawPage content PDA.
+pub fn authenticate_raw_page(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    page_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedRawPageV1> {
+    let data = page_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let (_, page) = decode_runtime_account::<RawPageV3>(&data, route.neutral_sink())?;
+    let recipe = PdaRecipeV3::raw_page(route.source_plane_contract_id(), page.id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_raw_page_account(route, runtime_account_view(page_account, &data), derived)
+        .map_err(Into::into)
+}
+
+/// Authenticate one globally tagged mutable WindowWork PDA and lineage.
+pub fn authenticate_window_work(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    work_account: &AccountInfo<'_>,
+    window: &WindowSpecV3,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedWindowWorkV1> {
+    let data = work_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let recipe = PdaRecipeV3::window_work(window.id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_window_work_account(
+        route,
+        runtime_account_view(work_account, &data),
+        derived,
+        window,
+        lineage,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate one globally tagged immutable WindowSeal PDA.
+pub fn authenticate_window_seal(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    seal_account: &AccountInfo<'_>,
+    window: &WindowSpecV3,
+) -> SourceV3SbfResult<AuthenticatedWindowSealAccountV1> {
+    let data = seal_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let recipe = PdaRecipeV3::window_seal(window.id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_window_seal_account(
+        route,
+        runtime_account_view(seal_account, &data),
+        derived,
+        window,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate one globally tagged immutable StatisticResult PDA.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_result_account(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    result_account: &AccountInfo<'_>,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    summary: &SummaryProgramV3,
+    evidence: AuthenticatedWindowEvidenceV1,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedStatisticResultAccountV1> {
+    let data = result_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let recipe = PdaRecipeV3::statistic_result(key.id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_statistic_result_account(
+        route,
+        runtime_account_view(result_account, &data),
+        derived,
+        window,
+        key,
+        summary,
+        evidence,
+        lineage,
+    )
+    .map_err(Into::into)
+}
+
+/// Authenticate the exact unallocated StatisticResult PDA and its never-opened lineage.
+pub fn authenticate_result_absence(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    result_account: &AccountInfo<'_>,
+    key: &StatisticKeyV3,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedStatisticResultAbsenceV1> {
+    let data = result_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let recipe = PdaRecipeV3::statistic_result(key.id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_statistic_result_absence(
+        route,
+        key,
+        runtime_account_view(result_account, &data),
+        derived,
+        lineage,
+    )
+    .map_err(Into::into)
+}
+
 /// Authenticate release account, both deployments, config, and SourceSpec bytes.
 #[allow(clippy::too_many_arguments)]
 pub fn authenticate_route(
@@ -240,7 +522,17 @@ pub fn authenticate_occurrence(
     let data = occurrence_account
         .try_borrow_data()
         .map_err(|_| SourceV3SbfError::AccountBorrow)?;
-    let occurrence_record_id = source_occurrence_record_id(&data)?;
+    let occurrence = CompiledSourceOccurrenceV3::decode(&data).map_err(|_| {
+        SourceV3SbfError::Runtime(clutch_source_plane_v3_runtime::Error::InvalidCodec)
+    })?;
+    let occurrence_record_id = ContentId::from_bytes(
+        occurrence
+            .id()
+            .map_err(|_| {
+                SourceV3SbfError::Runtime(clutch_source_plane_v3_runtime::Error::InvalidCodec)
+            })?
+            .bytes(),
+    );
     let (address, bump) =
         crate::seeds::source_occurrence_pda(program_id, &occurrence_record_id.bytes());
     let derived = RuntimeDerivedPdaV1 {
@@ -406,7 +698,7 @@ pub fn source_refusal_handoff(
     clock: AuthenticatedClockBucketV1,
     window: &WindowSpecV3,
     evidence: AuthenticatedWindowEvidenceV1,
-    evaluation: AuthenticatedEvaluationV1,
+    result_account: AuthenticatedStatisticResultAccountV1,
 ) -> SourceV3SbfResult<FailurePolicySourceHandoffV1> {
     if clock.policy_id() != route.clock_policy_id() {
         return Err(SourceV3SbfError::WrongClockAccount);
@@ -418,7 +710,7 @@ pub fn source_refusal_handoff(
         clock.snapshot(),
         window,
         evidence,
-        evaluation,
+        result_account,
     )
     .map_err(Into::into)
 }
@@ -432,7 +724,7 @@ pub fn successful_evaluation_handoff(
     clock: AuthenticatedClockBucketV1,
     window: &WindowSpecV3,
     evidence: AuthenticatedWindowEvidenceV1,
-    evaluation: AuthenticatedEvaluationV1,
+    result_account: AuthenticatedStatisticResultAccountV1,
 ) -> SourceV3SbfResult<SuccessfulEvaluationHandoffV1> {
     if clock.policy_id() != route.clock_policy_id() {
         return Err(SourceV3SbfError::WrongClockAccount);
@@ -444,7 +736,7 @@ pub fn successful_evaluation_handoff(
         clock.snapshot(),
         window,
         evidence,
-        evaluation,
+        result_account,
     )
     .map_err(Into::into)
 }
