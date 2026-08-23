@@ -22,7 +22,7 @@ pub const RUNTIME_TERMINAL_PATH_COUNT_V1: usize = 4;
 /// Exact encoded bytes in [`RuntimeLivenessPolicyV1`].
 pub const RUNTIME_LIVENESS_POLICY_BYTES_V1: usize = 404;
 /// Exact encoded bytes in [`RuntimeCompartmentV1`].
-pub const RUNTIME_LIVENESS_ACCOUNT_BYTES_V1: usize = 320;
+pub const RUNTIME_LIVENESS_ACCOUNT_BYTES_V1: usize = 392;
 
 /// Canonical compartment order used in policies, bundles, and codecs.
 pub const RUNTIME_COMPARTMENT_ORDER_V1: [RuntimeCompartmentKindV1;
@@ -70,6 +70,9 @@ pub enum RuntimeLivenessErrorV1 {
     BalanceShortfall,
     CallBudgetExhausted,
     CallCostExceedsMaximum,
+    WrongCallOrdinal,
+    WrongWorkReceipt,
+    WrongTerminalReceipt,
     AlreadyClosed,
     InvalidPhase,
     InvalidFlags,
@@ -256,6 +259,9 @@ impl RuntimeLivenessPolicyV1 {
         live(self.policy_id)?;
         live(self.realm_id)?;
         live(self.neutral_sink)?;
+        if self.neutral_sink == self.policy_id || self.neutral_sink == self.realm_id {
+            return Err(RuntimeLivenessErrorV1::IdentityAlias);
+        }
         if self.flags != 0 {
             return Err(RuntimeLivenessErrorV1::InvalidFlags);
         }
@@ -577,6 +583,19 @@ pub struct RuntimeCallMovementV1 {
     pub keeper_lamports: u64,
     pub payer: Id,
     pub payer_refund_lamports: u64,
+    pub call_ordinal: u32,
+    pub work_receipt_id: Id,
+}
+
+/// Adapter-authenticated semantic receipt for one unique bounded work item.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeCallAuthorizationV1 {
+    pub kind: RuntimeCompartmentKindV1,
+    pub account: Id,
+    pub owner: Id,
+    pub generation: u64,
+    pub call_ordinal: u32,
+    pub work_receipt_id: Id,
 }
 
 /// Adapter-observed account balance before and after one atomic transition.
@@ -596,6 +615,17 @@ pub struct RuntimeTerminalMovementV1 {
     pub neutral_sink: Id,
     pub neutral_lamports: u64,
     pub success: bool,
+    pub terminal_receipt_id: Id,
+}
+
+/// Adapter-authenticated terminal fact that makes one account deletable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeTerminalAuthorizationV1 {
+    pub kind: RuntimeCompartmentKindV1,
+    pub account: Id,
+    pub owner: Id,
+    pub generation: u64,
+    pub terminal_receipt_id: Id,
 }
 
 /// Persisted exact accounting for one mandatory runtime compartment.
@@ -605,8 +635,11 @@ pub struct RuntimeCompartmentV1 {
     pub phase: RuntimeCompartmentPhaseV1,
     pub funding_source: PresentFundingSourceV1,
     pub identity: RuntimeCompartmentIdentityV1,
+    pub last_work_receipt_id: Id,
+    pub terminal_receipt_id: Id,
     pub maximum_calls: u32,
     pub remaining_calls: u32,
+    pub completed_calls: u32,
     pub maximum_lamports_per_call: u64,
     pub capitalized_work_lamports: u64,
     pub remaining_work_lamports: u64,
@@ -654,8 +687,11 @@ impl RuntimeCompartmentV1 {
             phase: RuntimeCompartmentPhaseV1::Active,
             funding_source: admission.funding.source,
             identity: admission.identity,
+            last_work_receipt_id: Id::ZERO,
+            terminal_receipt_id: Id::ZERO,
             maximum_calls: compartment_policy.maximum_calls,
             remaining_calls: compartment_policy.maximum_calls,
+            completed_calls: 0,
             maximum_lamports_per_call: compartment_policy.maximum_lamports_per_call,
             capitalized_work_lamports: compartment_policy.work_capital_lamports()?,
             remaining_work_lamports: compartment_policy.work_capital_lamports()?,
@@ -689,6 +725,28 @@ impl RuntimeCompartmentV1 {
             return Err(RuntimeLivenessErrorV1::ZeroRentPrincipal);
         }
         if self.remaining_calls > self.maximum_calls
+            || self.completed_calls > self.maximum_calls
+        {
+            return Err(RuntimeLivenessErrorV1::ConservationFailure);
+        }
+        if (self.completed_calls == 0) != self.last_work_receipt_id.is_zero() {
+            return Err(RuntimeLivenessErrorV1::WrongWorkReceipt);
+        }
+        if !self.last_work_receipt_id.is_zero()
+            && (self.last_work_receipt_id == self.identity.account_id
+                || self.last_work_receipt_id == self.identity.neutral_sink)
+        {
+            return Err(RuntimeLivenessErrorV1::IdentityAlias);
+        }
+        if !self.terminal_receipt_id.is_zero()
+            && (self.terminal_receipt_id == self.identity.account_id
+                || self.terminal_receipt_id == self.identity.neutral_sink
+                || self.terminal_receipt_id == self.last_work_receipt_id)
+        {
+            return Err(RuntimeLivenessErrorV1::WrongTerminalReceipt);
+        }
+        if self.capitalized_work_lamports
+            != multiply_u32_u64(self.maximum_calls, self.maximum_lamports_per_call)?
             || self.remaining_work_lamports
                 != multiply_u32_u64(self.remaining_calls, self.maximum_lamports_per_call)?
         {
@@ -718,10 +776,24 @@ impl RuntimeCompartmentV1 {
         }
         match self.phase {
             RuntimeCompartmentPhaseV1::Active => {
-                if self.rent_locked_lamports != self.rent_principal_lamports
+                let active_calls = self
+                    .remaining_calls
+                    .checked_add(self.completed_calls)
+                    .ok_or(RuntimeLivenessErrorV1::ArithmeticOverflow)?;
+                let completed_reservations = multiply_u32_u64(
+                    self.completed_calls,
+                    self.maximum_lamports_per_call,
+                )?;
+                if active_calls != self.maximum_calls
+                    || add(
+                        self.keeper_paid_lamports,
+                        self.payer_refunded_work_lamports,
+                    )? != completed_reservations
+                    || self.rent_locked_lamports != self.rent_principal_lamports
                     || self.rent_refunded_lamports != 0
                     || self.neutral_sinked_work_lamports != 0
                     || self.donation_sinked_lamports != 0
+                    || !self.terminal_receipt_id.is_zero()
                 {
                     return Err(RuntimeLivenessErrorV1::InvalidPhase);
                 }
@@ -734,6 +806,7 @@ impl RuntimeCompartmentV1 {
                     || self.rent_refunded_lamports != self.rent_principal_lamports
                     || self.donation_remaining_lamports != 0
                     || self.donation_sinked_lamports != self.donation_received_lamports
+                    || self.terminal_receipt_id.is_zero()
                 {
                     return Err(RuntimeLivenessErrorV1::InvalidPhase);
                 }
@@ -745,14 +818,19 @@ impl RuntimeCompartmentV1 {
                     || self.rent_refunded_lamports != self.rent_principal_lamports
                     || self.donation_remaining_lamports != 0
                     || self.donation_sinked_lamports != self.donation_received_lamports
+                    || self.terminal_receipt_id.is_zero()
                 {
                     return Err(RuntimeLivenessErrorV1::InvalidPhase);
                 }
-                let completed_reservations = add(
+                let completed_reservations = multiply_u32_u64(
+                    self.completed_calls,
+                    self.maximum_lamports_per_call,
+                )?;
+                if add(
                     self.keeper_paid_lamports,
                     self.payer_refunded_work_lamports,
-                )?;
-                if completed_reservations % self.maximum_lamports_per_call != 0 {
+                )? != completed_reservations
+                {
                     return Err(RuntimeLivenessErrorV1::ConservationFailure);
                 }
             }
@@ -798,7 +876,7 @@ impl RuntimeCompartmentV1 {
     /// refund the unused per-call headroom to the immutable payer immediately.
     pub fn spend_call(
         mut self,
-        owner: Id,
+        authorization: RuntimeCallAuthorizationV1,
         keeper: Id,
         keeper_payment_lamports: u64,
         balances: RuntimeBalanceTransitionV1,
@@ -806,14 +884,39 @@ impl RuntimeCompartmentV1 {
         self.ensure_active()?;
         self.validate()?;
         live(keeper)?;
-        if owner != self.identity.owner {
+        if authorization.owner != self.identity.owner {
             return Err(RuntimeLivenessErrorV1::WrongOwner);
+        }
+        if authorization.kind != self.kind {
+            return Err(RuntimeLivenessErrorV1::WrongCompartment);
+        }
+        if authorization.account != self.identity.account_id {
+            return Err(RuntimeLivenessErrorV1::WrongAccount);
+        }
+        if authorization.generation != self.identity.generation {
+            return Err(RuntimeLivenessErrorV1::WrongLifecycle);
+        }
+        live(authorization.work_receipt_id)?;
+        if authorization.work_receipt_id == self.identity.account_id
+            || authorization.work_receipt_id == self.identity.neutral_sink
+        {
+            return Err(RuntimeLivenessErrorV1::IdentityAlias);
         }
         if keeper == self.identity.account_id || keeper == self.identity.neutral_sink {
             return Err(RuntimeLivenessErrorV1::IdentityAlias);
         }
         if self.remaining_calls == 0 {
             return Err(RuntimeLivenessErrorV1::CallBudgetExhausted);
+        }
+        let expected_ordinal = self
+            .completed_calls
+            .checked_add(1)
+            .ok_or(RuntimeLivenessErrorV1::ArithmeticOverflow)?;
+        if authorization.call_ordinal != expected_ordinal {
+            return Err(RuntimeLivenessErrorV1::WrongCallOrdinal);
+        }
+        if authorization.work_receipt_id == self.last_work_receipt_id {
+            return Err(RuntimeLivenessErrorV1::WrongWorkReceipt);
         }
         if keeper_payment_lamports > self.maximum_lamports_per_call {
             return Err(RuntimeLivenessErrorV1::CallCostExceedsMaximum);
@@ -828,10 +931,12 @@ impl RuntimeCompartmentV1 {
         }
         let refund = self.maximum_lamports_per_call - keeper_payment_lamports;
         self.remaining_calls -= 1;
+        self.completed_calls = expected_ordinal;
         self.remaining_work_lamports -= self.maximum_lamports_per_call;
         self.keeper_paid_lamports = add(self.keeper_paid_lamports, keeper_payment_lamports)?;
         self.payer_refunded_work_lamports =
             add(self.payer_refunded_work_lamports, refund)?;
+        self.last_work_receipt_id = authorization.work_receipt_id;
         self.validate()?;
         Ok((
             self,
@@ -842,6 +947,8 @@ impl RuntimeCompartmentV1 {
                 keeper_lamports: keeper_payment_lamports,
                 payer: self.identity.payer,
                 payer_refund_lamports: refund,
+                call_ordinal: authorization.call_ordinal,
+                work_receipt_id: authorization.work_receipt_id,
             },
         ))
     }
@@ -850,14 +957,12 @@ impl RuntimeCompartmentV1 {
     /// and rent return to the payer; every donation goes to the neutral sink.
     pub fn close_success(
         mut self,
-        owner: Id,
+        authorization: RuntimeTerminalAuthorizationV1,
         balances: RuntimeBalanceTransitionV1,
     ) -> RuntimeLivenessResultV1<(Self, RuntimeTerminalMovementV1)> {
         self.ensure_active()?;
         self.validate()?;
-        if owner != self.identity.owner {
-            return Err(RuntimeLivenessErrorV1::WrongOwner);
-        }
+        self.authenticate_terminal(authorization)?;
         self = self.observe_balance(balances.account_balance_before)?;
         if balances.account_balance_after != 0
             || self.expected_account_balance_lamports()? != balances.account_balance_before
@@ -878,6 +983,7 @@ impl RuntimeCompartmentV1 {
         self.remaining_work_lamports = 0;
         self.rent_locked_lamports = 0;
         self.donation_remaining_lamports = 0;
+        self.terminal_receipt_id = authorization.terminal_receipt_id;
         self.phase = RuntimeCompartmentPhaseV1::ClosedSuccess;
         self.validate()?;
         Ok((
@@ -890,6 +996,7 @@ impl RuntimeCompartmentV1 {
                 neutral_sink: self.identity.neutral_sink,
                 neutral_lamports: self.donation_sinked_lamports,
                 success: true,
+                terminal_receipt_id: authorization.terminal_receipt_id,
             },
         ))
     }
@@ -899,14 +1006,12 @@ impl RuntimeCompartmentV1 {
     /// payer, so interested parties cannot profit from declaring failure.
     pub fn close_failure(
         mut self,
-        owner: Id,
+        authorization: RuntimeTerminalAuthorizationV1,
         balances: RuntimeBalanceTransitionV1,
     ) -> RuntimeLivenessResultV1<(Self, RuntimeTerminalMovementV1)> {
         self.ensure_active()?;
         self.validate()?;
-        if owner != self.identity.owner {
-            return Err(RuntimeLivenessErrorV1::WrongOwner);
-        }
+        self.authenticate_terminal(authorization)?;
         self = self.observe_balance(balances.account_balance_before)?;
         if balances.account_balance_after != 0
             || self.expected_account_balance_lamports()? != balances.account_balance_before
@@ -924,6 +1029,7 @@ impl RuntimeCompartmentV1 {
         self.remaining_work_lamports = 0;
         self.rent_locked_lamports = 0;
         self.donation_remaining_lamports = 0;
+        self.terminal_receipt_id = authorization.terminal_receipt_id;
         self.phase = RuntimeCompartmentPhaseV1::ClosedFailure;
         self.validate()?;
         Ok((
@@ -936,8 +1042,35 @@ impl RuntimeCompartmentV1 {
                 neutral_sink: self.identity.neutral_sink,
                 neutral_lamports,
                 success: false,
+                terminal_receipt_id: authorization.terminal_receipt_id,
             },
         ))
+    }
+
+    fn authenticate_terminal(
+        self,
+        authorization: RuntimeTerminalAuthorizationV1,
+    ) -> RuntimeLivenessResultV1<()> {
+        if authorization.kind != self.kind {
+            return Err(RuntimeLivenessErrorV1::WrongCompartment);
+        }
+        if authorization.account != self.identity.account_id {
+            return Err(RuntimeLivenessErrorV1::WrongAccount);
+        }
+        if authorization.owner != self.identity.owner {
+            return Err(RuntimeLivenessErrorV1::WrongOwner);
+        }
+        if authorization.generation != self.identity.generation {
+            return Err(RuntimeLivenessErrorV1::WrongLifecycle);
+        }
+        live(authorization.terminal_receipt_id)?;
+        if authorization.terminal_receipt_id == self.identity.account_id
+            || authorization.terminal_receipt_id == self.identity.neutral_sink
+            || authorization.terminal_receipt_id == self.last_work_receipt_id
+        {
+            return Err(RuntimeLivenessErrorV1::WrongTerminalReceipt);
+        }
+        Ok(())
     }
 
     pub fn validate_against_policy(
@@ -979,8 +1112,12 @@ impl RuntimeCompartmentV1 {
         writer.id(self.identity.payer)?;
         writer.id(self.identity.neutral_sink)?;
         writer.u64(self.identity.generation)?;
+        writer.id(self.last_work_receipt_id)?;
+        writer.id(self.terminal_receipt_id)?;
         writer.u32(self.maximum_calls)?;
         writer.u32(self.remaining_calls)?;
+        writer.u32(self.completed_calls)?;
+        writer.reserved(4)?;
         for value in [
             self.maximum_lamports_per_call,
             self.capitalized_work_lamports,
@@ -1022,15 +1159,22 @@ impl RuntimeCompartmentV1 {
             neutral_sink: reader.id()?,
             generation: reader.u64()?,
         };
+        let last_work_receipt_id = reader.id()?;
+        let terminal_receipt_id = reader.id()?;
         let maximum_calls = reader.u32()?;
         let remaining_calls = reader.u32()?;
+        let completed_calls = reader.u32()?;
+        reader.reserved(4)?;
         let value = Self {
             kind,
             phase,
             funding_source,
             identity,
+            last_work_receipt_id,
+            terminal_receipt_id,
             maximum_calls,
             remaining_calls,
+            completed_calls,
             maximum_lamports_per_call: reader.u64()?,
             capitalized_work_lamports: reader.u64()?,
             remaining_work_lamports: reader.u64()?,
@@ -1074,6 +1218,7 @@ pub struct RuntimeLivenessBundleBindingV1 {
     pub owners: [Id; RUNTIME_COMPARTMENT_COUNT_V1],
     pub payers: [Id; RUNTIME_COMPARTMENT_COUNT_V1],
     pub generations: [u64; RUNTIME_COMPARTMENT_COUNT_V1],
+    pub funding_sources: [PresentFundingSourceV1; RUNTIME_COMPARTMENT_COUNT_V1],
 }
 
 impl RuntimeLivenessBundleV1 {
@@ -1198,6 +1343,8 @@ impl RuntimeLivenessBundleV1 {
         let mut owners = [Id::ZERO; RUNTIME_COMPARTMENT_COUNT_V1];
         let mut payers = [Id::ZERO; RUNTIME_COMPARTMENT_COUNT_V1];
         let mut generations = [0u64; RUNTIME_COMPARTMENT_COUNT_V1];
+        let mut funding_sources = [PresentFundingSourceV1::ExternalSignerNativeLamports;
+            RUNTIME_COMPARTMENT_COUNT_V1];
         let mut index = 0usize;
         while index < RUNTIME_COMPARTMENT_COUNT_V1 {
             let identity = self.compartments[index].identity;
@@ -1205,6 +1352,7 @@ impl RuntimeLivenessBundleV1 {
             owners[index] = identity.owner;
             payers[index] = identity.payer;
             generations[index] = identity.generation;
+            funding_sources[index] = self.compartments[index].funding_source;
             index += 1;
         }
         Ok(RuntimeLivenessBundleBindingV1 {
@@ -1216,6 +1364,7 @@ impl RuntimeLivenessBundleV1 {
             owners,
             payers,
             generations,
+            funding_sources,
         })
     }
 
