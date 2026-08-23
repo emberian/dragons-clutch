@@ -81,6 +81,17 @@ General V2 reserves local actions 1 through 38, in order:
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
 
+StructuredClaim `75/1` reserves actions 1 through 8:
+
+1. `CreateDescriptor`
+2. `WrapCanonical`
+3. `WrapFull`
+4. `UnwrapCanonical`
+5. `UnwrapFull`
+6. `CompactDonation`
+7. `RedeemTerminal`
+8. `RetireDescriptor`
+
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:
 
@@ -114,8 +125,11 @@ actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
-The other three family action spaces are empty: every local action is unknown
-until an atomic design wave fixes its payload and capability contract.
+The Dealer and recovery family action spaces remain empty: every local action
+there is unknown until an atomic design wave fixes its payload and capability
+contract. StructuredClaim payload codecs are owned by its separately integrated
+runtime and adapter; this central allocation does not duplicate or activate
+them.
 
 ## Coordinated successor account block
 
