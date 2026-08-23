@@ -374,6 +374,10 @@ impl NativeResolutionAccount {
     }
 }
 
+// General point resolution repeatedly reaches these primitives through both
+// hostile decode and state re-encoding. Sharing them is smaller on SBF while
+// leaving the Full and Direct compilation products byte-for-byte untouched.
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn check_required_hash(value: Hash32) -> Result<()> {
     Hash32::new(value.bytes()).map(|_| ())
 }
@@ -382,6 +386,7 @@ fn put_hash(out: &mut [u8], offset: usize, value: Hash32) {
     out[offset..offset + 32].copy_from_slice(&value.bytes());
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn get_hash(input: &[u8], offset: usize) -> Hash32 {
     let mut bytes = [0_u8; 32];
     bytes.copy_from_slice(&input[offset..offset + 32]);

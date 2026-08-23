@@ -1613,6 +1613,11 @@ impl OrderSlot {
     }
 }
 
+// The General product reaches these validators from enough distinct hostile
+// decoders that SBF's normal inlining duplicates more text than it removes.
+// Keep the smaller products' established codegen while sharing one checked
+// implementation in the General ELF.
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn check_hash(hash: Hash32) -> Result<()> {
     if hash == Hash32::ZERO {
         Err(CodecError::ZeroIdentity)
@@ -1621,6 +1626,7 @@ fn check_hash(hash: Hash32) -> Result<()> {
     }
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn check_count(count: u8) -> Result<()> {
     if count < 2 || count as usize > MAX_OUTCOMES {
         Err(CodecError::InvalidCount)
@@ -1643,6 +1649,7 @@ fn check_create_market_fields(
     check_hash(feed)
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn check_header(input: &[u8], tag: u8, version: u8, len: usize) -> Result<()> {
     if input.len() < len {
         return Err(CodecError::Truncated);
@@ -1661,6 +1668,7 @@ fn check_header(input: &[u8], tag: u8, version: u8, len: usize) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn check_padded_amounts(values: &[u64; MAX_OUTCOMES], active: usize) -> Result<()> {
     let mut i = active;
     while i < MAX_OUTCOMES {
