@@ -132,7 +132,7 @@ pub const CLOSE_SERIES_ARTIFACT_END_V2: usize = 41;
 /// Semantic role of one ordered current FundingV2 activation account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivateSeriesFundingAccountRoleV2 {
-    /// Writable persistent Series registry/replay owner.
+    /// Read-only persistent Series registry/replay owner.
     Registry,
     /// Writable absent FundingV2 PDA.
     Funding,
@@ -609,7 +609,7 @@ const fn close_meta(
 /// Frozen full account order for current FundingV2 physical retirement.
 pub const CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2:
     [CloseSeriesFundingAccountMetaV2; CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
-    close_meta(CloseSeriesFundingAccountRoleV2::Registry, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::Registry, false, false, false),
     close_meta(CloseSeriesFundingAccountRoleV2::Funding, false, true, false),
     close_meta(CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund, false, true, false),
     close_meta(CloseSeriesFundingAccountRoleV2::NeutralLamportSink, false, true, false),
@@ -2134,6 +2134,20 @@ mod tests {
                     let mut observed = observed_close_meta(index);
                     if index == funding {
                         observed.writable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        let registry = CloseSeriesFundingAccountRoleV2::Registry.index();
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == registry {
+                        observed.writable = true;
                     }
                     Some(observed)
                 },

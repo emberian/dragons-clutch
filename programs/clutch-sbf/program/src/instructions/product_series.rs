@@ -376,7 +376,7 @@ fn process_activate_funding(
         registry_account,
         request.series_plan_id,
         &rent,
-        true,
+        false,
     )?;
     let artifacts = authenticate_series_artifact_accounts_v4(
         program_id,
@@ -384,7 +384,7 @@ fn process_activate_funding(
         request.series_plan_id,
         registry.value().funding_terms_id,
     )?;
-    let registry_refs = authenticate_series_registry_capability_refs_v2_for_mutation(
+    let registry_refs = authenticate_series_registry_capability_refs_v2(
         program_id,
         registry_account,
         request.series_plan_id,
@@ -4753,7 +4753,7 @@ fn retire_series_funding_physical_v2<'a>(
         registry_account,
         projection.series_plan_id,
         &preflight.rent,
-        true,
+        false,
     )?;
     require(
         registry_after == registry_before
