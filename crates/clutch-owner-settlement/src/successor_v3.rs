@@ -600,9 +600,7 @@ pub fn derive_settlement_receipt_data_id_v3<H: SettlementReceiptDataHashV3>(
     exact_receipt_body: &[u8; SETTLEMENT_RECEIPT_BODY_V3_BYTES],
     hash: &H,
 ) -> Result<SettlementReceiptDataIdV3> {
-    if authenticated_receipt_pda == [0; 32]
-        || exact_receipt_body[..4] != [0x0f, 3, 0, 0]
-    {
+    if authenticated_receipt_pda == [0; 32] || exact_receipt_body[..2] != [0x0f, 3] {
         return Err(Error::InvalidAccount);
     }
     let mut transcript = [0u8; SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V3_BYTES];
@@ -2064,7 +2062,7 @@ mod tests {
     #[test]
     fn receipt_data_id_refuses_non_v3_outer_bytes() {
         let mut body = [0u8; SETTLEMENT_RECEIPT_BODY_V3_BYTES];
-        body[..4].copy_from_slice(&[0x0f, 2, 0, 0]);
+        body[..2].copy_from_slice(&[0x0f, 2]);
         assert_eq!(
             derive_settlement_receipt_data_id_v3([1; 32], &body, &PrefixHash),
             Err(Error::InvalidAccount)

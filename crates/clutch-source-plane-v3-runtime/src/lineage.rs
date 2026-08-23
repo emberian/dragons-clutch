@@ -287,6 +287,10 @@ pub fn authenticate_reopen_lineage_account(
     bytes[64..96].copy_from_slice(&account_data_id.bytes());
     bytes[96..128].copy_from_slice(&lineage.id()?.bytes());
     bytes[128] = derived_pda.bump;
+    bytes[129] = match access {
+        LineageAccessV1::ReadOnly => 1,
+        LineageAccessV1::Mutable => 2,
+    };
     Ok(AuthenticatedReopenLineageV1 {
         lineage,
         account_data_id,

@@ -55,14 +55,15 @@
 //!
 //! ## What this instruction creates, and what it still does not
 //!
-//! It creates both the seven-account program state plane and the Token-2022
-//! plane. The canonical Market, Hoard, founding Position, kernel aggregate,
+//! It creates the seven-account program state plane, the Token-2022 outcome
+//! plane, and the Realm-selected collateral Hoard. The canonical Market,
+//! Hoard, founding Position, kernel aggregate,
 //! founding Replay, SupplyLedger, and Resolution addresses must be genuinely
 //! absent System-owned slots: zero lamports, zero data, writable, and
 //! non-executable. All seven are rent-funded by the creator and assigned to
 //! this program with signed System CPIs. One outcome mint per active outcome
-//! and the Hoard's token account are then created and initialized through
-//! Token-2022.
+//! and the Hoard's token account are then created through their independently
+//! authenticated token-program roles.
 //!
 //! This is what closes the optional-leg hole of
 //! `docs/implementation/TOKEN2022_PLAN.md` §0.2.  Until a market could be
@@ -88,11 +89,11 @@
 //!   the old residue ("a market created today exists and cannot accept
 //!   collateral") is closed.  [`validate_initial_plane`] re-checks that the
 //!   written cap equals the terms' cap, so a founding write cannot invent
-//!   one. The offline reference's `validate_market_init` takes the 266-byte
-//!   collateral policy as evidence and refuses a cap above its mint ceiling.
-//!   **That evidence account is in this plane** ([`IX_POLICY`]), bound to
-//!   the Profile by recomputed digest, so `admit_collateral` discharges the
-//!   ceiling check on chain.
+//!   one. The live path takes the canonical `CollateralPolicyV2` account as
+//!   evidence and refuses a cap above its mint ceiling. **That evidence
+//!   account is in this plane** ([`IX_POLICY`]), joined through Profile V2 to
+//!   the exact compiled adapter release, so `admit_collateral` discharges the
+//!   ceiling check on chain without caller-shaped deployment facts.
 //! - [`MarketAccount::created_slot`] is written **`0`**.  The honest value is
 //!   the `Clock` sysvar slot, and this crate has no clock plane: no sysvar
 //!   dependency, no sysvar account role, and adding either is a shared-file
@@ -169,12 +170,20 @@
 //! absent target addresses and reports the transaction's consumed units.
 
 use crate::accounts::{
-    self, expect_pda, require, require_distinct, require_signer, require_two_term_closure,
-    MarketFacts, Outcome, RealmFacts, StateRole, SupplyFacts, TermsFacts,
+    self, expect_pda, require, require_signer, require_two_term_closure, MarketFacts, Outcome,
+    RealmFacts, StateRole, SupplyFacts, TermsFacts,
 };
+use crate::claim_release::authenticate_claim_issuance_v1;
+use crate::collateral_release::authenticate_realm_collateral_v2;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use crate::token;
+use clutch_collateral_adapter_v2::{
+    admit_collateral_account_v2, admit_collateral_mint_v2, prepare_hoard_creation_v2,
+    refine_market_collateral_v2, BoundCollateralProfileV2, CustodyCreationPlanV2,
+    CustodyInitializationStepV2, Id as CollateralId, MarketCollateralBindingV2,
+    RuntimeAccountViewV2, TokenAccountRoleV2,
+};
 use clutch_kernel::{
     BasisMode, MarketState, PayoutSet, PayoutVector, Phase, MAX_OUTCOMES as KERNEL_MAX_OUTCOMES,
 };
@@ -193,6 +202,8 @@ use clutch_solana_reference::{
     REPLAY_ACCOUNT_LEN,
 };
 use solana_account_info::AccountInfo;
+use solana_cpi::invoke;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::construction::{self, MarketStateBumps, MarketStateIdentity, MarketStateTargets};
@@ -248,12 +259,13 @@ const INPUT_STATE_ROLES: [StateRole; 3] = [
 
 /// Accounts this instruction takes before the one-per-outcome mints.
 ///
-/// Eleven state/actor accounts, then the Realm's 266 collateral-policy bytes, the
-/// token program, the collateral mint, the System program, the Rent sysvar,
-/// the Hoard's signing authority, and the Hoard token account.  The outcome
-/// mints follow, one per active outcome, so the exact count is
+/// Eleven state/actor accounts, then the Realm's canonical CollateralPolicyV2,
+/// release-selected collateral token program, collateral mint, System program,
+/// Rent sysvar, Hoard signing authority, Hoard token account, and the separate
+/// Token-2022 outcome-issuance program. The outcome mints follow, one per
+/// active outcome, so the exact count is
 /// [`account_count`] and not a constant.
-pub const ACCOUNT_COUNT_BASE: usize = 18;
+pub const ACCOUNT_COUNT_BASE: usize = 19;
 
 /// Canonical sealed collateral-policy PDA (read-only, program-owned).
 ///
@@ -262,8 +274,10 @@ pub const ACCOUNT_COUNT_BASE: usize = 18;
 /// proves the bytes came through typed `SealArtifact`; caller-owned copies are
 /// not construction evidence.
 pub const IX_POLICY: usize = 11;
-/// The pinned Token-2022 program (read-only, executable).
-pub const IX_TOKEN_PROGRAM: usize = 12;
+/// Realm-selected collateral token program (read-only, executable).
+pub const IX_COLLATERAL_TOKEN_PROGRAM: usize = 12;
+/// Backward-compatible source spelling for the collateral program index.
+pub const IX_TOKEN_PROGRAM: usize = IX_COLLATERAL_TOKEN_PROGRAM;
 /// The collateral mint the Realm's policy names (read-only).
 pub const IX_COLLATERAL_MINT: usize = 13;
 /// The System program, which creates every account this instruction founds.
@@ -272,10 +286,12 @@ pub const IX_SYSTEM_PROGRAM: usize = 14;
 pub const IX_RENT: usize = 15;
 /// The Hoard's signing authority; holds no data and is never written.
 pub const IX_HOARD_AUTHORITY: usize = 16;
-/// The Hoard's Token-2022 collateral account, created here.
+/// The Hoard's release-selected collateral token account, created here.
 pub const IX_HOARD_TOKEN: usize = 17;
+/// Token-2022 program used only for outcome issuance (read-only, executable).
+pub const IX_OUTCOME_TOKEN_PROGRAM: usize = 18;
 /// First outcome mint; one per active outcome follows, in index order.
-pub const IX_OUTCOME_MINT_BASE: usize = 18;
+pub const IX_OUTCOME_MINT_BASE: usize = 19;
 
 /// The exact account count for a market with `outcome_count` outcomes.
 ///
@@ -288,8 +304,52 @@ pub const fn account_count(outcome_count: u8) -> usize {
     ACCOUNT_COUNT_BASE + outcome_count as usize
 }
 
-/// Bind the Realm's collateral policy, admit the collateral mint, and return
-/// the policy the Hoard's token account will be created and checked under.
+/// Refuse all role aliases except the two independent read-only program roles
+/// when this Realm also selects Token-2022 for collateral.
+///
+/// Solana privilege union means those two instruction positions may resolve to
+/// the same runtime account. That is safe: neither is writable or a signer,
+/// the collateral release authenticates one, and the outcome role separately
+/// authenticates the fixed Token-2022 program.
+fn require_market_account_distinctness(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
+    let count = accounts.len();
+    let mut left = 0usize;
+    while left < count {
+        let mut right = left + 1;
+        while right < count {
+            let allowed_program_alias =
+                left == IX_COLLATERAL_TOKEN_PROGRAM && right == IX_OUTCOME_TOKEN_PROGRAM;
+            require(
+                accounts[left].key != accounts[right].key || allowed_program_alias,
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+/// Authenticated Market refinement and exact release-selected Hoard creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AdmittedMarketCollateralV2 {
+    bound: BoundCollateralProfileV2,
+    creation: CustodyCreationPlanV2,
+}
+
+fn runtime_account_view<'a>(account: &AccountInfo<'_>, data: &'a [u8]) -> RuntimeAccountViewV2<'a> {
+    RuntimeAccountViewV2 {
+        key: CollateralId::from_bytes(account.key.to_bytes()),
+        owner_program: CollateralId::from_bytes(account.owner.to_bytes()),
+        data,
+        is_signer: account.is_signer,
+        is_writable: account.is_writable,
+        executable: account.executable,
+    }
+}
+
+/// Bind the Realm's Profile V2, policy, and compiled adapter release, refine
+/// that authority with this exact Market/Hoard, and admit the collateral mint.
 ///
 /// This is the **market-initialization** half of the two enforcement points
 /// `docs/implementation/TOKEN2022_PLAN.md` §3.4 requires; the other half is
@@ -298,73 +358,66 @@ pub const fn account_count(outcome_count: u8) -> usize {
 ///
 /// Four things happen here that nothing else in this program could do:
 ///
-/// 1. the 266 policy bytes are **bound** to the Profile by recomputed digest,
-///    so the Realm's actual frozen policy — not a well-formed impostor — is
-///    what decides;
-/// 2. the whole `COLLATERAL_PROFILES.md` matrix runs against the mint through
-///    [`token::MintPolicy::collateral`], which reads the policy's four
-///    extension bitsets rather than re-stating the matrix;
+/// 1. the canonical policy bytes are **bound** to Profile V2 by recomputed
+///    content identity and to one exact compiled release, so a well-formed
+///    impostor policy or caller-shaped deployment cannot decide;
+/// 2. the release-selected hostile-byte parser runs the exact extension matrix
+///    against the mint rather than re-stating it in SBF;
 /// 3. `collateral_cap` is checked against the policy's mint ceiling, which the
 ///    module docs above record as an obligation this program could not
 ///    discharge. It can now; and
-/// 4. **`ImmutableOwner` is required of the Realm, not merely allowed.**  This
-///    lane takes open decision 4 of `TOKEN2022_PLAN.md` in the direction §3.4
-///    argues for, and takes it at the only place it can be taken: the Hoard's
-///    whole security story is that its owner authority is a program address,
-///    `SetAuthority(AccountOwner)` is the instruction that would break that,
-///    and `ImmutableOwner` is the extension that forbids it.  A Realm whose
-///    policy does not admit the extension cannot have a Hoard this program is
-///    willing to create, and says so as
-///    [`ClutchError::TokenAccountNotAdmitted`] before anything is written.
-///
-/// The returned policy is the *account* policy for the Hoard rather than the
-/// whole 266-byte value: the caller needs exactly that and an SBF frame is
-/// 4 KiB.
+/// 4. the exact custody owner guard and ordered initialization operations come
+///    from the selected release. Token-2022 uses `ImmutableOwner`; a reviewed
+///    legacy SPL release instead relies on a sole program-derived signer and
+///    the adapter's absence of any owner-authority-change route.
 #[inline(never)]
 fn admit_collateral(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
+    market: Hash32,
     collateral_cap: u64,
     hoard_authority: Pubkey,
-) -> Outcome<token::TokenAccountPolicy> {
-    let policy_account = &accounts[IX_POLICY];
-    require(
-        policy_account.owner == program_id,
-        ClutchError::WrongProgramOwner,
+) -> Outcome<AdmittedMarketCollateralV2> {
+    let realm = authenticate_realm_collateral_v2(
+        program_id,
+        &accounts[IX_REALM],
+        &accounts[IX_PROFILE],
+        &accounts[IX_POLICY],
+        &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
     )?;
-    require(!policy_account.is_writable, ClutchError::UnexpectedWritable)?;
-    require(!policy_account.executable, ClutchError::ExecutableAccount)?;
-    require(
-        policy_account.data_len() == collateral::COLLATERAL_POLICY_BYTES,
-        ClutchError::WrongDataLength,
-    )?;
-
-    let policy = {
-        let profile = ProfileAccount::decode(&accounts[IX_PROFILE].data.borrow())?;
-        collateral::verify_profile_identity(&policy_account.data.borrow(), &profile)?
-    };
-
-    /* V1's `CurrencyRef` admits two token programs and this adapter drives one.
-     * Saying so here is more useful than discovering it at the first CPI. */
-    token::require_drivable_collateral(&policy)?;
-    policy.check_market_cap(collateral_cap)?;
-    require(
-        policy.allowed_account_extensions & collateral::EXTENSION_IMMUTABLE_OWNER != 0,
-        ClutchError::TokenAccountNotAdmitted,
-    )?;
-
-    let token_program = &accounts[IX_TOKEN_PROGRAM];
-    require(
-        *token_program.key == token::TOKEN_2022_PROGRAM_ID && token_program.executable,
-        ClutchError::WrongTokenProgram,
-    )?;
-    require(!token_program.is_writable, ClutchError::UnexpectedWritable)?;
-
+    let bound = refine_market_collateral_v2(
+        realm,
+        MarketCollateralBindingV2 {
+            market: CollateralId::from_bytes(market.bytes()),
+            realm: CollateralId::from_bytes(realm.realm().realm.bytes()),
+            profile: CollateralId::from_bytes(realm.realm().profile.bytes()),
+            collateral_cap_atoms: collateral_cap,
+            hoard_authority: CollateralId::from_bytes(hoard_authority.to_bytes()),
+            hoard_token_account: CollateralId::from_bytes(accounts[IX_HOARD_TOKEN].key.to_bytes()),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    authenticate_claim_issuance_v1(bound, &accounts[IX_OUTCOME_TOKEN_PROGRAM])?;
     let mint = &accounts[IX_COLLATERAL_MINT];
-    require(!mint.is_writable, ClutchError::UnexpectedWritable)?;
-    require(!mint.executable, ClutchError::ExecutableAccount)?;
-    token::admit_mint(mint, &token::MintPolicy::collateral(&policy))?;
-    Ok(token::TokenAccountPolicy::hoard(&policy, hoard_authority))
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_collateral_mint_v2(bound, runtime_account_view(mint, &mint_data))
+        .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))?;
+    let creation = prepare_hoard_creation_v2(bound)
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require(
+        creation.token_program
+            == CollateralId::from_bytes(accounts[IX_COLLATERAL_TOKEN_PROGRAM].key.to_bytes())
+            && creation.account
+                == CollateralId::from_bytes(accounts[IX_HOARD_TOKEN].key.to_bytes())
+            && creation.owner_authority == CollateralId::from_bytes(hoard_authority.to_bytes())
+            && creation.mint == CollateralId::from_bytes(mint.key.to_bytes())
+            && creation.step_count != 0
+            && usize::from(creation.step_count) <= creation.steps.len(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AdmittedMarketCollateralV2 { bound, creation })
 }
 
 /// Authenticate the sealed policy's content-derived address.
@@ -376,7 +429,7 @@ fn require_canonical_policy_pda(program_id: &Pubkey, accounts: &[AccountInfo]) -
         seeds::policy_pda(
             program_id,
             &profile.profile.bytes(),
-            &profile.collateral_policy_digest.bytes(),
+            &profile.collateral_policy_id.bytes(),
         ),
         None,
     )?;
@@ -396,6 +449,16 @@ fn validate_creation_roles(accounts: &[AccountInfo]) -> Outcome<()> {
     require(*rent.key == token::RENT_SYSVAR_ID, ClutchError::WrongPda)?;
     require(!rent.is_writable, ClutchError::UnexpectedWritable)?;
     require(!rent.executable, ClutchError::ExecutableAccount)?;
+    let outcome_token_program = &accounts[IX_OUTCOME_TOKEN_PROGRAM];
+    require(
+        *outcome_token_program.key == token::TOKEN_2022_PROGRAM_ID
+            && outcome_token_program.executable,
+        ClutchError::WrongTokenProgram,
+    )?;
+    require(
+        !outcome_token_program.is_writable && !outcome_token_program.is_signer,
+        ClutchError::UnexpectedWritable,
+    )?;
     Ok(())
 }
 
@@ -416,7 +479,7 @@ fn require_uncreated(account: &AccountInfo) -> Outcome<()> {
     )
 }
 
-/// Create and initialize every Token-2022 account this market needs.
+/// Create the Token-2022 outcome plane and release-selected collateral Hoard.
 ///
 /// **This is the hole `TOKEN2022_PLAN.md` §0.2 named, closed.**  Until this
 /// function existed no instruction in this program created an outcome mint or
@@ -432,9 +495,9 @@ fn require_uncreated(account: &AccountInfo) -> Outcome<()> {
 /// [`token::MintPolicy::outcome`] admission every seam instruction will run,
 /// over the bytes the token program just wrote.
 ///
-/// Then the Hoard: `CreateAccount`, `InitializeImmutableOwner`,
-/// `InitializeAccount3` owned by the Hoard *authority* PDA, and the Realm's own
-/// account policy over the result.  The two Hoard addresses stay distinct for
+/// Then the Hoard: release-selected allocation and ordered initialization,
+/// owned by the Hoard *authority* PDA, followed by admission through the exact
+/// same Realm/Profile/release binding. The two Hoard addresses stay distinct for
 /// the reason `seeds` gives — collapsing them makes the signing seeds and the
 /// account seeds the same bytes — and the founding mirror
 /// `HoardAccount::collateral_atoms == hoard_token.amount` therefore holds from
@@ -446,12 +509,13 @@ fn create_token_plane(
     accounts: &[AccountInfo],
     market_bytes: &[u8; 32],
     outcome_count: u8,
-    hoard_policy: &token::TokenAccountPolicy,
+    collateral: AdmittedMarketCollateralV2,
     rent: &genesis::RentParameters,
 ) -> Outcome<()> {
     let system = &accounts[IX_SYSTEM_PROGRAM];
     let payer = &accounts[IX_CREATOR];
-    let token_program = &accounts[IX_TOKEN_PROGRAM];
+    let collateral_token_program = &accounts[IX_COLLATERAL_TOKEN_PROGRAM];
+    let outcome_token_program = &accounts[IX_OUTCOME_TOKEN_PROGRAM];
     let authority = *accounts[IX_MARKET].key;
 
     let mut outcome = 0_u8;
@@ -471,7 +535,7 @@ fn create_token_plane(
             token::MINT_ACCOUNT_LEN,
             &[seeds::SEED_OUTCOME_MINT, market_bytes, &index, &bump],
         )?;
-        token::initialize_outcome_mint(token_program, mint, &authority)?;
+        token::initialize_outcome_mint(outcome_token_program, mint, &authority)?;
         token::admit_mint(mint, &token::MintPolicy::outcome(*mint.key, authority))?;
         outcome += 1;
     }
@@ -482,25 +546,83 @@ fn create_token_plane(
     expect_pda(hoard_token.key, derived, None)?;
     let bump = [derived.1];
     genesis::create_pda_account(
-        &token::TOKEN_2022_PROGRAM_ID,
+        collateral_token_program.key,
         payer,
         hoard_token,
         system,
         rent,
-        token::IMMUTABLE_OWNER_ACCOUNT_LEN,
+        usize::from(collateral.creation.account_bytes),
         &[seeds::SEED_HOARD_TOKEN, market_bytes, &bump],
     )?;
-    token::initialize_immutable_owner(token_program, hoard_token)?;
-    token::initialize_account3(
-        token_program,
-        hoard_token,
-        &accounts[IX_COLLATERAL_MINT],
-        accounts[IX_HOARD_AUTHORITY].key,
-    )?;
-    let observation = token::admit_token_account(hoard_token, hoard_policy)?;
+    let collateral_mint = &accounts[IX_COLLATERAL_MINT];
+    let mut step = 0usize;
+    while step < usize::from(collateral.creation.step_count) {
+        match collateral.creation.steps[step] {
+            CustodyInitializationStepV2::None => return Err(ClutchError::MismatchedState.into()),
+            CustodyInitializationStepV2::InitializeImmutableOwner { account, data } => {
+                require(
+                    account == CollateralId::from_bytes(hoard_token.key.to_bytes()),
+                    ClutchError::MismatchedState,
+                )?;
+                let instruction = Instruction::new_with_bytes(
+                    *collateral_token_program.key,
+                    &data,
+                    vec![AccountMeta::new(*hoard_token.key, false)],
+                );
+                invoke(
+                    &instruction,
+                    &[hoard_token.clone(), collateral_token_program.clone()],
+                )
+                .map_err(|_| Refusal::Adapter(ClutchError::TokenAccountNotAdmitted))?;
+            }
+            CustodyInitializationStepV2::InitializeAccount3 {
+                account,
+                mint,
+                owner_authority,
+                data,
+            } => {
+                require(
+                    account == CollateralId::from_bytes(hoard_token.key.to_bytes())
+                        && mint == CollateralId::from_bytes(collateral_mint.key.to_bytes())
+                        && owner_authority
+                            == CollateralId::from_bytes(
+                                accounts[IX_HOARD_AUTHORITY].key.to_bytes(),
+                            ),
+                    ClutchError::MismatchedState,
+                )?;
+                let instruction = Instruction::new_with_bytes(
+                    *collateral_token_program.key,
+                    &data,
+                    vec![
+                        AccountMeta::new(*hoard_token.key, false),
+                        AccountMeta::new_readonly(*collateral_mint.key, false),
+                    ],
+                );
+                invoke(
+                    &instruction,
+                    &[
+                        hoard_token.clone(),
+                        collateral_mint.clone(),
+                        collateral_token_program.clone(),
+                    ],
+                )
+                .map_err(|_| Refusal::Adapter(ClutchError::TokenAccountNotAdmitted))?;
+            }
+        }
+        step += 1;
+    }
+    let hoard_data = hoard_token
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let observation = admit_collateral_account_v2(
+        collateral.bound,
+        runtime_account_view(hoard_token, &hoard_data),
+        TokenAccountRoleV2::Hoard,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::TokenAccountNotAdmitted))?;
     /* The founding market holds no collateral, so the mirror the collateral
      * transitions preserve is established here at zero rather than assumed. */
-    token::require_hoard_mirror(0, observation.amount)
+    token::require_hoard_mirror(0, observation.amount_atoms)
 }
 
 /* ------------------------------------------------------------------------ */
@@ -627,7 +749,8 @@ struct ProfileInitFacts {
     profile: Hash32,
     realm: Hash32,
     version: u8,
-    collateral_policy_digest: Hash32,
+    collateral_policy_id: Hash32,
+    adapter_release_id: Hash32,
     flags: u8,
 }
 
@@ -723,7 +846,8 @@ fn read_profile_init(data: &[u8]) -> Outcome<ProfileInitFacts> {
         profile: value.profile,
         realm: value.realm,
         version: value.version,
-        collateral_policy_digest: value.collateral_policy_digest,
+        collateral_policy_id: value.collateral_policy_id,
+        adapter_release_id: value.adapter_release_id,
         flags: value.flags,
     })
 }
@@ -972,7 +1096,8 @@ pub fn require_creation_sequence(sequence: u64) -> Outcome<()> {
 fn require_frozen_collateral_policy(profile: &ProfileInitFacts) -> Outcome<()> {
     require(
         profile.flags & PROFILE_FLAG_POLICY_FROZEN != 0
-            && profile.collateral_policy_digest != Hash32::ZERO,
+            && profile.collateral_policy_id != Hash32::ZERO
+            && profile.adapter_release_id != Hash32::ZERO,
         ClutchError::CollateralPolicyNotFrozen,
     )
 }
@@ -1566,7 +1691,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
     require_signer(creator)?;
     require(creator.is_writable, ClutchError::NotWritable)?;
 
-    require_distinct(accounts)?;
+    require_market_account_distinctness(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &INPUT_STATE_ROLES)?;
     require_creation_sequence(request.sequence)?;
 
@@ -1649,9 +1774,10 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
      * market cannot be founded above its Realm's ceiling by writing one cap and
      * admitting another. */
     require_canonical_policy_pda(program_id, accounts)?;
-    let hoard_policy = admit_collateral(
+    let collateral = admit_collateral(
         program_id,
         accounts,
+        market_id,
         terms_collateral_cap,
         *hoard_authority.key,
     )?;
@@ -1707,7 +1833,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         accounts,
         &market_bytes,
         intent.outcome_count,
-        &hoard_policy,
+        collateral,
         &rent,
     )?;
 
@@ -1888,8 +2014,9 @@ mod tests {
             let profile = ProfileAccount {
                 profile: profile_id,
                 realm: h(0x11),
-                collateral_policy_digest: policy.digest().expect("digest"),
-                version: 1,
+                collateral_policy_id: policy.digest().expect("digest"),
+                adapter_release_id: h(0x52),
+                version: 2,
                 flags: PROFILE_FLAG_POLICY_FROZEN,
             };
             let mut profile_bytes = vec![0_u8; account_len::PROFILE];
@@ -1913,7 +2040,7 @@ mod tests {
             self.admit().map(|_| ())
         }
 
-        fn admit(&self) -> Outcome<token::TokenAccountPolicy> {
+        fn admit(&self) -> Outcome<AdmittedMarketCollateralV2> {
             let program_id = Pubkey::new_from_array([0xc1; 32]);
             let mut cells: Vec<Cell> = (0..account_count(2)).map(|_| Cell::inert()).collect();
             cells[IX_PROFILE].data = self.profile.clone();
@@ -1931,6 +2058,7 @@ mod tests {
             admit_collateral(
                 &program_id,
                 &infos,
+                h(0x73),
                 self.cap,
                 Pubkey::new_from_array([0xa5; 32]),
             )
@@ -2062,8 +2190,9 @@ mod tests {
         let profile = ProfileAccount {
             profile: parent.identity().expect("the parent identity derives"),
             realm: h(0x11),
-            collateral_policy_digest: policy.digest().expect("digest"),
-            version: 1,
+            collateral_policy_id: policy.digest().expect("digest"),
+            adapter_release_id: h(0x52),
+            version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
         };
         let mut profile_bytes = vec![0_u8; account_len::PROFILE];
@@ -2210,7 +2339,7 @@ mod tests {
             realm: realm_hash(),
             profile: profile_hash(),
             max_outcomes: MAX_OUTCOMES as u8,
-            profile_version: 1,
+            profile_version: 2,
             stored_bump: 200,
             flags: 0,
         }
@@ -2220,8 +2349,9 @@ mod tests {
         ProfileAccount {
             profile: profile_hash(),
             realm: realm_hash(),
-            collateral_policy_digest: h(0xd0),
-            version: 1,
+            collateral_policy_id: h(0xd0),
+            adapter_release_id: h(0x52),
+            version: 2,
             flags: PROFILE_FLAG_POLICY_FROZEN,
         }
     }
@@ -2846,8 +2976,9 @@ mod tests {
         let unfrozen = ProfileAccount {
             profile: profile_hash(),
             realm: realm_hash(),
-            collateral_policy_digest: Hash32::ZERO,
-            version: 1,
+            collateral_policy_id: Hash32::ZERO,
+            adapter_release_id: Hash32::ZERO,
+            version: 2,
             flags: 0,
         };
         founded.profile = encoded(account_len::PROFILE, |out| unfrozen.encode(out));
@@ -2869,7 +3000,7 @@ mod tests {
             realm: realm_hash(),
             profile: profile_hash(),
             max_outcomes: 8,
-            profile_version: 1,
+            profile_version: 2,
             stored_bump: 200,
             flags: 0,
         };

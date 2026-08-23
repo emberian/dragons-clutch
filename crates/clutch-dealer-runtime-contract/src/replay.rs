@@ -459,7 +459,7 @@ pub struct DealerTransitionIntentV1 {
     /// Position generation expected after the transition.
     ///
     /// It is equal to the pre-generation for ordinary steps and exactly one
-    /// greater for a generation-consuming Finalize, Abort, or terminal step.
+    /// greater for a generation-consuming Lapse, Finalize, Abort, or terminal step.
     pub position_generation_after: u64,
     /// Ordinal consumed from Replay.
     pub expected_ordinal: u64,
@@ -475,13 +475,19 @@ impl DealerTransitionIntentV1 {
         for identity in [
             self.replay_account_id,
             self.replay_pre_id,
-            self.state_pre_content_id,
             self.state_post_content_id,
             self.position_pre_semantic_id,
             self.position_post_semantic_id,
             self.asset_transfer_bundle_id,
         ] {
             identity.validate_live()?;
+        }
+        if self.action == DealerRuntimeActionV1::Initialize {
+            if !self.state_pre_content_id.is_zero() {
+                return Err(Error::MismatchedBinding);
+            }
+        } else {
+            self.state_pre_content_id.validate_live()?;
         }
         let external_receipt_present = !self.liveness_receipt_semantic_id.is_zero();
         match self.liveness_mode {
@@ -521,7 +527,8 @@ impl DealerTransitionIntentV1 {
         }
         let consumes_generation = matches!(
             self.action,
-            DealerRuntimeActionV1::FinalizeSettlement
+            DealerRuntimeActionV1::LapseEpoch
+                | DealerRuntimeActionV1::FinalizeSettlement
                 | DealerRuntimeActionV1::AbortBeforeCollection
         );
         if consumes_generation

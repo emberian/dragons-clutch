@@ -110,6 +110,17 @@ and rejoins every reservation generation. Controller, replay, purpose binding,
 cash, and native-Egg state remain committed by that data ID even though frozen
 orders distinguish only their semantic Position owner.
 
+The authoritative account-local action-25 composer accepts only OrderPage V5,
+the canonical ordinary-General Position purpose profile, and the exact
+`0x81/3` OwnerSettlement row. It consumes the V5 slot's authenticated Position
+generation, rederives the Receipt V3 prestate through the typed owner-V3 hash
+domain, and advances the receipt latch, row, Reservation, and GEN1 Replay as
+one write set while leaving Position unchanged. Only the canonical terminal
+buy end carries `Reservation.remaining_cash_atoms` into the mutable row; the
+completed-order mask and Reservation's zeroed successor make that ownership
+handoff once-only. The older compact V3 composer remains a withdrawn reference
+for the V2 row and pre-V5 page shape.
+
 Terminal fee inputs come from the private authenticated fee-runtime projection,
 including explicit zero rows for sellers. The bridge recomputes
 `CandidateSettlementTotalsV1`, canonical owner rows, receipt accounting inputs,

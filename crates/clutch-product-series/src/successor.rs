@@ -860,7 +860,7 @@ pub struct RegistryCapabilityProjectionV2 {
 }
 
 impl RegistryCapabilityProjectionV2 {
-    fn validate_shape(self) -> Result<()> {
+    pub(crate) fn validate_shape(self) -> Result<()> {
         self.registry_release_id.validate()?;
         self.capability_profile_id.validate()?;
         self.semantic_owners.validate()?;

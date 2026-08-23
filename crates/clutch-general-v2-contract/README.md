@@ -253,23 +253,13 @@ credits refuse and retry without consuming replay or liveness when liquidity
 is absent. The adapter derives the canonical finalized 288-byte row data ID;
 it is neither caller supplied nor copied into the row. The
 one-way row state and in-place fee finalization receipt own persistent replay.
-No live SBF success transition exists: creating the 288-byte semantic body requires the
+No success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per
 participating owner, checked candidate totals, and a canonically derived owner
 order-set digest. General V2 does not yet expose that complete projection.
 The 292-byte outer row stores only tag/version, that semantic body, bump, and
 zero flags. Its pre-fund-safe creation plan must atomically update the separate
 rent ledger that owns payer principal, refund recipient, and donation sink.
-
-The capability-disabled fee composer now rederives the V2 row/Position/pot
-realization, derives purpose Replay V3 in the same plan, uses the finalized row
-data ID as Replay transition identity, and uses the exact deleted `0x84` payer
-outer data ID as distinct Replay evidence. The existing `0x83/1` carry is
-reallocated in place to exact 500-byte `0x83/2`; payer principal and hostile
-prefunding remain separate refund/neutral-sink transfers. The SBF seam freezes
-strict PDA, outer-version, data-ID, byte-postimage, close, and lamport-delta
-checks, but exports no dispatch route until the authoritative rent ledger and
-exhaustive signed-envelope loader can mint the pure plan.
 
 Action 26 is renamed `ConsumeDirectReceiptEggs` and has the exact disabled
 64-byte selector `epoch || receipt`. The imported

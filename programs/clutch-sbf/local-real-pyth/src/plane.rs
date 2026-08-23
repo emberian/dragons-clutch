@@ -1322,6 +1322,7 @@ pub fn create_market(actor: Address, lab: &LabPlane) -> Instruction {
         AccountMeta::new_readonly(RENT_SYSVAR, false),
         AccountMeta::new_readonly(lab.plane.hoard_authority.address, false),
         AccountMeta::new(lab.plane.hoard_token.address, false),
+        AccountMeta::new_readonly(TOKEN_2022, false),
     ];
     metas.extend(
         lab.plane

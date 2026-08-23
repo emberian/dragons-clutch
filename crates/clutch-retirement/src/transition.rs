@@ -4,7 +4,8 @@ use crate::{
     canonical_epoch_generation, AuthenticatedEpochBudgetDispositionV1, CandidateStatusWitnessV1,
     DeletableRentOwnerV1, EpochChildKindV1, EpochRetirementTailV1, GeneralEpochPhaseV2,
     GeneralEpochTombstoneV1, Identity32V1, MarketEpochCursorV1, PositionRetirementTailV1,
-    PositionTombstoneV1, PositionTombstoneV2, RentSplitV2, ReservationCountTailV1,
+    PositionTerminalProjectionV3, PositionTombstoneV1, PositionTombstoneV2, PositionTombstoneV3,
+    RentSplitV2, ReplayV3HashBackend, ReplayV3TerminalProjection, ReservationCountTailV1,
     ReservationStateV1, RetirementErrorV1, RetirementErrorV2, MAX_OUTCOMES,
 };
 use clutch_candidate_lifecycle::CandidateWindowV4;
@@ -952,6 +953,126 @@ pub struct PositionReplayRetirementPlanV1 {
     pub position_balance_after: u64,
     /// Exact deleted Replay balance.
     pub replay_balance_after: u64,
+}
+
+/// Exact source accounts for one purpose-owned Position V3/Replay V3 close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PositionV3ReplayV3AccountsV1 {
+    /// Permanent Position V3 account rewritten to its V3 tombstone.
+    pub position: Identity32V1,
+    /// Exact purpose-owned Replay V3 account deleted atomically.
+    pub replay: Identity32V1,
+}
+
+/// Complete pure inputs for one terminal Position V3/Replay V3 retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PositionV3ReplayV3RetirementRequestV1<'a> {
+    /// Economically empty, close-requested Position V3 projection.
+    pub position: PositionTerminalProjectionV3,
+    /// Exact hash-authenticated terminal purpose-owned Replay V3 projection.
+    pub replay: ReplayV3TerminalProjection<'a>,
+    /// Actual Position lamports before shrinking to its permanent tombstone.
+    pub position_balance: u64,
+    /// Actual Replay lamports before deletion.
+    pub replay_balance: u64,
+    /// Canonical immutable Realm neutral lamport sink.
+    pub neutral_sink: Identity32V1,
+    /// Actual source account identities authenticated by the runtime adapter.
+    pub accounts: PositionV3ReplayV3AccountsV1,
+    /// Authenticated unique balances for both persisted payers and neutral sink.
+    pub recipient_balances: RecipientBalanceBookV1,
+    /// Sequence authenticated from the signed close instruction.
+    pub signed_sequence: u64,
+}
+
+/// Atomic Position V3 tombstone plus purpose-owned Replay V3 deletion plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PositionV3ReplayV3RetirementPlanV1 {
+    /// Full-identity permanent Position V3 tombstone.
+    pub position_tombstone: PositionTombstoneV3,
+    /// Semantic identity of the exact terminal Replay prefix and extension.
+    pub terminal_replay_semantic_id: Identity32V1,
+    /// Alias-coalesced, overflow-checked payer and neutral-sink credits.
+    pub recipient_credits: CoalescedRecipientCreditsV1,
+    /// Exact permanent tombstone principal retained by Position.
+    pub position_balance_after: u64,
+    /// Replay is deleted to zero lamports.
+    pub replay_balance_after: u64,
+}
+
+/// Plan the canonical Position V3 plus purpose-owned Replay V3 retirement.
+///
+/// Purpose handlers alone may terminalize their Replay extension. This common
+/// planner deliberately does not interpret those bytes: it authenticates the
+/// shared Position/Replay/purpose/generation/sequence join and moves only the
+/// two independently persisted lamport-rent compartments. Position cash,
+/// native Eggs, collateral principal, fees, and liveness funding cannot enter
+/// this transition.
+pub fn plan_position_v3_replay_v3_retirement_v1<B: ReplayV3HashBackend>(
+    request: PositionV3ReplayV3RetirementRequestV1<'_>,
+    backend: &B,
+) -> Result<PositionV3ReplayV3RetirementPlanV1, RetirementErrorV2> {
+    let position = request.position.position();
+    let replay = request.replay.header();
+    if request.accounts.position == request.accounts.replay
+        || position.replay_account() != request.accounts.replay
+        || replay.position_account() != request.accounts.position
+        || replay.replay_account() != request.accounts.replay
+        || replay.purpose() != position.purpose()
+        || replay.purpose_binding_id() != position.purpose_binding_id()
+        || replay.position_generation() != position.generation()
+        || replay.next_sequence() != request.signed_sequence
+    {
+        return Err(RetirementErrorV2::ReplayMismatch);
+    }
+    require_no_source_recipient_alias(
+        &[request.accounts.position, request.accounts.replay],
+        request.recipient_balances,
+    )?;
+
+    let position_disposition = rent_disposition(
+        position.rent(),
+        request.position_balance,
+        request.neutral_sink,
+    )
+    .map_err(RetirementErrorV2::from)?;
+    let replay_disposition =
+        deletable_rent_disposition(replay.rent(), request.replay_balance, request.neutral_sink)?;
+    let mut credits = CoalescedRecipientCreditsV1::begin(request.recipient_balances)?;
+    credits.credit(
+        request.recipient_balances,
+        position_disposition.payer,
+        position_disposition.payer_refund_lamports,
+    )?;
+    credits.credit(
+        request.recipient_balances,
+        replay_disposition.payer,
+        replay_disposition.payer_refund_lamports,
+    )?;
+    credits.credit(
+        request.recipient_balances,
+        request.neutral_sink,
+        position_disposition.neutral_lamports,
+    )?;
+    credits.credit(
+        request.recipient_balances,
+        request.neutral_sink,
+        replay_disposition.neutral_lamports,
+    )?;
+
+    let position_tombstone = request.position.tombstone()?;
+    if position_disposition.tombstone_lamports
+        != position_tombstone.fields().permanent_tombstone_principal
+    {
+        return Err(RetirementErrorV2::NonCanonicalState);
+    }
+    Ok(PositionV3ReplayV3RetirementPlanV1 {
+        position_tombstone,
+        terminal_replay_semantic_id: request.replay.semantic_id(backend)?,
+        recipient_credits: credits,
+        position_balance_after: position_disposition.tombstone_lamports,
+        replay_balance_after: 0,
+    })
 }
 
 /// Complete pure inputs for one Position/Replay retirement plan.

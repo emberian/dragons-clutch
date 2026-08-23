@@ -180,12 +180,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-client-contract"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-owner-settlement",
  "clutch-solana-layout",
+]
+
+[[package]]
+name = "clutch-dealer-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-fee-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-owner-settlement",
+]
+
+[[package]]
+name = "clutch-general-v2-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-fee-runtime-contract",
+ "clutch-owner-settlement",
 ]
 
 [[package]]
@@ -200,23 +231,62 @@ version = "0.1.0"
 name = "clutch-local-real-pyth"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bincode",
  "clutch-batch",
  "clutch-batch-policy-identity",
  "clutch-client-contract",
+ "clutch-dealer-runtime-contract",
+ "clutch-general-v2-contract",
  "clutch-kernel",
+ "clutch-liveness",
+ "clutch-owner-settlement",
+ "clutch-product-series",
+ "clutch-retirement",
  "clutch-sbf",
  "clutch-sbf-svm-tests",
  "clutch-solana-layout",
  "clutch-solana-reference",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-adapter",
+ "clutch-source-plane-v3-runtime",
+ "clutch-structured-claim-runtime-contract",
+ "serde",
+ "serde_json",
+ "sha2",
  "solana-address",
  "solana-instruction",
+ "solana-keypair",
  "solana-transaction",
 ]
 
 [[package]]
 name = "clutch-owner-settlement"
 version = "0.1.0"
+
+[[package]]
+name = "clutch-price-measure"
+version = "0.1.0"
+dependencies = [
+ "clutch-bspline",
+]
+
+[[package]]
+name = "clutch-product-series"
+version = "0.1.0"
+dependencies = [
+ "clutch-bspline",
+ "clutch-price-measure",
+ "clutch-source-plane-v3",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-retirement"
+version = "0.1.0"
+dependencies = [
+ "clutch-candidate-lifecycle",
+]
 
 [[package]]
 name = "clutch-sbf"
@@ -227,10 +297,16 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
+ "clutch-general-v2-contract",
  "clutch-kernel",
  "clutch-liveness",
+ "clutch-price-measure",
+ "clutch-product-series",
  "clutch-solana-layout",
  "clutch-solana-reference",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-adapter",
+ "clutch-source-plane-v3-runtime",
  "solana-account-info",
  "solana-cpi",
  "solana-define-syscall 5.1.0",
@@ -281,7 +357,10 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-general-v2-contract",
  "clutch-kernel",
+ "clutch-price-measure",
+ "clutch-product-series",
  "clutch-sbf",
  "clutch-solana-layout",
  "clutch-solana-reference",
@@ -308,6 +387,62 @@ dependencies = [
  "clutch-bspline",
  "clutch-kernel",
  "clutch-solana-layout",
+]
+
+[[package]]
+name = "clutch-source-plane-v3"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-plane-v3-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-source-plane-v3",
+ "clutch-source-profile-v1",
+ "clutch-terminal-identity-v1",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-plane-v3-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-adapter",
+ "clutch-terminal-identity-v1",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-profile-v1"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "clutch-structured-claim"
+version = "0.1.0"
+dependencies = [
+ "clutch-kernel",
+]
+
+[[package]]
+name = "clutch-structured-claim-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-structured-claim",
+]
+
+[[package]]
+name = "clutch-terminal-identity-v1"
+version = "0.1.0"
+dependencies = [
+ "clutch-liveness",
 ]
 
 [[package]]

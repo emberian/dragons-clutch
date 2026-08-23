@@ -354,7 +354,7 @@ fn check_profile(rpc: &mut Rpc, walk: &Walk) -> Result<Vec<ReloadRecord>> {
     require(profile.profile == walk.profile_id, "profile: wrong identity")?;
     require(profile.realm == walk.realm_id, "profile: wrong realm")?;
     require(
-        profile.collateral_policy_digest == walk.policy_digest,
+        profile.collateral_policy_id == walk.policy_digest,
         "profile: wrong policy digest",
     )?;
     Ok(vec![record])

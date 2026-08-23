@@ -301,6 +301,28 @@ pub struct OwnerSettlementExpectationBasisV2 {
 }
 
 impl OwnerSettlementExpectationBasisV2 {
+    /// Project the pre-fee facts from an already sealed expectation.
+    ///
+    /// This validates the final expectation and strips only its selected fee.
+    /// It confers no account authentication or materialization authority.
+    pub fn from_expectation(expectation: OwnerSettlementExpectationV2) -> Result<Self> {
+        expectation.validate()?;
+        Ok(Self {
+            market: expectation.market,
+            epoch: expectation.epoch,
+            candidate: expectation.candidate,
+            owner: expectation.owner,
+            owner_order_set_digest: expectation.owner_order_set_digest,
+            price_scale: expectation.price_scale,
+            expected_buy_order_mask: expectation.expected_buy_order_mask,
+            expected_sell_order_mask: expectation.expected_sell_order_mask,
+            expected_slice_count: expectation.expected_slice_count,
+            expected_buy_price_units: expectation.expected_buy_price_units,
+            expected_sell_price_units: expectation.expected_sell_price_units,
+            reserved_cash_atoms: expectation.reserved_cash_atoms,
+        })
+    }
+
     pub const fn market(self) -> [u8; 32] {
         self.market
     }

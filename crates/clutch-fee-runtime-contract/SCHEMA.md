@@ -18,7 +18,7 @@ truth.
 | Payer allocation | `DCFEEPAY` | 2,680 | `allocate_payer_debit` from authenticated assessment and pre-transition signed envelopes | Same owner transition; temporary snapshot |
 | Recipient allocation | `DCFEEREC` | 2,640 | `allocate_recipients` from selected policy and candidate-verified standing makers | `RecipientAllocationIntentV1`; candidate-wide temporary snapshot |
 | Treasury ledger | `DCFEETRY` | 144 | `TreasuryLedgerV1::restore`, bound to selected treasury owner and ordinary Position | Begin/credit/settle transitions; owner-authorized ordinary withdrawal |
-| Owner fee finalization | `DCFEEFIN` / inner v2 | 496 | Settled path from the presence-explicit General V2 owner-cash realization; abort path from the exact V2 owner-fee/payer projection | In-place outer `0x83/2` successor; immutable until candidate terminal consumes and closes it |
+| Owner fee finalization | `DCFEEFIN` / inner v2 | 496 | Settled path from the exact General owner-cash realization plan; abort path from the exact owner transition and signed envelopes | In-place outer `0x83/2` successor; immutable until candidate terminal consumes and closes it |
 | Fee closure manifest | `DCFEECLS` | 224 | Canonical outcome/count/totals plus authenticated ordered closure-set data digest | Candidate-wide immutable terminal evidence |
 | Fee-record terminal | `DCFEEEND` | 544 | Exact selected book, owner finalizations, recipient allocation, treasury state, value disposition, and closure manifest | Candidate-wide immutable terminal evidence |
 
@@ -39,19 +39,11 @@ The owner carry keeps the same `(fee record, owner)` PDA and outer account tag
 | Immutable finalization | 2 | 496 | 2 | 500 |
 
 The v2 transition is not a reinterpretation of v1. It atomically authenticates
-the complete deleted `0x84` payer-allocation prestate data ID, final 288-byte
-presence-explicit V2 owner-row data ID, exact owner fee, canonical Position V3
-successor semantic ID, purpose-owned Replay V3 successor semantic ID and next
-sequence, canonical cash-pot successor data ID, and the data ID of the rent
-transition. The Replay transition ID is the finalized V2 row data ID and its
-distinct evidence ID is the deleted payer-allocation prestate data ID. No
-opaque duplicate finalization ID is persisted.
-
-`DCFEEFIN` stores 13 full identities, then the exact authorized fee, Position
-debit, Position credit, released cash, and Replay next sequence as five `u64`
-values, followed by 24 canonical zero bytes. It deliberately does not copy
-Position balances or cash-pot counters: their canonical successor semantic/data
-IDs retain one owner for those facts.
+the complete deleted `0x84` payer-allocation data ID, final 288-byte owner-row
+data ID, Position and cash-pot pre/post values, exact owner fee, and the data ID
+of the canonical rent-ledger transition. No opaque duplicate finalization ID is
+persisted: the one-way `0x83/1 -> 0x83/2` transition and final owner-row data ID
+are the replay fact.
 
 `OwnerFeeRentDispositionV2` requires the realloc top-up to be
 `max(v2_rent_minimum - observed_balance, 0)` and requires its authenticated
@@ -86,11 +78,15 @@ separately. `DCFEEEND` binds that manifest plus the selected economic identities
 settled/released totals, recipient amounts, and external value-disposition and
 terminal-authority receipt identities.
 
-`AuthenticatedSelectedOwnerFeeV2` derives buy-side presence from the V2 row's
-order mask and `PresentConsiderationV2`, so a present zero-price buy remains
-distinct from an absent buy. It reconstructs the exact payer allocation from
-signed reservation envelopes before any payer account can become Replay
-evidence or be deleted. `GeneralOwnerFeeFinalizationProjectionV2` and
+`project_pre_row_owner_fee_v2` consumes the owner-settlement-owned
+`OwnerSettlementExpectationBasisV2` before action 24 creates a V2 row. It
+reconstructs the exact payer allocation from signed Reservation envelopes and
+returns only `(owner, fee_atoms)`. `basis.with_selected_fee(row)` then seals the
+persisted expectation without a fee/row circular dependency. Buy-side presence
+comes from the basis mask and `PresentConsiderationV2`, so a present zero-price
+buy remains distinct from an absent buy. The terminal projection repeats this
+exact join before the payer account can become Replay evidence or be deleted.
+`GeneralOwnerFeeFinalizationProjectionV2` and
 `GeneralFeeTerminalProjectionV1` expose the authenticated owner and candidate
 facts without creating parallel semantic owners. `DealerFeeTerminalProjectionV1`
 exposes only fee policy/candidate/outcome identity and returns zero for fee,
