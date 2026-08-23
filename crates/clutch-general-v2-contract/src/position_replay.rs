@@ -45,6 +45,7 @@ const VIRTUAL_SPLIT_BUYER_ROLE: u8 = 5;
 const VIRTUAL_MERGE_SELLER_ROLE: u8 = 6;
 const STRUCTURED_GENERAL_ROLE: u8 = 7;
 const UNFILLED_RESERVATION_OWNER_ROLE: u8 = 8;
+const MERGE_PAYMENT_OWNER_ROLE: u8 = 9;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
@@ -72,6 +73,8 @@ pub enum GeneralReplayTransitionKindV1 {
     VirtualMergeSeller,
     /// Action 41 zero-fill Reservation release and co-close endpoint.
     ReleaseUnfilledReservation,
+    /// Action 40 merge Reservation payment latch; Position is unchanged.
+    FinalizeMergeReceiptPayment,
     /// Action 35 General Position endpoint of a structured exchange.
     StructuredGeneral,
     /// FractionalRedemption action 2 internal exact-lot endpoint.
@@ -152,6 +155,12 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 41,
                 UNFILLED_RESERVATION_OWNER_ROLE,
+            ),
+            Self::FinalizeMergeReceiptPayment => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                40,
+                MERGE_PAYMENT_OWNER_ROLE,
             ),
             Self::StructuredGeneral => (
                 STRUCTURED_EXCHANGE_FAMILY,
@@ -236,6 +245,12 @@ impl GeneralReplayTransitionKindV1 {
                 41,
                 UNFILLED_RESERVATION_OWNER_ROLE,
             ) => Ok(Self::ReleaseUnfilledReservation),
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                40,
+                MERGE_PAYMENT_OWNER_ROLE,
+            ) => Ok(Self::FinalizeMergeReceiptPayment),
             (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
                 Ok(Self::StructuredGeneral)
             }
@@ -834,7 +849,11 @@ where
             .bytes(),
     )?;
     let position_prestate_semantic_id = Id32::new(position_prestate.semantic_id)?;
-    let unchanged_required = kind == GeneralReplayTransitionKindV1::AccountReceiptEnd;
+    let unchanged_required = matches!(
+        kind,
+        GeneralReplayTransitionKindV1::AccountReceiptEnd
+            | GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment
+    );
     // Fractional credit transfer/merge can either realize a whole collateral
     // atom into Position cash or leave the Position body unchanged when the
     // destination residue remains below one atom. The Fractional composer owns
@@ -916,4 +935,40 @@ where
         consumed_sequence,
         next_sequence: replay_header.next_sequence(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn advanced_extension(action: u8, role: u8) -> [u8; GENERAL_REPLAY_EXTENSION_V1_BYTES] {
+        let mut body = [0u8; GENERAL_REPLAY_EXTENSION_V1_BYTES];
+        body[..32].copy_from_slice(&[1; 32]);
+        body[32..64].copy_from_slice(&[2; 32]);
+        body[64..96].copy_from_slice(&[3; 32]);
+        body[96..128].copy_from_slice(&[4; 32]);
+        body[128] = action;
+        body[129] = 1;
+        body[130] = SETTLEMENT_FAMILY;
+        body[131] = TRANSITION_VERSION_V1;
+        body[132] = role;
+        body
+    }
+
+    #[test]
+    fn action40_tuple_is_exact_and_wrong_role_is_refused() {
+        let value = GeneralReplayExtensionV1::decode(&advanced_extension(
+            40,
+            MERGE_PAYMENT_OWNER_ROLE,
+        ))
+        .unwrap();
+        assert_eq!(
+            value.last_kind(),
+            Some(GeneralReplayTransitionKindV1::FinalizeMergeReceiptPayment)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(40, OWNER_CASH_ROLE)),
+            Err(CodecError::InvalidState)
+        );
+    }
 }
