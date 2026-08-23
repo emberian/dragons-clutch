@@ -13,5 +13,7 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
+clutch-fee-runtime-contract = { path = "../clutch-fee-runtime-contract" }
+clutch-liveness = { path = "../clutch-liveness" }
 clutch-retirement = { path = "../clutch-retirement" }
 sha2 = { version = "=0.10.9", default-features = false }

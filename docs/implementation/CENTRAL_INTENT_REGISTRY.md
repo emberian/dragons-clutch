@@ -1,7 +1,7 @@
 # Central intent registry
 
-Status: registry allocation only. No successor action in this document is an
-executable runtime route.
+Status: General V2 remains registry-only. Dealer policy-catalog actions are
+executable only in one explicitly non-production laboratory profile.
 
 ## Frozen legacy space
 
@@ -33,7 +33,7 @@ family version creates a new namespace; it does not inherit capability.
 | --- | ---: | ---: | ---: | --- |
 | General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
-| Covered dealer | 76 | `0x4c` | 1 | disabled |
+| Covered dealer | 76 | `0x4c` | 1 | policy catalog only in the named non-production lab |
 | Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
 
@@ -91,6 +91,23 @@ StructuredClaim `75/1` reserves actions 1 through 8:
 6. `CompactDonation`
 7. `RedeemTerminal`
 8. `RetireDescriptor`
+
+These names allocate local tags only. They do not freeze payload bytes, account
+lists, account codecs, or transition semantics. Dealer now allocates the
+following bounded policy transport without enabling any facility/economic
+action:
+
+1. `BeginPolicy`
+2. `WritePolicy`
+3. `SealPolicy`
+4. `AbortPolicy`
+
+The exact payload widths are 72, 228, 32, and 32 bytes. `WritePolicy` carries a
+192-byte padded chunk and a strict cursor. The account coordinates `0x7d/1`
+(1,288-byte stage) and `0x7e/1` (1,204-byte immutable catalog) are part of the
+same atomic allocation. The local action values do not reuse the pure Dealer
+runtime enum's zero-based representation. `SealPolicy` persists an unadmitted
+catalog artifact; it does not initialize liquidity.
 
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:
@@ -155,10 +172,13 @@ Recovery 78/v1 reserves these local actions, all disabled:
 8. `CloseRecoveryFunding`
 9. `CloseFailureRoot`
 
-The Dealer family action space remains empty. StructuredClaim payload codecs
-are owned by its separately integrated runtime and adapter, while Recovery
-payload/account contracts are owned by its dedicated modules; this central
-allocation duplicates neither contract and activates none of these actions.
+StructuredClaim payload codecs are owned by its separately integrated runtime
+and adapter, while Recovery payload/account contracts are owned by its dedicated
+modules; this central allocation duplicates neither contract and activates none
+of these actions. Dealer facility
+actions `5..=25` are allocated in runtime order `Initialize..=Retire`, while
+only policy transport `1..=4` is executable in the existing non-production
+catalog profile. Every facility action remains capability-disabled.
 
 ## Coordinated successor account block
 
@@ -190,16 +210,28 @@ or pure runtime elsewhere does not make a route executable.
 | `0x90/1` | SourcePlane V3 | window seal |
 | `0x91/1` | SourcePlane V3 | statistic result |
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
+| `0x93/1` | Dealer | immutable liveness schedule (380 bytes) |
+| `0x94/1` | Dealer | authoritative State V2 (848 bytes) |
+| `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
+| `0x98/1` | Dealer | immutable-after-activation LP page V2 (1,028 bytes) |
+| `0x99/1` | Dealer | one-generation Lease V2 (1,044 bytes) |
+| `0x9a/1` | Dealer | SettlementPot V2 (1,236 bytes) |
+| `0x9b/1` | Dealer | counted Epoch binding V2 (772 bytes) |
+| `0x9c/1` | Dealer | page terminal allocation (756 bytes) |
+| `0x9d/1` | Dealer | streamed terminal ClaimWork (1,148 bytes) |
+| `0x9e/1` | Dealer | permanent root tombstone V2 (476 bytes) |
 | `0xa0/1` | Failure | external semantic root; root rent only |
 | `0xa1/1` | Liveness | immutable runtime policy |
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
 | `0xa3/1` | Terminal/replay | failure-generation tombstone |
 
-Tags `0x93..=0x9e` remain outside this wave's ownership for the coordinated
-Dealer design, and `0x9f` deliberately remains unallocated. The failure root
-never aliases `0xa2`, holds recovery work principal, or emits a keeper transfer.
-Accepted work rewrites the failure root and Recovery compartment atomically;
-only the latter is debited for the keeper payment and payer headroom refund.
+`0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
+Position V3 and purpose-owned Replay V3 families rather than minting local
+account-body duplicates at those coordinates. `0x9f` deliberately remains
+unallocated. The failure root never aliases `0xa2`, holds recovery work
+principal, or emits a keeper transfer. Accepted work rewrites the failure root
+and Recovery compartment atomically; only the latter is debited for the keeper
+payment and payer headroom refund.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -223,12 +255,15 @@ account-layout inventory.
 ## Capability and activation rule
 
 Capability membership is keyed by the exact triple `(family tag, family
-version, local action)`. Production profiles retain an empty General V2 set.
-The source-only
+version, local action)`. Production profiles retain empty successor executable
+sets. The distinct
+`profile-non-production-dealer-policy-catalog-lab` identity enables only
+`(76,1,1..=4)`. The separate
 `profile-non-production-general-v2-empty-book-identity-lab` enables only the
 actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
 General actions return `UnsupportedInstruction` before their handlers read
-accounts. Every allocated Source/Series action also returns
+accounts. Every production profile returns `UnsupportedInstruction` before
+reading accounts for disabled successor actions. Every allocated Source/Series action also returns
 `UnsupportedInstruction` before account reads. Unknown family versions and
 unknown local actions fail strict decoding and cannot fall into a legacy
 handler.

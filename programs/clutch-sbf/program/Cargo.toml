@@ -60,6 +60,13 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# A distinct non-production product containing only the immutable Dealer-policy
+# catalog transport. The hostile wire dependencies use their full decoders,
+# while this crate's capability table rejects every legacy action before
+# accounts. It must never be combined with another profile.
+profile-non-production-dealer-policy-catalog-lab = [
+    "profile-full",
+]
 # A deliberately non-production product whose only successes are the twelve
 # General V2 empty-book identity actions.  The dependency profiles provide the
 # narrow legacy codec substrate; this crate's capability table still rejects
@@ -87,6 +94,7 @@ clutch-collateral-adapter-v2 = {
     optional = true,
 }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
 clutch-general-v2-runtime = { path = "../../../crates/clutch-general-v2-runtime", default-features = false, optional = true }
 clutch-price-measure = { path = "../../../crates/clutch-price-measure" }

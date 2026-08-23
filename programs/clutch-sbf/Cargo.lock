@@ -80,6 +80,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-dealer-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "clutch-collateral-adapter-v2"
 version = "0.1.0"
 dependencies = [
@@ -170,6 +177,7 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
+ "clutch-dealer-runtime-contract",
  "clutch-collateral-adapter-v2",
  "clutch-general-v2-contract",
  "clutch-general-v2-runtime",

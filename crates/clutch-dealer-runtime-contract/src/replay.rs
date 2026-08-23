@@ -529,6 +529,23 @@ impl DealerTransitionIntentV1 {
         {
             return Err(Error::MismatchedBinding);
         }
+        if self.position_generation_before == 0
+            || (self.position_generation_after != self.position_generation_before
+                && self.position_generation_before.checked_add(1)
+                    != Some(self.position_generation_after))
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let consumes_generation = matches!(
+            self.action,
+            DealerRuntimeActionV1::FinalizeSettlement
+                | DealerRuntimeActionV1::AbortBeforeCollection
+        );
+        if consumes_generation
+            != (self.position_generation_after != self.position_generation_before)
+        {
+            return Err(Error::MismatchedBinding);
+        }
         Ok(())
     }
 

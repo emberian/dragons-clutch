@@ -98,6 +98,10 @@ pub const SEED_RECEIPT: &[u8] = b"dragons-clutch:receipt:v1";
 pub const SEED_GENERAL_FUNDING: &[u8] = b"dc:gen-funding:v1";
 /// Uploader-keyed typed artifact staging account seed prefix.
 pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
+/// Non-production uploader-keyed Dealer-policy stage prefix.
+pub const SEED_DEALER_POLICY_STAGE: &[u8] = b"dc-dealer-policy-stage-v1";
+/// Canonical immutable Dealer-policy prefix, frozen by the pure contract.
+pub const SEED_DEALER_POLICY: &[u8] = clutch_dealer_runtime_contract::DEALER_POLICY_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
@@ -547,6 +551,20 @@ pub fn grid_pda(program_id: &Pubkey, realm: &[u8; 32], grid: &[u8; 32]) -> (Pubk
 /// and recompute both identities from the exact bytes.
 pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_POLICY, profile, digest])
+}
+
+/// Canonical uploader-keyed stage for one exact Dealer policy identity.
+pub fn dealer_policy_stage_pda(
+    program_id: &Pubkey,
+    funder: &[u8; 32],
+    policy_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_POLICY_STAGE, funder, policy_id])
+}
+
+/// Canonical immutable Dealer policy address from the pure-contract recipe.
+pub fn dealer_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_POLICY, policy_id])
 }
 
 /// Canonical full-width batch-policy artifact address.
