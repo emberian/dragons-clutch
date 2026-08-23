@@ -7,7 +7,7 @@
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    content_id, ContentId, Error, FixedCodec, MarketInstanceV2Id, RegistryCapabilityProfileV2Id,
+    content_id, ContentId, Error, FixedCodec, MarketInstanceV2Id, RegistryCapabilityProfileV3Id,
     RegistryProgramReleaseV1Id, Result,
 };
 
@@ -214,7 +214,7 @@ pub struct MarketFamilyAggregatorBindingV1 {
     /// Registry release that authenticated the Market capabilities.
     pub registry_release_id: RegistryProgramReleaseV1Id,
     /// Capability profile that fixes the enabled-family mask.
-    pub capability_profile_id: RegistryCapabilityProfileV2Id,
+    pub capability_profile_id: RegistryCapabilityProfileV3Id,
     /// Enabled-family bits in [`MARKET_FAMILIES_V1`] order.
     pub enabled_family_mask: u8,
     /// Canonical Market-scoped family-root account identities.
@@ -475,6 +475,25 @@ pub struct MarketFamilyAggregatorV1 {
 }
 
 impl MarketFamilyAggregatorV1 {
+    /// Invalid zeroed storage used only as an out-parameter decode target.
+    /// Callers must not observe it unless [`FixedCodec::decode`] or the owning
+    /// root decoder has replaced every field and returned success.
+    pub(crate) const fn decode_buffer() -> Self {
+        Self {
+            binding: MarketFamilyAggregatorBindingV1 {
+                market_instance_id: MarketInstanceV2Id::from_bytes([0; 32]),
+                generation: 0,
+                registry_release_id: RegistryProgramReleaseV1Id::from_bytes([0; 32]),
+                capability_profile_id: RegistryCapabilityProfileV3Id::from_bytes([0; 32]),
+                enabled_family_mask: 0,
+                family_root_ids: [ContentId::ZERO; MARKET_FAMILY_COUNT_V1],
+            },
+            phase: MarketFamilyAggregatorPhaseV1::Open,
+            transition_sequence: 0,
+            families: [MarketFamilySlotV1::initial(false); MARKET_FAMILY_COUNT_V1],
+        }
+    }
+
     /// Initialize an authenticated Market binding in the open phase.
     pub fn initialize<A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized>(
         authority: &A,
@@ -836,7 +855,7 @@ impl FixedCodec for MarketFamilyAggregatorV1 {
         reader.reserved(4)?;
         let market_instance_id = MarketInstanceV2Id::from_bytes(reader.id().bytes());
         let registry_release_id = RegistryProgramReleaseV1Id::from_bytes(reader.id().bytes());
-        let capability_profile_id = RegistryCapabilityProfileV2Id::from_bytes(reader.id().bytes());
+        let capability_profile_id = RegistryCapabilityProfileV3Id::from_bytes(reader.id().bytes());
         let mut family_root_ids = [ContentId::ZERO; MARKET_FAMILY_COUNT_V1];
         let mut index = 0_usize;
         while index < MARKET_FAMILY_COUNT_V1 {

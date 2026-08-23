@@ -325,9 +325,11 @@ pub fn decode_loader_pair_v1(
 ///
 /// This deliberately does not weaken [`decode_programdata_state`]: the
 /// all-zero `Some` authority remains invalid for every observed loader state.
-/// A release adapter may select this decoder only after its immutable release
-/// row names the synthesized-genesis locus, and must still hash the complete
-/// ProgramData bytes so the deployed ELF remains part of the admitted identity.
+/// The successor registry-release adapter may select this decoder only after
+/// a content-addressed release body names `SynthesizedGenesisZero`, and this
+/// function then requires slot zero plus the exact `Some(default pubkey)`
+/// metadata image. The complete ProgramData bytes are still hashed by that
+/// adapter, so the ELF remains part of the admitted identity.
 pub fn decode_synthesized_genesis_loader_pair_v1(
     program: LoaderAccountViewV1<'_>,
     programdata: LoaderAccountViewV1<'_>,

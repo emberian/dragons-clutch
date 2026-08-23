@@ -1,12 +1,12 @@
 use clutch_product_series::{
-    ContentId, Error, FixedCodec, MarketFoundationAccountGraphV1, MarketFoundationScheduleV1,
-    MarketFoundationSlotV1, MarketInstanceV2Id, SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id,
+    ContentId, Error, FixedCodec, MarketFoundationAccountGraphV2, MarketFoundationScheduleV2,
+    MarketFoundationSlotV2, MarketInstanceV2Id, SeriesFundingQuoteV4Id, SeriesFundingTermsV2Id,
     SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationConfigurationV1,
     SeriesLinkObligationDispositionV1, SeriesLinkObligationStatusV1,
     SeriesLinkObligationTerminalProjectionV1, SeriesLinkObligationV1, SeriesMarketDispositionV1,
     SeriesMarketLinkBindingV1, SeriesMarketLinkV1, SeriesPlanV5Id, SourceOccurrenceV1Id,
-    MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
-    MARKET_FOUNDATION_SLOT_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V2, MARKET_FOUNDATION_MAX_OUTCOMES_V2,
+    MARKET_FOUNDATION_SLOT_COUNT_V2, SERIES_MARKET_LINK_BYTES_V1,
 };
 
 fn id(byte: u8) -> ContentId {
@@ -36,7 +36,7 @@ fn binding() -> SeriesMarketLinkBindingV1 {
         market_binding_id: id(4),
         disposition: SeriesMarketDispositionV1::Founder,
         funding_terms_id: SeriesFundingTermsV2Id::from_bytes([5; 32]),
-        funding_quote_id: SeriesFundingQuoteV2Id::from_bytes([6; 32]),
+        funding_quote_id: SeriesFundingQuoteV4Id::from_bytes([6; 32]),
         attachment_plan_id: id(7),
         capability_profile_id: id(8),
         obligation_configuration_id: configuration.id().unwrap(),
@@ -69,33 +69,33 @@ fn active_link() -> SeriesMarketLinkV1 {
         .unwrap()
 }
 
-fn schedule() -> MarketFoundationScheduleV1 {
-    let mut slot_principal_lamports = [0u64; MARKET_FOUNDATION_SLOT_COUNT_V1];
-    for principal in &mut slot_principal_lamports[..MARKET_FOUNDATION_CORE_SLOT_COUNT_V1 + 2] {
+fn schedule() -> MarketFoundationScheduleV2 {
+    let mut slot_principal_lamports = [0u64; MARKET_FOUNDATION_SLOT_COUNT_V2];
+    for principal in &mut slot_principal_lamports[..MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 2] {
         *principal = 1;
     }
-    let custody_start = MARKET_FOUNDATION_CORE_SLOT_COUNT_V1 + MARKET_FOUNDATION_MAX_OUTCOMES_V1;
+    let custody_start = MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + MARKET_FOUNDATION_MAX_OUTCOMES_V2;
     for principal in &mut slot_principal_lamports[custody_start..custody_start + 2] {
         *principal = 1;
     }
-    MarketFoundationScheduleV1 {
+    MarketFoundationScheduleV2 {
         outcome_count: 2,
         slot_principal_lamports,
         founding_timeout_buckets: 10,
     }
 }
 
-fn account_graph() -> MarketFoundationAccountGraphV1 {
+fn account_graph() -> MarketFoundationAccountGraphV2 {
     let schedule = schedule();
-    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V1];
+    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V2];
     let mut index = 0usize;
-    while index < MARKET_FOUNDATION_SLOT_COUNT_V1 {
+    while index < MARKET_FOUNDATION_SLOT_COUNT_V2 {
         if schedule.slot_principal_lamports[index] != 0 {
             account_ids[index] = ContentId::from_bytes([u8::try_from(index + 1).unwrap(); 32]);
         }
         index += 1;
     }
-    MarketFoundationAccountGraphV1 {
+    MarketFoundationAccountGraphV2 {
         market_instance_id: MarketInstanceV2Id::from_bytes([201; 32]),
         generation: 1,
         foundation_schedule_id: schedule.id().unwrap(),
@@ -201,10 +201,10 @@ fn foundation_graph_separates_failure_admission_and_runtime_roots() {
     let schedule = schedule();
     assert_ne!(
         graph
-            .account(MarketFoundationSlotV1::FailureAdmissionRoot)
+            .account(MarketFoundationSlotV2::FailureAdmissionRoot)
             .unwrap(),
         graph
-            .account(MarketFoundationSlotV1::FailureRuntimeRoot)
+            .account(MarketFoundationSlotV2::FailureRuntimeRoot)
             .unwrap()
     );
     assert!(graph.validate(schedule).is_ok());
@@ -214,12 +214,12 @@ fn foundation_graph_separates_failure_admission_and_runtime_roots() {
 fn foundation_graph_refuses_role_alias_and_noncanonical_tail() {
     let schedule = schedule();
     let mut aliased = account_graph();
-    aliased.account_ids[MarketFoundationSlotV1::FailureRuntimeRoot.index().unwrap()] = aliased
-        .account(MarketFoundationSlotV1::FailureAdmissionRoot)
+    aliased.account_ids[MarketFoundationSlotV2::FailureRuntimeRoot.index().unwrap()] = aliased
+        .account(MarketFoundationSlotV2::FailureAdmissionRoot)
         .unwrap();
     assert_eq!(aliased.validate(schedule), Err(Error::MismatchedArtifact));
 
     let mut tailed = account_graph();
-    tailed.account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V1 + 3] = id(250);
+    tailed.account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 3] = id(250);
     assert_eq!(tailed.validate(schedule), Err(Error::NonCanonicalPadding));
 }

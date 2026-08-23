@@ -35,12 +35,19 @@ use clutch_product_series::{
     SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV2, FixedCodec, MarketInstancePreimageV2,
-    RegistryCapabilityProfileV2, RegistryProgramReleaseV1, SeriesAttachmentPlanV2,
-    SeriesFundingQuoteV2, COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
-    MARKET_INSTANCE_PREIMAGE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
-    REGISTRY_PROGRAM_RELEASE_V1_BYTES, SERIES_ATTACHMENT_PLAN_BYTES_V2,
-    SERIES_FUNDING_QUOTE_BYTES_V2,
+    CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV4,
+    CompiledProductSeriesBundleV5, FixedCodec, MarketInstancePreimageV2,
+    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProfileV4,
+    RegistryProgramReleaseV1, RegistryProgramReleaseV2, SeriesAttachmentPlanV2,
+    SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesFundingQuoteV2, SeriesFundingQuoteV3,
+    SeriesFundingQuoteV4, COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V3_BYTES, COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES, MARKET_INSTANCE_PREIMAGE_V2_BYTES,
+    REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V3_BYTES,
+    REGISTRY_CAPABILITY_PROFILE_V4_BYTES, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
+    REGISTRY_PROGRAM_RELEASE_V2_BYTES, SERIES_ATTACHMENT_PLAN_BYTES_V2,
+    SERIES_ATTACHMENT_PLAN_BYTES_V3, SERIES_ATTACHMENT_PLAN_BYTES_V4,
+    SERIES_FUNDING_QUOTE_BYTES_V2, SERIES_FUNDING_QUOTE_BYTES_V3, SERIES_FUNDING_QUOTE_BYTES_V4,
 };
 use clutch_source_plane_v3_runtime::{
     SourceReleaseManifestV1, SourceReleaseManifestV2, SourceWorkScheduleBindingV1,
@@ -60,12 +67,19 @@ const COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES: usize = 528;
 
 const _: () = {
     assert!(REGISTRY_PROGRAM_RELEASE_V1_BYTES == 160);
-    assert!(REGISTRY_CAPABILITY_PROFILE_V2_BYTES == 816);
+    assert!(REGISTRY_CAPABILITY_PROFILE_V2_BYTES == 800);
+    assert!(REGISTRY_CAPABILITY_PROFILE_V3_BYTES == 816);
     assert!(SOURCE_RELEASE_MANIFEST_V1_BYTES == 1_008);
     assert!(SOURCE_RELEASE_MANIFEST_BYTES == 1_296);
-    assert!(SERIES_FUNDING_QUOTE_BYTES_V2 == 584);
+    assert!(SERIES_FUNDING_QUOTE_BYTES_V2 == 648);
+    assert!(SERIES_FUNDING_QUOTE_BYTES_V3 == 584);
     assert!(COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES == 528);
     assert!(SERIES_ATTACHMENT_PLAN_BYTES_V2 == 112);
+    assert!(COMPILED_PRODUCT_SERIES_BUNDLE_V3_BYTES == 528);
+    assert!(SERIES_ATTACHMENT_PLAN_BYTES_V3 == 112);
+    assert!(SERIES_FUNDING_QUOTE_BYTES_V4 == 592);
+    assert!(COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES == 528);
+    assert!(SERIES_ATTACHMENT_PLAN_BYTES_V4 == 112);
 };
 
 #[cfg(feature = "non-production-product-series-lab")]
@@ -121,6 +135,15 @@ pub const ARTIFACT_STAGE_HEADER_BYTES: usize = 2
 /// Largest artifact body admitted by this transport revision.
 pub const MAX_ARTIFACT_BYTES: usize = PRODUCT_BASIS_BYTES;
 
+/// Whether an immutable artifact coordinate admits new registrations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtifactRegistrationStatus {
+    /// New staging and sealing are admitted.
+    Current,
+    /// Coordinates remain decodable but no upload step may register them.
+    Withdrawn,
+}
+
 /// A fixed artifact family with one owning hostile-byte codec.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -157,7 +180,7 @@ pub enum ArtifactKind {
     RegistryProgramReleaseV1 = 41,
     /// Exact typed artifact graph emitted by an untrusted Product compiler.
     CompiledProductSeriesBundleV1 = 42,
-    /// Shared immutable central-registry capability profile V2.
+    /// Withdrawn historical 800-byte registry capability profile V2.
     RegistryCapabilityProfileV2 = 43,
     /// Complete reviewed SourcePlane V3 release manifest.
     SourceReleaseManifestV1 = 44,
@@ -167,12 +190,32 @@ pub enum ArtifactKind {
     MarketInstancePreimageV2 = 46,
     /// Receiver-release-authenticated SourcePlane V3 release manifest.
     SourceReleaseManifestV2 = 47,
-    /// Six-compartment recurring-Series funding quote V2.
+    /// Withdrawn historical 648-byte recurring-Series funding quote V2.
     SeriesFundingQuoteV2 = 48,
-    /// Exact successor compiler graph binding QuoteV2 and AttachmentV2.
+    /// Withdrawn compiler graph binding withdrawn QuoteV2 and AttachmentV2.
     CompiledProductSeriesBundleV2 = 49,
-    /// Operational attachment plan bound to one exact QuoteV2.
+    /// Withdrawn attachment plan bound to withdrawn QuoteV2.
     SeriesAttachmentPlanV2 = 50,
+    /// Withdrawn historical 816-byte central-registry capability profile V3.
+    RegistryCapabilityProfileV3 = 51,
+    /// Withdrawn provisional 45-slot recurring-Series funding quote V3.
+    SeriesFundingQuoteV3 = 52,
+    /// Withdrawn provisional compiler graph binding Quote/Attachment V3.
+    CompiledProductSeriesBundleV3 = 53,
+    /// Withdrawn provisional attachment plan bound to QuoteV3.
+    SeriesAttachmentPlanV3 = 54,
+    /// Current 46-slot recurring-Series funding quote V4.
+    SeriesFundingQuoteV4 = 55,
+    /// Withdrawn compiler graph binding historical ProfileV3 and Quote/Attachment V4.
+    CompiledProductSeriesBundleV4 = 56,
+    /// Current operational attachment plan bound to one exact QuoteV4.
+    SeriesAttachmentPlanV4 = 57,
+    /// Locus-explicit Registry executable release successor.
+    RegistryProgramReleaseV2 = 58,
+    /// ReleaseV2-bound central capability profile successor.
+    RegistryCapabilityProfileV4 = 59,
+    /// Current exact compiler graph binding ProfileV4 and Quote/Attachment V4.
+    CompiledProductSeriesBundleV5 = 60,
 }
 
 impl ArtifactKind {
@@ -218,13 +261,58 @@ impl ArtifactKind {
             48 => Ok(Self::SeriesFundingQuoteV2),
             49 => Ok(Self::CompiledProductSeriesBundleV2),
             50 => Ok(Self::SeriesAttachmentPlanV2),
+            51 => Ok(Self::RegistryCapabilityProfileV3),
+            52 => Ok(Self::SeriesFundingQuoteV3),
+            53 => Ok(Self::CompiledProductSeriesBundleV3),
+            54 => Ok(Self::SeriesAttachmentPlanV3),
+            55 => Ok(Self::SeriesFundingQuoteV4),
+            56 => Ok(Self::CompiledProductSeriesBundleV4),
+            57 => Ok(Self::SeriesAttachmentPlanV4),
+            58 => Ok(Self::RegistryProgramReleaseV2),
+            59 => Ok(Self::RegistryCapabilityProfileV4),
+            60 => Ok(Self::CompiledProductSeriesBundleV5),
             _ => Err(CodecError::InvalidEnum),
         }
     }
 
     /// Stable wire discriminant.
     pub const fn byte(self) -> u8 {
-        self as u8
+        match self {
+            Self::CollateralPolicy => 1,
+            Self::PriceGrid => 2,
+            Self::Terms => 3,
+            Self::BatchPolicy => 4,
+            Self::DirectBatchPolicyV3 => 5,
+            Self::NativeClaimBasisV1 => 32,
+            Self::EvidenceOnlyRecoveryPolicyV1 => 33,
+            Self::ProductTemplateV4 => 34,
+            Self::PriceMeasurePolicyV1 => 35,
+            Self::MarketGenesisProfileV2 => 36,
+            Self::SeriesFundingQuoteV1 => 37,
+            Self::SeriesAttachmentPlanV1 => 38,
+            Self::SeriesPlanV5 => 39,
+            Self::SeriesFundingTermsV2 => 40,
+            Self::RegistryProgramReleaseV1 => 41,
+            Self::CompiledProductSeriesBundleV1 => 42,
+            Self::RegistryCapabilityProfileV2 => 43,
+            Self::SourceReleaseManifestV1 => 44,
+            Self::SourceWorkScheduleV1 => 45,
+            Self::MarketInstancePreimageV2 => 46,
+            Self::SourceReleaseManifestV2 => 47,
+            Self::SeriesFundingQuoteV2 => 48,
+            Self::CompiledProductSeriesBundleV2 => 49,
+            Self::SeriesAttachmentPlanV2 => 50,
+            Self::RegistryCapabilityProfileV3 => 51,
+            Self::SeriesFundingQuoteV3 => 52,
+            Self::CompiledProductSeriesBundleV3 => 53,
+            Self::SeriesAttachmentPlanV3 => 54,
+            Self::SeriesFundingQuoteV4 => 55,
+            Self::CompiledProductSeriesBundleV4 => 56,
+            Self::SeriesAttachmentPlanV4 => 57,
+            Self::RegistryProgramReleaseV2 => 58,
+            Self::RegistryCapabilityProfileV4 => 59,
+            Self::CompiledProductSeriesBundleV5 => 60,
+        }
     }
 
     /// Exact canonical body length for this kind.
@@ -254,6 +342,16 @@ impl ArtifactKind {
             Self::SeriesFundingQuoteV2 => SERIES_FUNDING_QUOTE_BYTES_V2,
             Self::CompiledProductSeriesBundleV2 => COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
             Self::SeriesAttachmentPlanV2 => SERIES_ATTACHMENT_PLAN_BYTES_V2,
+            Self::RegistryCapabilityProfileV3 => REGISTRY_CAPABILITY_PROFILE_V3_BYTES,
+            Self::SeriesFundingQuoteV3 => SERIES_FUNDING_QUOTE_BYTES_V3,
+            Self::CompiledProductSeriesBundleV3 => COMPILED_PRODUCT_SERIES_BUNDLE_V3_BYTES,
+            Self::SeriesAttachmentPlanV3 => SERIES_ATTACHMENT_PLAN_BYTES_V3,
+            Self::SeriesFundingQuoteV4 => SERIES_FUNDING_QUOTE_BYTES_V4,
+            Self::CompiledProductSeriesBundleV4 => COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES,
+            Self::SeriesAttachmentPlanV4 => SERIES_ATTACHMENT_PLAN_BYTES_V4,
+            Self::RegistryProgramReleaseV2 => REGISTRY_PROGRAM_RELEASE_V2_BYTES,
+            Self::RegistryCapabilityProfileV4 => REGISTRY_CAPABILITY_PROFILE_V4_BYTES,
+            Self::CompiledProductSeriesBundleV5 => COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
         }
     }
 
@@ -285,7 +383,37 @@ impl ArtifactKind {
                 | Self::SeriesFundingQuoteV2
                 | Self::CompiledProductSeriesBundleV2
                 | Self::SeriesAttachmentPlanV2
+                | Self::RegistryCapabilityProfileV3
+                | Self::SeriesFundingQuoteV3
+                | Self::CompiledProductSeriesBundleV3
+                | Self::SeriesAttachmentPlanV3
+                | Self::SeriesFundingQuoteV4
+                | Self::CompiledProductSeriesBundleV4
+                | Self::SeriesAttachmentPlanV4
+                | Self::RegistryProgramReleaseV2
+                | Self::RegistryCapabilityProfileV4
+                | Self::CompiledProductSeriesBundleV5
         )
+    }
+
+    /// Whether the coordinate can be used to begin a new immutable upload.
+    pub const fn registration_status(self) -> ArtifactRegistrationStatus {
+        match self {
+            Self::RegistryProgramReleaseV1
+            | Self::SeriesFundingQuoteV1
+            | Self::SeriesAttachmentPlanV1
+            | Self::CompiledProductSeriesBundleV1
+            | Self::RegistryCapabilityProfileV2
+            | Self::RegistryCapabilityProfileV3
+            | Self::CompiledProductSeriesBundleV4
+            | Self::SeriesFundingQuoteV2
+            | Self::CompiledProductSeriesBundleV2
+            | Self::SeriesAttachmentPlanV2
+            | Self::SeriesFundingQuoteV3
+            | Self::CompiledProductSeriesBundleV3
+            | Self::SeriesAttachmentPlanV3 => ArtifactRegistrationStatus::Withdrawn,
+            _ => ArtifactRegistrationStatus::Current,
+        }
     }
 }
 
@@ -317,6 +445,15 @@ impl ArtifactBinding {
             || self.exact_len as usize > MAX_ARTIFACT_BYTES
         {
             return Err(CodecError::InvalidCount);
+        }
+        Ok(())
+    }
+
+    /// Refuse structurally valid but withdrawn coordinates for new uploads.
+    pub fn validate_for_registration(&self) -> Result<()> {
+        self.validate()?;
+        if self.kind.registration_status() == ArtifactRegistrationStatus::Withdrawn {
+            return Err(CodecError::InvalidEnum);
         }
         Ok(())
     }
@@ -904,6 +1041,146 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::RegistryCapabilityProfileV3 => {
+            let value = RegistryCapabilityProfileV3::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::SeriesFundingQuoteV3 => {
+            let value =
+                SeriesFundingQuoteV3::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::CompiledProductSeriesBundleV3 => {
+            let value = CompiledProductSeriesBundleV3::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::SeriesAttachmentPlanV3 => {
+            let value =
+                SeriesAttachmentPlanV3::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::SeriesFundingQuoteV4 => {
+            let value =
+                SeriesFundingQuoteV4::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::CompiledProductSeriesBundleV4 => {
+            let value = CompiledProductSeriesBundleV4::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::SeriesAttachmentPlanV4 => {
+            let value =
+                SeriesAttachmentPlanV4::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::RegistryProgramReleaseV2 => {
+            let value = RegistryProgramReleaseV2::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::RegistryCapabilityProfileV4 => {
+            let value = RegistryCapabilityProfileV4::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::CompiledProductSeriesBundleV5 => {
+            let value = CompiledProductSeriesBundleV5::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(all(
             feature = "non-production-product-series-lab",
             not(target_os = "solana")
@@ -1263,7 +1540,7 @@ mod tests {
         );
 
         for (tag, expected) in (u8::MIN..=u8::MAX).map(|tag| {
-            let expected = if (32..=50).contains(&tag) {
+            let expected = if (32..=60).contains(&tag) {
                 Ok(match tag {
                     32 => ArtifactKind::NativeClaimBasisV1,
                     33 => ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
@@ -1284,6 +1561,16 @@ mod tests {
                     48 => ArtifactKind::SeriesFundingQuoteV2,
                     49 => ArtifactKind::CompiledProductSeriesBundleV2,
                     50 => ArtifactKind::SeriesAttachmentPlanV2,
+                    51 => ArtifactKind::RegistryCapabilityProfileV3,
+                    52 => ArtifactKind::SeriesFundingQuoteV3,
+                    53 => ArtifactKind::CompiledProductSeriesBundleV3,
+                    54 => ArtifactKind::SeriesAttachmentPlanV3,
+                    55 => ArtifactKind::SeriesFundingQuoteV4,
+                    56 => ArtifactKind::CompiledProductSeriesBundleV4,
+                    57 => ArtifactKind::SeriesAttachmentPlanV4,
+                    58 => ArtifactKind::RegistryProgramReleaseV2,
+                    59 => ArtifactKind::RegistryCapabilityProfileV4,
+                    60 => ArtifactKind::CompiledProductSeriesBundleV5,
                     _ => unreachable!(),
                 })
             } else {
@@ -1291,7 +1578,7 @@ mod tests {
             };
             (tag, expected)
         }) {
-            if (32..=50).contains(&tag) {
+            if (32..=60).contains(&tag) {
                 assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
             }
         }
@@ -1465,6 +1752,46 @@ mod tests {
             ArtifactKind::from_byte(50),
             Ok(ArtifactKind::SeriesAttachmentPlanV2)
         );
+        assert_eq!(
+            ArtifactKind::from_byte(51),
+            Ok(ArtifactKind::RegistryCapabilityProfileV3)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(52),
+            Ok(ArtifactKind::SeriesFundingQuoteV3)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(53),
+            Ok(ArtifactKind::CompiledProductSeriesBundleV3)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(54),
+            Ok(ArtifactKind::SeriesAttachmentPlanV3)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(55),
+            Ok(ArtifactKind::SeriesFundingQuoteV4)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(56),
+            Ok(ArtifactKind::CompiledProductSeriesBundleV4)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(57),
+            Ok(ArtifactKind::SeriesAttachmentPlanV4)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(58),
+            Ok(ArtifactKind::RegistryProgramReleaseV2)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(59),
+            Ok(ArtifactKind::RegistryCapabilityProfileV4)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(60),
+            Ok(ArtifactKind::CompiledProductSeriesBundleV5)
+        );
         let source = binding(ArtifactKind::SourceReleaseManifestV1);
         assert_eq!(source.exact_len, 1_008);
         assert_eq!(
@@ -1477,6 +1804,38 @@ mod tests {
             validate_artifact(successor, &[0; SOURCE_RELEASE_MANIFEST_BYTES]),
             Err(CodecError::MismatchedBinding)
         );
+    }
+
+    #[test]
+    fn withdrawn_artifact_coordinates_are_decode_only_and_refuse_registration() {
+        for kind in [
+            ArtifactKind::RegistryProgramReleaseV1,
+            ArtifactKind::RegistryCapabilityProfileV2,
+            ArtifactKind::RegistryCapabilityProfileV3,
+            ArtifactKind::CompiledProductSeriesBundleV4,
+            ArtifactKind::SeriesFundingQuoteV2,
+            ArtifactKind::CompiledProductSeriesBundleV2,
+            ArtifactKind::SeriesAttachmentPlanV2,
+            ArtifactKind::SeriesFundingQuoteV3,
+            ArtifactKind::CompiledProductSeriesBundleV3,
+            ArtifactKind::SeriesAttachmentPlanV3,
+        ] {
+            let historical = binding(kind);
+            assert_eq!(historical.validate(), Ok(()));
+            assert_eq!(
+                historical.validate_for_registration(),
+                Err(CodecError::InvalidEnum)
+            );
+        }
+        for kind in [
+            ArtifactKind::RegistryProgramReleaseV2,
+            ArtifactKind::RegistryCapabilityProfileV4,
+            ArtifactKind::SeriesFundingQuoteV4,
+            ArtifactKind::SeriesAttachmentPlanV4,
+            ArtifactKind::CompiledProductSeriesBundleV5,
+        ] {
+            assert_eq!(binding(kind).validate_for_registration(), Ok(()));
+        }
     }
 
     #[test]

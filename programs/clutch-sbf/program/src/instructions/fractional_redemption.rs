@@ -59,7 +59,7 @@ use super::external_redemption_v3::{
     accept_zero_claim_collateral_payout, bearer_claim_observation_v3,
     invoke_claim_collateral_payout, observe_outcome_mints_for_bearer_v3, runtime_account_view,
 };
-use super::product_artifact::AuthenticatedRegistryCapabilityV2;
+use super::product_artifact::AuthenticatedRegistryCapabilityV3;
 use super::product_market::authenticate_market_lifecycle_root_v1;
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
@@ -261,7 +261,7 @@ impl AuthenticatedFractionalRuntimeReleaseV1 {
 /// wire coordinates is never accepted as a runtime release.
 pub(crate) fn authenticate_fractional_runtime_release_v1(
     program_id: &Pubkey,
-    capability: AuthenticatedRegistryCapabilityV2,
+    capability: AuthenticatedRegistryCapabilityV3,
     action: FractionalRedemptionActionV1,
 ) -> Outcome<AuthenticatedFractionalRuntimeReleaseV1> {
     require(
