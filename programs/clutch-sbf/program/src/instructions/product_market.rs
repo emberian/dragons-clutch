@@ -2532,11 +2532,30 @@ pub fn write_market_lifecycle_root_v1<'next>(
     successor: &MarketLifecycleRootV1,
     rebound_output: &'next mut MarketLifecycleRootAccountV1,
 ) -> Outcome<AuthenticatedMarketLifecycleRootV1<'next>> {
+    let binding = authenticated.state().binding();
     require(
         account.is_writable
             && *account.key == authenticated.account
             && account.owner == program_id
-            && successor.binding() == authenticated.state().binding(),
+            && successor.binding() == binding,
+        ClutchError::MismatchedState,
+    )?;
+    let live = authenticate_market_lifecycle_root_v1(
+        program_id,
+        account,
+        binding.market_instance_id,
+        binding.generation,
+        true,
+        rebound_output,
+    )?;
+    require(
+        live.account == authenticated.account
+            && live.owner_program == authenticated.owner_program
+            && live.value == authenticated.value
+            && live.observed_lamports == authenticated.observed_lamports
+            && live.writable == authenticated.writable
+            && live.data_id == authenticated.data_id
+            && live.authentication_id == authenticated.authentication_id,
         ClutchError::MismatchedState,
     )?;
     let mut data = account
@@ -2574,11 +2593,33 @@ pub fn write_series_market_link_v1<'next>(
     successor: &SeriesMarketLinkV1,
     rebound_output: &'next mut SeriesMarketLinkAccountV1,
 ) -> Outcome<AuthenticatedSeriesMarketLinkV1<'next>> {
+    let binding = authenticated.state().binding();
     require(
         account.is_writable
             && *account.key == authenticated.account
             && account.owner == program_id
-            && successor.binding() == authenticated.state().binding(),
+            && successor.binding() == binding,
+        ClutchError::MismatchedState,
+    )?;
+    let live = authenticate_series_market_link_v1(
+        program_id,
+        account,
+        binding.series_plan_id,
+        binding.ordinal,
+        binding.market_instance_id,
+        binding.generation,
+        Pubkey::new_from_array(binding.market_root_account_id.bytes()),
+        true,
+        rebound_output,
+    )?;
+    require(
+        live.account == authenticated.account
+            && live.owner_program == authenticated.owner_program
+            && live.value == authenticated.value
+            && live.observed_lamports == authenticated.observed_lamports
+            && live.writable == authenticated.writable
+            && live.data_id == authenticated.data_id
+            && live.authentication_id == authenticated.authentication_id,
         ClutchError::MismatchedState,
     )?;
     let mut data = account
