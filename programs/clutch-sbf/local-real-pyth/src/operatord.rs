@@ -432,6 +432,18 @@ impl<'index> OperatorJsonApi<'index> {
                     "sourceCommit": release.source_commit,
                     "sourceProfile": release.source_profile.name(),
                     "registeredSourceReleaseCount": release.source_profile.registered_release_count().to_string(),
+                    "wireSurface": {
+                        "schema": crate::rpc_index::WIRE_SURFACE_SCHEMA_V1,
+                        "identitySha256": hex32(release.wire_surface.identity_sha256),
+                        "legacyIntentPairs": release.wire_surface.legacy_intent_pairs.iter().map(|pair| json!({
+                            "tag": pair.tag.to_string(), "version": pair.version.to_string()
+                        })).collect::<Vec<_>>(),
+                        "dedicatedDirectIntentPairs": release.wire_surface.dedicated_direct_intent_pairs.iter().map(|pair| json!({
+                            "tag": pair.tag.to_string(), "version": pair.version.to_string()
+                        })).collect::<Vec<_>>(),
+                        "outerRequestActions": release.wire_surface.outer_request_actions.iter().map(u8::to_string).collect::<Vec<_>>(),
+                        "sourceGenerationDiscriminants": release.wire_surface.source_generation_discriminants.iter().map(u8::to_string).collect::<Vec<_>>()
+                    },
                     "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
                         "familyTag": intent.family_tag.to_string(),
                         "familyVersion": intent.family_version.to_string(),

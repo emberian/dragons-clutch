@@ -66,7 +66,10 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
   assert.match(chain, /registeredSourceReleaseCount differs from its compiled Source identity/);
-  for (const profile of ["production-inert", "non-production-mock-source-lab", "non-production-real-pyth-lab"]) assert.match(chain, new RegExp(`"${profile}"`));
+  assert.match(chain, /dragons-clutch\/wire-surface\/v1/);
+  assert.match(chain, /admits one intent through two strict decoders/);
+  assert.match(chain, /JSON\.stringify\(selected\.wireSurface\).*JSON\.stringify\(configuration\.release\.wireSurface\)/);
+  for (const profile of ["production-inert", "runtime-real-pyth-release", "non-production-mock-source-lab", "non-production-real-pyth-lab"]) assert.match(chain, new RegExp(`"${profile}"`));
   assert.match(app, /Enabled registry coordinates/);
   assert.match(app, /family names are release projections, not draft authority/);
   assert.match(app, /Source value routes refuse; no fixture or fallback identity is admitted/);
@@ -103,10 +106,10 @@ test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_tr
         accounts: [], requiredSigners: [], equations: [{ name: "exact conservation", unit: { kind: "collateral-atoms", mint: bytes(7) }, left: "340282366920938463463374607431768211455", right: "340282366920938463463374607431768211455" }]
       }]
     }, {
-      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32), sourceProfile: "production-inert", registeredSourceReleaseCount: "0" }
+      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32), sourceProfile: "production-inert", registeredSourceReleaseCount: "0", wireSurface: { schema: "dragons-clutch/wire-surface/v1", identitySha256: "05".repeat(32) } }
     }, "1232");
   })()`, context);
-  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v4");
+  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v5");
   assert.equal(output.message.recentBlockhash, "11111111111111111111111111111111");
   assert.equal(output.hasRecentBlockhash, false);
   assert.equal(output.signed, false);
@@ -114,6 +117,7 @@ test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_tr
   assert.equal(output.runtimeCapability, "not-authenticated");
   assert.equal(output.release.sourceProfile, "production-inert");
   assert.equal(output.release.registeredSourceReleaseCount, "0");
+  assert.equal(output.release.wireSurfaceIdentitySha256, "05".repeat(32));
   assert.equal(output.instructionCoordinates[0].source, "explicit-semantic-owner-draft; not runtime capability admission");
   assert.match(output.serializedTransactionHex, /^01(?:00){64}010001/);
   assert.equal(output.exactEquations[0].left, "340282366920938463463374607431768211455");

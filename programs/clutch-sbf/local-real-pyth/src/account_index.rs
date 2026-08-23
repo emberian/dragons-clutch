@@ -3461,6 +3461,13 @@ mod processed_fork_tests {
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
             source_profile: crate::rpc_index::CompiledSourceProfile::ProductionInert,
+            wire_surface: crate::rpc_index::ManifestWireSurfaceV1 {
+                identity_sha256: [0x37; 32],
+                legacy_intent_pairs: vec![],
+                dedicated_direct_intent_pairs: vec![],
+                outer_request_actions: vec![],
+                source_generation_discriminants: vec![],
+            },
             enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         };

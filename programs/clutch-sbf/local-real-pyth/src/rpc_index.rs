@@ -14,6 +14,7 @@ use std::str::FromStr;
 pub type Result<T> = core::result::Result<T, RpcIndexError>;
 
 pub const RPC_ENDPOINT_BINDING_DOMAIN_V1: &[u8] = b"dragons-clutch/rpc-endpoint-binding/v1\0";
+pub const WIRE_SURFACE_SCHEMA_V1: &str = "dragons-clutch/wire-surface/v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcIndexError {
@@ -93,6 +94,7 @@ impl CanonicalFamily {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompiledSourceProfile {
     ProductionInert,
+    RuntimeRealPythRelease,
     NonProductionMockSourceLab,
     NonProductionRealPythLab,
 }
@@ -102,6 +104,7 @@ impl CompiledSourceProfile {
     pub const fn name(self) -> &'static str {
         match self {
             Self::ProductionInert => "production-inert",
+            Self::RuntimeRealPythRelease => "runtime-real-pyth-release",
             Self::NonProductionMockSourceLab => "non-production-mock-source-lab",
             Self::NonProductionRealPythLab => "non-production-real-pyth-lab",
         }
@@ -110,7 +113,7 @@ impl CompiledSourceProfile {
     #[must_use]
     pub const fn registered_release_count(self) -> u8 {
         match self {
-            Self::ProductionInert => 0,
+            Self::ProductionInert | Self::RuntimeRealPythRelease => 0,
             Self::NonProductionMockSourceLab | Self::NonProductionRealPythLab => 1,
         }
     }
@@ -118,6 +121,7 @@ impl CompiledSourceProfile {
     pub fn parse(name: &str) -> Result<Self> {
         match name {
             "production-inert" => Ok(Self::ProductionInert),
+            "runtime-real-pyth-release" => Ok(Self::RuntimeRealPythRelease),
             "non-production-mock-source-lab" => Ok(Self::NonProductionMockSourceLab),
             "non-production-real-pyth-lab" => Ok(Self::NonProductionRealPythLab),
             _ => Err(RpcIndexError::InvalidRelease),
@@ -237,6 +241,11 @@ pub struct IndexedProgramRelease {
     pub source_commit: String,
     /// Checked compile-time Source identity class for this exact ELF.
     pub source_profile: CompiledSourceProfile,
+    /// Exact manifest-owned legacy/request/generation wire surface. The
+    /// central extension registry remains separately owned by
+    /// `enabled_intents`; this value must never be reconstructed from a
+    /// decoder or a client-side allowlist.
+    pub wire_surface: ManifestWireSurfaceV1,
     /// Only centrally registered coordinates present in the checked manifest.
     /// A decoded family without a coordinate remains non-actionable.
     pub enabled_intents: Vec<CanonicalIntentCoordinate>,
@@ -248,6 +257,64 @@ pub struct CanonicalIntentCoordinate {
     pub family_tag: u8,
     pub family_version: u8,
     pub local_action: u8,
+}
+
+/// One exact tag/version coordinate in a checked legacy decoder surface.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CanonicalWireIntentPair {
+    pub tag: u8,
+    pub version: u8,
+}
+
+/// Checked projection of the release manifest's exhaustive non-extension
+/// executable wire surface.
+///
+/// Its identity is produced by the capability-profile checker over the
+/// canonical manifest object using `dragons-clutch/wire-surface-identity/v1`.
+/// This client model deliberately does not duplicate that canonicalizer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManifestWireSurfaceV1 {
+    pub identity_sha256: [u8; 32],
+    pub legacy_intent_pairs: Vec<CanonicalWireIntentPair>,
+    pub dedicated_direct_intent_pairs: Vec<CanonicalWireIntentPair>,
+    pub outer_request_actions: Vec<u8>,
+    pub source_generation_discriminants: Vec<u8>,
+}
+
+impl ManifestWireSurfaceV1 {
+    pub fn validate(&self) -> Result<()> {
+        if self.identity_sha256 == [0; 32]
+            || !canonical_wire_pairs(&self.legacy_intent_pairs)
+            || !canonical_wire_pairs(&self.dedicated_direct_intent_pairs)
+            || self
+                .legacy_intent_pairs
+                .iter()
+                .any(|pair| self.dedicated_direct_intent_pairs.binary_search(pair).is_ok())
+            || !strictly_increasing(&self.outer_request_actions)
+            || !strictly_increasing(&self.source_generation_discriminants)
+        {
+            return Err(RpcIndexError::InvalidRelease);
+        }
+        Ok(())
+    }
+}
+
+fn canonical_wire_pairs(pairs: &[CanonicalWireIntentPair]) -> bool {
+    let mut previous = None;
+    for pair in pairs {
+        if pair.tag == 0
+            || pair.version == 0
+            || previous.is_some_and(|value| value >= *pair)
+        {
+            return false;
+        }
+        previous = Some(*pair);
+    }
+    true
+}
+
+fn strictly_increasing(values: &[u8]) -> bool {
+    values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 impl CanonicalIntentCoordinate {
@@ -299,6 +366,7 @@ impl IndexedProgramRelease {
         {
             return Err(RpcIndexError::InvalidRelease);
         }
+        self.wire_surface.validate()?;
         let mut previous = None;
         for family in &self.families {
             if previous.is_some_and(|value| value >= *family) {
@@ -1132,6 +1200,13 @@ mod tests {
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
             source_profile: CompiledSourceProfile::ProductionInert,
+            wire_surface: ManifestWireSurfaceV1 {
+                identity_sha256: [0x37; 32],
+                legacy_intent_pairs: vec![],
+                dedicated_direct_intent_pairs: vec![],
+                outer_request_actions: vec![],
+                source_generation_discriminants: vec![],
+            },
             enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         }
@@ -1180,6 +1255,10 @@ mod tests {
             0
         );
         assert_eq!(
+            CompiledSourceProfile::RuntimeRealPythRelease.registered_release_count(),
+            0
+        );
+        assert_eq!(
             CompiledSourceProfile::NonProductionMockSourceLab.registered_release_count(),
             1
         );
@@ -1208,6 +1287,26 @@ mod tests {
 
         let mut value = release();
         value.enabled_intents = vec![coordinate(77, 2, 1)];
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+    }
+
+    #[test]
+    fn wire_surface_refuses_noncanonical_or_cross_decoder_pairs() {
+        let mut value = release();
+        value.wire_surface.legacy_intent_pairs = vec![
+            CanonicalWireIntentPair { tag: 7, version: 3 },
+            CanonicalWireIntentPair { tag: 7, version: 3 },
+        ];
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+
+        value.wire_surface.legacy_intent_pairs =
+            vec![CanonicalWireIntentPair { tag: 36, version: 3 }];
+        value.wire_surface.dedicated_direct_intent_pairs =
+            vec![CanonicalWireIntentPair { tag: 36, version: 3 }];
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+
+        value.wire_surface.dedicated_direct_intent_pairs.clear();
+        value.wire_surface.outer_request_actions = vec![2, 1];
         assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
     }
 

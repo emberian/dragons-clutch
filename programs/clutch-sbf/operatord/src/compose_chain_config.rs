@@ -8,7 +8,10 @@
 
 use crate::{chain_server, repo_path, Result};
 use clutch_local_real_pyth::account_index::CANONICAL_ACCOUNT_DECODER_SET;
-use clutch_local_real_pyth::rpc_index::{CanonicalFamily, CompiledSourceProfile};
+use clutch_local_real_pyth::rpc_index::{
+    CanonicalFamily, CanonicalWireIntentPair, CompiledSourceProfile, ManifestWireSurfaceV1,
+    WIRE_SURFACE_SCHEMA_V1,
+};
 use serde_json::{json, Value};
 use solana_address::Address;
 use std::collections::{BTreeMap, BTreeSet};
@@ -282,6 +285,7 @@ pub(crate) struct CheckedCapabilityRelease {
     pub(crate) source_commit: String,
     pub(crate) elf_sha256: [u8; 32],
     pub(crate) source_profile: CompiledSourceProfile,
+    pub(crate) wire_surface: ManifestWireSurfaceV1,
 }
 
 pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilityRelease> {
@@ -341,6 +345,7 @@ pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilit
     )?;
     let source_profile = CompiledSourceProfile::parse(summary_string(&summary, &["source_identity"] )?)
         .map_err(|_| "checked profile source_identity is not a supported compiled identity")?;
+    let wire_surface = checked_wire_surface(&summary)?;
     Ok(CheckedCapabilityRelease {
         summary,
         manifest_sha256,
@@ -348,7 +353,100 @@ pub(crate) fn checked_capability_release(path: &Path) -> Result<CheckedCapabilit
         source_commit: source_commit.to_string(),
         elf_sha256,
         source_profile,
+        wire_surface,
     })
+}
+
+fn checked_wire_pairs(value: &Value, name: &str) -> Result<Vec<CanonicalWireIntentPair>> {
+    let rows = value
+        .as_array()
+        .ok_or_else(|| format!("checked profile {name} is not an array"))?;
+    if rows.len() > 256 {
+        return Err(format!("checked profile {name} exceeds its explicit bound").into());
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let pair = row
+                .as_array()
+                .filter(|pair| pair.len() == 2)
+                .ok_or_else(|| format!("checked profile {name}[{index}] is not a pair"))?;
+            Ok(CanonicalWireIntentPair {
+                tag: u8::try_from(
+                    pair[0]
+                        .as_u64()
+                        .ok_or_else(|| format!("checked profile {name}[{index}][0] is invalid"))?,
+                )?,
+                version: u8::try_from(
+                    pair[1]
+                        .as_u64()
+                        .ok_or_else(|| format!("checked profile {name}[{index}][1] is invalid"))?,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn checked_wire_u8s(value: &Value, name: &str) -> Result<Vec<u8>> {
+    let rows = value
+        .as_array()
+        .ok_or_else(|| format!("checked profile {name} is not an array"))?;
+    if rows.len() > 256 {
+        return Err(format!("checked profile {name} exceeds its explicit bound").into());
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(index, item)| {
+            Ok(u8::try_from(item.as_u64().ok_or_else(|| {
+                format!("checked profile {name}[{index}] is invalid")
+            })?)?)
+        })
+        .collect()
+}
+
+fn checked_wire_surface(summary: &Value) -> Result<ManifestWireSurfaceV1> {
+    let value = summary
+        .get("wire_surface")
+        .and_then(Value::as_object)
+        .ok_or("checked profile summary has no wire_surface object")?;
+    let expected_keys = BTreeSet::from([
+        "schema",
+        "legacy_intent_pairs",
+        "dedicated_direct_intent_pairs",
+        "outer_request_actions",
+        "source_generation_discriminants",
+    ]);
+    if value.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected_keys
+        || value.get("schema").and_then(Value::as_str) != Some(WIRE_SURFACE_SCHEMA_V1)
+    {
+        return Err("checked profile wire_surface schema or fields differ".into());
+    }
+    let surface = ManifestWireSurfaceV1 {
+        identity_sha256: hash32(
+            summary_string(summary, &["wire_surface_sha256"] )?,
+            "checked profile wire_surface_sha256",
+        )?,
+        legacy_intent_pairs: checked_wire_pairs(
+            &value["legacy_intent_pairs"],
+            "wire_surface.legacy_intent_pairs",
+        )?,
+        dedicated_direct_intent_pairs: checked_wire_pairs(
+            &value["dedicated_direct_intent_pairs"],
+            "wire_surface.dedicated_direct_intent_pairs",
+        )?,
+        outer_request_actions: checked_wire_u8s(
+            &value["outer_request_actions"],
+            "wire_surface.outer_request_actions",
+        )?,
+        source_generation_discriminants: checked_wire_u8s(
+            &value["source_generation_discriminants"],
+            "wire_surface.source_generation_discriminants",
+        )?,
+    };
+    surface
+        .validate()
+        .map_err(|_| "checked profile wire_surface is not canonical")?;
+    Ok(surface)
 }
 
 fn require_m7_successor_only_profile(summary: &Value) -> Result<()> {
@@ -632,7 +730,7 @@ pub(crate) fn compose_checked_chain_config(
         })
         .collect::<Result<Vec<_>>>()?;
     let value = json!({
-        "schema": "dragons-clutch/operatord-chain-config/v3",
+        "schema": "dragons-clutch/operatord-chain-config/v4",
         "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
         "cluster": {
             "name": cluster_name,
@@ -650,6 +748,18 @@ pub(crate) fn compose_checked_chain_config(
             "sourceCommit": checked.source_commit.as_str(),
             "sourceProfile": checked.source_profile.name(),
             "registeredSourceReleaseCount": checked.source_profile.registered_release_count().to_string(),
+            "wireSurface": {
+                "schema": WIRE_SURFACE_SCHEMA_V1,
+                "identitySha256": hex(checked.wire_surface.identity_sha256),
+                "legacyIntentPairs": checked.wire_surface.legacy_intent_pairs.iter().map(|pair| json!({
+                    "tag": pair.tag.to_string(), "version": pair.version.to_string()
+                })).collect::<Vec<_>>(),
+                "dedicatedDirectIntentPairs": checked.wire_surface.dedicated_direct_intent_pairs.iter().map(|pair| json!({
+                    "tag": pair.tag.to_string(), "version": pair.version.to_string()
+                })).collect::<Vec<_>>(),
+                "outerRequestActions": checked.wire_surface.outer_request_actions.iter().map(u8::to_string).collect::<Vec<_>>(),
+                "sourceGenerationDiscriminants": checked.wire_surface.source_generation_discriminants.iter().map(u8::to_string).collect::<Vec<_>>()
+            },
             "enabledIntents": projected_intents,
             "families": families.iter().map(|family| family.name()).collect::<Vec<_>>()
         }],
@@ -706,6 +816,27 @@ mod tests {
         assert!(!DeploymentSlotPolicy::SynthesizedLocalZero.accepts(1));
         assert!(!DeploymentSlotPolicy::ObservedPublicPositive.accepts(0));
         assert!(DeploymentSlotPolicy::ObservedPublicPositive.accepts(1));
+    }
+
+    #[test]
+    fn checked_wire_surface_is_exact_and_canonical() {
+        let summary = json!({
+            "wire_surface": {
+                "schema": WIRE_SURFACE_SCHEMA_V1,
+                "legacy_intent_pairs": [[1, 3], [2, 3]],
+                "dedicated_direct_intent_pairs": [],
+                "outer_request_actions": [0, 1, 2],
+                "source_generation_discriminants": []
+            },
+            "wire_surface_sha256": "37".repeat(32)
+        });
+        let surface = checked_wire_surface(&summary).unwrap();
+        assert_eq!(surface.outer_request_actions, vec![0, 1, 2]);
+        assert!(surface.source_generation_discriminants.is_empty());
+
+        let mut duplicated = summary;
+        duplicated["wire_surface"]["legacy_intent_pairs"] = json!([[1, 3], [1, 3]]);
+        assert!(checked_wire_surface(&duplicated).is_err());
     }
 
     #[test]

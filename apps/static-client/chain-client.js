@@ -15,8 +15,10 @@
   const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
   const DECODER_SET = "dragons-clutch/canonical-account-decoders/v4-product-v5-general-successor-current";
+  const WIRE_SURFACE_SCHEMA = "dragons-clutch/wire-surface/v1";
   const SOURCE_PROFILE_RELEASE_COUNTS = Object.freeze({
     "production-inert": "0",
+    "runtime-real-pyth-release": "0",
     "non-production-mock-source-lab": "1",
     "non-production-real-pyth-lab": "1"
   });
@@ -200,6 +202,51 @@
     return Object.freeze({ sourceProfile, registeredSourceReleaseCount });
   };
 
+  const validateWireSurface = (raw, name) => {
+    requirePlain(raw, name);
+    const expectedKeys = ["dedicatedDirectIntentPairs", "identitySha256", "legacyIntentPairs", "outerRequestActions", "schema", "sourceGenerationDiscriminants"];
+    if (JSON.stringify(Object.keys(raw).sort()) !== JSON.stringify(expectedKeys)
+        || raw.schema !== WIRE_SURFACE_SCHEMA) throw new Error(`${name} has an unknown schema or noncanonical fields.`);
+    const pairs = (value, field) => {
+      if (!Array.isArray(value) || value.length > 256) throw new Error(`${name}.${field} is invalid.`);
+      const projected = value.map((pair, index) => {
+        requirePlain(pair, `${name}.${field}[${index}]`);
+        if (JSON.stringify(Object.keys(pair).sort()) !== JSON.stringify(["tag", "version"])) throw new Error(`${name}.${field}[${index}] has noncanonical fields.`);
+        return Object.freeze({
+          tag: positiveDecimal(pair.tag, `${name}.${field}[${index}].tag`, 255n).toString(),
+          version: positiveDecimal(pair.version, `${name}.${field}[${index}].version`, 255n).toString()
+        });
+      });
+      for (let index = 1; index < projected.length; index += 1) {
+        const previous = projected[index - 1];
+        const current = projected[index];
+        if (Number(previous.tag) > Number(current.tag)
+            || (previous.tag === current.tag && Number(previous.version) >= Number(current.version))) throw new Error(`${name}.${field} is not strictly canonical.`);
+      }
+      return Object.freeze(projected);
+    };
+    const bytes = (value, field) => {
+      if (!Array.isArray(value) || value.length > 256) throw new Error(`${name}.${field} is invalid.`);
+      const projected = value.map((item, index) => decimal(item, `${name}.${field}[${index}]`, 255n).toString());
+      for (let index = 1; index < projected.length; index += 1) {
+        if (Number(projected[index - 1]) >= Number(projected[index])) throw new Error(`${name}.${field} is not strictly canonical.`);
+      }
+      return Object.freeze(projected);
+    };
+    const legacyIntentPairs = pairs(raw.legacyIntentPairs, "legacyIntentPairs");
+    const dedicatedDirectIntentPairs = pairs(raw.dedicatedDirectIntentPairs, "dedicatedDirectIntentPairs");
+    const legacyKeys = new Set(legacyIntentPairs.map((pair) => `${pair.tag}:${pair.version}`));
+    if (dedicatedDirectIntentPairs.some((pair) => legacyKeys.has(`${pair.tag}:${pair.version}`))) throw new Error(`${name} admits one intent through two strict decoders.`);
+    return Object.freeze({
+      schema: WIRE_SURFACE_SCHEMA,
+      identitySha256: hash32(raw.identitySha256, `${name}.identitySha256`),
+      legacyIntentPairs,
+      dedicatedDirectIntentPairs,
+      outerRequestActions: bytes(raw.outerRequestActions, "outerRequestActions"),
+      sourceGenerationDiscriminants: bytes(raw.sourceGenerationDiscriminants, "sourceGenerationDiscriminants")
+    });
+  };
+
   const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
     text(value, name, 512);
     let parsed;
@@ -374,7 +421,7 @@
     };
     const rpcHttpEndpoint = endpoint(binding.rpcHttpEndpoint, "transportBinding.rpcHttpEndpoint");
     const rpcWebsocketEndpoint = endpoint(binding.rpcWebsocketEndpoint, "transportBinding.rpcWebsocketEndpoint");
-    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v4"
+    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v5"
         || binding.verificationDisposition !== "last-complete-untrusted-http-release-bracket"
         || binding.authorityEligible !== false
         || text(binding.clusterKey, "transportBinding.clusterKey", 128) !== clusterKey
@@ -393,14 +440,15 @@
     if (typeof boundRelease.sourceCommit !== "string" || !COMMIT.test(boundRelease.sourceCommit)) throw new Error("daemon-projected source commit is not a full lowercase Git identity.");
     const families = validateFamilies(boundRelease.families, "transportBinding.release.families");
     const enabledIntents = validateEnabledIntents(boundRelease.enabledIntents, "transportBinding.release.enabledIntents");
+    const wireSurface = validateWireSurface(boundRelease.wireSurface, "transportBinding.release.wireSurface");
     if (enabledIntents.some((intent) => !families.includes(intent.family))) throw new Error("transportBinding release enables an intent whose canonical family is absent from its decoder set.");
     const source = validateSourceProfile(boundRelease.sourceProfile, boundRelease.registeredSourceReleaseCount, "transportBinding.release");
     const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
     if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
-    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, sourceProfile: source.sourceProfile, registeredSourceReleaseCount: source.registeredSourceReleaseCount, enabledIntents, families, releaseKey: expectedReleaseKey });
+    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, sourceProfile: source.sourceProfile, registeredSourceReleaseCount: source.registeredSourceReleaseCount, wireSurface, enabledIntents, families, releaseKey: expectedReleaseKey });
     const configuration = Object.freeze({
       ...target,
-      schema: "dragons-clutch/browser-daemon-chain-projection/v3",
+      schema: "dragons-clutch/browser-daemon-chain-projection/v4",
       authority: "untrusted-operatord-projection",
       decoderSet: DECODER_SET,
       clusterName,
@@ -489,6 +537,7 @@
         capabilityProfileId: hash32(release.capabilityProfileId, `releases[${index}].capabilityProfileId`),
         sourceCommit: typeof release.sourceCommit === "string" && COMMIT.test(release.sourceCommit) ? release.sourceCommit : (() => { throw new Error(`releases[${index}].sourceCommit is invalid.`); })(),
         ...validateSourceProfile(release.sourceProfile, release.registeredSourceReleaseCount, `releases[${index}]`),
+        wireSurface: validateWireSurface(release.wireSurface, `releases[${index}].wireSurface`),
         enabledIntents: validateEnabledIntents(release.enabledIntents, `releases[${index}].enabledIntents`),
         families: validateFamilies(release.families, `releases[${index}].families`)
       };
@@ -498,7 +547,7 @@
     if (new Set(releases.map((release) => release.releaseKey)).size !== releases.length) throw new Error("operatord release endpoint repeats a release key.");
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
     if (!selected) throw new Error("operatord release endpoint does not expose its acquisition-bound release key.");
-    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || selected.sourceProfile !== configuration.release.sourceProfile || selected.registeredSourceReleaseCount !== configuration.release.registeredSourceReleaseCount || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
+    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || selected.sourceProfile !== configuration.release.sourceProfile || selected.registeredSourceReleaseCount !== configuration.release.registeredSourceReleaseCount || JSON.stringify(selected.wireSurface) !== JSON.stringify(configuration.release.wireSurface) || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
       throw new Error("operatord release endpoint differs from its acquisition transport binding.");
     }
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });
@@ -646,17 +695,20 @@
     const familySet = new Set(releases.selected.families);
     const successorCapabilities = releases.selected.families.map((familyName) => {
       const coordinates = configuration.release.enabledIntents.filter((intent) => intent.family === familyName);
-      const compiledSourceUnavailable = familyName === "source" && configuration.release.registeredSourceReleaseCount === "0";
+      const compiledSourceUnavailable = familyName === "source" && configuration.release.sourceProfile === "production-inert";
+      const runtimeSourceRelease = familyName === "source" && configuration.release.sourceProfile === "runtime-real-pyth-release";
       const mockSourceUnavailable = familyName === "source" && configuration.release.sourceProfile === "non-production-mock-source-lab";
       return Object.freeze({
         surface: "successor-family",
         family: familyName,
         label: familyName,
         indexedByRelease: true,
-        allocationStatus: compiledSourceUnavailable ? "compiled with zero Source releases" : mockSourceUnavailable ? "fabricated laboratory Source identity" : coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
+        allocationStatus: compiledSourceUnavailable ? "production-inert" : runtimeSourceRelease ? "onchain release required" : mockSourceUnavailable ? "fabricated laboratory Source identity" : coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
         enabled: false,
         reason: compiledSourceUnavailable
-          ? "This exact checked ELF is production-inert and has zero registered Source identities. Source value routes refuse; fixture and laboratory identities are not fallbacks."
+          ? "This exact checked ELF is production-inert. Source value routes refuse; fixture and laboratory identities are not fallbacks."
+          : runtimeSourceRelease
+            ? "This release accepts only an exact onchain real-provider SourceReleaseManifestV2 through the checked Source successor. No provider identity is compiled or supplied by the browser. Runtime account admission remains onchain authority."
           : mockSourceUnavailable
             ? "This exact checked ELF uses the fabricated mock Source laboratory. Its accounts may be inspected as untrusted projections, but the operator client refuses to construct Source actions from them."
           : coordinates.length === 0

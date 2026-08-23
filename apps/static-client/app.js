@@ -120,9 +120,20 @@
       definition("Release-manifest SHA-256", snapshot.release.declaredManifestSha256),
       definition("Source commit", snapshot.release.declaredSourceCommit),
       definition("Capability profile", snapshot.release.declaredCapabilityProfileId),
+      definition("Manifest wire-surface identity", release.wireSurface.identitySha256),
+      definition("Legacy strict-decoder surface", release.wireSurface.legacyIntentPairs.length === 0
+        ? "none"
+        : release.wireSurface.legacyIntentPairs.map((pair) => `${pair.tag}/${pair.version}`).join(", ")),
+      definition("Dedicated Direct surface", release.wireSurface.dedicatedDirectIntentPairs.length === 0
+        ? "none"
+        : release.wireSurface.dedicatedDirectIntentPairs.map((pair) => `${pair.tag}/${pair.version}`).join(", ")),
+      definition("Outer Request actions", release.wireSurface.outerRequestActions.join(", ") || "none"),
+      definition("Legacy Source generations", release.wireSurface.sourceGenerationDiscriminants.join(", ") || "none — no legacy Source generation decoder is release-authorized"),
       definition("Compiled Source profile", release.sourceProfile),
       definition("Registered Source releases", release.sourceProfile === "production-inert"
         ? "0 — Source value routes refuse; no fixture or fallback identity is admitted"
+        : release.sourceProfile === "runtime-real-pyth-release"
+          ? "0 compiled — exact real-provider release authority must be registered onchain through the checked Source successor"
         : release.sourceProfile === "non-production-mock-source-lab"
           ? "1 — fabricated laboratory identity; read-only projection only and Source construction refuses"
           : "1 — non-production real-Pyth laboratory identity; release-bound untrusted projection only"),
@@ -370,11 +381,11 @@
       const key = `${instruction.familyTag}:${instruction.familyVersion}:${instruction.localAction}`;
       if (!enabledCoordinates.has(key)) throw new Error(`Successor coordinate ${key} is not enabled by the daemon-projected checked central registry; disabled capabilities are non-actionable.`);
       if (enabledCoordinates.get(key) !== instruction.family) throw new Error(`Successor coordinate ${key} belongs to ${enabledCoordinates.get(key)}, not caller-labeled family ${instruction.family}; family names are release projections, not draft authority.`);
-      if (state.configuration.release.registeredSourceReleaseCount === "0"
+      if (state.configuration.release.sourceProfile === "production-inert"
           && instruction.family === "source"
           && BigInt(instruction.localAction) >= 1n
           && BigInt(instruction.localAction) <= 12n) {
-        throw new Error(`Source coordinate ${key} is unavailable because this exact checked ELF compiled zero registered Source releases; fixture and mock fallbacks are forbidden.`);
+        throw new Error(`Source coordinate ${key} is unavailable because this exact checked ELF is production-inert; fixture and mock fallbacks are forbidden.`);
       }
       if (state.configuration.release.sourceProfile === "non-production-mock-source-lab"
           && instruction.family === "source") {

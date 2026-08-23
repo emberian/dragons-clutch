@@ -309,6 +309,9 @@
     exactKeys(raw, ["payer", "instructions"], "construction draft");
     requirePlain(configuration, "release configuration");
     requirePlain(configuration.release, "release configuration.release");
+    requirePlain(configuration.release.wireSurface, "release configuration.release.wireSurface");
+    if (configuration.release.wireSurface.schema !== "dragons-clutch/wire-surface/v1") throw new Error("release wire surface schema is unsupported.");
+    const wireSurfaceIdentitySha256 = hex32(configuration.release.wireSurface.identitySha256, "release wire surface identity");
     const programId = requireText(configuration.release.programId, "release programId", 44);
     const programBytes = decodeBase58(programId, "release programId");
     if (programBytes.every((byte) => byte === 0)) throw new Error("release programId must be nonzero.");
@@ -352,10 +355,11 @@
       sourceCommit: configuration.release.sourceCommit,
       capabilityProfileId: configuration.release.capabilityProfileId,
       sourceProfile: configuration.release.sourceProfile,
-      registeredSourceReleaseCount: configuration.release.registeredSourceReleaseCount
+      registeredSourceReleaseCount: configuration.release.registeredSourceReleaseCount,
+      wireSurfaceIdentitySha256
     });
     return Object.freeze({
-      schema: "dragons-clutch/operator/unsigned-protocol-transaction/v4",
+      schema: "dragons-clutch/operator/unsigned-protocol-transaction/v5",
       authority: "local-construction-from-explicit-semantic-owner-material",
       release,
       flows: Object.freeze(uniqueFlows),

@@ -19,8 +19,9 @@ use clutch_local_real_pyth::account_index::{
 use clutch_local_real_pyth::index_service::RpcIndexEngine;
 use clutch_local_real_pyth::operatord::ResumableKeeperSelector;
 use clutch_local_real_pyth::rpc_index::{
-    CanonicalFamily, CanonicalIntentCoordinate, CompiledSourceProfile, IndexedProgramRelease,
-    PlannedRpcRequest, RpcAcquisitionBounds, RpcClusterBinding, RpcIndexPlan,
+    CanonicalFamily, CanonicalIntentCoordinate, CanonicalWireIntentPair, CompiledSourceProfile,
+    IndexedProgramRelease, ManifestWireSurfaceV1, PlannedRpcRequest, RpcAcquisitionBounds,
+    RpcClusterBinding, RpcIndexPlan, WIRE_SURFACE_SCHEMA_V1,
 };
 use clutch_sbf::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_METADATA_LEN,
@@ -36,7 +37,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
-const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v3";
+const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v4";
 const MAX_CONFIG_BYTES: usize = 262_144;
 
 #[derive(Debug, Deserialize)]
@@ -78,8 +79,27 @@ struct ReleaseWire {
     source_commit: String,
     source_profile: String,
     registered_source_release_count: String,
+    wire_surface: WireSurfaceWire,
     enabled_intents: Vec<IntentWire>,
     families: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WireSurfaceWire {
+    schema: String,
+    identity_sha256: String,
+    legacy_intent_pairs: Vec<WireIntentPairWire>,
+    dedicated_direct_intent_pairs: Vec<WireIntentPairWire>,
+    outer_request_actions: Vec<String>,
+    source_generation_discriminants: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WireIntentPairWire {
+    tag: String,
+    version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +214,70 @@ fn family(text: &str) -> Result<CanonicalFamily> {
     })
 }
 
+fn wire_pair(pair: WireIntentPairWire, name: &str) -> Result<CanonicalWireIntentPair> {
+    Ok(CanonicalWireIntentPair {
+        tag: parse_unsigned(&pair.tag, &format!("{name}.tag"))?,
+        version: parse_unsigned(&pair.version, &format!("{name}.version"))?,
+    })
+}
+
+fn wire_surface(surface: WireSurfaceWire, name: &str) -> Result<ManifestWireSurfaceV1> {
+    if surface.schema != WIRE_SURFACE_SCHEMA_V1
+        || surface.legacy_intent_pairs.len() > 256
+        || surface.dedicated_direct_intent_pairs.len() > 256
+        || surface.outer_request_actions.len() > 256
+        || surface.source_generation_discriminants.len() > 256
+    {
+        return Err(format!("{name} is unsupported or exceeds its explicit bounds").into());
+    }
+    let projected = ManifestWireSurfaceV1 {
+        identity_sha256: hash32(
+            &surface.identity_sha256,
+            &format!("{name}.identitySha256"),
+        )?,
+        legacy_intent_pairs: surface
+            .legacy_intent_pairs
+            .into_iter()
+            .enumerate()
+            .map(|(index, pair)| wire_pair(pair, &format!("{name}.legacyIntentPairs[{index}]")))
+            .collect::<Result<Vec<_>>>()?,
+        dedicated_direct_intent_pairs: surface
+            .dedicated_direct_intent_pairs
+            .into_iter()
+            .enumerate()
+            .map(|(index, pair)| {
+                wire_pair(
+                    pair,
+                    &format!("{name}.dedicatedDirectIntentPairs[{index}]"),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        outer_request_actions: surface
+            .outer_request_actions
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                parse_unsigned(value, &format!("{name}.outerRequestActions[{index}]"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        source_generation_discriminants: surface
+            .source_generation_discriminants
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                parse_unsigned(
+                    value,
+                    &format!("{name}.sourceGenerationDiscriminants[{index}]"),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    projected
+        .validate()
+        .map_err(|_| format!("{name} is not canonical"))?;
+    Ok(projected)
+}
+
 fn parse_config(path: &Path) -> Result<ChainConfig> {
     let bytes = std::fs::read(path)?;
     parse_config_bytes(&bytes)
@@ -209,7 +293,7 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
     }
     let wire: ChainConfigWire = serde_json::from_slice(&bytes)?;
     if wire.schema != CONFIG_SCHEMA {
-        return Err("chain config schema is not operatord-chain-config/v3".into());
+        return Err("chain config schema is not operatord-chain-config/v4".into());
     }
     if wire.decoder_set != CANONICAL_ACCOUNT_DECODER_SET {
         return Err(format!(
@@ -254,6 +338,10 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
                 Ok(coordinate)
             })
             .collect::<Result<Vec<_>>>()?;
+        let checked_wire_surface = wire_surface(
+            release.wire_surface,
+            &format!("releases[{index}].wireSurface"),
+        )?;
         releases.push(IndexedProgramRelease {
             program_id: address(&release.program_id, &format!("releases[{index}].programId"))?,
             program_data: address(
@@ -287,6 +375,7 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
                 }
                 profile
             },
+            wire_surface: checked_wire_surface,
             enabled_intents,
             families,
         });
