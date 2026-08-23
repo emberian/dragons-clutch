@@ -127,7 +127,7 @@ fn pair_fixture(quantity: u64) -> PairFixture {
         relation_policy_digest: id(3),
         price_policy_digest: id(4),
         epoch_index: 7,
-        outcome_count: MAX_OUTCOMES as u8,
+        outcome_count: u8::try_from(MAX_OUTCOMES).unwrap(),
         price_scale: 10_000,
     };
     let prices = [625u64; MAX_OUTCOMES];
@@ -139,7 +139,7 @@ fn pair_fixture(quantity: u64) -> PairFixture {
     let mut coefficients = [0u64; MAX_OUTCOMES];
     let mut outcome = 0usize;
     while outcome < MAX_OUTCOMES {
-        coefficients[outcome] = outcome as u64 + 1;
+        coefficients[outcome] = u64::try_from(outcome).unwrap() + 1;
         outcome += 1;
     }
     let buy = EconomicOrderV2 {
@@ -179,7 +179,7 @@ fn pair_fixture(quantity: u64) -> PairFixture {
     let candidate_digest = verified.economic_candidate_digest;
     let common = SelectedPortfolioOrderRecordV2 {
         version: PORTFOLIO_EXECUTION_VERSION_V2,
-        outcome_count: MAX_OUTCOMES as u8,
+        outcome_count: u8::try_from(MAX_OUTCOMES).unwrap(),
         source_kind: PortfolioSourceOrderKindV2::Portfolio,
         side: Side::Buy,
         order_index: 0,

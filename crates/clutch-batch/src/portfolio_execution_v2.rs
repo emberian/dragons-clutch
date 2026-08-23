@@ -128,7 +128,7 @@ impl SelectedPortfolioOrderRecordV2 {
         output[0..8].copy_from_slice(&SELECTED_ORDER_MAGIC_V2);
         output[8] = self.version;
         output[9] = self.outcome_count;
-        output[10] = self.source_kind as u8;
+        output[10] = source_order_kind_byte(self.source_kind);
         output[11] = side_byte(self.side);
         output[12] = self.order_index;
         output[13] = self.page_slot;
@@ -862,7 +862,7 @@ impl PortfolioPairReceiptV2 {
         output[0..8].copy_from_slice(&PAIR_RECEIPT_MAGIC_V2);
         output[8] = self.version;
         output[9] = self.outcome_count;
-        output[10] = self.boundary as u8;
+        output[10] = valuation_boundary_byte(self.boundary);
         // Route byte 0 is the only admitted exact direct portfolio pair.
         output[11] = 0;
         output[12..14].copy_from_slice(&self.slice_index.to_le_bytes());
@@ -1721,10 +1721,10 @@ fn portfolio_transition_id_v2(
         input.settlement_receipt.accounted_end_mask,
         input.settlement_receipt.delivered_end_mask,
         input.settlement_receipt.expected_end_mask,
-        input.settlement_receipt.transition_kind as u8,
+        receipt_transition_kind_byte(input.settlement_receipt.transition_kind),
         input.settlement_receipt.expected_end_mask,
         input.settlement_receipt.expected_end_mask,
-        SettlementReceiptTransitionKindV2::PortfolioPairV2 as u8,
+        receipt_transition_kind_byte(SettlementReceiptTransitionKindV2::PortfolioPairV2),
     ])
     .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&input.settlement_receipt.transition_commitment)
@@ -1742,7 +1742,7 @@ fn portfolio_transition_id_v2(
     .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&pair.price_semantics_digest)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
-    hash.update(&[pair.boundary as u8])
+    hash.update(&[valuation_boundary_byte(pair.boundary)])
         .map_err(PortfolioExecutionErrorV2::Economic)?;
     hash.update(&pair.pair_units.to_le_bytes())
         .map_err(PortfolioExecutionErrorV2::Economic)?;
@@ -1847,6 +1847,25 @@ const fn side_byte(side: Side) -> u8 {
     match side {
         Side::Buy => 0,
         Side::Sell => 1,
+    }
+}
+
+const fn source_order_kind_byte(kind: PortfolioSourceOrderKindV2) -> u8 {
+    match kind {
+        PortfolioSourceOrderKindV2::Portfolio => 2,
+    }
+}
+
+const fn valuation_boundary_byte(boundary: PortfolioValuationBoundaryV2) -> u8 {
+    match boundary {
+        PortfolioValuationBoundaryV2::ExactReceiptDivisionV1 => 1,
+    }
+}
+
+const fn receipt_transition_kind_byte(kind: SettlementReceiptTransitionKindV2) -> u8 {
+    match kind {
+        SettlementReceiptTransitionKindV2::None => 0,
+        SettlementReceiptTransitionKindV2::PortfolioPairV2 => 1,
     }
 }
 
