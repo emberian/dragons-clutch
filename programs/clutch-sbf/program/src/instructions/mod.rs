@@ -152,6 +152,10 @@ pub mod product_artifact;
 pub(crate) mod product_general_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
+/// Staged-disabled Product founder custody transfer.  No dispatch or capability
+/// row reaches this module until the root/link creator consumes its receipt.
+#[cfg(feature = "non-production-product-series-lab")]
+pub(crate) mod product_market_foundation_init;
 #[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
 pub mod resolution_work;
