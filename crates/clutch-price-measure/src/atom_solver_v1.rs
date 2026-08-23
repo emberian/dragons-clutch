@@ -1,17 +1,24 @@
-//! Exact inverse solver for singleton and two-atom quantized mixtures.
+//! Exact bounded inverse solvers for quantized atom mixtures.
 //!
 //! The solver searches a caller-declared, canonical finite coordinate set. It
-//! first checks singleton atoms, then coordinate pairs in lexicographic order.
-//! For a pair it derives the unique primitive rational interpolation weight
-//! directly from the first differing payout coordinate and verifies every
-//! active payout equation. It never enumerates floating approximations or
-//! rounds a residual into a certificate.
+//! checks supports in increasing size and lexicographic coordinate order. Pair
+//! weights come directly from one exact interpolation equation; triple and
+//! quartet weights use checked determinant arithmetic. Every candidate is
+//! checked against all active payout equations, and every emitted certificate
+//! is independently admitted by the production verifier. No inverse path
+//! enumerates floating approximations or rounds a residual into a certificate.
 
 use crate::{
     verify_quantized_atom_mixture_v1, BoundQuantizedSplineV1, ErrorV1,
     QuantizedAtomMixtureCertificateV1, QuantizedPayoutPriceVectorV1,
     VerifiedQuantizedAtomMixtureV1, MAX_OUTCOMES, MAX_QUANTIZED_ATOMS,
 };
+use crate::fraction_free_v1::{
+    determinant_2x2, wide_gcd, FractionFreeErrorV1, FractionFreeMatrix3V1,
+    SignedDeltaV1,
+};
+#[cfg(test)]
+use crate::fraction_free_v1::WideUnsignedV1;
 
 /// Largest caller-declared coordinate set searched by the exact pair solver.
 pub const MAX_QUANTIZED_ATOM_SOLVER_COORDINATES_V1: usize = 64;
@@ -140,6 +147,53 @@ impl QuantizedAtomSupport3SolverPlanV1 {
     }
 }
 
+/// Explicit work bounds for deterministic support-at-most-four search.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuantizedAtomSupport4SolverPlanV1 {
+    maximum_pair_evaluations: u32,
+    maximum_triple_evaluations: u32,
+    maximum_quartet_evaluations: u32,
+}
+
+impl QuantizedAtomSupport4SolverPlanV1 {
+    /// Require positive pair, triple, and quartet evaluation budgets.
+    pub fn new(
+        maximum_pair_evaluations: u32,
+        maximum_triple_evaluations: u32,
+        maximum_quartet_evaluations: u32,
+    ) -> ResultAtomSolverV1<Self> {
+        if maximum_pair_evaluations == 0 {
+            return Err(QuantizedAtomPairSolverErrorV1::ZeroPairEvaluationLimit);
+        }
+        if maximum_triple_evaluations == 0 {
+            return Err(QuantizedAtomPairSolverErrorV1::ZeroTripleEvaluationLimit);
+        }
+        if maximum_quartet_evaluations == 0 {
+            return Err(QuantizedAtomPairSolverErrorV1::ZeroQuartetEvaluationLimit);
+        }
+        Ok(Self {
+            maximum_pair_evaluations,
+            maximum_triple_evaluations,
+            maximum_quartet_evaluations,
+        })
+    }
+
+    /// Maximum lexicographic coordinate pairs evaluated after singleton search.
+    pub const fn maximum_pair_evaluations(&self) -> u32 {
+        self.maximum_pair_evaluations
+    }
+
+    /// Maximum lexicographic coordinate triples evaluated after pair search.
+    pub const fn maximum_triple_evaluations(&self) -> u32 {
+        self.maximum_triple_evaluations
+    }
+
+    /// Maximum lexicographic coordinate quartets evaluated after triple search.
+    pub const fn maximum_quartet_evaluations(&self) -> u32 {
+        self.maximum_quartet_evaluations
+    }
+}
+
 /// Factual coverage of one exact support-at-most-three inverse search.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuantizedAtomSupport3SolverReportV1 {
@@ -188,6 +242,80 @@ impl QuantizedAtomSupport3SolverReportV1 {
     /// exceeded the V1 `u64` certificate profile.
     pub const fn exact_but_unrepresentable_triples(&self) -> u32 {
         self.exact_but_unrepresentable_triples
+    }
+
+    /// Whether the declared coordinates are every integer in the complete
+    /// Terms domain, including both endpoints.
+    pub const fn covers_full_integer_domain(&self) -> bool {
+        self.covers_full_integer_domain
+    }
+}
+
+/// Factual coverage of one exact support-at-most-four inverse search.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuantizedAtomSupport4SolverReportV1 {
+    coordinate_count: u8,
+    singleton_evaluations: u8,
+    pair_evaluations: u32,
+    triple_evaluations: u32,
+    quartet_evaluations: u32,
+    maximum_pair_evaluations: u32,
+    maximum_triple_evaluations: u32,
+    maximum_quartet_evaluations: u32,
+    exact_but_unrepresentable_triples: u32,
+    exact_but_unrepresentable_quartets: u32,
+    covers_full_integer_domain: bool,
+}
+
+impl QuantizedAtomSupport4SolverReportV1 {
+    /// Number of declared coordinates.
+    pub const fn coordinate_count(&self) -> u8 {
+        self.coordinate_count
+    }
+
+    /// Number of exact production atoms compared directly to the target.
+    pub const fn singleton_evaluations(&self) -> u8 {
+        self.singleton_evaluations
+    }
+
+    /// Number of lexicographic coordinate pairs considered.
+    pub const fn pair_evaluations(&self) -> u32 {
+        self.pair_evaluations
+    }
+
+    /// Number of lexicographic coordinate triples considered.
+    pub const fn triple_evaluations(&self) -> u32 {
+        self.triple_evaluations
+    }
+
+    /// Number of lexicographic coordinate quartets considered.
+    pub const fn quartet_evaluations(&self) -> u32 {
+        self.quartet_evaluations
+    }
+
+    /// Caller-declared pair work bound.
+    pub const fn maximum_pair_evaluations(&self) -> u32 {
+        self.maximum_pair_evaluations
+    }
+
+    /// Caller-declared triple work bound.
+    pub const fn maximum_triple_evaluations(&self) -> u32 {
+        self.maximum_triple_evaluations
+    }
+
+    /// Caller-declared quartet work bound.
+    pub const fn maximum_quartet_evaluations(&self) -> u32 {
+        self.maximum_quartet_evaluations
+    }
+
+    /// Exact positive triple solutions outside the V1 `u64` mass profile.
+    pub const fn exact_but_unrepresentable_triples(&self) -> u32 {
+        self.exact_but_unrepresentable_triples
+    }
+
+    /// Exact positive quartet solutions outside the V1 `u64` mass profile.
+    pub const fn exact_but_unrepresentable_quartets(&self) -> u32 {
+        self.exact_but_unrepresentable_quartets
     }
 
     /// Whether the declared coordinates are every integer in the complete
@@ -248,6 +376,35 @@ pub struct ExactQuantizedSupport3SolutionV1 {
     certificate: QuantizedAtomMixtureCertificateV1,
     verified: VerifiedQuantizedAtomMixtureV1,
     report: QuantizedAtomSupport3SolverReportV1,
+}
+
+/// One support-at-most-four certificate constructed and independently
+/// reverified by the production positive-mixture checker.
+///
+/// Repeated identities remain authority-neutral until an adapter proves the
+/// owning Market/Terms/Basis/price bodies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExactQuantizedSupport4SolutionV1 {
+    certificate: QuantizedAtomMixtureCertificateV1,
+    verified: VerifiedQuantizedAtomMixtureV1,
+    report: QuantizedAtomSupport4SolverReportV1,
+}
+
+impl ExactQuantizedSupport4SolutionV1 {
+    /// Canonical sparse certificate body produced by the solver.
+    pub const fn certificate(&self) -> &QuantizedAtomMixtureCertificateV1 {
+        &self.certificate
+    }
+
+    /// Independent production-verifier result for the same certificate.
+    pub const fn verified(&self) -> VerifiedQuantizedAtomMixtureV1 {
+        self.verified
+    }
+
+    /// Exact search-prefix coverage that preceded the first solution.
+    pub const fn report(&self) -> QuantizedAtomSupport4SolverReportV1 {
+        self.report
+    }
 }
 
 impl ExactQuantizedSupport3SolutionV1 {
@@ -313,6 +470,23 @@ pub enum QuantizedAtomSupport3SolverOutcomeV1 {
     WorkLimitReached(QuantizedAtomSupport3SolverReportV1),
 }
 
+/// Total outcome of one bounded support-at-most-four exact search.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuantizedAtomSupport4SolverOutcomeV1 {
+    /// The first exact singleton, pair, triple, or lexicographic quartet was
+    /// constructed and independently reverified.
+    Solved(ExactQuantizedSupport4SolutionV1),
+    /// The declared set was exhausted through support four without a
+    /// representable certificate. This does not decide support above four or
+    /// any coordinate omitted from the declared set.
+    Unsupported(QuantizedAtomSupport4SolverReportV1),
+    /// Exact positive solutions were seen, but their primitive masses or
+    /// denominator exceeded the V1 certificate's `u64` representation.
+    OutOfProfile(QuantizedAtomSupport4SolverReportV1),
+    /// A pair, triple, or quartet budget ended before that family was exhausted.
+    WorkTruncated(QuantizedAtomSupport4SolverReportV1),
+}
+
 /// Malformed-input or checked-arithmetic refusals from exact inverse solvers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuantizedAtomPairSolverErrorV1 {
@@ -340,6 +514,8 @@ pub enum QuantizedAtomPairSolverErrorV1 {
     ZeroPairEvaluationLimit,
     /// A support-three search cannot have a zero triple work bound.
     ZeroTripleEvaluationLimit,
+    /// A support-four search cannot have a zero quartet work bound.
+    ZeroQuartetEvaluationLimit,
     /// A checked integer conversion or counter overflowed.
     ArithmeticOverflow,
     /// Solver-derived facts disagreed despite exact input validation.
@@ -349,6 +525,16 @@ pub enum QuantizedAtomPairSolverErrorV1 {
 impl From<ErrorV1> for QuantizedAtomPairSolverErrorV1 {
     fn from(value: ErrorV1) -> Self {
         Self::PriceMeasure(value)
+    }
+}
+
+impl From<FractionFreeErrorV1> for QuantizedAtomPairSolverErrorV1 {
+    fn from(value: FractionFreeErrorV1) -> Self {
+        match value {
+            FractionFreeErrorV1::ArithmeticOverflow => Self::ArithmeticOverflow,
+            FractionFreeErrorV1::NonExactDivision
+            | FractionFreeErrorV1::InvariantViolation => Self::InvariantViolation,
+        }
     }
 }
 
@@ -666,6 +852,287 @@ pub fn solve_quantized_atom_support3_hull_v1(
     }
 }
 
+/// Construct the first exact singleton, pair, triple, or lexicographic quartet
+/// certificate over a declared finite coordinate set.
+///
+/// Each smaller support family must finish before the next begins. The caller
+/// supplies a separate positive work bound for pairs, triples, and quartets.
+/// `Unsupported` is deliberately a profile result: even after exhausting the
+/// declared set through support four, this constructor makes no statement
+/// about omitted coordinates or representations requiring support five through
+/// `outcome_count`. `OutOfProfile` is separate from both mathematical absence
+/// and work truncation. No result claims uniqueness, fair value, or optimality.
+pub fn solve_quantized_atom_support4_hull_v1(
+    bound: &BoundQuantizedSplineV1,
+    prices: &QuantizedPayoutPriceVectorV1,
+    coordinates: QuantizedAtomSearchCoordinatesV1,
+    plan: QuantizedAtomSupport4SolverPlanV1,
+) -> ResultAtomSolverV1<QuantizedAtomSupport4SolverOutcomeV1> {
+    let basis = bound.validated()?;
+    let spec = basis.spec();
+    validate_target_price(bound, prices, spec.outcome_count, spec.denominator)?;
+    validate_coordinates(bound, coordinates)?;
+    let mut report = QuantizedAtomSupport4SolverReportV1 {
+        coordinate_count: coordinates.coordinate_count,
+        singleton_evaluations: 0,
+        pair_evaluations: 0,
+        triple_evaluations: 0,
+        quartet_evaluations: 0,
+        maximum_pair_evaluations: plan.maximum_pair_evaluations,
+        maximum_triple_evaluations: plan.maximum_triple_evaluations,
+        maximum_quartet_evaluations: plan.maximum_quartet_evaluations,
+        exact_but_unrepresentable_triples: 0,
+        exact_but_unrepresentable_quartets: 0,
+        covers_full_integer_domain: covers_full_integer_domain(bound, coordinates)?,
+    };
+    let active_coordinates = usize::from(coordinates.coordinate_count);
+    let active_outcomes = usize::from(spec.outcome_count);
+
+    let mut coordinate = 0usize;
+    while coordinate < active_coordinates {
+        let atom = basis
+            .evaluate_point(coordinates.coordinates[coordinate])
+            .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                witness: u8_index(coordinate)?,
+            })?;
+        report.singleton_evaluations = report
+            .singleton_evaluations
+            .checked_add(1)
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        if equal_active(&atom.weights, &prices.prices, active_outcomes) {
+            return Ok(QuantizedAtomSupport4SolverOutcomeV1::Solved(
+                make_support4_solution(
+                    bound,
+                    prices,
+                    [coordinates.coordinates[coordinate], 0, 0, 0],
+                    [1, 0, 0, 0],
+                    1,
+                    1,
+                    report,
+                )?,
+            ));
+        }
+        coordinate += 1;
+    }
+
+    let mut left = 0usize;
+    while left < active_coordinates {
+        let left_atom = basis
+            .evaluate_point(coordinates.coordinates[left])
+            .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                witness: u8_index(left)?,
+            })?;
+        let mut right = left + 1;
+        while right < active_coordinates {
+            if report.pair_evaluations == plan.maximum_pair_evaluations {
+                return Ok(QuantizedAtomSupport4SolverOutcomeV1::WorkTruncated(
+                    report,
+                ));
+            }
+            report.pair_evaluations = report
+                .pair_evaluations
+                .checked_add(1)
+                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+            let right_atom = basis
+                .evaluate_point(coordinates.coordinates[right])
+                .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                    witness: u8_index(right)?,
+                })?;
+            if let Some((left_mass, right_mass, denominator)) = solve_pair_weights(
+                &left_atom.weights,
+                &right_atom.weights,
+                &prices.prices,
+                active_outcomes,
+            )? {
+                return Ok(QuantizedAtomSupport4SolverOutcomeV1::Solved(
+                    make_support4_solution(
+                        bound,
+                        prices,
+                        [
+                            coordinates.coordinates[left],
+                            coordinates.coordinates[right],
+                            0,
+                            0,
+                        ],
+                        [left_mass, right_mass, 0, 0],
+                        denominator,
+                        2,
+                        report,
+                    )?,
+                ));
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+
+    left = 0;
+    while left < active_coordinates {
+        let left_atom = basis
+            .evaluate_point(coordinates.coordinates[left])
+            .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                witness: u8_index(left)?,
+            })?;
+        let mut middle = left + 1;
+        while middle < active_coordinates {
+            let middle_atom = basis
+                .evaluate_point(coordinates.coordinates[middle])
+                .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                    witness: u8_index(middle)?,
+                })?;
+            let mut right = middle + 1;
+            while right < active_coordinates {
+                if report.triple_evaluations == plan.maximum_triple_evaluations {
+                    return Ok(QuantizedAtomSupport4SolverOutcomeV1::WorkTruncated(
+                        report,
+                    ));
+                }
+                report.triple_evaluations = report
+                    .triple_evaluations
+                    .checked_add(1)
+                    .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+                let right_atom = basis
+                    .evaluate_point(coordinates.coordinates[right])
+                    .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                        witness: u8_index(right)?,
+                    })?;
+                match solve_triple_weights(
+                    &left_atom.weights,
+                    &middle_atom.weights,
+                    &right_atom.weights,
+                    &prices.prices,
+                    active_outcomes,
+                )? {
+                    TripleWeightSolutionV1::NoExactPositiveSolution => {}
+                    TripleWeightSolutionV1::ExactButOutsideU64Profile => {
+                        report.exact_but_unrepresentable_triples = report
+                            .exact_but_unrepresentable_triples
+                            .checked_add(1)
+                            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+                    }
+                    TripleWeightSolutionV1::Representable {
+                        masses,
+                        denominator,
+                    } => {
+                        return Ok(QuantizedAtomSupport4SolverOutcomeV1::Solved(
+                            make_support4_solution(
+                                bound,
+                                prices,
+                                [
+                                    coordinates.coordinates[left],
+                                    coordinates.coordinates[middle],
+                                    coordinates.coordinates[right],
+                                    0,
+                                ],
+                                [masses[0], masses[1], masses[2], 0],
+                                denominator,
+                                3,
+                                report,
+                            )?,
+                        ));
+                    }
+                }
+                right += 1;
+            }
+            middle += 1;
+        }
+        left += 1;
+    }
+
+    left = 0;
+    while left < active_coordinates {
+        let left_atom = basis
+            .evaluate_point(coordinates.coordinates[left])
+            .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                witness: u8_index(left)?,
+            })?;
+        let mut first_middle = left + 1;
+        while first_middle < active_coordinates {
+            let first_middle_atom = basis
+                .evaluate_point(coordinates.coordinates[first_middle])
+                .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                    witness: u8_index(first_middle)?,
+                })?;
+            let mut second_middle = first_middle + 1;
+            while second_middle < active_coordinates {
+                let second_middle_atom = basis
+                    .evaluate_point(coordinates.coordinates[second_middle])
+                    .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                        witness: u8_index(second_middle)?,
+                    })?;
+                let mut right = second_middle + 1;
+                while right < active_coordinates {
+                    if report.quartet_evaluations == plan.maximum_quartet_evaluations {
+                        return Ok(QuantizedAtomSupport4SolverOutcomeV1::WorkTruncated(
+                            report,
+                        ));
+                    }
+                    report.quartet_evaluations = report
+                        .quartet_evaluations
+                        .checked_add(1)
+                        .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+                    let right_atom = basis
+                        .evaluate_point(coordinates.coordinates[right])
+                        .map_err(|_| ErrorV1::AtomEvaluationFailed {
+                            witness: u8_index(right)?,
+                        })?;
+                    match solve_quartet_weights(
+                        [
+                            &left_atom.weights,
+                            &first_middle_atom.weights,
+                            &second_middle_atom.weights,
+                            &right_atom.weights,
+                        ],
+                        &prices.prices,
+                        active_outcomes,
+                    )? {
+                        QuartetWeightSolutionV1::NoExactPositiveSolution => {}
+                        QuartetWeightSolutionV1::ExactButOutsideU64Profile => {
+                            report.exact_but_unrepresentable_quartets = report
+                                .exact_but_unrepresentable_quartets
+                                .checked_add(1)
+                                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+                        }
+                        QuartetWeightSolutionV1::Representable {
+                            masses,
+                            denominator,
+                        } => {
+                            return Ok(QuantizedAtomSupport4SolverOutcomeV1::Solved(
+                                make_support4_solution(
+                                    bound,
+                                    prices,
+                                    [
+                                        coordinates.coordinates[left],
+                                        coordinates.coordinates[first_middle],
+                                        coordinates.coordinates[second_middle],
+                                        coordinates.coordinates[right],
+                                    ],
+                                    masses,
+                                    denominator,
+                                    4,
+                                    report,
+                                )?,
+                            ));
+                        }
+                    }
+                    right += 1;
+                }
+                second_middle += 1;
+            }
+            first_middle += 1;
+        }
+        left += 1;
+    }
+
+    if report.exact_but_unrepresentable_triples != 0
+        || report.exact_but_unrepresentable_quartets != 0
+    {
+        Ok(QuantizedAtomSupport4SolverOutcomeV1::OutOfProfile(report))
+    } else {
+        Ok(QuantizedAtomSupport4SolverOutcomeV1::Unsupported(report))
+    }
+}
+
 fn validate_target_price(
     bound: &BoundQuantizedSplineV1,
     prices: &QuantizedPayoutPriceVectorV1,
@@ -979,311 +1446,187 @@ fn solve_triple_weights(
     })
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct WideUnsignedV1 {
-    high: u128,
-    low: u128,
-}
-
-impl WideUnsignedV1 {
-    const ZERO: Self = Self { high: 0, low: 0 };
-    const ONE: Self = Self { high: 0, low: 1 };
-
-    const fn from_u128(value: u128) -> Self {
-        Self {
-            high: 0,
-            low: value,
-        }
-    }
-
-    const fn is_zero(self) -> bool {
-        self.high == 0 && self.low == 0
-    }
-
-    fn checked_add(self, other: Self) -> Option<Self> {
-        let (low, carry) = self.low.overflowing_add(other.low);
-        let high = self
-            .high
-            .checked_add(other.high)?
-            .checked_add(if carry { 1 } else { 0 })?;
-        Some(Self { high, low })
-    }
-
-    fn checked_sub(self, other: Self) -> Option<Self> {
-        if self < other {
-            return None;
-        }
-        let (low, borrow) = self.low.overflowing_sub(other.low);
-        let high = self
-            .high
-            .checked_sub(other.high)?
-            .checked_sub(if borrow { 1 } else { 0 })?;
-        Some(Self { high, low })
-    }
-
-    fn checked_shl(self, shift: u32) -> Option<Self> {
-        if shift == 0 {
-            return Some(self);
-        }
-        if shift >= 256 {
-            return if self.is_zero() { Some(Self::ZERO) } else { None };
-        }
-        if shift == 128 {
-            return if self.high == 0 {
-                Some(Self {
-                    high: self.low,
-                    low: 0,
-                })
-            } else {
-                None
-            };
-        }
-        if shift > 128 {
-            let high_shift = shift - 128;
-            if self.high != 0 || self.low >> (128 - high_shift) != 0 {
-                return None;
-            }
-            return Some(Self {
-                high: self.low << high_shift,
-                low: 0,
-            });
-        }
-        if self.high >> (128 - shift) != 0 {
-            return None;
-        }
-        Some(Self {
-            high: (self.high << shift) | (self.low >> (128 - shift)),
-            low: self.low << shift,
-        })
-    }
-
-    const fn shr(self, shift: u32) -> Self {
-        if shift == 0 {
-            return self;
-        }
-        if shift >= 256 {
-            return Self::ZERO;
-        }
-        if shift == 128 {
-            return Self {
-                high: 0,
-                low: self.high,
-            };
-        }
-        if shift > 128 {
-            return Self {
-                high: 0,
-                low: self.high >> (shift - 128),
-            };
-        }
-        Self {
-            high: self.high >> shift,
-            low: (self.low >> shift) | (self.high << (128 - shift)),
-        }
-    }
-
-    fn trailing_zeros(self) -> ResultAtomSolverV1<u32> {
-        if self.low != 0 {
-            return Ok(self.low.trailing_zeros());
-        }
-        if self.high == 0 {
-            return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
-        }
-        128u32
-            .checked_add(self.high.trailing_zeros())
-            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)
-    }
-
-    const fn bit(self, index: u32) -> bool {
-        if index < 128 {
-            ((self.low >> index) & 1) != 0
-        } else {
-            ((self.high >> (index - 128)) & 1) != 0
-        }
-    }
-
-    fn set_bit(&mut self, index: u32) -> ResultAtomSolverV1<()> {
-        if index >= 256 {
-            return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
-        }
-        if index < 128 {
-            self.low |= 1u128 << index;
-        } else {
-            self.high |= 1u128 << (index - 128);
-        }
-        Ok(())
-    }
-
-    fn checked_mul_u64(self, mut multiplier: u64) -> Option<Self> {
-        let mut multiplicand = self;
-        let mut product = Self::ZERO;
-        while multiplier != 0 {
-            if multiplier & 1 != 0 {
-                product = product.checked_add(multiplicand)?;
-            }
-            multiplier >>= 1;
-            if multiplier != 0 {
-                multiplicand = multiplicand.checked_shl(1)?;
-            }
-        }
-        Some(product)
-    }
-
-    fn checked_div_exact(self, divisor: Self) -> ResultAtomSolverV1<Self> {
-        if divisor.is_zero() {
-            return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
-        }
-        let mut quotient = Self::ZERO;
-        let mut remainder = Self::ZERO;
-        let mut cursor = 256u16;
-        while cursor != 0 {
-            cursor -= 1;
-            let bit = u32::from(cursor);
-            remainder = remainder
-                .checked_shl(1)
-                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
-            if self.bit(bit) {
-                remainder = remainder
-                    .checked_add(Self::ONE)
-                    .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
-            }
-            if remainder >= divisor {
-                remainder = remainder
-                    .checked_sub(divisor)
-                    .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?;
-                quotient.set_bit(bit)?;
-            }
-        }
-        if !remainder.is_zero() {
-            return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
-        }
-        Ok(quotient)
-    }
-
-    fn to_u64(self) -> Option<u64> {
-        if self.high != 0 || self.low > u128::from(u64::MAX) {
-            return None;
-        }
-        u64::try_from(self.low).ok()
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SignedDeltaV1 {
-    negative: bool,
-    magnitude: u64,
+enum QuartetWeightSolutionV1 {
+    NoExactPositiveSolution,
+    ExactButOutsideU64Profile,
+    Representable {
+        masses: [u64; 4],
+        denominator: u64,
+    },
 }
 
-impl SignedDeltaV1 {
-    const fn between(left: u64, right: u64) -> Self {
-        if left >= right {
-            Self {
-                negative: false,
-                magnitude: left - right,
+fn solve_quartet_weights(
+    atoms: [&[u64; MAX_OUTCOMES]; 4],
+    target: &[u64; MAX_OUTCOMES],
+    active_outcomes: usize,
+) -> ResultAtomSolverV1<QuartetWeightSolutionV1> {
+    let mut pivot = None;
+    let mut first = 0usize;
+    while first < active_outcomes {
+        let mut second = first + 1;
+        while second < active_outcomes {
+            let mut third = second + 1;
+            while third < active_outcomes {
+                let rows = quartet_difference_rows(atoms, [first, second, third]);
+                let matrix = FractionFreeMatrix3V1::new(rows);
+                let determinant = matrix.determinant()?;
+                if !determinant.magnitude.is_zero() {
+                    pivot = Some((matrix, determinant, [first, second, third]));
+                    break;
+                }
+                third += 1;
             }
-        } else {
-            Self {
-                negative: true,
-                magnitude: right - left,
+            if pivot.is_some() {
+                break;
             }
+            second += 1;
+        }
+        if pivot.is_some() {
+            break;
+        }
+        first += 1;
+    }
+    let Some((matrix, mut denominator, pivot_rows)) = pivot else {
+        // An affinely dependent quartet has no irreducible support-four point:
+        // any positive representation can be moved to a boundary support that
+        // the already-exhausted triple search owns.
+        return Ok(QuartetWeightSolutionV1::NoExactPositiveSolution);
+    };
+    let right_hand_side = [
+        SignedDeltaV1::between(target[pivot_rows[0]], atoms[3][pivot_rows[0]]),
+        SignedDeltaV1::between(target[pivot_rows[1]], atoms[3][pivot_rows[1]]),
+        SignedDeltaV1::between(target[pivot_rows[2]], atoms[3][pivot_rows[2]]),
+    ];
+    let mut numerators = [
+        matrix.with_column(0, right_hand_side)?.determinant()?,
+        matrix.with_column(1, right_hand_side)?.determinant()?,
+        matrix.with_column(2, right_hand_side)?.determinant()?,
+    ];
+    if denominator.negative {
+        denominator = denominator.negated();
+        let mut numerator = 0usize;
+        while numerator < 3 {
+            numerators[numerator] = numerators[numerator].negated();
+            numerator += 1;
         }
     }
+    let mut numerator = 0usize;
+    while numerator < 3 {
+        if numerators[numerator].negative || numerators[numerator].magnitude.is_zero() {
+            return Ok(QuartetWeightSolutionV1::NoExactPositiveSolution);
+        }
+        numerator += 1;
+    }
+    let first_three = numerators[0]
+        .magnitude
+        .checked_add(numerators[1].magnitude)
+        .and_then(|sum| sum.checked_add(numerators[2].magnitude))
+        .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+    if first_three >= denominator.magnitude {
+        return Ok(QuartetWeightSolutionV1::NoExactPositiveSolution);
+    }
+    let fourth_numerator = denominator
+        .magnitude
+        .checked_sub(first_three)
+        .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?;
 
-    fn product(self, other: Self) -> ResultAtomSolverV1<SignedWideV1> {
-        let magnitude = u128::from(self.magnitude)
-            .checked_mul(u128::from(other.magnitude))
+    let mut outcome = 0usize;
+    while outcome < active_outcomes {
+        let first_term = numerators[0]
+            .magnitude
+            .checked_mul_u64(atoms[0][outcome])
             .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
-        Ok(SignedWideV1::new(
-            self.negative != other.negative,
-            WideUnsignedV1::from_u128(magnitude),
-        ))
+        let second_term = numerators[1]
+            .magnitude
+            .checked_mul_u64(atoms[1][outcome])
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        let third_term = numerators[2]
+            .magnitude
+            .checked_mul_u64(atoms[2][outcome])
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        let fourth_term = fourth_numerator
+            .checked_mul_u64(atoms[3][outcome])
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        let reconstructed = first_term
+            .checked_add(second_term)
+            .and_then(|sum| sum.checked_add(third_term))
+            .and_then(|sum| sum.checked_add(fourth_term))
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        let expected = denominator
+            .magnitude
+            .checked_mul_u64(target[outcome])
+            .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
+        if reconstructed != expected {
+            return Ok(QuartetWeightSolutionV1::NoExactPositiveSolution);
+        }
+        outcome += 1;
     }
+
+    let mut divisor = denominator.magnitude;
+    numerator = 0;
+    while numerator < 3 {
+        divisor = wide_gcd(divisor, numerators[numerator].magnitude)?;
+        numerator += 1;
+    }
+    divisor = wide_gcd(divisor, fourth_numerator)?;
+    let reduced_denominator = denominator.magnitude.checked_div_exact(divisor)?;
+    let reduced_first = numerators[0].magnitude.checked_div_exact(divisor)?;
+    let reduced_second = numerators[1].magnitude.checked_div_exact(divisor)?;
+    let reduced_third = numerators[2].magnitude.checked_div_exact(divisor)?;
+    let reduced_fourth = fourth_numerator.checked_div_exact(divisor)?;
+    let (
+        Some(denominator),
+        Some(first_mass),
+        Some(second_mass),
+        Some(third_mass),
+        Some(fourth_mass),
+    ) = (
+        reduced_denominator.to_u64(),
+        reduced_first.to_u64(),
+        reduced_second.to_u64(),
+        reduced_third.to_u64(),
+        reduced_fourth.to_u64(),
+    )
+    else {
+        return Ok(QuartetWeightSolutionV1::ExactButOutsideU64Profile);
+    };
+    let mass_sum = first_mass
+        .checked_add(second_mass)
+        .and_then(|sum| sum.checked_add(third_mass))
+        .and_then(|sum| sum.checked_add(fourth_mass))
+        .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?;
+    if first_mass == 0
+        || second_mass == 0
+        || third_mass == 0
+        || fourth_mass == 0
+        || mass_sum != denominator
+    {
+        return Err(QuantizedAtomPairSolverErrorV1::InvariantViolation);
+    }
+    Ok(QuartetWeightSolutionV1::Representable {
+        masses: [first_mass, second_mass, third_mass, fourth_mass],
+        denominator,
+    })
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SignedWideV1 {
-    negative: bool,
-    magnitude: WideUnsignedV1,
-}
-
-impl SignedWideV1 {
-    const fn new(negative: bool, magnitude: WideUnsignedV1) -> Self {
-        Self {
-            negative: negative && !magnitude.is_zero(),
-            magnitude,
+fn quartet_difference_rows(
+    atoms: [&[u64; MAX_OUTCOMES]; 4],
+    outcomes: [usize; 3],
+) -> [[SignedDeltaV1; 3]; 3] {
+    let mut rows = [[SignedDeltaV1::between(0, 0); 3]; 3];
+    let mut row = 0usize;
+    while row < 3 {
+        let outcome = outcomes[row];
+        let mut column = 0usize;
+        while column < 3 {
+            rows[row][column] =
+                SignedDeltaV1::between(atoms[column][outcome], atoms[3][outcome]);
+            column += 1;
         }
+        row += 1;
     }
-
-    fn checked_sub(self, other: Self) -> ResultAtomSolverV1<Self> {
-        if self.negative == other.negative {
-            if self.magnitude >= other.magnitude {
-                Ok(Self::new(
-                    self.negative,
-                    self.magnitude
-                        .checked_sub(other.magnitude)
-                        .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?,
-                ))
-            } else {
-                Ok(Self::new(
-                    !self.negative,
-                    other
-                        .magnitude
-                        .checked_sub(self.magnitude)
-                        .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?,
-                ))
-            }
-        } else {
-            Ok(Self::new(
-                self.negative,
-                self.magnitude
-                    .checked_add(other.magnitude)
-                    .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?,
-            ))
-        }
-    }
-
-    const fn negated(self) -> Self {
-        Self::new(!self.negative, self.magnitude)
-    }
-}
-
-fn determinant_2x2(
-    left_top: SignedDeltaV1,
-    right_bottom: SignedDeltaV1,
-    right_top: SignedDeltaV1,
-    left_bottom: SignedDeltaV1,
-) -> ResultAtomSolverV1<SignedWideV1> {
-    left_top
-        .product(right_bottom)?
-        .checked_sub(right_top.product(left_bottom)?)
-}
-
-fn wide_gcd(
-    mut left: WideUnsignedV1,
-    mut right: WideUnsignedV1,
-) -> ResultAtomSolverV1<WideUnsignedV1> {
-    if left.is_zero() {
-        return Ok(right);
-    }
-    if right.is_zero() {
-        return Ok(left);
-    }
-    let common_shift = core::cmp::min(left.trailing_zeros()?, right.trailing_zeros()?);
-    left = left.shr(left.trailing_zeros()?);
-    loop {
-        right = right.shr(right.trailing_zeros()?);
-        if left > right {
-            core::mem::swap(&mut left, &mut right);
-        }
-        right = right
-            .checked_sub(left)
-            .ok_or(QuantizedAtomPairSolverErrorV1::InvariantViolation)?;
-        if right.is_zero() {
-            return left
-                .checked_shl(common_shift)
-                .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow);
-        }
-    }
+    rows
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1366,6 +1709,43 @@ fn make_support3_solution(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn make_support4_solution(
+    bound: &BoundQuantizedSplineV1,
+    prices: &QuantizedPayoutPriceVectorV1,
+    coordinates: [u128; 4],
+    masses: [u64; 4],
+    weight_denominator: u64,
+    witness_count: u8,
+    report: QuantizedAtomSupport4SolverReportV1,
+) -> ResultAtomSolverV1<ExactQuantizedSupport4SolutionV1> {
+    let spec = bound.basis;
+    let mut observation_coordinates = [0u128; MAX_QUANTIZED_ATOMS];
+    let mut weights = [0u64; MAX_QUANTIZED_ATOMS];
+    let mut witness = 0usize;
+    while witness < usize::from(witness_count) {
+        observation_coordinates[witness] = coordinates[witness];
+        weights[witness] = masses[witness];
+        witness += 1;
+    }
+    let certificate = QuantizedAtomMixtureCertificateV1::new(
+        bound.bindings,
+        spec.degree,
+        spec.outcome_count,
+        spec.denominator,
+        weight_denominator,
+        witness_count,
+        observation_coordinates,
+        weights,
+    )?;
+    let verified = verify_quantized_atom_mixture_v1(bound, prices, &certificate)?;
+    Ok(ExactQuantizedSupport4SolutionV1 {
+        certificate,
+        verified,
+        report,
+    })
+}
+
 fn equal_active(
     left: &[u64; MAX_OUTCOMES],
     right: &[u64; MAX_OUTCOMES],
@@ -1431,6 +1811,41 @@ mod tests {
         QuantizedPayoutPriceVectorV1 {
             price_id: [4; 32],
             outcome_count: 3,
+            prices: padded,
+        }
+    }
+
+    fn support4_bound() -> BoundQuantizedSplineV1 {
+        let mut knots = [0u128; 16];
+        knots[..2].copy_from_slice(&[0, 4]);
+        BoundQuantizedSplineV1 {
+            bindings: QuantizedAtomMixtureBindingsV1 {
+                market_id: [1; 32],
+                terms_id: [2; 32],
+                basis_id: [3; 32],
+                price_id: [4; 32],
+            },
+            coordinate_domain_min: 0,
+            coordinate_domain_max: 4,
+            basis: BasisSpec {
+                outcome_count: 4,
+                degree: 3,
+                knot_count: 2,
+                uniform_log2_spacing: 2,
+                denominator: 64,
+                domain_max: 4,
+                edge_policy: EdgePolicy::Refuse,
+                knots,
+            },
+        }
+    }
+
+    fn support4_target(prices: [u64; 4]) -> QuantizedPayoutPriceVectorV1 {
+        let mut padded = [0u64; MAX_OUTCOMES];
+        padded[..4].copy_from_slice(&prices);
+        QuantizedPayoutPriceVectorV1 {
+            price_id: [4; 32],
+            outcome_count: 4,
             prices: padded,
         }
     }
@@ -1584,6 +1999,77 @@ mod tests {
     }
 
     #[test]
+    fn exact_interior_quartet_is_constructed_reduced_and_reverified() {
+        let solution = solve_quantized_atom_support4_hull_v1(
+            &support4_bound(),
+            &support4_target([49, 5, 3, 7]),
+            coordinates(&[0, 1, 2, 4]),
+            QuantizedAtomSupport4SolverPlanV1::new(6, 4, 1).unwrap(),
+        )
+        .unwrap();
+        let QuantizedAtomSupport4SolverOutcomeV1::Solved(solution) = solution else {
+            panic!("expected exact support-four solution")
+        };
+        assert_eq!(solution.certificate().witness_count, 4);
+        assert_eq!(solution.certificate().weight_denominator, 72);
+        assert_eq!(
+            &solution.certificate().observation_coordinates[..4],
+            &[0, 1, 2, 4]
+        );
+        assert_eq!(&solution.certificate().weights[..4], &[51, 8, 6, 7]);
+        assert_eq!(solution.verified().witness_count(), 4);
+        assert_eq!(solution.report().pair_evaluations(), 6);
+        assert_eq!(solution.report().triple_evaluations(), 4);
+        assert_eq!(solution.report().quartet_evaluations(), 1);
+    }
+
+    #[test]
+    fn support_four_unsupported_work_truncated_and_out_of_profile_are_distinct() {
+        let unsupported = solve_quantized_atom_support4_hull_v1(
+            &support4_bound(),
+            &support4_target([0, 64, 0, 0]),
+            coordinates(&[0, 1, 2, 4]),
+            QuantizedAtomSupport4SolverPlanV1::new(6, 4, 1).unwrap(),
+        )
+        .unwrap();
+        let QuantizedAtomSupport4SolverOutcomeV1::Unsupported(report) = unsupported else {
+            panic!("expected support-four profile exhaustion")
+        };
+        assert_eq!(report.quartet_evaluations(), 1);
+
+        let truncated = solve_quantized_atom_support4_hull_v1(
+            &support4_bound(),
+            &support4_target([0, 64, 0, 0]),
+            coordinates(&[0, 1, 2, 3, 4]),
+            QuantizedAtomSupport4SolverPlanV1::new(10, 10, 1).unwrap(),
+        )
+        .unwrap();
+        let QuantizedAtomSupport4SolverOutcomeV1::WorkTruncated(report) = truncated else {
+            panic!("expected quartet-prefix work truncation")
+        };
+        assert_eq!(report.quartet_evaluations(), 1);
+        assert_eq!(report.maximum_quartet_evaluations(), 1);
+
+        let denominator = u64::MAX;
+        let mut atoms = [[0u64; MAX_OUTCOMES]; 4];
+        atoms[0][..4].copy_from_slice(&[denominator - 1, 1, 0, 0]);
+        atoms[1][..4].copy_from_slice(&[1, denominator - 1, 0, 0]);
+        atoms[2][..4].copy_from_slice(&[0, 0, denominator, 0]);
+        atoms[3][..4].copy_from_slice(&[0, 0, 0, denominator]);
+        let mut target = [0u64; MAX_OUTCOMES];
+        target[..4].copy_from_slice(&[1, 2, 1, denominator - 4]);
+        assert_eq!(
+            solve_quartet_weights(
+                [&atoms[0], &atoms[1], &atoms[2], &atoms[3]],
+                &target,
+                4,
+            )
+            .unwrap(),
+            QuartetWeightSolutionV1::ExactButOutsideU64Profile,
+        );
+    }
+
+    #[test]
     fn wide_determinant_gcd_and_exact_division_preserve_the_high_limb() {
         let positive = SignedDeltaV1 {
             negative: false,
@@ -1595,14 +2081,14 @@ mod tests {
         };
         let determinant = determinant_2x2(positive, positive, negative, positive).unwrap();
         assert!(!determinant.negative);
-        assert_eq!(determinant.magnitude.high, 1);
+        assert_eq!(determinant.magnitude.limb(2), Some(1));
 
-        let dividend = WideUnsignedV1 { high: 1, low: 0 };
-        let divisor = WideUnsignedV1::from_u128(1u128 << 127);
+        let divisor = WideUnsignedV1::from_u128(1u128 << 127).unwrap();
+        let dividend = divisor.checked_mul_u64(2).unwrap();
         assert_eq!(wide_gcd(dividend, divisor).unwrap(), divisor);
         assert_eq!(
             dividend.checked_div_exact(divisor).unwrap(),
-            WideUnsignedV1::from_u128(2)
+            WideUnsignedV1::from_u128(2).unwrap()
         );
     }
 
@@ -1691,6 +2177,10 @@ mod tests {
         assert_eq!(
             QuantizedAtomSupport3SolverPlanV1::new(1, 0),
             Err(QuantizedAtomPairSolverErrorV1::ZeroTripleEvaluationLimit)
+        );
+        assert_eq!(
+            QuantizedAtomSupport4SolverPlanV1::new(1, 1, 0),
+            Err(QuantizedAtomPairSolverErrorV1::ZeroQuartetEvaluationLimit)
         );
         let mut malformed = target([16, 0, 0]);
         malformed.prices[3] = 1;
