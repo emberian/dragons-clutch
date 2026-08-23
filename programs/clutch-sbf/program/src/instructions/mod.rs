@@ -66,6 +66,9 @@ pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_interval_v2;
+/// Capability-disabled atomic Failure/Product/Collateral Resolution V5 composer.
+#[cfg(feature = "non-production-failure-recovery-lab")]
+pub(crate) mod failure_market_resolution_v5;
 /// Capability-disabled permanent shared-Market Failure replay seam.
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_replay_v2;
