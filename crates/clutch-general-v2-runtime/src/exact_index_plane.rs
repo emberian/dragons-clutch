@@ -18,8 +18,9 @@
 use clutch_batch::Side;
 use clutch_general_v2_contract::{
     DeletableRentOwnerV1, EconomicDomainV2AccountV1, Id32, MarketBindingV2,
-    SettlementRootPhaseV1, SettlementRootV1AccountV1, MARKET_BINDING_ACCOUNT_BYTES_V2,
-    MAX_ORDERS, MAX_OUTCOMES, MAX_SLICES,
+    ExactIndexChildrenStateV1, IndexedSettlementRootV1AccountV1, SettlementRootPhaseV1,
+    SettlementRootV1AccountV1, MARKET_BINDING_ACCOUNT_BYTES_V2, MAX_ORDERS, MAX_OUTCOMES,
+    MAX_SLICES,
 };
 use clutch_product_series::MarketGenesisProfileV2;
 use clutch_solana_layout::{
@@ -891,8 +892,6 @@ impl ExactIndexCreateAccountInputV1 {
 /// caller-authored order locations, slice edges, aggregates, counts, or IDs.
 #[derive(Clone, Copy, Debug)]
 pub struct ConstructExactIndexPlaneInputV1<'a> {
-    /// Unforgeable proof that a root successor atomically counts both creates.
-    pub counted_root_admission: CountedExactIndexAdmissionV1,
     /// Complete canonical V5 page set in page-index order.
     pub pages: &'a [GeneralOrderPageInputV5<'a>],
     /// Exact EconomicDomain V2 account body projection.
@@ -1020,6 +1019,41 @@ impl ExactIndexPlaneCreatePostwritesV1 {
     }
 }
 
+/// Atomic counted-root plus two-child creation postwrites.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CountedExactIndexRootCreatePostwritesV1 {
+    indexed_root: IndexedSettlementRootV1AccountV1,
+    indexed_root_data_id: Id32,
+    indexes: ExactIndexPlaneCreatePostwritesV1,
+}
+
+impl CountedExactIndexRootCreatePostwritesV1 {
+    /// Breaking root poststate that counts exactly both live siblings.
+    pub const fn indexed_root(&self) -> &IndexedSettlementRootV1AccountV1 {
+        &self.indexed_root
+    }
+
+    /// Account-key-bound exact indexed-root poststate identity.
+    pub const fn indexed_root_data_id(&self) -> Id32 {
+        self.indexed_root_data_id
+    }
+
+    /// Private exact child creation postwrites in the same rollback domain.
+    pub const fn index_postwrites(&self) -> &ExactIndexPlaneCreatePostwritesV1 {
+        &self.indexes
+    }
+
+    /// Encode the exact disabled indexed-root successor body.
+    pub fn encode_indexed_root(
+        &self,
+        output: &mut [u8],
+    ) -> Result<(), ExactIndexPlaneErrorV1> {
+        self.indexed_root
+            .encode(output)
+            .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)
+    }
+}
+
 /// Indexed replacement for the old complete-witness pair rescan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IndexedPairCoverageV1 {
@@ -1090,9 +1124,10 @@ impl IndexedPairCoverageV1 {
 
 /// Construct both sealed indexes from complete hostile inputs and the selected root.
 pub fn construct_exact_index_plane_v1(
+    counted_root_admission: CountedExactIndexAdmissionV1,
     input: ConstructExactIndexPlaneInputV1<'_>,
 ) -> Result<ExactIndexPlaneCreatePostwritesV1, ExactIndexPlaneErrorV1> {
-    let _counted_root_admission = input.counted_root_admission;
+    let _counted_root_admission = counted_root_admission;
     input
         .market_binding
         .validate()
@@ -1516,6 +1551,41 @@ pub fn construct_exact_index_plane_v1(
         adjacency_payer_debit: input.adjacency_create.rent_exempt_minimum,
         locator_post_lamports,
         adjacency_post_lamports,
+    })
+}
+
+/// Derive the exact two-child plane and its counted breaking root atomically.
+///
+/// Unlike the raw child constructor, this function can create its private
+/// admission capability because the returned root poststate owns exact
+/// expected/admitted/live counts of two. No live discriminator, seed, action,
+/// dispatch entry, or profile capability exists for this plan today.
+pub fn construct_counted_exact_index_root_v1(
+    input: ConstructExactIndexPlaneInputV1<'_>,
+) -> Result<CountedExactIndexRootCreatePostwritesV1, ExactIndexPlaneErrorV1> {
+    let root_account = input.settlement_root_account;
+    let base = *input.settlement_root;
+    let indexes = construct_exact_index_plane_v1(
+        CountedExactIndexAdmissionV1 { _private: () },
+        input,
+    )?;
+    let indexed_root = IndexedSettlementRootV1AccountV1::new_live(
+        base,
+        indexes.locator_account,
+        indexes.adjacency_account,
+        indexes.locator.common.plane_id,
+        indexes.locator_data_id,
+        indexes.adjacency_data_id,
+        indexes.locator.common.capability_profile,
+    )
+    .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    let indexed_root_data_id = indexed_root
+        .data_id(&crate::CanonicalSha256, root_account)
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    Ok(CountedExactIndexRootCreatePostwritesV1 {
+        indexed_root,
+        indexed_root_data_id,
+        indexes,
     })
 }
 
@@ -2152,8 +2222,6 @@ pub struct ExactIndexCloseAccountInputV1<'a> {
 /// Complete terminal-root input for atomic retirement of both index siblings.
 #[derive(Clone, Copy, Debug)]
 pub struct CloseExactIndexPlaneInputV1<'a> {
-    /// Unforgeable proof that a root successor atomically retires both children.
-    pub counted_root_retirement: CountedExactIndexRetirementV1,
     /// Counted terminal SettlementRoot account identity.
     pub settlement_root_account: Id32,
     /// Exact hostile-decoded terminal SettlementRoot body.
@@ -2200,6 +2268,31 @@ pub struct ExactIndexPlaneClosePostwritesV1 {
     plane_id: Id32,
 }
 
+/// Atomic close postwrites plus counted indexed-root retirement poststate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CountedExactIndexRootRetirementPostwritesV1 {
+    indexed_root_poststate: IndexedSettlementRootV1AccountV1,
+    indexed_root_poststate_data_id: Id32,
+    close: ExactIndexPlaneClosePostwritesV1,
+}
+
+impl CountedExactIndexRootRetirementPostwritesV1 {
+    /// Root poststate with admitted two, live zero, retired two.
+    pub const fn indexed_root_poststate(&self) -> &IndexedSettlementRootV1AccountV1 {
+        &self.indexed_root_poststate
+    }
+
+    /// Account-key-bound exact retired indexed-root identity.
+    pub const fn indexed_root_poststate_data_id(&self) -> Id32 {
+        self.indexed_root_poststate_data_id
+    }
+
+    /// Exact atomic sibling close and rent-credit postwrites.
+    pub const fn close_postwrites(&self) -> &ExactIndexPlaneClosePostwritesV1 {
+        &self.close
+    }
+}
+
 impl ExactIndexPlaneClosePostwritesV1 {
     /// Locator account whose lamports and data become zero.
     pub const fn locator_account(&self) -> Id32 {
@@ -2239,9 +2332,10 @@ impl ExactIndexPlaneClosePostwritesV1 {
 
 /// Prepare an atomic close only after the counted root proves exhaustive terminality.
 pub fn close_exact_index_plane_v1(
+    counted_root_retirement: CountedExactIndexRetirementV1,
     input: CloseExactIndexPlaneInputV1<'_>,
 ) -> Result<ExactIndexPlaneClosePostwritesV1, ExactIndexPlaneErrorV1> {
-    let _counted_root_retirement = input.counted_root_retirement;
+    let _counted_root_retirement = counted_root_retirement;
     input
         .settlement_root
         .validate()
@@ -2325,6 +2419,120 @@ pub fn close_exact_index_plane_v1(
         adjacency_principal,
         adjacency_donation,
         plane_id: common.plane_id,
+    })
+}
+
+/// Atomically close both exact children and advance their counted root partition.
+pub fn retire_counted_exact_index_root_v1(
+    indexed_root: &IndexedSettlementRootV1AccountV1,
+    input: CloseExactIndexPlaneInputV1<'_>,
+) -> Result<CountedExactIndexRootRetirementPostwritesV1, ExactIndexPlaneErrorV1> {
+    indexed_root
+        .validate()
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    if indexed_root.index_state() != ExactIndexChildrenStateV1::Live
+        || indexed_root.base() != input.settlement_root
+        || indexed_root.locator_account() != input.locator.account
+        || indexed_root.adjacency_account() != input.adjacency.account
+        || input.settlement_root_account.is_zero()
+    {
+        return Err(ExactIndexPlaneErrorV1::RootBinding);
+    }
+    let locator = FrozenOrderLocatorV1::decode(input.locator.body)?;
+    let adjacency = CandidateOrderSliceIndexV1::decode(input.adjacency.body)?;
+    if locator.plane_id() != indexed_root.plane_id()
+        || locator_data_id(&locator)? != indexed_root.locator_data_id()
+        || adjacency_data_id(&adjacency)? != indexed_root.adjacency_data_id()
+        || locator.common.capability_profile != indexed_root.capability_profile_id()
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let root_account = input.settlement_root_account;
+    let close = close_exact_index_plane_v1(
+        CountedExactIndexRetirementV1 { _private: () },
+        input,
+    )?;
+    let indexed_root_poststate = indexed_root
+        .retire_index_children()
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    let indexed_root_poststate_data_id = indexed_root_poststate
+        .data_id(&crate::CanonicalSha256, root_account)
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    Ok(CountedExactIndexRootRetirementPostwritesV1 {
+        indexed_root_poststate,
+        indexed_root_poststate_data_id,
+        close,
+    })
+}
+
+/// Mint the bounded immutable read authority from a counted live root and exact headers.
+///
+/// The later adapter remains responsible for authenticating the two account
+/// owners, canonical PDAs, read-only metas, and the root account before this
+/// pure join. Since no program transition may mutate a sealed index, reads do
+/// not rehash or rescan unrelated active rows.
+#[allow(clippy::too_many_arguments)]
+pub fn authorize_counted_exact_index_read_v1<'a>(
+    indexed_root_account: Id32,
+    indexed_root: &IndexedSettlementRootV1AccountV1,
+    locator_account: Id32,
+    locator_body: &'a [u8],
+    adjacency_account: Id32,
+    adjacency_body: &'a [u8],
+) -> Result<SealedExactIndexPairInputV1<'a>, ExactIndexPlaneErrorV1> {
+    indexed_root
+        .validate()
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    if indexed_root_account.is_zero()
+        || indexed_root.index_state() != ExactIndexChildrenStateV1::Live
+        || locator_account != indexed_root.locator_account()
+        || adjacency_account != indexed_root.adjacency_account()
+        || locator_body.len() < EXACT_INDEX_COMMON_HEADER_BYTES_V1
+        || adjacency_body.len() < EXACT_INDEX_COMMON_HEADER_BYTES_V1
+    {
+        return Err(ExactIndexPlaneErrorV1::RootBinding);
+    }
+    let mut locator_reader = ExactReader::new(locator_body);
+    let locator_common = decode_common(&mut locator_reader, FROZEN_ORDER_LOCATOR_MAGIC_V1)?;
+    let mut adjacency_reader = ExactReader::new(adjacency_body);
+    let adjacency_common = decode_common(
+        &mut adjacency_reader,
+        CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1,
+    )?;
+    let base = indexed_root.base();
+    if locator_body.len() != locator_encoded_len(locator_common.order_count)?
+        || adjacency_body.len()
+            != adjacency_encoded_len(adjacency_common.order_count, adjacency_common.edge_count)?
+        || !locator_common.semantic_eq(&adjacency_common)
+        || locator_common.settlement_root_account != indexed_root_account
+        || locator_common.market != base.market()
+        || locator_common.epoch != base.epoch()
+        || locator_common.order_set != base.order_set()
+        || locator_common.settlement_candidate != base.settlement_candidate_id()
+        || locator_common.selected_feed != base.retained_feed()
+        || locator_common.candidate_bundle_digest != base.candidate_bundle_digest()
+        || locator_common.owner_order_set_digest != base.owner_order_set_digest()
+        || locator_common.market_binding_account != base.market_binding()
+        || locator_common.epoch_generation != base.epoch_generation()
+        || locator_common.order_count != base.order_count()
+        || locator_common.outcome_count != base.outcome_count()
+        || locator_common.slice_count != base.counts().expected_receipts
+        || locator_common.plane_id != indexed_root.plane_id()
+        || locator_common.capability_profile != indexed_root.capability_profile_id()
+        || locator_common.sibling_account != adjacency_account
+        || adjacency_common.sibling_account != locator_account
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    Ok(SealedExactIndexPairInputV1 {
+        authority: CountedExactIndexReadAuthorityV1 {
+            plane_id: indexed_root.plane_id(),
+            locator_account,
+            adjacency_account,
+            _private: (),
+        },
+        locator_body,
+        adjacency_body,
     })
 }
 
