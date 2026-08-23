@@ -1,10 +1,10 @@
 use clutch_source_plane_v3::{
-    FixedCodec, OpenRawPageV3, RawPageV3, SourceHeadV3, StatisticResultV3, WindowSealV3,
+    ContentId, FixedCodec, OpenRawPageV3, RawPageV3, SourceHeadV3, StatisticResultV3, WindowSealV3,
     WindowWorkV3,
 };
 use clutch_source_plane_v3_adapter::AccountFamilyV3;
 
-use crate::auth::RuntimeKey;
+use crate::auth::{account_data_parts_id, RuntimeKey};
 use crate::{Error, Result};
 
 const RUNTIME_ACCOUNT_MAGIC: [u8; 8] = *b"DCSRTA01";
@@ -92,16 +92,33 @@ pub fn encode_runtime_account<T: RuntimeAccountBodyV1>(
         return Err(Error::InvalidCodec);
     }
     output.fill(0);
-    output[..8].copy_from_slice(&RUNTIME_ACCOUNT_MAGIC);
-    output[8..10].copy_from_slice(&RUNTIME_ACCOUNT_LAYOUT_VERSION.to_le_bytes());
-    output[10..12].copy_from_slice(&(header.family as u16).to_le_bytes());
-    output[12] = header.bump;
-    output[16..48].copy_from_slice(&header.principal_recipient.bytes());
-    output[48..56].copy_from_slice(&header.payer_principal_lamports.to_le_bytes());
-    output[56..64].copy_from_slice(&header.donation_floor_lamports.to_le_bytes());
-    output[64..72].copy_from_slice(&header.generation.to_le_bytes());
+    output[..RUNTIME_ACCOUNT_HEADER_BYTES]
+        .copy_from_slice(&encode_runtime_header(header, neutral_sink)?);
     body.encode_into(&mut output[RUNTIME_ACCOUNT_HEADER_BYTES..])?;
     Ok(())
+}
+
+/// Content identity of exact post-transition account bytes without one large stack buffer.
+pub fn canonical_runtime_account_data_id<const N: usize, T: RuntimeAccountBodyV1>(
+    key: RuntimeKey,
+    header: RuntimeAccountHeaderV1,
+    body: &T,
+    neutral_sink: RuntimeKey,
+) -> Result<ContentId> {
+    if N != T::ENCODED_LEN {
+        return Err(Error::InvalidCodec);
+    }
+    let header_bytes = encode_runtime_header(header, neutral_sink)?;
+    let mut body_bytes = [0; N];
+    body.encode_into(&mut body_bytes)?;
+    account_data_parts_id(
+        key,
+        RUNTIME_ACCOUNT_HEADER_BYTES
+            .checked_add(N)
+            .ok_or(Error::ArithmeticOverflow)?,
+        &header_bytes,
+        &body_bytes,
+    )
 }
 
 /// Hostile-decode one exact runtime account envelope and semantic body.
@@ -164,6 +181,23 @@ fn key_at(input: &[u8], at: usize) -> RuntimeKey {
     let mut bytes = [0; 32];
     bytes.copy_from_slice(&input[at..at + 32]);
     RuntimeKey::from_bytes(bytes)
+}
+
+fn encode_runtime_header(
+    header: RuntimeAccountHeaderV1,
+    neutral_sink: RuntimeKey,
+) -> Result<[u8; RUNTIME_ACCOUNT_HEADER_BYTES]> {
+    header.validate(neutral_sink)?;
+    let mut output = [0; RUNTIME_ACCOUNT_HEADER_BYTES];
+    output[..8].copy_from_slice(&RUNTIME_ACCOUNT_MAGIC);
+    output[8..10].copy_from_slice(&RUNTIME_ACCOUNT_LAYOUT_VERSION.to_le_bytes());
+    output[10..12].copy_from_slice(&(header.family as u16).to_le_bytes());
+    output[12] = header.bump;
+    output[16..48].copy_from_slice(&header.principal_recipient.bytes());
+    output[48..56].copy_from_slice(&header.payer_principal_lamports.to_le_bytes());
+    output[56..64].copy_from_slice(&header.donation_floor_lamports.to_le_bytes());
+    output[64..72].copy_from_slice(&header.generation.to_le_bytes());
+    Ok(output)
 }
 
 fn le_u16(input: &[u8]) -> u16 {

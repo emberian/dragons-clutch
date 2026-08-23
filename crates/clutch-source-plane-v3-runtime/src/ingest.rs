@@ -4,7 +4,7 @@ use clutch_source_plane_v3::{
 };
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 
-use crate::account::decode_runtime_account;
+use crate::account::{decode_runtime_account, RuntimeAccountHeaderV1};
 use crate::auth::{
     account_data_id, domain_id, AuthenticatedBoundaryV1, AuthenticatedSourceRouteV1,
     RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
@@ -196,6 +196,8 @@ pub struct AuthenticatedSourceHeadV1 {
     route_id: ContentId,
     account: RuntimeKey,
     terminal_generation: u64,
+    header: RuntimeAccountHeaderV1,
+    account_data_id: ContentId,
     head: SourceHeadV3,
     authentication_id: ContentId,
 }
@@ -216,6 +218,16 @@ impl AuthenticatedSourceHeadV1 {
         self.terminal_generation
     }
 
+    /// Exact decoded runtime account header.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
+    }
+
+    /// Digest of complete before-account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
     /// Complete canonical SourceHead body.
     pub const fn head(self) -> SourceHeadV3 {
         self.head
@@ -233,6 +245,8 @@ pub struct AuthenticatedOpenRawPageV1 {
     route_id: ContentId,
     account: RuntimeKey,
     terminal_generation: u64,
+    header: RuntimeAccountHeaderV1,
+    account_data_id: ContentId,
     open: OpenRawPageV3,
     authentication_id: ContentId,
 }
@@ -251,6 +265,16 @@ impl AuthenticatedOpenRawPageV1 {
     /// Durable terminal/reopen generation.
     pub const fn terminal_generation(self) -> u64 {
         self.terminal_generation
+    }
+
+    /// Exact decoded runtime account header.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
+    }
+
+    /// Digest of complete before-account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
     }
 
     /// Complete canonical OpenRawPage body.
@@ -306,6 +330,8 @@ pub fn authenticate_source_head_account(
         route_id: route.route_id(),
         account: account.key,
         terminal_generation: header.generation,
+        header,
+        account_data_id,
         head,
         authentication_id: domain_id(HEAD_AUTH_DOMAIN, &bytes),
     })
@@ -357,6 +383,8 @@ pub fn authenticate_open_raw_page_account(
         route_id: route.route_id(),
         account: account.key,
         terminal_generation: header.generation,
+        header,
+        account_data_id,
         open,
         authentication_id: domain_id(OPEN_AUTH_DOMAIN, &bytes),
     })
