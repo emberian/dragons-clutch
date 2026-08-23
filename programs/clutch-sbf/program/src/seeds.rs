@@ -74,6 +74,8 @@ pub const SEED_TERMS: &[u8] = b"dragons-clutch:terms:v1";
 pub const SEED_GRID: &[u8] = b"dragons-clutch:grid:v1";
 /// Resolution record account seed prefix.
 pub const SEED_RESOLUTION: &[u8] = b"dragons-clutch:resolution:v1";
+/// Full-width MarketInstance Resolution V5 account seed prefix.
+pub const SEED_RESOLUTION_V5: &[u8] = b"dc:resolution:v5";
 /// Epoch/book-domain account seed prefix.
 pub const SEED_EPOCH: &[u8] = b"dragons-clutch:epoch:v1";
 /// Order-page account seed prefix.
@@ -303,6 +305,11 @@ pub fn kernel_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
 /// Canonical full-width ClaimLedger V3 address.
 pub fn claim_ledger_v3_pda(program_id: &Pubkey, market_instance_v2_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_CLAIM_LEDGER_V3, market_instance_v2_id])
+}
+
+/// Canonical full-width Resolution V5 address.
+pub fn resolution_v5_pda(program_id: &Pubkey, market_instance_v2_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_RESOLUTION_V5, market_instance_v2_id])
 }
 
 /// Canonical reference-only external-shadow address and bump.
@@ -894,10 +901,7 @@ pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) ->
 }
 
 /// Canonical immutable liveness policy selected by a Source release.
-pub fn source_liveness_policy_pda(
-    program_id: &Pubkey,
-    policy_id: &[u8; 32],
-) -> (Pubkey, u8) {
+pub fn source_liveness_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_SOURCE_LIVENESS_POLICY_V1, policy_id])
 }
 
@@ -1198,6 +1202,8 @@ pub fn revenue_policy_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8)
 
 /// Outcome-mint seed prefix; 30 bytes.
 pub const SEED_OUTCOME_MINT: &[u8] = b"dragons-clutch:outcome-mint:v1";
+/// Full-width MarketInstanceV2 outcome-mint seed prefix.
+pub const SEED_OUTCOME_MINT_V2: &[u8] = b"dc:outcome-mint:v2";
 /// Hoard signing-authority seed prefix; 28 bytes.
 ///
 /// Shortened from the plan's `hoard-authority`, which does not fit a seed.
@@ -1217,6 +1223,25 @@ pub const SEED_HOARD_TOKEN_V2: &[u8] = b"dc:hoard-token:v2";
 /// account, and `MarketAccount::outcomes` already binds index to identity.
 pub fn outcome_mint_pda(program_id: &Pubkey, market: &[u8; 32], outcome_index: u8) -> (Pubkey, u8) {
     find(program_id, &[SEED_OUTCOME_MINT, market, &[outcome_index]])
+}
+
+/// Canonical full-width outcome mint for one MarketInstanceV2 outcome.
+///
+/// The fresh seed domain prevents a historical lowered Market coordinate from
+/// becoming authority merely because its bytes collide with a full content ID.
+pub fn outcome_mint_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    outcome_index: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_OUTCOME_MINT_V2,
+            market_instance_v2_id,
+            &[outcome_index],
+        ],
+    )
 }
 
 /// Canonical Hoard signing-authority address and bump.
@@ -1247,10 +1272,7 @@ pub fn hoard_token_pda(program_id: &Pubkey, market: &[u8; 32]) -> (Pubkey, u8) {
 }
 
 /// Canonical full-width Hoard V2 collateral token account.
-pub fn hoard_token_v2_pda(
-    program_id: &Pubkey,
-    market_instance_v2_id: &[u8; 32],
-) -> (Pubkey, u8) {
+pub fn hoard_token_v2_pda(program_id: &Pubkey, market_instance_v2_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_HOARD_TOKEN_V2, market_instance_v2_id])
 }
 

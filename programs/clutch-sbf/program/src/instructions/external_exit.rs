@@ -802,7 +802,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 &accounts[IX_HOARD_TOKEN],
                 &accounts[IX_DESTINATION],
             )?
-            .backing_after
+            .backing_after()
         }
         PreparedClaimCollateralPayoutV2::Nonzero(prepared) => {
             let market_bytes = market.market.bytes();

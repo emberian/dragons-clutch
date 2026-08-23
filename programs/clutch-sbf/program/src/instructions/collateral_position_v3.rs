@@ -7,7 +7,8 @@
 
 use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, ClaimLedgerV3, HoardV2,
-    Id as CollateralId, MarketCollateralBindingV2, CLAIM_LEDGER_V3_BYTES, HOARD_V2_BYTES,
+    Id as CollateralId, MarketCollateralBindingV2, ResolutionStateV5, ResolutionV5,
+    CLAIM_LEDGER_V3_BYTES, HOARD_V2_BYTES, RESOLUTION_V5_BYTES,
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
@@ -64,6 +65,15 @@ pub(crate) struct GeneralMarketLiabilityAuthorityV1 {
     pub(crate) market_instance: MarketInstancePreimageV2,
     pub(crate) hoard: HoardV2,
     pub(crate) claim_ledger: ClaimLedgerV3,
+}
+
+/// Hostile-decoded full-width Resolution bound to its exact PDA and ledgers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedResolutionV5 {
+    pub(crate) account_id: CollateralId,
+    pub(crate) resolution: ResolutionV5,
+    pub(crate) semantic_id: CollateralId,
+    pub(crate) data_id: CollateralId,
 }
 
 fn require_program_account(
@@ -235,6 +245,52 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
         market_instance,
         hoard,
         claim_ledger,
+    })
+}
+
+/// Authenticate the sole V5 payout owner. No legacy Resolution, Market, or
+/// Terms body participates in this join.
+pub(crate) fn authenticate_resolution_v5(
+    program_id: &Pubkey,
+    resolution_account: &AccountInfo<'_>,
+    liabilities: GeneralMarketLiabilityAuthorityV1,
+) -> Outcome<AuthenticatedResolutionV5> {
+    require_program_account(program_id, resolution_account, false, RESOLUTION_V5_BYTES)?;
+    let resolution = ResolutionV5::decode(&resolution_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_bytes = liabilities.market_binding.market_instance_v2_id.bytes();
+    expect_pda(
+        resolution_account.key,
+        seeds::resolution_v5_pda(program_id, &market_bytes),
+        Some(resolution.stored_bump),
+    )?;
+    let account_id = CollateralId::from_bytes(resolution_account.key.to_bytes());
+    require(
+        resolution.state == ResolutionStateV5::Finalized
+            && resolution.facts.market_instance_id == CollateralId::from_bytes(market_bytes)
+            && resolution.facts.native_claim_basis_id
+                == CollateralId::from_bytes(
+                    liabilities.market_binding.native_claim_basis_id.bytes(),
+                )
+            && resolution.facts.outcome_count == liabilities.market_binding.outcome_count
+            && liabilities.hoard.lifecycle
+                == clutch_collateral_adapter_v2::MarketLiabilityLifecycleV1::Resolved
+            && liabilities.claim_ledger.lifecycle
+                == clutch_collateral_adapter_v2::MarketLiabilityLifecycleV1::Resolved
+            && liabilities.claim_ledger.resolution_account == account_id,
+        ClutchError::MismatchedState,
+    )?;
+    let semantic_id = resolution
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let data_id = resolution
+        .data_id(account_id)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedResolutionV5 {
+        account_id,
+        resolution,
+        semantic_id,
+        data_id,
     })
 }
 
