@@ -59,10 +59,15 @@ semantic receipt prestate rather than a detached authorization flag. The pure V2
 projection does not activate action 25: its eventual handler must atomically
 advance the canonical Reservation accounting state, reserved-cash handoff,
 receipt latch, and V2 owner row.
-V2 cash realization is likewise intentionally unavailable until action 38
-consumes the fee runtime's private typed terminal projection (selected fee,
-carry, payer allocation, immutable fee receipt, and payer-allocation close) in
-the same atomic plan. A caller-supplied authorization boolean is not authority.
+V2 cash realization is an explicitly non-authorizing structural projection. It
+consumes the complete V2 row, canonical Position V3, and candidate cash pot;
+the row's immutable selected-fee amount is its only fee input. It derives the
+finalized row data ID from the exact terminal 288-byte body, stages the exact
+Position and pot successors, and preserves buyer-first liquidity refusal. The
+live action 38 composer must additionally rederive the fee runtime's private
+typed terminal projection and bind the deleted payer-allocation prestate data
+ID as GEN1 evidence before any atomic write. A caller-supplied authorization
+boolean is not authority.
 
 The successor direct-Egg contract closes the value-plane half only after
 accounting and owner cash finalization have completed. Action 25 advances exact
