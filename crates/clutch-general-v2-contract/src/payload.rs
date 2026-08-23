@@ -684,10 +684,10 @@ impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
 
 /// Action-38 `FinalizeOwnerSettlement` immutable selector.
 ///
-/// The finalization identity is persisted only after the accounting-complete
-/// owner row, Position, and candidate cash pot have all reached the exact
-/// atomic poststate. It is distinct from receipt accounting and Egg-delivery
-/// transition identities.
+/// The sixth identity is the SHA-256 data ID of the exact finalized V2 owner
+/// row. The live composer rederives it together with Position, Replay, and
+/// candidate cash-pot successors before any atomic write. It is distinct from
+/// receipt-accounting and Egg-delivery transition identities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeOwnerSettlementPayloadV1 {
     /// Counted parent Epoch PDA.
@@ -700,8 +700,8 @@ pub struct FinalizeOwnerSettlementPayloadV1 {
     pub position: Id32,
     /// Candidate-wide directional settlement cash-pot PDA.
     pub settlement_cash_pot: Id32,
-    /// Once-only owner Position/cash-pot realization identity.
-    pub owner_finalization_id: Id32,
+    /// Data ID of the exact canonical finalized 288-byte V2 owner row.
+    pub finalized_owner_row_data_id: Id32,
 }
 
 impl FinalizeOwnerSettlementPayloadV1 {
@@ -714,7 +714,7 @@ impl FinalizeOwnerSettlementPayloadV1 {
             owner_settlement: live_id(&mut reader)?,
             position: live_id(&mut reader)?,
             settlement_cash_pot: live_id(&mut reader)?,
-            owner_finalization_id: live_id(&mut reader)?,
+            finalized_owner_row_data_id: live_id(&mut reader)?,
         };
         reader.finish()?;
         let identities = [
@@ -723,7 +723,7 @@ impl FinalizeOwnerSettlementPayloadV1 {
             value.owner_settlement,
             value.position,
             value.settlement_cash_pot,
-            value.owner_finalization_id,
+            value.finalized_owner_row_data_id,
         ];
         let mut left = 0usize;
         while left < identities.len() {
@@ -1034,7 +1034,10 @@ mod tests {
             selector[start..start + ID_BYTES].copy_from_slice(&live(byte));
         }
         let decoded = FinalizeOwnerSettlementPayloadV1::decode(&selector).unwrap();
-        assert_eq!(decoded.owner_finalization_id, Id32::new(live(6)).unwrap());
+        assert_eq!(
+            decoded.finalized_owner_row_data_id,
+            Id32::new(live(6)).unwrap()
+        );
         assert!(matches!(
             decode_owner_settlement_payload_v1(38, &selector),
             Ok(OwnerSettlementPayloadV1::FinalizeOwnerSettlement(_))
