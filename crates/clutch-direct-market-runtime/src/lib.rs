@@ -17,6 +17,8 @@ use clutch_product_series::{
     SeriesMarketLinkV1,
 };
 
+pub mod selection_v1;
+
 /// Maximum funded Reservations ever admitted by one minimal Direct root.
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;
 /// Maximum retained submitted candidates owned by one Direct Selection.
@@ -64,6 +66,22 @@ pub enum DirectMarketErrorV1 {
     InvalidPosition,
     /// A cash reservation would require a rounding boundary.
     InexactCashConversion,
+    /// The owner-blind RelationV2 kernel refused an exact input or candidate.
+    Economic(clutch_batch::relation_v2::EconomicErrorV2),
+    /// The scalar Direct specialization refused the selected pair.
+    DirectPair(clutch_batch::direct_pair_v1::DirectPairErrorV1),
+}
+
+impl From<clutch_batch::relation_v2::EconomicErrorV2> for DirectMarketErrorV1 {
+    fn from(value: clutch_batch::relation_v2::EconomicErrorV2) -> Self {
+        Self::Economic(value)
+    }
+}
+
+impl From<clutch_batch::direct_pair_v1::DirectPairErrorV1> for DirectMarketErrorV1 {
+    fn from(value: clutch_batch::direct_pair_v1::DirectPairErrorV1) -> Self {
+        Self::DirectPair(value)
+    }
 }
 
 /// Exact deletable lamport ownership for one Direct account.

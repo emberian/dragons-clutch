@@ -308,6 +308,33 @@ pub(crate) fn validate_live_order_shape_v2(
     Ok(())
 }
 
+pub(crate) fn validate_two_order_prefix_v2(
+    domain: &EconomicDomainV2,
+    orders: &[EconomicOrderV2; 2],
+    len: u8,
+) -> Result<(), EconomicErrorV2> {
+    domain.validate()?;
+    if usize::from(len) > 2 {
+        return Err(EconomicErrorV2::TooManyOrders);
+    }
+    let mut previous = [0u8; 32];
+    let mut index = 0usize;
+    while index < usize::from(len) {
+        validate_live_order_shape_v2(domain, &orders[index], bounded_index(index)?, previous)?;
+        previous = orders[index].order_id;
+        index += 1;
+    }
+    while index < 2 {
+        if orders[index] != EMPTY_ECONOMIC_ORDER_V2 {
+            return Err(EconomicErrorV2::NonCanonicalOrderPadding {
+                order: bounded_index(index)?,
+            });
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
 /// Submitted economic fill coordinates.
 ///
 /// There is deliberately no claimed score or digest. Both are recomputed.
@@ -468,24 +495,42 @@ pub(crate) fn close_economic_candidate_v2(
     sell_flow: [u64; MAX_OUTCOMES],
     digest: [u8; 32],
 ) -> Result<VerifiedEconomicsV2, EconomicErrorV2> {
+    close_economic_coordinates_v2(
+        domain,
+        candidate.virtual_split,
+        candidate.virtual_merge,
+        buy_flow,
+        sell_flow,
+        digest,
+    )
+}
+
+fn close_economic_coordinates_v2(
+    domain: &EconomicDomainV2,
+    virtual_split: u64,
+    virtual_merge: u64,
+    buy_flow: [u64; MAX_OUTCOMES],
+    sell_flow: [u64; MAX_OUTCOMES],
+    digest: [u8; 32],
+) -> Result<VerifiedEconomicsV2, EconomicErrorV2> {
     let mut direct_flow = [0u64; MAX_OUTCOMES];
     let mut outcome = 0usize;
     while outcome < domain.outcomes() {
         let from_buy = buy_flow[outcome]
-            .checked_sub(candidate.virtual_split)
+            .checked_sub(virtual_split)
             .ok_or(EconomicErrorV2::VirtualSplitExceedsBuy {
                 outcome: bounded_index(outcome)?,
             })?;
         let from_sell = sell_flow[outcome]
-            .checked_sub(candidate.virtual_merge)
+            .checked_sub(virtual_merge)
             .ok_or(EconomicErrorV2::VirtualMergeExceedsSell {
                 outcome: bounded_index(outcome)?,
             })?;
         let left = buy_flow[outcome]
-            .checked_add(candidate.virtual_merge)
+            .checked_add(virtual_merge)
             .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
         let right = sell_flow[outcome]
-            .checked_add(candidate.virtual_split)
+            .checked_add(virtual_split)
             .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
         if left != right || from_buy != from_sell {
             return Err(EconomicErrorV2::OutcomeConservationMismatch {
@@ -502,8 +547,8 @@ pub(crate) fn close_economic_candidate_v2(
         aggregate_buy_flow: buy_flow,
         aggregate_sell_flow: sell_flow,
         claimed_direct_flow: direct_flow,
-        virtual_split: candidate.virtual_split,
-        virtual_merge: candidate.virtual_merge,
+        virtual_split,
+        virtual_merge,
         candidate_digest: digest,
     };
     let score_domain = ScoreDomainV2::new(
@@ -520,8 +565,8 @@ pub(crate) fn close_economic_candidate_v2(
         aggregate_buy_flow: buy_flow,
         aggregate_sell_flow: sell_flow,
         direct_flow,
-        virtual_split: candidate.virtual_split,
-        virtual_merge: candidate.virtual_merge,
+        virtual_split,
+        virtual_merge,
         economic_candidate_digest: digest,
         score,
     })
@@ -622,6 +667,24 @@ pub(crate) fn validate_live_order_fill_v2(
     }
     let fill = candidate.fills[at];
     let aon_bit = mask_bit(candidate.honored_aon_mask, at);
+    validate_live_order_fill_coordinates_v2(
+        domain,
+        price,
+        order,
+        order_index,
+        fill,
+        aon_bit,
+    )
+}
+
+fn validate_live_order_fill_coordinates_v2(
+    domain: &EconomicDomainV2,
+    price: &PricePreconditionV2,
+    order: &EconomicOrderV2,
+    order_index: u8,
+    fill: u64,
+    aon_bit: bool,
+) -> Result<[u64; MAX_OUTCOMES], EconomicErrorV2> {
     if fill > order.quantity {
         return Err(EconomicErrorV2::FillExceedsQuantity { order: order_index });
     }
@@ -668,6 +731,102 @@ pub(crate) fn validate_live_order_fill_v2(
         outcome += 1;
     }
     Ok(legs)
+}
+
+/// Verify the exact two-order compact projection while retaining RelationV2's
+/// canonical 64-order/64-fill digest and ScoreV2-Q semantics.
+///
+/// This crate-private seam exists for the Direct scalar specialization. It
+/// does not create a second relation: it hashes the same zero-padded transcript
+/// and applies the same order, fill, conservation, and score functions without
+/// materializing the general-width book or candidate on an SBF stack.
+pub(crate) fn verify_two_order_economic_candidate_v2(
+    domain: &EconomicDomainV2,
+    orders: &[EconomicOrderV2; 2],
+    price: &PricePreconditionV2,
+    fills: [u64; 2],
+    honored_aon_mask: u8,
+) -> Result<VerifiedEconomicsV2, EconomicErrorV2> {
+    domain.validate()?;
+    price.validate(domain)?;
+    if honored_aon_mask & !0b11 != 0 {
+        return Err(EconomicErrorV2::AonMaskNotApplicable { order: 2 });
+    }
+    validate_two_order_prefix_v2(domain, orders, 2)?;
+
+    let mut buy_flow = [0u64; MAX_OUTCOMES];
+    let mut sell_flow = [0u64; MAX_OUTCOMES];
+    let mut order_index = 0usize;
+    while order_index < 2 {
+        let bounded = bounded_index(order_index)?;
+        let aon_bit = ((honored_aon_mask >> bounded) & 1) != 0;
+        let legs = validate_live_order_fill_coordinates_v2(
+            domain,
+            price,
+            &orders[order_index],
+            bounded,
+            fills[order_index],
+            aon_bit,
+        )?;
+        let mut outcome = 0usize;
+        while outcome < domain.outcomes() {
+            let target = match orders[order_index].side {
+                Side::Buy => &mut buy_flow[outcome],
+                Side::Sell => &mut sell_flow[outcome],
+            };
+            *target = target
+                .checked_add(legs[outcome])
+                .ok_or(EconomicErrorV2::FlowOverflow {
+                    order: bounded,
+                    outcome: bounded_index(outcome)?,
+                })?;
+            outcome += 1;
+        }
+        order_index += 1;
+    }
+    let digest = two_order_economic_candidate_digest_v2(
+        domain,
+        orders,
+        price,
+        fills,
+        honored_aon_mask,
+    )?;
+    close_economic_coordinates_v2(domain, 0, 0, buy_flow, sell_flow, digest)
+}
+
+fn two_order_economic_candidate_digest_v2(
+    domain: &EconomicDomainV2,
+    orders: &[EconomicOrderV2; 2],
+    price: &PricePreconditionV2,
+    fills: [u64; 2],
+    honored_aon_mask: u8,
+) -> Result<[u8; 32], EconomicErrorV2> {
+    let mut hash = begin_economic_candidate_hash_v2(domain, 2)?;
+    hash_economic_order_v2(&mut hash, &orders[0])?;
+    hash_economic_order_v2(&mut hash, &orders[1])?;
+    let mut order_index = 2usize;
+    while order_index < MAX_ORDERS {
+        hash_economic_order_v2(&mut hash, &EMPTY_ECONOMIC_ORDER_V2)?;
+        order_index += 1;
+    }
+    hash.update(&price.policy_digest)?;
+    hash.update(&price.semantic_price_digest)?;
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        hash.update(&price.prices[outcome].to_le_bytes())?;
+        outcome += 1;
+    }
+    hash.update(&0u64.to_le_bytes())?;
+    hash.update(&0u64.to_le_bytes())?;
+    hash.update(&fills[0].to_le_bytes())?;
+    hash.update(&fills[1].to_le_bytes())?;
+    order_index = 2;
+    while order_index < MAX_ORDERS {
+        hash.update(&0u64.to_le_bytes())?;
+        order_index += 1;
+    }
+    hash.update(&u64::from(honored_aon_mask).to_le_bytes())?;
+    hash.finalize()
 }
 
 fn order_unit_value(

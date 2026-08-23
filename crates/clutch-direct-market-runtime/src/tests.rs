@@ -3,6 +3,17 @@ use crate::reservation_v1::{
     prepare_direct_reservation_admission_v1, AuthenticatedDirectReservationAdmissionV1,
     DirectReservationPhaseV1,
 };
+use crate::selection_v1::{
+    begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
+    prepare_direct_selection_freeze_v1, submit_direct_candidate_v1,
+    verify_next_direct_candidate_v1, AuthenticatedDirectSelectionFreezeV1,
+    DirectSelectionPhaseV1,
+};
+use clutch_batch::direct_pair_v1::DirectEconomicCandidateV1;
+use clutch_batch::relation_v2::{
+    price_semantics_digest_v2, EconomicDomainV2, PricePreconditionV2,
+    ECONOMIC_RELATION_VERSION_V2,
+};
 use clutch_batch::{PartialPolicy, Side};
 use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_retirement::{
@@ -48,6 +59,24 @@ impl AuthenticatedDirectReservationAdmissionV1 for AllowReservation {
         _expiry_epoch: u64,
         _limit_price_units_per_egg: u128,
         _rent: DirectRentOwnerV1,
+    ) -> Result<(), DirectMarketErrorV1> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AllowFreeze;
+
+impl AuthenticatedDirectSelectionFreezeV1 for AllowFreeze {
+    fn authenticate_freeze(
+        &self,
+        _root: DirectMarketRootV1,
+        _selection_account: [u8; 32],
+        _rent: DirectRentOwnerV1,
+        _reservations: &[Option<crate::reservation_v1::DirectReservationV1>; 2],
+        _reservation_semantic_ids: &[[u8; 32]; 2],
+        _domain: &EconomicDomainV2,
+        _price: &PricePreconditionV2,
     ) -> Result<(), DirectMarketErrorV1> {
         Ok(())
     }
@@ -394,4 +423,156 @@ fn reservation_refuses_rounding_and_debits_seller_eggs_exactly() {
     let fields = seller.position_poststate.semantic.fields();
     assert_eq!(fields.native_eggs[0], 13);
     assert_eq!(fields.outstanding_reservations, 1);
+}
+
+fn direct_domain_and_zero_price() -> (EconomicDomainV2, PricePreconditionV2) {
+    let domain = EconomicDomainV2 {
+        relation_version: ECONOMIC_RELATION_VERSION_V2,
+        market_semantics_digest: id(1),
+        epoch_semantics_digest: id(7),
+        relation_policy_digest: id(14),
+        price_policy_digest: id(15),
+        epoch_index: 1,
+        outcome_count: 16,
+        price_scale: 1_000,
+    };
+    let mut prices = [0u64; MAX_OUTCOMES];
+    prices[1] = 1_000;
+    let price = PricePreconditionV2 {
+        policy_digest: id(15),
+        semantic_price_digest: price_semantics_digest_v2(&domain, &prices).unwrap(),
+        prices,
+    };
+    (domain, price)
+}
+
+fn candidate(fill: u64) -> DirectEconomicCandidateV1 {
+    DirectEconomicCandidateV1 {
+        fills: [fill, fill],
+        honored_aon_mask: 0,
+    }
+}
+
+#[test]
+fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
+    let initial = state();
+    let buyer = prepare_direct_reservation_admission_v1(
+        &AllowReservation,
+        initial.root,
+        position(100, 0),
+        id(50),
+        id(51),
+        Side::Buy,
+        0,
+        10,
+        0,
+        PartialPolicy::Allow,
+        7,
+        0,
+        rent(52, 70, 2),
+    )
+    .unwrap();
+    let after_buyer = initial
+        .admit_reservation(1, 10, buyer.reservation.account(), buyer.reservation.semantic_id(&Sha).unwrap(), &Sha)
+        .unwrap();
+    let seller = prepare_direct_reservation_admission_v1(
+        &AllowReservation,
+        after_buyer.root,
+        position(0, 10),
+        id(60),
+        id(61),
+        Side::Sell,
+        0,
+        10,
+        0,
+        PartialPolicy::Allow,
+        7,
+        0,
+        rent(62, 70, 2),
+    )
+    .unwrap();
+    let after_seller = after_buyer
+        .admit_reservation(2, 11, seller.reservation.account(), seller.reservation.semantic_id(&Sha).unwrap(), &Sha)
+        .unwrap();
+    let (domain, price) = direct_domain_and_zero_price();
+    let frozen = prepare_direct_selection_freeze_v1(
+        &AllowFreeze,
+        after_seller,
+        3,
+        20,
+        id(70),
+        rent(71, 80, 3),
+        [Some(seller.reservation), Some(buyer.reservation)],
+        domain,
+        price,
+        &Sha,
+    )
+    .unwrap();
+    assert_eq!(frozen.selection.phase(), DirectSelectionPhaseV1::SubmissionOpen);
+    assert_eq!(frozen.selection.reservation_account(0).unwrap(), id(50));
+
+    let first = submit_direct_candidate_v1(frozen.state, frozen.selection, 4, 21, candidate(5), &Sha).unwrap();
+    let second = submit_direct_candidate_v1(first.state, first.selection, 5, 22, candidate(10), &Sha).unwrap();
+    let begun = begin_direct_candidate_verification_v1(second.state, second.selection, 6, 30, &Sha).unwrap();
+    let verified_first = verify_next_direct_candidate_v1(begun.state, begun.selection, 7, 31, &Sha).unwrap();
+    let verified_second = verify_next_direct_candidate_v1(verified_first.state, verified_first.selection, 8, 32, &Sha).unwrap();
+    let selected = finalize_direct_selection_v1(verified_second.state, verified_second.selection, 9, 33, &Sha).unwrap();
+    let pair = selected.selection.selected_pair().unwrap();
+    assert_eq!(pair.quantity(), 10);
+    assert_eq!(pair.consideration_cash_atoms(), 0);
+}
+
+#[test]
+fn selection_refuses_missing_extra_duplicate_and_partial_traversal() {
+    let initial = state();
+    let buyer = prepare_direct_reservation_admission_v1(
+        &AllowReservation, initial.root, position(100, 0), id(50), id(51), Side::Buy,
+        0, 10, 0, PartialPolicy::Allow, 7, 0, rent(52, 70, 2),
+    ).unwrap();
+    let after_buyer = initial.admit_reservation(
+        1, 10, id(50), buyer.reservation.semantic_id(&Sha).unwrap(), &Sha,
+    ).unwrap();
+    let seller = prepare_direct_reservation_admission_v1(
+        &AllowReservation, after_buyer.root, position(0, 10), id(60), id(61), Side::Sell,
+        0, 10, 0, PartialPolicy::Allow, 7, 0, rent(62, 70, 2),
+    ).unwrap();
+    let after_seller = after_buyer.admit_reservation(
+        2, 11, id(60), seller.reservation.semantic_id(&Sha).unwrap(), &Sha,
+    ).unwrap();
+    let (domain, price) = direct_domain_and_zero_price();
+    assert_eq!(
+        prepare_direct_selection_freeze_v1(
+            &AllowFreeze, after_seller, 3, 20, id(70), rent(71, 80, 3),
+            [Some(buyer.reservation), None], domain, price, &Sha,
+        ),
+        Err(DirectMarketErrorV1::InvalidCount)
+    );
+    assert_eq!(
+        prepare_direct_selection_freeze_v1(
+            &AllowFreeze, after_seller, 3, 20, id(70), rent(71, 80, 3),
+            [Some(buyer.reservation), Some(buyer.reservation)], domain, price, &Sha,
+        ),
+        Err(DirectMarketErrorV1::IdentityAlias)
+    );
+
+    let frozen = prepare_direct_selection_freeze_v1(
+        &AllowFreeze, after_seller, 3, 20, id(70), rent(71, 80, 3),
+        [Some(buyer.reservation), Some(seller.reservation)], domain, price, &Sha,
+    ).unwrap();
+    let submitted = submit_direct_candidate_v1(
+        frozen.state, frozen.selection, 4, 21, candidate(10), &Sha,
+    ).unwrap();
+    assert_eq!(
+        submit_direct_candidate_v1(
+            submitted.state, submitted.selection, 5, 22, candidate(10), &Sha,
+        ),
+        Err(DirectMarketErrorV1::IdentityAlias)
+    );
+    let begun = begin_direct_candidate_verification_v1(
+        submitted.state, submitted.selection, 5, 30, &Sha,
+    ).unwrap();
+    assert_eq!(
+        finalize_direct_selection_v1(begun.state, begun.selection, 6, 31, &Sha),
+        Err(DirectMarketErrorV1::WrongPhase)
+    );
 }
