@@ -293,9 +293,6 @@ pub(crate) fn activate_merge_cash_pot_v1<'info>(
             && payer.lamports() >= rent_owner.refundable_principal,
         ClutchError::MismatchedState,
     )?;
-    precheck_credit_recipient(locator_payer, &credits)?;
-    precheck_credit_recipient(adjacency_payer, &credits)?;
-    precheck_credit_recipient(neutral_sink, &credits)?;
     drop(adjacency_body);
     drop(locator_body);
     drop(root_body);
@@ -800,6 +797,9 @@ pub(crate) fn retire_exact_index_pair_v1(
             && !neutral_sink.executable,
         ClutchError::MismatchedState,
     )?;
+    precheck_credit_recipient(locator_payer, &credits)?;
+    precheck_credit_recipient(adjacency_payer, &credits)?;
+    precheck_credit_recipient(neutral_sink, &credits)?;
     drop(adjacency_body);
     drop(locator_body);
     drop(root_body);
