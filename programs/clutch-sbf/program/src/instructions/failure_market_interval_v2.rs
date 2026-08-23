@@ -1567,3 +1567,91 @@ fn framed_data_id(data: &[u8]) -> ProductContentId {
 fn require_live_data_id(id: ProductContentId) -> Outcome<()> {
     require(!id.is_zero(), ClutchError::MismatchedState)
 }
+
+#[cfg(test)]
+mod adversarial_account_tests {
+    use super::*;
+
+    struct Cell {
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+    }
+
+    impl Cell {
+        fn info(&mut self) -> AccountInfo<'_> {
+            AccountInfo::new(
+                &self.key,
+                false,
+                true,
+                &mut self.lamports,
+                &mut self.data,
+                &self.owner,
+                false,
+            )
+        }
+    }
+
+    #[test]
+    fn stale_cell_and_history_snapshots_refuse_before_write() {
+        let program_id = Pubkey::new_from_array([1; 32]);
+        let key = Pubkey::new_from_array([2; 32]);
+        let output = [9_u8; 8];
+        for _role in ["cell", "history"] {
+            let mut cell = Cell {
+                key,
+                owner: program_id,
+                lamports: 10,
+                data: vec![3; 8],
+            };
+            let expected_data_id = framed_data_id(&cell.data);
+            assert!(authenticate_write_prestate(
+                &program_id,
+                &cell.info(),
+                key,
+                expected_data_id,
+                10,
+                &output,
+            )
+            .is_ok());
+            assert!(authenticate_write_prestate(
+                &program_id,
+                &cell.info(),
+                Pubkey::new_from_array([4; 32]),
+                expected_data_id,
+                10,
+                &output,
+            )
+            .is_err());
+            assert!(authenticate_write_prestate(
+                &program_id,
+                &cell.info(),
+                key,
+                ProductContentId::from_bytes([5; 32]),
+                10,
+                &output,
+            )
+            .is_err());
+            assert!(authenticate_write_prestate(
+                &program_id,
+                &cell.info(),
+                key,
+                expected_data_id,
+                11,
+                &output,
+            )
+            .is_err());
+            cell.data[0] ^= 1;
+            assert!(authenticate_write_prestate(
+                &program_id,
+                &cell.info(),
+                key,
+                expected_data_id,
+                10,
+                &output,
+            )
+            .is_err());
+        }
+    }
+}
