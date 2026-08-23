@@ -105,6 +105,10 @@ and pre-generation live in `DealerQuotePreconditionV2`. The core recomputes its
 proof-independent semantic digest and refuses any byte mutation under a fixed
 digest. It does not authenticate the quote proof or facility account; the SBF
 adapter must establish that trust before invoking this relation.
+Successful full verification returns a private-field `VerifiedDealerLegV2`
+in-memory capability. Safe downstream code cannot fabricate that capability
+from the public `DealerLegVerdictV2`, whose public fields remain an explicitly
+unauthenticated persistence/projection DTO.
 
 `MinimumGrossHamiltonV1` derives per-order cash from immutable sorted order IDs,
 dealer-filled units, residual buyer maxima, residual seller minima, and one net

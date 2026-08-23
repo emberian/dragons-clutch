@@ -340,14 +340,17 @@ receiver totals, allocates payer cash by residual buyer capacity, satisfies
 seller minima, and assigns forced excess payout by native Egg flow, with exact
 Hamilton remainders and immutable-order-ID ties. The signed facility neither
 accepts candidate-supplied allocation bytes nor reimplements that rule. It
-binds an authenticated dealer verdict to the exact facility, policy, and
+accepts only the private-field capability returned by the full dealer relation,
+then binds its read-only verdict to the exact facility, policy, and
 pre-generation and independently recomputes only the aggregate curve receipt.
 
 The live adapter must authenticate every price and dealer quote precondition,
-obtain the verdict from the checked dealer relation, reconcile its aggregate
-receipt with the facility, and close all user, dealer, and fee transfers in one
-atomic transition. The pure verdict is a projection, not an authentication
-token. Its external fee amounts are upstream-quoted semantics, not proof of fee
+obtain the verification capability from the checked dealer relation, reconcile
+its aggregate receipt with the facility, and close all user, dealer, and fee
+transfers in one atomic transition. The capability proves pure relation
+execution but not quote proof or account authentication. Its detachable public
+verdict DTO is an unauthenticated projection. External fee amounts are
+upstream-quoted semantics, not proof of fee
 funding, custody, recipients, or transfer conservation. Standalone offchain
 quotes remain indicative until their generation and aggregate candidate execute
 atomically. The protocol still says “best valid submitted candidate,” not

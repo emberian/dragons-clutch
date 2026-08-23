@@ -7,8 +7,8 @@ use crate::dealer_leg_v2::{
     exact_mul_div_rem, verify_claimed_dealer_allocations_v2 as verify_claimed_core,
     verify_economic_candidate_with_dealer_v2 as verify_join_core, AggregateDealerTradeV2,
     DealerCashAllocationV2, DealerCashPolicyV2, DealerErrorV2, DealerFacilityBindingV2,
-    DealerFillRowV2, DealerLegCandidateV2, DealerLegVerdictV2, DealerQuotePreconditionV2,
-    DealerQuoteRowV2, DealerReceiptV2, DEALER_LEG_VERSION_V2, EMPTY_DEALER_FILL_ROW_V2,
+    DealerFillRowV2, DealerLegCandidateV2, DealerQuotePreconditionV2, DealerQuoteRowV2,
+    DealerReceiptV2, VerifiedDealerLegV2, DEALER_LEG_VERSION_V2, EMPTY_DEALER_FILL_ROW_V2,
     EMPTY_DEALER_QUOTE_ROW_V2, MAX_DEALER_ROWS_V2,
 };
 use crate::relation_v2::{
@@ -279,7 +279,7 @@ fn verify_economic_candidate_with_dealer_v2(
     price: &PricePreconditionV2,
     economic: &EconomicCandidateV2,
     dealer: &DealerFixture,
-) -> Result<DealerLegVerdictV2, DealerErrorV2> {
+) -> Result<VerifiedDealerLegV2, DealerErrorV2> {
     verify_join_core(
         domain,
         book,
@@ -291,22 +291,10 @@ fn verify_economic_candidate_with_dealer_v2(
 }
 
 fn verify_claimed_dealer_allocations_v2(
-    domain: &EconomicDomainV2,
-    book: &EconomicBookV2,
-    price: &PricePreconditionV2,
-    economic: &EconomicCandidateV2,
-    dealer: &DealerFixture,
+    verified: &VerifiedDealerLegV2,
     claimed: &[DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
-) -> Result<DealerLegVerdictV2, DealerErrorV2> {
-    verify_claimed_core(
-        domain,
-        book,
-        price,
-        economic,
-        &dealer.candidate,
-        &dealer.quote,
-        claimed,
-    )
+) -> Result<(), DealerErrorV2> {
+    verify_claimed_core(verified, claimed)
 }
 
 #[test]
@@ -322,14 +310,14 @@ fn dealer_join_is_additive_and_derives_the_unique_aggregate_leg() {
     let verified =
         verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &dealer)
             .unwrap();
-    assert_eq!(verified.trade.sell_to_users[..2], [1, 0]);
-    assert_eq!(verified.trade.buy_from_users[..2], [0, 0]);
-    assert_eq!(verified.aggregate_buy_flow[..2], [1, 0]);
-    assert_eq!(verified.aggregate_sell_flow[..2], [1, 0]);
-    assert_eq!(verified.direct_flow[..2], [1, 0]);
-    assert_eq!(verified.allocations[0].user_cash_in_atoms, 5);
-    assert_eq!(verified.allocations[0].user_cash_out_atoms, 0);
-    assert_eq!(verified.total_external_fee_atoms, 2);
+    assert_eq!(verified.trade().sell_to_users[..2], [1, 0]);
+    assert_eq!(verified.trade().buy_from_users[..2], [0, 0]);
+    assert_eq!(verified.aggregate_buy_flow()[..2], [1, 0]);
+    assert_eq!(verified.aggregate_sell_flow()[..2], [1, 0]);
+    assert_eq!(verified.direct_flow()[..2], [1, 0]);
+    assert_eq!(verified.allocations()[0].user_cash_in_atoms, 5);
+    assert_eq!(verified.allocations()[0].user_cash_out_atoms, 0);
+    assert_eq!(verified.total_external_fee_atoms(), 2);
 }
 
 #[test]
@@ -347,13 +335,13 @@ fn mixed_sign_outcomes_and_net_cash_close_exactly() {
         verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &dealer)
             .unwrap();
 
-    assert_eq!(verified.trade.sell_to_users[..2], [2, 0]);
-    assert_eq!(verified.trade.buy_from_users[..2], [0, 3]);
-    assert_eq!(verified.allocations[0].user_cash_in_atoms, 11);
-    assert_eq!(verified.allocations[1].user_cash_out_atoms, 7);
-    assert_eq!(verified.total_external_fee_atoms, 5);
-    let user_cash_in = u128::from(verified.allocations[0].user_cash_in_atoms);
-    let user_cash_out = u128::from(verified.allocations[1].user_cash_out_atoms);
+    assert_eq!(verified.trade().sell_to_users[..2], [2, 0]);
+    assert_eq!(verified.trade().buy_from_users[..2], [0, 3]);
+    assert_eq!(verified.allocations()[0].user_cash_in_atoms, 11);
+    assert_eq!(verified.allocations()[1].user_cash_out_atoms, 7);
+    assert_eq!(verified.total_external_fee_atoms(), 5);
+    let user_cash_in = u128::from(verified.allocations()[0].user_cash_in_atoms);
+    let user_cash_out = u128::from(verified.allocations()[1].user_cash_out_atoms);
     assert_eq!(
         user_cash_in + u128::from(dealer.quote.receipt.dealer_net_cash_out_atoms),
         user_cash_out + u128::from(dealer.quote.receipt.dealer_net_cash_in_atoms)
@@ -379,8 +367,8 @@ fn buyer_and_seller_hamilton_ties_prefer_smaller_immutable_id() {
         &buy_dealer,
     )
     .unwrap();
-    assert_eq!(bought.allocations[0].user_cash_in_atoms, 3);
-    assert_eq!(bought.allocations[1].user_cash_in_atoms, 2);
+    assert_eq!(bought.allocations()[0].user_cash_in_atoms, 3);
+    assert_eq!(bought.allocations()[1].user_cash_in_atoms, 2);
 
     let sellers = book_of(&[order(1, Side::Sell, 1, 0, 1), order(2, Side::Sell, 1, 0, 1)]);
     let sell_candidate = candidate(&[1, 1]);
@@ -399,8 +387,8 @@ fn buyer_and_seller_hamilton_ties_prefer_smaller_immutable_id() {
         &sell_dealer,
     )
     .unwrap();
-    assert_eq!(sold.allocations[0].user_cash_out_atoms, 3);
-    assert_eq!(sold.allocations[1].user_cash_out_atoms, 2);
+    assert_eq!(sold.allocations()[0].user_cash_out_atoms, 3);
+    assert_eq!(sold.allocations()[1].user_cash_out_atoms, 2);
 }
 
 #[test]
@@ -428,13 +416,13 @@ fn full_relation_book_width_is_not_confused_with_an_lp_roster() {
         verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &dealer)
             .unwrap();
 
-    assert_eq!(verified.allocation_count, book.len);
+    assert_eq!(verified.allocation_count(), book.len);
     assert_eq!(
-        verified.trade.sell_to_users[0],
+        verified.trade().sell_to_users[0],
         u64::try_from(MAX_ORDERS).expect("RelationV2 capacity fits Egg atoms")
     );
-    assert_eq!(verified.allocations[MAX_ORDERS - 1].order_id, id(64));
-    assert_eq!(verified.allocations[MAX_ORDERS - 1].user_cash_in_atoms, 1);
+    assert_eq!(verified.allocations()[MAX_ORDERS - 1].order_id, id(64));
+    assert_eq!(verified.allocations()[MAX_ORDERS - 1].user_cash_in_atoms, 1);
 }
 
 #[test]
@@ -451,8 +439,8 @@ fn buyer_caps_and_zero_weights_refuse_without_fallbacks() {
     let verified =
         verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &at_cap)
             .unwrap();
-    assert_eq!(verified.allocations[0].user_cash_in_atoms, 2);
-    assert_eq!(verified.allocations[1].user_cash_in_atoms, 3);
+    assert_eq!(verified.allocations()[0].user_cash_in_atoms, 2);
+    assert_eq!(verified.allocations()[1].user_cash_in_atoms, 3);
 
     let insufficient = dealer_of(
         &book,
@@ -552,7 +540,7 @@ fn row_identity_fill_padding_and_flow_are_canonical() {
 }
 
 #[test]
-fn exact_recomputation_is_the_only_allocation_authority() {
+fn verified_capability_is_the_only_allocation_authority() {
     let book = book_of(&[order(1, Side::Buy, 1, 0, 1), order(2, Side::Buy, 1, 0, 1)]);
     let economic = candidate(&[1, 1]);
     let dealer = dealer_of(
@@ -566,30 +554,15 @@ fn exact_recomputation_is_the_only_allocation_authority() {
         verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &dealer)
             .unwrap();
     assert_eq!(
-        verify_claimed_dealer_allocations_v2(
-            &domain(),
-            &book,
-            &price(),
-            &economic,
-            &dealer,
-            &verified.allocations,
-        )
-        .unwrap(),
-        verified
+        verify_claimed_dealer_allocations_v2(&verified, verified.allocations()),
+        Ok(())
     );
 
-    let mut forged = verified.allocations;
+    let mut forged = *verified.allocations();
     forged[0].user_cash_in_atoms -= 1;
     forged[1].user_cash_in_atoms += 1;
     assert_eq!(
-        verify_claimed_dealer_allocations_v2(
-            &domain(),
-            &book,
-            &price(),
-            &economic,
-            &dealer,
-            &forged,
-        ),
+        verify_claimed_dealer_allocations_v2(&verified, &forged),
         Err(DealerErrorV2::AllocationMismatch { row: 0 })
     );
 }
@@ -606,13 +579,13 @@ fn fees_are_external_and_semantically_bound_but_never_dealer_cash() {
     let second_verified =
         verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &second)
             .unwrap();
-    assert_eq!(first_verified.allocations[0].user_cash_in_atoms, 5);
-    assert_eq!(second_verified.allocations[0].user_cash_in_atoms, 5);
-    assert_eq!(first_verified.total_external_fee_atoms, 7);
-    assert_eq!(second_verified.total_external_fee_atoms, 9);
+    assert_eq!(first_verified.allocations()[0].user_cash_in_atoms, 5);
+    assert_eq!(second_verified.allocations()[0].user_cash_in_atoms, 5);
+    assert_eq!(first_verified.total_external_fee_atoms(), 7);
+    assert_eq!(second_verified.total_external_fee_atoms(), 9);
     assert_ne!(
-        first_verified.dealer_economic_candidate_digest,
-        second_verified.dealer_economic_candidate_digest
+        first_verified.dealer_economic_candidate_digest(),
+        second_verified.dealer_economic_candidate_digest()
     );
 }
 
@@ -625,8 +598,8 @@ fn fixed_authenticated_quote_identity_refuses_free_cash_and_digest_grinding() {
         verify_economic_candidate_with_dealer_v2(&domain(), &book, &price(), &economic, &baseline)
             .unwrap();
     assert_eq!(
-        accepted.dealer_quote_semantics_digest,
-        baseline.quote.semantic_quote_digest
+        accepted.dealer_quote_semantics_digest(),
+        &baseline.quote.semantic_quote_digest
     );
 
     let mut free_cash = baseline;
@@ -760,7 +733,7 @@ fn quote_for_same_fill_and_trade_cannot_replay_across_price_semantics() {
     );
     assert_ne!(
         baseline.quote.semantic_quote_digest,
-        accepted.dealer_quote_semantics_digest
+        *accepted.dealer_quote_semantics_digest()
     );
 }
 
@@ -804,10 +777,13 @@ fn proof_body_is_not_an_economic_or_rank_coordinate() {
     .unwrap();
     assert_eq!(first, second);
     assert_eq!(
-        first.dealer_quote_semantics_digest,
-        second.dealer_quote_semantics_digest
+        first.dealer_quote_semantics_digest(),
+        second.dealer_quote_semantics_digest()
     );
-    assert_eq!(first.score.digest, first.dealer_economic_candidate_digest);
+    assert_eq!(
+        first.score().digest,
+        *first.dealer_economic_candidate_digest()
+    );
 }
 
 #[test]
@@ -883,22 +859,22 @@ fn full_width_u64_rows_use_exact_wide_aggregates_and_mul_div() {
 
     let buyer_count = u128::try_from(midpoint).expect("fixture count fits");
     let row_max = u128::from(u64::MAX);
-    assert_eq!(verified.allocations[0].user_cash_in_atoms, u64::MAX);
+    assert_eq!(verified.allocations()[0].user_cash_in_atoms, u64::MAX);
     assert_eq!(
-        verified.allocations[midpoint - 1].user_cash_in_atoms,
+        verified.allocations()[midpoint - 1].user_cash_in_atoms,
         u64::MAX - 1
     );
     assert_eq!(
-        verified.allocations[MAX_ORDERS - 1].user_cash_out_atoms,
+        verified.allocations()[MAX_ORDERS - 1].user_cash_out_atoms,
         u64::MAX - 1
     );
     assert_eq!(
-        verified.total_external_fee_atoms,
+        verified.total_external_fee_atoms(),
         u128::try_from(MAX_ORDERS).expect("fixture count fits") * row_max
     );
     assert_eq!(
         buyer_count * row_max - 1,
-        verified.allocations[..midpoint]
+        verified.allocations()[..midpoint]
             .iter()
             .map(|allocation| u128::from(allocation.user_cash_in_atoms))
             .sum()
@@ -925,5 +901,5 @@ fn full_width_u64_rows_use_exact_wide_aggregates_and_mul_div() {
         &wide_weight,
     )
     .unwrap();
-    assert_eq!(weighted.allocations[0].user_cash_out_atoms, 1);
+    assert_eq!(weighted.allocations()[0].user_cash_out_atoms, 1);
 }

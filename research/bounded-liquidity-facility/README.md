@@ -142,8 +142,9 @@ loss subsidy and bid financing, exhaustive signed endpoints and payouts,
 state-contingent per-LP principal floors, funding cancellation/refunds,
 fixed-capacity positions, exit-queue shutdown, mixed-sign unwind, terminal
 Hamilton allocation, claim-order independence, cached-custody mutants, and
-rollback. It also obtains canonical per-order allocations only from a checked
-RelationV2 dealer verdict, independently recomputes the aggregate curve
+rollback. It also obtains canonical per-order allocations only through the
+private-field capability returned by the checked RelationV2 dealer relation,
+independently recomputes the aggregate curve
 receipt, and refuses stale, misdirected, projection-mismatched, and
 relation-valid-but-curve-false quotes without mutation.
 

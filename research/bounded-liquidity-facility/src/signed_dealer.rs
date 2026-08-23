@@ -8,7 +8,7 @@
 use core::convert::TryFrom;
 
 use clutch_batch::dealer_leg_v2::{
-    DealerLegVerdictV2, DealerQuotePreconditionV2, DEALER_LEG_VERSION_V2,
+    DealerQuotePreconditionV2, VerifiedDealerLegV2, DEALER_LEG_VERSION_V2,
 };
 
 use super::{Id, PriceVectorV1, MAX_ATOMS, MAX_OUTCOMES, MAX_PRICE_DENOMINATOR};
@@ -823,29 +823,29 @@ impl SignedDealerStateV1 {
     /// upstream-quoted external fee amounts are owned exclusively by
     /// `clutch_batch::dealer_leg_v2`. That relation does not prove fee funding,
     /// custody, recipients, or transfer conservation. This function
-    /// deliberately does not reinterpret or rescan `verdict.allocations`.
-    /// Instead it binds the authenticated projection to this exact facility,
+    /// deliberately does not reinterpret or rescan the verified allocations.
+    /// Instead it binds the verified projection to this exact facility,
     /// policy, and pre-generation, then independently recomputes the aggregate
     /// curve receipt from state.
     ///
-    /// A `DealerLegVerdictV2` is a public value, not an authentication token.
-    /// The caller must have obtained it from
-    /// `verify_economic_candidate_with_dealer_v2` over authenticated book,
-    /// price, candidate, and quote inputs before calling this seam. A live
-    /// adapter must perform both calls inside one atomic state transition.
+    /// `VerifiedDealerLegV2` is an unforgeable safe-Rust capability returned
+    /// only after the full pure dealer relation succeeds. It does not itself
+    /// authenticate the quote proof or accounts. A live adapter must
+    /// authenticate those inputs, obtain the capability, and perform this
+    /// reconciliation inside one atomic state transition.
     pub fn reconcile_authenticated_dealer_leg_v2(
         &self,
         slot: u64,
         quote: &DealerQuotePreconditionV2,
-        verdict: &DealerLegVerdictV2,
+        verified: &VerifiedDealerLegV2,
     ) -> DealerResult<SignedDealerTradeReceiptV1> {
         if quote.facility.version != DEALER_LEG_VERSION_V2
             || quote.facility.facility_semantics_digest != self.facility_id
             || quote.facility.policy_semantics_digest != self.policy.policy_id
             || quote.facility.pre_generation != self.generation
-            || verdict.outcome_count != self.policy.outcome_count
-            || verdict.trade != quote.trade
-            || verdict.dealer_quote_semantics_digest != quote.semantic_quote_digest
+            || verified.outcome_count() != self.policy.outcome_count
+            || verified.trade() != &quote.trade
+            || verified.dealer_quote_semantics_digest() != &quote.semantic_quote_digest
         {
             return Err(DealerError::DealerLegBindingMismatch);
         }
@@ -873,9 +873,9 @@ impl SignedDealerStateV1 {
         &mut self,
         slot: u64,
         quote: &DealerQuotePreconditionV2,
-        verdict: &DealerLegVerdictV2,
+        verified: &VerifiedDealerLegV2,
     ) -> DealerResult<SignedDealerTradeReceiptV1> {
-        let receipt = self.reconcile_authenticated_dealer_leg_v2(slot, quote, verdict)?;
+        let receipt = self.reconcile_authenticated_dealer_leg_v2(slot, quote, verified)?;
         self.commit_trade_receipt(receipt)?;
         Ok(receipt)
     }

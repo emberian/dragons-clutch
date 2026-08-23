@@ -189,10 +189,13 @@ pub const EMPTY_DEALER_CASH_ALLOCATION_V2: DealerCashAllocationV2 = DealerCashAl
     external_fee_atoms: 0,
 };
 
-/// Recomputed relation verdict conditional on an authenticated upstream quote.
+/// Public, forgeable DTO for one dealer-leg relation verdict.
 ///
-/// This is not evidence that the quote proof, facility, or account was
-/// authenticated. It contains only the checked proof-independent projection.
+/// This value is suitable for persistence and untrusted projection only. Its
+/// public fields are not evidence that the relation ran, that the quote proof
+/// was authenticated, or that any facility account was checked. In-memory
+/// consumers that require proof the full pure relation succeeded must accept
+/// [`VerifiedDealerLegV2`] instead.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerLegVerdictV2 {
     /// Active native Egg width.
@@ -217,6 +220,94 @@ pub struct DealerLegVerdictV2 {
     pub dealer_quote_semantics_digest: [u8; 32],
     /// Independently recomputed ScoreV2-Q key.
     pub score: ScoreV2,
+}
+
+/// In-memory capability minted only after full dealer-leg verification.
+///
+/// The private field prevents safe downstream code from wrapping a fabricated
+/// or mutated [`DealerLegVerdictV2`] as verified. This capability proves only
+/// that [`verify_economic_candidate_with_dealer_v2`] checked the full pure
+/// relation. It does not authenticate the upstream quote proof or any account;
+/// those remain adapter obligations.
+///
+/// Detached DTO copies deliberately lose this capability:
+///
+/// ```compile_fail
+/// use clutch_batch::dealer_leg_v2::{DealerLegVerdictV2, VerifiedDealerLegV2};
+///
+/// fn forge(verdict: DealerLegVerdictV2) -> VerifiedDealerLegV2 {
+///     VerifiedDealerLegV2 { verdict }
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedDealerLegV2 {
+    verdict: DealerLegVerdictV2,
+}
+
+impl VerifiedDealerLegV2 {
+    /// Read the public unauthenticated verdict projection.
+    ///
+    /// Copying only the returned DTO does not create another verification
+    /// capability. The capability itself is safely copyable and remains the
+    /// verification authority.
+    pub const fn verdict(&self) -> &DealerLegVerdictV2 {
+        &self.verdict
+    }
+
+    /// Read the active outcome width.
+    pub const fn outcome_count(&self) -> u8 {
+        self.verdict.outcome_count
+    }
+
+    /// Read the uniquely derived aggregate dealer trade.
+    pub const fn trade(&self) -> &AggregateDealerTradeV2 {
+        &self.verdict.trade
+    }
+
+    /// Read the exact derived allocation array.
+    pub const fn allocations(&self) -> &[DealerCashAllocationV2; MAX_DEALER_ROWS_V2] {
+        &self.verdict.allocations
+    }
+
+    /// Read the active allocation prefix length.
+    pub const fn allocation_count(&self) -> u8 {
+        self.verdict.allocation_count
+    }
+
+    /// Read the exact sum of upstream-quoted external fees.
+    pub const fn total_external_fee_atoms(&self) -> u128 {
+        self.verdict.total_external_fee_atoms
+    }
+
+    /// Read the joined aggregate buy flow.
+    pub const fn aggregate_buy_flow(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.verdict.aggregate_buy_flow
+    }
+
+    /// Read the joined aggregate sell flow.
+    pub const fn aggregate_sell_flow(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.verdict.aggregate_sell_flow
+    }
+
+    /// Read the independently derived direct flow.
+    pub const fn direct_flow(&self) -> &[u64; MAX_OUTCOMES] {
+        &self.verdict.direct_flow
+    }
+
+    /// Read the full joined economic candidate identity.
+    pub const fn dealer_economic_candidate_digest(&self) -> &[u8; 32] {
+        &self.verdict.dealer_economic_candidate_digest
+    }
+
+    /// Read the quote semantic identity consumed by this verification.
+    pub const fn dealer_quote_semantics_digest(&self) -> &[u8; 32] {
+        &self.verdict.dealer_quote_semantics_digest
+    }
+
+    /// Read the independently recomputed ScoreV2-Q key.
+    pub const fn score(&self) -> &ScoreV2 {
+        &self.verdict.score
+    }
 }
 
 /// Every deterministic refusal in the pure dealer-leg join.
@@ -360,7 +451,7 @@ pub fn verify_economic_candidate_with_dealer_v2(
     candidate: &EconomicCandidateV2,
     dealer: &DealerLegCandidateV2,
     quote: &DealerQuotePreconditionV2,
-) -> Result<DealerLegVerdictV2, DealerErrorV2> {
+) -> Result<VerifiedDealerLegV2, DealerErrorV2> {
     let unbalanced = derive_unbalanced_economics_v2(domain, book, price, candidate)?;
     let trade = derive_aggregate_dealer_trade(
         domain.outcome_count,
@@ -424,47 +515,43 @@ pub fn verify_economic_candidate_with_dealer_v2(
         candidate_digest: digest,
     };
     let score = score_candidate_v2(&delta).map_err(DealerErrorV2::Score)?;
-    Ok(DealerLegVerdictV2 {
-        outcome_count: domain.outcome_count,
-        trade,
-        allocations: cash.allocations,
-        allocation_count: dealer.row_count,
-        total_external_fee_atoms: cash.total_external_fee_atoms,
-        aggregate_buy_flow,
-        aggregate_sell_flow,
-        direct_flow,
-        dealer_economic_candidate_digest: digest,
-        dealer_quote_semantics_digest: quote.semantic_quote_digest,
-        score,
+    Ok(VerifiedDealerLegV2 {
+        verdict: DealerLegVerdictV2 {
+            outcome_count: domain.outcome_count,
+            trade,
+            allocations: cash.allocations,
+            allocation_count: dealer.row_count,
+            total_external_fee_atoms: cash.total_external_fee_atoms,
+            aggregate_buy_flow,
+            aggregate_sell_flow,
+            direct_flow,
+            dealer_economic_candidate_digest: digest,
+            dealer_quote_semantics_digest: quote.semantic_quote_digest,
+            score,
+        },
     })
 }
 
-/// Recompute a full dealer candidate and compare an adapter-carried allocation.
+/// Compare an adapter-carried allocation with a fully verified dealer leg.
 ///
 /// Production codecs need not persist these derived bytes. If a settlement
 /// checkpoint does carry them for execution convenience, this function makes
-/// exact recomputation the authority.
+/// the capability's exact derived projection authoritative without repeating
+/// any order, price, quote, or allocation-policy validation.
 pub fn verify_claimed_dealer_allocations_v2(
-    domain: &EconomicDomainV2,
-    book: &EconomicBookV2,
-    price: &PricePreconditionV2,
-    candidate: &EconomicCandidateV2,
-    dealer: &DealerLegCandidateV2,
-    quote: &DealerQuotePreconditionV2,
+    verified: &VerifiedDealerLegV2,
     claimed: &[DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
-) -> Result<DealerLegVerdictV2, DealerErrorV2> {
-    let verified =
-        verify_economic_candidate_with_dealer_v2(domain, book, price, candidate, dealer, quote)?;
+) -> Result<(), DealerErrorV2> {
     let mut row = 0usize;
     while row < MAX_DEALER_ROWS_V2 {
-        if claimed[row] != verified.allocations[row] {
+        if claimed[row] != verified.allocations()[row] {
             return Err(DealerErrorV2::AllocationMismatch {
                 row: bounded_row(row)?,
             });
         }
         row += 1;
     }
-    Ok(verified)
+    Ok(())
 }
 
 fn validate_facility(quote: &DealerQuotePreconditionV2) -> Result<(), DealerErrorV2> {

@@ -70,15 +70,18 @@ For the signed dealer, `clutch_batch::dealer_leg_v2` is the sole semantic owner
 of per-order dealer fills, residual all-in envelopes, upstream-quoted external
 fee amounts, and the canonical `MinimumGrossHamiltonV1` cash allocation. It
 does not prove fee funding, custody, recipients, or transfer conservation. The
-facility accepts only that relation's authenticated aggregate projection,
+facility accepts only that relation's private-field in-memory verification
+capability,
 binds it to its exact semantic facility, policy, and pre-generation, and
 independently recomputes the curve receipt. It deliberately does not reinterpret
-the verdict's per-user rows.
+the capability's per-user projection.
 The live verifier must authenticate the price and dealer quote inputs, call the
 dealer relation, reconcile its aggregate receipt with the facility, and close
-all user, dealer, and fee transfers in one atomic transition. A public pure
-verdict value is not authentication. A net-zero same-outcome flow must be
-removed before the facility leg rather than used to manufacture volume.
+all user, dealer, and fee transfers in one atomic transition. The capability
+proves that the pure relation ran; it does not authenticate quote proofs or
+accounts. A detached public verdict DTO proves neither. A net-zero same-outcome
+flow must be removed before the facility leg rather than used to manufacture
+volume.
 
 ## Promotion gates
 

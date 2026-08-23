@@ -1,8 +1,8 @@
 use clutch_batch::dealer_leg_v2::{
     dealer_quote_semantics_digest_v2, dealer_upstream_economic_candidate_digest_v2,
     verify_economic_candidate_with_dealer_v2, AggregateDealerTradeV2, DealerCashPolicyV2,
-    DealerFacilityBindingV2, DealerFillRowV2, DealerLegCandidateV2, DealerLegVerdictV2,
-    DealerQuotePreconditionV2, DealerQuoteRowV2, DealerReceiptV2, DEALER_LEG_VERSION_V2,
+    DealerFacilityBindingV2, DealerFillRowV2, DealerLegCandidateV2, DealerQuotePreconditionV2,
+    DealerQuoteRowV2, DealerReceiptV2, VerifiedDealerLegV2, DEALER_LEG_VERSION_V2,
     EMPTY_DEALER_FILL_ROW_V2, EMPTY_DEALER_QUOTE_ROW_V2, MAX_DEALER_ROWS_V2,
 };
 use clutch_batch::relation_v2::{
@@ -187,7 +187,7 @@ fn dealer_join_fixture(state: &SignedDealerStateV1) -> DealerJoinFixture {
     }
 }
 
-fn dealer_verdict(fixture: &DealerJoinFixture) -> DealerLegVerdictV2 {
+fn verified_dealer_leg(fixture: &DealerJoinFixture) -> VerifiedDealerLegV2 {
     verify_economic_candidate_with_dealer_v2(
         &fixture.domain,
         &fixture.book,
@@ -690,20 +690,20 @@ fn valid_aggregate_pool_values_may_exceed_each_single_source_bound() {
 fn authenticated_dealer_leg_is_reconciled_and_committed_as_one_aggregate() {
     let state = funded_state();
     let fixture = dealer_join_fixture(&state);
-    let verdict = dealer_verdict(&fixture);
-    assert_eq!(verdict.allocation_count, 1);
-    assert_eq!(verdict.allocations[0].user_cash_in_atoms, 3);
-    assert_eq!(verdict.total_external_fee_atoms, 1);
+    let verified = verified_dealer_leg(&fixture);
+    assert_eq!(verified.allocation_count(), 1);
+    assert_eq!(verified.allocations()[0].user_cash_in_atoms, 3);
+    assert_eq!(verified.total_external_fee_atoms(), 1);
 
     let receipt = state
-        .reconcile_authenticated_dealer_leg_v2(10, &fixture.quote, &verdict)
+        .reconcile_authenticated_dealer_leg_v2(10, &fixture.quote, &verified)
         .unwrap();
     assert_eq!(receipt.trader_cash_in_atoms, 3);
     assert_eq!(receipt.trader_cash_out_atoms, 0);
 
     let mut through_join = state;
     through_join
-        .execute_authenticated_dealer_leg_v2(10, &fixture.quote, &verdict)
+        .execute_authenticated_dealer_leg_v2(10, &fixture.quote, &verified)
         .unwrap();
     let mut direct = state;
     direct.execute_trade(10, trade(&[6, 0, 0], &[])).unwrap();
@@ -716,12 +716,12 @@ fn relation_valid_but_false_curve_receipt_is_refused_without_mutation() {
     let mut fixture = dealer_join_fixture(&state);
     fixture.quote.receipt.dealer_net_cash_in_atoms = 2;
     refresh_quote(&mut fixture);
-    let verdict = dealer_verdict(&fixture);
-    assert_eq!(verdict.allocations[0].user_cash_in_atoms, 2);
+    let verified = verified_dealer_leg(&fixture);
+    assert_eq!(verified.allocations()[0].user_cash_in_atoms, 2);
 
     let mut attempted = state;
     assert_eq!(
-        attempted.execute_authenticated_dealer_leg_v2(10, &fixture.quote, &verdict),
+        attempted.execute_authenticated_dealer_leg_v2(10, &fixture.quote, &verified),
         Err(DealerError::DealerLegReceiptMismatch)
     );
     assert_eq!(attempted, state);
@@ -733,10 +733,10 @@ fn stale_or_misdirected_authenticated_quote_is_refused_without_mutation() {
     let mut stale = dealer_join_fixture(&state);
     stale.quote.facility.pre_generation += 1;
     refresh_quote(&mut stale);
-    let stale_verdict = dealer_verdict(&stale);
+    let stale_verified = verified_dealer_leg(&stale);
     let mut attempted = state;
     assert_eq!(
-        attempted.execute_authenticated_dealer_leg_v2(10, &stale.quote, &stale_verdict),
+        attempted.execute_authenticated_dealer_leg_v2(10, &stale.quote, &stale_verified),
         Err(DealerError::DealerLegBindingMismatch)
     );
     assert_eq!(attempted, state);
@@ -744,24 +744,29 @@ fn stale_or_misdirected_authenticated_quote_is_refused_without_mutation() {
     let mut misdirected = dealer_join_fixture(&state);
     misdirected.quote.facility.facility_semantics_digest = id(99);
     refresh_quote(&mut misdirected);
-    let misdirected_verdict = dealer_verdict(&misdirected);
+    let misdirected_verified = verified_dealer_leg(&misdirected);
     assert_eq!(
-        state.reconcile_authenticated_dealer_leg_v2(10, &misdirected.quote, &misdirected_verdict),
+        state.reconcile_authenticated_dealer_leg_v2(10, &misdirected.quote, &misdirected_verified,),
         Err(DealerError::DealerLegBindingMismatch)
     );
 }
 
 #[test]
-fn public_verdict_value_cannot_be_replayed_against_another_quote_projection() {
+fn detached_public_verdict_cannot_forge_or_mix_the_verified_capability() {
     let state = funded_state();
     let fixture = dealer_join_fixture(&state);
-    let verdict = dealer_verdict(&fixture);
-    let mut forged = verdict;
-    forged.trade.sell_to_users[0] -= 1;
-    assert_eq!(
-        state.reconcile_authenticated_dealer_leg_v2(10, &fixture.quote, &forged),
-        Err(DealerError::DealerLegBindingMismatch)
-    );
+    let verified = verified_dealer_leg(&fixture);
+    let mut forged_dto = *verified.verdict();
+    forged_dto.trade.sell_to_users[0] -= 1;
+    assert_ne!(&forged_dto, verified.verdict());
+
+    // The facility accepts only `VerifiedDealerLegV2`; the public DTO above
+    // cannot be passed to either reconciliation method or wrapped back into a
+    // capability by safe downstream code. The compile-fail contract on the
+    // capability type enforces that boundary.
+    state
+        .reconcile_authenticated_dealer_leg_v2(10, &fixture.quote, &verified)
+        .unwrap();
 
     let mut other_quote = fixture.quote;
     other_quote.fee_policy_semantics_digest = id(77);
@@ -769,7 +774,7 @@ fn public_verdict_value_cannot_be_replayed_against_another_quote_projection() {
     other_quote.semantic_quote_digest =
         dealer_quote_semantics_digest_v2(&fixture.domain, &fixture.dealer, &other_quote).unwrap();
     assert_eq!(
-        state.reconcile_authenticated_dealer_leg_v2(10, &other_quote, &verdict),
+        state.reconcile_authenticated_dealer_leg_v2(10, &other_quote, &verified),
         Err(DealerError::DealerLegBindingMismatch)
     );
 
@@ -798,7 +803,7 @@ fn public_verdict_value_cannot_be_replayed_against_another_quote_projection() {
         fixture.quote.upstream_economic_candidate_digest
     );
     assert_eq!(other_price_quote.trade, fixture.quote.trade);
-    let other_price_verdict = verify_economic_candidate_with_dealer_v2(
+    let other_price_verified = verify_economic_candidate_with_dealer_v2(
         &fixture.domain,
         &fixture.book,
         &other_price,
@@ -808,10 +813,10 @@ fn public_verdict_value_cannot_be_replayed_against_another_quote_projection() {
     )
     .unwrap();
     state
-        .reconcile_authenticated_dealer_leg_v2(10, &other_price_quote, &other_price_verdict)
+        .reconcile_authenticated_dealer_leg_v2(10, &other_price_quote, &other_price_verified)
         .unwrap();
     assert_eq!(
-        state.reconcile_authenticated_dealer_leg_v2(10, &other_price_quote, &verdict),
+        state.reconcile_authenticated_dealer_leg_v2(10, &other_price_quote, &verified),
         Err(DealerError::DealerLegBindingMismatch)
     );
 }
