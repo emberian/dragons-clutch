@@ -106,6 +106,11 @@ separate payer/endowment plane. This crate has no operation that can satisfy
 work, keeper, rent, or terminal lamport obligations from Hoard or segregated
 collateral principal.
 
+Trading fees likewise create no collateral CPI kind. Accrued fees are internal
+Position-ledger cash movements while pooled Hoard custody remains unchanged; a
+treasury Position can exit only through the same owner-authorized ordinary
+withdrawal and exact postcondition as any other Position.
+
 `prepare_custody_creation_v2` freezes the selected family's account size and
 initialization order:
 
