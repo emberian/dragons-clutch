@@ -361,7 +361,7 @@ fn process_general_v2(
             action,
             request.envelope.payload,
         ),
-        _ => Err(ClutchError::UnsupportedInstruction),
+        _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
 
