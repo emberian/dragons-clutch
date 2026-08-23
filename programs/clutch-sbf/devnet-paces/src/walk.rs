@@ -9,6 +9,7 @@
 //! the protocol.
 
 use clutch_sbf::instructions::{genesis, market_init, source_ingest};
+use clutch_sbf::loader_state::UPGRADEABLE_LOADER_ID;
 use clutch_sbf::seeds;
 use clutch_sbf::source::{
     SourceSpecFieldsV1, SourceSpecV1, ORIENTATION_QUOTE_PER_BASE,
@@ -56,6 +57,14 @@ pub const DENOMINATOR: u64 = 64;
 /// The one smooth degree this campaign drives (the joined local gate covers
 /// one, two, and three; the devnet paces walk needs a single market plane).
 pub const DEGREE: u8 = 2;
+
+fn token_2022_programdata() -> Address {
+    Address::find_program_address(
+        &[TOKEN_2022.as_ref()],
+        &Address::new_from_array(UPGRADEABLE_LOADER_ID),
+    )
+    .0
+}
 
 /// The exact `SourceSpec` the compiled NON-PRODUCTION mock registry admits,
 /// byte-for-byte the joined lifecycle's `walk_spec`.
@@ -536,6 +545,8 @@ impl Walk {
                 AccountMeta::new_readonly(self.policy_account, false),
                 AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                 AccountMeta::new_readonly(RENT_SYSVAR, false),
+                AccountMeta::new_readonly(TOKEN_2022, false),
+                AccountMeta::new_readonly(token_2022_programdata(), false),
             ],
         )
     }
