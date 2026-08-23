@@ -381,7 +381,7 @@ pure runtime elsewhere does not make a route executable.
 | `0x94/1` | Dealer | authoritative State V2 with persisted terminal evidence (980 bytes) |
 | `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
 | `0x98/1` | Dealer | immutable-after-activation LP page V2 (980 bytes) |
-| `0x99/1` | Dealer | selected-artifact-bound one-generation Lease V2 (1,076 bytes) |
+| `0x99/1` | Dealer | root-counted CoveredDealer-selection-bound one-generation Lease V2 (1,140 bytes) |
 | `0x9a/1` | Dealer | SettlementPot V2 (1,236 bytes) |
 | `0x9b/1` | Dealer | counted General-generation-bound Epoch V2 (780 bytes) |
 | `0x9c/1` | Dealer | page terminal allocation (756 bytes) |
@@ -402,9 +402,10 @@ pure runtime elsewhere does not make a route executable.
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
 | `0xaa/1` | Product | shared MarketLifecycleRoot V1; phased prepaid founding and whole-Market terminal owner |
-| `0xab/1` | Failure | mutable interval-consensus work |
-| `0xac/1` | Failure/replay | permanent interval-consensus replay receipt |
+| `0xab/1` | Failure | reusable exclusive interval-consensus session cell; retained until Market terminal |
+| `0xac/1` | Failure/history | append-only aggregate interval history; retained through family-terminal commitment |
 | `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
+| `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

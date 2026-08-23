@@ -195,7 +195,7 @@ pub struct SettlementRootChildCountsV1 {
     pub released_unfilled_reservations: u16,
     /// Owners whose row/Position/pot/Replay action-38 transition completed.
     pub completed_owner_finalizations: u16,
-    /// Fee-bearing `0x83/2` receipts not yet candidate-terminally consumed.
+    /// Fee-bearing rent-owned `0x83/4` receipts not yet terminally consumed.
     /// Zero-fee owners instead retain exact action-38 GEN1 Replay evidence.
     pub live_fee_finalizations: u16,
     /// Dealer children admitted by the selected route.
@@ -695,7 +695,55 @@ impl SettlementRootV1AccountV1 {
             && self.counts.admitted_owner_rows == self.counts.expected_owner_rows
             && self.counts.admitted_reservations == self.counts.expected_filled_reservations
             && self.counts.released_unfilled_reservations == expected_unfilled
+            && self.counts.admitted_dealer_children == self.counts.expected_dealer_children
             && self.counts.admitted_merge_payments == self.counts.expected_merge_payments
+    }
+
+    /// Admit the unique opaque Dealer attachment selected by a CoveredDealer
+    /// candidate.
+    ///
+    /// The root owns only the exhaustive child count. The adapter must create
+    /// and authenticate the Dealer-owned child account in the same rollback
+    /// domain as this successor write; no caller-provided child DTO enters the
+    /// General account body.
+    pub fn admit_dealer_child(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Materializing
+            || self.counts.expected_dealer_children != 1
+            || self.counts.admitted_dealer_children != 0
+            || self.counts.live_dealer_children != 0
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.admitted_dealer_children = 1;
+        next.counts.live_dealer_children = 1;
+        if next.materialization_complete() {
+            next.phase = SettlementRootPhaseV1::Settling;
+        }
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Retire the unique authenticated Dealer attachment after its Dealer
+    /// Lease lifecycle is terminal.
+    ///
+    /// The adapter must authenticate the exact child PDA, immutable candidate
+    /// binding, rent close, and Dealer terminal capability before applying
+    /// this aggregate count transition.
+    pub fn retire_dealer_child(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Retiring
+            || self.counts.expected_dealer_children != 1
+            || self.counts.admitted_dealer_children != 1
+            || self.counts.live_dealer_children != 1
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.live_dealer_children = 0;
+        next.validate()?;
+        Ok(next)
     }
 
     /// Encode the exact 980-byte root.
@@ -742,6 +790,28 @@ impl SettlementRootV1AccountV1 {
             writer.u8(value)?;
         }
         writer.finish()
+    }
+
+    /// Content identity of the exact authenticated root prestate.
+    ///
+    /// This is the same account-key-bound transcript used by terminal
+    /// projection, but it makes no terminality claim. Read-only adapters use
+    /// it to bind a private page-set capability to the precise root bytes they
+    /// authenticated before an atomic successor write.
+    pub fn data_id<B: Sha256BackendV1>(
+        &self,
+        backend: &B,
+        root_account: Id32,
+    ) -> Result<Id32, CodecError> {
+        self.validate()?;
+        require_live(root_account)?;
+        let mut bytes = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
+        self.encode(&mut bytes)?;
+        Id32::new(backend.sha256(&[
+            SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
+            &root_account.bytes(),
+            &bytes,
+        ]))
     }
 
     /// Decode one hostile root account and rerun every invariant.
@@ -926,7 +996,7 @@ impl SettlementRootV1AccountV1 {
     /// Action 40 completes one distinct merge paid latch.
     /// Structural action-40 count successor. This does not authenticate the
     /// Receipt/Reservation/fee/Replay write set. Fee-bearing action 40 must
-    /// consume exact `0x83/2`; zero-fee action 40 must authenticate current
+    /// consume exact rent-owned `0x83/4`; zero-fee action 40 must authenticate current
     /// action-38 Replay evidence committing the finalized row and exact
     /// cash-pot poststate after action 38 authenticated action 37.
     pub fn complete_merge_payment(&self) -> Result<Self, CodecError> {
@@ -965,13 +1035,7 @@ impl SettlementRootV1AccountV1 {
         {
             return Err(CodecError::InvalidState);
         }
-        let mut bytes = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-        self.encode(&mut bytes)?;
-        let receipt = Id32::new(backend.sha256(&[
-            SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
-            &root_account.bytes(),
-            &bytes,
-        ]))?;
+        let receipt = self.data_id(backend, root_account)?;
         Ok(SettlementRootTerminalProjectionV1 {
             root_account,
             market_instance_v2_id: self.market_instance_v2_id,
@@ -1246,7 +1310,10 @@ pub fn initialize_settlement_root_v1(
         || request.current_slot == 0
         || request.feed.order_count == 0
         || request.feed.slice_count == 0
-        || request.feed.candidate_kind != SettlementCandidateKindV1::Direct
+        || !matches!(
+            request.feed.candidate_kind,
+            SettlementCandidateKindV1::Direct | SettlementCandidateKindV1::CoveredDealer
+        )
         || window.finalized_slot != 0
         || window.valid_verdict_count == 0
         || window
@@ -1272,7 +1339,7 @@ pub fn initialize_settlement_root_v1(
         || node.admission_policy_id != market.admission_policy_id
         || node.score_policy_id != market.score_policy_id
         || node.status != AdmissionNodeStatusV1::VerifiedValid
-        || node.candidate_kind != SettlementCandidateKindV1::Direct
+        || node.candidate_kind != request.feed.candidate_kind
         || request.node.cost_certificate_id().is_zero()
         || window.best_candidate_node != node.node
         || window.best_settlement_candidate_id != node.settlement_candidate_id
@@ -1387,7 +1454,9 @@ pub fn initialize_settlement_root_v1(
             released_unfilled_reservations: 0,
             completed_owner_finalizations: 0,
             live_fee_finalizations: 0,
-            expected_dealer_children: 0,
+            expected_dealer_children: u16::from(
+                request.feed.candidate_kind == SettlementCandidateKindV1::CoveredDealer,
+            ),
             admitted_dealer_children: 0,
             live_dealer_children: 0,
             expected_merge_payments: request.expected_merge_payments,

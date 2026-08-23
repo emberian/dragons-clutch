@@ -410,7 +410,7 @@ impl DealerLeaseSelectionEvidenceV3 {
                         .ok_or(Error::ArithmeticOverflow)?,
                 )
             };
-        if lease.selected_candidate_account_id != self.selected_candidate_account_id
+        if lease.settlement_root_account_id != self.selected_candidate_account_id
             || lease.epoch_id != epoch.epoch_id
             || lease.epoch_binding_account_id != epoch.epoch_binding_account_id
             || lease.settlement_candidate_id != final_candidate

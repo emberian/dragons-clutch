@@ -3,18 +3,15 @@
 //!
 //! The legacy external runtime binds one Series and ordinal into its identity.
 //! This successor instead derives its identity only from the immutable shared
-//! Market policy. Series links and Source occurrences are subordinate session
-//! inputs and never alter the runtime account identity. The existing evidence-recovery
-//! engine remains the semantic owner of finite schedules and exact rewards;
-//! its founding Series quote is funding provenance, not a Series-scoped account key.
+//! Market policy. Series links, Source occurrences, and absolute recovery
+//! schedules are subordinate session inputs and never alter the runtime account
+//! identity. Per-occurrence recovery state lives in the dedicated session/work
+//! owner; this root stores only the shared liveness-capital identity and one
+//! active-session pin.
 
-use clutch_evidence_recovery::{
-    ExternalRecoveryAdmissionV1, ExternalRecoveryFundingV1, ExternalRecoveryStateV1,
-    Identity as RecoveryIdentity, RecoveryClock, RecoveryPhase, EXTERNAL_RECOVERY_STATE_V1_BYTES,
-};
 use clutch_product_series::{
-    CompiledScheduleV1, ContentId as ProductContentId, MarketInstanceV2Id, SeriesFundingQuoteId,
-    SeriesFundingQuoteV1,
+    ContentId as ProductContentId, MarketInstanceV2Id, SeriesMarketLinkV1, SeriesMarketLinkV1Id,
+    SeriesPlanV5Id, SourceOccurrenceV1Id,
 };
 use sha2::{Digest, Sha256};
 
@@ -26,16 +23,28 @@ use crate::{Error, FailurePolicyBindingId, Result};
 
 const RUNTIME_ADMISSION_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-runtime-admission/v1";
 const RUNTIME_COMMITMENT_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-runtime-commitment/v1";
-const SCHEDULE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-recovery-schedule/v1";
+const SESSION_BEGIN_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-begin/v1";
+const SESSION_ADVANCE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-advance/v1";
+const SESSION_RESOLVE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-resolve/v1";
+const SESSION_CLOSE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-close/v1";
+const SESSION_HISTORY_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-history/v1";
 const MAGIC_V1: [u8; 8] = *b"DCFMRUN1";
 const VERSION_V1: u16 = 1;
 const HEADER_BYTES_V1: usize = 16;
 const ID_BYTES_V1: usize = 32;
-const PREFIX_ID_COUNT_V1: usize = 4;
+const PREFIX_ID_COUNT_V1: usize = 5;
 const ROOT_FUNDING_ID_COUNT_V1: usize = 2;
 const ROOT_FUNDING_AMOUNT_COUNT_V1: usize = 3;
 const PHASE_BYTES_V1: usize = 8;
 const SESSION_ID_COUNT_V1: usize = 8;
+const ACTIVE_SESSION_PIN_INDEX_V1: usize = 0;
+const SERIES_LINK_AUTHENTICATION_INDEX_V1: usize = 1;
+const SESSION_STATE_COMMITMENT_INDEX_V1: usize = 2;
+const SESSION_RESOLUTION_RECEIPT_INDEX_V1: usize = 3;
+const INTERVAL_TERMINAL_RECEIPT_INDEX_V1: usize = 4;
+const RECOVERY_TERMINAL_RECEIPT_INDEX_V1: usize = 5;
+const FAMILY_TERMINAL_RECEIPT_INDEX_V1: usize = 6;
+const SESSION_HISTORY_COMMITMENT_INDEX_V1: usize = 7;
 
 /// Canonical semantic body width inside the FailureRuntimeRoot account.
 pub const FAILURE_MARKET_RUNTIME_BYTES_V1: usize = 2_048;
@@ -70,9 +79,149 @@ runtime_id!(
     "Typed commitment to one complete canonical Market runtime state."
 );
 runtime_id!(
-    FailureMarketRecoveryScheduleIdV1,
-    "Typed identity of one exact absolute finite recovery schedule."
+    FailureMarketSessionScheduleIdV1,
+    "Typed identity of one subordinate Series/ordinal recovery schedule."
 );
+runtime_id!(
+    FailureMarketSessionTransitionReceiptIdV1,
+    "Typed identity of one authenticated subordinate session transition."
+);
+runtime_id!(
+    FailureMarketSessionHistoryCommitmentV1,
+    "Typed hash chain over every closed subordinate interval session."
+);
+
+/// Complete subordinate interval-session descriptor. This projection is not
+/// authority and never changes the shared runtime account identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionDescriptorV1 {
+    /// Initiating recurring Series.
+    pub series_plan_id: SeriesPlanV5Id,
+    /// Exact finite Series ordinal.
+    pub ordinal: u32,
+    /// Product/Source-owned occurrence.
+    pub source_occurrence_id: SourceOccurrenceV1Id,
+    /// Per-occurrence absolute schedule identity owned by the session.
+    pub schedule_id: FailureMarketSessionScheduleIdV1,
+    /// Canonical mutable `0xab` session/work account.
+    pub work_account_id: FailureMarketAccountIdV1,
+    /// Canonical permanent `0xac` replay account.
+    pub replay_account_id: FailureMarketAccountIdV1,
+    /// Complete initial subordinate session postimage.
+    pub session_state_commitment: ProductContentId,
+}
+
+/// Expected exact begin authority derived from Product link and session state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionBeginFactsV1 {
+    /// Shared runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Exact active Product link prestate.
+    pub series_link_before: SeriesMarketLinkV1Id,
+    /// Product link poststate after pinning this begin receipt.
+    pub series_link_after: SeriesMarketLinkV1Id,
+    /// Prior durable closed-session transcript, or zero for the first session.
+    pub previous_session_history: FailureMarketSessionHistoryCommitmentV1,
+    /// Prior interval terminal receipt, or zero for the first session.
+    pub previous_interval_terminal_receipt_id: ProductContentId,
+    /// Complete subordinate descriptor.
+    pub session: FailureMarketSessionDescriptorV1,
+    /// Receipt consumed by Product's link pin.
+    pub begin_receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+/// Expected exact bounded session-state advance authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionAdvanceFactsV1 {
+    /// Shared runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Pinned Product link semantic state.
+    pub series_link_state_id: SeriesMarketLinkV1Id,
+    /// Prior subordinate session commitment.
+    pub session_before: ProductContentId,
+    /// Authenticated subordinate session postimage.
+    pub session_after: ProductContentId,
+    /// Exact liveness work receipt applied in the same atomic batch.
+    pub liveness_work_receipt_id: ProductContentId,
+    /// Unique transition receipt.
+    pub transition_receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+/// Expected exact session resolution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionResolutionFactsV1 {
+    /// Shared runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Pinned Product link semantic state.
+    pub series_link_state_id: SeriesMarketLinkV1Id,
+    /// Prior subordinate session commitment.
+    pub session_before: ProductContentId,
+    /// Authenticated resolved subordinate postimage.
+    pub session_after: ProductContentId,
+    /// Exact private interval resolution receipt.
+    pub session_resolution_receipt_id: ProductContentId,
+    /// Unique transition receipt.
+    pub transition_receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+/// Expected exact session close and Product-link release authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionCloseFactsV1 {
+    /// Shared runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Pinned Product link prestate.
+    pub series_link_before: SeriesMarketLinkV1Id,
+    /// Released Product link poststate.
+    pub series_link_after: SeriesMarketLinkV1Id,
+    /// Prior resolved subordinate commitment.
+    pub session_before: ProductContentId,
+    /// Authenticated closed subordinate postimage.
+    pub session_after: ProductContentId,
+    /// Durable interval terminal receipt retained by `0xac`.
+    pub interval_terminal_receipt_id: ProductContentId,
+    /// Prior durable transcript, or zero while closing the first session.
+    pub previous_session_history: FailureMarketSessionHistoryCommitmentV1,
+    /// Resulting append-only transcript over this and every prior session.
+    pub resulting_session_history: FailureMarketSessionHistoryCommitmentV1,
+    /// Unique shared-runtime transition receipt.
+    pub transition_receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+/// Adapter authority for subordinate `0xab`/`0xac` and Product-link joins.
+/// Every method defaults to refusal.
+pub trait AuthenticatedFailureMarketSessionV1 {
+    /// Authenticate one fresh Source/Product/session begin join.
+    fn authenticate_failure_market_session_begin(
+        &self,
+        _expected: FailureMarketSessionBeginFactsV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+
+    /// Authenticate one bounded session+liveness atomic advance.
+    fn authenticate_failure_market_session_advance(
+        &self,
+        _expected: FailureMarketSessionAdvanceFactsV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+
+    /// Authenticate one session resolution and exact V5 writer join.
+    fn authenticate_failure_market_session_resolution(
+        &self,
+        _expected: FailureMarketSessionResolutionFactsV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+
+    /// Authenticate mutable-work close, durable replay, and link release.
+    fn authenticate_failure_market_session_close(
+        &self,
+        _expected: FailureMarketSessionCloseFactsV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
 
 /// Current Market runtime lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,10 +285,6 @@ pub struct FailureMarketRuntimeAdmissionFactsV1 {
     pub root_funding: FailureMarketRuntimeRootFundingFactsV1,
     /// Present Recovery funding receipt retained by the admission root.
     pub recovery_funding_receipt_id: FailureMarketRecoveryFundingReceiptIdV1,
-    /// Exact absolute finite schedule selected by immutable policy.
-    pub recovery_schedule_id: FailureMarketRecoveryScheduleIdV1,
-    /// Founder quote whose Recovery pricing capitalized the shared account.
-    pub recovery_funding_quote_id: SeriesFundingQuoteId,
     /// Complete initial runtime postimage.
     pub runtime_state_commitment: FailureMarketRuntimeStateCommitmentV1,
 }
@@ -201,7 +346,7 @@ pub struct FailureMarketRuntimeV1 {
     runtime_account_id: FailureMarketAccountIdV1,
     foundation_receipt_id: ProductContentId,
     root_funding: FailureMarketRuntimeRootFundingFactsV1,
-    recovery: ExternalRecoveryStateV1,
+    recovery_funding_receipt_id: FailureMarketRecoveryFundingReceiptIdV1,
     phase: FailureMarketRuntimePhaseV1,
     transition_sequence: u64,
     session_ids: [ProductContentId; SESSION_ID_COUNT_V1],
@@ -223,6 +368,11 @@ impl FailureMarketRuntimeV1 {
         self.runtime_account_id
     }
 
+    /// Product-private foundation step which capitalized this account.
+    pub const fn foundation_receipt_id(self) -> ProductContentId {
+        self.foundation_receipt_id
+    }
+
     /// Current lifecycle phase.
     pub const fn phase(self) -> FailureMarketRuntimePhaseV1 {
         self.phase
@@ -238,10 +388,51 @@ impl FailureMarketRuntimeV1 {
         self.root_funding
     }
 
-    /// Underlying finite recovery engine. Its founder quote is funding
-    /// provenance and is excluded from the Market runtime account identity.
-    pub const fn recovery(self) -> ExternalRecoveryStateV1 {
-        self.recovery
+    /// Immutable identity of the sole shared liveness-capital admission.
+    pub const fn recovery_funding_receipt_id(self) -> FailureMarketRecoveryFundingReceiptIdV1 {
+        self.recovery_funding_receipt_id
+    }
+
+    /// Exact currently pinned subordinate session, or zero when no session is active.
+    pub const fn active_session_pin_id(self) -> ProductContentId {
+        self.session_ids[ACTIVE_SESSION_PIN_INDEX_V1]
+    }
+
+    /// Product authentication of the initiating per-Series Market link.
+    pub const fn series_link_authentication_id(self) -> ProductContentId {
+        self.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1]
+    }
+
+    /// Latest complete subordinate session-state commitment.
+    pub const fn session_state_commitment(self) -> ProductContentId {
+        self.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1]
+    }
+
+    /// Accepted subordinate session resolution, if resolved.
+    pub const fn session_resolution_receipt_id(self) -> ProductContentId {
+        self.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1]
+    }
+
+    /// Durable closed-interval receipt, if mutable work was closed.
+    pub const fn interval_terminal_receipt_id(self) -> ProductContentId {
+        self.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1]
+    }
+
+    /// Sole shared Recovery-compartment close receipt, if closed.
+    pub const fn recovery_terminal_receipt_id(self) -> ProductContentId {
+        self.session_ids[RECOVERY_TERMINAL_RECEIPT_INDEX_V1]
+    }
+
+    /// Exhaustive Failure-family terminal receipt, if promoted.
+    pub const fn family_terminal_receipt_id(self) -> ProductContentId {
+        self.session_ids[FAMILY_TERMINAL_RECEIPT_INDEX_V1]
+    }
+
+    /// Append-only transcript over every completely closed interval session.
+    pub const fn session_history_commitment(self) -> FailureMarketSessionHistoryCommitmentV1 {
+        FailureMarketSessionHistoryCommitmentV1::from_bytes(
+            self.session_ids[SESSION_HISTORY_COMMITMENT_INDEX_V1].bytes(),
+        )
     }
 
     /// Canonical state commitment.
@@ -256,6 +447,18 @@ impl FailureMarketRuntimeV1 {
         ))
     }
 
+    /// Commit one stale-checked runtime transition. Product link and account
+    /// writes remain part of the same outer atomic batch.
+    pub fn commit_plan(&mut self, plan: FailureMarketSessionTransitionPlanV1) -> Result<()> {
+        self.validate()?;
+        if *self != plan.before {
+            return Err(Error::StalePlan);
+        }
+        plan.after.validate()?;
+        *self = plan.after;
+        Ok(())
+    }
+
     /// Encode every semantic and reserved byte canonically.
     pub fn encode_into(self, output: &mut [u8; FAILURE_MARKET_RUNTIME_BYTES_V1]) -> Result<()> {
         self.validate()?;
@@ -268,6 +471,7 @@ impl FailureMarketRuntimeV1 {
             self.admission_state_id.bytes(),
             self.runtime_account_id.bytes(),
             self.foundation_receipt_id.bytes(),
+            self.recovery_funding_receipt_id.bytes(),
         ] {
             put_id(output, &mut cursor, id)?;
         }
@@ -284,15 +488,6 @@ impl FailureMarketRuntimeV1 {
         ] {
             put_u64(output, &mut cursor, amount)?;
         }
-        let recovery_end = cursor
-            .checked_add(EXTERNAL_RECOVERY_STATE_V1_BYTES)
-            .ok_or(Error::WrongLength)?;
-        self.recovery.encode_into(
-            output
-                .get_mut(cursor..recovery_end)
-                .ok_or(Error::WrongLength)?,
-        )?;
-        cursor = recovery_end;
         output[cursor] = self.phase.byte();
         cursor = cursor
             .checked_add(PHASE_BYTES_V1)
@@ -333,6 +528,8 @@ impl FailureMarketRuntimeV1 {
             FailureMarketAdmissionStateIdV1::from_bytes(take_id(input, &mut cursor)?);
         let runtime_account_id = FailureMarketAccountIdV1::from_bytes(take_id(input, &mut cursor)?);
         let foundation_receipt_id = ProductContentId::from_bytes(take_id(input, &mut cursor)?);
+        let recovery_funding_receipt_id =
+            FailureMarketRecoveryFundingReceiptIdV1::from_bytes(take_id(input, &mut cursor)?);
         let root_funding = FailureMarketRuntimeRootFundingFactsV1 {
             rent_refund_owner: FailureMarketAccountIdV1::from_bytes(take_id(input, &mut cursor)?),
             neutral_sink: FailureMarketAccountIdV1::from_bytes(take_id(input, &mut cursor)?),
@@ -340,13 +537,6 @@ impl FailureMarketRuntimeV1 {
             donation_floor_lamports: take_u64(input, &mut cursor)?,
             observed_balance_lamports: take_u64(input, &mut cursor)?,
         };
-        let recovery_end = cursor
-            .checked_add(EXTERNAL_RECOVERY_STATE_V1_BYTES)
-            .ok_or(Error::WrongLength)?;
-        let recovery = ExternalRecoveryStateV1::decode(
-            input.get(cursor..recovery_end).ok_or(Error::WrongLength)?,
-        )?;
-        cursor = recovery_end;
         let phase = FailureMarketRuntimePhaseV1::decode(input[cursor])?;
         if input[cursor + 1..cursor + PHASE_BYTES_V1]
             .iter()
@@ -378,7 +568,7 @@ impl FailureMarketRuntimeV1 {
             runtime_account_id,
             foundation_receipt_id,
             root_funding,
-            recovery,
+            recovery_funding_receipt_id,
             phase,
             transition_sequence,
             session_ids,
@@ -388,11 +578,11 @@ impl FailureMarketRuntimeV1 {
     }
 
     fn validate(self) -> Result<()> {
-        self.recovery.check()?;
         require_live(self.policy_binding_id.bytes())?;
         require_live(self.admission_state_id.bytes())?;
         require_live(self.runtime_account_id.bytes())?;
         require_live(self.foundation_receipt_id.bytes())?;
+        require_live(self.recovery_funding_receipt_id.bytes())?;
         require_live(self.root_funding.rent_refund_owner.bytes())?;
         require_live(self.root_funding.neutral_sink.bytes())?;
         if self.root_funding.rent_principal_lamports == 0
@@ -408,56 +598,77 @@ impl FailureMarketRuntimeV1 {
         {
             return Err(Error::BindingMismatch);
         }
-        let live = |index: usize| !self.session_ids[index].is_zero();
+        let active_pin = !self.active_session_pin_id().is_zero();
+        let series_link = !self.series_link_authentication_id().is_zero();
+        let session_state = !self.session_state_commitment().is_zero();
+        let session_resolution = !self.session_resolution_receipt_id().is_zero();
+        let interval_terminal = !self.interval_terminal_receipt_id().is_zero();
+        let recovery_terminal = !self.recovery_terminal_receipt_id().is_zero();
+        let family_terminal = !self.family_terminal_receipt_id().is_zero();
+        let session_history = self.session_history_commitment().bytes() != [0; 32];
         match self.phase {
             FailureMarketRuntimePhaseV1::Ready => {
-                if self.transition_sequence != 0
-                    || self.session_ids.iter().any(|id| !id.is_zero())
-                    || self.recovery.phase() != RecoveryPhase::Active
+                if self.transition_sequence != 0 || self.session_ids.iter().any(|id| !id.is_zero())
                 {
                     return Err(Error::WrongPhase);
                 }
             }
             FailureMarketRuntimePhaseV1::IntervalActive => {
                 if self.transition_sequence == 0
-                    || self.recovery.phase() != RecoveryPhase::DegradedRecoverable
-                    || !(live(0) && live(1) && live(2) && live(3))
-                    || self.session_ids[4..].iter().any(|id| !id.is_zero())
+                    || !(active_pin && series_link && session_state)
+                    || session_resolution
+                    || interval_terminal
+                    || recovery_terminal
+                    || family_terminal
                 {
                     return Err(Error::WrongPhase);
                 }
             }
             FailureMarketRuntimePhaseV1::IntervalResolved => {
                 if self.transition_sequence == 0
-                    || self.recovery.phase() != RecoveryPhase::Resolved
-                    || !(live(0) && live(1) && live(2) && live(3))
-                    || self.session_ids[4..].iter().any(|id| !id.is_zero())
+                    || !(active_pin && series_link && session_state && session_resolution)
+                    || interval_terminal
+                    || recovery_terminal
+                    || family_terminal
                 {
                     return Err(Error::WrongPhase);
                 }
             }
             FailureMarketRuntimePhaseV1::IntervalClosed => {
                 if self.transition_sequence == 0
-                    || self.recovery.phase() != RecoveryPhase::Resolved
-                    || !(live(0) && live(1) && live(2) && live(3) && live(4))
-                    || self.session_ids[5..].iter().any(|id| !id.is_zero())
+                    || active_pin
+                    || !(series_link && session_state && session_resolution && interval_terminal)
+                    || !session_history
+                    || recovery_terminal
+                    || family_terminal
                 {
                     return Err(Error::WrongPhase);
                 }
             }
             FailureMarketRuntimePhaseV1::RecoveryClosed => {
                 if self.transition_sequence == 0
-                    || self.recovery.phase() != RecoveryPhase::Resolved
-                    || !(live(0) && live(1) && live(2) && live(3) && live(4) && live(5) && live(6))
-                    || live(7)
+                    || active_pin
+                    || !(series_link
+                        && session_state
+                        && session_resolution
+                        && interval_terminal
+                        && session_history
+                        && recovery_terminal)
+                    || family_terminal
                 {
                     return Err(Error::WrongPhase);
                 }
             }
             FailureMarketRuntimePhaseV1::FamilyTerminal => {
                 if self.transition_sequence == 0
-                    || self.recovery.phase() != RecoveryPhase::Resolved
-                    || self.session_ids.iter().any(|id| id.is_zero())
+                    || active_pin
+                    || !(series_link
+                        && session_state
+                        && session_resolution
+                        && interval_terminal
+                        && session_history
+                        && recovery_terminal
+                        && family_terminal)
                 {
                     return Err(Error::WrongPhase);
                 }
@@ -474,20 +685,14 @@ impl FailureMarketRuntimeV1 {
             || self.admission_state_id != admission.id()?
             || self.runtime_account_id.bytes() != policy.recovery_state_id.bytes()
             || self.runtime_account_id == admission.root_funding().facts().root_account_id
-            || self.recovery.market_instance_id() != policy.market_instance_id
-            || self.recovery.recovery_policy_id() != policy.recovery_policy_id
-            || self.recovery.state_id().bytes() != self.runtime_account_id.bytes()
-            || self.recovery.generation() != policy.generation
-            || self.recovery.funding().policy_id.bytes() != policy.liveness_policy_id.bytes()
-            || self.recovery.funding().lifecycle_id.bytes() != policy.liveness_lifecycle_id.bytes()
-            || self.recovery.funding().recovery_account_id.bytes()
-                != policy.recovery_compartment_account_id.bytes()
-            || self.recovery.funding().quote_schedule_id.bytes()
-                != policy.recovery_quote_schedule_id.bytes()
-            || self.recovery.funding().capitalized_work_lamports
-                != recovery_funding.work_principal_lamports
-            || self.recovery.funding().rent_principal_lamports
-                != recovery_funding.rent_principal_lamports
+            || self.recovery_funding_receipt_id != admission.recovery_funding().id()
+            || recovery_funding.failure_policy_binding_id != self.policy_binding_id
+            || recovery_funding.recovery_compartment_account_id
+                != policy.recovery_compartment_account_id
+            || recovery_funding.liveness_policy_id != policy.liveness_policy_id
+            || recovery_funding.liveness_lifecycle_id != policy.liveness_lifecycle_id
+            || recovery_funding.recovery_quote_schedule_id != policy.recovery_quote_schedule_id
+            || recovery_funding.generation != policy.generation
         {
             return Err(Error::BindingMismatch);
         }
@@ -495,63 +700,425 @@ impl FailureMarketRuntimeV1 {
     }
 }
 
+/// One stale-checked shared-runtime and Product-link session transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSessionTransitionPlanV1 {
+    before: FailureMarketRuntimeV1,
+    after: FailureMarketRuntimeV1,
+    series_link_before: SeriesMarketLinkV1,
+    series_link_after: SeriesMarketLinkV1,
+    receipt_id: FailureMarketSessionTransitionReceiptIdV1,
+}
+
+impl FailureMarketSessionTransitionPlanV1 {
+    /// Resulting complete shared runtime.
+    pub const fn resulting_runtime(self) -> FailureMarketRuntimeV1 {
+        self.after
+    }
+
+    /// Exact Product link prestate authenticated by the adapter.
+    pub const fn series_link_before(self) -> SeriesMarketLinkV1 {
+        self.series_link_before
+    }
+
+    /// Exact Product link poststate for the same atomic batch.
+    pub const fn series_link_after(self) -> SeriesMarketLinkV1 {
+        self.series_link_after
+    }
+
+    /// Unique session transition receipt.
+    pub const fn receipt_id(self) -> FailureMarketSessionTransitionReceiptIdV1 {
+        self.receipt_id
+    }
+}
+
+/// Plan one subordinate Series/Source session pin. A new session may begin
+/// after the prior interval is completely closed, but never after shared
+/// Recovery or Failure-family terminalization.
+pub fn plan_begin_failure_market_session_v1<A: AuthenticatedFailureMarketSessionV1 + ?Sized>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV1,
+    session: FailureMarketSessionDescriptorV1,
+) -> Result<FailureMarketSessionTransitionPlanV1> {
+    runtime.validate_against_admission(admission)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::Ready
+        && runtime.phase != FailureMarketRuntimePhaseV1::IntervalClosed
+    {
+        return Err(Error::WrongPhase);
+    }
+    validate_session_descriptor(runtime, admission, series_link, session)?;
+    let series_link_before = series_link.semantic_id()?;
+    let runtime_before = runtime.commitment()?;
+    let next_sequence = runtime
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let previous_session_history = runtime.session_history_commitment();
+    let previous_interval_terminal_receipt_id = runtime.interval_terminal_receipt_id();
+    if runtime.phase == FailureMarketRuntimePhaseV1::Ready {
+        if previous_session_history.bytes() != [0; 32]
+            || !previous_interval_terminal_receipt_id.is_zero()
+        {
+            return Err(Error::WrongPhase);
+        }
+    } else if previous_session_history.bytes() == [0; 32]
+        || previous_interval_terminal_receipt_id.is_zero()
+    {
+        return Err(Error::WrongPhase);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_BEGIN_DOMAIN_V1);
+    hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
+    hasher.update(series_link_before.bytes());
+    hasher.update(previous_session_history.bytes());
+    hasher.update(previous_interval_terminal_receipt_id.bytes());
+    hash_session_descriptor(&mut hasher, session);
+    let begin_receipt_id =
+        FailureMarketSessionTransitionReceiptIdV1::from_bytes(hasher.finalize().into());
+    require_live(begin_receipt_id.bytes())?;
+    let series_link_after_value =
+        series_link.pin_failure_session(ProductContentId::from_bytes(begin_receipt_id.bytes()))?;
+    let series_link_after = series_link_after_value.semantic_id()?;
+    let facts = FailureMarketSessionBeginFactsV1 {
+        runtime_before,
+        series_link_before,
+        series_link_after,
+        previous_session_history,
+        previous_interval_terminal_receipt_id,
+        session,
+        begin_receipt_id,
+    };
+    authority.authenticate_failure_market_session_begin(facts)?;
+    let mut after = runtime;
+    after.phase = FailureMarketRuntimePhaseV1::IntervalActive;
+    after.transition_sequence = next_sequence;
+    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] =
+        ProductContentId::from_bytes(begin_receipt_id.bytes());
+    after.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] =
+        ProductContentId::from_bytes(series_link_after.bytes());
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = session.session_state_commitment;
+    after.validate_against_admission(admission)?;
+    Ok(FailureMarketSessionTransitionPlanV1 {
+        before: runtime,
+        after,
+        series_link_before: series_link,
+        series_link_after: series_link_after_value,
+        receipt_id: begin_receipt_id,
+    })
+}
+
+/// Plan one bounded subordinate session/liveness advance.
+pub fn plan_advance_failure_market_session_v1<A: AuthenticatedFailureMarketSessionV1 + ?Sized>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV1,
+    session_after: ProductContentId,
+    liveness_work_receipt_id: ProductContentId,
+) -> Result<FailureMarketSessionTransitionPlanV1> {
+    runtime.validate_against_admission(admission)?;
+    require_active_link(runtime, admission, series_link)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::IntervalActive {
+        return Err(Error::WrongPhase);
+    }
+    require_live(session_after.bytes())?;
+    require_live(liveness_work_receipt_id.bytes())?;
+    let session_before = runtime.session_state_commitment();
+    if session_after == session_before || session_after == liveness_work_receipt_id {
+        return Err(Error::BindingMismatch);
+    }
+    let runtime_before = runtime.commitment()?;
+    let series_link_state_id = series_link.semantic_id()?;
+    let next_sequence = runtime
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_ADVANCE_DOMAIN_V1);
+    hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
+    hasher.update(series_link_state_id.bytes());
+    hasher.update(session_before.bytes());
+    hasher.update(session_after.bytes());
+    hasher.update(liveness_work_receipt_id.bytes());
+    let transition_receipt_id =
+        FailureMarketSessionTransitionReceiptIdV1::from_bytes(hasher.finalize().into());
+    require_live(transition_receipt_id.bytes())?;
+    let facts = FailureMarketSessionAdvanceFactsV1 {
+        runtime_before,
+        series_link_state_id,
+        session_before,
+        session_after,
+        liveness_work_receipt_id,
+        transition_receipt_id,
+    };
+    authority.authenticate_failure_market_session_advance(facts)?;
+    let mut after = runtime;
+    after.transition_sequence = next_sequence;
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = session_after;
+    after.validate_against_admission(admission)?;
+    Ok(FailureMarketSessionTransitionPlanV1 {
+        before: runtime,
+        after,
+        series_link_before: series_link,
+        series_link_after: series_link,
+        receipt_id: transition_receipt_id,
+    })
+}
+
+/// Plan exact subordinate interval resolution while retaining the Product link pin.
+pub fn plan_resolve_failure_market_session_v1<A: AuthenticatedFailureMarketSessionV1 + ?Sized>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV1,
+    session_after: ProductContentId,
+    session_resolution_receipt_id: ProductContentId,
+) -> Result<FailureMarketSessionTransitionPlanV1> {
+    runtime.validate_against_admission(admission)?;
+    require_active_link(runtime, admission, series_link)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::IntervalActive {
+        return Err(Error::WrongPhase);
+    }
+    require_live(session_after.bytes())?;
+    require_live(session_resolution_receipt_id.bytes())?;
+    let session_before = runtime.session_state_commitment();
+    if session_after == session_before || session_after == session_resolution_receipt_id {
+        return Err(Error::BindingMismatch);
+    }
+    let runtime_before = runtime.commitment()?;
+    let series_link_state_id = series_link.semantic_id()?;
+    let next_sequence = runtime
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_RESOLVE_DOMAIN_V1);
+    hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
+    hasher.update(series_link_state_id.bytes());
+    hasher.update(session_before.bytes());
+    hasher.update(session_after.bytes());
+    hasher.update(session_resolution_receipt_id.bytes());
+    let transition_receipt_id =
+        FailureMarketSessionTransitionReceiptIdV1::from_bytes(hasher.finalize().into());
+    require_live(transition_receipt_id.bytes())?;
+    let facts = FailureMarketSessionResolutionFactsV1 {
+        runtime_before,
+        series_link_state_id,
+        session_before,
+        session_after,
+        session_resolution_receipt_id,
+        transition_receipt_id,
+    };
+    authority.authenticate_failure_market_session_resolution(facts)?;
+    let mut after = runtime;
+    after.phase = FailureMarketRuntimePhaseV1::IntervalResolved;
+    after.transition_sequence = next_sequence;
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = session_after;
+    after.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1] = session_resolution_receipt_id;
+    after.validate_against_admission(admission)?;
+    Ok(FailureMarketSessionTransitionPlanV1 {
+        before: runtime,
+        after,
+        series_link_before: series_link,
+        series_link_after: series_link,
+        receipt_id: transition_receipt_id,
+    })
+}
+
+/// Plan mutable session-work close, durable replay retention, and Product link release.
+pub fn plan_close_failure_market_session_v1<A: AuthenticatedFailureMarketSessionV1 + ?Sized>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV1,
+    session_after: ProductContentId,
+    interval_terminal_receipt_id: ProductContentId,
+) -> Result<FailureMarketSessionTransitionPlanV1> {
+    runtime.validate_against_admission(admission)?;
+    require_active_link(runtime, admission, series_link)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::IntervalResolved {
+        return Err(Error::WrongPhase);
+    }
+    require_live(session_after.bytes())?;
+    require_live(interval_terminal_receipt_id.bytes())?;
+    let session_before = runtime.session_state_commitment();
+    if session_after == session_before || session_after == interval_terminal_receipt_id {
+        return Err(Error::BindingMismatch);
+    }
+    let series_link_before = series_link.semantic_id()?;
+    let series_link_after_value =
+        series_link.release_failure_session(interval_terminal_receipt_id)?;
+    let series_link_after = series_link_after_value.semantic_id()?;
+    let runtime_before = runtime.commitment()?;
+    let next_sequence = runtime
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_CLOSE_DOMAIN_V1);
+    hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
+    hasher.update(series_link_before.bytes());
+    hasher.update(series_link_after.bytes());
+    hasher.update(session_before.bytes());
+    hasher.update(session_after.bytes());
+    hasher.update(interval_terminal_receipt_id.bytes());
+    let transition_receipt_id =
+        FailureMarketSessionTransitionReceiptIdV1::from_bytes(hasher.finalize().into());
+    require_live(transition_receipt_id.bytes())?;
+    let previous_session_history = runtime.session_history_commitment();
+    let mut history_hasher = Sha256::new();
+    history_hasher.update(SESSION_HISTORY_DOMAIN_V1);
+    hash_runtime_transition_prefix(&mut history_hasher, runtime, runtime_before, next_sequence);
+    history_hasher.update(previous_session_history.bytes());
+    history_hasher.update(runtime.active_session_pin_id().bytes());
+    history_hasher.update(series_link_before.bytes());
+    history_hasher.update(series_link_after.bytes());
+    history_hasher.update(runtime.session_resolution_receipt_id().bytes());
+    history_hasher.update(session_before.bytes());
+    history_hasher.update(session_after.bytes());
+    history_hasher.update(interval_terminal_receipt_id.bytes());
+    history_hasher.update(transition_receipt_id.bytes());
+    let resulting_session_history =
+        FailureMarketSessionHistoryCommitmentV1::from_bytes(history_hasher.finalize().into());
+    require_live(resulting_session_history.bytes())?;
+    let facts = FailureMarketSessionCloseFactsV1 {
+        runtime_before,
+        series_link_before,
+        series_link_after,
+        session_before,
+        session_after,
+        interval_terminal_receipt_id,
+        previous_session_history,
+        resulting_session_history,
+        transition_receipt_id,
+    };
+    authority.authenticate_failure_market_session_close(facts)?;
+    let mut after = runtime;
+    after.phase = FailureMarketRuntimePhaseV1::IntervalClosed;
+    after.transition_sequence = next_sequence;
+    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] =
+        ProductContentId::from_bytes(series_link_after.bytes());
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] = session_after;
+    after.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] = interval_terminal_receipt_id;
+    after.session_ids[SESSION_HISTORY_COMMITMENT_INDEX_V1] =
+        ProductContentId::from_bytes(resulting_session_history.bytes());
+    after.validate_against_admission(admission)?;
+    Ok(FailureMarketSessionTransitionPlanV1 {
+        before: runtime,
+        after,
+        series_link_before: series_link,
+        series_link_after: series_link_after_value,
+        receipt_id: transition_receipt_id,
+    })
+}
+
+fn validate_session_descriptor(
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV1,
+    session: FailureMarketSessionDescriptorV1,
+) -> Result<()> {
+    let policy = admission.binding().facts();
+    let link = series_link.binding();
+    series_link.semantic_id()?;
+    require_live(session.series_plan_id.bytes())?;
+    require_live(session.source_occurrence_id.bytes())?;
+    require_live(session.schedule_id.bytes())?;
+    require_live(session.work_account_id.bytes())?;
+    require_live(session.replay_account_id.bytes())?;
+    require_live(session.session_state_commitment.bytes())?;
+    if series_link.active_failure_sessions() != 0
+        || link.market_instance_id != policy.market_instance_id
+        || link.generation != policy.generation
+        || link.series_plan_id != session.series_plan_id
+        || link.ordinal != session.ordinal
+        || link.source_occurrence_id != session.source_occurrence_id
+        || session.work_account_id == session.replay_account_id
+        || session.work_account_id == runtime.runtime_account_id
+        || session.replay_account_id == runtime.runtime_account_id
+        || session.work_account_id == admission.root_funding().facts().root_account_id
+        || session.replay_account_id == admission.root_funding().facts().root_account_id
+        || session.work_account_id == runtime.root_funding.rent_refund_owner
+        || session.work_account_id == runtime.root_funding.neutral_sink
+        || session.replay_account_id == runtime.root_funding.rent_refund_owner
+        || session.replay_account_id == runtime.root_funding.neutral_sink
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn require_active_link(
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV1,
+) -> Result<()> {
+    let policy = admission.binding().facts();
+    let binding = series_link.binding();
+    let semantic_id = series_link.semantic_id()?;
+    if series_link.active_failure_sessions() == 0
+        || binding.market_instance_id != policy.market_instance_id
+        || binding.generation != policy.generation
+        || semantic_id.bytes() != runtime.series_link_authentication_id().bytes()
+        || runtime.active_session_pin_id().is_zero()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn hash_runtime_transition_prefix(
+    hasher: &mut Sha256,
+    runtime: FailureMarketRuntimeV1,
+    runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    next_sequence: u64,
+) {
+    hasher.update(runtime.policy_binding_id.bytes());
+    hasher.update(runtime.runtime_account_id.bytes());
+    hasher.update(runtime_before.bytes());
+    hasher.update(runtime.transition_sequence.to_le_bytes());
+    hasher.update(next_sequence.to_le_bytes());
+}
+
+fn hash_session_descriptor(hasher: &mut Sha256, session: FailureMarketSessionDescriptorV1) {
+    hasher.update(session.series_plan_id.bytes());
+    hasher.update(session.ordinal.to_le_bytes());
+    hasher.update(session.source_occurrence_id.bytes());
+    hasher.update(session.schedule_id.bytes());
+    hasher.update(session.work_account_id.bytes());
+    hasher.update(session.replay_account_id.bytes());
+    hasher.update(session.session_state_commitment.bytes());
+}
+
 /// Admit the distinct mutable Market runtime from exact Product and liveness
-/// authority. The founder quote capitalizes the sole shared Recovery custody;
-/// later converging Series cannot replace it or alter runtime identity.
-#[allow(clippy::too_many_arguments)]
+/// authority. Per-Series schedules are intentionally absent; Begin pins the
+/// exact subordinate session which owns its own schedule and recovery state.
 pub fn admit_failure_market_runtime_v1<A: AuthenticatedFailureMarketRuntimeAdmissionV1 + ?Sized>(
     authority: &A,
     admission: FailureMarketAdmissionStateV1,
     runtime_account_id: FailureMarketAccountIdV1,
     foundation_receipt_id: ProductContentId,
     root_funding: FailureMarketRuntimeRootFundingFactsV1,
-    schedule: CompiledScheduleV1,
-    funding_quote: SeriesFundingQuoteV1,
-    creation_clock: RecoveryClock,
 ) -> Result<(
     FailureMarketRuntimeV1,
     FailureMarketRuntimeAdmissionReceiptV1,
 )> {
     let policy = admission.binding().facts();
-    let funding = admission.recovery_funding().facts();
-    let external_funding = ExternalRecoveryFundingV1 {
-        policy_id: RecoveryIdentity::from_bytes(policy.liveness_policy_id.bytes()),
-        lifecycle_id: RecoveryIdentity::from_bytes(policy.liveness_lifecycle_id.bytes()),
-        recovery_account_id: RecoveryIdentity::from_bytes(
-            policy.recovery_compartment_account_id.bytes(),
-        ),
-        semantic_owner: RecoveryIdentity::from_bytes(policy.recovery_receipt_program_id.bytes()),
-        payer: RecoveryIdentity::from_bytes(policy.recovery_refund_owner.bytes()),
-        neutral_sink: RecoveryIdentity::from_bytes(policy.neutral_sink.bytes()),
-        receipt_program_id: RecoveryIdentity::from_bytes(
-            policy.recovery_receipt_program_id.bytes(),
-        ),
-        quote_schedule_id: RecoveryIdentity::from_bytes(policy.recovery_quote_schedule_id.bytes()),
-        generation: policy.generation,
-        capitalized_work_lamports: funding.work_principal_lamports,
-        rent_principal_lamports: funding.rent_principal_lamports,
-        maximum_calls: funding.maximum_calls,
-        maximum_lamports_per_call: funding.maximum_lamports_per_call,
-    };
-    let recovery = ExternalRecoveryStateV1::admit(
-        policy.market_instance_id,
-        policy.recovery_policy_id,
-        schedule,
-        funding_quote,
-        ExternalRecoveryAdmissionV1 {
-            state_id: RecoveryIdentity::from_bytes(runtime_account_id.bytes()),
-            generation: policy.generation,
-            funding: external_funding,
-        },
-        creation_clock,
-    )?;
     let runtime = FailureMarketRuntimeV1 {
         policy_binding_id: admission.binding().id(),
         admission_state_id: admission.id()?,
         runtime_account_id,
         foundation_receipt_id,
         root_funding,
-        recovery,
+        recovery_funding_receipt_id: admission.recovery_funding().id(),
         phase: FailureMarketRuntimePhaseV1::Ready,
         transition_sequence: 0,
         session_ids: [ProductContentId::ZERO; SESSION_ID_COUNT_V1],
@@ -566,8 +1133,6 @@ pub fn admit_failure_market_runtime_v1<A: AuthenticatedFailureMarketRuntimeAdmis
         foundation_receipt_id,
         root_funding,
         recovery_funding_receipt_id: admission.recovery_funding().id(),
-        recovery_schedule_id: schedule_id(schedule)?,
-        recovery_funding_quote_id: recovery.funding_quote_id(),
         runtime_state_commitment: runtime.commitment()?,
     };
     authority.authenticate_failure_market_runtime_admission(facts)?;
@@ -584,24 +1149,6 @@ pub fn admit_failure_market_runtime_v1<A: AuthenticatedFailureMarketRuntimeAdmis
     ))
 }
 
-fn schedule_id(schedule: CompiledScheduleV1) -> Result<FailureMarketRecoveryScheduleIdV1> {
-    schedule.validate()?;
-    let mut hasher = Sha256::new();
-    hasher.update(SCHEDULE_DOMAIN_V1);
-    hasher.update(schedule.start_bucket.to_le_bytes());
-    hasher.update(schedule.end_bucket_exclusive.to_le_bytes());
-    hasher.update(schedule.primary_maturity_bucket_exclusive.to_le_bytes());
-    hasher.update([schedule.recovery_attempt_count]);
-    for attempt in schedule.recovery_attempts {
-        hasher.update(attempt.repair_generation.to_le_bytes());
-        hasher.update(attempt.opens_at_bucket.to_le_bytes());
-        hasher.update(attempt.closes_at_bucket.to_le_bytes());
-    }
-    Ok(FailureMarketRecoveryScheduleIdV1::from_bytes(
-        hasher.finalize().into(),
-    ))
-}
-
 fn hash_admission_facts(hasher: &mut Sha256, facts: FailureMarketRuntimeAdmissionFactsV1) {
     hasher.update(facts.failure_policy_binding_id.bytes());
     hasher.update(facts.market_instance_id.bytes());
@@ -615,8 +1162,6 @@ fn hash_admission_facts(hasher: &mut Sha256, facts: FailureMarketRuntimeAdmissio
     hasher.update(facts.root_funding.donation_floor_lamports.to_le_bytes());
     hasher.update(facts.root_funding.observed_balance_lamports.to_le_bytes());
     hasher.update(facts.recovery_funding_receipt_id.bytes());
-    hasher.update(facts.recovery_schedule_id.bytes());
-    hasher.update(facts.recovery_funding_quote_id.bytes());
     hasher.update(facts.runtime_state_commitment.bytes());
 }
 
@@ -686,7 +1231,6 @@ const _: () = assert!(
         + PREFIX_ID_COUNT_V1 * ID_BYTES_V1
         + ROOT_FUNDING_ID_COUNT_V1 * ID_BYTES_V1
         + ROOT_FUNDING_AMOUNT_COUNT_V1 * 8
-        + EXTERNAL_RECOVERY_STATE_V1_BYTES
         + PHASE_BYTES_V1
         + 8
         + SESSION_ID_COUNT_V1 * ID_BYTES_V1
@@ -703,12 +1247,16 @@ mod tests {
         FailureMarketPolicyFactsV1, FailureMarketPrepaidDebitReceiptIdV1,
         FailureMarketRecoveryFundingFactsV1, FailureMarketRootFundingFactsV1,
     };
+    use clutch_evidence_recovery::Identity as RecoveryIdentity;
     use clutch_liveness::Id as LivenessId;
     use clutch_product_series::{
-        AbsoluteRecoveryAttemptV1, ComponentDebitV1, EvidenceOnlyRecoveryPolicyId,
-        MarketGenesisProfileV2Id, NativeClaimBasisId, PriceMeasurePolicyV1Id, ProductTemplateId,
+        ComponentDebitV1, EvidenceOnlyRecoveryPolicyId, MarketGenesisProfileV2Id,
+        NativeClaimBasisId, PriceMeasurePolicyV1Id, ProductTemplateId,
         QuantizedIntervalConsensusProfileV1Id, RecoveryAttemptFundingV1,
-        RegistryCapabilityProfileV2Id, RegistryProgramReleaseV1Id, MAX_RECOVERY_ATTEMPTS,
+        RegistryCapabilityProfileV2Id, RegistryProgramReleaseV1Id, SeriesFundingQuoteV1,
+        SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id, SeriesLinkObligationConfigurationV1,
+        SeriesLinkObligationStatusV1, SeriesMarketDispositionV1, SeriesMarketLinkBindingV1,
+        MAX_RECOVERY_ATTEMPTS,
     };
     use clutch_source_plane_v3::ContentId as SourceContentId;
 
@@ -781,19 +1329,41 @@ mod tests {
 
     impl AuthenticatedFailureMarketRuntimeAdmissionV1 for Refusing {}
 
-    fn schedule() -> CompiledScheduleV1 {
-        let mut attempts = [AbsoluteRecoveryAttemptV1::ZERO; MAX_RECOVERY_ATTEMPTS];
-        attempts[0] = AbsoluteRecoveryAttemptV1 {
-            repair_generation: 2,
-            opens_at_bucket: 10,
-            closes_at_bucket: 20,
-        };
-        CompiledScheduleV1 {
-            start_bucket: 1,
-            end_bucket_exclusive: 5,
-            primary_maturity_bucket_exclusive: 10,
-            recovery_attempt_count: 1,
-            recovery_attempts: attempts,
+    #[derive(Clone, Copy, Debug)]
+    struct RefusingSession;
+
+    impl AuthenticatedFailureMarketSessionV1 for RefusingSession {}
+
+    #[derive(Clone, Copy, Debug)]
+    struct AcceptingSession;
+
+    impl AuthenticatedFailureMarketSessionV1 for AcceptingSession {
+        fn authenticate_failure_market_session_begin(
+            &self,
+            _expected: FailureMarketSessionBeginFactsV1,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn authenticate_failure_market_session_advance(
+            &self,
+            _expected: FailureMarketSessionAdvanceFactsV1,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn authenticate_failure_market_session_resolution(
+            &self,
+            _expected: FailureMarketSessionResolutionFactsV1,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn authenticate_failure_market_session_close(
+            &self,
+            _expected: FailureMarketSessionCloseFactsV1,
+        ) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -824,7 +1394,7 @@ mod tests {
         }
     }
 
-    fn admission() -> (FailureMarketAdmissionStateV1, SeriesFundingQuoteV1) {
+    fn admission() -> FailureMarketAdmissionStateV1 {
         let recovery_policy_id = EvidenceOnlyRecoveryPolicyId::from_bytes([4; 32]);
         let quote = quote(recovery_policy_id);
         let quote_id = quote.id().unwrap();
@@ -896,10 +1466,7 @@ mod tests {
         let root =
             admit_failure_market_root_funding_v1(&ExactRoot(root_facts), binding, root_facts)
                 .unwrap();
-        (
-            FailureMarketAdmissionStateV1::from_receipts(binding, recovery, root).unwrap(),
-            quote,
-        )
+        FailureMarketAdmissionStateV1::from_receipts(binding, recovery, root).unwrap()
     }
 
     fn runtime_root_funding() -> FailureMarketRuntimeRootFundingFactsV1 {
@@ -912,9 +1479,86 @@ mod tests {
         }
     }
 
+    fn active_series_link() -> SeriesMarketLinkV1 {
+        let configuration = SeriesLinkObligationConfigurationV1 {
+            capability_profile_id: ProductContentId::from_bytes([108; 32]),
+            attachment_plan_id: ProductContentId::from_bytes([107; 32]),
+            initial_statuses: [
+                SeriesLinkObligationStatusV1::CapabilityDisabled,
+                SeriesLinkObligationStatusV1::EnabledNeverFounded,
+                SeriesLinkObligationStatusV1::Live,
+                SeriesLinkObligationStatusV1::CapabilityDisabled,
+            ],
+        };
+        let binding = SeriesMarketLinkBindingV1 {
+            series_plan_id: SeriesPlanV5Id::from_bytes([101; 32]),
+            ordinal: 4,
+            market_instance_id: MarketInstanceV2Id::from_bytes([1; 32]),
+            market_root_account_id: ProductContentId::from_bytes([103; 32]),
+            market_binding_id: ProductContentId::from_bytes([104; 32]),
+            disposition: SeriesMarketDispositionV1::Founder,
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes([105; 32]),
+            funding_quote_id: SeriesFundingQuoteV2Id::from_bytes([106; 32]),
+            attachment_plan_id: ProductContentId::from_bytes([107; 32]),
+            capability_profile_id: ProductContentId::from_bytes([108; 32]),
+            obligation_configuration_id: configuration.id().unwrap(),
+            compiler_output_id: ProductContentId::from_bytes([109; 32]),
+            source_occurrence_id: SourceOccurrenceV1Id::from_bytes([110; 32]),
+            source_occurrence_account_id: ProductContentId::from_bytes([111; 32]),
+            source_occurrence_account_authentication_id: ProductContentId::from_bytes([112; 32]),
+            source_occurrence_receipt_id: ProductContentId::from_bytes([113; 32]),
+            source_release_id: ProductContentId::from_bytes([114; 32]),
+            source_route_id: ProductContentId::from_bytes([115; 32]),
+            clock_policy_id: ProductContentId::from_bytes([116; 32]),
+            source_plane_contract_id: ProductContentId::from_bytes([117; 32]),
+            source_spec_id: ProductContentId::from_bytes([118; 32]),
+            window_spec_id: ProductContentId::from_bytes([119; 32]),
+            statistic_key_id: ProductContentId::from_bytes([120; 32]),
+            funding_state_account_id: ProductContentId::from_bytes([121; 32]),
+            funding_debit_receipt_id: ProductContentId::from_bytes([122; 32]),
+            rent_refund_owner: ProductContentId::from_bytes([123; 32]),
+            neutral_lamport_sink: ProductContentId::from_bytes([124; 32]),
+            generation: 1,
+            source_repair_generation: 1,
+            funding_transition_sequence: 1,
+        };
+        SeriesMarketLinkV1::initialize_pending(binding, configuration, 1, 0)
+            .unwrap()
+            .activate(1, ProductContentId::from_bytes([125; 32]))
+            .unwrap()
+    }
+
+    fn admitted_runtime(admission: FailureMarketAdmissionStateV1) -> FailureMarketRuntimeV1 {
+        FailureMarketRuntimeV1 {
+            policy_binding_id: admission.binding().id(),
+            admission_state_id: admission.id().unwrap(),
+            runtime_account_id: FailureMarketAccountIdV1::from_bytes(
+                admission.binding().facts().recovery_state_id.bytes(),
+            ),
+            foundation_receipt_id: ProductContentId::from_bytes([92; 32]),
+            root_funding: runtime_root_funding(),
+            recovery_funding_receipt_id: admission.recovery_funding().id(),
+            phase: FailureMarketRuntimePhaseV1::Ready,
+            transition_sequence: 0,
+            session_ids: [ProductContentId::ZERO; SESSION_ID_COUNT_V1],
+        }
+    }
+
+    fn session(seed: u8) -> FailureMarketSessionDescriptorV1 {
+        FailureMarketSessionDescriptorV1 {
+            series_plan_id: SeriesPlanV5Id::from_bytes([101; 32]),
+            ordinal: 4,
+            source_occurrence_id: SourceOccurrenceV1Id::from_bytes([110; 32]),
+            schedule_id: FailureMarketSessionScheduleIdV1::from_bytes([seed; 32]),
+            work_account_id: FailureMarketAccountIdV1::from_bytes([seed.wrapping_add(1); 32]),
+            replay_account_id: FailureMarketAccountIdV1::from_bytes([seed.wrapping_add(2); 32]),
+            session_state_commitment: ProductContentId::from_bytes([seed.wrapping_add(3); 32]),
+        }
+    }
+
     #[test]
     fn market_runtime_round_trips_and_refuses_root_alias_or_fake_authority() {
-        let (admission, quote) = admission();
+        let admission = admission();
         let runtime_account = FailureMarketAccountIdV1::from_bytes(
             admission.binding().facts().recovery_state_id.bytes(),
         );
@@ -925,86 +1569,15 @@ mod tests {
             runtime_account,
             foundation_receipt,
             runtime_root_funding(),
-            schedule(),
-            quote,
-            RecoveryClock {
-                slot: 1,
-                unix_timestamp: 1,
-                current_bucket: 1,
-            },
         );
         assert_eq!(initial, Err(Error::BindingMismatch));
-
-        let engine = ExternalRecoveryStateV1::admit(
-            admission.binding().facts().market_instance_id,
-            admission.binding().facts().recovery_policy_id,
-            schedule(),
-            quote,
-            ExternalRecoveryAdmissionV1 {
-                state_id: RecoveryIdentity::from_bytes(runtime_account.bytes()),
-                generation: 1,
-                funding: ExternalRecoveryFundingV1 {
-                    policy_id: RecoveryIdentity::from_bytes(
-                        admission.binding().facts().liveness_policy_id.bytes(),
-                    ),
-                    lifecycle_id: RecoveryIdentity::from_bytes(
-                        admission.binding().facts().liveness_lifecycle_id.bytes(),
-                    ),
-                    recovery_account_id: RecoveryIdentity::from_bytes(
-                        admission
-                            .binding()
-                            .facts()
-                            .recovery_compartment_account_id
-                            .bytes(),
-                    ),
-                    semantic_owner: RecoveryIdentity::from_bytes(
-                        admission
-                            .binding()
-                            .facts()
-                            .recovery_receipt_program_id
-                            .bytes(),
-                    ),
-                    payer: RecoveryIdentity::from_bytes(
-                        admission.binding().facts().recovery_refund_owner.bytes(),
-                    ),
-                    neutral_sink: RecoveryIdentity::from_bytes(
-                        admission.binding().facts().neutral_sink.bytes(),
-                    ),
-                    receipt_program_id: RecoveryIdentity::from_bytes(
-                        admission
-                            .binding()
-                            .facts()
-                            .recovery_receipt_program_id
-                            .bytes(),
-                    ),
-                    quote_schedule_id: RecoveryIdentity::from_bytes(
-                        admission
-                            .binding()
-                            .facts()
-                            .recovery_quote_schedule_id
-                            .bytes(),
-                    ),
-                    generation: 1,
-                    capitalized_work_lamports: 1_000,
-                    rent_principal_lamports: 200,
-                    maximum_calls: 10,
-                    maximum_lamports_per_call: 100,
-                },
-            },
-            RecoveryClock {
-                slot: 1,
-                unix_timestamp: 1,
-                current_bucket: 1,
-            },
-        )
-        .unwrap();
         let expected_runtime = FailureMarketRuntimeV1 {
             policy_binding_id: admission.binding().id(),
             admission_state_id: admission.id().unwrap(),
             runtime_account_id: runtime_account,
             foundation_receipt_id: foundation_receipt,
             root_funding: runtime_root_funding(),
-            recovery: engine,
+            recovery_funding_receipt_id: admission.recovery_funding().id(),
             phase: FailureMarketRuntimePhaseV1::Ready,
             transition_sequence: 0,
             session_ids: [ProductContentId::ZERO; SESSION_ID_COUNT_V1],
@@ -1018,8 +1591,6 @@ mod tests {
             foundation_receipt_id: foundation_receipt,
             root_funding: runtime_root_funding(),
             recovery_funding_receipt_id: admission.recovery_funding().id(),
-            recovery_schedule_id: schedule_id(schedule()).unwrap(),
-            recovery_funding_quote_id: engine.funding_quote_id(),
             runtime_state_commitment: expected_runtime.commitment().unwrap(),
         };
         let (runtime, receipt) = admit_failure_market_runtime_v1(
@@ -1028,13 +1599,6 @@ mod tests {
             runtime_account,
             foundation_receipt,
             runtime_root_funding(),
-            schedule(),
-            quote,
-            RecoveryClock {
-                slot: 1,
-                unix_timestamp: 1,
-                current_bucket: 1,
-            },
         )
         .unwrap();
         assert_eq!(receipt.facts(), expected);
@@ -1057,15 +1621,95 @@ mod tests {
                 admission.root_funding().facts().root_account_id,
                 foundation_receipt,
                 runtime_root_funding(),
-                schedule(),
-                quote,
-                RecoveryClock {
-                    slot: 1,
-                    unix_timestamp: 1,
-                    current_bucket: 1,
-                },
             ),
             Err(Error::BindingMismatch)
         );
+
+        let session = FailureMarketSessionDescriptorV1 {
+            series_plan_id: SeriesPlanV5Id::from_bytes([101; 32]),
+            ordinal: 4,
+            source_occurrence_id: SourceOccurrenceV1Id::from_bytes([110; 32]),
+            schedule_id: FailureMarketSessionScheduleIdV1::from_bytes([126; 32]),
+            work_account_id: FailureMarketAccountIdV1::from_bytes([127; 32]),
+            replay_account_id: FailureMarketAccountIdV1::from_bytes([128; 32]),
+            session_state_commitment: ProductContentId::from_bytes([129; 32]),
+        };
+        assert_eq!(
+            plan_begin_failure_market_session_v1(
+                &RefusingSession,
+                runtime,
+                admission,
+                active_series_link(),
+                session,
+            ),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn closed_interval_reopens_without_overwriting_history_or_accepting_stale_plans() {
+        let admission = admission();
+        let mut runtime = admitted_runtime(admission);
+        let first_begin = plan_begin_failure_market_session_v1(
+            &AcceptingSession,
+            runtime,
+            admission,
+            active_series_link(),
+            session(126),
+        )
+        .unwrap();
+        let first_begin_receipt = first_begin.receipt_id();
+        runtime.commit_plan(first_begin).unwrap();
+        let first_link = first_begin.series_link_after();
+
+        let first_resolve = plan_resolve_failure_market_session_v1(
+            &AcceptingSession,
+            runtime,
+            admission,
+            first_link,
+            ProductContentId::from_bytes([140; 32]),
+            ProductContentId::from_bytes([141; 32]),
+        )
+        .unwrap();
+        runtime.commit_plan(first_resolve).unwrap();
+        let first_close = plan_close_failure_market_session_v1(
+            &AcceptingSession,
+            runtime,
+            admission,
+            first_link,
+            ProductContentId::from_bytes([142; 32]),
+            ProductContentId::from_bytes([143; 32]),
+        )
+        .unwrap();
+        runtime.commit_plan(first_close).unwrap();
+        assert_eq!(runtime.commit_plan(first_close), Err(Error::StalePlan));
+        let first_history = runtime.session_history_commitment();
+        assert_ne!(first_history.bytes(), [0; 32]);
+
+        let second_begin = plan_begin_failure_market_session_v1(
+            &AcceptingSession,
+            runtime,
+            admission,
+            active_series_link(),
+            session(150),
+        )
+        .unwrap();
+        assert_ne!(second_begin.receipt_id(), first_begin_receipt);
+        let second_active = second_begin.resulting_runtime();
+        assert_eq!(second_active.session_history_commitment(), first_history);
+        assert!(second_active.session_resolution_receipt_id().is_zero());
+        assert!(second_active.interval_terminal_receipt_id().is_zero());
+        runtime.commit_plan(second_begin).unwrap();
+        assert_eq!(runtime.commit_plan(second_begin), Err(Error::StalePlan));
+
+        let mut overwritten = second_active;
+        overwritten.phase = FailureMarketRuntimePhaseV1::IntervalClosed;
+        overwritten.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = ProductContentId::ZERO;
+        overwritten.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1] =
+            ProductContentId::from_bytes([151; 32]);
+        overwritten.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] =
+            ProductContentId::from_bytes([152; 32]);
+        overwritten.session_ids[SESSION_HISTORY_COMMITMENT_INDEX_V1] = ProductContentId::ZERO;
+        assert_eq!(overwritten.validate(), Err(Error::WrongPhase));
     }
 }

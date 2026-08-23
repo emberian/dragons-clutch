@@ -278,6 +278,19 @@ pub trait PortfolioBookAdapterV2 {
     ) -> Option<EconomicBookV2>;
 }
 
+/// Frame-bounded projection boundary for allocation-owning adapters.
+///
+/// The caller supplies storage for the complete fixed-capacity book. Success
+/// must fill that storage solely from the same authenticated page bytes used
+/// by [`PortfolioBookAdapterV2::authenticate_book_account`].
+pub trait PortfolioBookInPlaceAdapterV2: PortfolioBookAdapterV2 {
+    fn project_complete_economic_book_into(
+        &self,
+        expected: &PortfolioCompleteBookProjectionExpectationV2,
+        output: &mut EconomicBookV2,
+    ) -> bool;
+}
+
 /// Private proof that one complete General page set equals one RelationV2 book.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedCompletePortfolioBookV2 {
@@ -288,6 +301,55 @@ pub struct AuthenticatedCompletePortfolioBookV2 {
 impl AuthenticatedCompletePortfolioBookV2 {
     pub const fn economic_book(&self) -> &EconomicBookV2 {
         &self.economic_book
+    }
+
+    pub const fn order_set_digest(&self) -> PortfolioBookIdentityV2 {
+        self.page_set.order_set_digest
+    }
+
+    pub const fn settlement_root_account_id(&self) -> PortfolioBookIdentityV2 {
+        self.page_set.settlement_root_account_id
+    }
+
+    pub const fn retained_feed_account_id(&self) -> PortfolioBookIdentityV2 {
+        self.page_set.retained_feed_account_id
+    }
+
+    pub const fn settlement_candidate_id(&self) -> PortfolioBookIdentityV2 {
+        self.page_set.settlement_candidate_id
+    }
+
+    pub const fn settlement_witness_id(&self) -> PortfolioBookIdentityV2 {
+        self.page_set.settlement_witness_id
+    }
+
+    pub const fn traversal_index(&self) -> u16 {
+        self.page_set.traversal_index
+    }
+
+    pub const fn page_count(&self) -> u8 {
+        self.page_set.page_count
+    }
+
+    pub const fn order_count(&self) -> u8 {
+        self.page_set.order_count
+    }
+}
+
+/// Borrowed private proof over adapter-owned complete-book storage.
+///
+/// This is the SBF-safe equivalent of [`AuthenticatedCompletePortfolioBookV2`].
+/// Its fields remain private, so a caller cannot wrap an untrusted book after
+/// the account/page authentication constructor returns.
+#[derive(Debug, Eq, PartialEq)]
+pub struct AuthenticatedCompletePortfolioBookRefV2<'a> {
+    page_set: PortfolioBookPageSetRecordV2,
+    economic_book: &'a EconomicBookV2,
+}
+
+impl AuthenticatedCompletePortfolioBookRefV2<'_> {
+    pub const fn economic_book(&self) -> &EconomicBookV2 {
+        self.economic_book
     }
 
     pub const fn order_set_digest(&self) -> PortfolioBookIdentityV2 {
@@ -361,6 +423,35 @@ pub fn authenticate_complete_portfolio_book_for_root_transition_v2<A: PortfolioB
     )
 }
 
+/// Authenticate a writable-root complete book directly into caller-owned
+/// storage and return only a borrowed private capability.
+pub fn authenticate_complete_portfolio_book_for_root_transition_into_v2<
+    'a,
+    A: PortfolioBookInPlaceAdapterV2,
+>(
+    adapter: &A,
+    owner_program_id: PortfolioBookIdentityV2,
+    domain: &EconomicDomainV2,
+    page_set: PortfolioBookPageSetRecordV2,
+    output: &'a mut EconomicBookV2,
+) -> Result<AuthenticatedCompletePortfolioBookRefV2<'a>, PortfolioBookAuthorityErrorV2> {
+    let projection = authenticate_complete_portfolio_book_accounts_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        page_set,
+        true,
+    )?;
+    if !adapter.project_complete_economic_book_into(&projection, output) {
+        return Err(PortfolioBookAuthorityErrorV2::ProjectionAuthenticationFailed);
+    }
+    validate_projected_complete_book_v2(output, domain, projection.page_set.order_count)?;
+    Ok(AuthenticatedCompletePortfolioBookRefV2 {
+        page_set: projection.page_set,
+        economic_book: output,
+    })
+}
+
 fn authenticate_complete_portfolio_book_with_root_privilege_v2<A: PortfolioBookAdapterV2>(
     adapter: &A,
     owner_program_id: PortfolioBookIdentityV2,
@@ -368,6 +459,34 @@ fn authenticate_complete_portfolio_book_with_root_privilege_v2<A: PortfolioBookA
     page_set: PortfolioBookPageSetRecordV2,
     root_writable: bool,
 ) -> Result<AuthenticatedCompletePortfolioBookV2, PortfolioBookAuthorityErrorV2> {
+    let projection = authenticate_complete_portfolio_book_accounts_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        page_set,
+        root_writable,
+    )?;
+    let economic_book = adapter
+        .project_complete_economic_book(&projection)
+        .ok_or(PortfolioBookAuthorityErrorV2::ProjectionAuthenticationFailed)?;
+    validate_projected_complete_book_v2(
+        &economic_book,
+        domain,
+        projection.page_set.order_count,
+    )?;
+    Ok(AuthenticatedCompletePortfolioBookV2 {
+        page_set: projection.page_set,
+        economic_book,
+    })
+}
+
+fn authenticate_complete_portfolio_book_accounts_v2<A: PortfolioBookAdapterV2>(
+    adapter: &A,
+    owner_program_id: PortfolioBookIdentityV2,
+    domain: &EconomicDomainV2,
+    page_set: PortfolioBookPageSetRecordV2,
+    root_writable: bool,
+) -> Result<PortfolioCompleteBookProjectionExpectationV2, PortfolioBookAuthorityErrorV2> {
     page_set.validate()?;
     domain
         .validate()
@@ -431,20 +550,21 @@ fn authenticate_complete_portfolio_book_with_root_privilege_v2<A: PortfolioBookA
         }
         page += 1;
     }
-    let projection = PortfolioCompleteBookProjectionExpectationV2 { page_set };
-    let economic_book = adapter
-        .project_complete_economic_book(&projection)
-        .ok_or(PortfolioBookAuthorityErrorV2::ProjectionAuthenticationFailed)?;
+    Ok(PortfolioCompleteBookProjectionExpectationV2 { page_set })
+}
+
+fn validate_projected_complete_book_v2(
+    economic_book: &EconomicBookV2,
+    domain: &EconomicDomainV2,
+    order_count: u8,
+) -> Result<(), PortfolioBookAuthorityErrorV2> {
     economic_book
         .validate(domain)
         .map_err(PortfolioBookAuthorityErrorV2::Economic)?;
-    if economic_book.len != page_set.order_count {
+    if economic_book.len != order_count {
         return Err(PortfolioBookAuthorityErrorV2::ProjectedOrderCountMismatch);
     }
-    Ok(AuthenticatedCompletePortfolioBookV2 {
-        page_set,
-        economic_book,
-    })
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -36,6 +36,7 @@ use clutch_batch::relation_v2::{
     price_semantics_digest_v2, verify_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2,
     EconomicDomainV2, EconomicErrorV2, PricePreconditionV2, VerifiedEconomicsV2,
 };
+use clutch_batch::dealer_leg_v2::DealerErrorV2;
 use clutch_general_v2_contract::{
     candidate_bundle_digest_v1, candidate_feed_tail_v2, economic_domain_digest_v2,
     encode_score_v2_q_cost_first_admitted_tie_v1,
@@ -65,12 +66,14 @@ use sha2::{Digest, Sha256};
 
 mod builder;
 mod candidate_cost;
+mod covered_dealer;
 mod settlement;
 mod settlement_root_projection;
 mod work;
 
 pub use builder::*;
 pub use candidate_cost::*;
+pub use covered_dealer::*;
 pub use settlement::*;
 pub use settlement_root_projection::*;
 pub use work::*;
@@ -491,6 +494,8 @@ pub enum GeneralV2RuntimeError {
     AtomMixture(AtomMixtureErrorV1),
     /// The owner-blind economic relation refused the candidate.
     Relation(EconomicErrorV2),
+    /// The complete book and signed quote failed the covered-Dealer relation.
+    Dealer(DealerErrorV2),
     /// Owner membership, immutable policy, or exact cost derivation refused.
     CandidateCost(CandidateCostErrorV1),
     /// This path admits Direct candidates only.
@@ -548,6 +553,12 @@ impl From<AtomMixtureErrorV1> for GeneralV2RuntimeError {
 impl From<EconomicErrorV2> for GeneralV2RuntimeError {
     fn from(value: EconomicErrorV2) -> Self {
         Self::Relation(value)
+    }
+}
+
+impl From<DealerErrorV2> for GeneralV2RuntimeError {
+    fn from(value: DealerErrorV2) -> Self {
+        Self::Dealer(value)
     }
 }
 

@@ -69,6 +69,10 @@ impl<'a> Writer<'a> {
         self.bytes(&value.to_le_bytes());
     }
 
+    pub(crate) fn u128(&mut self, value: u128) {
+        self.bytes(&value.to_le_bytes());
+    }
+
     pub(crate) fn i64(&mut self, value: i64) {
         self.bytes(&value.to_le_bytes());
     }
@@ -168,6 +172,10 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn u64(&mut self) -> u64 {
         u64::from_le_bytes(self.bytes())
+    }
+
+    pub(crate) fn u128(&mut self) -> u128 {
+        u128::from_le_bytes(self.bytes())
     }
 
     pub(crate) fn i64(&mut self) -> i64 {

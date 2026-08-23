@@ -15,7 +15,8 @@ use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 
 use super::collateral_position_v3::{
-    authenticate_general_position_replay_v1, GeneralPositionReplayAuthorityV1, RuntimeSha256,
+    authenticate_general_position_replay_v1, authenticate_general_position_replay_v2,
+    GeneralPositionReplayAuthorityV1, GeneralPositionReplayAuthorityV2, RuntimeSha256,
 };
 
 fn current_general_replay_sequence_v1(
@@ -77,12 +78,47 @@ pub(crate) fn authenticate_current_general_position_replay_v1(
     )
 }
 
+/// Authenticate the current ordinary-General Position/Replay pair under the
+/// sole live MarketBinding V2 account and derive the body-owned next ordinal.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_current_general_position_replay_v2(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+) -> Outcome<GeneralPositionReplayAuthorityV2> {
+    let replay_data = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let next_sequence = current_general_replay_sequence_v1(
+        &replay_data,
+        position_account.key.to_bytes(),
+        replay_account.key.to_bytes(),
+        market_runtime_account.key.to_bytes(),
+    )?;
+    drop(replay_data);
+
+    authenticate_general_position_replay_v2(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        next_sequence,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clutch_retirement::{
-        DeletableRentOwnerV1, Identity32V1, ReplayV3EnvelopeFields,
-        ReplayV3EnvelopeHeader, ReplayV3ExtensionSchema, PURPOSE_REPLAY_V3_PREFIX_BYTES,
+        DeletableRentOwnerV1, Identity32V1, ReplayV3EnvelopeFields, ReplayV3EnvelopeHeader,
+        ReplayV3ExtensionSchema, PURPOSE_REPLAY_V3_PREFIX_BYTES,
     };
 
     fn identity(byte: u8) -> Identity32V1 {
@@ -120,21 +156,9 @@ mod tests {
             current_general_replay_sequence_v1(&general, [1; 32], [2; 32], [3; 32]).unwrap(),
             11
         );
-        assert!(current_general_replay_sequence_v1(
-            &general,
-            [8; 32],
-            [2; 32],
-            [3; 32]
-        )
-        .is_err());
+        assert!(current_general_replay_sequence_v1(&general, [8; 32], [2; 32], [3; 32]).is_err());
 
         let dealer = replay_body(PositionPurposeV3::DealerFacility);
-        assert!(current_general_replay_sequence_v1(
-            &dealer,
-            [1; 32],
-            [2; 32],
-            [3; 32]
-        )
-        .is_err());
+        assert!(current_general_replay_sequence_v1(&dealer, [1; 32], [2; 32], [3; 32]).is_err());
     }
 }

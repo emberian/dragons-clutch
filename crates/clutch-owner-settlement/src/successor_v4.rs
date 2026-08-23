@@ -15,6 +15,7 @@ use crate::{
     AuthenticatedSettlementReceiptEndV4, AuthenticatedSettlementReceiptEndV5,
     SettlementReceiptDataIdV4, MAX_ORDERS,
 };
+use clutch_retirement::{PositionAccountV3, PositionV3Fields};
 
 /// Canonical General outer tag selecting an owner-settlement row.
 pub const OWNER_SETTLEMENT_OUTER_TAG_V4: u8 = 0x81;
@@ -1145,6 +1146,78 @@ impl OwnerSettlementDispositionV4 {
     pub const fn position_reserved_cash_atoms(&self) -> Amount {
         self.position_reserved_cash_atoms
     }
+}
+
+/// Recover the exact Position prestate consumed by one finalized V4 row.
+///
+/// Action 40 needs to authenticate the immediately preceding zero-fee
+/// action-38 Replay transition after that transition has overwritten the live
+/// Replay account. The finalized row is the semantic owner of the exact
+/// handoff, buyer debit, seller credit, and rounding boundary, so it can
+/// invert only the cash/reserved-cash portion of that transition. Every
+/// identity, generation, rent, purpose, Egg balance, and child count remains
+/// byte-identical to `position_poststate`.
+pub fn recover_owner_cash_position_prestate_v4(
+    finalized: OwnerSettlementAccumulatorV4,
+    position_poststate: PositionAccountV3,
+) -> Result<PositionAccountV3> {
+    finalized.validate()?;
+    position_poststate
+        .validate()
+        .map_err(|_| Error::InvalidAccount)?;
+    if finalized.state != OwnerSettlementStateV4::Finalized {
+        return Err(Error::Incomplete);
+    }
+    let expectation = finalized.expectation;
+    let total_debit_atoms = owner_debit_atoms(
+        expectation.expected_buy_price_units.value,
+        expectation.price_scale,
+        expectation.selected_fee_atoms,
+    )?;
+    let credit_atoms = owner_credit_atoms(
+        expectation.expected_sell_price_units.value,
+        expectation.price_scale,
+    )?;
+    let post = position_poststate.fields();
+    let cash_atoms = post
+        .cash_atoms
+        .checked_add(total_debit_atoms)
+        .ok_or(Error::ArithmeticOverflow)?
+        .checked_sub(credit_atoms)
+        .ok_or(Error::ArithmeticUnderflow)?;
+    let reserved_cash_atoms = post
+        .reserved_cash_atoms
+        .checked_add(finalized.buy_cash_handoff_atoms)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if cash_atoms < finalized.buy_cash_handoff_atoms
+        || reserved_cash_atoms < finalized.buy_cash_handoff_atoms
+    {
+        return Err(Error::InvariantViolation);
+    }
+    let recovered = PositionAccountV3::new(PositionV3Fields {
+        cash_atoms,
+        reserved_cash_atoms,
+        ..post
+    })
+    .map_err(|_| Error::InvalidAccount)?;
+    let forward_cash = cash_atoms
+        .checked_sub(finalized.buy_cash_handoff_atoms)
+        .and_then(|value| {
+            value.checked_add(
+                finalized
+                    .buy_cash_handoff_atoms
+                    .checked_sub(total_debit_atoms)?,
+            )
+        })
+        .and_then(|value| value.checked_add(credit_atoms))
+        .ok_or(Error::ArithmeticOverflow)?;
+    let forward_reserved = reserved_cash_atoms
+        .checked_sub(finalized.buy_cash_handoff_atoms)
+        .ok_or(Error::ArithmeticUnderflow)?;
+    if forward_cash != post.cash_atoms || forward_reserved != post.reserved_cash_atoms {
+        return Err(Error::InvariantViolation);
+    }
+    Ok(recovered)
 }
 
 /// Typed data identity of one exact finalized V4 owner row.

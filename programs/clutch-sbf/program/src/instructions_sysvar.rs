@@ -126,6 +126,24 @@ pub const POST_UPDATE_V2_ACCOUNT_COUNT: usize = 7;
 
 /// Width of an Anchor instruction discriminator.
 pub const ANCHOR_DISCRIMINATOR_LEN: usize = 8;
+/// Native Ed25519 signature-verification program.
+pub const ED25519_PROGRAM_ID: [u8; 32] = [
+    3, 125, 70, 214, 124, 147, 251, 190, 18, 249, 66, 143, 131, 141, 64, 255, 5, 112, 116,
+    73, 39, 244, 138, 100, 252, 202, 112, 68, 128, 0, 0, 0,
+];
+/// Exact canonical one-signature Ed25519 header width.
+pub const ED25519_ONE_SIGNATURE_HEADER_BYTES: usize = 16;
+/// Exact Ed25519 signature width.
+pub const ED25519_SIGNATURE_BYTES: usize = 64;
+/// Exact Ed25519 public-key width.
+pub const ED25519_PUBLIC_KEY_BYTES: usize = 32;
+/// Quote admissions sign one SHA-256 identity.
+pub const ED25519_QUOTE_MESSAGE_BYTES: usize = 32;
+/// Canonical one-key, one-digest Ed25519 instruction bytes.
+pub const ED25519_QUOTE_INSTRUCTION_BYTES: usize = ED25519_ONE_SIGNATURE_HEADER_BYTES
+    + ED25519_SIGNATURE_BYTES
+    + ED25519_PUBLIC_KEY_BYTES
+    + ED25519_QUOTE_MESSAGE_BYTES;
 
 /// Shortest data a well-formed Instructions sysvar can carry: the count, one
 /// offset entry, and the trailer.
@@ -187,6 +205,14 @@ pub enum InstructionsSysvarError {
     /// One adjacent-instruction account had different signer/writable flags
     /// from the reviewed ABI.
     WrongPostAccountFlags,
+    /// The adjacent instruction was not the native Ed25519 verifier.
+    WrongEd25519Program,
+    /// The Ed25519 instruction did not use the exact one-signature local-data ABI.
+    MalformedEd25519Instruction,
+    /// The verified Ed25519 public key was not the policy-selected authority.
+    WrongEd25519PublicKey,
+    /// The verified Ed25519 message was not the exact quote-admission identity.
+    WrongEd25519Message,
 }
 
 /// One decoded account meta of a serialized instruction.
@@ -402,6 +428,59 @@ impl<'a> InstructionsSysvarV1<'a> {
             .checked_sub(1)
             .ok_or(InstructionsSysvarError::NoPrecedingInstruction)?;
         self.instruction_at(index)
+    }
+
+    /// Authenticate an immediately preceding native Ed25519 verification of
+    /// one exact 32-byte quote-admission identity.
+    ///
+    /// The parser admits only the canonical SDK one-signature layout with all
+    /// offsets local to the Ed25519 instruction (`u16::MAX`). The native
+    /// precompile has already rejected a bad signature before this instruction
+    /// executes; this method binds that successful verification to the exact
+    /// policy key and message without accepting caller signature claims.
+    pub fn preceding_ed25519_quote_v1(
+        self,
+        expected_public_key: [u8; ED25519_PUBLIC_KEY_BYTES],
+        expected_message: [u8; ED25519_QUOTE_MESSAGE_BYTES],
+    ) -> Result<(), InstructionsSysvarError> {
+        let instruction = self.preceding_instruction()?;
+        if instruction.program_id != ED25519_PROGRAM_ID {
+            return Err(InstructionsSysvarError::WrongEd25519Program);
+        }
+        if instruction.account_count != 0 || instruction.data.len() != ED25519_QUOTE_INSTRUCTION_BYTES {
+            return Err(InstructionsSysvarError::MalformedEd25519Instruction);
+        }
+        let data = instruction.data;
+        let canonical_header = [
+            1u8,
+            0,
+            16,
+            0,
+            255,
+            255,
+            80,
+            0,
+            255,
+            255,
+            112,
+            0,
+            32,
+            0,
+            255,
+            255,
+        ];
+        if data[..ED25519_ONE_SIGNATURE_HEADER_BYTES] != canonical_header {
+            return Err(InstructionsSysvarError::MalformedEd25519Instruction);
+        }
+        let public_key_start = ED25519_ONE_SIGNATURE_HEADER_BYTES + ED25519_SIGNATURE_BYTES;
+        let message_start = public_key_start + ED25519_PUBLIC_KEY_BYTES;
+        if data[public_key_start..message_start] != expected_public_key {
+            return Err(InstructionsSysvarError::WrongEd25519PublicKey);
+        }
+        if data[message_start..] != expected_message {
+            return Err(InstructionsSysvarError::WrongEd25519Message);
+        }
+        Ok(())
     }
 
     /// Project the immediately preceding instruction onto [`ImmediatePostV1`].

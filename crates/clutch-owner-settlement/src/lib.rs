@@ -96,7 +96,7 @@ pub use successor_v4::{
     build_owner_settlement_expectation_basis_book_v4,
     derive_owner_finalized_row_data_id_v4, prepare_create_owner_settlement_account_v4,
     prepare_realize_owner_cash_semantic_v4, prepare_realize_owner_cash_v4,
-    project_owner_merge_delivery_v4,
+    project_owner_merge_delivery_v4, recover_owner_cash_position_prestate_v4,
     project_owner_receipt_end_to_owner_v4, project_owner_settlement_account_v4,
     OwnerCashRealizationPlanV4, OwnerCashRealizationSemanticPlanV4,
     OwnerFinalizedRowDataHashV4, OwnerFinalizedRowDataIdV4,
