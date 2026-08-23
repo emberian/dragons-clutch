@@ -1056,6 +1056,20 @@ pub struct AuthenticatedSeriesFundingAccountV2 {
     value: SeriesFundingAccountV2,
 }
 
+/// Private physical authority for the five release-selected collateral-vault
+/// rent principals persisted by FundingV2.
+///
+/// There is intentionally no public constructor. The future activation
+/// composer must mint this only after exact vault creation/postwrite and live
+/// Rent authentication; an instruction array can never become refundable
+/// principal merely by reaching the generic state constructor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSeriesCollateralVaultRentV2 {
+    series_plan_id: SeriesPlanV5Id,
+    principal_lamports: [u64; SERIES_FUNDING_COMPONENT_COUNT],
+    authentication_id: ContentId,
+}
+
 impl AuthenticatedSeriesFundingAccountV2 {
     /// Exact mutable funding PDA.
     pub const fn account(self) -> Pubkey {
@@ -3472,7 +3486,7 @@ pub fn create_series_registry_account_v2<'a>(
 /// Create the exact current funding account after a private activation
 /// authority has authenticated all six physical principal/donation deposits.
 #[allow(clippy::too_many_arguments)]
-pub fn create_series_funding_account_v2<'a>(
+fn create_series_funding_account_v2<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
     target: &AccountInfo<'a>,
@@ -3524,7 +3538,7 @@ pub fn activate_series_funding_account_v2<
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
     principal: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     donations: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
-    collateral_vault_rent_principal_lamports: [u64; SERIES_FUNDING_COMPONENT_COUNT],
+    collateral_vault_rent: AuthenticatedSeriesCollateralVaultRentV2,
 ) -> Outcome<(
     AuthenticatedSeriesRegistryAccountV2,
     AuthenticatedSeriesFundingAccountV2,
@@ -3542,7 +3556,13 @@ pub fn activate_series_funding_account_v2<
             && !registry.activation_consumed()
             && registry.value().compiler_bundle_id == compiler_bundle.bundle_id()
             && compiler_bundle.bundle().series_plan_id == registry.value().series_plan_id
-            && compiler_bundle.bundle().funding_terms_id == registry.value().funding_terms_id,
+            && compiler_bundle.bundle().funding_terms_id == registry.value().funding_terms_id
+            && collateral_vault_rent.series_plan_id == registry.value().series_plan_id
+            && !collateral_vault_rent.authentication_id.is_zero()
+            && collateral_vault_rent
+                .principal_lamports
+                .iter()
+                .all(|principal| *principal != 0),
         ClutchError::MismatchedState,
     )?;
     require_system_lamport_destination(
@@ -3564,7 +3584,7 @@ pub fn activate_series_funding_account_v2<
     let value = SeriesFundingAccountV2 {
         state,
         rent_principal_lamports: rent.minimum_balance(SERIES_FUNDING_ACCOUNT_BYTES_V2)?,
-        collateral_vault_rent_principal_lamports,
+        collateral_vault_rent_principal_lamports: collateral_vault_rent.principal_lamports,
         stored_bump,
     };
     create_series_funding_account_v2(
@@ -3899,7 +3919,7 @@ pub fn read_series_funding_account_v2(
 }
 
 /// Write one validated current successor without changing framing/rent facts.
-pub fn write_series_funding_state_v2(
+fn write_series_funding_state_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
