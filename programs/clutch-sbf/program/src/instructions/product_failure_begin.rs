@@ -18,11 +18,12 @@ use crate::instructions::product_market::{
     AuthenticatedMarketLifecycleRootV1, AuthenticatedSeriesMarketLinkV1,
 };
 use clutch_product_series::{
-    compile_ordinal_v5, CompiledProductSeriesBundleV5, CompiledScheduleV1, ContentId,
-    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    MarketInstanceV2Id, MarketLifecyclePhaseV1, NativeClaimBasisV1, PriceMeasurePolicyV1,
-    ProductTemplateV4, SeriesAttachmentPlanV4, SeriesMarketLinkPhaseV1, SeriesPlanV5,
-    SeriesPlanV5Id, SourceOccurrenceV1Id, MAX_RECOVERY_ATTEMPTS,
+    compile_ordinal_v5, derive_product_failure_begin_schedule_projection_v1,
+    CompiledProductSeriesBundleV5, CompiledScheduleV1, ContentId, EvidenceOnlyRecoveryPolicyV1,
+    MarketGenesisProfileV2, MarketInstancePreimageV2, MarketInstanceV2Id, MarketLifecyclePhaseV1,
+    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductFailureBeginCompilerProvenanceV1,
+    ProductFailureBeginScheduleProjectionV1Id, ProductTemplateV4, SeriesAttachmentPlanV4,
+    SeriesMarketLinkPhaseV1, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
@@ -30,27 +31,72 @@ use clutch_solana_layout::product_series::{
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-const PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/product/failure-begin-schedule-projection/v1\0";
 const PRODUCT_FAILURE_BEGIN_SCHEDULE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/product-failure-begin-schedule-authentication/v1\0";
-const COMPILED_SCHEDULE_BODY_BYTES_V1: usize = 25 + MAX_RECOVERY_ATTEMPTS * 24;
 
-/// Exact semantic provenance for the current compiler output.
+/// Testable exact equality partition for the current mutable/immutable graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProductFailureBeginCompilerProvenanceV1 {
-    registry_release_id: ContentId,
-    capability_profile_id: ContentId,
-    compiler_bundle_id: ContentId,
-    series_plan_id: SeriesPlanV5Id,
-    ordinal: u32,
-    market_instance_id: MarketInstanceV2Id,
-    product_template_id: ContentId,
-    native_claim_basis_id: ContentId,
-    recovery_policy_id: ContentId,
-    price_measure_policy_id: ContentId,
-    market_genesis_profile_id: ContentId,
-    attachment_plan_id: ContentId,
+struct ProductFailureBeginGraphJoinV1 {
+    registry_terms: ContentId,
+    bundle_terms: ContentId,
+    link_terms: ContentId,
+    bundle_quote: ContentId,
+    link_quote: ContentId,
+    attachment_quote: ContentId,
+    bundle_attachment: ContentId,
+    link_attachment: ContentId,
+    attachment_semantic: ContentId,
+    registry_release: ContentId,
+    projection_release: ContentId,
+    bundle_release: ContentId,
+    root_release: ContentId,
+    registry_profile: ContentId,
+    projection_profile: ContentId,
+    bundle_profile: ContentId,
+    link_profile: ContentId,
+    root_profile: ContentId,
+    bundle_source_release: ContentId,
+    link_source_release: ContentId,
+    root_source_release: ContentId,
+    bundle_source_plane: ContentId,
+    link_source_plane: ContentId,
+    root_source_plane: ContentId,
+    bundle_source_spec: ContentId,
+    link_source_spec: ContentId,
+    root_source_spec: ContentId,
+    link_source_route: ContentId,
+    root_source_route: ContentId,
+    link_clock_policy: ContentId,
+    root_clock_policy: ContentId,
+}
+
+impl ProductFailureBeginGraphJoinV1 {
+    fn validate(self) -> Outcome<()> {
+        require(
+            self.registry_terms == self.bundle_terms
+                && self.registry_terms == self.link_terms
+                && self.bundle_quote == self.link_quote
+                && self.bundle_quote == self.attachment_quote
+                && self.bundle_attachment == self.link_attachment
+                && self.bundle_attachment == self.attachment_semantic
+                && self.registry_release == self.projection_release
+                && self.registry_release == self.bundle_release
+                && self.registry_release == self.root_release
+                && self.registry_profile == self.projection_profile
+                && self.registry_profile == self.bundle_profile
+                && self.registry_profile == self.link_profile
+                && self.registry_profile == self.root_profile
+                && self.bundle_source_release == self.link_source_release
+                && self.bundle_source_release == self.root_source_release
+                && self.bundle_source_plane == self.link_source_plane
+                && self.bundle_source_plane == self.root_source_plane
+                && self.bundle_source_spec == self.link_source_spec
+                && self.bundle_source_spec == self.root_source_spec
+                && self.link_source_route == self.root_source_route
+                && self.link_clock_policy == self.root_clock_policy,
+            ClutchError::MismatchedState,
+        )
+    }
 }
 
 /// Product-private exact current schedule projection for one subordinate Begin.
@@ -61,7 +107,7 @@ struct ProductFailureBeginCompilerProvenanceV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedProductFailureBeginScheduleV1 {
     id: ContentId,
-    schedule_projection_id: ContentId,
+    schedule_projection_id: ProductFailureBeginScheduleProjectionV1Id,
     schedule: CompiledScheduleV1,
     root_account: Pubkey,
     root_authentication_id: ContentId,
@@ -82,7 +128,7 @@ impl AuthenticatedProductFailureBeginScheduleV1 {
         self.id
     }
 
-    pub(crate) const fn schedule_projection_id(self) -> ContentId {
+    pub(crate) const fn schedule_projection_id(self) -> ProductFailureBeginScheduleProjectionV1Id {
         self.schedule_projection_id
     }
 
@@ -306,7 +352,8 @@ pub(crate) fn authenticate_product_failure_begin_schedule_v1<'root, 'link>(
         attachment_plan_id: attachment.semantic_id(),
     };
     let schedule_projection_id =
-        derive_product_failure_begin_schedule_projection_id_v1(compiled.schedule, provenance)?;
+        derive_product_failure_begin_schedule_projection_v1(compiled.schedule, provenance)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             PRODUCT_FAILURE_BEGIN_SCHEDULE_AUTHENTICATION_DOMAIN_V1,
@@ -377,6 +424,40 @@ fn require_current_product_failure_begin_graph_v1(
     let link_binding = link_state.binding();
     let bundle_value = bundle.value();
     let projection = registry.projection();
+    ProductFailureBeginGraphJoinV1 {
+        registry_terms: registry.funding_terms_id().content_id(),
+        bundle_terms: bundle_value.funding_terms_id.content_id(),
+        link_terms: link_binding.funding_terms_id.content_id(),
+        bundle_quote: bundle_value.funding_quote_id.content_id(),
+        link_quote: link_binding.funding_quote_id.content_id(),
+        attachment_quote: attachment.value().funding_quote_id.content_id(),
+        bundle_attachment: bundle_value.attachment_plan_id.content_id(),
+        link_attachment: link_binding.attachment_plan_id,
+        attachment_semantic: attachment.semantic_id(),
+        registry_release: registry.registry_release_id(),
+        projection_release: projection.registry_release_id,
+        bundle_release: bundle_value.registry_release_id,
+        root_release: root_binding.registry_release_id,
+        registry_profile: registry.capability_profile_id(),
+        projection_profile: projection.capability_profile_id,
+        bundle_profile: bundle_value.capability_profile_id.content_id(),
+        link_profile: link_binding.capability_profile_id,
+        root_profile: root_binding.capability_profile_id,
+        bundle_source_release: bundle_value.source_release_manifest_id,
+        link_source_release: link_binding.source_release_id,
+        root_source_release: root_binding.source_release_id,
+        bundle_source_plane: bundle_value.source_plane_contract_id,
+        link_source_plane: link_binding.source_plane_contract_id,
+        root_source_plane: root_binding.source_plane_contract_id,
+        bundle_source_spec: bundle_value.source_spec_id,
+        link_source_spec: link_binding.source_spec_id,
+        root_source_spec: root_binding.source_spec_id,
+        link_source_route: link_binding.source_route_id,
+        root_source_route: root_binding.source_route_id,
+        link_clock_policy: link_binding.clock_policy_id,
+        root_clock_policy: root_binding.clock_policy_id,
+    }
+    .validate()?;
     require(
         !root.is_writable()
             && link.is_writable()
@@ -392,20 +473,7 @@ fn require_current_product_failure_begin_graph_v1(
             && link_binding.generation == root_binding.generation
             && registry.series_plan_id() == link_binding.series_plan_id
             && registry.compiler_bundle_id() == bundle.semantic_id()
-            && registry.funding_terms_id() == bundle_value.funding_terms_id
-            && registry.funding_terms_id() == link_binding.funding_terms_id
-            && registry.registry_release_id() == root_binding.registry_release_id
-            && registry.capability_profile_id() == root_binding.capability_profile_id
-            && projection.registry_release_id == root_binding.registry_release_id
-            && projection.capability_profile_id == root_binding.capability_profile_id
-            && link_binding.capability_profile_id == root_binding.capability_profile_id
-            && bundle_value.registry_release_id == root_binding.registry_release_id
-            && bundle_value.capability_profile_id.content_id()
-                == root_binding.capability_profile_id
             && bundle_value.series_plan_id == link_binding.series_plan_id
-            && bundle_value.funding_quote_id == link_binding.funding_quote_id
-            && bundle_value.attachment_plan_id.content_id() == link_binding.attachment_plan_id
-            && attachment.value().funding_quote_id == bundle_value.funding_quote_id
             && series.semantic_id() == bundle_value.series_plan_id.content_id()
             && template.semantic_id() == bundle_value.product_template_id.content_id()
             && basis.semantic_id() == bundle_value.native_claim_basis_id.content_id()
@@ -422,15 +490,7 @@ fn require_current_product_failure_begin_graph_v1(
                 == root_binding.price_measure_policy_id
             && bundle_value.market_genesis_profile_id.content_id()
                 == root_binding.market_genesis_profile_id
-            && bundle_value.source_release_manifest_id == root_binding.source_release_id
-            && bundle_value.source_plane_contract_id == root_binding.source_plane_contract_id
-            && bundle_value.source_spec_id == root_binding.source_spec_id
-            && link_binding.compiler_output_id == bundle.semantic_id()
-            && link_binding.source_release_id == root_binding.source_release_id
-            && link_binding.source_plane_contract_id == root_binding.source_plane_contract_id
-            && link_binding.source_spec_id == root_binding.source_spec_id
-            && link_binding.source_route_id == root_binding.source_route_id
-            && link_binding.clock_policy_id == root_binding.clock_policy_id,
+            && link_binding.compiler_output_id == bundle.semantic_id(),
         ClutchError::MismatchedState,
     )
 }
@@ -504,57 +564,6 @@ fn require_distinct_product_failure_begin_accounts(
     Ok(())
 }
 
-fn derive_product_failure_begin_schedule_projection_id_v1(
-    schedule: CompiledScheduleV1,
-    provenance: ProductFailureBeginCompilerProvenanceV1,
-) -> Outcome<ContentId> {
-    let body = encode_compiled_schedule_body_v1(schedule)?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V1,
-            &body,
-            &provenance.registry_release_id.bytes(),
-            &provenance.capability_profile_id.bytes(),
-            &provenance.compiler_bundle_id.bytes(),
-            &provenance.series_plan_id.bytes(),
-            &provenance.ordinal.to_le_bytes(),
-            &provenance.market_instance_id.bytes(),
-            &provenance.product_template_id.bytes(),
-            &provenance.native_claim_basis_id.bytes(),
-            &provenance.recovery_policy_id.bytes(),
-            &provenance.price_measure_policy_id.bytes(),
-            &provenance.market_genesis_profile_id.bytes(),
-            &provenance.attachment_plan_id.bytes(),
-        ])
-        .to_bytes(),
-    );
-    require_live_content_id(id)?;
-    Ok(id)
-}
-
-fn encode_compiled_schedule_body_v1(
-    schedule: CompiledScheduleV1,
-) -> Outcome<[u8; COMPILED_SCHEDULE_BODY_BYTES_V1]> {
-    schedule
-        .validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let mut output = [0_u8; COMPILED_SCHEDULE_BODY_BYTES_V1];
-    output[0..8].copy_from_slice(&schedule.start_bucket.to_le_bytes());
-    output[8..16].copy_from_slice(&schedule.end_bucket_exclusive.to_le_bytes());
-    output[16..24].copy_from_slice(&schedule.primary_maturity_bucket_exclusive.to_le_bytes());
-    output[24] = schedule.recovery_attempt_count;
-    let mut index = 0_usize;
-    while index < MAX_RECOVERY_ATTEMPTS {
-        let offset = 25 + index * 24;
-        let attempt = schedule.recovery_attempts[index];
-        output[offset..offset + 8].copy_from_slice(&attempt.repair_generation.to_le_bytes());
-        output[offset + 8..offset + 16].copy_from_slice(&attempt.opens_at_bucket.to_le_bytes());
-        output[offset + 16..offset + 24].copy_from_slice(&attempt.closes_at_bucket.to_le_bytes());
-        index += 1;
-    }
-    Ok(output)
-}
-
 fn require_live_content_id(id: ContentId) -> Outcome<()> {
     id.validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
@@ -563,7 +572,7 @@ fn require_live_content_id(id: ContentId) -> Outcome<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clutch_product_series::AbsoluteRecoveryAttemptV1;
+    use clutch_product_series::{AbsoluteRecoveryAttemptV1, MAX_RECOVERY_ATTEMPTS};
 
     fn id(byte: u8) -> ContentId {
         ContentId::from_bytes([byte; 32])
@@ -602,16 +611,51 @@ mod tests {
         }
     }
 
+    fn graph() -> ProductFailureBeginGraphJoinV1 {
+        ProductFailureBeginGraphJoinV1 {
+            registry_terms: id(1),
+            bundle_terms: id(1),
+            link_terms: id(1),
+            bundle_quote: id(2),
+            link_quote: id(2),
+            attachment_quote: id(2),
+            bundle_attachment: id(3),
+            link_attachment: id(3),
+            attachment_semantic: id(3),
+            registry_release: id(4),
+            projection_release: id(4),
+            bundle_release: id(4),
+            root_release: id(4),
+            registry_profile: id(5),
+            projection_profile: id(5),
+            bundle_profile: id(5),
+            link_profile: id(5),
+            root_profile: id(5),
+            bundle_source_release: id(6),
+            link_source_release: id(6),
+            root_source_release: id(6),
+            bundle_source_plane: id(7),
+            link_source_plane: id(7),
+            root_source_plane: id(7),
+            bundle_source_spec: id(8),
+            link_source_spec: id(8),
+            root_source_spec: id(8),
+            link_source_route: id(9),
+            root_source_route: id(9),
+            link_clock_policy: id(10),
+            root_clock_policy: id(10),
+        }
+    }
+
     #[test]
     fn full_schedule_body_and_every_provenance_role_change_projection() {
         let original =
-            derive_product_failure_begin_schedule_projection_id_v1(schedule(), provenance())
-                .unwrap();
+            derive_product_failure_begin_schedule_projection_v1(schedule(), provenance()).unwrap();
 
         let mut altered_schedule = schedule();
         altered_schedule.recovery_attempts[0].closes_at_bucket = 41;
         assert_ne!(
-            derive_product_failure_begin_schedule_projection_id_v1(altered_schedule, provenance())
+            derive_product_failure_begin_schedule_projection_v1(altered_schedule, provenance())
                 .unwrap(),
             original
         );
@@ -619,37 +663,37 @@ mod tests {
         let mut altered = provenance();
         altered.registry_release_id = id(13);
         assert_ne!(
-            derive_product_failure_begin_schedule_projection_id_v1(schedule(), altered).unwrap(),
+            derive_product_failure_begin_schedule_projection_v1(schedule(), altered).unwrap(),
             original
         );
         let mut altered = provenance();
         altered.capability_profile_id = id(13);
         assert_ne!(
-            derive_product_failure_begin_schedule_projection_id_v1(schedule(), altered).unwrap(),
+            derive_product_failure_begin_schedule_projection_v1(schedule(), altered).unwrap(),
             original
         );
         let mut altered = provenance();
         altered.compiler_bundle_id = id(13);
         assert_ne!(
-            derive_product_failure_begin_schedule_projection_id_v1(schedule(), altered).unwrap(),
+            derive_product_failure_begin_schedule_projection_v1(schedule(), altered).unwrap(),
             original
         );
         let mut altered = provenance();
         altered.series_plan_id = SeriesPlanV5Id::from_bytes([13; 32]);
         assert_ne!(
-            derive_product_failure_begin_schedule_projection_id_v1(schedule(), altered).unwrap(),
+            derive_product_failure_begin_schedule_projection_v1(schedule(), altered).unwrap(),
             original
         );
         let mut altered = provenance();
         altered.ordinal = 13;
         assert_ne!(
-            derive_product_failure_begin_schedule_projection_id_v1(schedule(), altered).unwrap(),
+            derive_product_failure_begin_schedule_projection_v1(schedule(), altered).unwrap(),
             original
         );
         let mut altered = provenance();
         altered.market_instance_id = MarketInstanceV2Id::from_bytes([13; 32]);
         assert_ne!(
-            derive_product_failure_begin_schedule_projection_id_v1(schedule(), altered).unwrap(),
+            derive_product_failure_begin_schedule_projection_v1(schedule(), altered).unwrap(),
             original
         );
         for role in 0_u8..6_u8 {
@@ -664,8 +708,7 @@ mod tests {
                 _ => unreachable!(),
             }
             assert_ne!(
-                derive_product_failure_begin_schedule_projection_id_v1(schedule(), altered)
-                    .unwrap(),
+                derive_product_failure_begin_schedule_projection_v1(schedule(), altered).unwrap(),
                 original
             );
         }
@@ -676,7 +719,46 @@ mod tests {
         let mut invalid = schedule();
         invalid.recovery_attempts[1] = invalid.recovery_attempts[0];
         assert!(
-            derive_product_failure_begin_schedule_projection_id_v1(invalid, provenance()).is_err()
+            derive_product_failure_begin_schedule_projection_v1(invalid, provenance()).is_err()
         );
+    }
+
+    #[test]
+    fn registry_bundle_link_and_root_splices_refuse() {
+        assert!(graph().validate().is_ok());
+
+        let mut altered = graph();
+        altered.link_terms = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.link_quote = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.attachment_quote = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.link_attachment = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.root_release = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.bundle_profile = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.root_source_release = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.link_source_plane = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.bundle_source_spec = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.link_source_route = id(20);
+        assert!(altered.validate().is_err());
+        let mut altered = graph();
+        altered.link_clock_policy = id(20);
+        assert!(altered.validate().is_err());
     }
 }
