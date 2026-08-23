@@ -138,6 +138,8 @@ pub const OWNER_SETTLEMENT_SEED_DOMAIN_V2: &[u8] = b"owner-settlement:v2";
 pub const OWNER_SETTLEMENT_SEED_DOMAIN_V3: &[u8] = b"owner-settlement:v3";
 /// Delivery-complete owner-settlement successor PDA seed domain.
 pub const OWNER_SETTLEMENT_SEED_DOMAIN_V4: &[u8] = b"owner-settlement:v4";
+/// Sole future rent-owned owner-settlement PDA seed domain.
+pub const OWNER_SETTLEMENT_SEED_DOMAIN_V5: &[u8] = b"owner-settlement:v5";
 /// Fresh selected composite-fee record PDA seed domain.
 pub const SELECTED_FEE_RECORD_SEED_DOMAIN_V1: &[u8] = b"selected-fee-record:v1";
 /// Fresh owner-scoped fee carry PDA seed domain.
@@ -165,6 +167,8 @@ pub const RECEIPT_SEED_DOMAIN_V3: &[u8] = b"general-receipt:v3";
 /// Canonical General SettlementReceipt V4 PDA seed domain.
 /// V3 remains withdrawn and never aliases this fresh address family.
 pub const RECEIPT_SEED_DOMAIN_V4: &[u8] = b"general-receipt:v4";
+/// Sole future rent-owned General SettlementReceipt V5 PDA seed domain.
+pub const RECEIPT_SEED_DOMAIN_V5: &[u8] = b"general-receipt:v5";
 /// Fresh General V2 final-pot PDA seed domain.
 pub const FINAL_POT_SEED_DOMAIN_V1: &[u8] = b"general-final-pot:v2";
 
@@ -369,6 +373,51 @@ impl OwnerSettlementSeedTupleV4 {
     }
 }
 
+/// Validated ordered seed tuple for the rent-owned OwnerSettlement V5 PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementSeedTupleV5 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    owner: [u8; ID_BYTES],
+}
+
+impl OwnerSettlementSeedTupleV5 {
+    /// Construct the canonical rent-owned owner-row tuple.
+    pub fn new(epoch: Id32, settlement_candidate: Id32, owner: Id32) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() || owner.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate || epoch == owner || settlement_candidate == owner {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            owner: owner.bytes(),
+        })
+    }
+
+    /// First seed: fresh non-aliasing V5 owner-row domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        OWNER_SETTLEMENT_SEED_DOMAIN_V5
+    }
+
+    /// Second seed: full authenticated Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: final settlement-candidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: semantic Position owner.
+    pub const fn owner(&self) -> &[u8; ID_BYTES] {
+        &self.owner
+    }
+}
+
 /// Validated ordered seed tuple for the genesis-assisted MarketRuntime PDA.
 ///
 /// The runtime is anchored only to the immutable MarketBinding PDA. The full
@@ -485,6 +534,14 @@ pub struct SettlementReceiptSeedTupleV4 {
     slice_index_le: [u8; 2],
 }
 
+/// Validated ordered seed tuple for one rent-owned SettlementReceipt V5 PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementReceiptSeedTupleV5 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    slice_index_le: [u8; 2],
+}
+
 impl SettlementReceiptSeedTupleV3 {
     /// Construct the canonical tuple from authenticated selection facts.
     pub fn new(
@@ -555,6 +612,50 @@ impl SettlementReceiptSeedTupleV4 {
     /// First seed: the non-aliasing V4 receipt domain.
     pub const fn domain(&self) -> &'static [u8] {
         RECEIPT_SEED_DOMAIN_V4
+    }
+
+    /// Second seed: full authenticated counted Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: stable final SettlementCandidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: exact selected slice index in little-endian order.
+    pub const fn slice_index_le(&self) -> &[u8; 2] {
+        &self.slice_index_le
+    }
+}
+
+impl SettlementReceiptSeedTupleV5 {
+    /// Construct the canonical tuple from authenticated settlement-root facts.
+    pub fn new(
+        epoch: Id32,
+        settlement_candidate: Id32,
+        slice_index: u16,
+    ) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if slice_index >= MAX_SLICES_U16 {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            slice_index_le: slice_index.to_le_bytes(),
+        })
+    }
+
+    /// First seed: fresh non-aliasing V5 receipt domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        RECEIPT_SEED_DOMAIN_V5
     }
 
     /// Second seed: full authenticated counted Epoch PDA bytes.
@@ -746,10 +847,14 @@ pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V2: u8 = 2;
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V3: u8 = 3;
 /// Delivery-complete owner-settlement envelope version.
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V4: u8 = 4;
-/// Current owner-settlement envelope version; an alias only for V4.
+/// Sole future rent-owned owner-settlement envelope version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V5: u8 = 5;
+/// Historical compatibility alias for the withdrawn V4 envelope.
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = OWNER_SETTLEMENT_ACCOUNT_VERSION_V4;
-/// Exact outer owner-settlement account bytes.
+/// Exact historical outer owner-settlement account bytes.
 pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 292;
+/// Exact rent-owned V5 outer owner-settlement account bytes.
+pub const OWNER_SETTLEMENT_ACCOUNT_BYTES_V5: usize = 340;
 /// Fresh disabled selected composite-fee record envelope tag.
 pub const SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// First selected composite-fee record envelope version.
@@ -861,7 +966,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 30] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 31] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -896,6 +1001,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 30] = [
         tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
         version: OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
         owner: "clutch-general-v2-contract/OwnerSettlementV4AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION_V5,
+        owner: "clutch-general-v2-contract/OwnerSettlementV5AccountV1",
     },
     AccountAllocationV1 {
         tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,
@@ -1056,6 +1166,12 @@ mod seed_tests {
         assert_eq!(receipt_v4.settlement_candidate(), &[9; ID_BYTES]);
         assert_eq!(receipt_v4.slice_index_le(), &[2, 1]);
         assert_ne!(receipt.domain(), receipt_v4.domain());
+        let receipt_v5 = SettlementReceiptSeedTupleV5::new(id(8), id(9), 0x0102).unwrap();
+        assert_eq!(receipt_v5.domain(), b"general-receipt:v5");
+        assert_eq!(receipt_v5.epoch(), &[8; ID_BYTES]);
+        assert_eq!(receipt_v5.settlement_candidate(), &[9; ID_BYTES]);
+        assert_eq!(receipt_v5.slice_index_le(), &[2, 1]);
+        assert_ne!(receipt_v4.domain(), receipt_v5.domain());
         let page = GeneralOrderPageSeedTupleV5::new(id(8), 0x0304).unwrap();
         assert_eq!(page.domain(), b"general-order-page:v2");
         assert_eq!(page.epoch(), &[8; ID_BYTES]);
@@ -1072,6 +1188,12 @@ mod seed_tests {
         assert_eq!(owner_row.epoch(), &[8; ID_BYTES]);
         assert_eq!(owner_row.settlement_candidate(), &[9; ID_BYTES]);
         assert_eq!(owner_row.owner(), &[11; ID_BYTES]);
+        let owner_row_v5 = OwnerSettlementSeedTupleV5::new(id(8), id(9), id(11)).unwrap();
+        assert_eq!(owner_row_v5.domain(), b"owner-settlement:v5");
+        assert_eq!(owner_row_v5.epoch(), &[8; ID_BYTES]);
+        assert_eq!(owner_row_v5.settlement_candidate(), &[9; ID_BYTES]);
+        assert_eq!(owner_row_v5.owner(), &[11; ID_BYTES]);
+        assert_ne!(owner_row.domain(), owner_row_v5.domain());
         assert_ne!(
             epoch,
             EpochSeedTupleV1::new(binding, 0x0102_0304_0506_0709).unwrap()
@@ -1090,6 +1212,10 @@ mod seed_tests {
         );
         assert_eq!(
             SettlementReceiptSeedTupleV4::new(id(8), id(9), MAX_SLICES_U16),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            SettlementReceiptSeedTupleV5::new(id(8), id(9), MAX_SLICES_U16),
             Err(CodecError::InvalidCount)
         );
         assert_eq!(
