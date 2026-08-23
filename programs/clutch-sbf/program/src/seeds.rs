@@ -285,6 +285,8 @@ pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 pub const SEED_FAILURE_EXTERNAL_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
 /// Permanent failure-generation replay tombstone.
 pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
+/// Permanent shared-Market Failure replay successor.
+pub const SEED_FAILURE_MARKET_REPLAY_V2: &[u8] = b"dc:failure-market-replay:v2";
 /// Dedicated exhaustive interval-consensus work lifecycle.
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-work:v1";
 /// Permanent exhaustive interval-consensus replay receipt.
@@ -434,6 +436,22 @@ pub fn failure_replay_tombstone_pda(
         program_id,
         &[
             SEED_FAILURE_REPLAY_TOMBSTONE,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical permanent shared-Market Failure replay successor.
+pub fn failure_market_replay_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_REPLAY_V2,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
@@ -1903,6 +1921,8 @@ mod tests {
             SEED_PRODUCT_SERIES_MARKET_LINK,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,
+            SEED_FAILURE_REPLAY_TOMBSTONE,
+            SEED_FAILURE_MARKET_REPLAY_V2,
             SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
             SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
             SEED_FAILURE_MARKET_INTERVAL_CELL_V2,
@@ -1923,6 +1943,10 @@ mod tests {
         assert_ne!(
             failure_market_interval_history_v2_pda(&program_id, &market, 9).0,
             failure_interval_consensus_replay_pda(&program_id, &market, 9).0,
+        );
+        assert_ne!(
+            failure_market_replay_v2_pda(&program_id, &market, 9).0,
+            failure_replay_tombstone_pda(&program_id, &market, 9).0,
         );
     }
 }
