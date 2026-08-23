@@ -18,8 +18,6 @@ pub struct AuthenticatedPositionV3 {
     pub semantic: PositionAccountV3,
     /// Adapter-authenticated semantic ID of `semantic`.
     pub semantic_id: [u8; 32],
-    /// Replay sequence observed before receipt-authorized settlement.
-    pub replay_sequence: u64,
     /// True only after program-owner, PDA, and purpose binding authentication.
     pub account_authenticated: bool,
     /// True only after recomputing the Position V3 semantic ID.
@@ -51,11 +49,31 @@ impl AuthenticatedPositionV3 {
             || !self.account_authenticated
             || !self.semantic_id_authenticated
             || !self.market_binding_authenticated
-            || !self.writable
         {
             return Err(Error::InvalidAccount);
         }
         Ok(())
+    }
+
+    /// Validate this Position for an action that stages a body mutation.
+    pub fn validate_writable(self) -> Result<()> {
+        self.validate()?;
+        if !self.writable {
+            return Err(Error::InvalidAccount);
+        }
+        Ok(())
+    }
+
+    /// Return the exact unchanged Position projection used by an accounting-
+    /// only outer transition. This does not authorize a Position write.
+    pub fn unchanged_poststate(self) -> Result<PositionSettlementPoststateV3> {
+        self.validate()?;
+        Ok(PositionSettlementPoststateV3 {
+            account: self.account,
+            general_market_runtime: self.general_market_runtime,
+            prestate_semantic_id: self.semantic_id,
+            semantic: self.semantic,
+        })
     }
 
     /// Return a successor preserving every identity, lifecycle, purpose, rent,
@@ -66,7 +84,7 @@ impl AuthenticatedPositionV3 {
         reserved_cash_atoms: u64,
         native_eggs: [u64; MAX_OUTCOMES],
     ) -> Result<PositionSettlementPoststateV3> {
-        self.validate()?;
+        self.validate_writable()?;
         let old = self.semantic.fields();
         let semantic = PositionAccountV3::new(PositionV3Fields {
             cash_atoms,
@@ -80,7 +98,6 @@ impl AuthenticatedPositionV3 {
             general_market_runtime: self.general_market_runtime,
             prestate_semantic_id: self.semantic_id,
             semantic,
-            replay_sequence: self.replay_sequence,
         })
     }
 }
@@ -97,6 +114,37 @@ pub struct PositionSettlementPoststateV3 {
     pub prestate_semantic_id: [u8; 32],
     /// Exact canonical Position V3 successor body.
     pub semantic: PositionAccountV3,
-    /// Receipt-authorized settlement preserves Replay sequence.
-    pub replay_sequence: u64,
+}
+
+impl PositionSettlementPoststateV3 {
+    /// Validate this poststate as the exact permitted balance successor of an
+    /// authenticated Position V3 prestate.
+    ///
+    /// Every identity, purpose, lifecycle, generation, controller, Replay,
+    /// Reservation-count, and rent field must be byte-for-byte preserved. The
+    /// caller names the only three mutable balance compartments explicitly.
+    pub fn validate_successor_of(
+        self,
+        prestate: AuthenticatedPositionV3,
+        expected_cash_atoms: u64,
+        expected_reserved_cash_atoms: u64,
+        expected_native_eggs: [u64; MAX_OUTCOMES],
+    ) -> Result<()> {
+        prestate.validate_writable()?;
+        let expected = PositionAccountV3::new(PositionV3Fields {
+            cash_atoms: expected_cash_atoms,
+            reserved_cash_atoms: expected_reserved_cash_atoms,
+            native_eggs: expected_native_eggs,
+            ..prestate.semantic.fields()
+        })
+        .map_err(|_| Error::InvalidAccount)?;
+        if self.account != prestate.account
+            || self.general_market_runtime != prestate.general_market_runtime
+            || self.prestate_semantic_id != prestate.semantic_id
+            || self.semantic != expected
+        {
+            return Err(Error::InvariantViolation);
+        }
+        Ok(())
+    }
 }

@@ -1040,37 +1040,41 @@ mod tests {
     }
 
     fn position(owner: u8, cash: u64, reserved: u64) -> AuthenticatedPositionV3 {
+        let account = key(owner + 32);
+        let replay_account = identity(owner + 40);
+        let purpose_binding_id = identity(64);
+        let position_semantic_id = key(owner + 80);
+        let semantic = PositionAccountV3::new(PositionV3Fields {
+            purpose: PositionPurposeV3::General,
+            lifecycle: PositionLifecycleV3::Open,
+            outcome_count: 2,
+            stored_bump: 254,
+            generation: 1,
+            market_instance_id: identity(60),
+            realm_id: identity(61),
+            collateral_policy_id: identity(62),
+            collateral_release_id: identity(63),
+            owner: identity(owner),
+            controller: identity(owner + 8),
+            replay_account,
+            purpose_binding_id,
+            cash_atoms: cash,
+            reserved_cash_atoms: reserved,
+            native_eggs: [0; crate::MAX_OUTCOMES],
+            outstanding_reservations: 1,
+            rent: RentSplitV2 {
+                payer: identity(owner + 48),
+                refundable_live_principal: 1,
+                permanent_tombstone_principal: 1,
+                donation_floor: 0,
+            },
+        })
+        .unwrap();
         AuthenticatedPositionV3 {
-            account: key(owner + 32),
+            account,
             general_market_runtime: key(1),
-            semantic: PositionAccountV3::new(PositionV3Fields {
-                purpose: PositionPurposeV3::General,
-                lifecycle: PositionLifecycleV3::Open,
-                outcome_count: 2,
-                stored_bump: 254,
-                generation: 1,
-                market_instance_id: identity(60),
-                realm_id: identity(61),
-                collateral_policy_id: identity(62),
-                collateral_release_id: identity(63),
-                owner: identity(owner),
-                controller: identity(owner + 8),
-                replay_account: identity(owner + 40),
-                purpose_binding_id: identity(64),
-                cash_atoms: cash,
-                reserved_cash_atoms: reserved,
-                native_eggs: [0; crate::MAX_OUTCOMES],
-                outstanding_reservations: 1,
-                rent: RentSplitV2 {
-                    payer: identity(owner + 48),
-                    refundable_live_principal: 1,
-                    permanent_tombstone_principal: 1,
-                    donation_floor: 0,
-                },
-            })
-            .unwrap(),
-            semantic_id: key(owner + 80),
-            replay_sequence: 0,
+            semantic,
+            semantic_id: position_semantic_id,
             account_authenticated: true,
             semantic_id_authenticated: true,
             market_binding_authenticated: true,
