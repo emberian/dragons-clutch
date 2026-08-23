@@ -99,6 +99,13 @@ each outcome; a candidate cannot choose gross same-outcome dealer churn. The
 legacy RelationV2 verifier is unchanged as a public acceptance boundary and
 continues to refuse flows that need this counterparty.
 
+The submitted dealer leg contains only immutable order IDs and dealer-filled
+units. Receipt, residual envelopes, fee amounts and policy, facility policy,
+and pre-generation live in `DealerQuotePreconditionV2`. The core recomputes its
+proof-independent semantic digest and refuses any byte mutation under a fixed
+digest. It does not authenticate the quote proof or facility account; the SBF
+adapter must establish that trust before invoking this relation.
+
 `MinimumGrossHamiltonV1` derives per-order cash from immutable sorted order IDs,
 dealer-filled units, residual buyer maxima, residual seller minima, and one net
 aggregate dealer cash transition. Gross user cash and the net transition obey
@@ -110,10 +117,14 @@ does not exist, and any settlement copy can be checked against recomputation.
 Fees are summed and digest-bound separately and never enter dealer cash.
 The pure relation admits the full 64-order RelationV2 book; any smaller runtime
 chunk or LP-roster width is an adapter concern, not a market restriction.
+Gross cash, fee totals, and Hamilton weights use checked `u128`, so individually
+valid `u64` rows do not acquire an accidental aggregate-`u64` market cap.
 
-The joined digest commits the RelationV2 semantic digest, immutable facility
-and policy identities, pre-generation, policy version, receipt, derived trade,
-and every canonical row. It excludes proof bodies and derived allocation bytes.
+The joined digest commits the RelationV2 semantic digest and the recomputed
+quote semantic digest. The latter commits immutable facility, dealer-policy and
+fee-policy identities, pre-generation, policy version, receipt, derived trade,
+and every canonical fill and envelope row. Both exclude proof bodies and
+derived allocation bytes.
 This module still contains no accounts, custody, token logic, registry lookup,
 authorization, lifecycle transition, or SBF dispatch.
 

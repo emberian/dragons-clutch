@@ -3,9 +3,12 @@
 //! This module closes an otherwise-unbalanced [`crate::relation_v2`]
 //! candidate with one aggregate covered-dealer leg. The dealer flow is derived
 //! from user flow and the virtual split-or-merge; a candidate cannot choose a
-//! gross same-outcome round trip. Per-order cash is also derived. No cash
-//! allocation, proof body, price witness, account, signer, or SBF representation
-//! is a candidate coordinate.
+//! gross same-outcome round trip. The submitted leg contains only immutable
+//! order IDs and dealer-filled units. Receipt, residual envelopes, exact fees,
+//! and facility generation arrive through one proof-independent semantic quote
+//! precondition whose upstream authentication remains an adapter obligation.
+//! No cash allocation, proof body, price witness, account, signer, or SBF
+//! representation is a candidate coordinate.
 //!
 //! `MinimumGrossHamiltonV1` first selects the least gross payer and receiver
 //! totals compatible with the exact aggregate dealer receipt and every seller
@@ -34,6 +37,8 @@ pub const DEALER_LEG_VERSION_V2: u8 = 2;
 pub const MAX_DEALER_ROWS_V2: usize = MAX_ORDERS;
 
 const DEALER_ECONOMIC_DIGEST_DOMAIN_V2: &[u8] = b"dragons-clutch/dealer-economic-candidate/v2\0";
+const DEALER_QUOTE_SEMANTICS_DIGEST_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-quote-semantics/v2\0";
 
 const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_ORDERS == 64);
@@ -74,18 +79,31 @@ pub struct DealerReceiptV2 {
     pub dealer_net_cash_out_atoms: u64,
 }
 
-/// One immutable order's dealer-filled units and residual all-in envelope.
-///
-/// The upstream fee relation derives `maximum_cash_in_atoms` and
-/// `minimum_cash_out_atoms` after all non-dealer consideration and exact fees.
-/// `external_fee_atoms` remains explicit economic content but is never added to
-/// or subtracted from dealer cash.
+/// One immutable order's submitted dealer-fill coordinates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerOrderRowV2 {
+pub struct DealerFillRowV2 {
     /// Exact RelationV2 order identity.
     pub order_id: [u8; 32],
     /// Filled order units routed to the dealer.
     pub dealer_fill_units: u64,
+}
+
+/// Canonical unused dealer-fill row.
+pub const EMPTY_DEALER_FILL_ROW_V2: DealerFillRowV2 = DealerFillRowV2 {
+    order_id: [0; 32],
+    dealer_fill_units: 0,
+};
+
+/// One upstream-quoted order envelope aligned to a dealer-fill row.
+///
+/// The authenticated upstream fee relation derives `maximum_cash_in_atoms`
+/// and `minimum_cash_out_atoms` after all non-dealer consideration and exact
+/// fees. `external_fee_atoms` remains explicit economic content but is never
+/// added to or subtracted from dealer cash.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerQuoteRowV2 {
+    /// Exact RelationV2 order identity; must match the fill row at this index.
+    pub order_id: [u8; 32],
     /// Residual maximum a buyer may pay to the dealer.
     pub maximum_cash_in_atoms: u64,
     /// Residual minimum a seller must receive from the dealer.
@@ -94,26 +112,19 @@ pub struct DealerOrderRowV2 {
     pub external_fee_atoms: u64,
 }
 
-/// Canonical unused dealer row.
-pub const EMPTY_DEALER_ORDER_ROW_V2: DealerOrderRowV2 = DealerOrderRowV2 {
+/// Canonical unused quote row.
+pub const EMPTY_DEALER_QUOTE_ROW_V2: DealerQuoteRowV2 = DealerQuoteRowV2 {
     order_id: [0; 32],
-    dealer_fill_units: 0,
     maximum_cash_in_atoms: 0,
     minimum_cash_out_atoms: 0,
     external_fee_atoms: 0,
 };
 
-/// Submitted dealer coordinates. Per-user cash is intentionally absent.
+/// Submitted dealer-fill coordinates. Quote and per-user cash are absent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerLegCandidateV2 {
-    /// Immutable facility and generation binding.
-    pub facility: DealerFacilityBindingV2,
-    /// Frozen deterministic cash rule.
-    pub cash_policy: DealerCashPolicyV2,
-    /// Exact aggregate endpoint receipt from the covered-dealer kernel.
-    pub receipt: DealerReceiptV2,
     /// Strictly order-ID-sorted active rows followed by exact padding.
-    pub rows: [DealerOrderRowV2; MAX_DEALER_ROWS_V2],
+    pub rows: [DealerFillRowV2; MAX_DEALER_ROWS_V2],
     /// Active row prefix in `1..=64`.
     pub row_count: u8,
 }
@@ -125,6 +136,30 @@ pub struct AggregateDealerTradeV2 {
     pub sell_to_users: [u64; MAX_OUTCOMES],
     /// Filled user sells transferred into dealer custody.
     pub buy_from_users: [u64; MAX_OUTCOMES],
+}
+
+/// Upstream quote precondition projected to proof-independent semantics.
+///
+/// This pure crate recomputes `semantic_quote_digest` but cannot authenticate
+/// the upstream proof or facility account. The adapter must do so before
+/// passing this precondition, exactly as for [`PricePreconditionV2`]. Proof,
+/// certificate, signer, and account bytes are deliberately absent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerQuotePreconditionV2 {
+    /// Immutable facility and generation binding.
+    pub facility: DealerFacilityBindingV2,
+    /// Frozen deterministic cash rule.
+    pub cash_policy: DealerCashPolicyV2,
+    /// Content identity of the exact upstream fee policy.
+    pub fee_policy_semantics_digest: [u8; 32],
+    /// Canonical dealer trade quoted by the facility kernel.
+    pub trade: AggregateDealerTradeV2,
+    /// Exact net cash transition quoted by the facility kernel.
+    pub receipt: DealerReceiptV2,
+    /// Quote rows aligned one-for-one with the active fill rows.
+    pub rows: [DealerQuoteRowV2; MAX_DEALER_ROWS_V2],
+    /// Recomputed identity of the exact proof-independent quote semantics.
+    pub semantic_quote_digest: [u8; 32],
 }
 
 /// One exact, fully derived per-order cash allocation.
@@ -151,9 +186,12 @@ pub const EMPTY_DEALER_CASH_ALLOCATION_V2: DealerCashAllocationV2 = DealerCashAl
     external_fee_atoms: 0,
 };
 
-/// Recomputed accepted economics for one RelationV2-plus-dealer candidate.
+/// Recomputed relation verdict conditional on an authenticated upstream quote.
+///
+/// This is not evidence that the quote proof, facility, or account was
+/// authenticated. It contains only the checked proof-independent projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VerifiedDealerLegV2 {
+pub struct DealerLegVerdictV2 {
     /// Active native Egg width.
     pub outcome_count: u8,
     /// Unique aggregate dealer trade.
@@ -163,7 +201,7 @@ pub struct VerifiedDealerLegV2 {
     /// Active allocation count.
     pub allocation_count: u8,
     /// Exact fee total kept outside dealer conservation.
-    pub total_external_fee_atoms: u64,
+    pub total_external_fee_atoms: u128,
     /// User plus dealer demand flow supplied to ScoreV2.
     pub aggregate_buy_flow: [u64; MAX_OUTCOMES],
     /// User plus dealer supply flow supplied to ScoreV2.
@@ -172,6 +210,8 @@ pub struct VerifiedDealerLegV2 {
     pub direct_flow: [u64; MAX_OUTCOMES],
     /// Full proof- and representation-independent economic identity.
     pub dealer_economic_candidate_digest: [u8; 32],
+    /// Recomputed proof-independent quote identity consumed by this verdict.
+    pub dealer_quote_semantics_digest: [u8; 32],
     /// Independently recomputed ScoreV2-Q key.
     pub score: ScoreV2,
 }
@@ -183,7 +223,7 @@ pub enum DealerErrorV2 {
     Economic(EconomicErrorV2),
     /// Facility binding selected an unknown dealer-leg version.
     UnknownDealerVersion,
-    /// Facility or policy semantic identity was zero.
+    /// Facility, dealer-policy, or fee-policy semantic identity was zero.
     ZeroSemanticDigest,
     /// Aggregate receipt claimed simultaneous cash in and cash out.
     NonCanonicalReceipt,
@@ -195,6 +235,14 @@ pub enum DealerErrorV2 {
     NonCanonicalRowOrder { row: u8 },
     /// An inactive row was not exactly empty.
     NonCanonicalRowPadding { row: u8 },
+    /// An inactive quote row was not exactly empty.
+    NonCanonicalQuotePadding { row: u8 },
+    /// A quote row did not align with the immutable fill row at that index.
+    QuoteRowMismatch { row: u8 },
+    /// The facility quote named a different aggregate dealer trade.
+    QuoteTradeMismatch,
+    /// The quote's semantic digest did not match exact recomputation.
+    DealerQuoteSemanticDigestMismatch,
     /// A row named no active RelationV2 order.
     UnknownOrder { row: u8 },
     /// Dealer-filled units were zero or exceeded the selected order fill.
@@ -205,13 +253,13 @@ pub enum DealerErrorV2 {
     FlowOverflow { row: u8, outcome: u8 },
     /// Row flow did not reproduce the uniquely derived aggregate dealer trade.
     DealerFlowMismatch,
-    /// Cash minima, capacities, fees, or allocations exceeded `u64`.
+    /// A derived per-user cash allocation exceeded its `u64` atom field.
     CashTotalOverflow,
     /// Positive payer cash had no positive residual buyer capacity.
     ZeroAllocationWeight,
     /// Residual buyer capacity could not finance the canonical payer total.
     BuyerCapacityInsufficient,
-    /// Seller native-atom weights exceeded the fixed exact domain.
+    /// Aggregate Hamilton weights exceeded the fixed exact `u128` domain.
     AllocationWeightOverflow,
     /// Derived per-user cash did not close the exact aggregate receipt.
     CashConservationMismatch,
@@ -229,6 +277,56 @@ impl From<EconomicErrorV2> for DealerErrorV2 {
     }
 }
 
+/// Recompute the proof-independent identity of one canonical dealer quote.
+///
+/// This function checks canonical shape, but not an upstream proof or account.
+/// An adapter must authenticate the returned identity under the named facility,
+/// dealer policy, fee policy, and generation before constructing the
+/// [`DealerQuotePreconditionV2`] consumed by the joined relation.
+pub fn dealer_quote_semantics_digest_v2(
+    domain: &EconomicDomainV2,
+    dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
+) -> Result<[u8; 32], DealerErrorV2> {
+    validate_quote_content(domain, dealer, quote)?;
+    let mut hash = Sha256V2::new();
+    hash.update(DEALER_QUOTE_SEMANTICS_DIGEST_DOMAIN_V2)?;
+    hash.update(&domain.relation_version.to_le_bytes())?;
+    hash.update(&domain.market_semantics_digest)?;
+    hash.update(&domain.epoch_semantics_digest)?;
+    hash.update(&domain.relation_policy_digest)?;
+    hash.update(&domain.epoch_index.to_le_bytes())?;
+    hash.update(&[domain.outcome_count])?;
+    hash.update(&quote.facility.version.to_le_bytes())?;
+    hash.update(&quote.facility.facility_semantics_digest)?;
+    hash.update(&quote.facility.policy_semantics_digest)?;
+    hash.update(&quote.facility.pre_generation.to_le_bytes())?;
+    hash.update(&[cash_policy_byte(quote.cash_policy)])?;
+    hash.update(&quote.fee_policy_semantics_digest)?;
+    hash.update(&quote.receipt.dealer_net_cash_in_atoms.to_le_bytes())?;
+    hash.update(&quote.receipt.dealer_net_cash_out_atoms.to_le_bytes())?;
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        hash.update(&quote.trade.sell_to_users[outcome].to_le_bytes())?;
+        hash.update(&quote.trade.buy_from_users[outcome].to_le_bytes())?;
+        outcome += 1;
+    }
+    hash.update(&[dealer.row_count])?;
+    let mut row = 0usize;
+    while row < MAX_DEALER_ROWS_V2 {
+        let fill = dealer.rows[row];
+        let envelope = quote.rows[row];
+        hash.update(&fill.order_id)?;
+        hash.update(&fill.dealer_fill_units.to_le_bytes())?;
+        hash.update(&envelope.order_id)?;
+        hash.update(&envelope.maximum_cash_in_atoms.to_le_bytes())?;
+        hash.update(&envelope.minimum_cash_out_atoms.to_le_bytes())?;
+        hash.update(&envelope.external_fee_atoms.to_le_bytes())?;
+        row += 1;
+    }
+    hash.finalize().map_err(DealerErrorV2::Economic)
+}
+
 /// Verify one owner-blind candidate closed by one covered dealer.
 ///
 /// The legacy [`crate::relation_v2::verify_economic_candidate_v2`] API is not
@@ -241,9 +339,9 @@ pub fn verify_economic_candidate_with_dealer_v2(
     price: &PricePreconditionV2,
     candidate: &EconomicCandidateV2,
     dealer: &DealerLegCandidateV2,
-) -> Result<VerifiedDealerLegV2, DealerErrorV2> {
+    quote: &DealerQuotePreconditionV2,
+) -> Result<DealerLegVerdictV2, DealerErrorV2> {
     let unbalanced = derive_unbalanced_economics_v2(domain, book, price, candidate)?;
-    validate_facility(dealer)?;
     let trade = derive_aggregate_dealer_trade(
         domain.outcome_count,
         &unbalanced.aggregate_buy_flow,
@@ -251,8 +349,9 @@ pub fn verify_economic_candidate_with_dealer_v2(
         candidate.virtual_split,
         candidate.virtual_merge,
     )?;
-    let row_economics = validate_rows(domain, book, candidate, dealer, &trade)?;
-    let cash = allocate_cash(dealer, &row_economics)?;
+    validate_quote_precondition(domain, dealer, quote, &trade)?;
+    let row_economics = validate_rows(domain, book, candidate, dealer, quote, &trade)?;
+    let cash = allocate_cash(dealer, quote, &row_economics)?;
 
     let mut aggregate_buy_flow = unbalanced.aggregate_buy_flow;
     let mut aggregate_sell_flow = unbalanced.aggregate_sell_flow;
@@ -285,10 +384,8 @@ pub fn verify_economic_candidate_with_dealer_v2(
     }
 
     let digest = dealer_economic_digest(
-        domain,
-        dealer,
-        &trade,
         &unbalanced.economic_candidate_digest,
+        &quote.semantic_quote_digest,
     )?;
     let delta = CandidateDeltaV2 {
         normalization_policy: NormalizationPolicyV2::OwnerBlindAggregate,
@@ -301,7 +398,7 @@ pub fn verify_economic_candidate_with_dealer_v2(
         candidate_digest: digest,
     };
     let score = score_candidate_v2(&delta).map_err(DealerErrorV2::Score)?;
-    Ok(VerifiedDealerLegV2 {
+    Ok(DealerLegVerdictV2 {
         outcome_count: domain.outcome_count,
         trade,
         allocations: cash.allocations,
@@ -311,6 +408,7 @@ pub fn verify_economic_candidate_with_dealer_v2(
         aggregate_sell_flow,
         direct_flow,
         dealer_economic_candidate_digest: digest,
+        dealer_quote_semantics_digest: quote.semantic_quote_digest,
         score,
     })
 }
@@ -326,10 +424,11 @@ pub fn verify_claimed_dealer_allocations_v2(
     price: &PricePreconditionV2,
     candidate: &EconomicCandidateV2,
     dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
     claimed: &[DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
-) -> Result<VerifiedDealerLegV2, DealerErrorV2> {
+) -> Result<DealerLegVerdictV2, DealerErrorV2> {
     let verified =
-        verify_economic_candidate_with_dealer_v2(domain, book, price, candidate, dealer)?;
+        verify_economic_candidate_with_dealer_v2(domain, book, price, candidate, dealer, quote)?;
     let mut row = 0usize;
     while row < MAX_DEALER_ROWS_V2 {
         if claimed[row] != verified.allocations[row] {
@@ -342,18 +441,104 @@ pub fn verify_claimed_dealer_allocations_v2(
     Ok(verified)
 }
 
-fn validate_facility(dealer: &DealerLegCandidateV2) -> Result<(), DealerErrorV2> {
-    if dealer.facility.version != DEALER_LEG_VERSION_V2 {
+fn validate_facility(quote: &DealerQuotePreconditionV2) -> Result<(), DealerErrorV2> {
+    if quote.facility.version != DEALER_LEG_VERSION_V2 {
         return Err(DealerErrorV2::UnknownDealerVersion);
     }
-    if is_zero_digest(&dealer.facility.facility_semantics_digest)
-        || is_zero_digest(&dealer.facility.policy_semantics_digest)
+    if is_zero_digest(&quote.facility.facility_semantics_digest)
+        || is_zero_digest(&quote.facility.policy_semantics_digest)
+        || is_zero_digest(&quote.fee_policy_semantics_digest)
     {
         return Err(DealerErrorV2::ZeroSemanticDigest);
     }
-    if dealer.receipt.dealer_net_cash_in_atoms != 0 && dealer.receipt.dealer_net_cash_out_atoms != 0
-    {
+    if quote.receipt.dealer_net_cash_in_atoms != 0 && quote.receipt.dealer_net_cash_out_atoms != 0 {
         return Err(DealerErrorV2::NonCanonicalReceipt);
+    }
+    Ok(())
+}
+
+fn validate_quote_content(
+    domain: &EconomicDomainV2,
+    dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
+) -> Result<(), DealerErrorV2> {
+    domain.validate()?;
+    validate_facility(quote)?;
+    let count = usize::from(dealer.row_count);
+    if count == 0 || count > MAX_DEALER_ROWS_V2 {
+        return Err(DealerErrorV2::InvalidRowCount);
+    }
+
+    let mut has_trade = false;
+    let mut outcome = 0usize;
+    while outcome < usize::from(domain.outcome_count) {
+        if quote.trade.sell_to_users[outcome] != 0 && quote.trade.buy_from_users[outcome] != 0 {
+            return Err(DealerErrorV2::QuoteTradeMismatch);
+        }
+        has_trade |=
+            quote.trade.sell_to_users[outcome] != 0 || quote.trade.buy_from_users[outcome] != 0;
+        outcome += 1;
+    }
+    while outcome < MAX_OUTCOMES {
+        if quote.trade.sell_to_users[outcome] != 0 || quote.trade.buy_from_users[outcome] != 0 {
+            return Err(DealerErrorV2::QuoteTradeMismatch);
+        }
+        outcome += 1;
+    }
+    if !has_trade {
+        return Err(DealerErrorV2::QuoteTradeMismatch);
+    }
+
+    let mut previous = [0u8; 32];
+    let mut row = 0usize;
+    while row < count {
+        let fill = dealer.rows[row];
+        if is_zero_digest(&fill.order_id) || (row != 0 && previous >= fill.order_id) {
+            return Err(DealerErrorV2::NonCanonicalRowOrder {
+                row: bounded_row(row)?,
+            });
+        }
+        if fill.dealer_fill_units == 0 {
+            return Err(DealerErrorV2::InvalidDealerFill {
+                row: bounded_row(row)?,
+            });
+        }
+        previous = fill.order_id;
+        if quote.rows[row].order_id != fill.order_id {
+            return Err(DealerErrorV2::QuoteRowMismatch {
+                row: bounded_row(row)?,
+            });
+        }
+        row += 1;
+    }
+    while row < MAX_DEALER_ROWS_V2 {
+        if dealer.rows[row] != EMPTY_DEALER_FILL_ROW_V2 {
+            return Err(DealerErrorV2::NonCanonicalRowPadding {
+                row: bounded_row(row)?,
+            });
+        }
+        if quote.rows[row] != EMPTY_DEALER_QUOTE_ROW_V2 {
+            return Err(DealerErrorV2::NonCanonicalQuotePadding {
+                row: bounded_row(row)?,
+            });
+        }
+        row += 1;
+    }
+    Ok(())
+}
+
+fn validate_quote_precondition(
+    domain: &EconomicDomainV2,
+    dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
+    derived_trade: &AggregateDealerTradeV2,
+) -> Result<(), DealerErrorV2> {
+    validate_quote_content(domain, dealer, quote)?;
+    if quote.trade != *derived_trade {
+        return Err(DealerErrorV2::QuoteTradeMismatch);
+    }
+    if quote.semantic_quote_digest != dealer_quote_semantics_digest_v2(domain, dealer, quote)? {
+        return Err(DealerErrorV2::DealerQuoteSemanticDigestMismatch);
     }
     Ok(())
 }
@@ -395,12 +580,12 @@ fn derive_aggregate_dealer_trade(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RowEconomicsV2 {
-    payer_weights: [u64; MAX_DEALER_ROWS_V2],
-    receiver_weights: [u64; MAX_DEALER_ROWS_V2],
-    receiver_minima: [u64; MAX_DEALER_ROWS_V2],
-    total_payer_capacity: u64,
-    total_receiver_minimum: u64,
-    total_external_fee_atoms: u64,
+    payer_weights: [u128; MAX_DEALER_ROWS_V2],
+    receiver_weights: [u128; MAX_DEALER_ROWS_V2],
+    receiver_minima: [u128; MAX_DEALER_ROWS_V2],
+    total_payer_capacity: u128,
+    total_receiver_minimum: u128,
+    total_external_fee_atoms: u128,
 }
 
 fn validate_rows(
@@ -408,22 +593,10 @@ fn validate_rows(
     book: &EconomicBookV2,
     candidate: &EconomicCandidateV2,
     dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
     trade: &AggregateDealerTradeV2,
 ) -> Result<RowEconomicsV2, DealerErrorV2> {
     let count = usize::from(dealer.row_count);
-    if count == 0 || count > MAX_DEALER_ROWS_V2 {
-        return Err(DealerErrorV2::InvalidRowCount);
-    }
-    let mut row = count;
-    while row < MAX_DEALER_ROWS_V2 {
-        if dealer.rows[row] != EMPTY_DEALER_ORDER_ROW_V2 {
-            return Err(DealerErrorV2::NonCanonicalRowPadding {
-                row: bounded_row(row)?,
-            });
-        }
-        row += 1;
-    }
-
     let mut row_economics = RowEconomicsV2 {
         payer_weights: [0; MAX_DEALER_ROWS_V2],
         receiver_weights: [0; MAX_DEALER_ROWS_V2],
@@ -434,16 +607,10 @@ fn validate_rows(
     };
     let mut row_sell = [0u64; MAX_OUTCOMES];
     let mut row_buy = [0u64; MAX_OUTCOMES];
-    let mut previous = [0u8; 32];
-    row = 0;
+    let mut row = 0usize;
     while row < count {
         let supplied = dealer.rows[row];
-        if is_zero_digest(&supplied.order_id) || (row != 0 && previous >= supplied.order_id) {
-            return Err(DealerErrorV2::NonCanonicalRowOrder {
-                row: bounded_row(row)?,
-            });
-        }
-        previous = supplied.order_id;
+        let quoted = quote.rows[row];
         let order_index =
             find_order(book, &supplied.order_id).ok_or(DealerErrorV2::UnknownOrder {
                 row: bounded_row(row)?,
@@ -458,36 +625,36 @@ fn validate_rows(
         let order = book.orders[order_index];
         match order.side {
             Side::Buy => {
-                if supplied.minimum_cash_out_atoms != 0 {
+                if quoted.minimum_cash_out_atoms != 0 {
                     return Err(DealerErrorV2::NonCanonicalEnvelope {
                         row: bounded_row(row)?,
                     });
                 }
-                row_economics.payer_weights[row] = supplied.maximum_cash_in_atoms;
+                row_economics.payer_weights[row] = u128::from(quoted.maximum_cash_in_atoms);
                 row_economics.total_payer_capacity = row_economics
                     .total_payer_capacity
-                    .checked_add(supplied.maximum_cash_in_atoms)
+                    .checked_add(u128::from(quoted.maximum_cash_in_atoms))
                     .ok_or(DealerErrorV2::CashTotalOverflow)?;
             }
             Side::Sell => {
-                if supplied.maximum_cash_in_atoms != 0 {
+                if quoted.maximum_cash_in_atoms != 0 {
                     return Err(DealerErrorV2::NonCanonicalEnvelope {
                         row: bounded_row(row)?,
                     });
                 }
-                row_economics.receiver_minima[row] = supplied.minimum_cash_out_atoms;
+                row_economics.receiver_minima[row] = u128::from(quoted.minimum_cash_out_atoms);
                 row_economics.total_receiver_minimum = row_economics
                     .total_receiver_minimum
-                    .checked_add(supplied.minimum_cash_out_atoms)
+                    .checked_add(u128::from(quoted.minimum_cash_out_atoms))
                     .ok_or(DealerErrorV2::CashTotalOverflow)?;
             }
         }
         row_economics.total_external_fee_atoms = row_economics
             .total_external_fee_atoms
-            .checked_add(supplied.external_fee_atoms)
+            .checked_add(u128::from(quoted.external_fee_atoms))
             .ok_or(DealerErrorV2::CashTotalOverflow)?;
 
-        let mut native_atoms = 0u64;
+        let mut native_atoms = 0u128;
         let mut outcome = 0usize;
         while outcome < usize::from(domain.outcome_count) {
             let leg = order.coefficients[outcome]
@@ -498,7 +665,7 @@ fn validate_rows(
                 })?;
             if order.side == Side::Sell {
                 native_atoms = native_atoms
-                    .checked_add(leg)
+                    .checked_add(u128::from(leg))
                     .ok_or(DealerErrorV2::AllocationWeightOverflow)?;
             }
             let aggregate = match order.side {
@@ -527,16 +694,17 @@ fn validate_rows(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CashResultV2 {
     allocations: [DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
-    total_external_fee_atoms: u64,
+    total_external_fee_atoms: u128,
 }
 
 fn allocate_cash(
     dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
     economics: &RowEconomicsV2,
 ) -> Result<CashResultV2, DealerErrorV2> {
-    let receipt_in = u128::from(dealer.receipt.dealer_net_cash_in_atoms);
-    let receipt_out = u128::from(dealer.receipt.dealer_net_cash_out_atoms);
-    let minimum_receivers = u128::from(economics.total_receiver_minimum);
+    let receipt_in = u128::from(quote.receipt.dealer_net_cash_in_atoms);
+    let receipt_out = u128::from(quote.receipt.dealer_net_cash_out_atoms);
+    let minimum_receivers = economics.total_receiver_minimum;
     let receipt_shortfall = receipt_out.saturating_sub(receipt_in);
     let receiver_total_u128 = if minimum_receivers > receipt_shortfall {
         minimum_receivers
@@ -547,21 +715,21 @@ fn allocate_cash(
         .checked_add(receipt_in)
         .and_then(|value| value.checked_sub(receipt_out))
         .ok_or(DealerErrorV2::CashTotalOverflow)?;
-    let receiver_total =
-        u64::try_from(receiver_total_u128).map_err(|_| DealerErrorV2::CashTotalOverflow)?;
-    let payer_total =
-        u64::try_from(payer_total_u128).map_err(|_| DealerErrorV2::CashTotalOverflow)?;
-    if payer_total != 0 && economics.total_payer_capacity == 0 {
+    if payer_total_u128 != 0 && economics.total_payer_capacity == 0 {
         return Err(DealerErrorV2::ZeroAllocationWeight);
     }
-    if payer_total > economics.total_payer_capacity {
+    if payer_total_u128 > economics.total_payer_capacity {
         return Err(DealerErrorV2::BuyerCapacityInsufficient);
     }
 
     let count = usize::from(dealer.row_count);
-    let payer_allocations =
-        hamilton_allocate(payer_total, &economics.payer_weights, &dealer.rows, count)?;
-    let receiver_extra = receiver_total
+    let payer_allocations = hamilton_allocate(
+        payer_total_u128,
+        &economics.payer_weights,
+        &dealer.rows,
+        count,
+    )?;
+    let receiver_extra = receiver_total_u128
         .checked_sub(economics.total_receiver_minimum)
         .ok_or(DealerErrorV2::CashTotalOverflow)?;
     let receiver_extras = hamilton_allocate(
@@ -577,24 +745,29 @@ fn allocate_cash(
     let mut row = 0usize;
     while row < count {
         let supplied = dealer.rows[row];
-        let cash_out = economics.receiver_minima[row]
+        let quoted = quote.rows[row];
+        let cash_out_u128 = economics.receiver_minima[row]
             .checked_add(receiver_extras[row])
             .ok_or(DealerErrorV2::CashTotalOverflow)?;
-        if payer_allocations[row] > supplied.maximum_cash_in_atoms
-            || cash_out < supplied.minimum_cash_out_atoms
-            || (payer_allocations[row] != 0 && cash_out != 0)
+        let cash_out =
+            u64::try_from(cash_out_u128).map_err(|_| DealerErrorV2::CashTotalOverflow)?;
+        let payer_allocation =
+            u64::try_from(payer_allocations[row]).map_err(|_| DealerErrorV2::CashTotalOverflow)?;
+        if payer_allocation > quoted.maximum_cash_in_atoms
+            || cash_out < quoted.minimum_cash_out_atoms
+            || (payer_allocation != 0 && cash_out != 0)
         {
             return Err(DealerErrorV2::CashConservationMismatch);
         }
         allocations[row] = DealerCashAllocationV2 {
             order_id: supplied.order_id,
             dealer_fill_units: supplied.dealer_fill_units,
-            user_cash_in_atoms: payer_allocations[row],
+            user_cash_in_atoms: payer_allocation,
             user_cash_out_atoms: cash_out,
-            external_fee_atoms: supplied.external_fee_atoms,
+            external_fee_atoms: quoted.external_fee_atoms,
         };
         aggregate_in = aggregate_in
-            .checked_add(u128::from(payer_allocations[row]))
+            .checked_add(u128::from(payer_allocation))
             .ok_or(DealerErrorV2::CashTotalOverflow)?;
         aggregate_out = aggregate_out
             .checked_add(u128::from(cash_out))
@@ -617,16 +790,16 @@ fn allocate_cash(
 }
 
 fn hamilton_allocate(
-    total: u64,
-    weights: &[u64; MAX_DEALER_ROWS_V2],
-    rows: &[DealerOrderRowV2; MAX_DEALER_ROWS_V2],
+    total: u128,
+    weights: &[u128; MAX_DEALER_ROWS_V2],
+    rows: &[DealerFillRowV2; MAX_DEALER_ROWS_V2],
     count: usize,
-) -> Result<[u64; MAX_DEALER_ROWS_V2], DealerErrorV2> {
-    let mut result = [0u64; MAX_DEALER_ROWS_V2];
+) -> Result<[u128; MAX_DEALER_ROWS_V2], DealerErrorV2> {
+    let mut result = [0u128; MAX_DEALER_ROWS_V2];
     if total == 0 {
         return Ok(result);
     }
-    let mut weight_total = 0u64;
+    let mut weight_total = 0u128;
     let mut row = 0usize;
     while row < count {
         weight_total = weight_total
@@ -638,18 +811,13 @@ fn hamilton_allocate(
         return Err(DealerErrorV2::ZeroAllocationWeight);
     }
 
-    let mut remainders = [0u64; MAX_DEALER_ROWS_V2];
-    let mut assigned = 0u64;
+    let mut remainders = [0u128; MAX_DEALER_ROWS_V2];
+    let mut assigned = 0u128;
     row = 0;
     while row < count {
-        let numerator = u128::from(total)
-            .checked_mul(u128::from(weights[row]))
-            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
-        let quotient = numerator / u128::from(weight_total);
-        let remainder = numerator % u128::from(weight_total);
-        result[row] = u64::try_from(quotient).map_err(|_| DealerErrorV2::ArithmeticOverflow)?;
-        remainders[row] =
-            u64::try_from(remainder).map_err(|_| DealerErrorV2::ArithmeticOverflow)?;
+        let (quotient, remainder) = exact_mul_div_rem(total, weights[row], weight_total)?;
+        result[row] = quotient;
+        remainders[row] = remainder;
         assigned = assigned
             .checked_add(result[row])
             .ok_or(DealerErrorV2::ArithmeticOverflow)?;
@@ -685,45 +853,58 @@ fn hamilton_allocate(
             .checked_add(1)
             .ok_or(DealerErrorV2::ArithmeticOverflow)?;
         awarded[selected] = true;
-        left -= 1;
+        left = left
+            .checked_sub(1)
+            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
     }
     Ok(result)
 }
 
+/// Compute `(multiplicand * multiplier) / denominator` and its remainder
+/// without requiring a double-width product.
+pub(crate) fn exact_mul_div_rem(
+    multiplicand: u128,
+    multiplier: u128,
+    denominator: u128,
+) -> Result<(u128, u128), DealerErrorV2> {
+    if denominator == 0 {
+        return Err(DealerErrorV2::ZeroAllocationWeight);
+    }
+    let mut quotient = 0u128;
+    let mut remainder = 0u128;
+    let mut bit = 1u128 << 127;
+    loop {
+        quotient = quotient
+            .checked_mul(2)
+            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
+        let mut expanded_remainder = remainder
+            .checked_mul(2)
+            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
+        if multiplier & bit != 0 {
+            expanded_remainder = expanded_remainder
+                .checked_add(multiplicand)
+                .ok_or(DealerErrorV2::ArithmeticOverflow)?;
+        }
+        quotient = quotient
+            .checked_add(expanded_remainder / denominator)
+            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
+        remainder = expanded_remainder % denominator;
+        if bit == 1 {
+            break;
+        }
+        bit >>= 1;
+    }
+    Ok((quotient, remainder))
+}
+
 fn dealer_economic_digest(
-    domain: &EconomicDomainV2,
-    dealer: &DealerLegCandidateV2,
-    trade: &AggregateDealerTradeV2,
     base_digest: &[u8; 32],
+    quote_digest: &[u8; 32],
 ) -> Result<[u8; 32], DealerErrorV2> {
     let mut hash = Sha256V2::new();
     hash.update(DEALER_ECONOMIC_DIGEST_DOMAIN_V2)?;
     hash.update(base_digest)?;
-    hash.update(&[dealer.facility.version])?;
-    hash.update(&dealer.facility.facility_semantics_digest)?;
-    hash.update(&dealer.facility.policy_semantics_digest)?;
-    hash.update(&dealer.facility.pre_generation.to_le_bytes())?;
-    hash.update(&[cash_policy_byte(dealer.cash_policy)])?;
-    hash.update(&dealer.receipt.dealer_net_cash_in_atoms.to_le_bytes())?;
-    hash.update(&dealer.receipt.dealer_net_cash_out_atoms.to_le_bytes())?;
-    hash.update(&[domain.outcome_count])?;
-    let mut outcome = 0usize;
-    while outcome < MAX_OUTCOMES {
-        hash.update(&trade.sell_to_users[outcome].to_le_bytes())?;
-        hash.update(&trade.buy_from_users[outcome].to_le_bytes())?;
-        outcome += 1;
-    }
-    hash.update(&[dealer.row_count])?;
-    let mut row = 0usize;
-    while row < MAX_DEALER_ROWS_V2 {
-        let value = dealer.rows[row];
-        hash.update(&value.order_id)?;
-        hash.update(&value.dealer_fill_units.to_le_bytes())?;
-        hash.update(&value.maximum_cash_in_atoms.to_le_bytes())?;
-        hash.update(&value.minimum_cash_out_atoms.to_le_bytes())?;
-        hash.update(&value.external_fee_atoms.to_le_bytes())?;
-        row += 1;
-    }
+    hash.update(quote_digest)?;
     hash.finalize().map_err(DealerErrorV2::Economic)
 }
 
