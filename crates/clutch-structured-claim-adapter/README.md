@@ -12,6 +12,13 @@ structured claims are live. The SBF adapter remains responsible for exact
 owner/PDA/ProgramData/slot/Token-2022 authentication, Replay account binding,
 transaction execution, post-delta checks, and rollback.
 
+The canonical wrap/unwind planners join the actual mint supply and holder
+balance to the pure economic machine, stage the exact base Position/Replay
+poststates, and return the precise `MintToChecked` or `BurnChecked` quantity.
+They admit resolved-market canonical unwind and never spend reserved Position
+cash. Full-vector compression, direct redemption, donation compaction, and live
+descriptor creation remain subsequent runtime slices.
+
 The descriptor contains no mutable supply shadow. Actual wrapper supply must
 always come from the authenticated extension-free Token-2022 mint. Direct
 burns create beneficiary-free surplus backing, never a fee or treasury claim.
