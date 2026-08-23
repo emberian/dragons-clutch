@@ -57,7 +57,8 @@ use clutch_product_series::{
     SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTerminalProjectionV1,
     SeriesFundingTerminalProjectionV2,
     SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
-    SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT, SERIES_FUNDING_COMPONENT_COUNT_V2,
+    SourceOccurrenceV1Id, SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
+    SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     ActivateSeriesFundingIntentV1, AdvanceSeriesOccurrenceIntentV1, CloseSeriesFundingIntentV1,
@@ -1066,7 +1067,7 @@ pub struct AuthenticatedSeriesFundingAccountV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSeriesCollateralVaultRentV2 {
     series_plan_id: SeriesPlanV5Id,
-    principal_lamports: [u64; SERIES_FUNDING_COMPONENT_COUNT],
+    principal_lamports: [u64; SERIES_COLLATERAL_VAULT_COUNT_V2],
     authentication_id: ContentId,
 }
 
