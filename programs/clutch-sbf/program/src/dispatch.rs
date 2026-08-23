@@ -60,6 +60,8 @@ use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
     genesis, market_init, observe_resolve, orders_batch, source_ingest_v2,
 };
+#[cfg(feature = "non-production-structured-custody-lab")]
+use crate::instructions::structured_custody;
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
 use clutch_solana_layout::registry::ExtensionAction;
@@ -110,6 +112,8 @@ enum Route {
     GeneralV2,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
+    #[cfg(feature = "non-production-structured-custody-lab")]
+    StructuredCustody,
     DecodeOnly,
 }
 
@@ -204,6 +208,20 @@ fn route_hint(instruction_data: &[u8]) -> Route {
     }
     match instruction_data.get(10).copied() {
         Some(ACTION_LAYOUT_HINT) => match instruction_data.get(13).copied() {
+            #[cfg(feature = "non-production-structured-custody-lab")]
+            Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
+                if instruction_data.get(14).copied()
+                    == Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION)
+                    && instruction_data.get(15).copied()
+                        == Some(clutch_solana_layout::registry::GeneralV2Action::TransferPositionAssets.tag())
+                    && capabilities::extension_intent_action_enabled(
+                        clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG,
+                        clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
+                        clutch_solana_layout::registry::GeneralV2Action::TransferPositionAssets.tag(),
+                    ) =>
+            {
+                Route::StructuredCustody
+            }
             #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
             Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
                 if instruction_data.get(14).copied()
@@ -397,7 +415,35 @@ pub fn process(
         Route::GeneralV2 => process_general_v2(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
+        #[cfg(feature = "non-production-structured-custody-lab")]
+        Route::StructuredCustody => {
+            process_structured_custody(program_id, accounts, instruction_data)
+        }
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+/// Decode the canonical General action-35 envelope and enter the sole base
+/// owner of Structured Position custody writes.
+#[inline(never)]
+#[cfg(feature = "non-production-structured-custody-lab")]
+fn process_structured_custody(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::GeneralV2(
+            clutch_solana_layout::registry::GeneralV2Action::TransferPositionAssets,
+        ) => structured_custody::process(
+            program_id,
+            accounts,
+            request.sequence,
+            request.envelope.payload,
+        ),
+        _ => unexpected_route(),
     }
 }
 

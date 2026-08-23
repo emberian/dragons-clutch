@@ -16,6 +16,7 @@
 mod construction;
 mod custody_wire;
 mod descriptor;
+mod market_projection;
 mod position_transfer;
 mod replay_v3;
 mod runtime;
@@ -36,6 +37,11 @@ pub use descriptor::{
     reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1, DescriptorStateV1,
     StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
     DESCRIPTOR_ACCOUNT_VERSION,
+};
+pub use market_projection::{
+    project_structured_market_v1, StructuredMarketProjectionStateV1,
+    StructuredMarketProjectionV1, STRUCTURED_MARKET_PROJECTION_PREIMAGE_BYTES_V1,
+    STRUCTURED_MARKET_PROJECTION_V1_DOMAIN,
 };
 pub use position_transfer::{
     prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,

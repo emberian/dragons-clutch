@@ -91,3 +91,6 @@ pub mod source_ingest;
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod split;
+/// Base-owned PositionV3/Replay endpoint for Structured custody CPI.
+#[cfg(feature = "non-production-structured-custody-lab")]
+pub mod structured_custody;

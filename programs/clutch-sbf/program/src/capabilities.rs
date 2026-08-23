@@ -11,17 +11,28 @@
 #[cfg(all(
     feature = "profile-full",
     not(feature = "profile-non-production-dealer-policy-catalog-lab"),
-    not(feature = "non-production-product-series-lab")
+    not(feature = "non-production-product-series-lab"),
+    not(feature = "non-production-structured-custody-lab")
 ))]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v5-source-ingest";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
     feature = "non-production-product-series-lab",
+    not(feature = "non-production-structured-custody-lab"),
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v5-source-ingest";
+/// Explicit local-only artifact admitting the base Structured custody endpoint.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-structured-custody-lab",
+    not(feature = "non-production-product-series-lab"),
+    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+))]
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/non-production-structured-custody-lab/v1";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
@@ -45,7 +56,8 @@ pub const PROFILE_LABEL: &str =
 #[cfg(all(
     feature = "profile-full",
     not(feature = "profile-non-production-dealer-policy-catalog-lab"),
-    not(feature = "non-production-product-series-lab")
+    not(feature = "non-production-product-series-lab"),
+    not(feature = "non-production-structured-custody-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
     0xec, 0xdd, 0xa1, 0x9b, 0x6a, 0xd7, 0x76, 0x94, 0x08, 0xa3, 0xa7, 0x1d, 0xaa, 0x9f, 0x42, 0x7b,
@@ -55,11 +67,23 @@ pub const PROFILE_ID: [u8; 32] = [
 #[cfg(all(
     feature = "profile-full",
     feature = "non-production-product-series-lab",
+    not(feature = "non-production-structured-custody-lab"),
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
     0xe1, 0x30, 0xe7, 0x01, 0x1f, 0xf6, 0xd8, 0xbd, 0xd0, 0x5e, 0xd2, 0x9e, 0x01, 0xd1, 0x93, 0x7a,
     0x26, 0x9e, 0x71, 0xb1, 0x40, 0xd6, 0xe3, 0x7d, 0x4f, 0x01, 0xd6, 0xbc, 0x7d, 0x8b, 0xfc, 0x9c,
+];
+/// SHA-256 of the local-only Structured custody profile label.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-structured-custody-lab",
+    not(feature = "non-production-product-series-lab"),
+    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+))]
+pub const PROFILE_ID: [u8; 32] = [
+    0x8b, 0x0b, 0x2a, 0x6e, 0x61, 0xdc, 0x7c, 0xa9, 0xf5, 0x31, 0xb8, 0x3b, 0xd5, 0x44, 0x66, 0xb4,
+    0x42, 0x7c, 0xf9, 0xde, 0x6d, 0xc6, 0x8c, 0xec, 0x93, 0x14, 0xdf, 0x4d, 0xad, 0xaf, 0xa4, 0x4e,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
@@ -92,6 +116,9 @@ pub const PROFILE_ID: [u8; 32] = [
 /// Whether this artifact is the explicitly non-production identity lab.
 pub const GENERAL_V2_IDENTITY_LAB: bool =
     cfg!(feature = "profile-non-production-general-v2-empty-book-identity-lab");
+
+/// Whether this artifact admits the exact base Structured custody endpoint.
+pub const STRUCTURED_CUSTODY_LAB: bool = cfg!(feature = "non-production-structured-custody-lab");
 
 /// Whether this artifact is the explicitly non-production Dealer catalog lab.
 pub const DEALER_POLICY_CATALOG_LAB: bool =
@@ -191,6 +218,7 @@ pub const fn extension_intent_action_allocated(
 /// disabled.
 #[cfg(all(
     feature = "profile-full",
+    not(feature = "non-production-structured-custody-lab"),
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
@@ -198,6 +226,26 @@ pub const fn extension_intent_action_allocated(
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
+
+/// The Structured custody laboratory adds only General action 35 to the full
+/// Source-capable profile. Structured family actions remain disabled until a
+/// separately deployed wrapper owns their Token-2022 side.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-structured-custody-lab",
+    not(any(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab",
+        feature = "non-production-product-series-lab"
+    ))
+))]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (74, 1, 35),
+    (77, 2, 1),
+    (77, 2, 2),
+    (77, 2, 3),
+    (77, 2, 4),
+];
 
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(
@@ -388,8 +436,14 @@ mod tests {
                         && family_tag == 77
                         && family_version == 2
                         && matches!(local_action, 1 | 2 | 3 | 4);
-                    let expected_enabled =
-                        dealer_enabled || general_enabled || source_runtime_enabled;
+                    let structured_custody_enabled = STRUCTURED_CUSTODY_LAB
+                        && family_tag == 74
+                        && family_version == 1
+                        && local_action == 35;
+                    let expected_enabled = dealer_enabled
+                        || general_enabled
+                        || source_runtime_enabled
+                        || structured_custody_enabled;
                     assert_eq!(
                         extension_intent_action_enabled(family_tag, family_version, local_action,),
                         expected_enabled,
