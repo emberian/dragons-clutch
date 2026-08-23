@@ -30,8 +30,9 @@ use clutch_product_series::{
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
     PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProjectionV2,
     SeriesAttachmentPlanV1, SeriesFundingComponentV1, SeriesFundingQuoteV1,
-    SeriesFundingRequirementsV1, SeriesFundingStateV1, SeriesFundingTermsV2,
-    SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id, SERIES_FUNDING_COMPONENT_COUNT,
+    SeriesFundingRequirementsV1, SeriesFundingStateV1, SeriesFundingTerminalProjectionV1,
+    SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
+    SERIES_FUNDING_COMPONENT_COUNT,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
@@ -45,6 +46,8 @@ use solana_pubkey::Pubkey;
 
 /// Closed number of physical Series funding compartments.
 pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
+/// Canonical generation of the sole funding activation permitted by V1.
+pub const SERIES_ACTIVATION_GENERATION_V1: u64 = 1;
 
 /// Exact read-only Product/Series artifact count used by registration and
 /// every later transition that reconstructs the immutable join.
@@ -68,6 +71,8 @@ pub const IX_SERIES_ARTIFACT_GENESIS: usize = 6;
 pub const IX_SERIES_ARTIFACT_QUOTE: usize = 7;
 /// SeriesAttachmentPlan V1 artifact account index.
 pub const IX_SERIES_ARTIFACT_ATTACHMENT: usize = 8;
+
+const SERIES_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/series-terminal-receipt/v1";
 
 /// Exact decoded immutable bodies selected by one registered Series.
 ///
@@ -96,6 +101,116 @@ pub struct AuthenticatedSeriesArtifactsV1 {
     pub quote: Box<SeriesFundingQuoteV1>,
     /// Operational attachment identities excluded from Market identity.
     pub attachment: Box<SeriesAttachmentPlanV1>,
+}
+
+/// Authenticated persistent registry account.
+///
+/// Private fields prevent a caller from turning a decoded body into account
+/// authority. Instances are minted only after owner/PDA/role/codec/rent checks,
+/// or by the canonical one-shot activation write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSeriesRegistryAccountV1 {
+    account: Pubkey,
+    value: SeriesRegistryAccountV1,
+}
+
+impl AuthenticatedSeriesRegistryAccountV1 {
+    /// Exact authenticated registry PDA.
+    pub const fn account(&self) -> Pubkey {
+        self.account
+    }
+
+    /// Exact hostile-decoded registry body.
+    pub const fn value(&self) -> SeriesRegistryAccountV1 {
+        self.value
+    }
+
+    /// Whether its one permitted activation has already been consumed.
+    pub const fn activation_consumed(&self) -> bool {
+        self.value.activation_consumed
+    }
+}
+
+/// Authenticated mutable funding account.
+///
+/// The private account key binds the decoded wrapper to the exact PDA checked
+/// by [`read_series_funding_account`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSeriesFundingAccountV1 {
+    account: Pubkey,
+    value: SeriesFundingAccountV1,
+}
+
+impl AuthenticatedSeriesFundingAccountV1 {
+    /// Exact authenticated funding PDA.
+    pub const fn account(&self) -> Pubkey {
+        self.account
+    }
+
+    /// Exact hostile-decoded funding wrapper and pure state.
+    pub const fn value(&self) -> SeriesFundingAccountV1 {
+        self.value
+    }
+}
+
+/// Private-field terminal authorization over the exact consumed replay anchor,
+/// exact funding PDA/body, and authenticated immutable artifacts.
+///
+/// This receipt authorizes no transfer by itself. Collateral and lamport
+/// adapters must still bind its exact destinations/amounts to runtime accounts
+/// and verify post-deltas before the funding account may be closed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSeriesTerminalV1 {
+    registry_account: Pubkey,
+    funding_account: Pubkey,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: SeriesFundingTermsV2Id,
+    funding_quote_id: clutch_product_series::SeriesFundingQuoteId,
+    activation_generation: u64,
+    projection: SeriesFundingTerminalProjectionV1,
+    receipt_id: ContentId,
+}
+
+impl AuthenticatedSeriesTerminalV1 {
+    /// Exact persistent replay-anchor PDA.
+    pub const fn registry_account(&self) -> Pubkey {
+        self.registry_account
+    }
+
+    /// Exact mutable funding PDA whose closed body was authenticated.
+    pub const fn funding_account(&self) -> Pubkey {
+        self.funding_account
+    }
+
+    /// Exact recurring Series identity.
+    pub const fn series_plan_id(&self) -> SeriesPlanV5Id {
+        self.series_plan_id
+    }
+
+    /// Exact immutable terminal-ownership terms identity.
+    pub const fn funding_terms_id(&self) -> SeriesFundingTermsV2Id {
+        self.funding_terms_id
+    }
+
+    /// Exact funding quote identity retained by the closed state.
+    pub const fn funding_quote_id(&self) -> clutch_product_series::SeriesFundingQuoteId {
+        self.funding_quote_id
+    }
+
+    /// Canonical one-shot activation generation.
+    pub const fn activation_generation(&self) -> u64 {
+        self.activation_generation
+    }
+
+    /// State-derived terminal amounts and immutable destinations.
+    pub const fn projection(&self) -> SeriesFundingTerminalProjectionV1 {
+        self.projection
+    }
+
+    /// Digest of the exact registry PDA/body and funding PDA/body join.
+    pub const fn id(&self) -> ContentId {
+        self.receipt_id
+    }
 }
 
 impl AuthenticatedSeriesArtifactsV1 {
@@ -966,7 +1081,7 @@ pub fn read_series_registry_account(
     account: &AccountInfo<'_>,
     expected_series: SeriesPlanV5Id,
     rent: &RentParameters,
-) -> Outcome<SeriesRegistryAccountV1> {
+) -> Outcome<AuthenticatedSeriesRegistryAccountV1> {
     read_series_registry_account_with_role(program_id, account, expected_series, rent, false)
 }
 
@@ -976,7 +1091,7 @@ fn read_series_registry_account_with_role(
     expected_series: SeriesPlanV5Id,
     rent: &RentParameters,
     writable: bool,
-) -> Outcome<SeriesRegistryAccountV1> {
+) -> Outcome<AuthenticatedSeriesRegistryAccountV1> {
     require_program_account(
         program_id,
         account,
@@ -997,7 +1112,10 @@ fn read_series_registry_account_with_role(
         Some(value.stored_bump),
     )?;
     require_rent_coverage(account, value.rent_principal_lamports, rent)?;
-    Ok(value)
+    Ok(AuthenticatedSeriesRegistryAccountV1 {
+        account: *account.key,
+        value,
+    })
 }
 
 /// Consume the one permitted activation in the persistent registry/replay
@@ -1011,19 +1129,22 @@ pub fn consume_series_activation(
     account: &AccountInfo<'_>,
     expected_series: SeriesPlanV5Id,
     rent: &RentParameters,
-) -> Outcome<SeriesRegistryAccountV1> {
+) -> Outcome<AuthenticatedSeriesRegistryAccountV1> {
     let current =
         read_series_registry_account_with_role(program_id, account, expected_series, rent, true)?;
-    require(!current.activation_consumed, ClutchError::Replay)?;
+    require(!current.activation_consumed(), ClutchError::Replay)?;
     let next = SeriesRegistryAccountV1 {
         activation_consumed: true,
-        ..current
+        ..current.value()
     };
     let mut data = account
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     next.encode(&mut data)?;
-    Ok(next)
+    Ok(AuthenticatedSeriesRegistryAccountV1 {
+        account: *account.key,
+        value: next,
+    })
 }
 
 /// Authenticate a mutable Series-funding account and join it to its exact
@@ -1034,7 +1155,7 @@ pub fn read_series_funding_account(
     expected_series: SeriesPlanV5Id,
     quote: &clutch_product_series::SeriesFundingQuoteV1,
     rent: &RentParameters,
-) -> Outcome<SeriesFundingAccountV1> {
+) -> Outcome<AuthenticatedSeriesFundingAccountV1> {
     require_program_account(program_id, account, SERIES_FUNDING_ACCOUNT_BYTES_V1, true)?;
     let data = account
         .try_borrow_data()
@@ -1054,16 +1175,24 @@ pub fn read_series_funding_account(
         Some(value.stored_bump),
     )?;
     require_rent_coverage(account, value.rent_principal_lamports, rent)?;
-    Ok(value)
+    Ok(AuthenticatedSeriesFundingAccountV1 {
+        account: *account.key,
+        value,
+    })
 }
 
 /// Write one already-validated atomic successor state back to its authenticated
 /// account wrapper without changing rent ownership or framing.
 pub fn write_series_funding_state(
     account: &AccountInfo<'_>,
-    current: SeriesFundingAccountV1,
+    current: AuthenticatedSeriesFundingAccountV1,
     next: SeriesFundingStateV1,
 ) -> Outcome<()> {
+    require(
+        current.account() == *account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let current = current.value();
     require(
         current.state.series_plan_id == next.series_plan_id
             && current.state.funding_terms_id == next.funding_terms_id
@@ -1082,6 +1211,78 @@ pub fn write_series_funding_state(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     updated.encode(&mut data)?;
     Ok(())
+}
+
+/// Authenticate the exact terminal Series root before any value movement.
+///
+/// The consumed registry receipt proves that this is the sole V1 activation.
+/// The funding receipt proves the exact PDA/body/rent join. The authenticated
+/// artifact graph supplies the sole FundingTerms and quote bodies from which
+/// the pure terminal projection is derived. This does not itself authorize or
+/// execute any lamport or collateral transfer.
+pub fn authenticate_series_terminal(
+    registry: AuthenticatedSeriesRegistryAccountV1,
+    funding: AuthenticatedSeriesFundingAccountV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+) -> Outcome<AuthenticatedSeriesTerminalV1> {
+    require(registry.activation_consumed(), ClutchError::Replay)?;
+    let registry_value = registry.value();
+    let funding_value = funding.value();
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terms_id = artifacts
+        .funding_terms
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_quote_id = artifacts
+        .quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        registry_value.series_plan_id == series_plan_id
+            && registry_value.funding_terms_id == funding_terms_id
+            && funding_value.state.series_plan_id == series_plan_id
+            && funding_value.state.funding_terms_id == funding_terms_id
+            && funding_value.state.funding_quote_id == funding_quote_id,
+        ClutchError::MismatchedState,
+    )?;
+    funding_value
+        .state
+        .validate_against_quote(&artifacts.quote)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projection = funding_value
+        .state
+        .terminal_projection(&artifacts.funding_terms, &artifacts.quote)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let mut registry_body = [0; SERIES_REGISTRY_ACCOUNT_BYTES_V1];
+    registry_value.encode(&mut registry_body)?;
+    let mut funding_body = [0; SERIES_FUNDING_ACCOUNT_BYTES_V1];
+    funding_value.encode(&mut funding_body)?;
+    let generation = SERIES_ACTIVATION_GENERATION_V1.to_le_bytes();
+    let receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_TERMINAL_RECEIPT_DOMAIN_V1,
+            registry.account().as_ref(),
+            &registry_body,
+            funding.account().as_ref(),
+            &funding_body,
+            &generation,
+        ])
+        .to_bytes(),
+    );
+    Ok(AuthenticatedSeriesTerminalV1 {
+        registry_account: registry.account(),
+        funding_account: funding.account(),
+        series_plan_id,
+        funding_terms_id,
+        funding_quote_id,
+        activation_generation: SERIES_ACTIVATION_GENERATION_V1,
+        projection,
+        receipt_id,
+    })
 }
 
 fn require_lamport_vault_metadata(
