@@ -2,15 +2,18 @@ use clutch_candidate_lifecycle::{CandidateWindowV4, Id as CandidateId, RankKey};
 use clutch_retirement::{
     admit_deletable_rent, admit_initial_rent_split, admit_reopen_rent_split,
     open_general_epoch_root, plan_direct_reservation_close, plan_epoch_root_retirement,
-    plan_general_reservation_close, plan_position_replay_retirement,
+    plan_epoch_root_retirement_v2, plan_general_reservation_close,
+    plan_position_replay_retirement,
     register_direct_reservation_v2, register_general_reservation_v2, reopen_position_with_replay,
     terminate_reservation_v2, AdapterDirectEpochProjectionV1, AdapterEpochAccountProjectionV1,
     AdapterMarketAccountProjectionV1, AdapterNeutralSinkBindingProjectionV1,
     AdapterPositionAccountProjectionV1, AdapterReplayAbsenceProjectionV1,
-    AdapterReplayAccountProjectionV1, CountedEpochChildSlotV2, CountedReservationV2,
+    AdapterReplayAccountProjectionV1, AuthenticatedEpochBudgetDispositionV1,
+    CountedEpochChildSlotV2, CountedReservationV2,
     DeletableRentOwnerV1, DirectEpochLifecyclePhaseV1, DirectReservationCloseRequestV1,
     DirectReservationRegistrationAccountsV1, EpochBudgetRootSiblingV1, EpochChildCountsV1,
-    EpochRetirementTailV1, EpochRootAccountsV1, EpochRootRetirementRequestV1,
+    EpochRetirementTailV1, EpochRootAccountsV1, EpochRootRecipientBalanceBookV2,
+    EpochRootRetirementRequestV1, EpochRootRetirementRequestV2,
     EpochWindowRootSiblingV1, GeneralEpochLifecycleProjectionV2, GeneralEpochPhaseV2,
     GeneralReservationCloseRequestV1, GeneralReservationRegistrationAccountsV1, Identity32V1,
     LiveGeneralEpochProjectionV2, LivePositionV2, LiveReplaySuccessorV1, MarketEpochCursorV1,
@@ -1306,6 +1309,86 @@ fn epoch_root_refuses_without_authoritative_budget_disposition() {
         }),
         Err(RetirementErrorV2::AccountAlias)
     );
+}
+
+#[test]
+fn epoch_root_v2_pays_five_distinct_recipients_and_closes_atomically() {
+    let mut terminal = epoch();
+    terminal.phase = GeneralEpochPhaseV2::Settled;
+    let window = EpochWindowRootSiblingV1 {
+        market: terminal.market,
+        epoch: terminal.epoch,
+        epoch_generation: terminal.retirement.epoch_generation,
+        rent: deletable(5, 13, 3),
+    };
+    let budget = AuthenticatedEpochBudgetDispositionV1::after_semantic_owner_validation(
+        id(42),
+        terminal.market,
+        terminal.epoch,
+        terminal.retirement.epoch_generation,
+        id(250),
+        id(8),
+        deletable(6, 17, 2),
+        13,
+    )
+    .unwrap();
+    let plan = plan_epoch_root_retirement_v2(EpochRootRetirementRequestV2 {
+        epoch: GeneralEpochLifecycleProjectionV2::Live(terminal),
+        window,
+        admission_ledger: admission_ledger(terminal),
+        budget,
+        reward_recipient: id(7),
+        epoch_balance: 29,
+        window_balance: 20,
+        budget_balance: 35,
+        neutral_sink: id(250),
+        neutral_sink_binding: neutral_sink_binding(),
+        accounts: EpochRootAccountsV1 {
+            epoch: epoch_account(terminal, 40),
+            window: id(41),
+            budget: id(42),
+        },
+        recipient_balances: EpochRootRecipientBalanceBookV2 {
+            entries: [
+                Some(RecipientBalanceV1 {
+                    recipient: id(3),
+                    balance_before: 100,
+                }),
+                Some(RecipientBalanceV1 {
+                    recipient: id(5),
+                    balance_before: 200,
+                }),
+                Some(RecipientBalanceV1 {
+                    recipient: id(6),
+                    balance_before: 300,
+                }),
+                Some(RecipientBalanceV1 {
+                    recipient: id(7),
+                    balance_before: 400,
+                }),
+                Some(RecipientBalanceV1 {
+                    recipient: id(250),
+                    balance_before: 500,
+                }),
+            ],
+        },
+    })
+    .unwrap();
+    assert!(matches!(
+        plan.epoch_post_state,
+        GeneralEpochLifecycleProjectionV2::Tombstone(_)
+    ));
+    assert_eq!(plan.epoch_balance_after, 7);
+    assert_eq!(plan.window_balance_after, 0);
+    assert_eq!(plan.budget_balance_after, 0);
+    assert_eq!(plan.root_close_reward_lamports, 13);
+    assert_eq!(plan.recipient_credits.get(id(3)).unwrap().credit_lamports, 11);
+    assert_eq!(plan.recipient_credits.get(id(5)).unwrap().credit_lamports, 13);
+    assert_eq!(plan.recipient_credits.get(id(6)).unwrap().credit_lamports, 17);
+    assert_eq!(plan.recipient_credits.get(id(7)).unwrap().credit_lamports, 13);
+    assert_eq!(plan.recipient_credits.get(id(250)).unwrap().credit_lamports, 23);
+    assert_eq!(11 + 13 + 17 + 13 + 23 + 7, 84);
+    assert_eq!(29 + 20 + 35, 84);
 }
 
 #[test]

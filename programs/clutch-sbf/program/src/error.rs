@@ -19,6 +19,7 @@
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
+//! | `0x4000 + n` | [`clutch_general_v2_contract::CodecError`] variant `n` |
 //!
 //! The `0x0050-0x005f` block realizes the allocation `observe_resolve`'s
 //! module docs proposed while this file was frozen: the eleven evidence-gate
@@ -37,6 +38,7 @@
 //! evidence block and the genesis block costs nothing and keeps a later
 //! evidence append from having to jump over an unrelated family.
 
+use clutch_general_v2_contract::CodecError as GeneralV2CodecError;
 use clutch_kernel::Error as KernelError;
 use clutch_solana_layout::{resolution_work::ResolutionWorkCodecError, CodecError};
 use clutch_solana_reference::Error as ReferenceError;
@@ -446,6 +448,22 @@ pub const fn resolution_work_code(error: ResolutionWorkError) -> u32 {
     }
 }
 
+/// Stable numeric projection for the General V2 pure contract.
+pub const fn general_v2_codec_code(error: GeneralV2CodecError) -> u32 {
+    0x4000
+        + match error {
+            GeneralV2CodecError::WrongLength => 0,
+            GeneralV2CodecError::WrongTag => 1,
+            GeneralV2CodecError::WrongVersion => 2,
+            GeneralV2CodecError::ZeroIdentity => 3,
+            GeneralV2CodecError::InvalidCount => 4,
+            GeneralV2CodecError::InvalidState => 5,
+            GeneralV2CodecError::NonCanonicalPadding => 6,
+            GeneralV2CodecError::MismatchedBinding => 7,
+            GeneralV2CodecError::ArithmeticOverflow => 8,
+        }
+}
+
 /// One refusal type for the whole processor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
@@ -459,6 +477,8 @@ pub enum Refusal {
     Reference(ReferenceError),
     /// Resumable occupation-resolution refusal.
     ResolutionWork(ResolutionWorkError),
+    /// Strict General V2 account, payload, or semantic-contract refusal.
+    GeneralV2(GeneralV2CodecError),
 }
 
 impl Refusal {
@@ -470,6 +490,7 @@ impl Refusal {
             Self::Kernel(error) => kernel_code(error),
             Self::Reference(error) => reference_code(error),
             Self::ResolutionWork(error) => resolution_work_code(error),
+            Self::GeneralV2(error) => general_v2_codec_code(error),
         }
     }
 }
@@ -507,6 +528,12 @@ impl From<ResolutionWorkError> for Refusal {
 impl From<ResolutionWorkCodecError> for Refusal {
     fn from(value: ResolutionWorkCodecError) -> Self {
         Self::ResolutionWork(ResolutionWorkError::Codec(value))
+    }
+}
+
+impl From<GeneralV2CodecError> for Refusal {
+    fn from(value: GeneralV2CodecError) -> Self {
+        Self::GeneralV2(value)
     }
 }
 

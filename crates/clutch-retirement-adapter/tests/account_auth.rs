@@ -8,11 +8,14 @@ use clutch_retirement::{
 use clutch_retirement_adapter::{
     authenticate_counted_child, authenticate_direct_epoch_v4, authenticate_direct_reservation_v6,
     authenticate_direct_reservation_v8, authenticate_general_epoch_tombstone_v1,
-    authenticate_general_epoch_v5, authenticate_general_reservation_v5,
-    authenticate_general_reservation_v7, authenticate_market_v2,
-    authenticate_position_tombstone_v1, authenticate_position_v2,
-    project_authenticated_direct_epoch_v4, AccountViewV1, CanonicalPdaV1, CountedChildSchemaV1,
-    RetirementAdapterErrorV1, RetirementAdapterErrorV2,
+    authenticate_general_epoch_v5, authenticate_general_epoch_v5_exact,
+    authenticate_general_reservation_v5, authenticate_general_reservation_v7,
+    authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
+    authenticate_position_v2, authenticate_position_v2_exact,
+    authenticate_replay_successor_v1_exact, authenticate_runtime_executable_v2,
+    project_authenticated_direct_epoch_v4, project_authenticated_position_v2,
+    project_authenticated_replay_successor_v1, AccountAccessV2, AccountViewV1, AccountViewV2,
+    CanonicalPdaV1, CountedChildSchemaV1, RetirementAdapterErrorV1, RetirementAdapterErrorV2,
 };
 use clutch_solana_layout::direct_selection_v3::DIRECT_EPOCH_V4_BYTES;
 use clutch_solana_layout::registry::{
@@ -33,6 +36,129 @@ fn view<'a>(data: &'a [u8], bump: u8) -> (AccountViewV1<'a>, CanonicalPdaV1) {
     )
 }
 
+fn view_v2<'a>(data: &'a [u8], bump: u8) -> (AccountViewV2<'a>, CanonicalPdaV1) {
+    let address = common::id(101);
+    (
+        AccountViewV2 {
+            address,
+            owner: common::id(100),
+            data,
+            is_writable: true,
+            is_executable: false,
+        },
+        CanonicalPdaV1::after_derivation(address, bump),
+    )
+}
+
+#[test]
+fn successor_authentication_is_exact_about_access_and_executable_state() {
+    let position = common::position_v2().encode().unwrap();
+    let (position_view, position_pda) = view_v2(&position, 9);
+    let authenticated = authenticate_position_v2_exact(
+        position_view,
+        common::id(100),
+        position_pda,
+        AccountAccessV2::Writable,
+    )
+    .unwrap();
+    assert!(project_authenticated_position_v2(authenticated).is_ok());
+
+    let mut read_only = position_view;
+    read_only.is_writable = false;
+    assert!(authenticate_position_v2_exact(
+        read_only,
+        common::id(100),
+        position_pda,
+        AccountAccessV2::ReadOnly,
+    )
+    .is_ok());
+    assert_eq!(
+        authenticate_position_v2_exact(
+            position_view,
+            common::id(100),
+            position_pda,
+            AccountAccessV2::ReadOnly,
+        ),
+        Err(RetirementAdapterErrorV2::UnexpectedWritable)
+    );
+    assert_eq!(
+        authenticate_position_v2_exact(
+            read_only,
+            common::id(100),
+            position_pda,
+            AccountAccessV2::Writable,
+        ),
+        Err(RetirementAdapterErrorV2::NotWritable)
+    );
+    let mut executable = position_view;
+    executable.is_executable = true;
+    assert_eq!(
+        authenticate_position_v2_exact(
+            executable,
+            common::id(100),
+            position_pda,
+            AccountAccessV2::Writable,
+        ),
+        Err(RetirementAdapterErrorV2::ExecutableAccount)
+    );
+
+    let market = common::market_v2().encode().unwrap();
+    let (mut market_view, market_pda) = view_v2(&market, 10);
+    market_view.is_writable = false;
+    assert!(authenticate_market_v2_exact(
+        market_view,
+        common::id(100),
+        market_pda,
+        AccountAccessV2::ReadOnly,
+    )
+    .is_ok());
+
+    let epoch = common::epoch_v5().encode().unwrap();
+    let (epoch_view, epoch_pda) = view_v2(&epoch, 12);
+    assert!(authenticate_general_epoch_v5_exact(
+        epoch_view,
+        common::id(100),
+        epoch_pda,
+        AccountAccessV2::Writable,
+    )
+    .is_ok());
+
+    let replay = common::replay_successor_v1().encode().unwrap();
+    let (replay_view, replay_pda) = view_v2(&replay, 18);
+    let authenticated = authenticate_replay_successor_v1_exact(
+        replay_view,
+        common::id(100),
+        replay_pda,
+        AccountAccessV2::Writable,
+    )
+    .unwrap();
+    assert!(project_authenticated_replay_successor_v1(authenticated).is_ok());
+
+    let mut program = AccountViewV2 {
+        address: common::id(110),
+        owner: common::id(111),
+        data: &[],
+        is_writable: false,
+        is_executable: true,
+    };
+    assert!(authenticate_runtime_executable_v2(program, common::id(110)).is_ok());
+    program.is_executable = false;
+    assert_eq!(
+        authenticate_runtime_executable_v2(program, common::id(110)),
+        Err(RetirementAdapterErrorV2::NotExecutable)
+    );
+    program.is_executable = true;
+    program.is_writable = true;
+    assert_eq!(
+        authenticate_runtime_executable_v2(program, common::id(110)),
+        Err(RetirementAdapterErrorV2::UnexpectedWritable)
+    );
+    assert_eq!(
+        authenticate_runtime_executable_v2(program, common::id(112)),
+        Err(RetirementAdapterErrorV2::WrongProgramAddress)
+    );
+}
+
 #[test]
 fn retirement_coordinates_match_central_reserved_disabled_registry_entries() {
     let expected = [
@@ -40,19 +166,22 @@ fn retirement_coordinates_match_central_reserved_disabled_registry_entries() {
             POSITION_TOMBSTONE_TAG,
             POSITION_TOMBSTONE_VERSION_V1,
             "retirement-provisional-position-tombstone-v1-account",
+            AllocationStatus::ReservedDisabled,
         ),
         (
             GENERAL_EPOCH_TOMBSTONE_TAG,
             GENERAL_EPOCH_TOMBSTONE_VERSION_V1,
             "retirement-provisional-general-epoch-tombstone-v1-account",
+            AllocationStatus::ReservedDisabled,
         ),
         (
             REPLAY_SUCCESSOR_ACCOUNT_TAG,
             REPLAY_SUCCESSOR_ACCOUNT_VERSION,
             "replay-successor-v1-account",
+            AllocationStatus::ReservedDisabled,
         ),
     ];
-    for (tag, version, name) in expected {
+    for (tag, version, name, status) in expected {
         let mut matches = 0u8;
         for entry in CENTRAL_COLLISION_LEDGER {
             if entry.coordinates
@@ -63,7 +192,7 @@ fn retirement_coordinates_match_central_reserved_disabled_registry_entries() {
                 })
             {
                 matches += 1;
-                assert_eq!(entry.status, AllocationStatus::ReservedDisabled);
+                assert_eq!(entry.status, status);
                 assert_eq!(entry.name, name);
             }
         }
