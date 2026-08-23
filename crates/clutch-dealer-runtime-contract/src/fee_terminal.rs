@@ -11,7 +11,10 @@ use clutch_fee_runtime_contract::terminal::{
     DealerFeeTerminalProjectionV1, FeeTerminalOutcomeV1,
 };
 
-use crate::{DealerEpochBindingPhaseV2, DealerEpochBindingV2, DealerLeaseV2, Error, Id, Result};
+use crate::{
+    CoveredDealerSelectionV1, DealerEpochBindingPhaseV2, DealerEpochBindingV2, DealerLeaseV2,
+    DealerPolicyV1, Error, Id, Result,
+};
 
 /// Dealer-authenticated terminal evidence for one exact leased candidate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,26 +61,43 @@ impl DealerFeeTerminalJoinV1 {
 /// caller-supplied terminal summary.
 pub fn bind_dealer_fee_terminal_v1(
     terminal: DealerFeeTerminalProjectionV1,
+    policy: &DealerPolicyV1,
+    selection: &CoveredDealerSelectionV1,
     epoch: &DealerEpochBindingV2,
     lease: &DealerLeaseV2,
 ) -> Result<DealerFeeTerminalJoinV1> {
+    policy.validate()?;
+    selection.validate()?;
     epoch.validate()?;
     lease.validate()?;
     let terminal_receipt_id = dealer_id(terminal.terminal_receipt);
     let fee_record_account_id = dealer_id(terminal.fee_record);
     let settlement_candidate_id = dealer_id(terminal.settlement_candidate);
-    let fee_revenue_policy_id = dealer_id(terminal.fee_policy);
+    let fee_revenue_policy_id = dealer_id(terminal.revenue_policy);
     for identity in [
         terminal_receipt_id,
         fee_record_account_id,
         settlement_candidate_id,
         fee_revenue_policy_id,
+        dealer_id(terminal.realm),
+        dealer_id(terminal.market),
+        dealer_id(terminal.epoch),
+        dealer_id(terminal.batch_policy),
     ] {
         if identity.is_zero() {
             return Err(Error::ZeroIdentity);
         }
     }
     if epoch.phase != DealerEpochBindingPhaseV2::Leased
+        || policy.policy_id()? != lease.policy_id
+        || selection.policy_id != lease.policy_id
+        || selection.selection_account_id != lease.covered_dealer_selection_account_id
+        || selection.selection_id()? != lease.covered_dealer_selection_id
+        || dealer_id(terminal.realm) != policy.realm_id
+        || dealer_id(terminal.market) != lease.market_instance_v2_id
+        || dealer_id(terminal.epoch) != lease.epoch_id
+        || dealer_id(terminal.batch_policy) != selection.batch_policy_id
+        || fee_revenue_policy_id != selection.fee_revenue_policy_id
         || epoch.policy_id != lease.policy_id
         || epoch.facility_id != lease.facility_id
         || epoch.facility_position_binding_id != lease.facility_position_binding_id

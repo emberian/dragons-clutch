@@ -228,6 +228,19 @@ pub const fn persisted_account_contract_v1(
             registry::DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
             DealerAccountLifetimeV1::ReplayReferencedEvidence,
         ),
+        registry::DEALER_COVERED_SELECTION_ACCOUNT_TAG => {
+            if version != registry::DEALER_COVERED_SELECTION_ACCOUNT_VERSION
+                && version != registry::DEALER_COVERED_TERMINAL_ACCOUNT_VERSION
+            {
+                return None;
+            }
+            return Some(DealerPersistedAccountContractV1 {
+                tag,
+                version,
+                account_bytes: registry::DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+                lifetime: DealerAccountLifetimeV1::CountedChild,
+            });
+        }
         _ => return None,
     };
     if version != expected_version {
@@ -295,6 +308,8 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::LapseEpoch
             | DealerFacilityAction::SelectLeaseAndBegin => 16,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 24,
+            DealerFacilityAction::FinalizeSettlement
+            | DealerFacilityAction::AbortBeforeCollection => 16,
             DealerFacilityAction::QueueExit => 16,
             DealerFacilityAction::Claim | DealerFacilityAction::Retire => 8,
             _ => 0,
@@ -351,6 +366,17 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::RefundCancelledSponsor
             | DealerFacilityAction::BindEpoch
             | DealerFacilityAction::LapseEpoch => {
+                value.liveness_call_ordinal = read_u32(input, 16);
+                if input[20..24].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 24);
+                if value.liveness_call_ordinal == 0 {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::FinalizeSettlement
+            | DealerFacilityAction::AbortBeforeCollection => {
                 value.liveness_call_ordinal = read_u32(input, 16);
                 if input[20..24].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
@@ -605,6 +631,10 @@ pub enum DealerMetaRoleV1 {
     RevenuePolicyRecord,
     /// Selected owner-netted fee record.
     FeeRecord,
+    /// Canonical fee closure manifest paired with the terminal receipt.
+    FeeClosureManifest,
+    /// Canonical candidate-wide fee terminal receipt.
+    FeeTerminalReceipt,
     /// Authenticated canonical EconomicDomainV2.
     EconomicDomain,
     /// Immutable quantized price-measure policy artifact.
@@ -929,6 +959,43 @@ const COLLECT_DELIVER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
 
+const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 29;
+const fn finalize_abort_contract(finalize: bool) -> [DealerMetaSpecV1; FINALIZE_ABORT_ACCOUNT_COUNT] {
+    [
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, finalize),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, !finalize),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::CoveredSelection, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::Lease, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::SettlementPot, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FeeClosureManifest, DealerMetaOwnerV1::FeeRuntime, false, false),
+    meta(DealerMetaRoleV1::FeeTerminalReceipt, DealerMetaOwnerV1::FeeRuntime, false, false),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    ]
+}
+const FINALIZE_SETTLEMENT: &[DealerMetaSpecV1] = &finalize_abort_contract(true);
+const ABORT_BEFORE_COLLECTION: &[DealerMetaSpecV1] = &finalize_abort_contract(false);
+
 const CANCEL_FUNDING: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1201,6 +1268,8 @@ pub fn meta_contract_v1(
             &COLLECT_DELIVER
                 [..COLLECT_DELIVER_FIXED_COUNT + usize::from(payload.book_page_count)],
         ),
+        DealerFacilityAction::FinalizeSettlement => Some(FINALIZE_SETTLEMENT),
+        DealerFacilityAction::AbortBeforeCollection => Some(ABORT_BEFORE_COLLECTION),
         DealerFacilityAction::SponsorHalt => Some(SPONSOR_HALT),
         DealerFacilityAction::TimedClose => Some(TIMED_CLOSE),
         DealerFacilityAction::QueueExit

@@ -12,8 +12,10 @@ use crate::accounts::{expect_pda, require, require_count, require_signer, Outcom
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_dealer_runtime_contract::{
-    advance_collect_v2, advance_deliver_v2, prepare_covered_dealer_row_progress_v1,
+    advance_collect_v2, advance_deliver_v2, bind_dealer_fee_terminal_v1,
+    prepare_abort_lease_pot_v3, prepare_covered_dealer_row_progress_v1,
     dealer_runtime_liveness_policy_id_v1,
+    prepare_finalize_lease_pot_v3,
     prepare_begin_covered_lease_pot_v4, prepare_bind_epoch_v3,
     prepare_dealer_sponsor_funding_transfer_v1,
     prepare_activate_dealer_v3, prepare_cancel_stale_funding_v3,
@@ -22,7 +24,8 @@ use clutch_dealer_runtime_contract::{
     prepare_lapse_epoch_v3, project_covered_dealer_position_v1,
     prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
     prepare_refund_cancelled_sponsor_v3, CoveredDealerSelectionContextV1,
-    CoveredDealerRowAssetTransitionV1, CoveredDealerSelectionV1, DealerActionReceiptV1,
+    CoveredDealerRowAssetTransitionV1, CoveredDealerSelectionV1, CoveredDealerTerminalV2,
+    DealerActionReceiptV1,
     DealerChildCountsV2,
     DealerEpochCloseCreditsV2, DealerEpochCloseRentV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
@@ -30,11 +33,13 @@ use clutch_dealer_runtime_contract::{
     DealerLivenessCompartmentV1, DealerLivenessScheduleV1, DealerPhaseV2,
     DealerPositionMarketJoinV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
-    DealerStateV2, DealerTransferPositionV3, DealerLeaseV2, DeletableRentOwnerV1,
+    DealerStateV2, DealerTransferPositionV3, DealerLeasePotCloseRentV3, DealerLeaseV2,
+    DeletableRentOwnerV1,
     FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, RootRentOwnerV1,
     SettlementPotPhaseV1, SettlementPotV2, SponsorCapitalDispositionV1,
 };
 use clutch_general_v2_contract::{
+    fee_runtime_semantic_release_id_v1,
     project_general_position_replay_prestate_v1, project_general_replay_transition_v1,
     CandidateWindowV4AccountV1, EconomicDomainV2AccountV1, GeneralEpochV6AccountV1,
     GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1, MarketBindingV2,
@@ -42,6 +47,10 @@ use clutch_general_v2_contract::{
     SettlementRootV1AccountV1,
     ECONOMIC_DOMAIN_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
     SELECTED_FEE_RECORD_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_BYTES, WINDOW_ACCOUNT_BYTES,
+};
+use clutch_fee_runtime_contract::terminal::{
+    FeeTerminalReceiptBundleV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
+    FEE_TERMINAL_RECEIPT_V1_BYTES,
 };
 use clutch_batch::portfolio_book_v2::{
     authenticate_complete_portfolio_book_into_v2,
@@ -101,7 +110,7 @@ use clutch_solana_layout::registry::{
     DEALER_ACTION_RECEIPT_ACCOUNT_VERSION, DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES,
     DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG, DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION,
     DEALER_COVERED_SELECTION_ACCOUNT_BYTES, DEALER_COVERED_SELECTION_ACCOUNT_TAG,
-    DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
+    DEALER_COVERED_SELECTION_ACCOUNT_VERSION, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES, DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG,
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION, DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
     DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG, DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
@@ -157,6 +166,7 @@ const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
 const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 40;
 const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 33;
+const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 29;
 
 /// Static source for the adapter's heap-resident complete RelationV2 book.
 ///
@@ -505,6 +515,51 @@ fn authenticate_action_receipt(
         ClutchError::DealerPolicyRentMismatch,
     )?;
     Ok((bump, receipt))
+}
+
+fn authenticate_fee_terminal_for_dealer(
+    program_id: &Pubkey,
+    closure_manifest_account: &AccountInfo<'_>,
+    terminal_account: &AccountInfo<'_>,
+    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+    selection: &CoveredDealerSelectionV1,
+    epoch: &DealerEpochBindingV2,
+    lease: &DealerLeaseV2,
+) -> Outcome<clutch_dealer_runtime_contract::DealerFeeTerminalJoinV1> {
+    for (account, expected_len) in [
+        (closure_manifest_account, FEE_CLOSURE_MANIFEST_V1_BYTES),
+        (terminal_account, FEE_TERMINAL_RECEIPT_V1_BYTES),
+    ] {
+        require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+        require(
+            !account.executable && !account.is_signer && !account.is_writable,
+            ClutchError::MismatchedState,
+        )?;
+        require(account.data_len() == expected_len, ClutchError::WrongDataLength)?;
+    }
+    let manifest_data = closure_manifest_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let terminal_data = terminal_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let bundle = FeeTerminalReceiptBundleV1::decode(&manifest_data, &terminal_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let manifest = bundle.closure_manifest();
+    let terminal = bundle.terminal();
+    let runtime_release = fee_runtime_semantic_release_id_v1(&RuntimeSha256)?;
+    require(
+        manifest.receipt().0 == closure_manifest_account.key.to_bytes()
+            && terminal.terminal_receipt().0 == terminal_account.key.to_bytes()
+            && terminal.closure_manifest().0 == closure_manifest_account.key.to_bytes()
+            && manifest.runtime_program().0 == program_id.to_bytes()
+            && terminal.runtime_program().0 == program_id.to_bytes()
+            && manifest.runtime_release().0 == runtime_release.bytes()
+            && terminal.runtime_release().0 == runtime_release.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    bind_dealer_fee_terminal_v1(terminal.project_dealer(), policy, selection, epoch, lease)
+        .map_err(dealer_fault)
 }
 
 #[inline(never)]
@@ -1641,6 +1696,28 @@ fn require_aliases(accounts: &[AccountInfo<'_>], allowed: (usize, usize)) -> Out
         let mut right = left + 1;
         while right < accounts.len() {
             if (left, right) != allowed {
+                require(
+                    accounts[left].key != accounts[right].key,
+                    ClutchError::AccountAlias,
+                )?;
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+fn require_finalize_abort_aliases(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            let recipient_alias = matches!(
+                (left, right),
+                (0, 17) | (0, 23) | (0, 24) | (17, 23) | (17, 24) | (23, 24)
+            );
+            if !recipient_alias {
                 require(
                     accounts[left].key != accounts[right].key,
                     ClutchError::AccountAlias,
@@ -5690,6 +5767,374 @@ fn collect_or_deliver_row(
     )
 }
 
+#[inline(never)]
+fn finalize_or_abort_lease_pot(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DealerFacilityAction,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require(
+        matches!(
+            action,
+            DealerFacilityAction::FinalizeSettlement
+                | DealerFacilityAction::AbortBeforeCollection
+        ),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    let payload = DealerRuntimePayloadV1::decode(action, payload_bytes).map_err(dealer_fault)?;
+    require_count(accounts, FINALIZE_ABORT_ACCOUNT_COUNT)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    require_finalize_abort_aliases(accounts)?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (position_binding, facility_position, facility_replay, replay_binding) =
+        authenticate_position_and_replay(
+            program_id,
+            &accounts[2],
+            &accounts[3],
+            &accounts[4],
+            &policy,
+            &state,
+            true,
+        )?;
+    require(
+        facility_replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let (_epoch_bump, epoch) =
+        authenticate_epoch_binding_with_access(program_id, &accounts[6], state.facility_id, false)?;
+    let schedule = authenticate_schedule(program_id, &accounts[7])?;
+    let compartment = match action {
+        DealerFacilityAction::FinalizeSettlement => DealerLivenessCompartmentV1::Settlement,
+        DealerFacilityAction::AbortBeforeCollection => DealerLivenessCompartmentV1::Recovery,
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[8],
+        &accounts[9..16],
+        compartment.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &position_binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let selected_runtime = runtime_states[compartment.index()];
+    require(
+        selected_runtime.identity.payer.bytes() == accounts[17].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let (selection_bump, selection) = dealer_body::<CoveredDealerSelectionV1>(
+        program_id,
+        &accounts[18],
+        true,
+        DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+        DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
+        DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+    )?;
+    let (lease_bump, lease) = dealer_body::<DealerLeaseV2>(
+        program_id,
+        &accounts[19],
+        true,
+        DEALER_LEASE_V2_ACCOUNT_TAG,
+        DEALER_LEASE_V2_ACCOUNT_VERSION,
+        DEALER_LEASE_V2_ACCOUNT_BYTES,
+    )?;
+    let (pot_bump, pot) = dealer_body::<SettlementPotV2>(
+        program_id,
+        &accounts[20],
+        true,
+        DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG,
+        DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
+        DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES,
+    )?;
+    expect_pda(
+        accounts[18].key,
+        seeds::dealer_covered_selection_pda(
+            program_id,
+            &selection.epoch_id.bytes(),
+            &selection.settlement_candidate_id.bytes(),
+        ),
+        Some(selection_bump),
+    )?;
+    expect_pda(
+        accounts[19].key,
+        seeds::dealer_lease_v2_pda(program_id, &state.facility_id.bytes(), state.generation),
+        Some(lease_bump),
+    )?;
+    expect_pda(
+        accounts[20].key,
+        seeds::dealer_pot_v2_pda(program_id, &state.facility_id.bytes(), state.generation),
+        Some(pot_bump),
+    )?;
+    selection
+        .validate_lease_pot(&lease, &pot, &epoch, &policy)
+        .map_err(dealer_fault)?;
+    require(
+        selection.selection_account_id == id(accounts[18].key)
+            && selection.stored_bump == selection_bump
+            && selection.lease_account_id == id(accounts[19].key)
+            && selection.settlement_pot_account_id == id(accounts[20].key)
+            && selection.dealer_state_account_id == id(accounts[2].key)
+            && selection.epoch_binding_account_id == id(accounts[6].key),
+        ClutchError::MismatchedState,
+    )?;
+    for (account, owner) in [(&accounts[18], selection.rent), (&accounts[19], lease.rent), (&accounts[20], pot.rent)] {
+        let floor = owner
+            .refundable_principal
+            .checked_add(owner.donation_floor)
+            .ok_or(ClutchError::Arithmetic)?;
+        require(
+            account.lamports() >= floor && owner.neutral_sink == policy.neutral_sink,
+            ClutchError::DealerPolicyRentMismatch,
+        )?;
+    }
+
+    let fee_terminal = authenticate_fee_terminal_for_dealer(
+        program_id,
+        &accounts[21],
+        &accounts[22],
+        &policy,
+        &selection,
+        &epoch,
+        &lease,
+    )?;
+    for account in [&accounts[23], &accounts[24], &accounts[25]] {
+        require(
+            account.is_writable && !account.executable,
+            ClutchError::NotWritable,
+        )?;
+    }
+    require(
+        id(accounts[23].key) == lease.rent.payer
+            && id(accounts[24].key) == pot.rent.payer
+            && id(accounts[25].key) == policy.neutral_sink,
+        ClutchError::MismatchedState,
+    )?;
+    let current_slot = read_clock_slot(&accounts[26])?;
+    let rent = read_rent(&accounts[27])?;
+    require_system_program(&accounts[28])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    require(
+        payload.keeper_payment_lamports >= receipt_principal,
+        ClutchError::MismatchedState,
+    )?;
+    require_creatable(&accounts[16])?;
+    let runtime_action = match action {
+        DealerFacilityAction::FinalizeSettlement => DealerRuntimeActionV1::FinalizeSettlement,
+        DealerFacilityAction::AbortBeforeCollection => DealerRuntimeActionV1::AbortBeforeCollection,
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let action_index = DealerLivenessScheduleV1::action_index(runtime_action);
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(compartment),
+        runtime_owner: runtime_binding.owner(compartment),
+        quote_schedule_id: runtime_binding.quote_schedule_id(compartment),
+        receipt_account_id: id(accounts[16].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[4].key),
+        action: runtime_action,
+        compartment,
+        runtime_generation: runtime_binding.generation(compartment),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports[action_index],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[17].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[16].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[16].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &selected_runtime)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[8],
+        &accounts[9 + compartment.index()],
+        selected_runtime,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt.runtime_receipt_observation().map_err(dealer_fault)?,
+    )?;
+    let market = DealerPositionMarketJoinV1 {
+        market_instance_v2_id: policy.market_instance_v2_id,
+        realm_id: policy.realm_id,
+        collateral_policy_id: position_binding.collateral_policy_id,
+        collateral_release_id: position_binding.collateral_release_id,
+        outcome_count: policy.outcome_count,
+    };
+    let close_rent = DealerLeasePotCloseRentV3 {
+        lease_lamports_before: accounts[19].lamports(),
+        pot_lamports_before: accounts[20].lamports(),
+        lease_lamports_after: 0,
+        pot_lamports_after: 0,
+    };
+    let prepared = match runtime_action {
+        DealerRuntimeActionV1::FinalizeSettlement => prepare_finalize_lease_pot_v3(
+            &policy,
+            &position_binding,
+            &state,
+            id(accounts[2].key),
+            &dependency,
+            &lease,
+            id(accounts[20].key),
+            &pot,
+            &schedule,
+            &runtime_binding,
+            &authorization,
+            &fee_terminal,
+            market,
+            &facility_position,
+            &facility_replay,
+            replay_binding,
+            close_rent,
+        ),
+        DealerRuntimeActionV1::AbortBeforeCollection => prepare_abort_lease_pot_v3(
+            &policy,
+            &position_binding,
+            &state,
+            id(accounts[2].key),
+            &dependency,
+            &lease,
+            id(accounts[20].key),
+            &pot,
+            &schedule,
+            &runtime_binding,
+            &authorization,
+            &fee_terminal,
+            market,
+            &facility_position,
+            &facility_replay,
+            replay_binding,
+            current_slot,
+            close_rent,
+        ),
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    }
+    .map_err(dealer_fault)?;
+    let terminal = CoveredDealerTerminalV2::from_prepared(
+        &selection,
+        &state,
+        &lease,
+        &pot,
+        &facility_replay,
+        &fee_terminal,
+        &receipt,
+        prepared,
+        current_slot,
+    )
+    .map_err(dealer_fault)?;
+    let close = prepared.close();
+    require(
+        close.refund_recipients() == [id(accounts[23].key), id(accounts[24].key)]
+            && close.neutral_sink() == id(accounts[25].key)
+            && terminal.selection_account_id() == id(accounts[18].key)
+            && terminal.stored_bump() == selection_bump,
+        ClutchError::MismatchedState,
+    )?;
+
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[16],
+        &accounts[28],
+        &rent,
+        DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_ACTION_RECEIPT,
+            &receipt_slot.bytes(),
+            &[receipt_bump],
+        ],
+    )?;
+    apply_liveness_transition(
+        &accounts[9 + compartment.index()],
+        &accounts[0],
+        &accounts[17],
+        &liveness_transition,
+    )?;
+    write_dealer_body(
+        &accounts[16],
+        DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+        DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        receipt_bump,
+        &receipt,
+    )?;
+    accounts[3]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &prepared
+                .transfer()
+                .position_post()
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &prepared.state_after(),
+    )?;
+    prepared
+        .replay()
+        .replay_post()
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)?;
+    write_dealer_body(
+        &accounts[18],
+        DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+        DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+        selection_bump,
+        &terminal,
+    )?;
+    release_dealer_account(&accounts[19])?;
+    release_dealer_account(&accounts[20])?;
+    let refunds = close.refund_lamports();
+    credit_lamports(&accounts[23], refunds[0])?;
+    credit_lamports(&accounts[24], refunds[1])?;
+    credit_lamports(&accounts[25], close.neutral_sink_lamports())
+}
+
 /// Execute one facility action admitted by the non-production profile.
 pub fn process(
     program_id: &Pubkey,
@@ -5724,6 +6169,10 @@ pub fn process(
         }
         DealerFacilityAction::Collect | DealerFacilityAction::Deliver => {
             collect_or_deliver_row(program_id, accounts, sequence, action, payload)
+        }
+        DealerFacilityAction::FinalizeSettlement
+        | DealerFacilityAction::AbortBeforeCollection => {
+            finalize_or_abort_lease_pot(program_id, accounts, sequence, action, payload)
         }
         _ => super::dealer_runtime::process_reserved_disabled(action),
     }
@@ -5808,6 +6257,93 @@ mod collect_deliver_adversarial_tests {
     #[test]
     fn complete_handlers_remain_outside_every_current_capability_profile() {
         for action in [DealerFacilityAction::Collect, DealerFacilityAction::Deliver] {
+            assert!(!crate::capabilities::extension_intent_action_enabled(
+                DEALER_FAMILY_TAG,
+                DEALER_FAMILY_VERSION,
+                action.tag(),
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod finalize_abort_adversarial_tests {
+    use super::DealerRuntimePayloadV1;
+    use crate::instructions::dealer_runtime::{meta_contract_v1, DealerMetaRoleV1};
+    use clutch_solana_layout::registry::{
+        DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
+    };
+
+    fn payload() -> [u8; 32] {
+        let mut value = [0u8; 32];
+        value[0..8].copy_from_slice(&7u64.to_le_bytes());
+        value[8..16].copy_from_slice(&9u64.to_le_bytes());
+        value[16..20].copy_from_slice(&11u32.to_le_bytes());
+        value[24..32].copy_from_slice(&13u64.to_le_bytes());
+        value
+    }
+
+    #[test]
+    fn terminal_payload_rejects_padding_stale_width_and_zero_call_ordinal() {
+        for action in [
+            DealerFacilityAction::FinalizeSettlement,
+            DealerFacilityAction::AbortBeforeCollection,
+        ] {
+            let exact = payload();
+            let decoded = DealerRuntimePayloadV1::decode(action, &exact).unwrap();
+            assert_eq!(decoded.expected_generation, 7);
+            assert_eq!(decoded.expected_replay_ordinal, 9);
+            assert_eq!(decoded.liveness_call_ordinal, 11);
+            assert_eq!(decoded.keeper_payment_lamports, 13);
+            assert!(DealerRuntimePayloadV1::decode(action, &exact[..31]).is_err());
+            let mut padding = exact;
+            padding[20] = 1;
+            assert!(DealerRuntimePayloadV1::decode(action, &padding).is_err());
+            let mut no_ordinal = exact;
+            no_ordinal[16..20].fill(0);
+            assert!(DealerRuntimePayloadV1::decode(action, &no_ordinal).is_err());
+        }
+    }
+
+    #[test]
+    fn only_the_action_owned_liveness_compartment_is_writable() {
+        let decoded = DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::FinalizeSettlement,
+            &payload(),
+        )
+        .unwrap();
+        let finalize = meta_contract_v1(DealerFacilityAction::FinalizeSettlement, decoded).unwrap();
+        let abort = meta_contract_v1(DealerFacilityAction::AbortBeforeCollection, decoded).unwrap();
+        assert_eq!(finalize.len(), 29);
+        assert_eq!(abort.len(), 29);
+        let finalize_settlement = finalize
+            .iter()
+            .find(|meta| meta.role == DealerMetaRoleV1::LivenessSettlement)
+            .unwrap();
+        let finalize_recovery = finalize
+            .iter()
+            .find(|meta| meta.role == DealerMetaRoleV1::LivenessRecovery)
+            .unwrap();
+        let abort_settlement = abort
+            .iter()
+            .find(|meta| meta.role == DealerMetaRoleV1::LivenessSettlement)
+            .unwrap();
+        let abort_recovery = abort
+            .iter()
+            .find(|meta| meta.role == DealerMetaRoleV1::LivenessRecovery)
+            .unwrap();
+        assert!(finalize_settlement.writable);
+        assert!(!finalize_recovery.writable);
+        assert!(!abort_settlement.writable);
+        assert!(abort_recovery.writable);
+    }
+
+    #[test]
+    fn terminal_handlers_remain_outside_every_current_capability_profile() {
+        for action in [
+            DealerFacilityAction::FinalizeSettlement,
+            DealerFacilityAction::AbortBeforeCollection,
+        ] {
             assert!(!crate::capabilities::extension_intent_action_enabled(
                 DEALER_FAMILY_TAG,
                 DEALER_FAMILY_VERSION,

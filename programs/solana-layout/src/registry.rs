@@ -470,6 +470,8 @@ pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION: u8 = 1;
 pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 /// First Dealer CoveredDealer selection attachment version.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
+/// In-place terminal postwrite version of the counted Dealer attachment.
+pub const DEALER_COVERED_TERMINAL_ACCOUNT_VERSION: u8 = 2;
 /// Exact attachment bytes including the Dealer global envelope.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
     DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 5_436;
@@ -1502,6 +1504,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-covered-selection-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+            version: DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-covered-terminal-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
