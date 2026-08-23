@@ -503,8 +503,9 @@ impl PreparedDealerPositionPairTransferV1 {
     }
 }
 
-/// Prepare sponsor/LP contribution, pre-activation withdrawal, or sponsor refund.
-pub fn prepare_dealer_position_pair_transfer_v1(
+/// Prepare sponsor initialization, LP contribution, pre-activation withdrawal,
+/// or sponsor refund.
+pub(crate) fn prepare_dealer_position_pair_transfer_v1(
     action: DealerRuntimeActionV1,
     market: DealerPositionMarketJoinV1,
     source: DealerTransferPositionV3,
@@ -547,6 +548,94 @@ pub fn prepare_dealer_position_pair_transfer_v1(
         source_post,
         destination_post,
     })
+}
+
+/// Prepare exact sponsor cash funding from the authenticated sponsor Position.
+///
+/// `sponsor_capital_atoms` must be projected from the authoritative Dealer
+/// State initialization transition. Sponsor funding never transfers Eggs or
+/// reserved cash and never crosses the Realm Hoard token boundary.
+pub fn prepare_dealer_sponsor_funding_transfer_v1(
+    market: DealerPositionMarketJoinV1,
+    sponsor_owner: Id,
+    sponsor_capital_atoms: u64,
+    sponsor_position: DealerTransferPositionV3,
+    facility_position: DealerTransferPositionV3,
+) -> Result<PreparedDealerPositionPairTransferV1> {
+    require_general_owner(sponsor_position, sponsor_owner)?;
+    let amounts = sponsor_capital_amounts(sponsor_capital_atoms)?;
+    prepare_dealer_position_pair_transfer_v1(
+        DealerRuntimeActionV1::Initialize,
+        market,
+        sponsor_position,
+        facility_position,
+        amounts,
+    )
+}
+
+/// Prepare one exact LP contribution or pre-activation withdrawal.
+///
+/// Every moved amount is derived from the immutable Dealer capital unit and
+/// the exact share delta. The caller cannot supply an independent cash/Egg
+/// vector or silently round a capital unit.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_dealer_lp_share_transfer_v1(
+    action: DealerRuntimeActionV1,
+    policy: &crate::DealerPolicyV1,
+    market: DealerPositionMarketJoinV1,
+    lp_owner: Id,
+    share_delta: u64,
+    lp_position: DealerTransferPositionV3,
+    facility_position: DealerTransferPositionV3,
+) -> Result<PreparedDealerPositionPairTransferV1> {
+    policy.validate()?;
+    require_general_owner(lp_position, lp_owner)?;
+    if market.market_instance_v2_id != policy.market_instance_v2_id
+        || market.outcome_count != policy.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let amounts = lp_share_amounts(policy, share_delta)?;
+    match action {
+        DealerRuntimeActionV1::Contribute => prepare_dealer_position_pair_transfer_v1(
+            action,
+            market,
+            lp_position,
+            facility_position,
+            amounts,
+        ),
+        DealerRuntimeActionV1::WithdrawFunding => prepare_dealer_position_pair_transfer_v1(
+            action,
+            market,
+            facility_position,
+            lp_position,
+            amounts,
+        ),
+        _ => Err(Error::MismatchedBinding),
+    }
+}
+
+/// Prepare the exact pre-activation sponsor-principal refund.
+///
+/// The State transition supplies both the immutable refund owner and the
+/// original sponsor principal; donation, fee, rent, and liveness balances are
+/// not admitted to this internal cash movement.
+pub fn prepare_dealer_sponsor_refund_transfer_v1(
+    market: DealerPositionMarketJoinV1,
+    sponsor_refund_owner: Id,
+    sponsor_capital_atoms: u64,
+    facility_position: DealerTransferPositionV3,
+    refund_position: DealerTransferPositionV3,
+) -> Result<PreparedDealerPositionPairTransferV1> {
+    require_general_owner(refund_position, sponsor_refund_owner)?;
+    let amounts = sponsor_capital_amounts(sponsor_capital_atoms)?;
+    prepare_dealer_position_pair_transfer_v1(
+        DealerRuntimeActionV1::RefundCancelledSponsor,
+        market,
+        facility_position,
+        refund_position,
+        amounts,
+    )
 }
 
 /// Exact result prepared before atomic Position↔Pot mutation.
@@ -613,7 +702,16 @@ pub fn prepare_dealer_position_pot_transfer_v1(
             return Err(Error::ConservationFailure);
         }
         require_pot_debit_delta(pot, amounts)?;
-        apply_position_credit(position.position(), amounts)?
+        let credited = apply_position_credit(position.position(), amounts)?;
+        if matches!(
+            action,
+            DealerRuntimeActionV1::FinalizeSettlement
+                | DealerRuntimeActionV1::AbortBeforeCollection
+        ) {
+            advance_position_generation(credited)?
+        } else {
+            credited
+        }
     };
     let position_post_id = position_semantic_id(position_post)?;
     let (source_pre, source_post, destination_pre, destination_post) = if position_to_pot {
@@ -716,6 +814,59 @@ fn apply_position_debit(
     PositionAccountV3::new(fields).map_err(|_| Error::ConservationFailure)
 }
 
+fn sponsor_capital_amounts(capital_atoms: u64) -> Result<DealerAssetTransferAmountsV1> {
+    if capital_atoms == 0 {
+        return Err(Error::InvalidParameter);
+    }
+    Ok(DealerAssetTransferAmountsV1 {
+        cash_atoms: capital_atoms,
+        source_reserved_cash_atoms: 0,
+        destination_reserved_cash_atoms: 0,
+        native_eggs: [0; MAX_OUTCOMES],
+    })
+}
+
+fn lp_share_amounts(
+    policy: &crate::DealerPolicyV1,
+    share_delta: u64,
+) -> Result<DealerAssetTransferAmountsV1> {
+    if share_delta == 0 {
+        return Err(Error::InvalidParameter);
+    }
+    let cash_atoms = policy
+        .capital_unit_cash_atoms
+        .checked_mul(share_delta)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let mut native_eggs = [0u64; MAX_OUTCOMES];
+    let mut index = 0usize;
+    while index < usize::from(policy.outcome_count) {
+        native_eggs[index] = policy.capital_unit_eggs[index]
+            .checked_mul(share_delta)
+            .ok_or(Error::ArithmeticOverflow)?;
+        index += 1;
+    }
+    let amounts = DealerAssetTransferAmountsV1 {
+        cash_atoms,
+        source_reserved_cash_atoms: 0,
+        destination_reserved_cash_atoms: 0,
+        native_eggs,
+    };
+    amounts.validate(policy.outcome_count)?;
+    Ok(amounts)
+}
+
+fn require_general_owner(position: DealerTransferPositionV3, expected_owner: Id) -> Result<()> {
+    expected_owner.validate_live()?;
+    match position {
+        DealerTransferPositionV3::General { position, .. }
+            if identity_matches(position.position().owner(), expected_owner) =>
+        {
+            Ok(())
+        }
+        _ => Err(Error::MismatchedBinding),
+    }
+}
+
 fn apply_position_credit(
     position: PositionAccountV3,
     amounts: DealerAssetTransferAmountsV1,
@@ -781,7 +932,7 @@ fn require_transfer_direction(
     destination: DealerAssetEndpointKindV1,
 ) -> Result<()> {
     let valid = match action {
-        DealerRuntimeActionV1::Contribute => {
+        DealerRuntimeActionV1::Initialize | DealerRuntimeActionV1::Contribute => {
             source == DealerAssetEndpointKindV1::GeneralPosition
                 && destination == DealerAssetEndpointKindV1::FacilityPosition
         }
@@ -818,7 +969,8 @@ fn require_transfer_direction(
 const fn action_has_asset_transfer(action: DealerRuntimeActionV1) -> bool {
     matches!(
         action,
-        DealerRuntimeActionV1::Contribute
+        DealerRuntimeActionV1::Initialize
+            | DealerRuntimeActionV1::Contribute
             | DealerRuntimeActionV1::WithdrawFunding
             | DealerRuntimeActionV1::RefundCancelledSponsor
             | DealerRuntimeActionV1::SelectLeaseAndBegin
@@ -846,6 +998,15 @@ fn position_semantic_id(position: PositionAccountV3) -> Result<Id> {
         .semantic_id(&DealerPositionSha256V1)
         .map_err(|_| Error::MismatchedBinding)?;
     Ok(Id::from_bytes(identity.bytes()))
+}
+
+fn advance_position_generation(position: PositionAccountV3) -> Result<PositionAccountV3> {
+    let mut fields = position.fields();
+    fields.generation = fields
+        .generation
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    PositionAccountV3::new(fields).map_err(|_| Error::ConservationFailure)
 }
 
 #[derive(Clone, Copy, Debug)]
