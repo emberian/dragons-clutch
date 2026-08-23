@@ -2412,16 +2412,20 @@ impl ClearWorkV1 {
                     ErrorV1::ArithmeticOverflow,
                 ),
             }
-            let price = self.cand.prices[outcome] as i128;
+            let price = i128::from(self.cand.prices[outcome]);
+            let signed_direct = i128::from(direct) - i128::from(overlap);
             let weighted_term = price
                 .checked_mul(scale - price)
-                .and_then(|weight| weight.checked_mul(direct as i128 - overlap as i128));
+                .and_then(|weight| weight.checked_mul(signed_direct));
             match weighted_term.and_then(|term| weighted.checked_add(term)) {
                 Some(sum) => weighted = sum,
-                None => self.latch(
-                    pos(M14_SCORE, 0, outcome as u16, 0, 4),
-                    ErrorV1::ArithmeticOverflow,
-                ),
+                None => {
+                    let outcome_index = u16::try_from(outcome).unwrap_or(u16::MAX);
+                    self.latch(
+                        pos(M14_SCORE, 0, outcome_index, 0, 4),
+                        ErrorV1::ArithmeticOverflow,
+                    );
+                }
             }
             self.summary.buy_flow[outcome] = flow;
             self.summary.sell_flow[outcome] = if self.flow_sell[outcome] > u64::MAX as u128 {
