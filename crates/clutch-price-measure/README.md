@@ -34,7 +34,7 @@ at most `outcome_count`. This proves membership in the convex hull of the
 actual finite quantized atom set. It neither uses nor accepts the continuous
 moment-cone witness and makes no uniqueness or optimality claim.
 
-### Exact singleton/two-atom construction
+### Exact bounded atom construction
 
 `solve_quantized_atom_pair_hull_v1` constructs a canonical V1 certificate when
 the target is exactly one production atom or an exact rational interpolation
@@ -57,6 +57,22 @@ price identities. An owning adapter must authenticate those bodies before
 using its certificate. It also makes no claim about representations requiring
 three or more atoms, and its deterministic first solution is not an economic
 optimum or a unique representation.
+
+`solve_quantized_atom_support3_hull_v1` extends that search through every
+lexicographic coordinate triple under separate pair and triple work limits.
+For an affine-independent triple, it derives exact barycentric numerators with
+checked signed 2-by-2 determinants, checks the reconstruction in every active
+outcome, reduces all masses and their denominator by their exact common gcd,
+and independently invokes the same production verifier.
+
+The determinant substrate uses two fixed `u128` limbs so the difference of two
+full `u64` products and subsequent exact reconstruction remain representable
+without signed overflow. It uses fixed-iteration exact division and binary gcd;
+there are no casts, allocations, floats, or rounding. Exhaustive outcomes
+separate no rational singleton/pair/triple, exact triples whose primitive
+masses exceed V1's `u64` encoding, and work truncation. The support-three API
+makes no statement about representations requiring four through
+`outcome_count` atoms.
 
 ## Continuous exact profile
 

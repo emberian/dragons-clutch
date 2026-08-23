@@ -49,6 +49,8 @@ const UNFILLED_RESERVATION_OWNER_ROLE: u8 = 8;
 const MERGE_PAYMENT_OWNER_ROLE: u8 = 9;
 const PORTFOLIO_PAIR_BUYER_ROLE: u8 = 10;
 const PORTFOLIO_PAIR_SELLER_ROLE: u8 = 11;
+const PORTFOLIO_ARCHIVE_BUYER_ROLE: u8 = 12;
+const PORTFOLIO_ARCHIVE_SELLER_ROLE: u8 = 13;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
@@ -86,6 +88,10 @@ pub enum GeneralReplayTransitionKindV1 {
     PortfolioPairBuyer,
     /// Action 42 exact coefficient-portfolio seller endpoint.
     PortfolioPairSeller,
+    /// Action 44 buyer Position child retirement endpoint.
+    RetirePortfolioPairBuyerArchive,
+    /// Action 44 seller Position child retirement endpoint.
+    RetirePortfolioPairSellerArchive,
     /// Action 35 General Position endpoint of a structured exchange.
     StructuredGeneral,
     /// FractionalRedemption action 2 internal exact-lot endpoint.
@@ -196,6 +202,18 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 42,
                 PORTFOLIO_PAIR_SELLER_ROLE,
+            ),
+            Self::RetirePortfolioPairBuyerArchive => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                44,
+                PORTFOLIO_ARCHIVE_BUYER_ROLE,
+            ),
+            Self::RetirePortfolioPairSellerArchive => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                44,
+                PORTFOLIO_ARCHIVE_SELLER_ROLE,
             ),
             Self::StructuredGeneral => (
                 STRUCTURED_EXCHANGE_FAMILY,
@@ -310,6 +328,18 @@ impl GeneralReplayTransitionKindV1 {
                 42,
                 PORTFOLIO_PAIR_SELLER_ROLE,
             ) => Ok(Self::PortfolioPairSeller),
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                44,
+                PORTFOLIO_ARCHIVE_BUYER_ROLE,
+            ) => Ok(Self::RetirePortfolioPairBuyerArchive),
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                44,
+                PORTFOLIO_ARCHIVE_SELLER_ROLE,
+            ) => Ok(Self::RetirePortfolioPairSellerArchive),
             (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
                 Ok(Self::StructuredGeneral)
             }
@@ -936,9 +966,13 @@ where
     {
         return Err(CodecError::MismatchedBinding);
     }
-    let expected_outstanding_reservations = if kind
-        == GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
-    {
+    let retires_reservation_child = matches!(
+        kind,
+        GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
+            | GeneralReplayTransitionKindV1::RetirePortfolioPairBuyerArchive
+            | GeneralReplayTransitionKindV1::RetirePortfolioPairSellerArchive
+    );
+    let expected_outstanding_reservations = if retires_reservation_child {
         pre_fields
             .outstanding_reservations
             .checked_sub(1)
@@ -986,6 +1020,8 @@ where
             | GeneralReplayTransitionKindV1::PortfolioPairBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
             | GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
+            | GeneralReplayTransitionKindV1::RetirePortfolioPairBuyerArchive
+            | GeneralReplayTransitionKindV1::RetirePortfolioPairSellerArchive
             | GeneralReplayTransitionKindV1::StructuredGeneral
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalExact
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit
@@ -1119,6 +1155,42 @@ mod tests {
             GeneralReplayExtensionV1::decode(&advanced_extension(
                 26,
                 PORTFOLIO_PAIR_BUYER_ROLE,
+            )),
+            Err(CodecError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn action44_roles_are_fresh_exhaustive_and_not_action42_roles() {
+        let buyer = GeneralReplayExtensionV1::decode(&advanced_extension(
+            44,
+            PORTFOLIO_ARCHIVE_BUYER_ROLE,
+        ))
+        .unwrap();
+        let seller = GeneralReplayExtensionV1::decode(&advanced_extension(
+            44,
+            PORTFOLIO_ARCHIVE_SELLER_ROLE,
+        ))
+        .unwrap();
+        assert_eq!(
+            buyer.last_kind(),
+            Some(GeneralReplayTransitionKindV1::RetirePortfolioPairBuyerArchive)
+        );
+        assert_eq!(
+            seller.last_kind(),
+            Some(GeneralReplayTransitionKindV1::RetirePortfolioPairSellerArchive)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(
+                44,
+                PORTFOLIO_PAIR_BUYER_ROLE,
+            )),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(
+                42,
+                PORTFOLIO_ARCHIVE_SELLER_ROLE,
             )),
             Err(CodecError::InvalidState)
         );

@@ -244,6 +244,21 @@ own accounts, hashes, lifecycle, candidate identity, ranking, or execution;
 the adapter must authenticate the same complete Product/Market/Grid tuple as
 the verifier path before accepting the emitted sidecar.
 
+The additive `solve_quantized_atom_support3_hull_v1` continues through
+lexicographic coordinate triples under a separate triple work bound. It solves
+an affine-independent triple by exact barycentric 2-by-2 determinants, checks
+every payout equation, reduces the whole mass vector by an exact common gcd,
+and then invokes the same production verifier. A fixed two-`u128`-limb
+substrate holds signed determinant magnitudes and reconstruction products; its
+binary gcd and fixed-iteration division use no allocation, unchecked cast,
+float, or rounding.
+
+An exhaustive support-three result distinguishes absence of an exact positive
+singleton/pair/triple from existence of exact triples whose reduced masses or
+denominator exceed the V1 `u64` certificate profile. A work-limited result
+claims only its deterministic search prefix. None of these outcomes decides
+representability with support four through `outcome_count`.
+
 ## 4. Adapter certificate interface
 
 `AdapterBindingsV2` is a typed trust-boundary input, not an account layout. The
@@ -294,8 +309,8 @@ Before a production SBF profile selects the finite checker:
    already remints the exact Product/Grid capability rather than trusting a
    policy bit;
 2. independently generate the transfer templates and derivation manifest;
-3. extend the exact singleton/two-atom constructor to support three through
-   `outcome_count` atoms, or retain that restriction explicitly in every
+3. extend the exact support-three constructor through `outcome_count` atoms,
+   or retain that restriction explicitly in every
    proposing client; no floating residual may become consensus evidence;
 4. decide whether the `u64` denominator lattice is a deliberate sufficient
    inner profile or prove a constructive completeness bound;

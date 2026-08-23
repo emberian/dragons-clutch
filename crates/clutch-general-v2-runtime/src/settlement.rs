@@ -1528,8 +1528,8 @@ impl SettlementTraversalProjectionV4 {
         }
     }
 
-    /// Exact canonical slice at one checked active Feed index.
-    pub fn slice(&self, slice_index: u16) -> Option<CanonicalSettlementSliceV1> {
+    /// Canonical retained-Feed settlement slice at one authenticated index.
+    pub fn settlement_slice(&self, slice_index: u16) -> Option<CanonicalSettlementSliceV1> {
         if slice_index < self.feed.slice_count {
             Some(self.slices[usize::from(slice_index)])
         } else {
@@ -1537,13 +1537,23 @@ impl SettlementTraversalProjectionV4 {
         }
     }
 
-    /// Exact canonical integer price at one checked active outcome.
-    pub fn price(&self, outcome: u8) -> Option<u64> {
+    /// Exact alias used by the private Portfolio sibling constructor.
+    pub fn slice(&self, slice_index: u16) -> Option<CanonicalSettlementSliceV1> {
+        self.settlement_slice(slice_index)
+    }
+
+    /// Canonical selected price at one active outcome.
+    pub fn outcome_price(&self, outcome: u8) -> Option<u64> {
         if outcome < self.feed.outcome_count {
             Some(self.prices[usize::from(outcome)])
         } else {
             None
         }
+    }
+
+    /// Exact alias used by the private Portfolio sibling constructor.
+    pub fn price(&self, outcome: u8) -> Option<u64> {
+        self.outcome_price(outcome)
     }
 }
 
