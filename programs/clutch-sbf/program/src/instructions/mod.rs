@@ -63,8 +63,12 @@ pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod external_exit;
 pub mod external_redemption_v3;
+/// Capability-disabled reusable Market interval account seam.
 #[cfg(feature = "non-production-failure-recovery-lab")]
-pub mod failure_interval_consensus;
+pub(crate) mod failure_market_interval_v2;
+/// Capability-disabled permanent shared-Market Failure replay seam.
+#[cfg(feature = "non-production-failure-recovery-lab")]
+pub(crate) mod failure_market_replay_v2;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_market_admission;
 #[cfg(feature = "non-production-failure-recovery-lab")]
@@ -103,6 +107,9 @@ pub mod general_v2_unfilled_release_v1;
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_identity;
+/// Staged action-24 rent-owned V5 materializer; route remains disabled.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_materialize_v5;
 #[cfg(any(
     all(
         feature = "profile-full",

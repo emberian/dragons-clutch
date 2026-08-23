@@ -14,7 +14,7 @@ use std::fs::{self, OpenOptions, Permissions};
 use std::io::Write as _;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub type Result<T> = std::result::Result<T, SessionError>;
 
@@ -79,6 +79,7 @@ impl LocalValidatorPorts {
     pub fn validate(self) -> Result<()> {
         let fixed = [self.rpc, self.rpc_websocket, self.faucet, self.gossip];
         if fixed.iter().any(|port| *port == 0)
+            || self.rpc.checked_add(1) != Some(self.rpc_websocket)
             || self.dynamic_start == 0
             || self.dynamic_start > self.dynamic_end
         {
@@ -133,6 +134,8 @@ impl RealSourceAcquisitionV3 {
             } => {
                 if !https_rpc_url.starts_with("https://")
                     || https_rpc_url.contains('@')
+                    || https_rpc_url.contains('?')
+                    || https_rpc_url.contains('#')
                     || *maximum_account_reads == 0
                     || *maximum_account_reads > 1_024
                 {
@@ -211,12 +214,12 @@ impl RealSourceConfigV3 {
                 "real Source parser, receiver, transport, feed, and Config identities are invalid",
             ));
         }
-        if self.receiver_deployment_slot == 0
-            || self.parser_deployment_slot == 0
-            || self.transport_deployment_slot == 0
+        if self.receiver_deployment_slot != 0
+            || self.parser_deployment_slot != 0
+            || self.transport_deployment_slot != 0
         {
             return Err(SessionError::InvalidSource(
-                "real Source deployment slots must be nonzero",
+                "locally synthesized Source deployment slots must be zero",
             ));
         }
         require_digest(self.feed_id, "real source feed identity is zero")?;
@@ -234,10 +237,12 @@ impl RealSourceConfigV3 {
     }
 }
 
-/// Expected upgradeable program release loaded by the local validator.
-/// Construction records Program, ProgramData, slot, and ELF digest; the
-/// process launcher remains responsible for checking the ELF bytes before
-/// using the argv.
+/// Expected upgradeable program release synthesized by the local validator.
+/// Agave's `--bpf-program` genesis path writes a ProgramData slot of zero, so
+/// local release coordinates require that exact slot. Public-cluster release
+/// coordinates are owned by a separate manifest and must not use this type.
+/// Construction records Program, ProgramData, and ELF digest; the process
+/// launcher remains responsible for checking the ELF bytes before using argv.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalProgramRelease {
     pub program_id: Address,
@@ -286,7 +291,7 @@ impl LocalProgramRelease {
         if self.program_id == Address::default()
             || self.program_data == Address::default()
             || self.program_id == self.program_data
-            || self.deployment_slot == 0
+            || self.deployment_slot != 0
             || !self.elf_path.is_absolute()
             || self.elf_path == Path::new("/")
             || self.elf_path.extension().and_then(|value| value.to_str()) != Some("so")
@@ -788,12 +793,16 @@ impl LocalValidatorInvocation {
                 "local validator invocation is not explicitly bound",
             ));
         }
+        let release_addresses = core::iter::once(&config.clutch_release)
+            .chain(&config.external_program_releases)
+            .flat_map(|release| [release.program_id, release.program_data])
+            .collect::<BTreeSet<_>>();
         let mut addresses = BTreeSet::new();
         for account in genesis_accounts {
             account.validate(layout.root())?;
-            if !addresses.insert(account.address) {
+            if release_addresses.contains(&account.address) || !addresses.insert(account.address) {
                 return Err(SessionError::InvalidRelease(
-                    "local genesis account address is duplicated",
+                    "local genesis account aliases a release or is duplicated",
                 ));
             }
         }
@@ -894,9 +903,26 @@ impl EphemeralKeyRoster {
 }
 
 fn validate_root(root: &Path) -> Result<()> {
-    if !root.is_absolute() || root == Path::new("/") || root.ancestors().count() < 3 {
+    let has_only_normal_text_components = root.to_str().is_some_and(|text| {
+        text.strip_prefix('/').is_some_and(|remainder| {
+            !remainder.is_empty()
+                && remainder
+                    .split('/')
+                    .all(|component| {
+                        !component.is_empty() && component != "." && component != ".."
+                    })
+        })
+    });
+    if !root.is_absolute()
+        || root == Path::new("/")
+        || root.ancestors().count() < 3
+        || !has_only_normal_text_components
+        || root
+            .components()
+            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
         return Err(SessionError::InvalidRoot(
-            "local session root must be a narrow absolute path",
+            "local session root must be a narrow, normal absolute path",
         ));
     }
     let name = root
@@ -905,10 +931,55 @@ fn validate_root(root: &Path) -> Result<()> {
         .ok_or(SessionError::InvalidRoot(
             "local session root has no UTF-8 leaf",
         ))?;
-    if name.is_empty() || name == ".solana" || name == "id.json" {
+    let key_like = root.components().any(|component| {
+        let Component::Normal(value) = component else {
+            return false;
+        };
+        let value = value.to_string_lossy().to_ascii_lowercase();
+        value == ".solana"
+            || value == "ephemeral-keys"
+            || value == "id.json"
+            || [
+                "wallet",
+                "keypair",
+                "private-key",
+                "private_key",
+                "mnemonic",
+                "seed",
+                "secret",
+                "keystore",
+                "recovery-phrase",
+                "recovery_phrase",
+            ]
+            .iter()
+            .any(|marker| value.contains(*marker))
+    });
+    if name.is_empty() || key_like {
         return Err(SessionError::InvalidRoot(
             "local session root resembles a wallet path",
         ));
+    }
+    let mut prefix = PathBuf::from("/");
+    for component in root.components() {
+        let Component::Normal(value) = component else {
+            continue;
+        };
+        prefix.push(value);
+        match fs::symlink_metadata(&prefix) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(SessionError::InvalidRoot(
+                    "local session root has a symlink ancestor",
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(SessionError::InvalidRoot(
+                    "local session root ancestor is not a directory",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(SessionError::Io(error)),
+        }
     }
     Ok(())
 }
@@ -964,6 +1035,18 @@ mod tests {
         assert!(ports.validate().is_ok());
         assert!(require_loopback_endpoint(&ports.rpc_http(), "http://").is_ok());
         assert!(require_loopback_endpoint(&ports.rpc_websocket(), "ws://").is_ok());
+        assert!(LocalValidatorPorts {
+            rpc_websocket: 9140,
+            ..ports
+        }
+        .validate()
+        .is_err());
+        assert!(RealSourceAcquisitionV3::BoundedPublicRead {
+            https_rpc_url: "https://api.devnet.solana.com/?api-key=secret".into(),
+            maximum_account_reads: 16,
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -983,16 +1066,49 @@ mod tests {
     }
 
     #[test]
+    fn session_root_refuses_non_normal_and_key_material_paths() {
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/session")).is_ok());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/../session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/./session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch//session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/wallet/session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/session/seed.json")).is_err());
+    }
+
+    #[test]
+    fn session_root_refuses_a_symlink_ancestor() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_nanos();
+        let temporary = fs::canonicalize(std::env::temp_dir())
+            .expect("temporary directory has a canonical path");
+        let base = temporary.join(format!(
+            "dragons-clutch-root-alias-{}-{nonce}",
+            std::process::id()
+        ));
+        let actual = base.join("actual");
+        let alias = base.join("alias");
+        fs::create_dir(&base).expect("test base is fresh");
+        fs::create_dir(&actual).expect("test target is fresh");
+        std::os::unix::fs::symlink(&actual, &alias).expect("test alias is created");
+        assert!(validate_root(&alias.join("session")).is_err());
+        fs::remove_file(alias).expect("test alias is removed");
+        fs::remove_dir(actual).expect("test target is removed");
+        fs::remove_dir(base).expect("test base is removed");
+    }
+
+    #[test]
     fn source_executes_in_clutch_with_distinct_parser_receiver_and_transport() {
         let program = |byte, digest, name: &str| LocalProgramRelease {
             program_id: Address::new_from_array([byte; 32]),
             program_data: Address::new_from_array([byte + 20; 32]),
-            deployment_slot: 100 + u64::from(byte),
+            deployment_slot: 0,
             elf_sha256: [digest; 32],
             elf_path: PathBuf::from(format!("/tmp/{name}.so")),
         };
         let mut config = LocalSessionConfig {
-            root: PathBuf::from("/tmp/dragons-clutch-session-test"),
+            root: PathBuf::from("/private/tmp/dragons-clutch-session-test"),
             ports: LocalValidatorPorts {
                 rpc: 9137,
                 rpc_websocket: 9138,
@@ -1017,19 +1133,19 @@ mod tests {
             source: RealSourceConfigV3 {
                 receiver_program: Address::new_from_array([2; 32]),
                 receiver_program_data: Address::new_from_array([22; 32]),
-                receiver_deployment_slot: 102,
+                receiver_deployment_slot: 0,
                 receiver_config: Address::new_from_array([5; 32]),
                 receiver_release_sha256: [12; 32],
                 parser_program: Address::new_from_array([3; 32]),
                 parser_program_data: Address::new_from_array([23; 32]),
-                parser_deployment_slot: 103,
+                parser_deployment_slot: 0,
                 parser_config: Address::new_from_array([6; 32]),
                 parser_release_sha256: [13; 32],
                 feed_account: Address::new_from_array([7; 32]),
                 feed_id: [15; 32],
                 transport_program: Address::new_from_array([4; 32]),
                 transport_program_data: Address::new_from_array([24; 32]),
-                transport_deployment_slot: 104,
+                transport_deployment_slot: 0,
                 transport_release_sha256: [14; 32],
                 source_spec_id: [16; 32],
                 acquisition: RealSourceAcquisitionV3::PinnedLocalCapture {

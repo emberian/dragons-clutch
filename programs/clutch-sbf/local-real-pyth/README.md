@@ -57,8 +57,13 @@ The builder feature now also exposes two reusable boundaries:
   ports, mint identity, warp slot, digest-bound genesis-account files, and
   explicit main-program/adapter `--bpf-program` releases without starting a
   process. Each program tuple carries its Program, ProgramData, deployment
-  slot, expected ELF digest, and absolute `.so` path; the eventual process
-  launcher must check the bytes against that digest before using the argv.
+  slot, expected ELF digest, and absolute `.so` path. The deployment slot is
+  exactly zero because pinned Agave synthesizes that value in ProgramData at
+  genesis; historical public-cluster slots are not valid local coordinates.
+  The eventual process launcher must check the staged bytes against each
+  digest immediately before using the argv. Existing input aliases are resolved
+  before reads, key-like resolved targets and symlink leaves are refused, and a
+  fresh session root may not traverse a symlink ancestor.
 - `transaction_builder` accepts instruction bytes from their semantic owner,
   binds them to package/schema/release identity, preserves exact integer
   balance equations, and assembles unsigned blockhash-free Solana transactions.

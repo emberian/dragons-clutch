@@ -17,15 +17,20 @@ use crate::{
     content_id, CapabilitySemanticOwnersV2, ContentId, Error, EvidenceOnlyRecoveryPolicyId,
     FixedCodec, NativeClaimBasisId, PriceMeasurePolicyV1Id, QuantizedIntervalConsensusProfileV1,
     RealmCollateralProjectionV1, RegistryCapabilityProfileV2Id, RegistryCapabilityProfileV3Id,
-    RegistryCapabilityProjectionV2, RegistryProgramReleaseV1Id, Result,
+    RegistryCapabilityProfileV4Id, RegistryCapabilityProjectionV2, RegistryProgramReleaseV1Id,
+    RegistryProgramReleaseV2Id, Result,
 };
 
 const PROFILE_MAGIC_V2: [u8; 8] = *b"DCRCAPV2";
 const PROFILE_VERSION_V2: u16 = 2;
 const PROFILE_MAGIC_V3: [u8; 8] = *b"DCRCAPV3";
 const PROFILE_VERSION_V3: u16 = 3;
-const RELEASE_MAGIC: [u8; 8] = *b"DCRRELV1";
-const RELEASE_VERSION: u16 = 1;
+const PROFILE_MAGIC_V4: [u8; 8] = *b"DCRCAPV4";
+const PROFILE_VERSION_V4: u16 = 4;
+const RELEASE_MAGIC_V1: [u8; 8] = *b"DCRRELV1";
+const RELEASE_VERSION_V1: u16 = 1;
+const RELEASE_MAGIC_V2: [u8; 8] = *b"DCRRELV2";
+const RELEASE_VERSION_V2: u16 = 2;
 
 /// SHA-256 domain for [`RegistryCapabilityProfileV2`].
 pub const REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN: &[u8] =
@@ -37,11 +42,20 @@ pub const REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN: &[u8] =
     b"dragons-clutch/registry-capability-profile/v3";
 /// Exact canonical width of [`RegistryCapabilityProfileV3`].
 pub const REGISTRY_CAPABILITY_PROFILE_V3_BYTES: usize = 816;
+/// SHA-256 domain for [`RegistryCapabilityProfileV4`].
+pub const REGISTRY_CAPABILITY_PROFILE_V4_DOMAIN: &[u8] =
+    b"dragons-clutch/registry-capability-profile/v4";
+/// Exact canonical width of [`RegistryCapabilityProfileV4`].
+pub const REGISTRY_CAPABILITY_PROFILE_V4_BYTES: usize = 816;
 
 /// SHA-256 domain for [`RegistryProgramReleaseV1`].
 pub const REGISTRY_PROGRAM_RELEASE_V1_DOMAIN: &[u8] = b"dragons-clutch/registry-program-release/v1";
 /// Exact canonical width of [`RegistryProgramReleaseV1`].
 pub const REGISTRY_PROGRAM_RELEASE_V1_BYTES: usize = 160;
+/// SHA-256 domain for [`RegistryProgramReleaseV2`].
+pub const REGISTRY_PROGRAM_RELEASE_V2_DOMAIN: &[u8] = b"dragons-clutch/registry-program-release/v2";
+/// Exact canonical width of [`RegistryProgramReleaseV2`].
+pub const REGISTRY_PROGRAM_RELEASE_V2_BYTES: usize = 160;
 
 /// Exact executable release associated with one central-registry profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,8 +100,8 @@ impl FixedCodec for RegistryProgramReleaseV1 {
     fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.validate()?;
         let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
-        writer.bytes(&RELEASE_MAGIC);
-        writer.u16(RELEASE_VERSION);
+        writer.bytes(&RELEASE_MAGIC_V1);
+        writer.u16(RELEASE_VERSION_V1);
         writer.reserved(6);
         writer.id(self.program);
         writer.id(self.programdata);
@@ -100,8 +114,8 @@ impl FixedCodec for RegistryProgramReleaseV1 {
 
     fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.magic(&RELEASE_MAGIC)?;
-        if reader.u16() != RELEASE_VERSION {
+        reader.magic(&RELEASE_MAGIC_V1)?;
+        if reader.u16() != RELEASE_VERSION_V1 {
             return Err(Error::BadVersion);
         }
         reader.reserved(6)?;
@@ -113,6 +127,162 @@ impl FixedCodec for RegistryProgramReleaseV1 {
             capability_manifest_id: reader.id(),
         };
         reader.reserved(8)?;
+        reader.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Disjoint deployment locus for a V2 registry release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum RegistryReleaseLocusV2 {
+    /// Agave-synthesized ProgramData whose loader slot is exactly zero.
+    SynthesizedGenesisZero = 1,
+    /// Loader-observed ProgramData whose deployment slot is strictly positive.
+    ObservedPositive = 2,
+}
+
+impl RegistryReleaseLocusV2 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::SynthesizedGenesisZero => 1,
+            Self::ObservedPositive => 2,
+        }
+    }
+
+    fn decode(byte: u8) -> Result<Self> {
+        match byte {
+            1 => Ok(Self::SynthesizedGenesisZero),
+            2 => Ok(Self::ObservedPositive),
+            _ => Err(Error::InvalidParameter),
+        }
+    }
+}
+
+/// Versioned executable release with a disjoint loader-observed coordinate kind.
+///
+/// Solana programs cannot authenticate the cluster genesis hash, so that truth
+/// is deliberately not stored here. The operator's release manifest separately
+/// binds genesis/network/workflow identity to this artifact's exact digest.
+/// Onchain, slot zero is admitted only under `SynthesizedGenesisZero`; an
+/// observed deployment is admitted only under `ObservedPositive` with a
+/// positive loader slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistryProgramReleaseV2 {
+    /// Executing SBF program address.
+    pub program: ContentId,
+    /// Upgradeable-loader ProgramData linked from the Program account.
+    pub programdata: ContentId,
+    /// SHA-256 of the complete ProgramData account bytes, including ELF.
+    pub programdata_sha256: ContentId,
+    /// Canonical compiled capability-manifest identity reviewed for this ELF.
+    pub capability_manifest_id: ContentId,
+    /// Deployment slot decoded from ProgramData metadata.
+    pub deployment_slot: u64,
+    /// Disjoint local-synthesized versus observed-public policy.
+    pub locus: RegistryReleaseLocusV2,
+}
+
+impl RegistryProgramReleaseV2 {
+    /// Construct and validate one locus-explicit loader release.
+    pub fn new(
+        program: ContentId,
+        programdata: ContentId,
+        programdata_sha256: ContentId,
+        capability_manifest_id: ContentId,
+        deployment_slot: u64,
+        locus: RegistryReleaseLocusV2,
+    ) -> Result<Self> {
+        let value = Self {
+            program,
+            programdata,
+            programdata_sha256,
+            capability_manifest_id,
+            deployment_slot,
+            locus,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Exact release identity derived from loader facts and chain coordinates.
+    pub fn id(self) -> Result<RegistryProgramReleaseV2Id> {
+        let mut body = [0; REGISTRY_PROGRAM_RELEASE_V2_BYTES];
+        self.encode_into(&mut body)?;
+        Ok(RegistryProgramReleaseV2Id::from_bytes(
+            content_id(REGISTRY_PROGRAM_RELEASE_V2_DOMAIN, &body).bytes(),
+        ))
+    }
+
+    fn validate(self) -> Result<()> {
+        let identities = [
+            self.program,
+            self.programdata,
+            self.programdata_sha256,
+            self.capability_manifest_id,
+        ];
+        for identity in identities {
+            identity.validate()?;
+        }
+        let mut left = 0usize;
+        while left < identities.len() {
+            let mut right = left + 1;
+            while right < identities.len() {
+                if identities[left] == identities[right] {
+                    return Err(Error::MismatchedArtifact);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        match self.locus {
+            RegistryReleaseLocusV2::SynthesizedGenesisZero if self.deployment_slot == 0 => Ok(()),
+            RegistryReleaseLocusV2::ObservedPositive if self.deployment_slot != 0 => Ok(()),
+            _ => Err(Error::InvalidParameter),
+        }
+    }
+}
+
+impl FixedCodec for RegistryProgramReleaseV2 {
+    const ENCODED_LEN: usize = REGISTRY_PROGRAM_RELEASE_V2_BYTES;
+
+    fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
+        writer.bytes(&RELEASE_MAGIC_V2);
+        writer.u16(RELEASE_VERSION_V2);
+        writer.reserved(6);
+        for identity in [
+            self.program,
+            self.programdata,
+            self.programdata_sha256,
+            self.capability_manifest_id,
+        ] {
+            writer.id(identity);
+        }
+        writer.u64(self.deployment_slot);
+        writer.u8(self.locus.byte());
+        writer.reserved(7);
+        writer.finish()
+    }
+
+    fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.magic(&RELEASE_MAGIC_V2)?;
+        if reader.u16() != RELEASE_VERSION_V2 {
+            return Err(Error::BadVersion);
+        }
+        reader.reserved(6)?;
+        let value = Self {
+            program: reader.id(),
+            programdata: reader.id(),
+            programdata_sha256: reader.id(),
+            capability_manifest_id: reader.id(),
+            deployment_slot: reader.u64(),
+            locus: RegistryReleaseLocusV2::decode(reader.u8())?,
+        };
+        reader.reserved(7)?;
         reader.finish()?;
         value.validate()?;
         Ok(value)
@@ -618,6 +788,105 @@ impl FixedCodec for RegistryCapabilityProfileV3 {
     }
 }
 
+/// Current central-registry capability profile bound to ReleaseV2.
+///
+/// The capability rule bytes remain exactly the reviewed V3 rule set, but the
+/// fresh header, domain, typed ID, and artifact coordinate prevent a historical
+/// ProfileV3 from being reinterpreted. `rules` is in-memory reuse of the single
+/// rule validator, not a second persisted body: this codec only accepts and
+/// emits the V4 header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistryCapabilityProfileV4 {
+    /// Exact reviewed capability rules whose release reference is a ReleaseV2 ID.
+    pub rules: RegistryCapabilityProfileV3,
+}
+
+impl RegistryCapabilityProfileV4 {
+    /// Promote reviewed V3 rule semantics under one exact ReleaseV2 identity.
+    ///
+    /// This does not authenticate loader state; the SBF adapter performs that
+    /// join before it mints a private capability receipt.
+    pub fn new(
+        rules: RegistryCapabilityProfileV3,
+        registry_release_id: RegistryProgramReleaseV2Id,
+    ) -> Result<Self> {
+        registry_release_id.validate()?;
+        if rules.registry_release_id != registry_release_id.content_id() {
+            return Err(Error::MismatchedArtifact);
+        }
+        let value = Self { rules };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Domain-separated V4 profile identity.
+    pub fn id(&self) -> Result<RegistryCapabilityProfileV4Id> {
+        let mut body = [0; REGISTRY_CAPABILITY_PROFILE_V4_BYTES];
+        self.encode_into(&mut body)?;
+        Ok(RegistryCapabilityProfileV4Id::from_bytes(
+            content_id(REGISTRY_CAPABILITY_PROFILE_V4_DOMAIN, &body).bytes(),
+        ))
+    }
+
+    /// Exact typed ReleaseV2 selected by this profile.
+    pub const fn registry_release_id(&self) -> RegistryProgramReleaseV2Id {
+        RegistryProgramReleaseV2Id::from_bytes(self.rules.registry_release_id.bytes())
+    }
+
+    /// Reconstruct the sole compiler/runtime projection under the V4 profile ID.
+    pub fn projection(&self) -> Result<RegistryCapabilityProjectionV2> {
+        self.validate()?;
+        Ok(self.rules.projection_with_id(self.id()?.content_id()))
+    }
+
+    /// Derive interval-consensus bounds under the V4 profile identity.
+    pub fn interval_consensus_profile(&self) -> Result<QuantizedIntervalConsensusProfileV1> {
+        self.validate()?;
+        let profile = QuantizedIntervalConsensusProfileV1 {
+            capability_profile_id: self.id()?.content_id(),
+            maximum_interval_width: self.rules.maximum_interval_width,
+            maximum_coordinates_per_advance: self.rules.maximum_coordinates_per_advance,
+        };
+        profile.validate()?;
+        Ok(profile)
+    }
+
+    fn validate(&self) -> Result<()> {
+        self.rules.validate()?;
+        self.registry_release_id().validate()
+    }
+}
+
+impl FixedCodec for RegistryCapabilityProfileV4 {
+    const ENCODED_LEN: usize = REGISTRY_CAPABILITY_PROFILE_V4_BYTES;
+
+    fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        self.rules.encode_into(output)?;
+        output[..8].copy_from_slice(&PROFILE_MAGIC_V4);
+        output[8..10].copy_from_slice(&PROFILE_VERSION_V4.to_le_bytes());
+        Ok(())
+    }
+
+    fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.magic(&PROFILE_MAGIC_V4)?;
+        if reader.u16() != PROFILE_VERSION_V4 {
+            return Err(Error::BadVersion);
+        }
+        reader.reserved(6)?;
+        let mut rule_bytes = [0u8; REGISTRY_CAPABILITY_PROFILE_V3_BYTES];
+        rule_bytes.copy_from_slice(input);
+        rule_bytes[..8].copy_from_slice(&PROFILE_MAGIC_V3);
+        rule_bytes[8..10].copy_from_slice(&PROFILE_VERSION_V3.to_le_bytes());
+        let value = Self {
+            rules: RegistryCapabilityProfileV3::decode(&rule_bytes)?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
 fn encode_semantic_owners(writer: &mut Writer<'_>, owners: CapabilitySemanticOwnersV2) {
     for id in [
         owners.source_plane_contract_id,
@@ -690,6 +959,17 @@ fn decode_realm_collateral(reader: &mut Reader<'_>) -> RealmCollateralProjection
 mod tests {
     use super::*;
 
+    fn release_v2(slot: u64, locus: RegistryReleaseLocusV2) -> RegistryProgramReleaseV2 {
+        RegistryProgramReleaseV2 {
+            program: ContentId::from_bytes([1; 32]),
+            programdata: ContentId::from_bytes([2; 32]),
+            programdata_sha256: ContentId::from_bytes([3; 32]),
+            capability_manifest_id: ContentId::from_bytes([4; 32]),
+            deployment_slot: slot,
+            locus,
+        }
+    }
+
     #[test]
     fn withdrawn_v2_and_current_v3_profile_widths_never_cross_decode() {
         assert_eq!(REGISTRY_CAPABILITY_PROFILE_V2_BYTES, 800);
@@ -706,6 +986,36 @@ mod tests {
         assert_ne!(
             REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN,
             REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN
+        );
+    }
+
+    #[test]
+    fn release_v2_locus_is_disjoint_and_v1_never_cross_decodes() {
+        let local = release_v2(0, RegistryReleaseLocusV2::SynthesizedGenesisZero);
+        let mut local_bytes = [0u8; REGISTRY_PROGRAM_RELEASE_V2_BYTES];
+        assert_eq!(local.encode_into(&mut local_bytes), Ok(()));
+        assert_eq!(RegistryProgramReleaseV2::decode(&local_bytes), Ok(local));
+        assert_eq!(
+            RegistryProgramReleaseV1::decode(&local_bytes),
+            Err(Error::BadMagic)
+        );
+
+        let observed = release_v2(1, RegistryReleaseLocusV2::ObservedPositive);
+        let mut observed_bytes = [0u8; REGISTRY_PROGRAM_RELEASE_V2_BYTES];
+        assert_eq!(observed.encode_into(&mut observed_bytes), Ok(()));
+        assert_eq!(
+            RegistryProgramReleaseV2::decode(&observed_bytes),
+            Ok(observed)
+        );
+
+        assert_eq!(
+            release_v2(1, RegistryReleaseLocusV2::SynthesizedGenesisZero)
+                .encode_into(&mut local_bytes),
+            Err(Error::InvalidParameter)
+        );
+        assert_eq!(
+            release_v2(0, RegistryReleaseLocusV2::ObservedPositive).encode_into(&mut local_bytes),
+            Err(Error::InvalidParameter)
         );
     }
 }

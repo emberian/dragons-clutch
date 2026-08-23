@@ -173,10 +173,10 @@ value-bearing action stays disabled until its exact source, collateral,
 liveness, and failure receipts are authenticated.
 
 Dealer owns `0x7d/1` for its staged policy and `0x7e/1` for its immutable
-policy. The Source/Series account namespace reserves the disjoint `0x7f/1` for
-the persistent Series registration/replay anchor and `0x80/1` for the mutable
-Series-funding wrapper. Their exact 168-byte and 376-byte codecs are fixed but
-reserved-disabled. The funding wrapper adds tag/version/bump/flags, exact
+policy. The Source/Series account namespace withdraws `0x7f/1` and reserves
+the disjoint `0x7f/2` for the current 172-byte BundleV5-retaining Series
+registration/replay anchor. The QuoteV1-shaped `0x80/1` funding wrapper is
+historical and has no current mutation route. Its 376-byte codec adds tag/version/bump/flags, exact
 refundable account-rent principal, and five release-selected collateral-vault
 rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
 copy its cursor or component-balance facts.
@@ -356,8 +356,9 @@ pure runtime elsewhere does not make a route executable.
 | `0x13/9` | General V2 | sole future rent-owned Reservation V9 (666 bytes); V4 live creation withdrawn |
 | `0x7d/1` | Dealer | staged policy |
 | `0x7e/1` | Dealer | immutable policy |
-| `0x7f/1` | Recurring Series | registry |
-| `0x80/1` | Recurring Series | present-funding compartments |
+| `0x7f/1` | Recurring Series | withdrawn registry without compiler provenance |
+| `0x7f/2` | Recurring Series | BundleV5-retaining registry |
+| `0x80/1` | Recurring Series | withdrawn QuoteV1-shaped present funding |
 | `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
 | `0x81/2` | General V2 | withdrawn presence-explicit owner settlement V2; never a live alias |
 | `0x81/3` | General V2 | historical Reservation-handoff owner settlement V3; withdrawn |

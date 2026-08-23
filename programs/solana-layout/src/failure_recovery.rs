@@ -670,6 +670,7 @@ pub enum RecoveryAccountRoleV1 {
     RegistryProgramData,
     RegistryRelease,
     CapabilityProfile,
+    CompilerBundle,
     SeriesArtifact,
     FundingTermsArtifact,
     ProductTemplateArtifact,
@@ -730,6 +731,7 @@ pub const INITIALIZE_FAILURE_ROOT_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::RegistryProgramData, false, false),
     meta(RecoveryAccountRoleV1::RegistryRelease, false, false),
     meta(RecoveryAccountRoleV1::CapabilityProfile, false, false),
+    meta(RecoveryAccountRoleV1::CompilerBundle, false, false),
     meta(RecoveryAccountRoleV1::SeriesArtifact, false, false),
     meta(RecoveryAccountRoleV1::FundingTermsArtifact, false, false),
     meta(RecoveryAccountRoleV1::ProductTemplateArtifact, false, false),
@@ -778,6 +780,7 @@ pub const TRIGGER_RELATION_REFUSAL_METAS_V1: &[RecoveryAccountMetaV1] = &[
     meta(RecoveryAccountRoleV1::RegistryProgramData, false, false),
     meta(RecoveryAccountRoleV1::RegistryRelease, false, false),
     meta(RecoveryAccountRoleV1::CapabilityProfile, false, false),
+    meta(RecoveryAccountRoleV1::CompilerBundle, false, false),
     meta(RecoveryAccountRoleV1::SeriesArtifact, false, false),
     meta(RecoveryAccountRoleV1::ProductTemplateArtifact, false, false),
     meta(RecoveryAccountRoleV1::ClaimBasisArtifact, false, false),
@@ -826,6 +829,7 @@ pub const RESOLVE_CALLER_FUNDED_METAS_V1: &[RecoveryAccountMetaV1] = &[
     TRIGGER_RELATION_REFUSAL_METAS_V1[13],
     TRIGGER_RELATION_REFUSAL_METAS_V1[14],
     TRIGGER_RELATION_REFUSAL_METAS_V1[15],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[16],
 ];
 /// Exact ordered account contract for paid resolution.
 pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
@@ -842,6 +846,7 @@ pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
     TRIGGER_RELATION_REFUSAL_METAS_V1[8],
     TRIGGER_RELATION_REFUSAL_METAS_V1[9],
     TRIGGER_RELATION_REFUSAL_METAS_V1[10],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[11],
     ACCEPT_RECOVERY_WORK_METAS_V1[3],
     ACCEPT_RECOVERY_WORK_METAS_V1[4],
     ACCEPT_RECOVERY_WORK_METAS_V1[5],

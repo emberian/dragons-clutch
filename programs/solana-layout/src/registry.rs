@@ -212,7 +212,14 @@ pub const DEALER_POLICY_ACCOUNT_BYTES: usize =
 /// Source/Series registry account discriminator.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
 /// Source/Series registry account version.
-pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current Source/Series registry account version retaining BundleV5.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical decoder coordinate retained for untrusted index clients only.
+/// Runtime authority must use [`SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2`].
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2")]
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 =
+    SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1;
 /// Source/Series present-funding account discriminator.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 /// Source/Series present-funding account version.
@@ -402,6 +409,10 @@ pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION: u8 = 1;
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
 /// Permanent failure-generation replay tombstone version.
 pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
+/// Permanent shared-Market Failure replay successor version.
+pub const FAILURE_MARKET_REPLAY_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact framed shared-Market Failure replay bytes.
+pub const FAILURE_MARKET_REPLAY_ACCOUNT_BYTES_V2: usize = 256;
 /// Immutable exact fractional-redemption policy discriminator.
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG: u8 = 0xa4;
 /// Withdrawn policy version whose offset 80 meant payout-vector digest.
@@ -1035,10 +1046,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-registry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-registry-v1-account",
+        name: "source-series-registry-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1424,8 +1444,17 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG,
             version: FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION,
         },
+        status: AllocationStatus::Withdrawn,
+        name: "failure-replay-tombstone-v1-withdrawn-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG,
+            version: FAILURE_MARKET_REPLAY_ACCOUNT_VERSION_V2,
+        },
         status: AllocationStatus::ReservedDisabled,
-        name: "failure-replay-tombstone-v1-account",
+        name: "failure-market-replay-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2860,7 +2889,7 @@ mod tests {
             (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
             (
                 SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
             ),
             (
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
@@ -2991,7 +3020,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_recovery_account_block_is_complete_and_disabled() {
+    fn failure_recovery_account_block_withdraws_legacy_replay_and_reserves_market_successor() {
         let expected = [
             (
                 FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
@@ -3004,10 +3033,6 @@ mod tests {
             (
                 FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
                 FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
-            ),
-            (
-                FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG,
-                FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION,
             ),
         ];
         for (offset, (tag, version)) in expected.into_iter().enumerate() {
@@ -3038,6 +3063,32 @@ mod tests {
             Some(AllocationStatus::ReservedDisabled)
         );
         assert!(market_root_successor.next().is_none());
+
+        let legacy_replay = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG,
+                FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION,
+            )
+        });
+        assert_eq!(
+            legacy_replay.map(|entry| entry.status),
+            Some(AllocationStatus::Withdrawn)
+        );
+        let market_replay = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG,
+                FAILURE_MARKET_REPLAY_ACCOUNT_VERSION_V2,
+            )
+        });
+        assert_eq!(
+            market_replay.map(|entry| entry.status),
+            Some(AllocationStatus::ReservedDisabled)
+        );
+        assert_eq!(FAILURE_MARKET_REPLAY_ACCOUNT_BYTES_V2, 256);
     }
 
     #[test]

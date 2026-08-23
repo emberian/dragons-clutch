@@ -110,8 +110,8 @@ The central collision ledger reserves these coordinates as
 `ReservedDisabled`, records retirement's provisional tombstones at `0x75/1`
 and `0x76/1` plus the permanent Position tombstone at `0x75/2`, and proves its
 recorded rows internally disjoint. Dealer owns `0x7d/1` and `0x7e/1`, while
-Source/Series owns `0x7f/1` and `0x80/1`; General does not reinterpret those
-coordinates. A complete
+Source/Series owns the `0x7f` and `0x80` coordinates (with `0x7f/1` withdrawn
+and `0x7f/2` current); General does not reinterpret those coordinates. A complete
 legacy-account inventory cross-check remains an activation gate. The numeric
 constants in the standalone General crate describe matching codec bytes, not a
 second allocation authority; the eventual adapter must add an explicit parity

@@ -23,6 +23,7 @@ mod compiler_output;
 mod compiler_output_v2;
 mod compiler_output_v3;
 mod compiler_output_v4;
+mod compiler_output_v5;
 mod foundation_funding;
 mod funding;
 mod funding_state;
@@ -69,6 +70,11 @@ pub use compiler_output_v4::{
     assemble_compiled_product_series_bundle_v4, CompiledProductSeriesBundleV4,
     ProductSeriesBundleInputsV4, COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V4_DOMAIN,
+};
+pub use compiler_output_v5::{
+    assemble_compiled_product_series_bundle_v5, CompiledProductSeriesBundleV5,
+    ProductSeriesBundleInputsV5, COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
 };
 pub use foundation_funding::{
     MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
@@ -145,16 +151,20 @@ pub use market_replay::{
     MARKET_LIFECYCLE_REPLAY_RECEIPT_DOMAIN_V1,
 };
 pub use product_registry::{
-    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryProgramReleaseV1,
+    RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProfileV4,
+    RegistryProgramReleaseV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
     REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN,
     REGISTRY_CAPABILITY_PROFILE_V3_BYTES, REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN,
+    REGISTRY_CAPABILITY_PROFILE_V4_BYTES, REGISTRY_CAPABILITY_PROFILE_V4_DOMAIN,
     REGISTRY_PROGRAM_RELEASE_V1_BYTES, REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
+    REGISTRY_PROGRAM_RELEASE_V2_BYTES, REGISTRY_PROGRAM_RELEASE_V2_DOMAIN,
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
 };
 pub use source_series::{
-    compile_source_occurrence_v3, AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
+    compile_source_occurrence_v3, compile_source_occurrence_v4,
+    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
     SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use successor::{
@@ -273,7 +283,11 @@ typed_id!(
 );
 typed_id!(
     CompiledProductSeriesBundleV4Id,
-    "Typed identity of one current `CompiledProductSeriesBundleV4` compiler output."
+    "Typed identity of one historical `CompiledProductSeriesBundleV4` compiler output."
+);
+typed_id!(
+    CompiledProductSeriesBundleV5Id,
+    "Typed identity of one current `CompiledProductSeriesBundleV5` compiler output."
 );
 typed_id!(
     SeriesFundingQuoteId,
@@ -346,7 +360,11 @@ typed_id!(
 typed_id!(SeriesPlanV5Id, "Typed identity of one `SeriesPlanV5`.");
 typed_id!(
     RegistryProgramReleaseV1Id,
-    "Typed identity of one immutable `RegistryProgramReleaseV1`."
+    "Typed identity of one historical immutable `RegistryProgramReleaseV1`."
+);
+typed_id!(
+    RegistryProgramReleaseV2Id,
+    "Typed identity of one locus-explicit immutable `RegistryProgramReleaseV2`."
 );
 typed_id!(
     RegistryCapabilityProfileV2Id,
@@ -354,7 +372,11 @@ typed_id!(
 );
 typed_id!(
     RegistryCapabilityProfileV3Id,
-    "Typed identity of one current immutable `RegistryCapabilityProfileV3`."
+    "Typed identity of one historical immutable `RegistryCapabilityProfileV3`."
+);
+typed_id!(
+    RegistryCapabilityProfileV4Id,
+    "Typed identity of one ReleaseV2-bound immutable `RegistryCapabilityProfileV4`."
 );
 typed_id!(
     SeriesFundingTermsV2Id,

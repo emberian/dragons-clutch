@@ -66,6 +66,9 @@ pub const SEED_FRACTIONAL_POLICY_V2: &[u8] =
 /// Sole aggregate numerator-credit ledger V1.
 pub const SEED_FRACTIONAL_LEDGER_V1: &[u8] =
     clutch_fractional_redemption_runtime::FRACTIONAL_LEDGER_PDA_PREFIX;
+/// Owner-scoped exact numerator credit and permanent tombstone V2.
+pub const SEED_FRACTIONAL_CREDIT_V2: &[u8] =
+    clutch_fractional_redemption_runtime::FRACTIONAL_CREDIT_PDA_PREFIX;
 /// Reference-only external-shadow account seed prefix.
 pub const SEED_EXTERNAL: &[u8] = b"dragons-clutch:external:v1";
 /// Reference-only replay-sequence account seed prefix.
@@ -285,10 +288,16 @@ pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 pub const SEED_FAILURE_EXTERNAL_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
 /// Permanent failure-generation replay tombstone.
 pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
+/// Permanent shared-Market Failure replay terminal successor.
+pub const SEED_FAILURE_MARKET_REPLAY_V2: &[u8] = b"dc:failure-market-replay:v2";
 /// Dedicated exhaustive interval-consensus work lifecycle.
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-work:v1";
 /// Permanent exhaustive interval-consensus replay receipt.
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY: &[u8] = b"dc:failure-interval-replay:v1";
+/// Reusable Market-scoped Failure interval cell V2.
+pub const SEED_FAILURE_MARKET_INTERVAL_CELL_V2: &[u8] = b"dc:fail-int-cell:v2";
+/// Append-only Market-scoped Failure interval history V2.
+pub const SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2: &[u8] = b"dc:fail-int-history:v2";
 /// Shared Product Market lifecycle root, keyed by Market and generation.
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root:v1";
 /// Zero-data Product foundation principal/donation vault.
@@ -438,6 +447,22 @@ pub fn failure_replay_tombstone_pda(
     )
 }
 
+/// Canonical permanent shared-Market Failure replay terminal PDA.
+pub fn failure_market_replay_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_REPLAY_V2,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
 /// Canonical shared Product MarketLifecycleRoot PDA.
 pub fn product_market_lifecycle_root_pda(
     program_id: &Pubkey,
@@ -528,6 +553,38 @@ pub fn failure_interval_consensus_replay_pda(
         program_id,
         &[
             SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Derive the reusable Market-scoped Failure interval cell V2.
+pub fn failure_market_interval_cell_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_INTERVAL_CELL_V2,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Derive the append-only Market-scoped Failure interval history V2.
+pub fn failure_market_interval_history_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
@@ -847,6 +904,18 @@ pub fn fractional_policy_v2_pda(
 /// Canonical sole aggregate-credit ledger for one fractional policy.
 pub fn fractional_ledger_v1_pda(program_id: &Pubkey, policy_account: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_FRACTIONAL_LEDGER_V1, policy_account])
+}
+
+/// Canonical owner-scoped Fractional credit/tombstone address.
+pub fn fractional_credit_v2_pda(
+    program_id: &Pubkey,
+    policy_account: &[u8; 32],
+    claimant: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_FRACTIONAL_CREDIT_V2, policy_account, claimant],
+    )
 }
 
 /// Canonical disabled selected fee-record address for one SelectedCandidate.
@@ -1878,6 +1947,17 @@ mod tests {
     }
 
     #[test]
+    fn failure_market_replay_successor_cannot_alias_the_occurrence_tombstone() {
+        assert_ne!(SEED_FAILURE_MARKET_REPLAY_V2, SEED_FAILURE_REPLAY_TOMBSTONE);
+        let program_id = Pubkey::new_from_array([1; 32]);
+        let market = [2; 32];
+        assert_ne!(
+            failure_market_replay_v2_pda(&program_id, &market, 3).0,
+            failure_replay_tombstone_pda(&program_id, &market, 3).0,
+        );
+    }
+
+    #[test]
     fn product_market_and_link_prefixes_are_pairwise_disjoint() {
         let prefixes = [
             SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
@@ -1886,13 +1966,32 @@ mod tests {
             SEED_PRODUCT_SERIES_MARKET_LINK,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,
+            SEED_FAILURE_REPLAY_TOMBSTONE,
+            SEED_FAILURE_MARKET_REPLAY_V2,
             SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
             SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
+            SEED_FAILURE_MARKET_INTERVAL_CELL_V2,
+            SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2,
         ];
         for (index, prefix) in prefixes.iter().enumerate() {
+            assert!(prefix.len() <= 32);
             for later in prefixes.iter().skip(index + 1) {
                 assert_ne!(*prefix, *later);
             }
         }
+        let program_id = Pubkey::new_from_array([7; 32]);
+        let market = [8; 32];
+        assert_ne!(
+            failure_market_interval_cell_v2_pda(&program_id, &market, 9).0,
+            failure_interval_consensus_work_pda(&program_id, &market, 9).0,
+        );
+        assert_ne!(
+            failure_market_interval_history_v2_pda(&program_id, &market, 9).0,
+            failure_interval_consensus_replay_pda(&program_id, &market, 9).0,
+        );
+        assert_ne!(
+            failure_market_replay_v2_pda(&program_id, &market, 9).0,
+            failure_replay_tombstone_pda(&program_id, &market, 9).0,
+        );
     }
 }
