@@ -64,8 +64,10 @@ pub use interval_consensus::{
     advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
     quantized_interval_rounding_policy_id_v1,
     require_quantized_interval_consensus_runtime_capability_v1,
-    QuantizedIntervalConsensusCertificateV1, QuantizedIntervalConsensusContextV1,
-    QuantizedIntervalConsensusProfileV1, QuantizedIntervalConsensusProgressV1,
+    restore_verified_quantized_interval_payout_v1,
+    AuthenticatedQuantizedIntervalConsensusHistoryV1, QuantizedIntervalConsensusCertificateV1,
+    QuantizedIntervalConsensusContextV1, QuantizedIntervalConsensusProfileV1,
+    QuantizedIntervalConsensusProgressV1, QuantizedIntervalConsensusRestorationV1,
     QuantizedIntervalConsensusSessionV1, QuantizedIntervalConsensusWorkV1,
     VerifiedQuantizedIntervalPayoutV1, BASIS_EVALUATOR_VERSION_V1,
     QUANTIZED_INTERVAL_CONSENSUS_CERTIFICATE_BYTES_V1,
@@ -235,6 +237,10 @@ typed_id!(
 typed_id!(
     QuantizedIntervalConsensusCertificateV1Id,
     "Typed identity of one exhaustive quantized interval-consensus certificate."
+);
+typed_id!(
+    QuantizedIntervalConsensusWorkV1Id,
+    "Typed identity of one complete structural interval-consensus work preimage."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.
