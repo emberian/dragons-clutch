@@ -23,10 +23,12 @@ mod chain_server;
 mod compose_chain_config;
 mod crank;
 mod decode;
+mod devnet_deployment;
 mod friday;
 mod http;
 mod index_api;
 mod integer;
+mod local_validator_launcher;
 mod payoff_compiler;
 mod plan;
 mod processed_ws;
@@ -73,9 +75,63 @@ fn usage() -> ! {
          operatord compile-payoff --compiler-release-sha256 HASH < request.json\n  \
          operatord chain-serve --config FILE [--port N] [--static DIR]\n  \
          operatord compose-chain-config --local-release-manifest FILE --capability-manifest FILE \
-         --cluster-name NAME --expected-genesis HASH --rpc-http-url URL --rpc-websocket-url URL"
+         --cluster-name NAME --expected-genesis HASH --rpc-http-url URL --rpc-websocket-url URL\n  \
+         operatord prepare-local-chain --config FILE --capability-manifest FILE\n  \
+         operatord launch-local-chain --config FILE --capability-manifest FILE [--port N] [--static DIR]\n  \
+         operatord compose-devnet-chain-config --deployment-manifest FILE \
+         --capability-manifest FILE --built-elf FILE"
     );
     process::exit(2)
+}
+
+fn parse_devnet_compose(
+    mut args: impl Iterator<Item = String>,
+) -> Result<devnet_deployment::ComposeDevnetOptions> {
+    let mut deployment_manifest = None;
+    let mut capability_manifest = None;
+    let mut built_elf = None;
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--deployment-manifest" => deployment_manifest = Some(PathBuf::from(value()?)),
+            "--capability-manifest" => capability_manifest = Some(PathBuf::from(value()?)),
+            "--built-elf" => built_elf = Some(PathBuf::from(value()?)),
+            other => return Err(format!("unknown compose-devnet-chain-config flag {other}").into()),
+        }
+    }
+    Ok(devnet_deployment::ComposeDevnetOptions {
+        deployment_manifest: deployment_manifest
+            .ok_or("compose-devnet-chain-config requires --deployment-manifest FILE")?,
+        capability_manifest: capability_manifest
+            .ok_or("compose-devnet-chain-config requires --capability-manifest FILE")?,
+        built_elf: built_elf.ok_or("compose-devnet-chain-config requires --built-elf FILE")?,
+    })
+}
+
+fn parse_local_launch(
+    mut args: impl Iterator<Item = String>,
+) -> Result<local_validator_launcher::LocalLaunchOptions> {
+    let mut config = None;
+    let mut capability_manifest = None;
+    let mut server_port = 9130_u16;
+    let mut statics = repo_path("apps/static-client");
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--config" => config = Some(PathBuf::from(value()?)),
+            "--capability-manifest" => capability_manifest = Some(PathBuf::from(value()?)),
+            "--port" => server_port = value()?.parse()?,
+            "--static" => statics = PathBuf::from(value()?),
+            other => return Err(format!("unknown local-chain flag {other}").into()),
+        }
+    }
+    Ok(local_validator_launcher::LocalLaunchOptions {
+        config: config.ok_or("local-chain command requires --config FILE")?,
+        capability_manifest: capability_manifest
+            .ok_or("local-chain command requires --capability-manifest FILE")?,
+        server_port,
+        statics,
+    })
 }
 
 struct CompilerServeOptions {
@@ -570,6 +626,16 @@ fn main() {
         }),
         "compose-chain-config" => parse_compose_chain_config(args).and_then(|options| {
             print!("{}", compose_chain_config::compose(&options)?);
+            Ok(())
+        }),
+        "prepare-local-chain" => parse_local_launch(args).and_then(|options| {
+            print!("{}", local_validator_launcher::prepare_only(&options)?);
+            Ok(())
+        }),
+        "launch-local-chain" => parse_local_launch(args)
+            .and_then(|options| local_validator_launcher::launch_and_serve(&options)),
+        "compose-devnet-chain-config" => parse_devnet_compose(args).and_then(|options| {
+            print!("{}", devnet_deployment::compose(&options)?);
             Ok(())
         }),
         _ => usage(),
