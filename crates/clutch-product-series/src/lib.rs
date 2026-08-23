@@ -100,8 +100,8 @@ pub use market_family_aggregator::{
     MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
 };
 pub use market_lifecycle::{
-    MarketFoundationCapitalV1, MarketFoundationProgressV1, MarketFoundationSlotV1,
-    MarketFoundationStepProjectionV1, MarketFoundingAbortProjectionV1,
+    MarketFoundationAccountGraphV1, MarketFoundationCapitalV1, MarketFoundationProgressV1,
+    MarketFoundationSlotV1, MarketFoundationStepProjectionV1, MarketFoundingAbortProjectionV1,
     MarketInstanceTerminalProjectionV1, MarketLifecycleBindingV1, MarketLifecyclePhaseV1,
     MarketLifecycleRootV1, MarketResolutionActivationV1, MarketSharedCoreTerminalProjectionV1,
     MarketSharedCoreV1, SeriesLinkObligationConfigurationV1, SeriesLinkObligationConfigurationV1Id,
@@ -243,6 +243,10 @@ typed_id!(
 typed_id!(
     MarketFoundationScheduleV1Id,
     "Typed identity of one itemized shared-Market foundation schedule."
+);
+typed_id!(
+    MarketFoundationAccountGraphV1Id,
+    "Typed identity of one canonical ordered shared-Market foundation account graph."
 );
 typed_id!(
     MarketLifecycleRootV1Id,

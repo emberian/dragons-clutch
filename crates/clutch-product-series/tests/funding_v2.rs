@@ -1,8 +1,8 @@
 use clutch_product_series::{
     AuthenticatedSeriesFundingAuthorityV2, ComponentDebitV1, ContentId, Error,
-    MarketFoundationScheduleV1, MarketInstanceV2Id, RecoveryAttemptFundingV1,
-    SeriesFundingComponentV2, SeriesFundingPhaseV2, SeriesFundingQuoteV2,
-    SeriesFundingReservationV2, SeriesFundingStateV2, SeriesFundingTermsV2Id,
+    MarketFoundationAccountGraphV1, MarketFoundationScheduleV1, MarketFoundationSlotV1,
+    MarketInstanceV2Id, RecoveryAttemptFundingV1, SeriesFundingComponentV2, SeriesFundingPhaseV2,
+    SeriesFundingQuoteV2, SeriesFundingReservationV2, SeriesFundingStateV2, SeriesFundingTermsV2Id,
     SeriesMarketDispositionV1, SeriesMarketLinkV1Id, SeriesOrdinalFulfillmentV2, SeriesPlanV5Id,
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
     MARKET_FOUNDATION_SLOT_COUNT_V1, MAX_RECOVERY_ATTEMPTS, SERIES_FUNDING_COMPONENT_COUNT_V2,
@@ -34,7 +34,7 @@ fn quote() -> SeriesFundingQuoteV2 {
     };
     SeriesFundingQuoteV2 {
         evidence_only_recovery_policy_id: id(1),
-        components: [debit(16), debit(7), debit(10), debit(3), debit(4), debit(5)],
+        components: [debit(17), debit(7), debit(10), debit(3), debit(4), debit(5)],
         foundation: MarketFoundationScheduleV1 {
             outcome_count: 2,
             slot_principal_lamports: slots,
@@ -174,4 +174,28 @@ fn series_admission_is_mandatory_even_for_exact_convergence() {
         id(43),
     );
     assert_eq!(result, Err(Error::InvalidComponentStatus));
+}
+
+#[test]
+fn failure_admission_and_runtime_accounts_cannot_alias() {
+    let schedule = quote().foundation;
+    let mut accounts = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V1];
+    for (index, account) in accounts.iter_mut().enumerate() {
+        if schedule.slot_principal_lamports[index] != 0 {
+            *account = id(u8::try_from(index + 60).unwrap());
+        }
+    }
+    let mut graph = MarketFoundationAccountGraphV1 {
+        market_instance_id: MarketInstanceV2Id::from_bytes([51; 32]),
+        generation: 1,
+        foundation_schedule_id: schedule.id().unwrap(),
+        account_ids: accounts,
+    };
+    assert!(graph.validate(schedule).is_ok());
+    let admission = MarketFoundationSlotV1::FailureAdmissionRoot
+        .index()
+        .unwrap();
+    let runtime = MarketFoundationSlotV1::FailureRuntimeRoot.index().unwrap();
+    graph.account_ids[runtime] = graph.account_ids[admission];
+    assert_eq!(graph.validate(schedule), Err(Error::MismatchedArtifact));
 }

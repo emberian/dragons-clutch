@@ -12,18 +12,18 @@ use crate::codec::{Reader, Writer};
 use crate::{
     content_id, AuthenticatedMarketFamilyAuthorityV1, ContentId, Error, FixedCodec,
     MarketFamilyAggregatorPhaseV1, MarketFamilyAggregatorV1, MarketFamilyV1,
-    MarketFoundationScheduleV1, MarketFoundationScheduleV1Id, MarketInstanceV2Id, Result,
-    SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id, SeriesMarketDispositionV1,
-    SeriesMarketLinkV1Id, SeriesPlanV5Id, SourceOccurrenceV1Id, MARKET_FAMILY_AGGREGATOR_BYTES_V1,
-    MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
-    MARKET_FOUNDATION_SLOT_COUNT_V1,
+    MarketFoundationAccountGraphV1Id, MarketFoundationScheduleV1, MarketFoundationScheduleV1Id,
+    MarketInstanceV2Id, Result, SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id,
+    SeriesMarketDispositionV1, SeriesMarketLinkV1Id, SeriesPlanV5Id, SourceOccurrenceV1Id,
+    MARKET_FAMILY_AGGREGATOR_BYTES_V1, MARKET_FOUNDATION_CORE_SLOT_COUNT_V1,
+    MARKET_FOUNDATION_MAX_OUTCOMES_V1, MARKET_FOUNDATION_SLOT_COUNT_V1,
 };
 
 const ROOT_MAGIC_V1: [u8; 8] = *b"DCMKRTV1";
 const ROOT_VERSION_V1: u16 = 1;
 const LINK_MAGIC_V1: [u8; 8] = *b"DCSMLKV1";
 const LINK_VERSION_V1: u16 = 1;
-const MARKET_BINDING_ID_COUNT_V1: usize = 30;
+const MARKET_BINDING_ID_COUNT_V1: usize = 32;
 const LINK_BINDING_ID_COUNT_V1: usize = 25;
 
 /// Exact number of mandatory shared-core terminal owners outside the product-family aggregator.
@@ -31,7 +31,7 @@ pub const MARKET_SHARED_CORE_COUNT_V1: usize = 5;
 /// Exact number of Series-link-scoped attachment obligations.
 pub const SERIES_LINK_OBLIGATION_COUNT_V1: usize = 4;
 /// Exact shared `0xaa` semantic body width.
-pub const MARKET_LIFECYCLE_ROOT_BYTES_V1: usize = 2_352;
+pub const MARKET_LIFECYCLE_ROOT_BYTES_V1: usize = 2_416;
 /// Exact per-Series `0xad` semantic body width.
 pub const SERIES_MARKET_LINK_BYTES_V1: usize = 1_104;
 
@@ -61,8 +61,10 @@ pub enum MarketFoundationSlotV1 {
     Hoard,
     /// ClaimLedger V3 root.
     ClaimLedger,
-    /// Failure durable root.
-    FailureRoot,
+    /// Immutable Failure market admission/policy root (a0/v2).
+    FailureAdmissionRoot,
+    /// Distinct dynamic Failure runtime root (a0/v1).
+    FailureRuntimeRoot,
     /// Permanent Failure root replay receipt.
     FailureReplay,
     /// Failure interval work account.
@@ -90,13 +92,14 @@ impl MarketFoundationSlotV1 {
             Self::MarketRuntime => Ok(2),
             Self::Hoard => Ok(3),
             Self::ClaimLedger => Ok(4),
-            Self::FailureRoot => Ok(5),
-            Self::FailureReplay => Ok(6),
-            Self::FailureIntervalWork => Ok(7),
-            Self::FailureIntervalReplay => Ok(8),
-            Self::ResolutionV5 => Ok(9),
-            Self::FractionalPolicy => Ok(10),
-            Self::FractionalLedger => Ok(11),
+            Self::FailureAdmissionRoot => Ok(5),
+            Self::FailureRuntimeRoot => Ok(6),
+            Self::FailureReplay => Ok(7),
+            Self::FailureIntervalWork => Ok(8),
+            Self::FailureIntervalReplay => Ok(9),
+            Self::ResolutionV5 => Ok(10),
+            Self::FractionalPolicy => Ok(11),
+            Self::FractionalLedger => Ok(12),
             Self::OutcomeMint(outcome) => {
                 let index = usize::from(outcome);
                 if index >= MARKET_FOUNDATION_MAX_OUTCOMES_V1 {
@@ -126,18 +129,19 @@ impl MarketFoundationSlotV1 {
             2 => Ok(Self::MarketRuntime),
             3 => Ok(Self::Hoard),
             4 => Ok(Self::ClaimLedger),
-            5 => Ok(Self::FailureRoot),
-            6 => Ok(Self::FailureReplay),
-            7 => Ok(Self::FailureIntervalWork),
-            8 => Ok(Self::FailureIntervalReplay),
-            9 => Ok(Self::ResolutionV5),
-            10 => Ok(Self::FractionalPolicy),
-            11 => Ok(Self::FractionalLedger),
-            12..=27 => Ok(Self::OutcomeMint(
+            5 => Ok(Self::FailureAdmissionRoot),
+            6 => Ok(Self::FailureRuntimeRoot),
+            7 => Ok(Self::FailureReplay),
+            8 => Ok(Self::FailureIntervalWork),
+            9 => Ok(Self::FailureIntervalReplay),
+            10 => Ok(Self::ResolutionV5),
+            11 => Ok(Self::FractionalPolicy),
+            12 => Ok(Self::FractionalLedger),
+            13..=28 => Ok(Self::OutcomeMint(
                 u8::try_from(index - MARKET_FOUNDATION_CORE_SLOT_COUNT_V1)
                     .map_err(|_| Error::InvalidParameter)?,
             )),
-            28..=43 => Ok(Self::OutcomeCustody(
+            29..=44 => Ok(Self::OutcomeCustody(
                 u8::try_from(
                     index
                         - MARKET_FOUNDATION_CORE_SLOT_COUNT_V1
@@ -147,6 +151,83 @@ impl MarketFoundationSlotV1 {
             )),
             _ => Err(Error::InvalidParameter),
         }
+    }
+}
+
+/// Canonical ordered physical account graph for one prepaid Market foundation.
+///
+/// Inactive outcome-tail slots are exactly zero. Every active physical account
+/// is nonzero and pairwise distinct, preventing the immutable Failure admission
+/// root, dynamic Failure runtime root, replay accounts, custody, or any other
+/// foundation role from aliasing another role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketFoundationAccountGraphV1 {
+    /// Full-width shared Market.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Exact shared generation.
+    pub generation: u64,
+    /// Exact quote-owned slot schedule.
+    pub foundation_schedule_id: MarketFoundationScheduleV1Id,
+    /// Accounts in [`MarketFoundationSlotV1`] order.
+    pub account_ids: [ContentId; MARKET_FOUNDATION_SLOT_COUNT_V1],
+}
+
+impl MarketFoundationAccountGraphV1 {
+    /// Validate exact active/zero-tail presence and pairwise role separation.
+    pub fn validate(self, schedule: MarketFoundationScheduleV1) -> Result<()> {
+        self.market_instance_id.validate()?;
+        self.foundation_schedule_id.validate()?;
+        schedule.validate()?;
+        if self.generation == 0 || self.foundation_schedule_id != schedule.id()? {
+            return Err(Error::MismatchedArtifact);
+        }
+        let expected = expected_foundation_bitmap(schedule.outcome_count)?;
+        let mut index = 0usize;
+        while index < MARKET_FOUNDATION_SLOT_COUNT_V1 {
+            let active = (expected & slot_bit(index)?) != 0;
+            if active != (self.account_ids[index] != ContentId::ZERO) {
+                return Err(Error::NonCanonicalPadding);
+            }
+            if active {
+                self.account_ids[index].validate()?;
+                let mut prior = 0usize;
+                while prior < index {
+                    if self.account_ids[prior] == self.account_ids[index] {
+                        return Err(Error::MismatchedArtifact);
+                    }
+                    prior += 1;
+                }
+            }
+            index += 1;
+        }
+        Ok(())
+    }
+
+    /// Typed identity of the exact Market/generation/schedule/account graph.
+    pub fn id(
+        self,
+        schedule: MarketFoundationScheduleV1,
+    ) -> Result<MarketFoundationAccountGraphV1Id> {
+        self.validate(schedule)?;
+        let mut body = [0u8; 1_512];
+        body[..32].copy_from_slice(&self.market_instance_id.bytes());
+        body[32..40].copy_from_slice(&self.generation.to_le_bytes());
+        body[40..72].copy_from_slice(&self.foundation_schedule_id.bytes());
+        let mut at = 72usize;
+        for account in self.account_ids {
+            body[at..at + 32].copy_from_slice(&account.bytes());
+            at += 32;
+        }
+        Ok(MarketFoundationAccountGraphV1Id::from_bytes(
+            content_id(b"dragons-clutch/market-foundation-account-graph/v1", &body).bytes(),
+        ))
+    }
+
+    /// Exact account occupying one canonical active slot.
+    pub fn account(self, slot: MarketFoundationSlotV1) -> Result<ContentId> {
+        let account = self.account_ids[slot.index()?];
+        account.validate()?;
+        Ok(account)
     }
 }
 
@@ -248,12 +329,16 @@ pub struct MarketLifecycleBindingV1 {
     pub resolution_account_id: ContentId,
     /// Market-scoped FoundationVault PDA.
     pub foundation_vault_id: ContentId,
+    /// Canonical pairwise-distinct physical foundation account graph.
+    pub foundation_account_graph_id: MarketFoundationAccountGraphV1Id,
     /// Exact itemized foundation schedule.
     pub foundation_schedule_id: MarketFoundationScheduleV1Id,
     /// Accepted collateral liability founding plan.
     pub market_liability_founding_id: ContentId,
     /// Exact claim-mint founding plan.
     pub claim_mint_founding_plan_id: ContentId,
+    /// Canonical accepted claim-issuance binding shared by all claim consumers.
+    pub claim_issuance_binding_id: ContentId,
     /// General-private MarketBinding/Runtime founding capability.
     pub general_founding_capability_id: ContentId,
     /// Product-owned abort policy.
@@ -270,6 +355,7 @@ impl MarketLifecycleBindingV1 {
     /// Validate all immutable identities and finite bounds.
     pub fn validate(self) -> Result<()> {
         self.market_instance_id.validate()?;
+        self.foundation_account_graph_id.validate()?;
         self.foundation_schedule_id.validate()?;
         if self.generation == 0
             || self.outcome_count == 0
@@ -291,7 +377,7 @@ impl MarketLifecycleBindingV1 {
     /// Domain-separated identity of the complete binding.
     pub fn id(self) -> Result<ContentId> {
         self.validate()?;
-        let mut body = [0u8; 991];
+        let mut body = [0u8; 1055];
         let mut at = 0usize;
         for id in self.identity_ids() {
             body[at..at + 32].copy_from_slice(&id.bytes());
@@ -338,9 +424,11 @@ impl MarketLifecycleBindingV1 {
             self.failure_liveness_quote_schedule_id,
             self.resolution_account_id,
             self.foundation_vault_id,
+            self.foundation_account_graph_id.content_id(),
             self.foundation_schedule_id.content_id(),
             self.market_liability_founding_id,
             self.claim_mint_founding_plan_id,
+            self.claim_issuance_binding_id,
             self.general_founding_capability_id,
             self.founding_abort_policy_id,
         ]
@@ -1227,8 +1315,7 @@ impl MarketLifecycleRootV1 {
         {
             return Err(Error::WorkIncomplete);
         }
-        let (product_families, product_family_projection) =
-            self.product_families.finalize_terminal()?;
+        let (product_families, _) = self.product_families.finalize_terminal()?;
         let next = Self {
             phase: MarketLifecyclePhaseV1::Terminal,
             transition_sequence: self
@@ -1239,45 +1326,60 @@ impl MarketLifecycleRootV1 {
             ..self
         };
         next.validate()?;
-        let root_semantic_id = next.semantic_id()?;
-        let product_family_terminal_projection_id = product_family_projection.id()?.content_id();
+        let projection = next.terminal_projection()?;
+        Ok((next, projection))
+    }
+
+    /// Re-derive the only whole-Market terminal projection from a terminal root.
+    ///
+    /// This is structural only. A live adapter must first authenticate the
+    /// exact program owner, PDA, full account bytes, Market, and generation.
+    pub fn terminal_projection(self) -> Result<MarketInstanceTerminalProjectionV1> {
+        self.validate()?;
+        if self.phase != MarketLifecyclePhaseV1::Terminal {
+            return Err(Error::WorkIncomplete);
+        }
+        let root_semantic_id = self.semantic_id()?;
+        let product_family_terminal_projection_id = self
+            .product_families
+            .terminal_projection()?
+            .id()?
+            .content_id();
         let mut body = [0u8; 444];
         body[..32].copy_from_slice(&root_semantic_id.bytes());
-        body[32..64].copy_from_slice(&next.binding.market_instance_id.bytes());
-        body[64..72].copy_from_slice(&next.binding.generation.to_le_bytes());
-        body[72..80].copy_from_slice(&next.transition_sequence.to_le_bytes());
-        let mut at = 80usize;
+        body[32..64].copy_from_slice(&self.binding.market_instance_id.bytes());
+        body[64..72].copy_from_slice(&self.binding.generation.to_le_bytes());
+        body[72..80].copy_from_slice(&self.transition_sequence.to_le_bytes());
         body[80..112].copy_from_slice(&product_family_terminal_projection_id.bytes());
         let mut at = 112usize;
-        for receipt in next.shared_core_terminal_receipts {
+        for receipt in self.shared_core_terminal_receipts {
             body[at..at + 32].copy_from_slice(&receipt.bytes());
             at += 32;
         }
-        for id in next.fractional_terminal_state_ids {
+        for id in self.fractional_terminal_state_ids {
             body[at..at + 32].copy_from_slice(&id.bytes());
             at += 32;
         }
-        body[336..368].copy_from_slice(&next.resolution_semantic_id.bytes());
-        body[368..400].copy_from_slice(&next.resolution_data_id.bytes());
-        body[400..432].copy_from_slice(&next.resolution_activation_receipt_id.bytes());
-        body[432..436].copy_from_slice(&next.admitted_series_links.to_le_bytes());
-        body[436..444].copy_from_slice(&next.capital.principal_total_lamports.to_le_bytes());
+        body[336..368].copy_from_slice(&self.resolution_semantic_id.bytes());
+        body[368..400].copy_from_slice(&self.resolution_data_id.bytes());
+        body[400..432].copy_from_slice(&self.resolution_activation_receipt_id.bytes());
+        body[432..436].copy_from_slice(&self.admitted_series_links.to_le_bytes());
+        body[436..444].copy_from_slice(&self.capital.principal_total_lamports.to_le_bytes());
         let id = content_id(MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1, &body);
-        let projection = MarketInstanceTerminalProjectionV1 {
+        Ok(MarketInstanceTerminalProjectionV1 {
             id,
             root_semantic_id,
-            market_instance_id: next.binding.market_instance_id,
-            generation: next.binding.generation,
-            final_transition_sequence: next.transition_sequence,
+            market_instance_id: self.binding.market_instance_id,
+            generation: self.binding.generation,
+            final_transition_sequence: self.transition_sequence,
             product_family_terminal_projection_id,
-            shared_core_terminal_receipts: next.shared_core_terminal_receipts,
-            fractional_terminal_state_ids: next.fractional_terminal_state_ids,
-            resolution_semantic_id: next.resolution_semantic_id,
-            resolution_data_id: next.resolution_data_id,
-            resolution_activation_receipt_id: next.resolution_activation_receipt_id,
-            admitted_series_links: next.admitted_series_links,
-        };
-        Ok((next, projection))
+            shared_core_terminal_receipts: self.shared_core_terminal_receipts,
+            fractional_terminal_state_ids: self.fractional_terminal_state_ids,
+            resolution_semantic_id: self.resolution_semantic_id,
+            resolution_data_id: self.resolution_data_id,
+            resolution_activation_receipt_id: self.resolution_activation_receipt_id,
+            admitted_series_links: self.admitted_series_links,
+        })
     }
 
     /// Enter timeout abort and refund all still-unspent FoundationVault principal.
@@ -2028,11 +2130,13 @@ fn binding_from_ids(
         failure_liveness_quote_schedule_id: ids[22],
         resolution_account_id: ids[23],
         foundation_vault_id: ids[24],
-        foundation_schedule_id: MarketFoundationScheduleV1Id::from_bytes(ids[25].bytes()),
-        market_liability_founding_id: ids[26],
-        claim_mint_founding_plan_id: ids[27],
-        general_founding_capability_id: ids[28],
-        founding_abort_policy_id: ids[29],
+        foundation_account_graph_id: MarketFoundationAccountGraphV1Id::from_bytes(ids[25].bytes()),
+        foundation_schedule_id: MarketFoundationScheduleV1Id::from_bytes(ids[26].bytes()),
+        market_liability_founding_id: ids[27],
+        claim_mint_founding_plan_id: ids[28],
+        claim_issuance_binding_id: ids[29],
+        general_founding_capability_id: ids[30],
+        founding_abort_policy_id: ids[31],
         founding_deadline_bucket,
         maximum_interval_width,
         maximum_coordinates_per_advance,
@@ -2816,15 +2920,20 @@ impl MarketLifecycleRootV1 {
     pub fn initialize_founder(
         binding: MarketLifecycleBindingV1,
         schedule: MarketFoundationScheduleV1,
+        account_graph: MarketFoundationAccountGraphV1,
         mut capital: MarketFoundationCapitalV1,
         product_families: MarketFamilyAggregatorV1,
         root_poststate_receipt_id: ContentId,
     ) -> Result<Self> {
         binding.validate()?;
         schedule.validate()?;
+        account_graph.validate(schedule)?;
         product_families.validate()?;
         root_poststate_receipt_id.validate()?;
         if binding.foundation_schedule_id != schedule.id()?
+            || binding.foundation_account_graph_id != account_graph.id(schedule)?
+            || binding.market_instance_id != account_graph.market_instance_id
+            || binding.generation != account_graph.generation
             || binding.outcome_count != schedule.outcome_count
             || product_families.phase() != MarketFamilyAggregatorPhaseV1::Open
             || product_families.binding().market_instance_id != binding.market_instance_id
@@ -2885,10 +2994,13 @@ impl MarketLifecycleRootV1 {
     pub fn record_foundation_step(
         self,
         schedule: MarketFoundationScheduleV1,
+        account_graph: MarketFoundationAccountGraphV1,
         step: MarketFoundationStepProjectionV1,
     ) -> Result<Self> {
         self.validate_against_schedule(schedule)?;
+        account_graph.validate(schedule)?;
         if self.phase != MarketLifecyclePhaseV1::Founding
+            || account_graph.id(schedule)? != self.binding.foundation_account_graph_id
             || step.binding_id != self.binding.id()?
             || step.root_transition_sequence
                 != self
@@ -2899,6 +3011,9 @@ impl MarketLifecycleRootV1 {
             return Err(Error::UnauthenticatedAuthority);
         }
         let index = step.slot.index()?;
+        if step.account_id != account_graph.account_ids[index] {
+            return Err(Error::MismatchedArtifact);
+        }
         let bit = slot_bit(index)?;
         if (self.foundation.expected_bitmap & bit) == 0
             || (self.foundation.initialized_bitmap & bit) != 0

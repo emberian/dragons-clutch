@@ -747,9 +747,17 @@ impl MarketFamilyAggregatorV1 {
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
         next.validate()?;
-        let summaries = next.exhaustive_summaries()?;
-        let projection = MarketFamilyAggregatorTerminalProjectionV1::derive(&next, summaries)?;
+        let projection = next.terminal_projection()?;
         Ok((next, projection))
+    }
+
+    /// Re-derive the exact terminal projection from an authenticated terminal body.
+    pub fn terminal_projection(&self) -> Result<MarketFamilyAggregatorTerminalProjectionV1> {
+        self.validate()?;
+        if self.phase != MarketFamilyAggregatorPhaseV1::Terminal {
+            return Err(Error::SeriesNotClosed);
+        }
+        MarketFamilyAggregatorTerminalProjectionV1::derive(self, self.exhaustive_summaries()?)
     }
 
     /// Derive one typed exhaustive summary for each canonical family.

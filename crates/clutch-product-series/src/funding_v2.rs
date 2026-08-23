@@ -21,12 +21,12 @@ const STATE_SCHEMA_V2: u16 = 2;
 /// Maximum outcome count represented by the fixed foundation schedule.
 pub const MARKET_FOUNDATION_MAX_OUTCOMES_V1: usize = 16;
 /// Fixed shared-core slots preceding outcome mint and custody slots.
-pub const MARKET_FOUNDATION_CORE_SLOT_COUNT_V1: usize = 12;
-/// Exact number of slots: twelve core, sixteen mints, sixteen custody accounts.
+pub const MARKET_FOUNDATION_CORE_SLOT_COUNT_V1: usize = 13;
+/// Exact number of slots: thirteen core, sixteen mints, sixteen custody accounts.
 pub const MARKET_FOUNDATION_SLOT_COUNT_V1: usize =
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V1 + 2 * MARKET_FOUNDATION_MAX_OUTCOMES_V1;
 /// Exact V2 quote width.
-pub const SERIES_FUNDING_QUOTE_BYTES_V2: usize = 640;
+pub const SERIES_FUNDING_QUOTE_BYTES_V2: usize = 648;
 /// Exact V2 mutable funding-state width.
 pub const SERIES_FUNDING_STATE_BYTES_V2: usize = 512;
 /// Six disjoint Series funding compartments.
@@ -150,7 +150,7 @@ impl MarketFoundationScheduleV1 {
     /// Typed identity of the exact itemized schedule.
     pub fn id(self) -> Result<MarketFoundationScheduleV1Id> {
         self.validate()?;
-        let mut body = [0u8; 368];
+        let mut body = [0u8; 376];
         body[0] = self.outcome_count;
         body[8..16].copy_from_slice(&self.founding_timeout_buckets.to_le_bytes());
         let mut at = 16usize;
