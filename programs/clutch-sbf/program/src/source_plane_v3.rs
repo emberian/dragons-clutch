@@ -987,11 +987,9 @@ pub fn authenticate_receiver_route(
 }
 
 /// Authenticate one immutable Product/failure generation request under the
-/// exact authority program selected by the Source release.
-///
-/// The request body is content addressed under a disjoint external-authority
-/// namespace. The executing Clutch program never derives this PDA under its
-/// own identity and therefore cannot silently become generation authority.
+/// exact authority program selected by the Source release. Current V2 releases
+/// require that authority to be the already-authenticated adapter deployment;
+/// historical V1 external-authority artifacts remain non-executable.
 pub fn authenticate_generation_request(
     route: AuthenticatedSourceRouteV1,
     request_account: &AccountInfo<'_>,

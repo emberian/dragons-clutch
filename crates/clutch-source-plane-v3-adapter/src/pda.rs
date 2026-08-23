@@ -96,6 +96,34 @@ pub enum PdaFamilyV3 {
     SourceNoReopenTerminal = 20,
 }
 
+impl PdaFamilyV3 {
+    /// Canonical recipe-domain discriminator without an enum cast.
+    pub const fn wire_u16(self) -> u16 {
+        match self {
+            Self::V2SourceSpec => 1,
+            Self::SourceHead => 2,
+            Self::OpenRawPage => 3,
+            Self::RawPage => 4,
+            Self::WindowWork => 5,
+            Self::WindowSeal => 6,
+            Self::StatisticResult => 7,
+            Self::ProductTemplate => 8,
+            Self::SeriesPlan => 9,
+            Self::SeriesFunding => 10,
+            Self::Instance => 11,
+            Self::DrawdownWork => 12,
+            Self::SourceRelease => 13,
+            Self::SourceWorkReceipt => 14,
+            Self::ReopenLineage => 15,
+            Self::WindowSpec => 16,
+            Self::SummaryProgram => 17,
+            Self::StatisticKey => 18,
+            Self::SourcePolicyHandoff => 19,
+            Self::SourceNoReopenTerminal => 20,
+        }
+    }
+}
+
 /// Canonical fixed-capacity PDA seed recipe proposal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PdaRecipeV3 {
@@ -343,7 +371,7 @@ impl PdaRecipeV3 {
         self.validate()?;
         let mut hasher = Sha256::new();
         hasher.update(RECIPE_DOMAIN);
-        hasher.update((self.family as u16).to_le_bytes());
+        hasher.update(self.family.wire_u16().to_le_bytes());
         hasher.update([self.count]);
         for seed in self.seeds {
             hasher.update([seed.length]);

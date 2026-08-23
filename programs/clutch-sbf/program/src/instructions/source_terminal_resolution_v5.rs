@@ -87,13 +87,17 @@ impl AuthenticatedSourceResolutionTerminalPolicyV1 {
     ) -> Outcome<Self> {
         let statistic_result_recipe = PdaRecipeV3::statistic_result(source.statistic_key_id())
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let statistic_result_recipe_id = statistic_result_recipe
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
-            lineage.lineage().family == LineageFamilyV1::StatisticResult
-                && lineage.lineage().active_account == source.result_account()
-                && lineage.lineage().semantic_binding_id
-                    == statistic_result_recipe
-                        .id()
-                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            successful_statistic_result_lineage_matches(
+                lineage.lineage().family,
+                lineage.lineage().active_account,
+                lineage.lineage().semantic_binding_id,
+                source.result_account(),
+                statistic_result_recipe_id,
+            ),
             ClutchError::MismatchedState,
         )?;
         Self::new(
@@ -484,6 +488,18 @@ fn lineage_family(family: SourceReopenFamilyV1) -> LineageFamilyV1 {
     }
 }
 
+fn successful_statistic_result_lineage_matches(
+    family: LineageFamilyV1,
+    active_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    semantic_binding_id: ContentId,
+    expected_result_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    expected_statistic_result_recipe_id: ContentId,
+) -> bool {
+    family == LineageFamilyV1::StatisticResult
+        && active_account == expected_result_account
+        && semantic_binding_id == expected_statistic_result_recipe_id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,5 +514,42 @@ mod tests {
         // Construction of Product's and Failure's private receipts is not
         // available here. The absence of an override is itself the adversarial
         // invariant: every possible call returns AuthorizationUnavailable.
+    }
+
+    #[test]
+    fn successful_terminal_refuses_family_account_and_recipe_substitution() {
+        let result_account = clutch_source_plane_v3_runtime::RuntimeKey::from_bytes([1; 32]);
+        let other_account = clutch_source_plane_v3_runtime::RuntimeKey::from_bytes([2; 32]);
+        let recipe_id = ContentId::from_bytes([3; 32]);
+        let other_recipe_id = ContentId::from_bytes([4; 32]);
+
+        assert!(successful_statistic_result_lineage_matches(
+            LineageFamilyV1::StatisticResult,
+            result_account,
+            recipe_id,
+            result_account,
+            recipe_id,
+        ));
+        assert!(!successful_statistic_result_lineage_matches(
+            LineageFamilyV1::EvaluationWork,
+            result_account,
+            recipe_id,
+            result_account,
+            recipe_id,
+        ));
+        assert!(!successful_statistic_result_lineage_matches(
+            LineageFamilyV1::StatisticResult,
+            other_account,
+            recipe_id,
+            result_account,
+            recipe_id,
+        ));
+        assert!(!successful_statistic_result_lineage_matches(
+            LineageFamilyV1::StatisticResult,
+            result_account,
+            other_recipe_id,
+            result_account,
+            recipe_id,
+        ));
     }
 }

@@ -210,7 +210,7 @@ fn fixed_account_wrapper_has_one_core_owner_and_hostile_decode_is_exact() {
         Err(AdapterError::BadVersion)
     );
     hostile = bytes.clone();
-    hostile[10..12].copy_from_slice(&(AccountFamilyV3::WindowWork as u16).to_le_bytes());
+    hostile[10..12].copy_from_slice(&5_u16.to_le_bytes());
     assert_eq!(
         decode_account::<SourceHeadV3>(&hostile, sink),
         Err(AdapterError::WrongAccountFamily)
@@ -402,7 +402,7 @@ fn v2_is_transcoded_not_reinterpreted_and_stricter_v3_slot_rule_refuses() {
     let mut page_bytes = vec![0; RAW_PAGE_BYTES];
     page.encode_into(&mut page_bytes).unwrap();
     assert_ne!(&v2_bytes[..8], &page_bytes[104..112]);
-    assert_eq!(page_bytes[104], RawRecordKindV3::Observation as u8);
+    assert_eq!(page_bytes[104], 1);
     assert!(page_bytes[105..112].iter().all(|byte| *byte == 0));
 }
 
@@ -1002,8 +1002,7 @@ fn recurring_lapse_projection_is_permissionless_and_preserves_compartments() {
         .validate_for_program(id(69), lapsed.plan)
         .unwrap();
     let mut hostile = encoded;
-    hostile[10..12]
-        .copy_from_slice(&(TransitionActionV3::CreateSeriesInstance as u16).to_le_bytes());
+    hostile[10..12].copy_from_slice(&10_u16.to_le_bytes());
     assert_eq!(
         IntentPreimageV3::decode(&hostile)
             .unwrap()

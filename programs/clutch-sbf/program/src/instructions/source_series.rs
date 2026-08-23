@@ -143,8 +143,9 @@ pub(super) fn require_live_intent(
 }
 
 /// Execute action 2 against the exact release-selected route and schedule.
-/// The generation request is derived under the release-selected external
-/// authority; Clutch only authenticates and consumes it.
+/// The generation request is derived under the release-selected authority.
+/// Current V2 releases bind that role to the exact authenticated adapter
+/// deployment; this action only authenticates and consumes the immutable body.
 #[allow(clippy::too_many_arguments)]
 fn process_initialize_head(
     program_id: &Pubkey,
