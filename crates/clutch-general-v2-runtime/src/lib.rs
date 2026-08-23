@@ -54,6 +54,10 @@ use clutch_product_series::{
 use clutch_solana_layout::{CodecError as LayoutError, PriceGridAccount};
 use sha2::{Digest, Sha256};
 
+mod builder;
+
+pub use builder::*;
+
 /// SHA-256 domain for the canonical V3 quantized witness body.
 ///
 /// The terminating zero is part of the preimage. A future field or encoding
