@@ -13,14 +13,19 @@
 
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5Id, ContentId, FixedCodec,
-    NativeClaimBasisV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
-    SeriesAttachmentPlanV4Id,
+    MarketInstanceV2Id, NativeClaimBasisV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
+    SeriesAttachmentPlanV4Id, SeriesPlanV5Id,
 };
 use clutch_collateral_adapter_v2::{
     admit_collateral_account_v2, admit_collateral_mint_v2, RuntimeAccountViewV2,
     TokenAccountRoleV2,
 };
-use clutch_retirement::{PositionAccountV3, PositionPurposeV3, ReplayV3Envelope};
+use clutch_retirement::{
+    plan_position_v3_replay_v3_retirement_v1, PositionAccountV3, PositionPurposeV3,
+    PositionV3ReplayV3AccountsV1, PositionV3ReplayV3RetirementPlanV1,
+    PositionV3ReplayV3RetirementRequestV1, RecipientBalanceBookV1, RecipientBalanceV1,
+    ReplayV3Envelope,
+};
 use clutch_retirement::{
     admit_deletable_rent, admit_initial_rent_split, Identity32V1, PositionLifecycleV3,
     PositionV3Fields, ReplayV3EnvelopeFields, ReplayV3EnvelopeHeader, ReplayV3ExtensionSchema,
@@ -36,14 +41,21 @@ use clutch_structured_claim_adapter::runtime_contract::{
     StructuredClaimDescriptorV2, StructuredClaimPayloadV1, StructuredClaimReplayExtensionV1,
     StructuredClaimRuntimeAddressesV1, StructuredMarketRootBindingV1, StructuredMarketRootV1,
     StructuredProductLineageV1, WrapperQuantityPayloadV1, WrapperRecipeHashV1, WrapperRecipeV1,
+    AuthenticatedVaultRetirementV1, StructuredClaimReplayTransitionV1,
+    StructuredClaimTerminalReplayDeltaV1, StructuredProductWrapperTerminalProjectionV1,
+    StructuredRootCloseDispositionV1,
+    prepare_structured_descriptor_terminal_owner_v1, prepare_structured_descriptor_terminal_v1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_BYTES_V1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1, STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
+    STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_DOMAIN_V1,
 };
 use clutch_structured_claim_adapter::{
     bind_descriptor_v1,
     canonical_native_claim_id_v1, canonical_series_scoped_wrapper_product_id_v2,
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
+    decode_retired_canonical_wrapper_mint_v1,
     prepare_current_compact_donation_v1, prepare_current_redeem_terminal_v1,
+    prepare_current_retire_descriptor_v1,
     prepare_current_structured_position_poststate_v1,
     prepare_current_structured_vault_poststate_v1, prepare_current_unwrap_full_v1,
     prepare_current_wrap_full_v1, AccountRoleV1,
@@ -80,7 +92,9 @@ use super::product_artifact::{
 };
 use super::product_market::{
     admit_series_wrapper_obligation_v1, authenticate_series_market_link_v1,
-    authenticate_series_wrapper_authorization_v1, AuthenticatedSeriesWrapperAuthorizationV1,
+    authenticate_series_wrapper_authorization_v1, terminalize_series_wrapper_obligation_v1,
+    AuthenticatedSeriesWrapperAuthorizationV1, AuthenticatedSeriesWrapperTerminalOwnerV1,
+    AuthenticatedSeriesWrapperTerminalV1,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, transfer_data,
@@ -130,6 +144,10 @@ pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
 
 /// Exact account count for beneficiary-free single-vault compaction.
 pub const STRUCTURED_COMPACTION_ACCOUNT_COUNT: usize = 27;
+/// Exact action-8 frame. Hoard and ClaimLedger are current read-only semantic
+/// owners; the descriptor, mint, Position/Replay, root, and optional Product
+/// link terminal successor are mutated atomically.
+pub const STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT: usize = 31;
 const _: () = assert!(
     clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
         == clutch_structured_claim_adapter::runtime_contract::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
@@ -165,6 +183,49 @@ const CX_HOARD_TOKEN: usize = 23;
 const CX_WRAPPER_RELEASE_V2: usize = 24;
 const CX_BASE_RELEASE_V2: usize = 25;
 const CX_TOKEN_RELEASE_V2: usize = 26;
+
+const RT_VAULT_AUTHORITY: usize = 0;
+const RT_REALM: usize = 1;
+const RT_PROFILE: usize = 2;
+const RT_POLICY: usize = 3;
+const RT_COLLATERAL_TOKEN_PROGRAM: usize = 4;
+const RT_COLLATERAL_TOKEN_PROGRAM_DATA: usize = 5;
+const RT_MARKET_BINDING: usize = 6;
+const RT_MARKET_RUNTIME: usize = 7;
+const RT_POSITION: usize = 8;
+const RT_REPLAY: usize = 9;
+const RT_DESCRIPTOR: usize = 10;
+const RT_WRAPPER_PROGRAM: usize = 11;
+const RT_WRAPPER_PROGRAM_DATA: usize = 12;
+const RT_BASE_PROGRAM: usize = 13;
+const RT_BASE_PROGRAM_DATA: usize = 14;
+const RT_TOKEN_PROGRAM: usize = 15;
+const RT_TOKEN_PROGRAM_DATA: usize = 16;
+const RT_BASIS: usize = 17;
+const RT_MARKET_INSTANCE: usize = 18;
+const RT_HOARD: usize = 19;
+const RT_CLAIM_LEDGER: usize = 20;
+const RT_MINT: usize = 21;
+const RT_MINT_AUTHORITY: usize = 22;
+const RT_STRUCTURED_ROOT: usize = 23;
+const RT_SERIES_LINK: usize = 24;
+const RT_RENT_REFUND_OWNER: usize = 25;
+const RT_NEUTRAL_SINK: usize = 26;
+const RT_WRAPPER_RELEASE_V2: usize = 27;
+const RT_BASE_RELEASE_V2: usize = 28;
+const RT_TOKEN_RELEASE_V2: usize = 29;
+const RT_SYSTEM_PROGRAM: usize = 30;
+
+const STRUCTURED_TERMINAL_POSITION_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/terminal-position-transition/v1\0";
+const STRUCTURED_TERMINAL_RENT_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/terminal-rent-transition/v1\0";
+const STRUCTURED_TERMINAL_VAULT_CLOSE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/terminal-vault-close/v1\0";
+const STRUCTURED_TERMINAL_ROOT_SEMANTIC_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/terminal-root-semantic/v1\0";
+const STRUCTURED_TERMINAL_ROOT_DATA_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/terminal-root-data/v1\0";
 
 const ACCOUNT_ROLES: [AccountRoleV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     AccountRoleV1::VaultAuthority,
@@ -245,6 +306,72 @@ struct AuthenticatedStructuredDeploymentsV2 {
     base_release_id: ContentId,
     token_release_id: ContentId,
     owner_release_id: ContentId,
+}
+
+/// Private postwrite authority proving the exact terminal Structured root and
+/// every immutable Product join consumed by the Product-owned Wrapper latch.
+/// This type is constructible only after hostile reauthentication of the
+/// descriptor, mint, Position tombstone, deleted Replay, and root postimage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedStructuredDescriptorTerminalV1 {
+    id: ContentId,
+    root_account: Pubkey,
+    root_semantic_id: ContentId,
+    root_data_id: ContentId,
+    link_account: Pubkey,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    wrapper_admission_receipt_id: ContentId,
+}
+
+impl AuthenticatedSeriesWrapperTerminalOwnerV1
+    for AuthenticatedStructuredDescriptorTerminalV1
+{
+    fn owner_terminal_receipt_id(&self) -> Outcome<ContentId> {
+        Ok(self.id)
+    }
+
+    fn structured_root_account(&self) -> Outcome<Pubkey> {
+        Ok(self.root_account)
+    }
+
+    fn structured_root_semantic_id(&self) -> Outcome<ContentId> {
+        Ok(self.root_semantic_id)
+    }
+
+    fn structured_root_data_id(&self) -> Outcome<ContentId> {
+        Ok(self.root_data_id)
+    }
+
+    fn authenticate_series_wrapper_terminal_owner_v1(
+        &self,
+        link_account: Pubkey,
+        series_plan_id: SeriesPlanV5Id,
+        ordinal: u32,
+        market_instance_id: MarketInstanceV2Id,
+        generation: u64,
+        wrapper_admission_receipt_id: ContentId,
+        owner_terminal_receipt_id: ContentId,
+        structured_root_account: Pubkey,
+        structured_root_semantic_id: ContentId,
+        structured_root_data_id: ContentId,
+    ) -> Outcome<()> {
+        require(
+            link_account == self.link_account
+                && series_plan_id == self.series_plan_id
+                && ordinal == self.ordinal
+                && market_instance_id == self.market_instance_id
+                && generation == self.generation
+                && wrapper_admission_receipt_id == self.wrapper_admission_receipt_id
+                && owner_terminal_receipt_id == self.id
+                && structured_root_account == self.root_account
+                && structured_root_semantic_id == self.root_semantic_id
+                && structured_root_data_id == self.root_data_id,
+            ClutchError::MismatchedState,
+        )
+    }
 }
 
 /// Found one funded, empty Structured PositionV3 and SCV1 Replay pair.
@@ -1374,6 +1501,933 @@ pub fn process_compact_donation(
     };
     authenticate_compaction_collateral_observations(accounts, liabilities.bound, plan)?;
     write_compaction_poststate(accounts, poststate, plan)
+}
+
+/// Retire one exact descriptor after the wrapper has atomically revoked its
+/// zero-supply mint authority and persisted the descriptor tombstone. This is
+/// the sole current action-8 base route: it never consults MarketLedger, and it
+/// consumes Product's private Wrapper terminal writer only for the final live
+/// descriptor in the Structured root.
+pub fn process_retire_descriptor(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT)?;
+    require(sequence == 0, ClutchError::Replay)?;
+    let request = match clutch_structured_claim_adapter::runtime_contract::decode_structured_claim_payload_v1(
+        StructuredClaimActionV1::RetireDescriptor.tag(),
+        payload,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+    {
+        StructuredClaimPayloadV1::RetireDescriptor(value) => value,
+        _ => return Err(ClutchError::NonCanonical.into()),
+    };
+
+    let root_data = accounts[RT_STRUCTURED_ROOT]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let root_before = StructuredMarketRootV1::decode(&root_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    drop(root_data);
+    let family_terminal = root_before.live_descriptor_count == 1;
+    validate_retirement_privileges(program_id, accounts, family_terminal)?;
+
+    let value_authority = authenticate_general_market_value_authority_v2(
+        program_id,
+        &accounts[RT_REALM],
+        &accounts[RT_PROFILE],
+        &accounts[RT_POLICY],
+        &accounts[RT_COLLATERAL_TOKEN_PROGRAM],
+        &accounts[RT_COLLATERAL_TOKEN_PROGRAM_DATA],
+        &accounts[RT_MARKET_BINDING],
+        &accounts[RT_MARKET_RUNTIME],
+        &accounts[RT_MARKET_INSTANCE],
+        &accounts[RT_HOARD],
+        &accounts[RT_CLAIM_LEDGER],
+        false,
+        false,
+    )?;
+    let liabilities = value_authority.liabilities;
+    let basis_artifact = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        &accounts[RT_BASIS],
+        ContentId::from_bytes(liabilities.market_binding.native_claim_basis_id.bytes()),
+    )?;
+    let basis = *basis_artifact.value();
+    require(
+        basis.outcome_count == liabilities.market_binding.outcome_count,
+        ClutchError::MismatchedState,
+    )?;
+
+    let descriptor_data = accounts[RT_DESCRIPTOR]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let retired_descriptor = StructuredClaimDescriptorV2::decode(&descriptor_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    drop(descriptor_data);
+    require(
+        retired_descriptor.state
+            == clutch_structured_claim_adapter::runtime_contract::DescriptorStateV1::Retired,
+        ClutchError::MismatchedState,
+    )?;
+    let mut active_descriptor = retired_descriptor;
+    active_descriptor.state =
+        clutch_structured_claim_adapter::runtime_contract::DescriptorStateV1::Active;
+    active_descriptor
+        .validate_persisted()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let deployments = authenticate_terminal_deployments(accounts, active_descriptor)?;
+    let market_instance_id = liabilities
+        .market_instance
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let descriptor_basis = DescriptorBasisV1 {
+        market: market_instance_id.bytes(),
+        terms_digest: basis_artifact.semantic_id().bytes(),
+        basis_degree: basis.basis_degree,
+        denominator: basis.denominator,
+        outcome_count: basis.outcome_count,
+    };
+    let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
+        &active_descriptor,
+        descriptor_basis,
+        deployments.runtime.binding,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let native_claim_id = canonical_native_claim_id_v1(&identity).map_err(map_adapter_error)?;
+    let product_id = canonical_series_scoped_wrapper_product_id_v2(
+        &identity,
+        native_claim_id,
+        active_descriptor.structured_root_id,
+        active_descriptor.wrapper_recipe_id,
+    )
+    .map_err(map_adapter_error)?;
+    require(
+        request.wrapper_product_id == product_id,
+        ClutchError::MismatchedState,
+    )?;
+    let addresses = derive_runtime_addresses(
+        accounts[RT_WRAPPER_PROGRAM].key,
+        product_id,
+        active_descriptor,
+    )?;
+    require(
+        addresses.descriptor == accounts[RT_DESCRIPTOR].key.to_bytes()
+            && addresses.mint == accounts[RT_MINT].key.to_bytes()
+            && addresses.mint_authority == accounts[RT_MINT_AUTHORITY].key.to_bytes()
+            && addresses.vault_owner == accounts[RT_VAULT_AUTHORITY].key.to_bytes(),
+        ClutchError::WrongPda,
+    )?;
+    let bound_descriptor = bind_descriptor_v1(
+        active_descriptor,
+        descriptor_basis,
+        deployments.runtime,
+        native_claim_id,
+        product_id,
+        addresses,
+        &RuntimeStructuredPdaVerifierV1,
+    )
+    .map_err(map_adapter_error)?;
+
+    let root_id = root_before
+        .binding
+        .id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_pda = Pubkey::find_program_address(
+        &[STRUCTURED_ROOT_SEED_V1, &root_id.bytes()],
+        program_id,
+    );
+    require(
+        *accounts[RT_STRUCTURED_ROOT].key == root_pda.0
+            && root_before.root_bump == root_pda.1
+            && root_id.bytes() == active_descriptor.structured_root_id
+            && root_before.binding.owner_release_id == deployments.owner_release_id
+            && root_before.binding.market_instance_id == market_instance_id
+            && root_before.binding.link_account == accounts[RT_SERIES_LINK].key.to_bytes()
+            && root_before.binding.rent_refund_owner.bytes()
+                == accounts[RT_RENT_REFUND_OWNER].key.to_bytes()
+            && root_before.binding.neutral_lamport_sink.bytes()
+                == accounts[RT_NEUTRAL_SINK].key.to_bytes()
+            && liabilities.market_binding.neutral_sink.bytes()
+                == accounts[RT_NEUTRAL_SINK].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let position_data = accounts[RT_POSITION]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let replay_data = accounts[RT_REPLAY]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let mint_data = accounts[RT_MINT]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let position = PositionAccountV3::decode(&position_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let replay = ReplayV3Envelope::decode(&replay_data, &RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let extension = StructuredClaimReplayExtensionV1::decode(replay.extension())
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let retired_mint = decode_retired_canonical_wrapper_mint_v1(
+        accounts[RT_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[RT_MINT].key.to_bytes(),
+        &mint_data,
+    )
+    .map_err(map_adapter_error)?;
+    require(
+        position.purpose() == PositionPurposeV3::StructuredClaim
+            && position.lifecycle() == PositionLifecycleV3::Open
+            && position.outstanding_reservations() == 0
+            && position.cash_atoms() == 0
+            && position.reserved_cash_atoms() == 0
+            && position.native_eggs() == [0; clutch_retirement::MAX_OUTCOMES]
+            && position.owner().bytes() == addresses.vault_owner
+            && position.controller().bytes() == addresses.vault_owner
+            && position.purpose_binding_id().bytes() == product_id
+            && position.replay_account().bytes() == accounts[RT_REPLAY].key.to_bytes()
+            && replay.header().position_account().bytes() == accounts[RT_POSITION].key.to_bytes()
+            && replay.header().replay_account().bytes() == accounts[RT_REPLAY].key.to_bytes()
+            && replay.header().purpose() == PositionPurposeV3::StructuredClaim
+            && replay.header().purpose_binding_id().bytes() == product_id
+            && replay.header().position_generation() == position.generation()
+            && replay.header().next_sequence() == request.vault_replay_sequence
+            && request.vault_generation == position.generation()
+            && extension.descriptor_account == accounts[RT_DESCRIPTOR].key.to_bytes()
+            && extension.wrapper_product_id == product_id
+            && extension.vault_authority == addresses.vault_owner
+            && extension.current_position_semantic_id
+                == position
+                    .semantic_id(&RuntimeSha256)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let position_semantic_before = position
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_position = PositionAccountV3::new(PositionV3Fields {
+        lifecycle: PositionLifecycleV3::CloseRequested,
+        ..position.fields()
+    })
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_position_semantic = terminal_position
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_transition_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            STRUCTURED_TERMINAL_POSITION_TRANSITION_DOMAIN_V1,
+            &value_authority.receipt_id.bytes(),
+            &root_id.bytes(),
+            accounts[RT_DESCRIPTOR].key.as_ref(),
+            &product_id,
+            accounts[RT_MINT].key.as_ref(),
+            accounts[RT_POSITION].key.as_ref(),
+            accounts[RT_REPLAY].key.as_ref(),
+            &position_semantic_before.bytes(),
+            &terminal_position_semantic.bytes(),
+            &request.vault_generation.to_le_bytes(),
+            &request.vault_replay_sequence.to_le_bytes(),
+            &accounts[RT_POSITION].lamports().to_le_bytes(),
+            &accounts[RT_REPLAY].lamports().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!terminal_transition_id.is_zero(), ClutchError::MismatchedState)?;
+    let terminal_delta = StructuredClaimTerminalReplayDeltaV1 {
+        action: StructuredClaimActionV1::RetireDescriptor,
+        sequence: request.vault_replay_sequence,
+        transition_id: terminal_transition_id.bytes(),
+        position_account: accounts[RT_POSITION].key.to_bytes(),
+        position_pre_semantic_id: position_semantic_before.bytes(),
+        position_terminal_semantic_id: terminal_position_semantic.bytes(),
+    };
+    let terminal_delta_body = terminal_delta
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_delta_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_DOMAIN_V1,
+            &terminal_delta_body,
+        ])
+        .to_bytes(),
+    );
+    let terminal_extension = extension
+        .terminalized(StructuredClaimReplayTransitionV1 {
+            descriptor_account: accounts[RT_DESCRIPTOR].key.to_bytes(),
+            wrapper_product_id: product_id,
+            vault_authority: addresses.vault_owner,
+            action: StructuredClaimActionV1::RetireDescriptor,
+            transition_id: terminal_transition_id.bytes(),
+            delta_id: terminal_delta_id.bytes(),
+            position_pre_semantic_id: position_semantic_before.bytes(),
+            position_post_semantic_id: terminal_position_semantic.bytes(),
+        })
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_replay_header = replay
+        .header()
+        .terminalized(position.generation(), &terminal_extension, &RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_replay = ReplayV3Envelope::from_header(
+        terminal_replay_header,
+        &terminal_extension,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let payer = position.rent().payer;
+    let neutral_sink = id(accounts[RT_NEUTRAL_SINK].key.to_bytes())?;
+    require(
+        payer.bytes() == accounts[RT_RENT_REFUND_OWNER].key.to_bytes()
+            && replay.header().rent().payer() == payer
+            && payer != neutral_sink,
+        ClutchError::MismatchedState,
+    )?;
+    let retirement = plan_position_v3_replay_v3_retirement_v1(
+        PositionV3ReplayV3RetirementRequestV1 {
+            position: terminal_position
+                .terminal_projection()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            replay: terminal_replay
+                .terminal_projection()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            position_balance: accounts[RT_POSITION].lamports(),
+            replay_balance: accounts[RT_REPLAY].lamports(),
+            neutral_sink,
+            accounts: PositionV3ReplayV3AccountsV1 {
+                position: id(accounts[RT_POSITION].key.to_bytes())?,
+                replay: id(accounts[RT_REPLAY].key.to_bytes())?,
+            },
+            recipient_balances: RecipientBalanceBookV1 {
+                entries: [
+                    Some(RecipientBalanceV1 {
+                        recipient: payer,
+                        balance_before: accounts[RT_RENT_REFUND_OWNER].lamports(),
+                    }),
+                    Some(RecipientBalanceV1 {
+                        recipient: neutral_sink,
+                        balance_before: accounts[RT_NEUTRAL_SINK].lamports(),
+                    }),
+                    None,
+                    None,
+                ],
+            },
+            signed_sequence: request
+                .vault_replay_sequence
+                .checked_add(1)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        },
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let tombstone_semantic_id = retirement
+        .position_tombstone
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let position_rent_body = position
+        .rent()
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let replay_rent_body = replay
+        .header()
+        .rent()
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rent_transition_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            STRUCTURED_TERMINAL_RENT_TRANSITION_DOMAIN_V1,
+            accounts[RT_POSITION].key.as_ref(),
+            &position_rent_body,
+            accounts[RT_REPLAY].key.as_ref(),
+            &replay_rent_body,
+            accounts[RT_RENT_REFUND_OWNER].key.as_ref(),
+            accounts[RT_NEUTRAL_SINK].key.as_ref(),
+        ])
+        .to_bytes(),
+    );
+    let position_principal = position
+        .rent()
+        .refundable_live_principal
+        .checked_add(position.rent().permanent_tombstone_principal)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let position_donation = accounts[RT_POSITION]
+        .lamports()
+        .checked_sub(position_principal)
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let replay_donation = accounts[RT_REPLAY]
+        .lamports()
+        .checked_sub(replay.header().rent().refundable_principal())
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let payer_credit = retirement
+        .recipient_credits
+        .get(payer)
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let sink_credit = retirement
+        .recipient_credits
+        .get(neutral_sink)
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let vault_close_receipt = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            STRUCTURED_TERMINAL_VAULT_CLOSE_DOMAIN_V1,
+            &terminal_transition_id.bytes(),
+            &terminal_delta_id.bytes(),
+            &retirement.terminal_replay_semantic_id.bytes(),
+            &tombstone_semantic_id.bytes(),
+            &rent_transition_id.bytes(),
+            &value_authority.receipt_id.bytes(),
+            &payer_credit.credit_lamports.to_le_bytes(),
+            &sink_credit.credit_lamports.to_le_bytes(),
+            &retirement.position_balance_after.to_le_bytes(),
+            &retirement.replay_balance_after.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    let descriptor_retirement = prepare_current_retire_descriptor_v1(
+        &bound_descriptor,
+        liabilities.bound,
+        CurrentStructuredVaultAccountsV1 {
+            descriptor: accounts[RT_DESCRIPTOR].key.to_bytes(),
+            wrapper_product_id: product_id,
+            vault_position: accounts[RT_POSITION].key.to_bytes(),
+            vault_replay: accounts[RT_REPLAY].key.to_bytes(),
+            mint: accounts[RT_MINT].key.to_bytes(),
+        },
+        CurrentStructuredLiabilitiesV1 {
+            hoard: liabilities.hoard,
+            claim_ledger: liabilities.claim_ledger,
+        },
+        value_authority.receipt_id.bytes(),
+        retired_mint,
+        current_position_projection(position, &replay),
+        request,
+        AuthenticatedVaultRetirementV1 {
+            close_receipt: vault_close_receipt.bytes(),
+            market: market_instance_id.bytes(),
+            vault_owner: addresses.vault_owner,
+            position_account: accounts[RT_POSITION].key.to_bytes(),
+            replay_account: accounts[RT_REPLAY].key.to_bytes(),
+            generation: request.vault_generation,
+            replay_sequence: request.vault_replay_sequence,
+            tombstone: tombstone_semantic_id.bytes(),
+            terminal_replay_semantic_id: retirement.terminal_replay_semantic_id.bytes(),
+            rent_transition_id: rent_transition_id.bytes(),
+            rent_refund_owner: accounts[RT_RENT_REFUND_OWNER].key.to_bytes(),
+            neutral_lamport_sink: accounts[RT_NEUTRAL_SINK].key.to_bytes(),
+            position_tombstone_principal_lamports: retirement.position_balance_after,
+            position_refund_lamports: position.rent().refundable_live_principal,
+            replay_refund_lamports: replay.header().rent().refundable_principal(),
+            position_donation_lamports: position_donation,
+            replay_donation_lamports: replay_donation,
+        },
+    )
+    .map_err(map_adapter_error)?;
+    let owner_plan = prepare_structured_descriptor_terminal_owner_v1(
+        root_before,
+        accounts[RT_STRUCTURED_ROOT].lamports(),
+        accounts[RT_STRUCTURED_ROOT].key.to_bytes(),
+        product_id,
+        accounts[RT_MINT].key.to_bytes(),
+        accounts[RT_DESCRIPTOR].key.to_bytes(),
+        active_descriptor,
+        descriptor_retirement,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        (owner_plan.root_after.live_descriptor_count == 0) == family_terminal,
+        ClutchError::MismatchedState,
+    )?;
+
+    preflight_retirement_balances(accounts, retirement, owner_plan.root_after, family_terminal)?;
+    apply_vault_retirement(accounts, retirement)?;
+    write_and_reauthenticate_structured_root_v1(
+        &accounts[RT_STRUCTURED_ROOT],
+        &owner_plan.root_after,
+        root_id,
+        root_pda.1,
+        program_id,
+    )?;
+    reauthenticate_retired_descriptor_vault(
+        accounts,
+        retired_descriptor,
+        retired_mint,
+        retirement,
+    )?;
+
+    let product_terminal = if family_terminal {
+        let structured_terminal = authenticate_structured_terminal_postwrite(
+            accounts,
+            owner_plan.root_after,
+            root_id,
+            retirement,
+            retired_descriptor,
+            retired_mint,
+        )?;
+        Some(terminalize_product_wrapper(
+            program_id,
+            accounts,
+            root_before,
+            structured_terminal,
+        )?)
+    } else {
+        None
+    };
+    let product_projection = match product_terminal {
+        Some(terminal) => {
+            let projection = terminal.product_terminal_projection();
+            let obligation_terminal_receipt_id = projection
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            Some(StructuredProductWrapperTerminalProjectionV1 {
+                link_account: terminal.link_account().to_bytes(),
+                market_instance_id: root_before.binding.market_instance_id.bytes(),
+                generation: root_before.binding.generation,
+                previous_link_authentication_id: terminal.link_authentication_before(),
+                previous_link_semantic_id: terminal.link_semantic_before(),
+                previous_link_transition_sequence: root_before
+                    .product_lineage
+                    .product_link_transition_sequence,
+                product_admission_receipt_id: terminal.wrapper_admission_receipt_id(),
+                owner_terminal_receipt_id: terminal.owner_terminal_receipt_id(),
+                obligation_terminal_receipt_id,
+                successor_link_authentication_id: terminal.link_authentication_after(),
+                successor_link_semantic_id: terminal.link_semantic_after(),
+                successor_link_transition_sequence: projection.link_transition_sequence,
+            })
+        }
+        None => None,
+    };
+    let complete = prepare_structured_descriptor_terminal_v1(
+        root_before,
+        accounts[RT_STRUCTURED_ROOT].lamports(),
+        accounts[RT_STRUCTURED_ROOT].key.to_bytes(),
+        product_id,
+        accounts[RT_MINT].key.to_bytes(),
+        accounts[RT_DESCRIPTOR].key.to_bytes(),
+        active_descriptor,
+        descriptor_retirement,
+        product_projection,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        complete.root_after == owner_plan.root_after
+            && complete.descriptor_terminal_receipt_id
+                == owner_plan.descriptor_terminal_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    if let Some(close) = complete.root_close {
+        close_structured_root(accounts, close)?;
+    }
+    Ok(())
+}
+
+fn validate_retirement_privileges(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    family_terminal: bool,
+) -> Outcome<()> {
+    let mut index = 0usize;
+    while index < accounts.len() {
+        let signer = index == RT_VAULT_AUTHORITY;
+        let writable = structured_retirement_account_writable(index, family_terminal);
+        let executable = matches!(
+            index,
+            RT_COLLATERAL_TOKEN_PROGRAM
+                | RT_WRAPPER_PROGRAM
+                | RT_BASE_PROGRAM
+                | RT_TOKEN_PROGRAM
+                | RT_SYSTEM_PROGRAM
+        );
+        require(
+            accounts[index].is_signer == signer
+                && accounts[index].is_writable == writable
+                && accounts[index].executable == executable,
+            ClutchError::MismatchedState,
+        )?;
+        index += 1;
+    }
+    require_system_program(&accounts[RT_SYSTEM_PROGRAM])?;
+    require(
+        *accounts[RT_BASE_PROGRAM].key == *program_id
+            && accounts[RT_POSITION].owner == program_id
+            && accounts[RT_REPLAY].owner == program_id
+            && accounts[RT_STRUCTURED_ROOT].owner == program_id
+            && accounts[RT_SERIES_LINK].owner == program_id
+            && accounts[RT_DESCRIPTOR].owner == accounts[RT_WRAPPER_PROGRAM].key
+            && accounts[RT_MINT].owner == accounts[RT_TOKEN_PROGRAM].key
+            && accounts[RT_MINT_AUTHORITY].owner == &SYSTEM_PROGRAM_ID
+            && accounts[RT_MINT_AUTHORITY].data_len() == 0
+            && accounts[RT_RENT_REFUND_OWNER].owner == &SYSTEM_PROGRAM_ID
+            && accounts[RT_RENT_REFUND_OWNER].data_len() == 0
+            && accounts[RT_NEUTRAL_SINK].owner == &SYSTEM_PROGRAM_ID
+            && accounts[RT_NEUTRAL_SINK].data_len() == 0,
+        ClutchError::MismatchedState,
+    )?;
+    for release in [
+        RT_WRAPPER_RELEASE_V2,
+        RT_BASE_RELEASE_V2,
+        RT_TOKEN_RELEASE_V2,
+    ] {
+        require(
+            accounts[release].owner == program_id,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let same_token_release =
+        accounts[RT_COLLATERAL_TOKEN_PROGRAM].key == accounts[RT_TOKEN_PROGRAM].key;
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            let token_alias = (left == RT_COLLATERAL_TOKEN_PROGRAM
+                && right == RT_TOKEN_PROGRAM)
+                || (same_token_release
+                    && left == RT_COLLATERAL_TOKEN_PROGRAM_DATA
+                    && right == RT_TOKEN_PROGRAM_DATA);
+            require(
+                accounts[left].key != accounts[right].key || token_alias,
+                ClutchError::MismatchedState,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+const fn structured_retirement_account_writable(
+    index: usize,
+    family_terminal: bool,
+) -> bool {
+    matches!(
+        index,
+        RT_POSITION
+            | RT_REPLAY
+            | RT_DESCRIPTOR
+            | RT_MINT
+            | RT_STRUCTURED_ROOT
+            | RT_RENT_REFUND_OWNER
+            | RT_NEUTRAL_SINK
+    ) || (index == RT_SERIES_LINK && family_terminal)
+}
+
+fn authenticate_terminal_deployments(
+    accounts: &[AccountInfo<'_>],
+    descriptor: StructuredClaimDescriptorV2,
+) -> Outcome<AuthenticatedStructuredDeploymentsV2> {
+    authenticate_structured_release_set_v2(
+        accounts[RT_BASE_PROGRAM].key,
+        descriptor,
+        [
+            (
+                &accounts[RT_WRAPPER_PROGRAM],
+                &accounts[RT_WRAPPER_PROGRAM_DATA],
+            ),
+            (&accounts[RT_BASE_PROGRAM], &accounts[RT_BASE_PROGRAM_DATA]),
+            (&accounts[RT_TOKEN_PROGRAM], &accounts[RT_TOKEN_PROGRAM_DATA]),
+        ],
+        [
+            &accounts[RT_WRAPPER_RELEASE_V2],
+            &accounts[RT_BASE_RELEASE_V2],
+            &accounts[RT_TOKEN_RELEASE_V2],
+        ],
+    )
+}
+
+fn preflight_retirement_balances(
+    accounts: &[AccountInfo<'_>],
+    retirement: PositionV3ReplayV3RetirementPlanV1,
+    root_after: StructuredMarketRootV1,
+    family_terminal: bool,
+) -> Outcome<()> {
+    let payer = id(accounts[RT_RENT_REFUND_OWNER].key.to_bytes())?;
+    let sink = id(accounts[RT_NEUTRAL_SINK].key.to_bytes())?;
+    let payer_credit = retirement
+        .recipient_credits
+        .get(payer)
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let sink_credit = retirement
+        .recipient_credits
+        .get(sink)
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        payer_credit.balance_after
+            == accounts[RT_RENT_REFUND_OWNER]
+                .lamports()
+                .checked_add(payer_credit.credit_lamports)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            && sink_credit.balance_after
+                == accounts[RT_NEUTRAL_SINK]
+                    .lamports()
+                    .checked_add(sink_credit.credit_lamports)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            && retirement.replay_balance_after == 0
+            && root_after
+                .rent_principal_lamports
+                .checked_add(root_after.current_donation_lamports)
+                == Some(accounts[RT_STRUCTURED_ROOT].lamports()),
+        ClutchError::MismatchedState,
+    )?;
+    if family_terminal {
+        payer_credit
+            .balance_after
+            .checked_add(root_after.rent_principal_lamports)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        sink_credit
+            .balance_after
+            .checked_add(root_after.current_donation_lamports)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    }
+    Ok(())
+}
+
+fn apply_vault_retirement(
+    accounts: &[AccountInfo<'_>],
+    retirement: PositionV3ReplayV3RetirementPlanV1,
+) -> Outcome<()> {
+    let tombstone_body = retirement
+        .position_tombstone
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    set_structured_lamports(&accounts[RT_POSITION], retirement.position_balance_after)?;
+    accounts[RT_POSITION]
+        .resize(POSITION_TOMBSTONE_V3_BYTES)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    accounts[RT_POSITION]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&tombstone_body);
+    set_structured_lamports(&accounts[RT_REPLAY], retirement.replay_balance_after)?;
+    accounts[RT_REPLAY]
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    accounts[RT_REPLAY].assign(&SYSTEM_PROGRAM_ID);
+    for (account_index, recipient) in [
+        (RT_RENT_REFUND_OWNER, id(accounts[RT_RENT_REFUND_OWNER].key.to_bytes())?),
+        (RT_NEUTRAL_SINK, id(accounts[RT_NEUTRAL_SINK].key.to_bytes())?),
+    ] {
+        let credit = retirement
+            .recipient_credits
+            .get(recipient)
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        set_structured_lamports(&accounts[account_index], credit.balance_after)?;
+    }
+    Ok(())
+}
+
+fn reauthenticate_retired_descriptor_vault(
+    accounts: &[AccountInfo<'_>],
+    expected_descriptor: StructuredClaimDescriptorV2,
+    expected_mint: clutch_structured_claim_adapter::runtime_contract::WrapperMintProjectionV1,
+    retirement: PositionV3ReplayV3RetirementPlanV1,
+) -> Outcome<()> {
+    let descriptor_data = accounts[RT_DESCRIPTOR]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let observed_descriptor = StructuredClaimDescriptorV2::decode(&descriptor_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    drop(descriptor_data);
+    let mint_data = accounts[RT_MINT]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let observed_mint = decode_retired_canonical_wrapper_mint_v1(
+        accounts[RT_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[RT_MINT].key.to_bytes(),
+        &mint_data,
+    )
+    .map_err(map_adapter_error)?;
+    drop(mint_data);
+    let position_data = accounts[RT_POSITION]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let observed_tombstone = clutch_retirement::PositionTombstoneV3::decode(&position_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    require(
+        observed_descriptor == expected_descriptor
+            && observed_mint == expected_mint
+            && observed_tombstone == retirement.position_tombstone
+            && accounts[RT_POSITION].owner == accounts[RT_BASE_PROGRAM].key
+            && accounts[RT_POSITION].data_len() == POSITION_TOMBSTONE_V3_BYTES
+            && accounts[RT_POSITION].lamports() == retirement.position_balance_after
+            && accounts[RT_REPLAY].owner == &SYSTEM_PROGRAM_ID
+            && accounts[RT_REPLAY].data_len() == 0
+            && accounts[RT_REPLAY].lamports() == 0,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn authenticate_structured_terminal_postwrite(
+    accounts: &[AccountInfo<'_>],
+    root: StructuredMarketRootV1,
+    root_id: ContentId,
+    retirement: PositionV3ReplayV3RetirementPlanV1,
+    descriptor: StructuredClaimDescriptorV2,
+    mint: clutch_structured_claim_adapter::runtime_contract::WrapperMintProjectionV1,
+) -> Outcome<AuthenticatedStructuredDescriptorTerminalV1> {
+    let root_body = root
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_data = accounts[RT_STRUCTURED_ROOT]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    require(
+        root_data.as_ref() == &root_body[..],
+        ClutchError::MismatchedState,
+    )?;
+    drop(root_data);
+    let descriptor_body = descriptor
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let data_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[STRUCTURED_TERMINAL_ROOT_DATA_DOMAIN_V1, &root_body])
+            .to_bytes(),
+    );
+    let semantic_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            STRUCTURED_TERMINAL_ROOT_SEMANTIC_DOMAIN_V1,
+            &root_id.bytes(),
+            &root.aggregate_terminal_receipt_id.bytes(),
+            &root.transition_sequence.to_le_bytes(),
+            &root.admitted_descriptor_count.to_le_bytes(),
+            &root.terminal_descriptor_count.to_le_bytes(),
+            &data_id.bytes(),
+            accounts[RT_DESCRIPTOR].key.as_ref(),
+            &descriptor_body,
+            accounts[RT_MINT].key.as_ref(),
+            &mint.supply.to_le_bytes(),
+            &retirement
+                .position_tombstone
+                .semantic_id(&RuntimeSha256)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes(),
+            &retirement.terminal_replay_semantic_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(
+        root.live_descriptor_count == 0
+            && root.terminal_descriptor_count == root.admitted_descriptor_count
+            && !root.aggregate_terminal_receipt_id.is_zero()
+            && !data_id.is_zero()
+            && !semantic_id.is_zero()
+            && data_id != semantic_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedStructuredDescriptorTerminalV1 {
+        id: root.aggregate_terminal_receipt_id,
+        root_account: *accounts[RT_STRUCTURED_ROOT].key,
+        root_semantic_id: semantic_id,
+        root_data_id: data_id,
+        link_account: *accounts[RT_SERIES_LINK].key,
+        series_plan_id: root.binding.series_plan_id,
+        ordinal: root.binding.ordinal,
+        market_instance_id: root.binding.market_instance_id,
+        generation: root.binding.generation,
+        wrapper_admission_receipt_id: root.product_lineage.product_admission_receipt_id,
+    })
+}
+
+fn terminalize_product_wrapper(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    root_before: StructuredMarketRootV1,
+    owner: AuthenticatedStructuredDescriptorTerminalV1,
+) -> Outcome<AuthenticatedSeriesWrapperTerminalV1> {
+    let mut link_output = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let link_data = accounts[RT_SERIES_LINK]
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    SeriesMarketLinkAccountV1::decode_into(&link_data, &mut link_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    drop(link_data);
+    let link_binding = link_output.state.binding();
+    let link = authenticate_series_market_link_v1(
+        program_id,
+        &accounts[RT_SERIES_LINK],
+        root_before.binding.series_plan_id,
+        root_before.binding.ordinal,
+        root_before.binding.market_instance_id,
+        root_before.binding.generation,
+        Pubkey::new_from_array(link_binding.market_root_account_id.bytes()),
+        true,
+        &mut link_output,
+    )?;
+    require(
+        link.account() == *accounts[RT_SERIES_LINK].key
+            && link.authentication_id() == root_before.product_lineage.link_authentication_id
+            && ContentId::from_bytes(
+                link.state()
+                    .semantic_id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .bytes(),
+            ) == root_before.product_lineage.link_semantic_id
+            && link.state().transition_sequence()
+                == root_before.product_lineage.product_link_transition_sequence
+            && link.state().obligation_admission_receipt_id(
+                clutch_product_series::SeriesLinkObligationV1::Wrapper,
+            ) == root_before.product_lineage.product_admission_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    let mut rebound = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    terminalize_series_wrapper_obligation_v1(
+        program_id,
+        &accounts[RT_SERIES_LINK],
+        link,
+        &owner,
+        &mut rebound,
+    )
+}
+
+fn close_structured_root(
+    accounts: &[AccountInfo<'_>],
+    close: StructuredRootCloseDispositionV1,
+) -> Outcome<()> {
+    require(
+        close.root_account == accounts[RT_STRUCTURED_ROOT].key.to_bytes()
+            && close.rent_refund_owner == accounts[RT_RENT_REFUND_OWNER].key.to_bytes()
+            && close.neutral_lamport_sink == accounts[RT_NEUTRAL_SINK].key.to_bytes()
+            && close.balance_before_lamports == accounts[RT_STRUCTURED_ROOT].lamports()
+            && close.balance_after_lamports == 0
+            && close.refund_lamports.checked_add(close.donation_lamports)
+                == Some(close.balance_before_lamports),
+        ClutchError::MismatchedState,
+    )?;
+    let refund_after = accounts[RT_RENT_REFUND_OWNER]
+        .lamports()
+        .checked_add(close.refund_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let sink_after = accounts[RT_NEUTRAL_SINK]
+        .lamports()
+        .checked_add(close.donation_lamports)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    set_structured_lamports(&accounts[RT_STRUCTURED_ROOT], 0)?;
+    accounts[RT_STRUCTURED_ROOT]
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    accounts[RT_STRUCTURED_ROOT].assign(&SYSTEM_PROGRAM_ID);
+    set_structured_lamports(&accounts[RT_RENT_REFUND_OWNER], refund_after)?;
+    set_structured_lamports(&accounts[RT_NEUTRAL_SINK], sink_after)?;
+    require(
+        accounts[RT_STRUCTURED_ROOT].lamports() == 0
+            && accounts[RT_STRUCTURED_ROOT].data_len() == 0
+            && accounts[RT_STRUCTURED_ROOT].owner == &SYSTEM_PROGRAM_ID
+            && accounts[RT_RENT_REFUND_OWNER].lamports() == refund_after
+            && accounts[RT_NEUTRAL_SINK].lamports() == sink_after,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn set_structured_lamports(account: &AccountInfo<'_>, value: u64) -> Outcome<()> {
+    **account
+        .try_borrow_mut_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? = value;
+    Ok(())
 }
 
 fn validate_compaction_privileges(
@@ -2670,6 +3724,23 @@ mod tests {
             STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
         );
         assert_eq!(STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES, 656);
+    }
+
+    #[test]
+    fn descriptor_retirement_frame_keeps_product_link_read_only_until_final() {
+        assert_eq!(STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT, 31);
+        assert!(!structured_retirement_account_writable(
+            RT_SERIES_LINK,
+            false,
+        ));
+        assert!(structured_retirement_account_writable(
+            RT_SERIES_LINK,
+            true,
+        ));
+        assert!(!structured_retirement_account_writable(
+            RT_MINT_AUTHORITY,
+            true,
+        ));
     }
 
     #[test]
