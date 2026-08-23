@@ -211,21 +211,45 @@ account_len re-pin chain; batch with M1.
 
 ### M7. Product-driven capability profiles are required for deployment rent
 
-The exact `a6381fbe…` ELF is 91.25% `.text`, and 98.19% of that text is
-first-party `clutch_*` code. Dependency pruning is not the lever. Direct and
-general clearing, legacy generations, both source generations, artifact
-transport, ResolutionWork, and one monolithic 74-tag decoder all remain in one
-artifact.
+The current `193c0872…` ELF is 2,082,320 bytes with 1,942,200 bytes of `.text`.
+Dependency pruning is not the lever. Exact final-symbol attribution gives this
+first-order ownership map; LTO means only actual profile builds can establish
+the resulting artifact sizes:
 
-Measure at least two strict O3 siblings before considering CPI decomposition:
+| capability family | resident bytes |
+| --- | ---: |
+| general clearing | 501,952 |
+| Direct V3 | 250,360 |
+| occupation/resumable resolution | 186,440 |
+| Direct V2 | 101,656 |
+| Source V2/Pyth | 66,024 |
+| legacy Source V1 | 44,176 |
+| all-tags `Intent::decode` | 44,776 |
 
-1. general clearing + selected Pyth V2 source, with Direct V2/V3 compatibility
-   absent; and
-2. Direct V3 + selected Pyth V2 source, with general and Direct V2 absent.
+The exact duplicate-code ceiling is only 2,984 bytes—0.46% of the 645,876-byte
+gap. A measured V1/V2 `canonical_window_id` alias confirmed why source-level
+similarity is not enough: both 184-byte symbols already shared one address, and
+the refactor saved zero ELF bytes and zero lamports. It was reverted.
+
+Build and measure these strict siblings before considering CPI decomposition:
+
+1. **Direct V3 + Source V2, categorical/point.** Removing general clearing
+   except the shared 31,392-byte relation implementation, Direct V2, Source V1,
+   and occupation/resumable resolution has about 802,832 bytes of direct
+   attribution. This is the strongest sub-ten-SOL candidate.
+2. **General clearing + Source V2, categorical/point.** Removing Direct V2,
+   Direct V3, Source V1, and occupation/resumable resolution has 582,632 bytes
+   of direct attribution, leaving a 63,244-byte first-order gap. Pruning the
+   disabled variants from the decoder and support tree may close it; only an
+   exact profile build can say.
+3. **General clearing + Source V2 + occupation.** Direct attribution removes
+   only 396,192 bytes. It is not a credible ten-SOL profile without another
+   capability removal or a program split.
 
 A real profile must gate intent variants and strict decoding, dispatch arms,
-account codecs, and source generations together. Gating handler modules alone
-leaves the 44,528-byte all-tags `Intent::decode` and much of the layout surface
+account codecs, reference request/action decoders, generation dispatch, and
+source generations together. Gating handler modules alone leaves the
+44,776-byte all-tags `Intent::decode` and much of the layout surface
 resident. These profiles select deployable products; they must not change the
 shared Eggcrate semantics or pretend that a nonresident capability was tested.
 Splitting into CPI programs comes only if measured selective monoliths cannot
