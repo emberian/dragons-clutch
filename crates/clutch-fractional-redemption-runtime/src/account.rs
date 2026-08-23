@@ -2,6 +2,7 @@
 
 use clutch_collateral_adapter_v2::{BoundClaimIssuanceV1, BoundCollateralProfileV2};
 use clutch_retirement::{DeletableRentOwnerV1, Identity32V1, RentSplitV2};
+use sha2::{Digest, Sha256};
 
 use crate::codec::{
     exact, identity, put_identity, put_u128, put_u64, require_zeroes, u128_at, u64_at,
@@ -9,29 +10,41 @@ use crate::codec::{
 use crate::{map_retirement, Error, PayoutVectorV1, Result};
 
 /// Fractional-redemption immutable policy discriminator.
-pub const FRACTIONAL_POLICY_ACCOUNT_TAG: u8 = 0xa4;
+pub const FRACTIONAL_POLICY_ACCOUNT_TAG: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG;
 /// Fractional-redemption immutable policy schema.
-pub const FRACTIONAL_POLICY_ACCOUNT_VERSION: u8 = 1;
+pub const FRACTIONAL_POLICY_ACCOUNT_VERSION: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION;
 /// Exact immutable policy body width.
-pub const FRACTIONAL_POLICY_ACCOUNT_BYTES: usize = 296;
+pub const FRACTIONAL_POLICY_ACCOUNT_BYTES: usize =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_BYTES;
 /// Aggregate numerator-credit ledger discriminator.
-pub const FRACTIONAL_LEDGER_ACCOUNT_TAG: u8 = 0xa5;
+pub const FRACTIONAL_LEDGER_ACCOUNT_TAG: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_TAG;
 /// Aggregate numerator-credit ledger schema.
-pub const FRACTIONAL_LEDGER_ACCOUNT_VERSION: u8 = 1;
+pub const FRACTIONAL_LEDGER_ACCOUNT_VERSION: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION;
 /// Exact aggregate ledger body width.
-pub const FRACTIONAL_LEDGER_ACCOUNT_BYTES: usize = 224;
+pub const FRACTIONAL_LEDGER_ACCOUNT_BYTES: usize =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_BYTES;
 /// Owner-scoped live numerator-credit discriminator.
-pub const FRACTIONAL_CREDIT_ACCOUNT_TAG: u8 = 0xa6;
+pub const FRACTIONAL_CREDIT_ACCOUNT_TAG: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG;
 /// Owner-scoped live numerator-credit schema.
-pub const FRACTIONAL_CREDIT_ACCOUNT_VERSION: u8 = 1;
+pub const FRACTIONAL_CREDIT_ACCOUNT_VERSION: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION;
 /// Exact owner-scoped live credit body width.
-pub const FRACTIONAL_CREDIT_ACCOUNT_BYTES: usize = 296;
+pub const FRACTIONAL_CREDIT_ACCOUNT_BYTES: usize =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES;
 /// Permanent zero-credit tombstone discriminator.
-pub const FRACTIONAL_CREDIT_TOMBSTONE_TAG: u8 = 0xa7;
+pub const FRACTIONAL_CREDIT_TOMBSTONE_TAG: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG;
 /// Permanent zero-credit tombstone schema.
-pub const FRACTIONAL_CREDIT_TOMBSTONE_VERSION: u8 = 1;
+pub const FRACTIONAL_CREDIT_TOMBSTONE_VERSION: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION;
 /// Exact permanent credit tombstone width.
-pub const FRACTIONAL_CREDIT_TOMBSTONE_BYTES: usize = 232;
+pub const FRACTIONAL_CREDIT_TOMBSTONE_BYTES: usize =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES;
 
 /// Canonical policy PDA seed prefix.
 pub const FRACTIONAL_POLICY_PDA_PREFIX: &[u8] = b"fractional-redemption-policy:v1";
@@ -39,6 +52,9 @@ pub const FRACTIONAL_POLICY_PDA_PREFIX: &[u8] = b"fractional-redemption-policy:v
 pub const FRACTIONAL_LEDGER_PDA_PREFIX: &[u8] = b"fractional-redemption-ledger:v1";
 /// Canonical owner-credit/tombstone PDA seed prefix.
 pub const FRACTIONAL_CREDIT_PDA_PREFIX: &[u8] = b"fractional-redemption-credit:v1";
+/// Domain for the complete canonical `0xa5/v1` state identity.
+pub const FRACTIONAL_LEDGER_STATE_ID_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional-redemption/ledger-state/v1\0";
 
 /// Honest no-subsidy terminal rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -224,12 +240,8 @@ impl FractionalPolicyV1 {
 pub struct FractionalLedgerV1 {
     /// Exact immutable policy PDA.
     pub policy_account: Identity32V1,
-    /// Full successor MarketInstance identity.
-    pub market_instance: Identity32V1,
-    /// Canonical immutable Resolution account.
-    pub resolution_account: Identity32V1,
-    /// Exact vector identity recomputed from Resolution.
-    pub payout_vector_id: Identity32V1,
+    /// Exact canonical ClaimLedger V3 account advanced with this ledger.
+    pub claim_ledger_account: Identity32V1,
     /// Resolution/credit domain generation.
     pub domain_generation: u64,
     /// Exact next market-wide fractional action sequence.
@@ -258,7 +270,7 @@ impl FractionalLedgerV1 {
         self.rent.validate().map_err(map_retirement)
     }
 
-    /// Bind every cached identity to its immutable policy owner.
+    /// Bind the aggregate ledger to its immutable policy owner.
     pub fn validate_with_policy(
         self,
         policy_account: Identity32V1,
@@ -267,9 +279,6 @@ impl FractionalLedgerV1 {
         self.validate()?;
         policy.validate()?;
         if self.policy_account != policy_account
-            || self.market_instance != policy.market_instance
-            || self.resolution_account != policy.resolution_account
-            || self.payout_vector_id != policy.payout_vector_id
             || self.domain_generation != policy.domain_generation
         {
             return Err(Error::MismatchedBinding);
@@ -301,12 +310,7 @@ impl FractionalLedgerV1 {
         put_u64(&mut output, 16, self.next_sequence)?;
         put_u64(&mut output, 24, self.active_credit_accounts)?;
         put_u128(&mut output, 32, self.aggregate_credit_numerator)?;
-        for (offset, value) in [
-            (48, self.policy_account),
-            (80, self.market_instance),
-            (112, self.resolution_account),
-            (144, self.payout_vector_id),
-        ] {
+        for (offset, value) in [(48, self.policy_account), (80, self.claim_ledger_account)] {
             put_identity(&mut output, offset, value)?;
         }
         output[176..].copy_from_slice(&self.rent.encode().map_err(map_retirement)?);
@@ -323,11 +327,10 @@ impl FractionalLedgerV1 {
             return Err(Error::WrongVersion);
         }
         require_zeroes(input, 4, 8)?;
+        require_zeroes(input, 112, 176)?;
         let value = Self {
             policy_account: identity(input, 48)?,
-            market_instance: identity(input, 80)?,
-            resolution_account: identity(input, 112)?,
-            payout_vector_id: identity(input, 144)?,
+            claim_ledger_account: identity(input, 80)?,
             domain_generation: u64_at(input, 8)?,
             next_sequence: u64_at(input, 16)?,
             active_credit_accounts: u64_at(input, 24)?,
@@ -338,6 +341,15 @@ impl FractionalLedgerV1 {
         };
         value.validate()?;
         Ok(value)
+    }
+
+    /// Hash the complete canonical account body for atomic ClaimLedger joins.
+    pub fn state_id(self) -> Result<Identity32V1> {
+        let encoded = self.encode()?;
+        let mut hasher = Sha256::new();
+        hasher.update(FRACTIONAL_LEDGER_STATE_ID_DOMAIN_V1);
+        hasher.update(encoded);
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
     }
 
     /// Canonical PDA seed facts.

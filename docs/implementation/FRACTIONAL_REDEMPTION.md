@@ -1,11 +1,11 @@
 # Exact fractional redemption for native B-spline Eggs
 
-Status: **MODEL-ONLY / HOST-TESTED DESIGN** (2026-08-19). The executable model
-is `research/fractional-redemption`. It is safe `no_std`, no-allocation,
-float-free Rust with fixed arrays and checked integer arithmetic. It changes no
-production kernel, SBF instruction, account codec, market terms, or release
-claim. In particular, the currently integrated runtime must continue to refuse
-a non-integral redemption until one complete policy below is promoted.
+Status: **RUNTIME CONTRACT PROMOTED / SBF DISABLED** (2026-08-23).
+`crates/clutch-fractional-redemption-runtime` now owns the safe `no_std`,
+no-allocation, fixed-layout transition and account contract. Intent family
+79/v1 and account tags `0xa4..=0xa7` remain `ReservedDisabled`; no Solana route
+or release capability is enabled. `research/fractional-redemption` remains the
+derivation and exhaustive small-domain model, not a second runtime truth.
 
 ## 1. The obligation
 

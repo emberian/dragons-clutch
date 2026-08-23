@@ -5,65 +5,14 @@ use clutch_retirement::Identity32V1;
 use crate::codec::{exact, identity, put_identity, put_u64, require_zeroes, u64_at};
 use crate::{Error, Result};
 
+pub use clutch_solana_layout::registry::FractionalRedemptionAction as FractionalRedemptionActionV1;
+
 /// Fractional-redemption successor intent family.
-pub const FRACTIONAL_REDEMPTION_FAMILY_TAG: u8 = 79;
+pub const FRACTIONAL_REDEMPTION_FAMILY_TAG: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_TAG;
 /// Fractional-redemption successor intent-family version.
-pub const FRACTIONAL_REDEMPTION_FAMILY_VERSION: u8 = 1;
-
-/// Family-local action allocation. Allocation never implies capability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum FractionalRedemptionActionV1 {
-    /// Create the immutable policy and sole aggregate-credit ledger.
-    Initialize = 1,
-    /// Exact-lot internal Position redemption with no credit account.
-    RedeemInternalExact = 2,
-    /// Exact-lot bearer redemption with no credit account.
-    RedeemBearerExact = 3,
-    /// Arbitrary internal redemption into an owner credit.
-    RedeemInternalCredit = 4,
-    /// Arbitrary bearer redemption into an owner credit.
-    RedeemBearerCredit = 5,
-    /// Transfer an explicit numerator between owner credits.
-    TransferCredit = 6,
-    /// Merge one entire source residue into a destination credit.
-    MergeCredit = 7,
-    /// Close a zero credit into its permanent tombstone.
-    CloseZeroCredit = 8,
-    /// Mark canonical native supply exhausted without sweeping backing.
-    SealClaimsExhausted = 9,
-    /// Delete only a claims/credit/backing-empty aggregate ledger.
-    CloseEmptyLedger = 10,
-}
-
-impl FractionalRedemptionActionV1 {
-    /// First allocated local action.
-    pub const FIRST_TAG: u8 = 1;
-    /// Last allocated local action.
-    pub const LAST_TAG: u8 = 10;
-
-    /// Decode one exact family-local tag.
-    pub const fn from_tag(tag: u8) -> Option<Self> {
-        match tag {
-            1 => Some(Self::Initialize),
-            2 => Some(Self::RedeemInternalExact),
-            3 => Some(Self::RedeemBearerExact),
-            4 => Some(Self::RedeemInternalCredit),
-            5 => Some(Self::RedeemBearerCredit),
-            6 => Some(Self::TransferCredit),
-            7 => Some(Self::MergeCredit),
-            8 => Some(Self::CloseZeroCredit),
-            9 => Some(Self::SealClaimsExhausted),
-            10 => Some(Self::CloseEmptyLedger),
-            _ => None,
-        }
-    }
-
-    /// Return the family-local tag.
-    pub const fn tag(self) -> u8 {
-        self as u8
-    }
-}
+pub const FRACTIONAL_REDEMPTION_FAMILY_VERSION: u8 =
+    clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_FAMILY_VERSION;
 
 /// Exact initialization payload width.
 pub const FRACTIONAL_INITIALIZE_INTENT_BYTES: usize = 24;

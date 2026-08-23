@@ -36,6 +36,7 @@ family version creates a new namespace; it does not inherit capability.
 | Covered dealer | 76 | `0x4c` | 1 | policy catalog only in the named non-production lab |
 | Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
+| Exact fractional redemption | 79 | `0x4f` | 1 | disabled |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
@@ -171,6 +172,34 @@ Recovery 78/v1 reserves these local actions, all disabled:
 7. `ResolvePaidRecovery`
 8. `CloseRecoveryFunding`
 9. `CloseFailureRoot`
+
+FractionalRedemption 79/v1 reserves these local actions, all disabled:
+
+1. `Initialize`
+2. `RedeemInternalExact`
+3. `RedeemBearerExact`
+4. `RedeemInternalCredit`
+5. `RedeemBearerCredit`
+6. `TransferCredit`
+7. `MergeCredit`
+8. `CloseZeroCredit`
+9. `SealClaimsExhausted`
+10. `CloseEmptyLedger`
+
+The corresponding account coordinates are `0xa4/1` for the immutable
+Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
+credit and live-credit count, `0xa6/1` for one owner-scoped canonical numerator,
+and `0xa7/1` for the permanent zero-credit replay tombstone. Their exact body
+widths are 296, 224, 296, and 232 bytes. Resolution owns the vector,
+SupplyLedger/ClaimLedger owns native claim supply and backing, Position V3 and
+Replay V3 own internal custody/replay, and the Realm collateral adapter owns
+Hoard transfers. The fractional accounts copy none of those mutable facts.
+
+The only admitted terminal policy in the runtime contract is
+`RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
+backing live. `CloseEmptyLedger` requires claims, aggregate credit, live credit
+accounts, and claim backing all to be zero, so it cannot sweep Hoard principal,
+reinterpret donation surplus as revenue, or silently forfeit claimant value.
 
 Dealer facility actions `5..=25` are allocated in runtime order
 `Initialize..=Retire`, while only policy transport `1..=4` is executable in the

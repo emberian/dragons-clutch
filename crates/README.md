@@ -35,6 +35,10 @@ This directory contains offline `no_std` crates
 - `clutch-liveness` — the host-side liveness/fee-carry kernels
   (`IntentFeeCarry`, `TreasuryServiceLedger`) backing the liveness policy
   profile and the revenue seams.
+- `clutch-fractional-redemption-runtime` — safe fixed-layout exact native-claim
+  redemption, sole aggregate numerator-credit accounting, owner-credit
+  transfer/merge, and no-sweep terminal retention. Its 79/v1 Solana seam is
+  centrally allocated but capability-disabled.
 - `clutch-structured-claim` — exact rational coefficient realization,
   complete-set-compressed native backing, flat wrapper composition, and
   transactional transferable-claim custody/lifecycle semantics.

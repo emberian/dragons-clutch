@@ -97,18 +97,20 @@ pub fn initialize_fractional_ledger_v1(
     policy_account: Identity32V1,
     policy: FractionalPolicyV1,
     ledger_account: Identity32V1,
+    claim_ledger_account: Identity32V1,
     stored_bump: u8,
     rent: clutch_retirement::DeletableRentOwnerV1,
 ) -> Result<FractionalLedgerV1> {
     policy.validate()?;
-    if policy_account == ledger_account {
+    if policy_account == ledger_account
+        || policy_account == claim_ledger_account
+        || ledger_account == claim_ledger_account
+    {
         return Err(Error::MismatchedBinding);
     }
     let ledger = FractionalLedgerV1 {
         policy_account,
-        market_instance: policy.market_instance,
-        resolution_account: policy.resolution_account,
-        payout_vector_id: policy.payout_vector_id,
+        claim_ledger_account,
         domain_generation: policy.domain_generation,
         next_sequence: 1,
         active_credit_accounts: 0,
