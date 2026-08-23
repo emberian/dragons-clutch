@@ -16,7 +16,7 @@ use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
     ContentId as ProductContentId, EvidenceOnlyRecoveryPolicyId, MarketGenesisProfileV2Id,
     MarketInstanceV2Id, NativeClaimBasisId, PriceMeasurePolicyV1Id, ProductTemplateId,
-    QuantizedIntervalConsensusProfileV1Id, RegistryCapabilityProfileV2Id,
+    QuantizedIntervalConsensusProfileV1Id, RegistryCapabilityProfileV4Id,
     RegistryProgramReleaseV1Id,
 };
 use clutch_source_plane_v3::ContentId as SourceContentId;
@@ -145,7 +145,7 @@ pub struct FailureMarketPolicyFactsV1 {
     /// Current authenticated central Registry program release.
     pub registry_release_id: RegistryProgramReleaseV1Id,
     /// Immutable central capability profile selected for this Market.
-    pub capability_profile_id: RegistryCapabilityProfileV2Id,
+    pub capability_profile_id: RegistryCapabilityProfileV4Id,
     /// Central-profile-derived interval-consensus profile.
     pub interval_consensus_profile_id: QuantizedIntervalConsensusProfileV1Id,
     /// Largest admitted inclusive interval width.
@@ -557,7 +557,7 @@ impl FailureMarketAdmissionStateV1 {
             market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes(reader.id()?),
             relation_policy_id: ProductContentId::from_bytes(reader.id()?),
             registry_release_id: RegistryProgramReleaseV1Id::from_bytes(reader.id()?),
-            capability_profile_id: RegistryCapabilityProfileV2Id::from_bytes(reader.id()?),
+            capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes(reader.id()?),
             interval_consensus_profile_id: QuantizedIntervalConsensusProfileV1Id::from_bytes(
                 reader.id()?,
             ),
@@ -1169,7 +1169,7 @@ mod tests {
             market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes(id()),
             relation_policy_id: ProductContentId::from_bytes(id()),
             registry_release_id: RegistryProgramReleaseV1Id::from_bytes(id()),
-            capability_profile_id: RegistryCapabilityProfileV2Id::from_bytes(id()),
+            capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes(id()),
             interval_consensus_profile_id: QuantizedIntervalConsensusProfileV1Id::from_bytes(id()),
             maximum_interval_width: 1_024,
             maximum_coordinates_per_advance: 32,
