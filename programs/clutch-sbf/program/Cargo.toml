@@ -80,10 +80,9 @@ profile-non-production-dealer-policy-catalog-lab = [
     "clutch-general-v2-runtime/layout-profile-general",
     "profile-full",
 ]
-# A deliberately non-production product whose only successes are the twelve
-# General V2 empty-book identity actions.  The dependency profiles provide the
-# narrow legacy codec substrate; this crate's capability table still rejects
-# every legacy action before account inspection.
+# A deliberately non-production General successor compilation surface. No
+# action tuple succeeds until Product admission and exhaustive retirement are
+# reachable together; the dependency profile exists only for current codecs.
 profile-non-production-general-v2-empty-book-identity-lab = [
     "dep:clutch-fee-runtime-contract",
     "dep:clutch-general-v2-runtime",

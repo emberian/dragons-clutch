@@ -257,7 +257,7 @@ impl KeeperFrontier {
                         frontier.clear_work.insert(node);
                     }
                 }
-                CanonicalAccountKind::GeneralSelectedCandidate => {
+                CanonicalAccountKind::GeneralSettlementRoot => {
                     if let Some(epoch) = version.projection.primary_binding {
                         frontier.selected_epochs.insert(epoch);
                     }

@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn canonical_hash_and_intent_selection_do_not_depend_on_browser_input() {
         let summary = json!({
-            "central_registry": {"enabled_intent_triples": [[74, 1, 26], [76, 1, 1], [78, 1, 1], [79, 1, 1]]},
+            "central_registry": {"enabled_intent_triples": [[76, 1, 1], [78, 1, 1], [79, 1, 1]]},
             "capabilities": [
                 {"slot": "source-plane", "linkage": "linked"},
                 {"slot": "series-products", "linkage": "linked"},
@@ -691,7 +691,7 @@ mod tests {
                 {"slot": "recovery", "linkage": "linked"}
             ]
         });
-        assert_eq!(enabled_intents(&summary).unwrap()[0], [74, 1, 26]);
+        assert_eq!(enabled_intents(&summary).unwrap()[0], [76, 1, 1]);
         let families = selected_families(&summary).unwrap();
         assert!(families.contains(&CanonicalFamily::Source));
         assert!(families.contains(&CanonicalFamily::Product));

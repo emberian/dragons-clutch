@@ -820,15 +820,15 @@ pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
         let value = DirectEpochV3Account::decode(data)?;
         return Ok(epoch_facts(&value.common));
     }
+    #[cfg(feature = "profile-full")]
+    return Err(ClutchError::UnsupportedInstruction.into());
     #[cfg(feature = "profile-direct-v3-source-v2-point")]
     {
         let value = DirectEpochV3Account::decode(data)?;
         return Ok(epoch_facts(&value.common));
     }
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-    let value = EpochAccount::decode(data)?;
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-    Ok(epoch_facts(&value))
+    #[cfg(feature = "profile-general-source-v2-point")]
+    Err(ClutchError::UnsupportedInstruction.into())
 }
 
 fn epoch_facts(value: &EpochAccount) -> EpochFacts {
@@ -1396,13 +1396,6 @@ mod tests {
         account_len::PRICE_GRID,
         grid(),
         read_price_grid
-    );
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-    header_case!(
-        epoch_reader_refuses_hostile_headers,
-        account_len::EPOCH,
-        epoch(),
-        read_epoch
     );
     #[cfg(feature = "profile-direct-v3-source-v2-point")]
     header_case!(

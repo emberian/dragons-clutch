@@ -52,16 +52,6 @@ use crate::instructions::dealer_policy;
     feature = "profile-direct-v3-source-v2-point"
 ))]
 use crate::instructions::direct_selection_v3;
-#[cfg(any(
-    all(
-        feature = "profile-full",
-        not(feature = "profile-non-production-dealer-policy-catalog-lab")
-    ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
-))]
-use crate::instructions::general_v2_direct_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
-use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
@@ -115,14 +105,6 @@ enum Route {
     ResolutionWork,
     #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
     DealerPolicy,
-    #[cfg(any(
-        all(
-            feature = "profile-full",
-            not(feature = "profile-non-production-dealer-policy-catalog-lab")
-        ),
-        feature = "profile-non-production-general-v2-empty-book-identity-lab"
-    ))]
-    GeneralV2,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
     DecodeOnly,
@@ -142,8 +124,6 @@ const INTENT_MATERIALIZE_HINT: u8 = 4;
 const INTENT_DEMATERIALIZE_HINT: u8 = 5;
 const INTENT_FEED_ADVANCE_HINT: u8 = 6;
 const INTENT_PLACE_ORDER_HINT: u8 = 7;
-const INTENT_CANCEL_ORDER_HINT: u8 = 8;
-const INTENT_SETTLE_PAGE_HINT: u8 = 9;
 const INTENT_INIT_REALM_HINT: u8 = 10;
 const INTENT_INIT_PROFILE_HINT: u8 = 11;
 const INTENT_INIT_PRICE_GRID_HINT: u8 = 12;
@@ -172,29 +152,7 @@ const INTENT_FINALIZE_RESOLUTION_WORK_HINT: u8 = 34;
 const INTENT_ABORT_RESOLUTION_WORK_HINT: u8 = 35;
 const INTENT_INIT_DIRECT_EPOCH_V4_HINT: u8 = 36;
 const INTENT_LAPSE_SELECTED_DIRECT_V3_HINT: u8 = 46;
-const INTENT_INIT_CLEAR_WORK_HINT: u8 = 47;
-const INTENT_GROW_CLEAR_WORK_HINT: u8 = 48;
-const INTENT_INIT_EPOCH_HINT: u8 = 49;
-const INTENT_FREEZE_EPOCH_HINT: u8 = 50;
-const INTENT_ADVANCE_CLEAR_WORK_HINT: u8 = 51;
-const INTENT_ADVANCE_CLEAR_SLICES_HINT: u8 = 52;
-const INTENT_COMPLETE_CLEAR_WORK_HINT: u8 = 53;
-const INTENT_SUBMIT_CANDIDATE_HINT: u8 = 54;
-const INTENT_WRITE_CANDIDATE_FEED_HINT: u8 = 55;
-const INTENT_SEAL_CANDIDATE_HINT: u8 = 56;
-const INTENT_FINALIZE_SELECTION_HINT: u8 = 57;
-const INTENT_FREEZE_ENTITLEMENT_HINT: u8 = 58;
-const INTENT_ENTITLE_SLICE_HINT: u8 = 59;
-const INTENT_RELEASE_TERMINAL_RESERVATION_HINT: u8 = 60;
-const INTENT_CLOSE_GENERAL_RECEIPT_HINT: u8 = 61;
-const INTENT_CLOSE_GENERAL_RESERVATION_HINT: u8 = 62;
-const INTENT_CLOSE_GENERAL_PAGE_HINT: u8 = 63;
-const INTENT_CLOSE_GENERAL_POT_HINT: u8 = 64;
-const INTENT_CLOSE_GENERAL_CANDIDATE_HINT: u8 = 65;
-const INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT: u8 = 66;
-const INTENT_CLOSE_GENERAL_EPOCH_HINT: u8 = 67;
 const INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT: u8 = 68;
-const INTENT_CLOSE_POSITION_HINT: u8 = 69;
 const INTENT_INIT_SOURCE_SPEC_V2_HINT: u8 = 70;
 const INTENT_INIT_SOURCE_ARCHIVE_V2_HINT: u8 = 71;
 const INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT: u8 = 72;
@@ -234,26 +192,6 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::FractionalRedemption
             }
-            #[cfg(any(
-                all(
-                    feature = "profile-full",
-                    not(feature = "profile-non-production-dealer-policy-catalog-lab")
-                ),
-                feature = "profile-non-production-general-v2-empty-book-identity-lab"
-            ))]
-            Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
-                if instruction_data.get(14).copied()
-                    == Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION)
-                    && instruction_data.get(15).copied().is_some_and(|action| {
-                        capabilities::extension_intent_action_enabled(
-                            clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG,
-                            clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
-                            action,
-                        )
-                    }) =>
-            {
-                Route::GeneralV2
-            }
             #[cfg(feature = "non-production-product-series-lab")]
             Some(clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG)
                 if instruction_data.get(14).copied()
@@ -282,34 +220,6 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_ABORT_ARTIFACT_HINT,
             ) => Route::Artifact,
             Some(INTENT_PLACE_ORDER_HINT) => Route::OrdersBatch,
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-            Some(INTENT_CANCEL_ORDER_HINT) => Route::OrdersBatch,
-            #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-            Some(
-                INTENT_SETTLE_PAGE_HINT
-                | INTENT_INIT_CLEAR_WORK_HINT
-                | INTENT_GROW_CLEAR_WORK_HINT
-                | INTENT_INIT_EPOCH_HINT
-                | INTENT_FREEZE_EPOCH_HINT
-                | INTENT_ADVANCE_CLEAR_WORK_HINT
-                | INTENT_ADVANCE_CLEAR_SLICES_HINT
-                | INTENT_COMPLETE_CLEAR_WORK_HINT
-                | INTENT_SUBMIT_CANDIDATE_HINT
-                | INTENT_WRITE_CANDIDATE_FEED_HINT
-                | INTENT_SEAL_CANDIDATE_HINT
-                | INTENT_FINALIZE_SELECTION_HINT
-                | INTENT_FREEZE_ENTITLEMENT_HINT
-                | INTENT_ENTITLE_SLICE_HINT
-                | INTENT_RELEASE_TERMINAL_RESERVATION_HINT
-                | INTENT_CLOSE_GENERAL_RECEIPT_HINT
-                | INTENT_CLOSE_GENERAL_RESERVATION_HINT
-                | INTENT_CLOSE_GENERAL_PAGE_HINT
-                | INTENT_CLOSE_GENERAL_POT_HINT
-                | INTENT_CLOSE_GENERAL_CANDIDATE_HINT
-                | INTENT_CLOSE_GENERAL_CLEAR_WORK_HINT
-                | INTENT_CLOSE_GENERAL_EPOCH_HINT
-                | INTENT_CLOSE_POSITION_HINT,
-            ) => Route::OrdersBatch,
             #[cfg(feature = "profile-full")]
             Some(INTENT_SUBMIT_DIRECT_PAGE_HINT) => Route::OrdersBatch,
             Some(
@@ -432,14 +342,6 @@ pub fn process(
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
         #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
-        #[cfg(any(
-            all(
-                feature = "profile-full",
-                not(feature = "profile-non-production-dealer-policy-catalog-lab")
-            ),
-            feature = "profile-non-production-general-v2-empty-book-identity-lab"
-        ))]
-        Route::GeneralV2 => process_general_v2(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
@@ -593,54 +495,6 @@ fn disabled_dealer_facility_action(
             Some(action)
         }
         _ => None,
-    }
-}
-
-/// Decode the strict successor envelope and enter one capability-admitted
-/// General V2 action. Current direct V5 delivery is deployable in `profile-full`;
-/// the historical identity actions remain confined to their laboratory.
-#[inline(never)]
-#[cfg(any(
-    all(
-        feature = "profile-full",
-        not(feature = "profile-non-production-dealer-policy-catalog-lab")
-    ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
-))]
-fn process_general_v2(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request =
-        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
-    match request.envelope.action {
-        ExtensionAction::GeneralV2(
-            action @ clutch_solana_layout::registry::GeneralV2Action::ConsumeDirectReceiptEggs,
-        ) => general_v2_direct_v5::process(
-            program_id,
-            accounts,
-            request.sequence,
-            action,
-            request.envelope.payload,
-        ),
-        #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
-        ExtensionAction::GeneralV2(action) => general_v2_identity::process(
-            program_id,
-            accounts,
-            request.sequence,
-            action,
-            request.envelope.payload,
-        ),
-        #[cfg(not(feature = "profile-non-production-general-v2-empty-book-identity-lab"))]
-        ExtensionAction::GeneralV2(_) => Err(ClutchError::UnsupportedInstruction.into()),
-        ExtensionAction::DealerPolicy(_)
-        | ExtensionAction::DealerFacility(_)
-        | ExtensionAction::StructuredClaim(_)
-        | ExtensionAction::SourceV3(_)
-        | ExtensionAction::RecurringSeries(_)
-        | ExtensionAction::Recovery(_)
-        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
     }
 }
 
@@ -839,38 +693,8 @@ fn process_orders_batch(
         Action::Layout(Intent::PlaceOrder { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-        Action::Layout(Intent::CancelOrder { .. }) => {
-            orders_batch::process(program_id, accounts, &request)
-        }
         #[cfg(feature = "profile-full")]
         Action::Layout(Intent::SubmitDirectPage { .. }) => {
-            orders_batch::process(program_id, accounts, &request)
-        }
-        #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
-        Action::Layout(Intent::SettlePage { .. })
-        | Action::Layout(Intent::InitClearWork { .. })
-        | Action::Layout(Intent::GrowClearWork { .. })
-        | Action::Layout(Intent::InitEpoch { .. })
-        | Action::Layout(Intent::FreezeEpoch { .. })
-        | Action::Layout(Intent::AdvanceClearWork { .. })
-        | Action::Layout(Intent::AdvanceClearSlices { .. })
-        | Action::Layout(Intent::CompleteClearWork { .. })
-        | Action::Layout(Intent::SubmitCandidate { .. })
-        | Action::Layout(Intent::WriteCandidateFeed { .. })
-        | Action::Layout(Intent::SealCandidate { .. })
-        | Action::Layout(Intent::FinalizeSelection { .. })
-        | Action::Layout(Intent::FreezeEntitlement { .. })
-        | Action::Layout(Intent::EntitleSlice { .. })
-        | Action::Layout(Intent::ReleaseTerminalReservation { .. })
-        | Action::Layout(Intent::CloseGeneralReceipt { .. })
-        | Action::Layout(Intent::CloseGeneralReservation { .. })
-        | Action::Layout(Intent::CloseGeneralPage { .. })
-        | Action::Layout(Intent::CloseGeneralPot { .. })
-        | Action::Layout(Intent::CloseGeneralCandidate { .. })
-        | Action::Layout(Intent::CloseGeneralClearWork { .. })
-        | Action::Layout(Intent::CloseGeneralEpoch { .. })
-        | Action::Layout(Intent::ClosePosition { .. }) => {
             orders_batch::process(program_id, accounts, &request)
         }
         _ => unexpected_route(),
@@ -1582,6 +1406,37 @@ mod tests {
                 Route::ResolutionWork,
             ),
         ]
+        .into_iter()
+        .filter(|(intent, _)| {
+            !matches!(
+                intent,
+                Intent::CancelOrder { .. }
+                    | Intent::SettlePage { .. }
+                    | Intent::InitClearWork { .. }
+                    | Intent::GrowClearWork { .. }
+                    | Intent::InitEpoch { .. }
+                    | Intent::FreezeEpoch { .. }
+                    | Intent::AdvanceClearWork { .. }
+                    | Intent::AdvanceClearSlices { .. }
+                    | Intent::CompleteClearWork { .. }
+                    | Intent::SubmitCandidate { .. }
+                    | Intent::WriteCandidateFeed { .. }
+                    | Intent::SealCandidate { .. }
+                    | Intent::FinalizeSelection { .. }
+                    | Intent::FreezeEntitlement { .. }
+                    | Intent::EntitleSlice { .. }
+                    | Intent::ReleaseTerminalReservation { .. }
+                    | Intent::CloseGeneralReceipt { .. }
+                    | Intent::CloseGeneralReservation { .. }
+                    | Intent::CloseGeneralPage { .. }
+                    | Intent::CloseGeneralPot { .. }
+                    | Intent::CloseGeneralCandidate { .. }
+                    | Intent::CloseGeneralClearWork { .. }
+                    | Intent::CloseGeneralEpoch { .. }
+                    | Intent::ClosePosition { .. }
+            )
+        })
+        .collect()
     }
 
     fn non_layout_request(action: u8) -> Vec<u8> {

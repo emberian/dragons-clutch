@@ -18,6 +18,10 @@ default = ["profile-full"]
 profile-full = []
 profile-direct-v3-source-v2-point = []
 profile-general-source-v2-point = ["clutch-batch/profile-general-source-v2-point"]
+# Host-only forensic parser for the withdrawn General V3 request family. No
+# deployable checked profile forwards this feature, and the SBF program refuses
+# those tags before hostile payload decoding.
+non-production-legacy-general-v3-hostile-decode = []
 # Makes the successor Product/Series-only artifact kinds decodable for the
 # explicit local-bank vertical slice. RegistryRelease and CapabilityProfile
 # remain central immutable artifact kinds in every build.
