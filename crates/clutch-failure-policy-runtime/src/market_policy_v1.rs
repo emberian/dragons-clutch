@@ -27,6 +27,11 @@ use crate::{Error, FailurePolicyBindingId, Result};
 const MARKET_POLICY_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-policy/v1";
 const MARKET_RECOVERY_FUNDING_DOMAIN_V1: &[u8] =
     b"dragons-clutch/failure-market-recovery-funding/v1";
+const MARKET_ADMISSION_STATE_MAGIC_V1: [u8; 8] = *b"DCFMRKT1";
+const MARKET_ADMISSION_STATE_SCHEMA_V1: u16 = 1;
+
+/// Exact canonical width of one shared-Market Failure admission state.
+pub const FAILURE_MARKET_ADMISSION_STATE_BYTES_V1: usize = 1_048;
 
 /// Typed physical account identity used by the Market policy join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,6 +255,177 @@ impl FailureMarketRecoveryFundingReceiptV1 {
     }
 }
 
+/// Canonical persisted admission for one shared Market Failure lifecycle.
+///
+/// This is the semantic body stored inside the versioned `0xa0` account. It
+/// owns the immutable Market policy and the exact initially funded liveness
+/// Recovery receipt; Series provenance remains in Product's counted links.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketAdmissionStateV1 {
+    binding: FailureMarketPolicyBindingV1,
+    recovery_funding: FailureMarketRecoveryFundingReceiptV1,
+}
+
+impl FailureMarketAdmissionStateV1 {
+    /// Join already authenticated policy and present-funding receipts.
+    pub fn from_receipts(
+        binding: FailureMarketPolicyBindingV1,
+        recovery_funding: FailureMarketRecoveryFundingReceiptV1,
+    ) -> Result<Self> {
+        let state = Self {
+            binding,
+            recovery_funding,
+        };
+        state.validate()?;
+        Ok(state)
+    }
+
+    /// Immutable shared-Market policy.
+    pub const fn binding(self) -> FailureMarketPolicyBindingV1 {
+        self.binding
+    }
+
+    /// Exact initial present-funding receipt.
+    pub const fn recovery_funding(self) -> FailureMarketRecoveryFundingReceiptV1 {
+        self.recovery_funding
+    }
+
+    /// Encode every semantic byte and canonical reserved byte.
+    pub fn encode_into(
+        self,
+        output: &mut [u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1],
+    ) -> Result<()> {
+        self.validate()?;
+        output.fill(0);
+        let mut writer = AdmissionWriterV1::new(output);
+        writer.bytes(&MARKET_ADMISSION_STATE_MAGIC_V1)?;
+        writer.u16(MARKET_ADMISSION_STATE_SCHEMA_V1)?;
+        writer.reserved(6)?;
+        writer.id(self.binding.id.bytes())?;
+        writer.id(self.recovery_funding.id.bytes())?;
+        let policy = self.binding.facts;
+        for id in policy_identity_bytes(policy) {
+            writer.id(id)?;
+        }
+        writer.u64(policy.maximum_interval_width)?;
+        writer.u16(policy.maximum_coordinates_per_advance)?;
+        writer.reserved(6)?;
+        writer.u64(policy.generation)?;
+        let funding = self.recovery_funding.facts;
+        writer.id(funding.prepaid_debit_receipt_id.bytes())?;
+        writer.u64(funding.work_principal_lamports)?;
+        writer.u64(funding.rent_principal_lamports)?;
+        writer.u64(funding.donation_lamports)?;
+        writer.u64(funding.observed_balance_lamports)?;
+        writer.u32(funding.maximum_calls)?;
+        writer.reserved(4)?;
+        writer.u64(funding.maximum_lamports_per_call)?;
+        writer.finish()
+    }
+
+    /// Decode canonical bytes and rederive both receipt identities.
+    ///
+    /// Decoding proves byte-level self-consistency only. The SBF adapter must
+    /// still authenticate the account owner, PDA, and full liveness accounts.
+    pub fn decode(input: &[u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1]) -> Result<Self> {
+        let mut reader = AdmissionReaderV1::new(input);
+        if reader.array::<8>()? != MARKET_ADMISSION_STATE_MAGIC_V1
+            || reader.u16()? != MARKET_ADMISSION_STATE_SCHEMA_V1
+        {
+            return Err(Error::InvalidEnum);
+        }
+        reader.reserved(6)?;
+        let binding_id = FailurePolicyBindingId::from_bytes(reader.id()?);
+        let funding_id = FailureMarketRecoveryFundingReceiptIdV1::from_bytes(reader.id()?);
+        let policy = FailureMarketPolicyFactsV1 {
+            market_instance_id: MarketInstanceV2Id::from_bytes(reader.id()?),
+            product_template_id: ProductTemplateId::from_bytes(reader.id()?),
+            native_claim_basis_id: NativeClaimBasisId::from_bytes(reader.id()?),
+            recovery_policy_id: EvidenceOnlyRecoveryPolicyId::from_bytes(reader.id()?),
+            price_measure_policy_id: PriceMeasurePolicyV1Id::from_bytes(reader.id()?),
+            market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes(reader.id()?),
+            relation_policy_id: ProductContentId::from_bytes(reader.id()?),
+            registry_release_id: RegistryProgramReleaseV1Id::from_bytes(reader.id()?),
+            capability_profile_id: RegistryCapabilityProfileV2Id::from_bytes(reader.id()?),
+            interval_consensus_profile_id: QuantizedIntervalConsensusProfileV1Id::from_bytes(
+                reader.id()?,
+            ),
+            maximum_interval_width: 0,
+            maximum_coordinates_per_advance: 0,
+            source_release_manifest_id: SourceContentId::from_bytes(reader.id()?),
+            source_release_authentication_id: SourceContentId::from_bytes(reader.id()?),
+            source_release_account_id: FailureMarketAccountIdV1::from_bytes(reader.id()?),
+            source_plane_contract_id: SourceContentId::from_bytes(reader.id()?),
+            source_spec_id: SourceContentId::from_bytes(reader.id()?),
+            summary_program_id: SourceContentId::from_bytes(reader.id()?),
+            primary_window_id: SourceContentId::from_bytes(reader.id()?),
+            statistic_key_id: SourceContentId::from_bytes(reader.id()?),
+            clock_policy_id: SourceContentId::from_bytes(reader.id()?),
+            recovery_state_id: RecoveryIdentity::from_bytes(reader.id()?),
+            recovery_compartment_account_id: LivenessId::from_bytes(reader.id()?),
+            liveness_policy_id: LivenessId::from_bytes(reader.id()?),
+            liveness_lifecycle_id: LivenessId::from_bytes(reader.id()?),
+            recovery_quote_schedule_id: LivenessId::from_bytes(reader.id()?),
+            recovery_receipt_program_id: LivenessId::from_bytes(reader.id()?),
+            recovery_refund_owner: LivenessId::from_bytes(reader.id()?),
+            neutral_sink: LivenessId::from_bytes(reader.id()?),
+            generation: 0,
+        };
+        let policy = FailureMarketPolicyFactsV1 {
+            maximum_interval_width: reader.u64()?,
+            maximum_coordinates_per_advance: reader.u16()?,
+            ..policy
+        };
+        reader.reserved(6)?;
+        let policy = FailureMarketPolicyFactsV1 {
+            generation: reader.u64()?,
+            ..policy
+        };
+        let funding = FailureMarketRecoveryFundingFactsV1 {
+            failure_policy_binding_id: binding_id,
+            prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes(
+                reader.id()?,
+            ),
+            recovery_compartment_account_id: policy.recovery_compartment_account_id,
+            liveness_policy_id: policy.liveness_policy_id,
+            liveness_lifecycle_id: policy.liveness_lifecycle_id,
+            recovery_quote_schedule_id: policy.recovery_quote_schedule_id,
+            generation: policy.generation,
+            work_principal_lamports: reader.u64()?,
+            rent_principal_lamports: reader.u64()?,
+            donation_lamports: reader.u64()?,
+            observed_balance_lamports: reader.u64()?,
+            maximum_calls: reader.u32()?,
+            maximum_lamports_per_call: {
+                reader.reserved(4)?;
+                reader.u64()?
+            },
+        };
+        reader.finish()?;
+        let binding = FailureMarketPolicyBindingV1 {
+            id: binding_id,
+            facts: policy,
+        };
+        let recovery_funding = FailureMarketRecoveryFundingReceiptV1 {
+            id: funding_id,
+            facts: funding,
+        };
+        Self::from_receipts(binding, recovery_funding)
+    }
+
+    fn validate(self) -> Result<()> {
+        validate_facts(self.binding.facts)?;
+        if hash_facts(self.binding.facts) != self.binding.id {
+            return Err(Error::BindingMismatch);
+        }
+        validate_recovery_funding(self.binding, self.recovery_funding.facts)?;
+        if hash_recovery_funding(self.recovery_funding.facts) != self.recovery_funding.id {
+            return Err(Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Adapter-owned authentication of the sole persisted liveness custody.
 ///
 /// The live implementor must privately bind owner, PDA, full account body,
@@ -275,22 +451,7 @@ pub fn admit_failure_market_recovery_funding_v1<
 ) -> Result<FailureMarketRecoveryFundingReceiptV1> {
     validate_recovery_funding(binding, facts)?;
     authority.authenticate_failure_market_recovery_funding(facts)?;
-    let mut hasher = Sha256::new();
-    hasher.update(MARKET_RECOVERY_FUNDING_DOMAIN_V1);
-    hasher.update(facts.failure_policy_binding_id.bytes());
-    hasher.update(facts.prepaid_debit_receipt_id.bytes());
-    hasher.update(facts.recovery_compartment_account_id.bytes());
-    hasher.update(facts.liveness_policy_id.bytes());
-    hasher.update(facts.liveness_lifecycle_id.bytes());
-    hasher.update(facts.recovery_quote_schedule_id.bytes());
-    hasher.update(facts.generation.to_le_bytes());
-    hasher.update(facts.work_principal_lamports.to_le_bytes());
-    hasher.update(facts.rent_principal_lamports.to_le_bytes());
-    hasher.update(facts.donation_lamports.to_le_bytes());
-    hasher.update(facts.observed_balance_lamports.to_le_bytes());
-    hasher.update(facts.maximum_calls.to_le_bytes());
-    hasher.update(facts.maximum_lamports_per_call.to_le_bytes());
-    let id = FailureMarketRecoveryFundingReceiptIdV1::from_bytes(hasher.finalize().into());
+    let id = hash_recovery_funding(facts);
     if id.bytes().iter().all(|byte| *byte == 0) {
         return Err(Error::BindingMismatch);
     }
@@ -461,7 +622,17 @@ fn validate_facts(facts: FailureMarketPolicyFactsV1) -> Result<()> {
 fn hash_facts(facts: FailureMarketPolicyFactsV1) -> FailurePolicyBindingId {
     let mut hasher = Sha256::new();
     hasher.update(MARKET_POLICY_DOMAIN_V1);
-    for id in [
+    for id in policy_identity_bytes(facts) {
+        hasher.update(id);
+    }
+    hasher.update(facts.maximum_interval_width.to_le_bytes());
+    hasher.update(facts.maximum_coordinates_per_advance.to_le_bytes());
+    hasher.update(facts.generation.to_le_bytes());
+    FailurePolicyBindingId::from_bytes(hasher.finalize().into())
+}
+
+fn policy_identity_bytes(facts: FailureMarketPolicyFactsV1) -> [[u8; 32]; 27] {
+    [
         facts.market_instance_id.bytes(),
         facts.product_template_id.bytes(),
         facts.native_claim_basis_id.bytes(),
@@ -489,13 +660,153 @@ fn hash_facts(facts: FailureMarketPolicyFactsV1) -> FailurePolicyBindingId {
         facts.recovery_receipt_program_id.bytes(),
         facts.recovery_refund_owner.bytes(),
         facts.neutral_sink.bytes(),
-    ] {
-        hasher.update(id);
-    }
-    hasher.update(facts.maximum_interval_width.to_le_bytes());
-    hasher.update(facts.maximum_coordinates_per_advance.to_le_bytes());
+    ]
+}
+
+fn hash_recovery_funding(
+    facts: FailureMarketRecoveryFundingFactsV1,
+) -> FailureMarketRecoveryFundingReceiptIdV1 {
+    let mut hasher = Sha256::new();
+    hasher.update(MARKET_RECOVERY_FUNDING_DOMAIN_V1);
+    hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.prepaid_debit_receipt_id.bytes());
+    hasher.update(facts.recovery_compartment_account_id.bytes());
+    hasher.update(facts.liveness_policy_id.bytes());
+    hasher.update(facts.liveness_lifecycle_id.bytes());
+    hasher.update(facts.recovery_quote_schedule_id.bytes());
     hasher.update(facts.generation.to_le_bytes());
-    FailurePolicyBindingId::from_bytes(hasher.finalize().into())
+    hasher.update(facts.work_principal_lamports.to_le_bytes());
+    hasher.update(facts.rent_principal_lamports.to_le_bytes());
+    hasher.update(facts.donation_lamports.to_le_bytes());
+    hasher.update(facts.observed_balance_lamports.to_le_bytes());
+    hasher.update(facts.maximum_calls.to_le_bytes());
+    hasher.update(facts.maximum_lamports_per_call.to_le_bytes());
+    FailureMarketRecoveryFundingReceiptIdV1::from_bytes(hasher.finalize().into())
+}
+
+struct AdmissionWriterV1<'a> {
+    output: &'a mut [u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1],
+    cursor: usize,
+}
+
+impl<'a> AdmissionWriterV1<'a> {
+    fn new(output: &'a mut [u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1]) -> Self {
+        Self { output, cursor: 0 }
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let end = self
+            .cursor
+            .checked_add(bytes.len())
+            .ok_or(Error::WrongLength)?;
+        self.output
+            .get_mut(self.cursor..end)
+            .ok_or(Error::WrongLength)?
+            .copy_from_slice(bytes);
+        self.cursor = end;
+        Ok(())
+    }
+
+    fn id(&mut self, value: [u8; 32]) -> Result<()> {
+        self.bytes(&value)
+    }
+
+    fn u16(&mut self, value: u16) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn u32(&mut self, value: u32) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn u64(&mut self, value: u64) -> Result<()> {
+        self.bytes(&value.to_le_bytes())
+    }
+
+    fn reserved(&mut self, bytes: usize) -> Result<()> {
+        let end = self.cursor.checked_add(bytes).ok_or(Error::WrongLength)?;
+        if self
+            .output
+            .get(self.cursor..end)
+            .ok_or(Error::WrongLength)?
+            .iter()
+            .any(|byte| *byte != 0)
+        {
+            return Err(Error::InvalidEnum);
+        }
+        self.cursor = end;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.cursor == FAILURE_MARKET_ADMISSION_STATE_BYTES_V1 {
+            Ok(())
+        } else {
+            Err(Error::WrongLength)
+        }
+    }
+}
+
+struct AdmissionReaderV1<'a> {
+    input: &'a [u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1],
+    cursor: usize,
+}
+
+impl<'a> AdmissionReaderV1<'a> {
+    fn new(input: &'a [u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1]) -> Self {
+        Self { input, cursor: 0 }
+    }
+
+    fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let end = self.cursor.checked_add(N).ok_or(Error::WrongLength)?;
+        let value = self
+            .input
+            .get(self.cursor..end)
+            .ok_or(Error::WrongLength)?
+            .try_into()
+            .map_err(|_| Error::WrongLength)?;
+        self.cursor = end;
+        Ok(value)
+    }
+
+    fn id(&mut self) -> Result<[u8; 32]> {
+        self.array()
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.array()?))
+    }
+
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.array()?))
+    }
+
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.array()?))
+    }
+
+    fn reserved(&mut self, bytes: usize) -> Result<()> {
+        let end = self.cursor.checked_add(bytes).ok_or(Error::WrongLength)?;
+        if self
+            .input
+            .get(self.cursor..end)
+            .ok_or(Error::WrongLength)?
+            .iter()
+            .any(|byte| *byte != 0)
+        {
+            return Err(Error::InvalidEnum);
+        }
+        self.cursor = end;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.cursor == FAILURE_MARKET_ADMISSION_STATE_BYTES_V1 {
+            Ok(())
+        } else {
+            Err(Error::WrongLength)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -813,6 +1124,45 @@ mod tests {
                 recovery,
                 1_207,
             ),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn admission_state_round_trips_and_rejects_noncanonical_or_stale_bytes() {
+        let policy_facts = facts();
+        let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
+        let funding_facts = funding(binding);
+        let recovery_funding = admit_failure_market_recovery_funding_v1(
+            &ExactFunding(funding_facts),
+            binding,
+            funding_facts,
+        )
+        .unwrap();
+        let state =
+            FailureMarketAdmissionStateV1::from_receipts(binding, recovery_funding).unwrap();
+        let mut encoded = [0u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1];
+        state.encode_into(&mut encoded).unwrap();
+        assert_eq!(FailureMarketAdmissionStateV1::decode(&encoded), Ok(state));
+
+        let mut bad_padding = encoded;
+        bad_padding[10] = 1;
+        assert_eq!(
+            FailureMarketAdmissionStateV1::decode(&bad_padding),
+            Err(Error::InvalidEnum)
+        );
+
+        let mut stale_binding = encoded;
+        stale_binding[16] ^= 1;
+        assert_eq!(
+            FailureMarketAdmissionStateV1::decode(&stale_binding),
+            Err(Error::BindingMismatch)
+        );
+
+        let mut stale_funding = encoded;
+        stale_funding[48] ^= 1;
+        assert_eq!(
+            FailureMarketAdmissionStateV1::decode(&stale_funding),
             Err(Error::BindingMismatch)
         );
     }

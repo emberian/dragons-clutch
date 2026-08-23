@@ -373,6 +373,8 @@ pub const DEALER_EXIT_TICKET_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADE
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG: u8 = 0xa0;
 /// Single-custody failure semantic root account version.
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Shared-Market failure policy/funding root successor version.
+pub const FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2: u8 = 2;
 /// Immutable runtime-liveness policy account discriminator.
 pub const FAILURE_LIVENESS_POLICY_ACCOUNT_TAG: u8 = 0xa1;
 /// Immutable runtime-liveness policy account version.
@@ -1300,6 +1302,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "failure-external-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
+            version: FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-market-root-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2817,6 +2828,19 @@ mod tests {
                 "duplicate account {tag}/{version}"
             );
         }
+        let mut market_root_successor = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
+                FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2,
+            )
+        });
+        assert_eq!(
+            market_root_successor.next().map(|entry| entry.status),
+            Some(AllocationStatus::ReservedDisabled)
+        );
+        assert!(market_root_successor.next().is_none());
     }
 
     #[test]
