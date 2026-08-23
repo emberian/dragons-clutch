@@ -51,10 +51,16 @@ profile-non-production-general-v2-empty-book-identity-lab = [
 non-production-mock-source = ["profile-full", "clutch-sbf/non-production-mock-source"]
 # Compiles the explicit local-real Pyth release row and its SVM campaign. This
 # is a different, non-production ELF identity; the default registry is unchanged.
-non-production-real-pyth-lab = ["profile-full", "clutch-sbf/non-production-real-pyth-lab"]
+non-production-real-pyth-lab = ["clutch-sbf/non-production-real-pyth-lab"]
 # Distinct real-ELF profile for the immutable Dealer-policy catalog only.
 profile-non-production-dealer-policy-catalog-lab = [
     "clutch-sbf/profile-non-production-dealer-policy-catalog-lab",
+]
+# Builds the separate Product/Series account-boundary ELF. All recurring-Series
+# extension actions remain capability-disabled.
+non-production-product-series-lab = [
+    "clutch-sbf/non-production-product-series-lab",
+    "clutch-solana-layout/non-production-product-series-lab",
 ]
 
 [dependencies]

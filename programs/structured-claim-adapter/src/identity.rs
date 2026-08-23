@@ -1,112 +1,76 @@
-//! Native-claim, deployment, product-digest, and PDA binding.
+//! Deployment, digest, and program-derived-address authentication.
 
-use clutch_solana_layout::{
-    portfolio_settlement::NativePortfolioClaimV1, Hash32, MarketAccount, TermsAccount,
+use crate::runtime_contract::{
+    reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1,
+    StructuredClaimDescriptorV1, StructuredClaimRuntimeAddressesV1, DESCRIPTOR_ACCOUNT_TAG,
+    DESCRIPTOR_ACCOUNT_VERSION,
 };
-use clutch_structured_claim::{ClaimVector, DeploymentBinding, NativeBasisIdentity, NativeClaim};
+use clutch_structured_claim::DeploymentBinding;
 #[cfg(not(target_os = "solana"))]
 use sha2::{Digest, Sha256};
 
-use crate::{codec::DESCRIPTOR_LIVE, is_zero, Error, Key, Result};
-use crate::{StructuredClaimDescriptorV1, MAX_OUTCOMES};
+use crate::{is_zero, Error, Key, Result};
 
 /// Descriptor PDA seed prefix.
 pub const DESCRIPTOR_SEED: &[u8] = b"dc:claim-desc:v1";
-/// Wrapper mint PDA seed prefix.
+/// Extension-free wrapper-mint PDA seed prefix.
 pub const MINT_SEED: &[u8] = b"dc:claim-mint:v1";
-/// Shared mint-authority and base-Position owner PDA seed prefix.
+/// Token-2022 mint-authority PDA seed prefix.
+pub const MINT_AUTHORITY_SEED: &[u8] = b"dc:claim-mint-auth:v1";
+/// Base Position semantic-owner PDA seed prefix.
 pub const VAULT_OWNER_SEED: &[u8] = b"dc:claim-vault:v1";
-/// Per-actor wrapper replay PDA seed prefix.
-pub const REPLAY_SEED: &[u8] = b"dc:claim-replay:v1";
 
-/// Authenticated executable and upgradeable-loader observations.
-///
-/// The owning dispatcher decodes the executable and ProgramData accounts into
-/// this projection. The three slots and six identities become part of product
-/// fungibility; a deployment change therefore fails closed.
+const _: () = assert!(DESCRIPTOR_ACCOUNT_TAG == 0x88);
+const _: () = assert!(DESCRIPTOR_ACCOUNT_VERSION == 1);
+
+/// Authenticated executable and ProgramData observations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RuntimeDeployments {
-    /// Exact identities and deployment slots observed from the three programs.
+pub struct RuntimeDeploymentsV1 {
+    /// Canonical runtime-contract deployment identity.
     pub binding: DeploymentBinding,
     /// Pinned upgradeable-loader executable.
     pub upgradeable_loader: Key,
-    /// Owner of each Program account: wrapper, base, then Token-2022.
+    /// Owners of wrapper, base, and Token-2022 Program accounts.
     pub program_owners: [Key; 3],
-    /// Owner of each ProgramData account in the same order.
+    /// Owners of wrapper, base, and Token-2022 ProgramData accounts.
     pub program_data_owners: [Key; 3],
-    /// ProgramData address named by each Program account in the same order.
+    /// ProgramData addresses linked by those Program accounts.
     pub linked_program_data: [Key; 3],
-    /// Bit `i` states that program `i` is executable; exactly `0b111` is valid.
+    /// Executable bits for wrapper, base, and Token-2022; exactly `0b111`.
     pub executable_mask: u8,
 }
 
-impl RuntimeDeployments {
-    /// Validate loader ownership, Program→ProgramData linkage, and identities.
+impl RuntimeDeploymentsV1 {
+    /// Validate exact loader ownership, linkage, and executable identity.
     pub fn validate(&self) -> Result<()> {
         self.binding
             .validate()
-            .map_err(|_| Error::DeploymentMismatch)?;
+            .map_err(|_| Error::InvalidDeployment)?;
         if is_zero(&self.upgradeable_loader) || self.executable_mask != 0b111 {
-            return Err(Error::DeploymentMismatch);
+            return Err(Error::InvalidDeployment);
         }
-        let expected_data = [
+        let expected = [
             self.binding.wrapper_program_data,
             self.binding.base_program_data,
             self.binding.token_2022_program_data,
         ];
-        let mut i = 0;
-        while i < 3 {
-            if self.program_owners[i] != self.upgradeable_loader
-                || self.program_data_owners[i] != self.upgradeable_loader
-                || self.linked_program_data[i] != expected_data[i]
+        let mut index = 0_usize;
+        while index < expected.len() {
+            if self.program_owners[index] != self.upgradeable_loader
+                || self.program_data_owners[index] != self.upgradeable_loader
+                || self.linked_program_data[index] != expected[index]
             {
-                return Err(Error::DeploymentMismatch);
+                return Err(Error::InvalidDeployment);
             }
-            i += 1;
+            index += 1;
         }
         Ok(())
     }
 }
 
-/// Canonical wrapper-owned account addresses.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AddressBinding {
-    /// Descriptor account.
-    pub descriptor: Key,
-    /// Extension-free Token-2022 mint.
-    pub mint: Key,
-    /// Mint authority and owner of the dedicated base Position.
-    pub vault_owner: Key,
-}
-
-impl AddressBinding {
-    fn validate_shape(&self) -> Result<()> {
-        let values = [self.descriptor, self.mint, self.vault_owner];
-        let mut left = 0;
-        while left < values.len() {
-            if is_zero(&values[left]) {
-                return Err(Error::InvalidIdentity);
-            }
-            let mut right = left + 1;
-            while right < values.len() {
-                if values[left] == values[right] {
-                    return Err(Error::InvalidIdentity);
-                }
-                right += 1;
-            }
-            left += 1;
-        }
-        Ok(())
-    }
-}
-
-/// Runtime program-address verifier.
-///
-/// Production uses `create_program_address` with the exact prefix, product id,
-/// and persisted bump. Host tests inject a deterministic verifier because the
-/// repository intentionally does not link a host curve backend.
-pub trait PdaVerifier {
-    /// Return true only if `address` is exactly the PDA for the given tuple.
+/// Program-address verifier supplied by the target-specific adapter boundary.
+pub trait PdaVerifierV1 {
+    /// Return true only for the exact PDA at `(program, prefix, product, bump)`.
     fn verify(
         &self,
         program: &Key,
@@ -117,13 +81,13 @@ pub trait PdaVerifier {
     ) -> bool;
 }
 
-/// Onchain verifier backed by Solana's program-address syscall.
+/// Solana syscall-backed program-address verifier.
 #[cfg(target_os = "solana")]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SolanaPdaVerifier;
+pub struct SolanaPdaVerifierV1;
 
 #[cfg(target_os = "solana")]
-impl PdaVerifier for SolanaPdaVerifier {
+impl PdaVerifierV1 for SolanaPdaVerifierV1 {
     fn verify(
         &self,
         program: &Key,
@@ -136,138 +100,107 @@ impl PdaVerifier for SolanaPdaVerifier {
 
         let bump_seed = [bump];
         let program = Pubkey::new_from_array(*program);
-        match Pubkey::create_program_address(&[prefix, product_id, &bump_seed], &program) {
-            Ok(derived) => derived.to_bytes() == *address,
-            Err(_) => false,
-        }
+        Pubkey::create_program_address(&[prefix, product_id, &bump_seed], &program)
+            .map(|derived| derived.to_bytes() == *address)
+            .unwrap_or(false)
     }
 }
 
-/// SHA-256 of the exact core-owned wrapper-product preimage.
-pub fn canonical_wrapper_product_id(
-    deployments: &DeploymentBinding,
+/// Fully bound canonical descriptor identity.
+///
+/// Fields are private so downstream code cannot detach a caller-authored
+/// identity from the deployment/hash/PDA checks that minted this value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundDescriptorV1 {
+    descriptor: StructuredClaimDescriptorV1,
+    identity: DescriptorIdentityV1,
+    native_claim_id: Key,
+    wrapper_product_id: Key,
+    addresses: StructuredClaimRuntimeAddressesV1,
+}
+
+impl BoundDescriptorV1 {
+    /// Canonical persisted descriptor.
+    pub const fn descriptor(&self) -> &StructuredClaimDescriptorV1 {
+        &self.descriptor
+    }
+
+    /// Runtime-contract identity reconstructed from authenticated basis.
+    pub const fn identity(&self) -> &DescriptorIdentityV1 {
+        &self.identity
+    }
+
+    /// Canonical native-claim digest.
+    pub const fn native_claim_id(&self) -> Key {
+        self.native_claim_id
+    }
+
+    /// Canonical deployment-bound wrapper-product digest.
+    pub const fn wrapper_product_id(&self) -> Key {
+        self.wrapper_product_id
+    }
+
+    /// Canonical descriptor, mint, authority, and vault-owner addresses.
+    pub const fn addresses(&self) -> StructuredClaimRuntimeAddressesV1 {
+        self.addresses
+    }
+}
+
+/// SHA-256 the exact runtime-contract native-claim preimage.
+pub fn canonical_native_claim_id_v1(identity: &DescriptorIdentityV1) -> Result<Key> {
+    hash(&identity.native_claim_preimage)
+}
+
+/// SHA-256 the exact runtime-contract wrapper-product preimage.
+pub fn canonical_wrapper_product_id_v1(
+    identity: &DescriptorIdentityV1,
     native_claim_id: Key,
 ) -> Result<Key> {
-    let preimage = deployments.product_preimage(native_claim_id)?;
-    #[cfg(target_os = "solana")]
-    {
-        Ok(solana_sha256_hasher::hash(&preimage).to_bytes())
-    }
-    #[cfg(not(target_os = "solana"))]
-    {
-        let digest = Sha256::digest(preimage);
-        let mut output = [0; 32];
-        output.copy_from_slice(&digest);
-        Ok(output)
-    }
+    hash(&identity.product_preimage(native_claim_id)?)
 }
 
-/// Fixed replay namespace binding one wrapper product and one actor.
-pub fn canonical_replay_namespace(product_id: Key, actor: Key) -> Result<Key> {
-    if is_zero(&product_id) || is_zero(&actor) {
-        return Err(Error::InvalidIdentity);
-    }
-    #[cfg(target_os = "solana")]
-    {
-        Ok(
-            solana_sha256_hasher::hashv(&[
-                b"dragons-clutch/wrapper-replay/v1",
-                &product_id,
-                &actor,
-            ])
-            .to_bytes(),
-        )
-    }
-    #[cfg(not(target_os = "solana"))]
-    {
-        let mut hasher = Sha256::new();
-        hasher.update(b"dragons-clutch/wrapper-replay/v1");
-        hasher.update(product_id);
-        hasher.update(actor);
-        Ok(hasher.finalize().into())
-    }
-}
-
-/// Bind a descriptor to live Market/Terms, three deployments, product digest,
-/// and wrapper PDAs, returning the core-owned native claim.
+/// Join canonical descriptor semantics to exact deployments, hashes, and PDAs.
 #[allow(clippy::too_many_arguments)]
-#[inline(never)]
-pub fn bind_descriptor<P: PdaVerifier>(
-    descriptor: &StructuredClaimDescriptorV1,
-    wrapper_program: Key,
-    market: &MarketAccount,
-    terms: &TermsAccount,
-    deployments: &RuntimeDeployments,
+pub fn bind_descriptor_v1<P: PdaVerifierV1>(
+    descriptor: StructuredClaimDescriptorV1,
+    basis: DescriptorBasisV1,
+    deployments: RuntimeDeploymentsV1,
     expected_native_claim_id: Key,
-    expected_product_id: Key,
-    addresses: &AddressBinding,
+    expected_wrapper_product_id: Key,
+    addresses: StructuredClaimRuntimeAddressesV1,
     verifier: &P,
-) -> Result<NativeClaim> {
-    descriptor.validate_shape()?;
+) -> Result<BoundDescriptorV1> {
     deployments.validate()?;
-    addresses.validate_shape()?;
-    market.validate().map_err(|_| Error::DescriptorBinding)?;
-    terms
-        .binds_market(market)
-        .map_err(|_| Error::DescriptorBinding)?;
-    if descriptor.state > DESCRIPTOR_LIVE + 1
-        || descriptor.market != market.market.bytes()
-        || descriptor.terms != terms.terms.bytes()
-        || is_zero(&wrapper_program)
+    let identity = reconstruct_descriptor_identity_v1(&descriptor, basis, deployments.binding)?;
+    let native_claim_id = canonical_native_claim_id_v1(&identity)?;
+    let wrapper_product_id = canonical_wrapper_product_id_v1(&identity, native_claim_id)?;
+    if native_claim_id != expected_native_claim_id
+        || wrapper_product_id != expected_wrapper_product_id
+        || is_zero(&native_claim_id)
+        || is_zero(&wrapper_product_id)
     {
-        return Err(Error::DescriptorBinding);
-    }
-
-    let observed = deployments.binding;
-    if observed.wrapper_program != wrapper_program
-        || observed.base_program != descriptor.base_program
-        || observed.base_program_data != descriptor.base_program_data
-        || observed.base_deployment_slot != descriptor.base_deployment_slot
-        || observed.wrapper_program_data != descriptor.wrapper_program_data
-        || observed.wrapper_deployment_slot != descriptor.wrapper_deployment_slot
-        || observed.token_2022_program != descriptor.token_2022_program
-        || observed.token_2022_program_data != descriptor.token_2022_program_data
-        || observed.token_2022_deployment_slot != descriptor.token_2022_deployment_slot
-    {
-        return Err(Error::DeploymentMismatch);
-    }
-
-    let (live_claim, removed_gcd) = NativePortfolioClaimV1::compile(
-        Hash32::from_bytes(descriptor.market),
-        terms,
-        descriptor.primitive,
-    )
-    .map_err(|_| Error::DescriptorBinding)?;
-    if removed_gcd != 1 || live_claim.claim.bytes() != expected_native_claim_id {
         return Err(Error::DigestMismatch);
     }
-
-    let vector = ClaimVector {
-        outcome_count: terms.outcome_count,
-        coefficients: descriptor.primitive,
-    };
-    let claim = NativeClaim {
-        basis: NativeBasisIdentity {
-            market: descriptor.market,
-            terms: descriptor.terms,
-            basis_degree: terms.basis_degree,
-            denominator: terms.payouts[0].denominator,
-            outcome_count: terms.outcome_count,
-        },
-        vector,
-    };
-    claim.validate()?;
-    // The two owners emit byte-identical native claim preimages; the live
-    // layout digest above is the runtime authority and this comparison guards
-    // accidental drift in fields before product hashing.
-    if claim.identity_preimage().is_err() {
-        return Err(Error::DigestMismatch);
+    let address_values = [
+        addresses.descriptor,
+        addresses.mint,
+        addresses.mint_authority,
+        addresses.vault_owner,
+    ];
+    let mut left = 0_usize;
+    while left < address_values.len() {
+        if is_zero(&address_values[left]) {
+            return Err(Error::PdaMismatch);
+        }
+        let mut right = left + 1;
+        while right < address_values.len() {
+            if address_values[left] == address_values[right] {
+                return Err(Error::PdaMismatch);
+            }
+            right += 1;
+        }
+        left += 1;
     }
-    let product_id = canonical_wrapper_product_id(&observed, expected_native_claim_id)?;
-    if product_id != expected_product_id {
-        return Err(Error::DigestMismatch);
-    }
-
     let checks = [
         (
             addresses.descriptor,
@@ -276,25 +209,48 @@ pub fn bind_descriptor<P: PdaVerifier>(
         ),
         (addresses.mint, MINT_SEED, descriptor.mint_bump),
         (
+            addresses.mint_authority,
+            MINT_AUTHORITY_SEED,
+            descriptor.vault_bump,
+        ),
+        (
             addresses.vault_owner,
             VAULT_OWNER_SEED,
-            descriptor.vault_owner_bump,
+            descriptor.vault_bump,
         ),
     ];
-    let mut i = 0;
-    while i < checks.len() {
+    let mut index = 0_usize;
+    while index < checks.len() {
         if !verifier.verify(
-            &wrapper_program,
-            &checks[i].0,
-            checks[i].1,
-            &product_id,
-            checks[i].2,
+            &deployments.binding.wrapper_program,
+            &checks[index].0,
+            checks[index].1,
+            &wrapper_product_id,
+            checks[index].2,
         ) {
             return Err(Error::PdaMismatch);
         }
-        i += 1;
+        index += 1;
     }
-    Ok(claim)
+    Ok(BoundDescriptorV1 {
+        descriptor,
+        identity,
+        native_claim_id,
+        wrapper_product_id,
+        addresses,
+    })
 }
 
-const _: () = assert!(MAX_OUTCOMES == clutch_solana_layout::MAX_OUTCOMES);
+fn hash(input: &[u8]) -> Result<Key> {
+    #[cfg(target_os = "solana")]
+    {
+        Ok(solana_sha256_hasher::hash(input).to_bytes())
+    }
+    #[cfg(not(target_os = "solana"))]
+    {
+        let digest = Sha256::digest(input);
+        let mut value = [0_u8; 32];
+        value.copy_from_slice(&digest);
+        Ok(value)
+    }
+}

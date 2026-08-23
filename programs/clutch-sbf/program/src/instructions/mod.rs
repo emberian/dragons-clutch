@@ -54,6 +54,8 @@ pub mod market_init;
 pub mod merge_materialize;
 pub mod observe_resolve;
 pub mod orders_batch;
+#[cfg(feature = "non-production-product-series-lab")]
+pub mod product_series;
 pub mod resolution_work;
 pub mod source_ingest;
 pub mod source_ingest_v2;

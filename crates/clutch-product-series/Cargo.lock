@@ -34,6 +34,14 @@ version = "0.1.0"
 dependencies = [
  "clutch-bspline",
  "clutch-price-measure",
+ "clutch-source-plane-v3",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-plane-v3"
+version = "0.1.0"
+dependencies = [
  "sha2",
 ]
 

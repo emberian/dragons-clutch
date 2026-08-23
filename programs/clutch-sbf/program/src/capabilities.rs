@@ -10,9 +10,18 @@
 /// Full research/runtime surface retained by the historical default build.
 #[cfg(all(
     feature = "profile-full",
-    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    not(feature = "profile-non-production-dealer-policy-catalog-lab"),
+    not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/full/v1";
+/// Explicit local-only artifact catalog containing successor Product/Series kinds.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-product-series-lab",
+    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+))]
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v1";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-source-v2-point/v1";
@@ -21,7 +30,10 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/direct-v3-sou
 pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-source-v2-point/v1";
 /// Dealer-policy catalog laboratory. This identity is non-production and
 /// contains no legacy intent capability.
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[cfg(all(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    not(feature = "non-production-product-series-lab")
+))]
 pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/non-production-dealer-policy-catalog-lab/v1";
 /// Non-production General V2 empty-book identity laboratory.
@@ -32,11 +44,22 @@ pub const PROFILE_LABEL: &str =
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(all(
     feature = "profile-full",
-    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    not(feature = "profile-non-production-dealer-policy-catalog-lab"),
+    not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
     0xf2, 0x06, 0x66, 0x13, 0x61, 0x0b, 0x8e, 0x3c, 0xff, 0x18, 0x48, 0x5d, 0x2e, 0x6f, 0x3e, 0x3c,
     0x9f, 0xdc, 0xfc, 0xbb, 0x75, 0x7b, 0x46, 0xb4, 0x07, 0x73, 0x3e, 0xa1, 0x5c, 0x5e, 0x9a, 0xc8,
+];
+/// SHA-256 of the local-only Product/Series artifact catalog profile label.
+#[cfg(all(
+    feature = "profile-full",
+    feature = "non-production-product-series-lab",
+    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+))]
+pub const PROFILE_ID: [u8; 32] = [
+    0x64, 0xa6, 0x52, 0x0b, 0xf9, 0x7a, 0xca, 0xba, 0xe3, 0x3e, 0xec, 0xf4, 0xe2, 0x90, 0xf9, 0xe3,
+    0x6a, 0xb0, 0xce, 0xbe, 0x6d, 0x7f, 0xe9, 0xd0, 0x82, 0xf0, 0x6d, 0x87, 0x61, 0x1c, 0xca, 0x60,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
@@ -51,7 +74,10 @@ pub const PROFILE_ID: [u8; 32] = [
     0x78, 0x0a, 0x12, 0x72, 0xc0, 0x83, 0xc7, 0xc2, 0x25, 0x4f, 0x35, 0x3a, 0xa7, 0x8b, 0xf8, 0x20,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[cfg(all(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    not(feature = "non-production-product-series-lab")
+))]
 pub const PROFILE_ID: [u8; 32] = [
     0xcb, 0x80, 0x25, 0xae, 0x72, 0xa0, 0xbc, 0x86, 0x66, 0xd9, 0x31, 0x9b, 0xe6, 0xfb, 0x67, 0x82,
     0x82, 0xd5, 0xa9, 0x12, 0x96, 0x9e, 0x6a, 0x10, 0xdf, 0xcd, 0xdd, 0x84, 0x06, 0x23, 0x7d, 0x72,
@@ -147,7 +173,8 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 /// SourcePlane V3
 /// actions 1 through 12, and recurring-Series actions 13 through 18 have
 /// registered local actions; every exact tuple remains separately disabled
-/// until its handler is admitted.
+/// until its handler is admitted. The Series payload/account codecs are frozen
+/// only for the explicit laboratory; they do not activate any runtime tuple.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,

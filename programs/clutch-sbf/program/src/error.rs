@@ -17,6 +17,7 @@
 //! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
 //! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam and the revenue admission boundary ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::RevenuePolicyRecordMissing`]) |
 //! | `0x0150..=0x0152` | non-production Dealer-policy catalog transport |
+//! | `0x00b0..=0x00bf` | disabled Source/Series SBF adapter account and custody boundaries |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -237,6 +238,12 @@ pub enum ClutchError {
     /// A registered source release refused provider deployment, source bytes,
     /// freshness, lineage, confidence, window, or archive provenance.
     SourceAdmissionFailed = 0x007a,
+    /// A Series component custody transfer did not produce the exact expected
+    /// source and destination balance deltas, or its System CPI refused.
+    ///
+    /// Series lamport custody is not token custody, so reusing
+    /// [`ClutchError::TokenDeltaMismatch`] would misname the trust boundary.
+    SeriesCustodyDeltaMismatch = 0x00b0,
     /// The checkpoint account's body bytes are not a `ClearWorkV1` encoding.
     ///
     /// `clutch_batch::relation_v1_stream::CodecFaultV1`, collapsed: the bytes
@@ -315,6 +322,20 @@ pub enum ClutchError {
     /// did not match the stored full-principal plan.
     DealerPolicyRentMismatch = 0x0152,
 }
+
+/// First globally reserved Source/Series adapter refusal code.
+pub const SOURCE_SERIES_REFUSAL_FIRST: u32 = 0x00b0;
+/// Last globally reserved Source/Series adapter refusal code.
+pub const SOURCE_SERIES_REFUSAL_LAST: u32 = 0x00bf;
+
+const _: () = assert!(ClutchError::SeriesCustodyDeltaMismatch as u32
+    >= SOURCE_SERIES_REFUSAL_FIRST);
+const _: () = assert!(ClutchError::SeriesCustodyDeltaMismatch as u32
+    <= SOURCE_SERIES_REFUSAL_LAST);
+const _: () = assert!(ClutchError::CandidateNotCompetitive as u32
+    < SOURCE_SERIES_REFUSAL_FIRST);
+const _: () = assert!(ClutchError::ScoreDigestMismatch as u32
+    < SOURCE_SERIES_REFUSAL_FIRST);
 
 impl From<ClutchError> for ProgramError {
     fn from(value: ClutchError) -> Self {

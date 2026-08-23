@@ -17,6 +17,8 @@
 #   ./run_svm_tests.sh --non-production-real-pyth-lab real_pyth_router_verifies_then_post_update
 # The successor identity/solver-claim campaign is a mutually exclusive SBF product:
 #   ./run_svm_tests.sh --general-v2-identity-lab general_v2_identity
+# The Product/Series account boundary is a separate local-only ELF:
+#   ./run_svm_tests.sh --non-production-product-series-lab product_series
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 program="$(cd "$here/.." && pwd)"
@@ -51,6 +53,11 @@ elif [ "${1:-}" = "--general-v2-identity-lab" ]; then
   build_features=(--no-default-features --features custom-heap,profile-non-production-general-v2-empty-book-identity-lab)
   test_features=(--no-default-features --features profile-non-production-general-v2-empty-book-identity-lab)
   build_lab_receiver=0
+elif [ "${1:-}" = "--non-production-product-series-lab" ]; then
+  shift
+  profile="NON-PRODUCTION-non-production-product-series-lab"
+  build_features=(--features non-production-product-series-lab)
+  test_features=(--features non-production-product-series-lab)
 fi
 
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"
