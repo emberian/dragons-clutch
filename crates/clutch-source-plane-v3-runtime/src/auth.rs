@@ -20,6 +20,8 @@ const SCHEMA_V1: u16 = 1;
 
 /// Exact canonical bytes in [`ClockPolicyV1`].
 pub const CLOCK_POLICY_BYTES: usize = 64;
+/// Exact canonical bytes in one reviewed parser return payload.
+pub const PARSER_OUTPUT_BYTES: usize = 120;
 /// Exact canonical bytes in [`SourceReleaseManifestV1`].
 pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 944;
 
@@ -262,6 +264,27 @@ impl ClockPolicyV1 {
         Ok(out)
     }
 
+    /// Hostile-decode one exact Clock policy account body.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        if input.len() != CLOCK_POLICY_BYTES
+            || input[..8] != CLOCK_POLICY_MAGIC
+            || le_u16(&input[8..10]) != SCHEMA_V1
+            || input[10..16].iter().any(|byte| *byte != 0)
+            || input[40..].iter().any(|byte| *byte != 0)
+        {
+            return Err(Error::InvalidCodec);
+        }
+        let value = Self {
+            anchor_unix_timestamp: le_u64(&input[16..24]),
+            bucket_seconds: le_u32(&input[24..28]),
+            maximum_boundary_lateness_seconds: le_u32(&input[28..32]),
+            maximum_source_age_seconds: le_u32(&input[32..36]),
+            maximum_source_slot_lag: le_u32(&input[36..40]),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Content identity of the exact time/bucket policy.
     pub fn id(&self) -> Result<ContentId> {
         let bytes = self.encode()?;
@@ -482,6 +505,65 @@ impl SourceReleaseManifestV1 {
         Ok(out)
     }
 
+    /// Hostile-decode one exact immutable Source release account body.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        if input.len() != SOURCE_RELEASE_MANIFEST_BYTES
+            || input[..8] != SOURCE_RELEASE_MAGIC
+            || le_u16(&input[8..10]) != SCHEMA_V1
+            || input[10..16].iter().any(|byte| *byte != 0)
+        {
+            return Err(Error::InvalidCodec);
+        }
+        let mut at = 16_usize;
+        let source_plane_contract_id = take_id(input, &mut at);
+        let source_spec_id = take_id(input, &mut at);
+        let adapter = decode_deployment(input, &mut at)?;
+        let parser = decode_deployment(input, &mut at)?;
+        let parser_config = take_key(input, &mut at);
+        let parser_config_owner = take_key(input, &mut at);
+        let source_spec_account = take_key(input, &mut at);
+        let source_spec_owner = take_key(input, &mut at);
+        let feed = take_key(input, &mut at);
+        let feed_owner = take_key(input, &mut at);
+        let generation_authority_program = take_key(input, &mut at);
+        let system_program = take_key(input, &mut at);
+        let source_compartment_account = take_key(input, &mut at);
+        let source_compartment_owner = take_key(input, &mut at);
+        let neutral_sink = take_key(input, &mut at);
+        let parser_config_data_id = take_id(input, &mut at);
+        let source_spec_account_data_id = take_id(input, &mut at);
+        let clock_policy_id = take_id(input, &mut at);
+        let source_work_schedule_id = take_id(input, &mut at);
+        let liveness_policy_id = take_id(input, &mut at);
+        if at != input.len() {
+            return Err(Error::InvalidCodec);
+        }
+        let value = Self {
+            source_plane_contract_id,
+            source_spec_id,
+            source_spec_account,
+            source_spec_owner,
+            source_spec_account_data_id,
+            adapter,
+            parser,
+            parser_config,
+            parser_config_owner,
+            parser_config_data_id,
+            feed,
+            feed_owner,
+            generation_authority_program,
+            system_program,
+            clock_policy_id,
+            source_work_schedule_id,
+            liveness_policy_id,
+            source_compartment_account,
+            source_compartment_owner,
+            neutral_sink,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Content identity of the complete source route.
     pub fn id(&self) -> Result<ContentId> {
         Ok(domain_id(SOURCE_RELEASE_DOMAIN, &self.encode()?))
@@ -676,10 +758,10 @@ impl ParserOutputV1 {
         Ok(())
     }
 
-    /// Canonical return-data digest.
-    pub fn id(&self) -> Result<ContentId> {
+    /// Canonical reviewed-parser return bytes.
+    pub fn encode(&self) -> Result<[u8; PARSER_OUTPUT_BYTES]> {
         self.validate()?;
-        let mut bytes = [0; 120];
+        let mut bytes = [0; PARSER_OUTPUT_BYTES];
         bytes[..32].copy_from_slice(&self.source_spec_id.bytes());
         bytes[32..48].copy_from_slice(&self.low.to_le_bytes());
         bytes[48..64].copy_from_slice(&self.high.to_le_bytes());
@@ -687,7 +769,30 @@ impl ParserOutputV1 {
         bytes[72..80].copy_from_slice(&self.publish_slot.to_le_bytes());
         bytes[80..88].copy_from_slice(&self.publish_time.to_le_bytes());
         bytes[88..].copy_from_slice(&self.feed_account_data_id.bytes());
-        Ok(domain_id(PARSER_OUTPUT_DOMAIN, &bytes))
+        Ok(bytes)
+    }
+
+    /// Hostile-decode exact return data from the reviewed parser program.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        if input.len() != PARSER_OUTPUT_BYTES {
+            return Err(Error::InvalidCodec);
+        }
+        let value = Self {
+            source_spec_id: id_at(input, 0),
+            low: le_u128(&input[32..48]),
+            high: le_u128(&input[48..64]),
+            source_sequence: le_u64(&input[64..72]),
+            publish_slot: le_u64(&input[72..80]),
+            publish_time: le_u64(&input[80..88]),
+            feed_account_data_id: id_at(input, 88),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Canonical return-data digest.
+    pub fn id(&self) -> Result<ContentId> {
+        Ok(domain_id(PARSER_OUTPUT_DOMAIN, &self.encode()?))
     }
 }
 
@@ -987,10 +1092,72 @@ fn encode_deployment(value: &DeploymentBindingV1, out: &mut [u8], at: &mut usize
     *at = end;
 }
 
+fn decode_deployment(input: &[u8], at: &mut usize) -> Result<DeploymentBindingV1> {
+    let program = take_key(input, at);
+    let program_account_data_id = take_id(input, at);
+    let programdata = take_key(input, at);
+    let programdata_account_data_id = take_id(input, at);
+    let loader = take_key(input, at);
+    let end = (*at).checked_add(16).ok_or(Error::ArithmeticOverflow)?;
+    if end > input.len() || input[*at + 4..*at + 8].iter().any(|byte| *byte != 0) {
+        return Err(Error::InvalidCodec);
+    }
+    let value = DeploymentBindingV1 {
+        program,
+        program_account_data_id,
+        programdata,
+        programdata_account_data_id,
+        loader,
+        programdata_link_offset: le_u16(&input[*at..*at + 2]),
+        deployment_slot_offset: le_u16(&input[*at + 2..*at + 4]),
+        deployment_slot: le_u64(&input[*at + 8..end]),
+    };
+    *at = end;
+    value.validate()?;
+    Ok(value)
+}
+
+fn take_id(input: &[u8], at: &mut usize) -> ContentId {
+    let value = id_at(input, *at);
+    *at += 32;
+    value
+}
+
+fn take_key(input: &[u8], at: &mut usize) -> RuntimeKey {
+    let mut bytes = [0; 32];
+    bytes.copy_from_slice(&input[*at..*at + 32]);
+    *at += 32;
+    RuntimeKey::from_bytes(bytes)
+}
+
+fn id_at(input: &[u8], at: usize) -> ContentId {
+    let mut bytes = [0; 32];
+    bytes.copy_from_slice(&input[at..at + 32]);
+    ContentId::from_bytes(bytes)
+}
+
+fn le_u16(input: &[u8]) -> u16 {
+    let mut word = [0; 2];
+    word.copy_from_slice(input);
+    u16::from_le_bytes(word)
+}
+
+fn le_u32(input: &[u8]) -> u32 {
+    let mut word = [0; 4];
+    word.copy_from_slice(input);
+    u32::from_le_bytes(word)
+}
+
 fn le_u64(input: &[u8]) -> u64 {
     let mut word = [0; 8];
     word.copy_from_slice(input);
     u64::from_le_bytes(word)
+}
+
+fn le_u128(input: &[u8]) -> u128 {
+    let mut word = [0; 16];
+    word.copy_from_slice(input);
+    u128::from_le_bytes(word)
 }
 
 const _: () = assert!(SOURCE_PLANE_PROGRAM_BYTES == 64);
