@@ -881,6 +881,31 @@ pub const fn account_metas_v1(
     }
 }
 
+/// Return the unique account index assigned to `role` by one frozen action.
+///
+/// The disabled SBF adapter uses this projection instead of duplicating raw
+/// indices, so adding an earlier typed authority cannot silently retarget a
+/// later economic account. Every current action contract contains each role at
+/// most once.
+pub fn account_index_v1(
+    action: registry::RecoveryAction,
+    role: RecoveryAccountRoleV1,
+) -> Option<usize> {
+    let metas = account_metas_v1(action);
+    let mut found = None;
+    let mut index = 0usize;
+    while index < metas.len() {
+        if metas[index].role == role {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(index);
+        }
+        index += 1;
+    }
+    found
+}
+
 /// Decode exactly the payload shape selected by the Recovery action tag.
 pub fn decode_payload_v1(
     action: registry::RecoveryAction,
@@ -1593,5 +1618,32 @@ mod tests {
         assert_eq!(close[5].role, RecoveryAccountRoleV1::RootRentRefundOwner);
         assert!(close[5].writable);
         assert!(!close[5].signer);
+    }
+
+    #[test]
+    fn account_role_lookup_refuses_missing_or_duplicate_roles() {
+        let mut tag = RecoveryAction::FIRST_TAG;
+        while tag <= RecoveryAction::LAST_TAG {
+            let action = RecoveryAction::from_tag(tag).unwrap();
+            let metas = account_metas_v1(action);
+            let mut index = 0usize;
+            while index < metas.len() {
+                assert_eq!(account_index_v1(action, metas[index].role), Some(index));
+                let mut sibling = index + 1;
+                while sibling < metas.len() {
+                    assert_ne!(metas[index].role, metas[sibling].role);
+                    sibling += 1;
+                }
+                index += 1;
+            }
+            tag += 1;
+        }
+        assert_eq!(
+            account_index_v1(
+                RecoveryAction::AdvanceIntervalConsensus,
+                RecoveryAccountRoleV1::ResolutionV5,
+            ),
+            None
+        );
     }
 }

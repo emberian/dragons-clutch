@@ -48,6 +48,7 @@ pub mod product_series;
 pub mod projection;
 pub mod registry;
 pub mod reservation;
+pub mod reservation_v9;
 pub mod settlement_receipt_v3;
 pub mod source_series;
 pub mod settlement_receipt_v4;

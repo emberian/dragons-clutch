@@ -675,6 +675,63 @@ impl GeneralPositionReplayPrestateV1 {
     }
 }
 
+/// Recompute and compare the exact transition immediately preceding a checked
+/// General Replay prestate.
+///
+/// This is structural, not an execution capability. The action-specific
+/// composer must derive `prior_position_semantic_id`, `transition_id`, and
+/// `transition_evidence_id` from its authenticated semantic owners. It is
+/// useful for a sequence of same-Position transitions such as per-receipt
+/// merge payments, where the current Replay retains the prior transition and
+/// delta but no duplicate payment authority account should be invented.
+pub fn verify_general_replay_last_transition_v1<B: ReplayV3HashBackend>(
+    prestate: GeneralPositionReplayPrestateV1,
+    prior_position_semantic_id: Id32,
+    kind: GeneralReplayTransitionKindV1,
+    transition_id: Id32,
+    transition_evidence_id: Id32,
+    backend: &B,
+) -> Result<(), CodecError> {
+    if prior_position_semantic_id.is_zero()
+        || transition_id.is_zero()
+        || transition_evidence_id.is_zero()
+    {
+        return Err(CodecError::ZeroIdentity);
+    }
+    let consumed_sequence = prestate
+        .replay_header
+        .next_sequence()
+        .checked_sub(1)
+        .ok_or(CodecError::InvalidState)?;
+    let extension = prestate.extension;
+    let current_position_semantic_id = Id32::new(prestate.position.semantic_id)?;
+    let generation = prestate.position.semantic.fields().generation;
+    let (family, version, action, role) = kind.coordinates();
+    let expected_delta_id = Id32::new(backend.sha256_parts(&[
+        GENERAL_REPLAY_DELTA_DOMAIN_V1,
+        &[family],
+        &[version],
+        &[action],
+        &[role],
+        &consumed_sequence.to_le_bytes(),
+        &transition_id.bytes(),
+        &transition_evidence_id.bytes(),
+        &prestate.position.account,
+        &prior_position_semantic_id.bytes(),
+        &current_position_semantic_id.bytes(),
+        &generation.to_le_bytes(),
+        &generation.to_le_bytes(),
+    ]))?;
+    if extension.last_kind() != Some(kind)
+        || extension.last_transition_id() != transition_id
+        || extension.last_delta_id() != expected_delta_id
+        || extension.current_position_semantic_id() != current_position_semantic_id
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    Ok(())
+}
+
 /// Decode and structurally bind exact Position V3 and General Replay V3 bytes.
 pub fn project_general_position_replay_prestate_v1<B>(
     replay_account: Id32,
