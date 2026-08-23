@@ -135,6 +135,10 @@ pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x84;
 /// General V2 selected-record treasury-ledger envelope version.
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
+/// General V2 buyer-first settlement cash-pot envelope discriminator.
+pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x85;
+/// General V2 buyer-first settlement cash-pot envelope version.
+pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -490,6 +494,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-treasury-ledger-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG,
+            version: GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-settlement-cash-pot-v1-account",
     },
 ];
 
@@ -1004,6 +1017,10 @@ mod tests {
             (
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG,
+                GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {

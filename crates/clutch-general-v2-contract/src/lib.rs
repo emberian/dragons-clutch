@@ -126,6 +126,8 @@ pub const PAYER_ALLOCATION_SEED_DOMAIN_V1: &[u8] = b"owner-payer-allocation:v1";
 pub const RECIPIENT_ALLOCATION_SEED_DOMAIN_V1: &[u8] = b"candidate-recipient-allocation:v1";
 /// Fresh selected-record-scoped treasury ledger PDA seed domain.
 pub const TREASURY_LEDGER_SEED_DOMAIN_V1: &[u8] = b"fee-treasury-ledger:v1";
+/// Fresh buyer-first candidate settlement cash-pot PDA seed domain.
+pub const SETTLEMENT_CASH_POT_SEED_DOMAIN_V1: &[u8] = b"settlement-cash-pot:v1";
 /// Fresh counted General V2 Epoch PDA seed domain.
 pub const EPOCH_SEED_DOMAIN_V1: &[u8] = b"general-epoch:v2";
 /// Fresh counted General V2 order-page PDA seed domain.
@@ -208,21 +210,23 @@ impl EpochSeedTupleV1 {
 /// Validated ordered seed tuple for one owner-settlement envelope PDA.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnerSettlementSeedTupleV1 {
-    selected_candidate: [u8; ID_BYTES],
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
     owner: [u8; ID_BYTES],
 }
 
 impl OwnerSettlementSeedTupleV1 {
-    /// Construct the canonical tuple from a SelectedCandidate PDA and semantic owner.
-    pub fn new(selected_candidate: Id32, owner: Id32) -> Result<Self, CodecError> {
-        if selected_candidate.is_zero() || owner.is_zero() {
+    /// Construct the canonical tuple from Epoch, final candidate, and owner.
+    pub fn new(epoch: Id32, settlement_candidate: Id32, owner: Id32) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() || owner.is_zero() {
             return Err(CodecError::ZeroIdentity);
         }
-        if selected_candidate == owner {
+        if epoch == settlement_candidate || epoch == owner || settlement_candidate == owner {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(Self {
-            selected_candidate: selected_candidate.bytes(),
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
             owner: owner.bytes(),
         })
     }
@@ -232,12 +236,17 @@ impl OwnerSettlementSeedTupleV1 {
         OWNER_SETTLEMENT_SEED_DOMAIN_V1
     }
 
-    /// Second seed: full authenticated SelectedCandidate PDA bytes.
-    pub const fn selected_candidate(&self) -> &[u8; ID_BYTES] {
-        &self.selected_candidate
+    /// Second seed: full authenticated parent Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
     }
 
-    /// Third seed: full semantic Position-owner identity bytes.
+    /// Third seed: final selected RelationV2 settlement candidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: full semantic Position-owner identity bytes.
     pub const fn owner(&self) -> &[u8; ID_BYTES] {
         &self.owner
     }
@@ -260,37 +269,43 @@ pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x7f;
 /// First exact owner-settlement envelope version.
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
 /// Exact outer owner-settlement account bytes.
-pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 340;
+pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 292;
 /// Fresh disabled selected composite-fee record envelope tag.
 pub const SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x80;
 /// First selected composite-fee record envelope version.
 pub const SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected composite-fee record outer bytes.
-pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES: usize = 388;
+pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES: usize = 340;
 /// Fresh disabled owner fee-carry envelope tag.
 pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x81;
 /// First owner fee-carry envelope version.
 pub const OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
 /// Exact owner fee-carry outer bytes.
-pub const OWNER_FEE_CARRY_ACCOUNT_BYTES: usize = 180;
+pub const OWNER_FEE_CARRY_ACCOUNT_BYTES: usize = 132;
 /// Fresh disabled owner payer-allocation envelope tag.
 pub const PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x82;
 /// First owner payer-allocation envelope version.
 pub const PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact owner payer-allocation outer bytes.
-pub const PAYER_ALLOCATION_ACCOUNT_BYTES: usize = 2_732;
+pub const PAYER_ALLOCATION_ACCOUNT_BYTES: usize = 2_684;
 /// Fresh disabled candidate-wide recipient-allocation envelope tag.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x83;
 /// First candidate-wide recipient-allocation envelope version.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact candidate-wide recipient-allocation outer bytes.
-pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES: usize = 2_692;
+pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES: usize = 2_644;
 /// Fresh disabled selected-record treasury-ledger envelope tag.
 pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x84;
 /// First selected-record treasury-ledger envelope version.
 pub const TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected-record treasury-ledger outer bytes.
-pub const TREASURY_LEDGER_ACCOUNT_BYTES: usize = 196;
+pub const TREASURY_LEDGER_ACCOUNT_BYTES: usize = 148;
+/// Fresh disabled buyer-first settlement cash-pot envelope tag.
+pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x85;
+/// First buyer-first settlement cash-pot envelope version.
+pub const SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
+/// Exact buyer-first settlement cash-pot outer bytes.
+pub const SETTLEMENT_CASH_POT_ACCOUNT_BYTES: usize = 260;
 /// Existing semantic account tag, fresh successor version: sealed feed.
 pub const CANDIDATE_FEED_ACCOUNT_TAG: u8 = 18;
 /// Active-width General V2 feed version.
@@ -346,7 +361,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 18] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 19] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -386,6 +401,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 18] = [
         tag: TREASURY_LEDGER_ACCOUNT_TAG,
         version: TREASURY_LEDGER_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/TreasuryLedgerV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: SETTLEMENT_CASH_POT_ACCOUNT_TAG,
+        version: SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/SettlementCashPotV1AccountV1",
     },
     AccountAllocationV1 {
         tag: WINDOW_ACCOUNT_TAG,

@@ -176,6 +176,9 @@ pub const SEED_GENERAL_V2_RECIPIENT_ALLOCATION: &[u8] =
 /// Disabled selected-record treasury-ledger seed prefix.
 pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
     clutch_general_v2_contract::TREASURY_LEDGER_SEED_DOMAIN_V1;
+/// Disabled buyer-first candidate settlement cash-pot seed prefix.
+pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
+    clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -358,12 +361,18 @@ pub fn general_v2_selected_pda(
 /// Canonical disabled owner-settlement address for one selected owner row.
 pub fn general_v2_owner_settlement_pda(
     program_id: &Pubkey,
-    selected_candidate: &[u8; 32],
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
     owner: &[u8; 32],
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_GENERAL_V2_OWNER_SETTLEMENT, selected_candidate, owner],
+        &[
+            SEED_GENERAL_V2_OWNER_SETTLEMENT,
+            epoch,
+            settlement_candidate,
+            owner,
+        ],
     )
 }
 
@@ -416,6 +425,22 @@ pub fn general_v2_recipient_allocation_pda(
 /// Canonical disabled treasury-ledger address for one selected fee record.
 pub fn general_v2_treasury_ledger_pda(program_id: &Pubkey, fee_record: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_GENERAL_V2_TREASURY_LEDGER, fee_record])
+}
+
+/// Canonical disabled buyer-first cash-pot address for one final candidate.
+pub fn general_v2_settlement_cash_pot_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_SETTLEMENT_CASH_POT,
+            epoch,
+            settlement_candidate,
+        ],
+    )
 }
 
 /// Canonical immutable-terms address and bump.

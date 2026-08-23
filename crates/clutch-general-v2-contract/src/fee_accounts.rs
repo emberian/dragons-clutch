@@ -4,8 +4,10 @@
 //!
 //! The inner fee crate remains the sole semantic owner of fee selection,
 //! carry, payer allocation, recipient allocation, and treasury accounting.
-//! This module adds only exact Solana-facing tag/version/rent/bump bytes and
-//! always re-enters the inner codec's constructor-backed decoder.
+//! This module adds only exact Solana-facing tag/version/bump/flags bytes and
+//! always re-enters the inner codec's constructor-backed decoder. Funding and
+//! rent disposition remain owned by a separately authenticated runtime/rent
+//! ledger rather than duplicated in these semantic accounts.
 
 use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
@@ -27,16 +29,16 @@ use clutch_fee_runtime_contract::treasury::TreasuryLedgerV1;
 use clutch_fee_runtime_contract::MAX_FEE_ROWS_V1;
 
 use crate::{
-    CodecError, DeletableRentOwnerV1, Id32, Reader, Writer, OWNER_FEE_CARRY_ACCOUNT_BYTES,
-    OWNER_FEE_CARRY_ACCOUNT_TAG, OWNER_FEE_CARRY_ACCOUNT_VERSION, PAYER_ALLOCATION_ACCOUNT_BYTES,
-    PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION,
-    RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-    RECIPIENT_ALLOCATION_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
-    SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
-    TREASURY_LEDGER_ACCOUNT_BYTES, TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
+    CodecError, Reader, Writer, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG,
+    OWNER_FEE_CARRY_ACCOUNT_VERSION, PAYER_ALLOCATION_ACCOUNT_BYTES, PAYER_ALLOCATION_ACCOUNT_TAG,
+    PAYER_ALLOCATION_ACCOUNT_VERSION, RECIPIENT_ALLOCATION_ACCOUNT_BYTES,
+    RECIPIENT_ALLOCATION_ACCOUNT_TAG, RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+    SELECTED_FEE_RECORD_ACCOUNT_BYTES, SELECTED_FEE_RECORD_ACCOUNT_TAG,
+    SELECTED_FEE_RECORD_ACCOUNT_VERSION, TREASURY_LEDGER_ACCOUNT_BYTES,
+    TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
 };
 
-const OUTER_FEE_ACCOUNT_BYTES: usize = 2 + 48 + 2;
+const OUTER_FEE_ACCOUNT_BYTES: usize = 2 + 2;
 
 fn map_fee_error<T>(result: clutch_fee_runtime_contract::Result<T>) -> Result<T, CodecError> {
     result.map_err(|_| CodecError::InvalidState)
@@ -46,18 +48,13 @@ fn encode_outer<const BODY: usize>(
     tag: u8,
     version: u8,
     body: &[u8; BODY],
-    rent: DeletableRentOwnerV1,
     stored_bump: u8,
     output: &mut [u8],
 ) -> Result<(), CodecError> {
-    rent.validate()?;
     let mut writer = Writer::exact(output, BODY + OUTER_FEE_ACCOUNT_BYTES)?;
     writer.u8(tag)?;
     writer.u8(version)?;
     writer.bytes(body)?;
-    writer.bytes(&rent.payer.bytes())?;
-    writer.u64(rent.refundable_principal)?;
-    writer.u64(rent.donation_floor)?;
     writer.u8(stored_bump)?;
     writer.u8(0)?;
     writer.finish()
@@ -67,7 +64,7 @@ fn decode_outer<const BODY: usize>(
     tag: u8,
     version: u8,
     input: &[u8],
-) -> Result<([u8; BODY], DeletableRentOwnerV1, u8), CodecError> {
+) -> Result<([u8; BODY], u8), CodecError> {
     let mut reader = Reader::exact(input, BODY + OUTER_FEE_ACCOUNT_BYTES)?;
     if reader.u8()? != tag {
         return Err(CodecError::WrongTag);
@@ -76,27 +73,19 @@ fn decode_outer<const BODY: usize>(
         return Err(CodecError::WrongVersion);
     }
     let body = reader.array()?;
-    let rent = DeletableRentOwnerV1 {
-        payer: Id32::new(reader.array()?)?,
-        refundable_principal: reader.u64()?,
-        donation_floor: reader.u64()?,
-    };
     let stored_bump = reader.u8()?;
     if reader.u8()? != 0 {
         return Err(CodecError::InvalidState);
     }
     reader.finish()?;
-    rent.validate()?;
-    Ok((body, rent, stored_bump))
+    Ok((body, stored_bump))
 }
 
-/// Immutable selected composite-fee record plus disjoint rent ownership.
+/// Immutable selected composite-fee record outer envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelectedFeeRecordV1AccountV1 {
     /// Constructor-authenticated selected fee semantics.
     pub semantic: SelectedCompositeFeeV1,
-    /// Refundable rent principal and hostile-prefund floor.
-    pub rent: DeletableRentOwnerV1,
     /// Stored PDA bump.
     pub stored_bump: u8,
 }
@@ -109,7 +98,6 @@ impl SelectedFeeRecordV1AccountV1 {
             SELECTED_FEE_RECORD_ACCOUNT_TAG,
             SELECTED_FEE_RECORD_ACCOUNT_VERSION,
             &body,
-            self.rent,
             self.stored_bump,
             output,
         )
@@ -121,26 +109,23 @@ impl SelectedFeeRecordV1AccountV1 {
         batch: &FrozenPolicyV1,
         revenue: &RevenuePolicyV1,
     ) -> Result<Self, CodecError> {
-        let (body, rent, stored_bump) = decode_outer(
+        let (body, stored_bump) = decode_outer(
             SELECTED_FEE_RECORD_ACCOUNT_TAG,
             SELECTED_FEE_RECORD_ACCOUNT_VERSION,
             input,
         )?;
         Ok(Self {
             semantic: map_fee_error(decode_fee_record_v1(&body, batch, revenue))?,
-            rent,
             stored_bump,
         })
     }
 }
 
-/// One owner-scoped fee carry plus disjoint rent ownership.
+/// One owner-scoped fee carry outer envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnerFeeCarryV1AccountV1 {
     /// Constructor-authenticated carry semantics.
     pub semantic: OwnerFeeCarryV1,
-    /// Refundable rent principal and hostile-prefund floor.
-    pub rent: DeletableRentOwnerV1,
     /// Stored PDA bump.
     pub stored_bump: u8,
 }
@@ -153,7 +138,6 @@ impl OwnerFeeCarryV1AccountV1 {
             OWNER_FEE_CARRY_ACCOUNT_TAG,
             OWNER_FEE_CARRY_ACCOUNT_VERSION,
             &body,
-            self.rent,
             self.stored_bump,
             output,
         )
@@ -161,26 +145,23 @@ impl OwnerFeeCarryV1AccountV1 {
 
     /// Decode only against the authenticated selected fee record.
     pub fn decode(input: &[u8], selected: &SelectedCompositeFeeV1) -> Result<Self, CodecError> {
-        let (body, rent, stored_bump) = decode_outer(
+        let (body, stored_bump) = decode_outer(
             OWNER_FEE_CARRY_ACCOUNT_TAG,
             OWNER_FEE_CARRY_ACCOUNT_VERSION,
             input,
         )?;
         Ok(Self {
             semantic: map_fee_error(decode_owner_fee_carry_v1(&body, selected))?,
-            rent,
             stored_bump,
         })
     }
 }
 
-/// Temporary owner payer-allocation snapshot plus disjoint rent ownership.
+/// Temporary owner payer-allocation snapshot outer envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PayerAllocationV1AccountV1 {
     /// Constructor-authenticated allocation semantics.
     pub semantic: PayerAllocationV1,
-    /// Refundable rent principal and hostile-prefund floor.
-    pub rent: DeletableRentOwnerV1,
     /// Stored PDA bump.
     pub stored_bump: u8,
 }
@@ -193,7 +174,6 @@ impl PayerAllocationV1AccountV1 {
             PAYER_ALLOCATION_ACCOUNT_TAG,
             PAYER_ALLOCATION_ACCOUNT_VERSION,
             &body,
-            self.rent,
             self.stored_bump,
             output,
         )
@@ -205,26 +185,23 @@ impl PayerAllocationV1AccountV1 {
         assessment: &OwnerFeeAssessmentV1,
         envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
     ) -> Result<Self, CodecError> {
-        let (body, rent, stored_bump) = decode_outer(
+        let (body, stored_bump) = decode_outer(
             PAYER_ALLOCATION_ACCOUNT_TAG,
             PAYER_ALLOCATION_ACCOUNT_VERSION,
             input,
         )?;
         Ok(Self {
             semantic: map_fee_error(decode_payer_allocation_v1(&body, assessment, envelopes))?,
-            rent,
             stored_bump,
         })
     }
 }
 
-/// Temporary candidate-wide recipient snapshot plus disjoint rent ownership.
+/// Temporary candidate-wide recipient snapshot outer envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecipientAllocationV1AccountV1 {
     /// Constructor-authenticated allocation semantics.
     pub semantic: RecipientAllocationV1,
-    /// Refundable rent principal and hostile-prefund floor.
-    pub rent: DeletableRentOwnerV1,
     /// Stored PDA bump.
     pub stored_bump: u8,
 }
@@ -237,7 +214,6 @@ impl RecipientAllocationV1AccountV1 {
             RECIPIENT_ALLOCATION_ACCOUNT_TAG,
             RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
             &body,
-            self.rent,
             self.stored_bump,
             output,
         )
@@ -250,7 +226,7 @@ impl RecipientAllocationV1AccountV1 {
         revenue: &RevenuePolicyV1,
         makers: &[StandingMakerRowV1; MAX_FEE_ROWS_V1],
     ) -> Result<Self, CodecError> {
-        let (body, rent, stored_bump) = decode_outer(
+        let (body, stored_bump) = decode_outer(
             RECIPIENT_ALLOCATION_ACCOUNT_TAG,
             RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
             input,
@@ -259,19 +235,16 @@ impl RecipientAllocationV1AccountV1 {
             semantic: map_fee_error(decode_recipient_allocation_v1(
                 &body, selected, revenue, makers,
             ))?,
-            rent,
             stored_bump,
         })
     }
 }
 
-/// Treasury ordinary-Position ledger plus disjoint rent ownership.
+/// Treasury ordinary-Position ledger outer envelope.
 #[derive(Debug, Eq, PartialEq)]
 pub struct TreasuryLedgerV1AccountV1 {
     /// Constructor-authenticated treasury semantics.
     pub semantic: TreasuryLedgerV1,
-    /// Refundable rent principal and hostile-prefund floor.
-    pub rent: DeletableRentOwnerV1,
     /// Stored PDA bump.
     pub stored_bump: u8,
 }
@@ -284,7 +257,6 @@ impl TreasuryLedgerV1AccountV1 {
             TREASURY_LEDGER_ACCOUNT_TAG,
             TREASURY_LEDGER_ACCOUNT_VERSION,
             &body,
-            self.rent,
             self.stored_bump,
             output,
         )
@@ -292,14 +264,13 @@ impl TreasuryLedgerV1AccountV1 {
 
     /// Decode only against the selected record that fixes its treasury facts.
     pub fn decode(input: &[u8], selected: &SelectedCompositeFeeV1) -> Result<Self, CodecError> {
-        let (body, rent, stored_bump) = decode_outer(
+        let (body, stored_bump) = decode_outer(
             TREASURY_LEDGER_ACCOUNT_TAG,
             TREASURY_LEDGER_ACCOUNT_VERSION,
             input,
         )?;
         Ok(Self {
             semantic: map_fee_error(decode_treasury_ledger_v1(&body, selected))?,
-            rent,
             stored_bump,
         })
     }

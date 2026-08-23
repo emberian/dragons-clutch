@@ -25,12 +25,13 @@ counted Epoch codecs must not be described as General V2-compatible.
 | counted-retirement Replay successor | `0x7a/1` | 132, owned by retirement/reference |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
-| disabled `OwnerSettlementV1AccountV1` envelope | `0x7f/1` | 340 |
-| disabled selected fee-record envelope | `0x80/1` | 388 |
-| disabled owner fee-carry envelope | `0x81/1` | 180 |
-| disabled temporary payer-allocation envelope | `0x82/1` | 2,732 |
-| disabled temporary recipient-allocation envelope | `0x83/1` | 2,692 |
-| disabled treasury-ledger envelope | `0x84/1` | 196 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x7f/1` | 292 |
+| disabled selected fee-record envelope | `0x80/1` | 340 |
+| disabled owner fee-carry envelope | `0x81/1` | 132 |
+| disabled temporary payer-allocation envelope | `0x82/1` | 2,684 |
+| disabled temporary recipient-allocation envelope | `0x83/1` | 2,644 |
+| disabled treasury-ledger envelope | `0x84/1` | 148 |
+| disabled buyer-first settlement cash-pot envelope | `0x85/1` | 260 |
 
 The successor `solana-layout` collision ledger reserves every coordinate above
 as `ReservedDisabled`, records retirement's provisional
@@ -66,12 +67,13 @@ The first-spine tuples are exact ordered seeds:
 | Feed/Stage | `candidate-feed:v2`, AdmissionNode PDA |
 | ClearWork | `clear-work:v2`, AdmissionNode PDA |
 | SelectedCandidate | `selected-candidate:v1`, Epoch PDA, final `SettlementCandidateId` |
-| OwnerSettlement | `owner-settlement:v1`, SelectedCandidate PDA, semantic owner |
+| OwnerSettlement | `owner-settlement:v1`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
 | selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
 | owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
 | temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner |
 | temporary recipient allocation | `candidate-recipient-allocation:v1`, selected fee-record PDA |
 | treasury ledger | `fee-treasury-ledger:v1`, selected fee-record PDA |
+| settlement cash pot | `settlement-cash-pot:v1`, Epoch PDA, final `SettlementCandidateId` |
 
 The Window assigns the ordinal atomically before deriving a node; no
 submitter-selected commitment or address controls the final rank tie. Remaining
@@ -197,14 +199,26 @@ No success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per
 participating owner, checked candidate totals, and a canonically derived owner
 order-set digest. General V2 does not yet expose that complete projection.
+The 292-byte outer row stores only tag/version, that semantic body, bump, and
+zero flags. Its pre-fund-safe creation plan must atomically update the separate
+rent ledger that owns payer principal, refund recipient, and donation sink.
 
-The capability-disabled fee envelopes at `0x80` through `0x84` add only an exact outer
-tag/version, the constructor-checked inner fee codec, disjoint refundable rent
-principal and hostile-prefund floor, a stored PDA bump, and zero flags. The
-selected record is candidate-scoped; carry and payer allocation are keyed by
+The capability-disabled fee envelopes at `0x80` through `0x84` add only an
+exact outer tag/version, the constructor-checked inner fee codec, a stored PDA
+bump, and zero flags. The separately authenticated runtime/rent ledger owns
+funding, refundable principal, and hostile-prefund disposition; these semantic
+accounts do not duplicate that truth. The selected record is candidate-scoped;
+carry and payer allocation are keyed by
 `(selected fee record, owner)`; recipient allocation and treasury ledger are
 selected-record scoped. No General action is assigned to these accounts yet,
 and no fee-bearing value movement becomes executable from their reservation.
+
+The disabled `0x85/1` account wraps the exact 256-byte buyer-first cash-pot
+body. It segregates buyer consideration, selected fees, rounding price units,
+and terminal virtual-claim cash while owner rows are realized. Allocation
+completion is not retirement authority: no action may close the pot or move
+value until the matching complete Egg/reservation transition and later
+FinalPot disposition owner are both authenticated.
 
 Action 20's strict 96-byte payload is `epoch || node || selected_candidate`.
 The selected field is all zero exactly when the Epoch and Window authenticate

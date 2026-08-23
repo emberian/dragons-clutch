@@ -70,12 +70,13 @@ the pinned layout dependency graph.
 | counted-retirement Replay successor | `0x7a/1` | 132 |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
-| disabled `OwnerSettlementV1AccountV1` envelope | `0x7f/1` | 340 |
-| disabled selected fee-record envelope | `0x80/1` | 388 |
-| disabled owner fee-carry envelope | `0x81/1` | 180 |
-| disabled temporary payer-allocation envelope | `0x82/1` | 2,732 |
-| disabled temporary recipient-allocation envelope | `0x83/1` | 2,692 |
-| disabled treasury-ledger envelope | `0x84/1` | 196 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x7f/1` | 292 |
+| disabled selected fee-record envelope | `0x80/1` | 340 |
+| disabled owner fee-carry envelope | `0x81/1` | 132 |
+| disabled temporary payer-allocation envelope | `0x82/1` | 2,684 |
+| disabled temporary recipient-allocation envelope | `0x83/1` | 2,644 |
+| disabled treasury-ledger envelope | `0x84/1` | 148 |
+| disabled buyer-first settlement cash-pot envelope | `0x85/1` | 260 |
 
 Here `O` is the active outcome count, `N` the active order count, `A` the
 active quantized-atom count, and `S` the active settlement-slice count. Feeds
@@ -234,12 +235,13 @@ never authority.
 | Feed or FeedStage | `["candidate-feed:v2", AdmissionNode_PDA]` |
 | ClearWork | `["clear-work:v2", AdmissionNode_PDA]` |
 | SelectedCandidate | `["selected-candidate:v1", Epoch_PDA, settlement_candidate_id]` |
-| OwnerSettlement | `["owner-settlement:v1", SelectedCandidate_PDA, semantic_owner]` |
+| OwnerSettlement | `["owner-settlement:v1", Epoch_PDA, settlement_candidate_id, semantic_owner]` |
 | selected fee record | `["selected-fee-record:v1", SelectedCandidate_PDA]` |
 | owner fee carry | `["owner-fee-carry:v1", selected_fee_record_PDA, semantic_owner]` |
 | temporary payer allocation | `["owner-payer-allocation:v1", selected_fee_record_PDA, semantic_owner]` |
 | temporary recipient allocation | `["candidate-recipient-allocation:v1", selected_fee_record_PDA]` |
 | treasury ledger | `["fee-treasury-ledger:v1", selected_fee_record_PDA]` |
+| settlement cash pot | `["settlement-cash-pot:v1", Epoch_PDA, settlement_candidate_id]` |
 
 The exported order-page, reservation, receipt, and final-pot prefixes do not
 freeze their suffix tuples. Those remain unallocated until their complete
@@ -691,14 +693,26 @@ no successful SBF transition. They cannot activate until an authenticated,
 complete filled-order projection, exactly one selected fee row per canonical
 owner, checked candidate totals, a canonically derived owner-order-set digest,
 and exact receipt, reservation, and SelectedCandidate joins exist.
+The 292-byte row outer stores no duplicate rent DTO. Its pre-fund-safe creation
+plan must atomically update the separate authenticated rent ledger that owns
+the payer principal, refund recipient, and donation sink.
 
 The centrally reserved `0x80/1` through `0x84/1` fee envelopes are likewise
 capability-disabled. Their inner codecs re-enter the typed fee constructors;
-the outer bytes add only rent ownership, hostile-prefund accounting, PDA bump,
-and zero flags. Carry and payer allocation are keyed by `(selected fee record,
-owner)`, never by an order, reservation, or intent. No local action or ordered
-SBF meta contract has been allocated for these accounts, so they cannot relax
-the zero-fee boundary or move Position value.
+the outer bytes add only tag/version, PDA bump, and zero flags. A separately
+authenticated runtime/rent ledger must own funding, refundable principal, and
+hostile-prefund disposition. Carry and payer allocation are keyed by
+`(selected fee record, owner)`, never by an order, reservation, or intent. No
+local action or ordered SBF meta contract has been allocated for these
+accounts, so they cannot relax the zero-fee boundary or move Position value.
+
+The `0x85/1` cash-pot envelope is also capability-disabled. Its exact
+256-byte semantic body enforces buyer-first candidate-wide allocation and
+segregates consideration, fees, rounding price units, and virtual-claim cash.
+Receipt-end accounting is not value movement. No settlement action may consume
+its plan until an authenticated matching complete Egg/reservation transition
+is in the same atomic write set, and allocation completion does not authorize
+cash-pot, owner-row, or FinalPot retirement.
 
 This lab can close completed Work and unlink terminal source nodes while
 retaining the selected Feed. It still leaves the retained Feed,
