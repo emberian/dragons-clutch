@@ -62,6 +62,23 @@ impl FailureMarketRecoveryFundingReceiptIdV1 {
     }
 }
 
+/// Typed projection of Product's authenticated prepaid debit receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct FailureMarketPrepaidDebitReceiptIdV1([u8; 32]);
+
+impl FailureMarketPrepaidDebitReceiptIdV1 {
+    /// Construct from exact receipt bytes without claiming authenticity.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return exact receipt bytes.
+    pub const fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
 /// Complete untrusted projection of one shared Market Failure policy.
 ///
 /// The fields are public so account adapters can construct an expected
@@ -188,6 +205,8 @@ pub fn admit_failure_market_policy_v1<A: AuthenticatedFailureMarketPolicyV1 + ?S
 pub struct FailureMarketRecoveryFundingFactsV1 {
     /// Exact shared Market policy receiving the budget.
     pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Product private receipt for the exact prepaid Series custody debit.
+    pub prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1,
     /// Sole liveness Recovery custody account.
     pub recovery_compartment_account_id: LivenessId,
     /// Exact liveness policy.
@@ -259,6 +278,7 @@ pub fn admit_failure_market_recovery_funding_v1<
     let mut hasher = Sha256::new();
     hasher.update(MARKET_RECOVERY_FUNDING_DOMAIN_V1);
     hasher.update(facts.failure_policy_binding_id.bytes());
+    hasher.update(facts.prepaid_debit_receipt_id.bytes());
     hasher.update(facts.recovery_compartment_account_id.bytes());
     hasher.update(facts.liveness_policy_id.bytes());
     hasher.update(facts.liveness_lifecycle_id.bytes());
@@ -284,6 +304,7 @@ pub fn admit_failure_market_recovery_funding_v1<
 /// typed prepaid endowment debited by Product's founding transaction.
 pub fn project_initial_market_recovery_funding_v1(
     binding: FailureMarketPolicyBindingV1,
+    prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1,
     policy: RuntimeLivenessPolicyV1,
     recovery: RuntimeCompartmentV1,
     observed_balance_lamports: u64,
@@ -322,6 +343,7 @@ pub fn project_initial_market_recovery_funding_v1(
     }
     let facts = FailureMarketRecoveryFundingFactsV1 {
         failure_policy_binding_id: binding.id,
+        prepaid_debit_receipt_id,
         recovery_compartment_account_id: recovery.identity.account_id,
         liveness_policy_id: recovery.identity.policy_id,
         liveness_lifecycle_id: recovery.identity.lifecycle_id,
@@ -352,6 +374,11 @@ fn validate_recovery_funding(
         .checked_mul(facts.maximum_lamports_per_call)
         .ok_or(Error::BindingMismatch)?;
     if facts.failure_policy_binding_id != binding.id
+        || facts
+            .prepaid_debit_receipt_id
+            .bytes()
+            .iter()
+            .all(|byte| *byte == 0)
         || facts.recovery_compartment_account_id != policy.recovery_compartment_account_id
         || facts.liveness_policy_id != policy.liveness_policy_id
         || facts.liveness_lifecycle_id != policy.liveness_lifecycle_id
@@ -565,6 +592,7 @@ mod tests {
         let policy = binding.facts();
         FailureMarketRecoveryFundingFactsV1 {
             failure_policy_binding_id: binding.id(),
+            prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes([91; 32]),
             recovery_compartment_account_id: policy.recovery_compartment_account_id,
             liveness_policy_id: policy.liveness_policy_id,
             liveness_lifecycle_id: policy.liveness_lifecycle_id,
@@ -745,18 +773,46 @@ mod tests {
         let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
         let (policy, recovery) = initial_recovery(binding);
         assert_eq!(
-            project_initial_market_recovery_funding_v1(binding, policy, recovery, 1_207),
+            project_initial_market_recovery_funding_v1(
+                binding,
+                FailureMarketPrepaidDebitReceiptIdV1::from_bytes([91; 32]),
+                policy,
+                recovery,
+                1_207,
+            ),
             Ok(funding(binding))
         );
 
         let mut signer_funded = recovery;
         signer_funded.funding_source = PresentFundingSourceV1::ExternalSignerNativeLamports;
         assert_eq!(
-            project_initial_market_recovery_funding_v1(binding, policy, signer_funded, 1_207,),
+            project_initial_market_recovery_funding_v1(
+                binding,
+                FailureMarketPrepaidDebitReceiptIdV1::from_bytes([91; 32]),
+                policy,
+                signer_funded,
+                1_207,
+            ),
             Err(Error::BindingMismatch)
         );
         assert_eq!(
-            project_initial_market_recovery_funding_v1(binding, policy, recovery, 1_206),
+            project_initial_market_recovery_funding_v1(
+                binding,
+                FailureMarketPrepaidDebitReceiptIdV1::from_bytes([91; 32]),
+                policy,
+                recovery,
+                1_206,
+            ),
+            Err(Error::BindingMismatch)
+        );
+        assert_eq!(
+            project_initial_market_recovery_funding_v1(
+                binding,
+                FailureMarketPrepaidDebitReceiptIdV1::from_bytes([0; 32]),
+                policy,
+                recovery,
+                1_207,
+            ),
             Err(Error::BindingMismatch)
         );
     }
