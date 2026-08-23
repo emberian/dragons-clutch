@@ -27,6 +27,7 @@ const EMPTY = Object.freeze({
   session: null,
   belief: null,
   clearing: null,
+  pyth: null,
   boot: [],
   fault: null,
   done: null,
@@ -99,6 +100,9 @@ export const createStore = () => {
         break;
       case "clearing":
         state.clearing = event;
+        break;
+      case "pyth-campaign":
+        state.pyth = event;
         break;
       case "fault":
         state.fault = event;

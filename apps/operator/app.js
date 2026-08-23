@@ -5,11 +5,12 @@
  * make a trust boundary legible should not ask you to trust a dependency tree
  * to read it.
  *
- * Two modes share this page. In *watch* mode the daemon replays the sealed
+ * Three modes share this page. In *watch* mode the daemon replays the sealed
  * lane's forty-four-step plan and the screens are read-only. In *trade* mode
  * it founds the Friday clutch and the screens become a ticket. The page does
  * not choose: it renders whichever screen set the daemon's own stream implies,
- * because a `market` event only ever arrives from a trade session. */
+ * because a `market` event only ever arrives from a trade session. The
+ * retained local-real Pyth mode is selected only by its explicit identity. */
 
 import { el, fill } from "./dom.js";
 import { chip } from "./evidence.js";
@@ -17,6 +18,7 @@ import { createStore } from "./stream.js";
 import { renderBench } from "./bench.js";
 import { renderWalk } from "./walk.js";
 import { renderFunding, renderTicket, renderBook } from "./market.js";
+import { renderPyth } from "./pyth.js";
 import {
   bindRepaint,
   renderBook as renderTradeBook,
@@ -43,10 +45,20 @@ const TRADE_SCREENS = Object.freeze([
   { id: "bench", label: "Bench", render: renderBench }
 ]);
 
+const PYTH_SCREENS = Object.freeze([
+  { id: "pyth", label: "Campaign", render: renderPyth }
+]);
+
 const store = createStore();
 let current = null;
 
-const screensFor = (state) => (state.market ? TRADE_SCREENS : WATCH_SCREENS);
+const screensFor = (state) => (
+  state.identity && state.identity.mode === "pyth-local"
+    ? PYTH_SCREENS
+    : state.market
+      ? TRADE_SCREENS
+      : WATCH_SCREENS
+);
 
 /* The honesty strip. Permanent, non-dismissible, and rendered before any
  * state can arrive — there is no code path on this page that removes it, and
@@ -55,18 +67,19 @@ const screensFor = (state) => (state.market ? TRADE_SCREENS : WATCH_SCREENS);
 const renderBanner = (state) => {
   const strip = document.getElementById("honesty");
   const identity = state.identity;
+  const pyth = identity && identity.mode === "pyth-local";
   const parts = [
     el("span", "honesty-flag", "NON-PRODUCTION"),
-    el("span", null, "mock-source ELF"),
+    el("span", null, pyth ? "SYNTHETIC OBSERVATION" : "mock-source ELF"),
     el("span", "honesty-sep", "·"),
     el("code", "digest", identity ? identity.elf_sha256 : "sha256 pending"),
     el("span", "honesty-sep", "·"),
-    el("span", null, "LOCAL 127.0.0.1 ONLY"),
+    el("span", null, pyth ? "LOCAL VALIDATOR ONLY" : "LOCAL 127.0.0.1 ONLY"),
     el("span", "honesty-sep", "·"),
     el("span", null, "no value"),
     el("span", "honesty-sep", "·"),
     el("span", null, "evidence scope"),
-    chip("SBF_EXECUTED"),
+    chip(identity && identity.evidence_scope ? identity.evidence_scope : "SBF_EXECUTED"),
     el("span", "honesty-note", "unpromoted")
   ];
   fill(strip, ...parts);
@@ -101,14 +114,18 @@ const render = (state) => {
 
   const brand = document.getElementById("brand-sub");
   if (brand) {
-    brand.textContent = state.market
-      ? "Friday clutch — trade mode, committed, local"
-      : "general clearing, committed, local";
+    brand.textContent = state.identity && state.identity.mode === "pyth-local"
+      ? "retained real-provider campaign — synthetic, local"
+      : state.market
+        ? "Friday clutch — trade mode, committed, local"
+        : "general clearing, committed, local";
   }
 
   const status = document.getElementById("status");
   const label = state.fault
     ? "faulted"
+    : state.pyth
+      ? state.done ? `campaign ${state.done.verdict}` : "campaign loaded"
     : state.session
       ? `clutch ${state.session.phase}`
       : state.done

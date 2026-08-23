@@ -23,6 +23,7 @@ mod decode;
 mod friday;
 mod http;
 mod plan;
+mod pyth;
 mod quantize;
 mod replay;
 mod rpc;
@@ -55,9 +56,9 @@ pub(crate) fn repo_path(relative: &str) -> PathBuf {
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
-         operatord serve [--mode watch|trade] [--port N] [--rpc-port N] [--faucet-port N] \
+         operatord serve [--mode watch|trade|pyth-local] [--port N] [--rpc-port N] [--faucet-port N] \
          [--gossip-port N] [--dynamic-port-range START-END] [--work DIR] [--static DIR] \
-         [--freeze-window SLOTS] [--exit-when-done]\n  \
+         [--freeze-window SLOTS] [--transcript DIR] [--exit-when-done]\n  \
          operatord emit <plan-dir>\n  \
          operatord replay <plan-dir>"
     );
@@ -73,6 +74,7 @@ struct Options {
     dynamic_port_range: String,
     work: Option<PathBuf>,
     statics: PathBuf,
+    transcript: Option<PathBuf>,
     freeze_window: u64,
     exit_when_done: bool,
 }
@@ -90,6 +92,7 @@ impl Default for Options {
             dynamic_port_range: "9201-9250".to_string(),
             work: None,
             statics: repo_path("apps/operator"),
+            transcript: None,
             freeze_window: session::FREEZE_WINDOW_SLOTS_DEFAULT,
             exit_when_done: false,
         }
@@ -109,6 +112,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options> {
             "--dynamic-port-range" => options.dynamic_port_range = value()?,
             "--work" => options.work = Some(PathBuf::from(value()?)),
             "--static" => options.statics = PathBuf::from(value()?),
+            "--transcript" => options.transcript = Some(PathBuf::from(value()?)),
             "--freeze-window" => options.freeze_window = value()?.parse()?,
             "--exit-when-done" => options.exit_when_done = true,
             other => return Err(format!("unknown flag {other}").into()),
@@ -120,13 +124,15 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options> {
 /// Dispatch on the session mode: watch the sealed lane's plan, or trade the
 /// Friday clutch.  The two share the prologue and nothing else.
 fn dispatch(options: Options) -> Result<()> {
-    toolchain::validate_validator_network(
-        Some(options.port),
-        options.rpc_port,
-        options.faucet_port,
-        options.gossip_port,
-        &options.dynamic_port_range,
-    )?;
+    if options.mode != "pyth-local" {
+        toolchain::validate_validator_network(
+            Some(options.port),
+            options.rpc_port,
+            options.faucet_port,
+            options.gossip_port,
+            &options.dynamic_port_range,
+        )?;
+    }
     match options.mode.as_str() {
         "watch" => serve(options),
         "trade" => trade::serve(trade::Options {
@@ -140,7 +146,17 @@ fn dispatch(options: Options) -> Result<()> {
             freeze_window: options.freeze_window,
             exit_when_settled: options.exit_when_done,
         }),
-        other => Err(format!("unknown session mode {other}; try watch or trade").into()),
+        "pyth-local" => pyth::serve(pyth::Options {
+            port: options.port,
+            transcript: options
+                .transcript
+                .ok_or("pyth-local mode requires --transcript DIR")?,
+            statics: options.statics,
+            exit_when_done: options.exit_when_done,
+        }),
+        other => {
+            Err(format!("unknown session mode {other}; try watch, trade, or pyth-local").into())
+        }
     }
 }
 

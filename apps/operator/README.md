@@ -1,6 +1,6 @@
 # Operator Bench
 
-The first frontend, in two modes.
+The first frontend, in three explicit modes.
 
 Run its dependency-free source/mechanical checks with:
 
@@ -24,6 +24,12 @@ against a fixed-belief automaton. The market is created by a signed
 `CreateMarket`, the cash arrives by a signed `Endow`, the Eggs by a signed
 `Split`: nothing about the trading plane is injected bank state.
 
+**Pyth local** is a read-only presentation of a retained, public-safe
+local-real Pyth campaign transcript. It does not start a validator, contact
+RPC or a provider API, load a wallet or key file, or build a browser
+transaction. Its permanent boundary is **NON-PRODUCTION / SYNTHETIC
+OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE**.
+
 ```sh
 # watch mode: the sealed lane's plan, step by step
 CARGO_NET_OFFLINE=true cargo run --offline \
@@ -32,11 +38,23 @@ CARGO_NET_OFFLINE=true cargo run --offline \
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode trade
+# retained campaign mode: display three truth-labelled public transcript files
+CARGO_NET_OFFLINE=true cargo run --offline \
+  --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
+  serve --mode pyth-local \
+  --transcript docs/reviews/evidence/local-real-pyth-signed-rpc-2026-08-22
 # then open 127.0.0.1:9130 in a browser
 ```
 
-Runtime prerequisites are Rust/Cargo, `cargo-build-sbf`, `solana-keygen`, and
-`solana-test-validator`; the scripted gate also uses `curl` and Python. Node
+To retain a new campaign instead, choose a new empty directory with
+`CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR` when running
+`programs/clutch-sbf/scripts/run_local_real_pyth.sh`, then pass that directory
+to `--transcript`. The display reads only `campaign.json`, `result.json`, and
+`probe-evidence.json`; it does not replay or extend the campaign.
+
+Watch/trade runtime prerequisites are Rust/Cargo, `cargo-build-sbf`,
+`solana-keygen`, and `solana-test-validator`; the scripted gate also uses
+`curl` and Python. Retained campaign mode starts no validator. Node
 and npm are required only for the source/mechanical browser checks. Override
 the Trade wrapper's listeners with `CLUTCH_OPERATOR_TRADE_PORT`,
 `CLUTCH_OPERATOR_TRADE_RPC_PORT`, `CLUTCH_OPERATOR_TRADE_FAUCET_PORT`,
@@ -79,6 +97,19 @@ usable. The scripted local gate acquires that session cookie from the index in
 the same way a browser does.
 
 ## What is on screen
+
+### Pyth local mode
+
+| screen | what it reads |
+| --- | --- |
+| **Campaign** | exact captured receiver/router Program and ProgramData identities; campaign, validator, ELF, source-profile, VAA, and update hashes; loopback listener evidence; synthetic source value and conservative interval; both atomic rollback negatives; seal and categorical resolution; all signed transactions in retained order with signature, signed-wire hash, slot, compute units, fee, top-level program order, and exact error |
+
+All integers cross the daemon/browser boundary as decimal strings. The daemon
+refuses the presentation unless the three inputs carry the exact boundary,
+provider role set, thirteen-step order, instruction-2 `SourceAdmissionFailed`
+rollback errors, matching terminal signatures, closed rollback checks, seal,
+and payout cell 1. The static page remains an untrusted projection of that
+retained evidence.
 
 ### Watch mode
 
@@ -201,6 +232,7 @@ rather than written as a URL literal, so the grep needs no exception.
 | `action.js` | the one write: a JSON intent |
 | `bench.js`, `walk.js`, `market.js` | the watch-mode screens; `bench.js` is shared |
 | `trade.js` | the trade-mode screens: Clutch, Ticket, Book, Settlement, Steps |
+| `pyth.js` | the read-only retained local-real Pyth campaign screen |
 
 ## Not built
 

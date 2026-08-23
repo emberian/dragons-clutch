@@ -180,6 +180,8 @@ p { margin: 0.5rem 0; }
 }
 .callout strong { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em; }
 .callout-warn { border-left-color: var(--accent-2); }
+.pyth-boundary { border-top: 0.35rem solid var(--accent-2); }
+.provider-table .digest { max-width: 24rem; }
 .callout-ok { border-left-color: var(--accent-3); }
 .callout-bad { border-left-color: var(--accent-2); background: var(--surface); }
 

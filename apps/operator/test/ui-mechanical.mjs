@@ -38,3 +38,23 @@ test("belief dragging updates in place and freeze is phase-disabled", async () =
   assert.match(inputHandler[1], /valueNode\.textContent/);
   assert.match(trade, /freeze\.disabled = !open/);
 });
+
+test("the retained Pyth surface is truth-labelled and has no campaign action", async () => {
+  const [app, pyth, stream] = await Promise.all([
+    source("app.js"),
+    source("pyth.js"),
+    source("stream.js"),
+  ]);
+  assert.match(app, /identity\.mode === "pyth-local"/);
+  assert.match(stream, /case "pyth-campaign"/);
+  for (const phrase of [
+    "NON-PRODUCTION",
+    "SYNTHETIC OBSERVATION",
+    "LOCAL VALIDATOR ONLY",
+    "NO VALUE",
+    "not devnet price evidence",
+  ]) {
+    assert.match(pyth, new RegExp(phrase));
+  }
+  assert.doesNotMatch(pyth, /\bact\s*\(|fetch\s*\(|EventSource|signTransaction|sendTransaction/);
+});
