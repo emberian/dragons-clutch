@@ -106,6 +106,11 @@ be synchronized before activation.
   one-based ordinal. Node validation checks both embedded identities and the
   eight canonical zero padding bytes. The current CandidateLifecycle V4 uses a
   node-ID suffix and is therefore incompatible.
+- `clutch-general-v2-runtime` owns the fixed domain-separated General selector
+  IDs for the already-owned owner-blind RelationV2 and ScoreV2-Q semantics. A
+  live adapter must derive those IDs rather than accepting arbitrary nonzero
+  relation/score labels, and must persist the runtime-returned rank rather than
+  caller-supplied score components.
 - Duplicate candidates are economically bounded by per-node bond, rent, and
   verification capitalization. Progress rewards pay checked work from that
   node's compartment; they are not duplicate solver prizes. The root Budget

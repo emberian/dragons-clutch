@@ -1,0 +1,23 @@
+[package]
+name = "clutch-general-v2-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Executable pure-core General V2 quantized relation join for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["layout-profile-full"]
+layout-profile-full = ["clutch-solana-layout/profile-full"]
+layout-profile-general = ["clutch-solana-layout/profile-general-source-v2-point"]
+
+[dependencies]
+clutch-batch = { path = "../clutch-batch" }
+clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
+clutch-price-measure = { path = "../clutch-price-measure" }
+clutch-product-series = { path = "../clutch-product-series" }
+clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
