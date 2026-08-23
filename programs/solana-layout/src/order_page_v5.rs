@@ -692,8 +692,33 @@ where
     F: FnMut(&VerifiedOrderSlotV5) -> Result<()>,
 {
     let header = OrderPageHeaderV5::decode(input)?;
-    let digest = fold_page_digest_v5(input, &header)?;
     header.validate_shape()?;
+
+    #[cfg(not(target_os = "solana"))]
+    let mut digest = {
+        let mut digest = Sha256::new();
+        digest.update(ORDER_PAGE_V5_DIGEST_DOMAIN);
+        digest.update(&header.market.0);
+        digest.update(&header.epoch.0);
+        digest.update(&header.page_index.to_le_bytes());
+        digest.update(&[header.order_count, header.tombstone_count]);
+        digest
+    };
+    #[cfg(target_os = "solana")]
+    let page_index = header.page_index.to_le_bytes();
+    #[cfg(target_os = "solana")]
+    let counts = [header.order_count, header.tombstone_count];
+    #[cfg(target_os = "solana")]
+    let mut digest_parts: [&[u8]; 6 + MAX_ORDERS_PER_PAGE] = [&[]; 6 + MAX_ORDERS_PER_PAGE];
+    #[cfg(target_os = "solana")]
+    {
+        digest_parts[0] = ORDER_PAGE_V5_DIGEST_DOMAIN;
+        digest_parts[1] = &header.market.0;
+        digest_parts[2] = &header.epoch.0;
+        digest_parts[3] = &page_index;
+        digest_parts[4] = &counts;
+    }
+
     let mut cursor = OrderSlotCursorV5::over(input, header.order_count, header.page_index);
     let mut portfolios = 0usize;
     let mut tombstones = 0u8;
@@ -702,7 +727,15 @@ where
     let mut index = 0usize;
     while let Some(step) = cursor.next_slot() {
         let verified = step?;
-        if index < header.order_count as usize {
+        let slot_start = ORDER_PAGE_V5_HEADER_BYTES + index * ORDER_SLOT_BYTES;
+        let slot_bytes = &input[slot_start..slot_start + ORDER_SLOT_BYTES];
+        #[cfg(not(target_os = "solana"))]
+        digest.update(slot_bytes);
+        #[cfg(target_os = "solana")]
+        {
+            digest_parts[5 + index] = slot_bytes;
+        }
+        if index < usize::from(header.order_count) {
             observe(&verified)?;
             if index == 0 {
                 first = verified.slot.order_id();
@@ -717,6 +750,15 @@ where
         }
         index += 1;
     }
+    #[cfg(not(target_os = "solana"))]
+    {
+        digest.update(&input[ORDER_PAGE_V5_GENERATION_TAIL_OFFSET..account_len::ORDER_PAGE_V5]);
+    }
+    #[cfg(target_os = "solana")]
+    {
+        digest_parts[5 + MAX_ORDERS_PER_PAGE] =
+            &input[ORDER_PAGE_V5_GENERATION_TAIL_OFFSET..account_len::ORDER_PAGE_V5];
+    }
     if tombstones != header.tombstone_count
         || first != header.first_order_id
         || last != header.last_order_id
@@ -726,7 +768,11 @@ where
     if portfolios > MAX_PORTFOLIO_ORDERS {
         return Err(CodecError::InvalidCount);
     }
-    if digest != header.page_digest {
+    #[cfg(not(target_os = "solana"))]
+    let folded_digest = Hash32(digest.finish());
+    #[cfg(target_os = "solana")]
+    let folded_digest = Hash32(solana_sha256_hasher::hashv(&digest_parts).to_bytes());
+    if folded_digest != header.page_digest {
         return Err(CodecError::MismatchedBinding);
     }
     Ok((header, portfolios))
@@ -1199,6 +1245,102 @@ mod tests {
         page
     }
 
+    fn open_two_page_set() -> [OrderPageAccountV5; 2] {
+        let market = Hash32::from_bytes([1; 32]);
+        let epoch = Hash32::from_bytes([2; 32]);
+        let first_owner = Hash32::from_bytes([3; 32]);
+        let second_owner = Hash32::from_bytes([4; 32]);
+        let mut head_orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
+        let mut head_generations = [0u64; MAX_ORDERS_PER_PAGE];
+        let mut index = 0usize;
+        while index < MAX_ORDERS_PER_PAGE {
+            let rank = u64::try_from(index)
+                .unwrap()
+                .checked_add(1)
+                .unwrap();
+            head_orders[index] = OrderSlot::Single(OrderRecord {
+                owner: first_owner,
+                order_id: canonical_order_id(rank),
+                outcome: 0,
+                side: 0,
+                quantity: 7,
+                limit: 4,
+                minimum_fill: 1,
+                flags: 0,
+                generation: 9,
+                expiry_epoch: 12,
+            });
+            head_generations[index] = rank.checked_add(40).unwrap();
+            index += 1;
+        }
+        head_orders[0] = OrderSlot::Tombstone(crate::TombstoneRecord {
+            order_id: canonical_order_id(1),
+            owner: first_owner,
+            retired_generation: 9,
+            generation: 10,
+        });
+        head_generations[0] = 0;
+        let mut head = OrderPageAccountV5 {
+            page: OrderPageAccount {
+                market,
+                epoch,
+                order_set: Hash32::ZERO,
+                page_digest: Hash32::ZERO,
+                first_order_id: canonical_order_id(1),
+                last_order_id: canonical_order_id(16),
+                prev_page_last_order_id: Hash32::ZERO,
+                page_index: 0,
+                page_count: 2,
+                set_order_count: 0,
+                order_count: 16,
+                tombstone_count: 1,
+                frozen: 0,
+                stored_bump: 5,
+                orders: head_orders,
+            },
+            position_generations: head_generations,
+        };
+        head.page.page_digest = head.recomputed_page_digest().unwrap();
+
+        let mut tail_orders = [OrderSlot::Empty; MAX_ORDERS_PER_PAGE];
+        tail_orders[0] = OrderSlot::Single(OrderRecord {
+            owner: second_owner,
+            order_id: canonical_order_id(17),
+            outcome: 1,
+            side: 1,
+            quantity: 5,
+            limit: 3,
+            minimum_fill: 0,
+            flags: 0,
+            generation: 4,
+            expiry_epoch: 12,
+        });
+        let mut tail_generations = [0u64; MAX_ORDERS_PER_PAGE];
+        tail_generations[0] = 77;
+        let mut tail = OrderPageAccountV5 {
+            page: OrderPageAccount {
+                market,
+                epoch,
+                order_set: Hash32::ZERO,
+                page_digest: Hash32::ZERO,
+                first_order_id: canonical_order_id(17),
+                last_order_id: canonical_order_id(17),
+                prev_page_last_order_id: canonical_order_id(16),
+                page_index: 1,
+                page_count: 2,
+                set_order_count: 0,
+                order_count: 1,
+                tombstone_count: 0,
+                frozen: 0,
+                stored_bump: 6,
+                orders: tail_orders,
+            },
+            position_generations: tail_generations,
+        };
+        tail.page.page_digest = tail.recomputed_page_digest().unwrap();
+        [head, tail]
+    }
+
     #[test]
     fn v5_envelope_and_width_are_exact_and_v4_is_not_reinterpreted() {
         let page = open_page(41);
@@ -1349,6 +1491,67 @@ mod tests {
         assert_eq!(
             verify_page_set_v5_streaming(&[&bytes]),
             Ok(facts.order_set())
+        );
+    }
+
+    #[test]
+    fn v5_freeze_closes_dense_cross_page_links_and_excludes_retired_owners() {
+        let pages = open_two_page_set();
+        let mut head = encoded(&pages[0]);
+        let mut tail = encoded(&pages[1]);
+        let context = FreezePageSetContextV5::new(
+            pages[0].page.market,
+            pages[0].page.epoch,
+            2,
+            12,
+        )
+        .unwrap();
+        let facts = freeze_page_set_prestate_v5(
+            context,
+            &[&head, &tail],
+            &mut OwnerInterner::new(),
+        )
+        .unwrap();
+        assert_eq!(facts.page_count(), 2);
+        assert_eq!(facts.populated_order_count(), 17);
+        assert_eq!(facts.live_order_count(), 16);
+        assert_eq!(facts.owner_count(), 2);
+        assert_eq!(facts.position_generation_count(), 16);
+
+        let sealed_head = seal_page_v5(
+            &mut head,
+            facts.order_set(),
+            facts.populated_order_count(),
+        )
+        .unwrap();
+        let sealed_tail = seal_page_v5(
+            &mut tail,
+            facts.order_set(),
+            facts.populated_order_count(),
+        )
+        .unwrap();
+        assert_eq!(facts.binds_sealed_header(0, &sealed_head), Ok(()));
+        assert_eq!(facts.binds_sealed_header(1, &sealed_tail), Ok(()));
+        assert_eq!(
+            verify_page_set_v5_streaming(&[&head, &tail]),
+            Ok(facts.order_set())
+        );
+
+        let mut sparse = pages;
+        sparse[0].page.order_count = 15;
+        sparse[0].page.last_order_id = canonical_order_id(15);
+        sparse[0].page.orders[15] = OrderSlot::Empty;
+        sparse[0].position_generations[15] = 0;
+        sparse[0].page.page_digest = sparse[0].recomputed_page_digest().unwrap();
+        let sparse_head = encoded(&sparse[0]);
+        let sparse_tail = encoded(&sparse[1]);
+        assert_eq!(
+            freeze_page_set_prestate_v5(
+                context,
+                &[&sparse_head, &sparse_tail],
+                &mut OwnerInterner::new(),
+            ),
+            Err(CodecError::InvalidCount)
         );
     }
 
