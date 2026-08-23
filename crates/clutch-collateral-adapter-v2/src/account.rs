@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::{
-    AdapterReleaseV2, BoundCollateralProfileV2, Error, Id, OwnerGuardV2, ProgramFamilyV2,
-    Result, BASE_MINT_BYTES, BASE_TOKEN_ACCOUNT_BYTES, EXTENSION_IMMUTABLE_OWNER,
-    IMMUTABLE_OWNER_ACCOUNT_BYTES,
+    AdapterReleaseV2, BoundCollateralProfileV2, BoundRealmCollateralV2, Error, Id, OwnerGuardV2,
+    ProgramFamilyV2, Result, BASE_MINT_BYTES, BASE_TOKEN_ACCOUNT_BYTES,
+    EXTENSION_IMMUTABLE_OWNER, IMMUTABLE_OWNER_ACCOUNT_BYTES,
 };
 
 const ACCOUNT_TYPE_TOKEN_ACCOUNT: u8 = 2;
@@ -33,16 +33,18 @@ pub struct RuntimeAccountViewV2<'a> {
 
 /// Immutable identity of a separately owned collateral custody compartment.
 ///
-/// `semantic_owner` is the one state artifact that owns the compartment fact;
-/// `compartment` is its local typed discriminant. PDA address/seed allocation is
-/// deliberately left to the consuming adapter until that graph is frozen.
+/// `semantic_owner` owns the vault's identity/role namespace; it need not own
+/// mutable balance facts. For example, a SeriesPlan may own the five component
+/// roles while SeriesFunding state solely owns principal/donation amounts.
+/// `compartment` is the namespace-local typed discriminant. PDA address/seed
+/// allocation is deliberately left to the consuming adapter until frozen.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CustodyBindingV2 {
     /// Exact collateral token account.
     pub account: Id,
     /// Exact token owner authority stored in the account.
     pub owner_authority: Id,
-    /// State artifact that semantically owns this custody compartment.
+    /// Artifact that owns this custody endpoint's identity and role namespace.
     pub semantic_owner: Id,
     /// Nonzero owner-local compartment discriminant.
     pub compartment: u16,
@@ -151,8 +153,23 @@ pub fn market_hoard_binding_v2(bound: BoundCollateralProfileV2) -> CustodyBindin
 }
 
 /// Parse and admit the exact collateral mint selected by the bound Realm.
+pub fn admit_realm_collateral_mint_v2(
+    bound: BoundRealmCollateralV2,
+    account: RuntimeAccountViewV2<'_>,
+) -> Result<MintObservationV2> {
+    admit_collateral_mint_inner_v2(bound, account)
+}
+
+/// Parse and admit the exact collateral mint through a concrete Market refinement.
 pub fn admit_collateral_mint_v2(
     bound: BoundCollateralProfileV2,
+    account: RuntimeAccountViewV2<'_>,
+) -> Result<MintObservationV2> {
+    admit_collateral_mint_inner_v2(bound.realm_bound(), account)
+}
+
+fn admit_collateral_mint_inner_v2(
+    bound: BoundRealmCollateralV2,
     account: RuntimeAccountViewV2<'_>,
 ) -> Result<MintObservationV2> {
     let policy = bound.policy();
@@ -188,9 +205,29 @@ pub fn admit_collateral_mint_v2(
     })
 }
 
+/// Parse and admit a holder or segregated custody account before any Market exists.
+///
+/// A Hoard role refuses here because it requires a concrete Market refinement.
+pub fn admit_realm_collateral_account_v2(
+    bound: BoundRealmCollateralV2,
+    account: RuntimeAccountViewV2<'_>,
+    role: TokenAccountRoleV2,
+) -> Result<TokenAccountObservationV2> {
+    admit_collateral_account_inner_v2(bound, None, account, role)
+}
+
 /// Parse and admit one holder, Hoard, or segregated custody token account.
 pub fn admit_collateral_account_v2(
     bound: BoundCollateralProfileV2,
+    account: RuntimeAccountViewV2<'_>,
+    role: TokenAccountRoleV2,
+) -> Result<TokenAccountObservationV2> {
+    admit_collateral_account_inner_v2(bound.realm_bound(), Some(bound), account, role)
+}
+
+fn admit_collateral_account_inner_v2(
+    bound: BoundRealmCollateralV2,
+    market_bound: Option<BoundCollateralProfileV2>,
     account: RuntimeAccountViewV2<'_>,
     role: TokenAccountRoleV2,
 ) -> Result<TokenAccountObservationV2> {
@@ -209,7 +246,9 @@ pub fn admit_collateral_account_v2(
             None
         }
         TokenAccountRoleV2::Hoard => {
-            let binding = market_hoard_binding_v2(bound);
+            let binding = market_hoard_binding_v2(
+                market_bound.ok_or(Error::MismatchedBinding)?,
+            );
             binding.validate(release)?;
             if account.key != binding.account
                 || account.data.len() != usize::from(release.custody_account_bytes)
