@@ -10032,6 +10032,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn terminal_closure_intents_round_trip_and_stay_tag_contiguous() {
         let market = h(1);
@@ -10127,6 +10128,7 @@ mod tests {
     /// It is deliberately *not* part of the epoch-terminal contiguity above —
     /// a Position outlives every epoch — and it carries no epoch coordinate at
     /// all, so no caller can aim it at one epoch's state.
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn the_position_close_intent_has_an_exact_unambiguous_wire() {
         let market = h(1);
@@ -12051,6 +12053,7 @@ mod tests {
         assert_eq!(Intent::decode(&b[..n + 1]), Err(CodecError::TrailingBytes));
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn cancellation_intents_name_a_rank_an_owner_and_a_generation() {
         let market = h(1);
@@ -12093,6 +12096,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "profile-full")]
     #[test]
     fn direct_submission_intent_has_one_exact_page_wire() {
         let market = h(1);
@@ -12113,6 +12117,7 @@ mod tests {
         assert_eq!(Intent::decode(&bytes[..len]), Err(CodecError::ZeroIdentity));
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn clear_work_creation_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12184,6 +12189,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn general_epoch_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12277,6 +12283,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn the_walk_intent_has_an_exact_unambiguous_wire() {
         let market = h(1);
@@ -12341,6 +12348,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn the_slice_and_close_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12422,6 +12430,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn submit_candidate_intent() -> Intent {
         let market = h(1);
         let mut prices = [0u64; MAX_OUTCOMES];
@@ -12441,6 +12450,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn the_submission_intent_has_an_exact_unambiguous_wire() {
         let submit = submit_candidate_intent();
@@ -12517,6 +12527,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn the_chunked_write_intent_has_an_exact_unambiguous_wire() {
         let market = h(1);
@@ -12655,6 +12666,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn the_seal_and_selection_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12725,6 +12737,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     #[test]
     fn the_entitlement_intents_have_exact_unambiguous_wires() {
         let market = h(1);
@@ -12788,6 +12801,7 @@ mod tests {
         assert_eq!([FREEZE_ENTITLEMENT_TAG, ENTITLE_SLICE_TAG], [58, 59]);
     }
 
+    #[cfg(feature = "profile-full")]
     #[test]
     fn direct_v3_authority_intents_have_exact_wires() {
         let market = h(1);
@@ -12827,6 +12841,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "profile-full")]
     #[test]
     fn every_intent_refuses_the_superseded_encoding_version() {
         let market = h(1);
@@ -13490,6 +13505,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "profile-full")]
     #[test]
     fn authenticated_source_intents_have_exact_unambiguous_wires() {
         let mut body = [0_u8; SOURCE_SPEC_BODY_V1_BYTES];
@@ -13601,9 +13617,14 @@ mod tests {
         let mut v2_bytes = [0_u8; MAX_INTENT_BYTES];
         let v2_len = intents[0].encode(&mut v2_bytes).unwrap();
         v2_bytes[0] = INIT_SOURCE_SPEC_TAG;
+        let v1_tag_result = if cfg!(feature = "profile-full") {
+            CodecError::TrailingBytes
+        } else {
+            CodecError::WrongTag
+        };
         assert_eq!(
             Intent::decode(&v2_bytes[..v2_len]),
-            Err(CodecError::TrailingBytes)
+            Err(v1_tag_result)
         );
 
         // The widest admitted intent is exactly this one.
