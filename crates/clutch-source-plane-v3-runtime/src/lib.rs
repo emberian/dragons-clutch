@@ -27,8 +27,11 @@ mod window;
 
 pub use account::{
     canonical_runtime_account_data_id, decode_runtime_account, encode_runtime_account,
-    observe_runtime_account_header, RuntimeAccountBodyV1, RuntimeAccountHeaderV1,
-    RUNTIME_ACCOUNT_HEADER_BYTES, RUNTIME_ACCOUNT_LAYOUT_VERSION,
+    observe_runtime_account_header, registered_runtime_account_tag, RuntimeAccountBodyV1,
+    RuntimeAccountHeaderV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
+    RUNTIME_ACCOUNT_GLOBAL_VERSION, RUNTIME_ACCOUNT_HEADER_BYTES, RUNTIME_ACCOUNT_LAYOUT_VERSION,
+    SOURCE_HEAD_ACCOUNT_TAG, STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG,
+    WINDOW_WORK_ACCOUNT_TAG,
 };
 pub use auth::{
     account_data_id, authenticate_boundary, authenticate_source_release_account,
@@ -36,7 +39,7 @@ pub use auth::{
     AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
     ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1,
     RuntimeDerivedPdaV1, RuntimeKey, SourceReleaseManifestV1, CLOCK_POLICY_BYTES,
-    SOURCE_RELEASE_MANIFEST_BYTES,
+    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_RELEASE_MANIFEST_BYTES,
 };
 pub use funding::{
     authenticate_source_work_receipt_account, plan_source_account_close,
@@ -58,17 +61,20 @@ pub use ingest::{
 pub use lineage::{
     advance_lineage_state, authenticate_reopen_lineage_account, authorize_reopen,
     close_lineage_generation, open_lineage_generation, AuthenticatedReopenLineageV1,
-    LineageAccessV1, LineageFamilyV1, ReopenAuthorizationV1, ReopenLineageV1, REOPEN_LINEAGE_BYTES,
+    LineageAccessV1, LineageFamilyV1, ReopenAuthorizationV1, ReopenLineageV1,
+    REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, REOPEN_LINEAGE_BYTES,
 };
 pub use window::{
     authenticate_evaluation_authority, authenticate_raw_page_account,
     authenticate_statistic_result, authenticate_statistic_result_absence,
-    authenticate_window_seal_account, authenticate_window_work_account, fold_authenticated_pages,
-    join_source_occurrence, seal_authenticated_window, source_occurrence_record_id,
-    AuthenticatedEvaluationV1, AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1,
-    AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
-    EvaluationAuthorityV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1,
-    FoldPagesOutputV1, OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
+    authenticate_statistic_result_account, authenticate_window_seal_account,
+    authenticate_window_work_account, fold_authenticated_pages, join_source_occurrence,
+    seal_authenticated_window, source_occurrence_record_id, AuthenticatedEvaluationV1,
+    AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1,
+    AuthenticatedStatisticResultAccountV1, AuthenticatedWindowEvidenceV1,
+    AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1, EvaluationAuthorityV1,
+    EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
+    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
     SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD, SOURCE_OCCURRENCE_RECORD_BYTES,
 };
 
