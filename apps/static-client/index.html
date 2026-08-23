@@ -162,13 +162,18 @@
           <form id="compiler-form" class="compiler-form">
             <label class="field"><span>Compiler release SHA-256</span><input id="compiler-release-sha256" class="mono" autocomplete="off" placeholder="Exact external compiler build/release identity" required></label>
             <label class="field"><span>Exact rational payoff definition JSON</span><textarea id="compiler-definition" class="mono" spellcheck="false" placeholder="production-payoff-definition/v1 with productTermsId, kind, and the exact categorical, smooth-control, or analytic definition. Every integer and rational component must use canonical decimal strings." required></textarea><small>JavaScript numbers are refused; this page validates transport shape but leaves payout math to Rust.</small></label>
-            <label class="field"><span>operatord/CLI compiler proposal JSON</span><textarea id="compiler-proposal" class="mono" spellcheck="false" placeholder="Untrusted production-payoff proposal v1 containing the input digest, exact-vs-approximate status, rational bounds, canonical basis/certificate bytes, and the 528-byte Product/Series bundle." required></textarea><small>The proposal must bind the definition and compiler release exactly. It remains non-authoritative.</small></label>
-            <button id="bind-compiler-proposal" class="primary-button" type="submit">Bind and display compiler proposal</button>
+            <label class="field"><span>Canonical Product/Series bundle inputs JSON</span><textarea id="compiler-bundle-inputs" class="mono" spellcheck="false" placeholder="Exact fixed-codec hex bodies for registryCapabilityProfileV2, recovery, Product template, price policy, Genesis, funding quote, attachment, Series, funding terms, plus sourceReleaseManifestId." required></textarea><small>The compiled basis is deliberately absent: Rust derives it, then the canonical bundle assembler requires every supplied artifact to join it.</small></label>
+            <button id="compile-payoff" class="primary-button" type="submit">Compile through selected operatord</button>
+            <details>
+              <summary>Bind output from the stdin/stdout CLI instead</summary>
+              <label class="field"><span>CLI compiler proposal JSON</span><textarea id="compiler-proposal" class="mono" spellcheck="false" placeholder="Output from operatord compile-payoff --compiler-release-sha256 HASH."></textarea><small>The same definition digest, configured compiler release, basis, certificate, and bundle joins are checked before display.</small></label>
+              <button id="bind-compiler-proposal" class="quiet-button" type="button">Bind CLI proposal</button>
+            </details>
             <p id="compiler-error" class="form-error" role="alert" hidden></p>
           </form>
 
           <div class="compiler-output" aria-live="polite">
-            <div class="output-heading"><span>Untrusted Product proposal</span><span id="compiler-status">waiting for external compiler output</span></div>
+            <div class="output-heading"><span>Untrusted Product proposal</span><span id="compiler-status">waiting for pure Rust compiler output</span></div>
             <dl id="compiler-identities" class="release-facts compiler-facts"></dl>
             <div id="compiler-bounds" class="bounds-list"></div>
             <pre id="compiler-output" class="code-block output-code">No compiler proposal bound.

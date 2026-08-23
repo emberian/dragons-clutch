@@ -19,12 +19,14 @@
 mod bot;
 mod builders;
 mod bus;
+mod chain_server;
 mod crank;
 mod decode;
 mod friday;
 mod http;
 mod index_api;
 mod integer;
+mod payoff_compiler;
 mod plan;
 mod pyth;
 mod pyth_live;
@@ -64,9 +66,81 @@ fn usage() -> ! {
          [--gossip-port N] [--dynamic-port-range START-END] [--work DIR] [--static DIR] \
          [--freeze-window SLOTS] [--transcript DIR] [--exit-when-done]\n  \
          operatord emit <plan-dir>\n  \
-         operatord replay <plan-dir>"
+         operatord replay <plan-dir>\n  \
+         operatord compiler-serve --compiler-release-sha256 HASH [--port N] [--static DIR]\n  \
+         operatord compile-payoff --compiler-release-sha256 HASH < request.json\n  \
+         operatord chain-serve --config FILE [--port N] [--static DIR]"
     );
     process::exit(2)
+}
+
+struct CompilerServeOptions {
+    port: u16,
+    statics: PathBuf,
+    compiler_release_sha256: String,
+}
+
+fn parse_compiler_serve(mut args: impl Iterator<Item = String>) -> Result<CompilerServeOptions> {
+    let mut port = 9130_u16;
+    let mut statics = repo_path("apps/static-client");
+    let mut compiler_release_sha256 = None;
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--port" => port = value()?.parse()?,
+            "--static" => statics = PathBuf::from(value()?),
+            "--compiler-release-sha256" => compiler_release_sha256 = Some(value()?),
+            other => return Err(format!("unknown compiler-serve flag {other}").into()),
+        }
+    }
+    Ok(CompilerServeOptions {
+        port,
+        statics,
+        compiler_release_sha256: compiler_release_sha256
+            .ok_or("compiler-serve requires --compiler-release-sha256 HASH")?,
+    })
+}
+
+fn parse_compiler_release(mut args: impl Iterator<Item = String>) -> Result<String> {
+    let Some(flag) = args.next() else {
+        return Err("compile-payoff requires --compiler-release-sha256 HASH".into());
+    };
+    if flag != "--compiler-release-sha256" {
+        return Err(format!("unknown compile-payoff flag {flag}").into());
+    }
+    let release = args
+        .next()
+        .ok_or("--compiler-release-sha256 needs a value")?;
+    if let Some(extra) = args.next() {
+        return Err(format!("unexpected compile-payoff argument {extra}").into());
+    }
+    Ok(release)
+}
+
+struct ChainServeOptions {
+    port: u16,
+    statics: PathBuf,
+    config: PathBuf,
+}
+
+fn parse_chain_serve(mut args: impl Iterator<Item = String>) -> Result<ChainServeOptions> {
+    let mut port = 9130_u16;
+    let mut statics = repo_path("apps/static-client");
+    let mut config = None;
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--port" => port = value()?.parse()?,
+            "--static" => statics = PathBuf::from(value()?),
+            "--config" => config = Some(PathBuf::from(value()?)),
+            other => return Err(format!("unknown chain-serve flag {other}").into()),
+        }
+    }
+    Ok(ChainServeOptions {
+        port,
+        statics,
+        config: config.ok_or("chain-serve requires --config FILE")?,
+    })
 }
 
 struct Options {
@@ -441,6 +515,17 @@ fn main() {
             Some(dir) => run_replay(Path::new(&dir)),
             None => usage(),
         },
+        "compiler-serve" => parse_compiler_serve(args).and_then(|options| {
+            payoff_compiler::serve(
+                options.port,
+                options.statics,
+                options.compiler_release_sha256,
+            )
+        }),
+        "compile-payoff" => parse_compiler_release(args).and_then(payoff_compiler::compile_cli),
+        "chain-serve" => parse_chain_serve(args).and_then(|options| {
+            chain_server::serve(options.port, options.statics, &options.config)
+        }),
         _ => usage(),
     };
     if let Err(error) = outcome {
