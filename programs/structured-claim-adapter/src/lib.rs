@@ -19,6 +19,7 @@
 
 mod accounts;
 mod custody;
+mod current_lifecycle;
 mod dispatch;
 mod envelope;
 mod handler;
@@ -42,6 +43,13 @@ pub use custody::{
     STRUCTURED_CUSTODY_CLAIM_LEDGER_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
     STRUCTURED_CUSTODY_HOARD_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
     STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1,
+};
+pub use current_lifecycle::{
+    prepare_current_compact_donation_v1, prepare_current_redeem_terminal_v1,
+    prepare_current_unwrap_full_v1, prepare_current_wrap_full_v1,
+    CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
+    CurrentStructuredTransitionPlanV1, CurrentStructuredVaultAccountsV1,
+    CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1, CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1,
 };
 pub use dispatch::{dispatch_structured_claim_v1, StructuredClaimAccountLoaderV1};
 pub use envelope::{
