@@ -68,6 +68,14 @@ const FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 29;
 const FULL_VECTOR_ACCOUNT_COUNT: usize = 32;
 const TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
 const COMPACTION_ACCOUNT_COUNT: usize = 27;
+const _: () = assert!(
+    clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
+        == clutch_structured_claim_adapter::runtime_contract::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
+);
+const _: () = assert!(
+    clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+        == STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+);
 
 const VAULT_AUTHORITY: usize = 0;
 const PAYER: usize = 1;

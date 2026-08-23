@@ -3,7 +3,7 @@
 This crate is the allocation-free runtime contract between the pure
 `clutch-structured-claim` economics and the small SBF/Token-2022 adapters. It
 keeps the historical 384-byte descriptor v1 decode-only, freezes the sole
-future 449-byte descriptor v2, and owns the exact 624-byte Series-scoped
+future 449-byte descriptor v2, and owns the exact 656-byte Series-scoped
 Structured root plus fixed-depth wrapper-recipe membership. The descriptor
 reconstructs native-claim and deployment/root/recipe-bound product identity
 from authenticated Product, basis, and deployment facts. Custody stages the
@@ -60,6 +60,6 @@ burns create beneficiary-free surplus backing, never a fee or treasury claim.
 
 Descriptor coordinate `0x88/1` is permanently historical and decode-only;
 `0x88/2` is the sole future descriptor. The mutable Structured market root is
-`0xaf/1`; `0xad/1` belongs to Product SeriesMarketLink and `0xae/1` belongs to
-Dealer CoveredDealerSelection. Central allocation alone does not make any
+`0xb7/1`; `0xad/1` belongs to Product SeriesMarketLink and `0xaf/1` belongs to
+the Dealer facility-lifetime Product Series-obligation binding. Central allocation alone does not make any
 Structured route executable.

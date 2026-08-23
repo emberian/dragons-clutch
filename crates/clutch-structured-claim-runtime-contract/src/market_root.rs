@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// Central Structured root account discriminator.
-pub const STRUCTURED_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xaf;
+pub const STRUCTURED_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb7;
 /// First Structured root account version.
 pub const STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact mutable Structured root account width.
@@ -1039,6 +1039,29 @@ mod tests {
         hostile[2] = 1;
         assert_eq!(
             StructuredMarketRootV1::decode(&hostile),
+            Err(Error::InvalidHeader)
+        );
+    }
+
+    #[test]
+    fn colliding_dealer_coordinate_never_decodes_as_structured_root() {
+        let hash = DeterministicHash;
+        let root = StructuredMarketRootV1::initialize(
+            binding(),
+            lineage(&hash),
+            id(17),
+            id(18),
+            1_000,
+            0,
+            7,
+            &hash,
+        )
+        .unwrap();
+        let mut bytes = root.encode().unwrap();
+        assert_eq!(bytes[0], 0xb7);
+        bytes[0] = 0xaf;
+        assert_eq!(
+            StructuredMarketRootV1::decode(&bytes),
             Err(Error::InvalidHeader)
         );
     }

@@ -422,8 +422,9 @@ pure runtime elsewhere does not make a route executable.
 | `0xac/2` | Failure/history | append-only aggregate interval-session history |
 | `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
 | `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
-| `0xaf/1` | StructuredClaim | 624-byte Series-scoped descriptor-family root |
+| `0xaf/1` | Dealer | counted facility-lifetime Product Series-obligation binding (772 bytes) |
 | `0xb0/1` | Product/replay | permanent compact MarketLifecycle replay receipt; replaces terminal `0xaa/1` |
+| `0xb7/1` | StructuredClaim | 656-byte Series-scoped descriptor-family root |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

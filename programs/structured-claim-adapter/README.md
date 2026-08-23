@@ -22,7 +22,7 @@ Historical descriptor v1 is exactly 384 bytes at `0x88/1` and remains
 decode-only. The sole future descriptor v2 is exactly 449 bytes at `0x88/2`.
 It additionally binds the exact Series-scoped Structured root and authenticated
 wrapper recipe, while retaining distinct descriptor/mint/mint-authority/vault
-bumps. The mutable `0xaf/1` root owns Product lineage, descriptor counts,
+bumps. The mutable `0xb7/1` root owns Product lineage, descriptor counts,
 ordered admission/terminal transcripts, refundable rent principal, and
 donation residue. Actual wrapper supply is always the extension-free
 Token-2022 mint; backing is always the dedicated base Position. Hoard, native
@@ -50,7 +50,7 @@ non-production central capability/dispatch tuples.
 Activation must be atomic with all of the following:
 
 - central capability activation for only the implemented family-local actions,
-  descriptor account `0x88/2`, and root account `0xaf/1`;
+  descriptor account `0x88/2`, and root account `0xb7/1`;
 - an exact capability-profile tuple and new profile/release identity;
 - main-dispatcher routing to this crate;
 - promotion of the laboratory-only base Position V3 action-35 handler into a
@@ -210,7 +210,7 @@ rent shortfall plan. Existing lamports stay locked in the permanent descriptor
 and mint identities and never become a refund, fee, bounty, reserve, treasury,
 or caller claim.
 
-The closable base Position/Replay pair and `0xaf/1` root are separate. The base
+The closable base Position/Replay pair and `0xb7/1` root are separate. The base
 charges the Product-authenticated rent owner each complete current-bank
 principal atop hostile prefunding, persists that principal separately from the
 donation floor/residue, and freezes Product's neutral lamport sink. Later close
