@@ -76,6 +76,21 @@ create a Market. Those routes remain blocked on SourcePlane V3, authenticated
 registry selectors, full-width Instance identity, and mutable component-owned
 funding state.
 
+The distinct `non-production-structured-custody-lab` profile admits exactly
+General V2 action 35 in addition to the full profile's four Source V3 actions.
+Action 35 hostile-decodes the current Realm collateral chain, MarketBinding and
+MarketRuntime, MarketInstanceV2 and NativeClaimBasis artifacts, Hoard V2,
+ClaimLedger V3, two Position V3 owners and their purpose-owned Replay V3
+envelopes, and the descriptor-pinned wrapper/base/Token-2022 deployments. It
+then atomically transfers exact free cash/native-Egg atoms between the ordinary
+and Structured vault Positions and advances both Replays. Persisted rent owner,
+refundable principal, and donation floor remain byte-exact, and no lamports
+move. The base endpoint does not mint or burn wrapper supply; Structured family
+actions `75/v1/1..=8` remain disabled until a separate wrapper program performs
+and reconciles that Token-2022 side.
+
+No build, measurement, SVM, or validator evidence exists yet for this profile.
+
 ```sh
 # one-time source/build preparation; subsequent builds are offline
 tools/agave-loopback-validator/fetch-source.sh

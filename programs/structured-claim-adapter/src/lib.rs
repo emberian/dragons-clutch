@@ -12,11 +12,10 @@
 //! authentication, hostile Solana account projection, exact CPI staging, and
 //! post-CPI reconciliation.
 //!
-//! Every family-local action is currently reserved but disabled. The
-//! admission check runs after reading only the three-byte extension header and
-//! before payload or account data is read. Pure planning APIs exist so the
-//! complete handler can be implemented before activation; they are not runtime
-//! admission and cannot make the deployed dispatcher execute this family.
+//! The default adapter keeps every family-local action disabled. The distinct
+//! `live-canonical-wrapper` build admits exactly actions 1, 2, and 4 for the
+//! separately deployed wrapper ELF; all other coordinates still refuse after
+//! reading only the three-byte extension header.
 
 mod accounts;
 mod custody;
@@ -65,6 +64,7 @@ pub use identity::{
     MINT_SEED, VAULT_OWNER_SEED,
 };
 pub use token2022_wire::{
+    decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
     plan_token_2022_cpi_v1, wrapper_mint_parser_plan_v1, wrapper_token_parser_plan_v1,
     CanonicalToken2022DecoderV1, Token2022InstructionPlanV1, WrapperMintParserPlanV1,
     WrapperTokenParserPlanV1, TOKEN_2022_BASE_ACCOUNT_BYTES,

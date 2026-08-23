@@ -26,6 +26,9 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# Activates only Structured actions 1/2/4 for the separately deployed wrapper
+# ELF. The base program does not enable this feature.
+live-canonical-wrapper = []
 
 [dependencies]
 clutch-collateral-adapter-v2 = { path = "../../crates/clutch-collateral-adapter-v2" }

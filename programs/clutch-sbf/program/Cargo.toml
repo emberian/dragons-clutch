@@ -38,6 +38,14 @@ non-production-real-pyth-lab = []
 # that can only read one. The builders exist so a bank campaign exercises the
 # real decoders at the real offsets instead of a convenient parallel encoding.
 laboratory-fixtures = []
+# Enables only the base-owned Structured vault-founding and custody endpoints
+# in a distinct local artifact identity. The collateral catalog contains the
+# byte-pinned real local Token-2022/legacy-SPL deployments but no fixture
+# account builders or mock-source defaults.
+non-production-structured-custody-lab = [
+    "dep:clutch-structured-claim",
+    "dep:clutch-structured-claim-adapter",
+]
 # Enables the non-activating Product/Series artifact-catalog laboratory. It can
 # publish exact successor artifacts, including immutable funding-requirement
 # bodies, but deliberately cannot register a Series or create an occurrence.
@@ -127,6 +135,8 @@ clutch-liveness = { path = "../../../crates/clutch-liveness" }
 clutch-source-plane-v3 = { path = "../../../crates/clutch-source-plane-v3" }
 clutch-source-plane-v3-adapter = { path = "../../../crates/clutch-source-plane-v3-adapter" }
 clutch-source-plane-v3-runtime = { path = "../../../crates/clutch-source-plane-v3-runtime" }
+clutch-structured-claim = { path = "../../../crates/clutch-structured-claim", optional = true }
+clutch-structured-claim-adapter = { path = "../../structured-claim-adapter", default-features = false, features = ["profile-full"], optional = true }
 clutch-solana-layout = { path = "../../solana-layout", default-features = false }
 clutch-solana-reference = { path = "../../solana-reference", default-features = false }
 solana-account-info = "=3.1.1"

@@ -2,7 +2,7 @@
 
 use crate::runtime_contract::{
     reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1,
-    StructuredClaimDescriptorV1, StructuredClaimRuntimeAddressesV1, DESCRIPTOR_ACCOUNT_TAG,
+    StructuredClaimDescriptorV2, StructuredClaimRuntimeAddressesV1, DESCRIPTOR_ACCOUNT_TAG,
     DESCRIPTOR_ACCOUNT_VERSION,
 };
 use clutch_structured_claim::DeploymentBinding;
@@ -21,7 +21,7 @@ pub const MINT_AUTHORITY_SEED: &[u8] = b"dc:claim-mint-auth:v1";
 pub const VAULT_OWNER_SEED: &[u8] = b"dc:claim-vault:v1";
 
 const _: () = assert!(DESCRIPTOR_ACCOUNT_TAG == 0x88);
-const _: () = assert!(DESCRIPTOR_ACCOUNT_VERSION == 1);
+const _: () = assert!(DESCRIPTOR_ACCOUNT_VERSION == 2);
 
 /// Authenticated executable and ProgramData observations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,7 +112,7 @@ impl PdaVerifierV1 for SolanaPdaVerifierV1 {
 /// identity from the deployment/hash/PDA checks that minted this value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundDescriptorV1 {
-    descriptor: StructuredClaimDescriptorV1,
+    descriptor: StructuredClaimDescriptorV2,
     identity: DescriptorIdentityV1,
     native_claim_id: Key,
     wrapper_product_id: Key,
@@ -121,7 +121,7 @@ pub struct BoundDescriptorV1 {
 
 impl BoundDescriptorV1 {
     /// Canonical persisted descriptor.
-    pub const fn descriptor(&self) -> &StructuredClaimDescriptorV1 {
+    pub const fn descriptor(&self) -> &StructuredClaimDescriptorV2 {
         &self.descriptor
     }
 
@@ -162,7 +162,7 @@ pub fn canonical_wrapper_product_id_v1(
 /// Join canonical descriptor semantics to exact deployments, hashes, and PDAs.
 #[allow(clippy::too_many_arguments)]
 pub fn bind_descriptor_v1<P: PdaVerifierV1>(
-    descriptor: StructuredClaimDescriptorV1,
+    descriptor: StructuredClaimDescriptorV2,
     basis: DescriptorBasisV1,
     deployments: RuntimeDeploymentsV1,
     expected_native_claim_id: Key,
@@ -211,12 +211,12 @@ pub fn bind_descriptor_v1<P: PdaVerifierV1>(
         (
             addresses.mint_authority,
             MINT_AUTHORITY_SEED,
-            descriptor.vault_bump,
+            descriptor.mint_authority_bump,
         ),
         (
             addresses.vault_owner,
             VAULT_OWNER_SEED,
-            descriptor.vault_bump,
+            descriptor.vault_owner_bump,
         ),
     ];
     let mut index = 0_usize;

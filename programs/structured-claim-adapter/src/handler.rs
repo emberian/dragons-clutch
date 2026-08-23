@@ -7,7 +7,7 @@ use crate::runtime_contract::{
     CanonicalUnwrapRequestV1, CanonicalWrapRequestV1, CreateDescriptorPayloadV1,
     DescriptorRetirementPlanV1, DescriptorStateV1, DonationCompactionPlanV1,
     MarketChangingWrapperTransitionPlanV1, PermanentIdentityFundingPlanV1,
-    PermanentTargetProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV1,
+    PermanentTargetProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV2,
     StructuredClaimPayloadV1, TerminalRedemptionPlanV1, VaultMutationRequestV1,
     WrapperTransitionPlanV1,
 };
@@ -41,7 +41,7 @@ pub struct BaseVaultCreationEvidenceV1 {
     pub position: Key,
     /// Canonical current-generation Replay account.
     pub replay: Key,
-    /// Initial generation, necessarily zero.
+    /// Initial Position generation, necessarily one.
     pub generation: u64,
     /// Initial replay sequence, necessarily zero.
     pub replay_sequence: u64,
@@ -53,10 +53,12 @@ pub struct BaseVaultCreationEvidenceV1 {
     pub position_prefund_lamports: u64,
     /// Existing Replay lamports before construction.
     pub replay_prefund_lamports: u64,
-    /// Payer-funded Position rent shortfall.
-    pub position_shortfall_lamports: u64,
-    /// Payer-funded Replay rent shortfall.
-    pub replay_shortfall_lamports: u64,
+    /// Full payer-funded Position live-plus-tombstone principal. Prefunding
+    /// never discounts this amount.
+    pub position_principal_lamports: u64,
+    /// Full payer-funded Replay principal. Prefunding never discounts this
+    /// amount.
+    pub replay_principal_lamports: u64,
     /// Exact Position lamports after construction.
     pub position_final_lamports: u64,
     /// Exact Replay lamports after construction.
@@ -126,17 +128,17 @@ pub fn authenticate_base_vault_creation_v1<V: BaseCapabilityVerifierV1>(
         }
         left += 1;
     }
-    if evidence.generation != 0
+    if evidence.generation != 1
         || evidence.replay_sequence != 0
         || evidence.position_final_lamports
             != evidence
                 .position_prefund_lamports
-                .checked_add(evidence.position_shortfall_lamports)
+                .checked_add(evidence.position_principal_lamports)
                 .ok_or(Error::Arithmetic)?
         || evidence.replay_final_lamports
             != evidence
                 .replay_prefund_lamports
-                .checked_add(evidence.replay_shortfall_lamports)
+                .checked_add(evidence.replay_principal_lamports)
                 .ok_or(Error::Arithmetic)?
         || evidence.position_final_lamports == 0
         || evidence.replay_final_lamports == 0
@@ -320,9 +322,9 @@ pub struct DescriptorWriteV1 {
     /// Canonical descriptor account address.
     pub address: Key,
     /// Complete expected descriptor before this write, absent for creation.
-    pub before: Option<StructuredClaimDescriptorV1>,
+    pub before: Option<StructuredClaimDescriptorV2>,
     /// Complete canonical 384-byte image after this write.
-    pub after: StructuredClaimDescriptorV1,
+    pub after: StructuredClaimDescriptorV2,
 }
 
 /// One staged outer execution operation.

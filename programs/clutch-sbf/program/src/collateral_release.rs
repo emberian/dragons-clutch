@@ -60,22 +60,29 @@ pub const LOCAL_REAL_LEGACY_SPL_RELEASE_V2: AdapterReleaseV2 = AdapterReleaseV2:
     COLLATERAL_LEGACY_SPL_PARSER_CPI_CODE_ID_V2,
 );
 
-#[cfg(feature = "laboratory-fixtures")]
+#[cfg(any(
+    feature = "laboratory-fixtures",
+    feature = "non-production-structured-custody-lab"
+))]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 2] = [
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
     LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
 ];
-#[cfg(not(feature = "laboratory-fixtures"))]
+#[cfg(not(any(
+    feature = "laboratory-fixtures",
+    feature = "non-production-structured-custody-lab"
+)))]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 0] = [];
 
 const _: () = assert!(ADAPTER_RELEASE_V2_BYTES == 192);
 
 /// Return the closed release catalog compiled into this program.
 ///
-/// The local-real laboratory ELF has binary-pinned Token-2022 and legacy SPL
-/// rows. Default and public-cluster artifacts deliberately have no rows and
-/// therefore deny collateral admission until separately reviewed deployment
-/// manifests are compiled into that exact ELF.
+/// The local-real laboratory ELFs have binary-pinned Token-2022 and legacy SPL
+/// rows. The Structured custody laboratory selects those runtime rows directly
+/// without compiling fixture-account builders. Default and public-cluster
+/// artifacts deliberately have no rows and therefore deny collateral admission
+/// until separately reviewed deployment manifests are compiled into that ELF.
 pub fn compiled_collateral_catalog_v2() -> Outcome<AdapterCatalogV2> {
     AdapterCatalogV2::new(&COMPILED_COLLATERAL_RELEASES_V2)
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
