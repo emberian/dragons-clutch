@@ -7,10 +7,24 @@ use clutch_source_plane_v3_adapter::AccountFamilyV3;
 use crate::auth::{account_data_parts_id, RuntimeKey};
 use crate::{Error, Result};
 
-const RUNTIME_ACCOUNT_MAGIC: [u8; 8] = *b"DCSRTA01";
+const RUNTIME_ACCOUNT_MAGIC_SUFFIX: [u8; 6] = *b"DCRTA1";
 
 /// Exact SourcePlane runtime account-envelope version.
 pub const RUNTIME_ACCOUNT_LAYOUT_VERSION: u16 = 1;
+/// Registered main-program version shared by promoted Source accounts.
+pub const RUNTIME_ACCOUNT_GLOBAL_VERSION: u8 = 1;
+/// Registered SourceHead account discriminator.
+pub const SOURCE_HEAD_ACCOUNT_TAG: u8 = 0x8b;
+/// Registered mutable OpenRawPage account discriminator.
+pub const OPEN_RAW_PAGE_ACCOUNT_TAG: u8 = 0x8d;
+/// Registered immutable RawPage account discriminator.
+pub const RAW_PAGE_ACCOUNT_TAG: u8 = 0x8e;
+/// Registered mutable WindowWork account discriminator.
+pub const WINDOW_WORK_ACCOUNT_TAG: u8 = 0x8f;
+/// Registered immutable WindowSeal account discriminator.
+pub const WINDOW_SEAL_ACCOUNT_TAG: u8 = 0x90;
+/// Registered immutable StatisticResult account discriminator.
+pub const STATISTIC_RESULT_ACCOUNT_TAG: u8 = 0x91;
 /// Exact bytes before the semantic core body.
 pub const RUNTIME_ACCOUNT_HEADER_BYTES: usize = 72;
 
@@ -130,14 +144,18 @@ pub fn decode_runtime_account<T: RuntimeAccountBodyV1>(
         .checked_add(T::ENCODED_LEN)
         .ok_or(Error::ArithmeticOverflow)?;
     if input.len() != expected
-        || input[..8] != RUNTIME_ACCOUNT_MAGIC
+        || input[1] != RUNTIME_ACCOUNT_GLOBAL_VERSION
+        || input[2..8] != RUNTIME_ACCOUNT_MAGIC_SUFFIX
         || le_u16(&input[8..10]) != RUNTIME_ACCOUNT_LAYOUT_VERSION
         || input[13..16].iter().any(|byte| *byte != 0)
     {
         return Err(Error::InvalidCodec);
     }
     let family = AccountFamilyV3::decode(le_u16(&input[10..12]))?;
-    if family != T::FAMILY || family.body_len() != T::ENCODED_LEN {
+    if family != T::FAMILY
+        || input[0] != registered_runtime_account_tag(family)?
+        || family.body_len() != T::ENCODED_LEN
+    {
         return Err(Error::InvalidCodec);
     }
     let header = RuntimeAccountHeaderV1 {
@@ -189,7 +207,9 @@ fn encode_runtime_header(
 ) -> Result<[u8; RUNTIME_ACCOUNT_HEADER_BYTES]> {
     header.validate(neutral_sink)?;
     let mut output = [0; RUNTIME_ACCOUNT_HEADER_BYTES];
-    output[..8].copy_from_slice(&RUNTIME_ACCOUNT_MAGIC);
+    output[0] = registered_runtime_account_tag(header.family)?;
+    output[1] = RUNTIME_ACCOUNT_GLOBAL_VERSION;
+    output[2..8].copy_from_slice(&RUNTIME_ACCOUNT_MAGIC_SUFFIX);
     output[8..10].copy_from_slice(&RUNTIME_ACCOUNT_LAYOUT_VERSION.to_le_bytes());
     output[10..12].copy_from_slice(&(header.family as u16).to_le_bytes());
     output[12] = header.bump;
@@ -198,6 +218,19 @@ fn encode_runtime_header(
     output[56..64].copy_from_slice(&header.donation_floor_lamports.to_le_bytes());
     output[64..72].copy_from_slice(&header.generation.to_le_bytes());
     Ok(output)
+}
+
+/// Registered global account discriminator for one promoted runtime family.
+pub const fn registered_runtime_account_tag(family: AccountFamilyV3) -> Result<u8> {
+    match family {
+        AccountFamilyV3::SourceHead => Ok(SOURCE_HEAD_ACCOUNT_TAG),
+        AccountFamilyV3::OpenRawPage => Ok(OPEN_RAW_PAGE_ACCOUNT_TAG),
+        AccountFamilyV3::RawPage => Ok(RAW_PAGE_ACCOUNT_TAG),
+        AccountFamilyV3::WindowWork => Ok(WINDOW_WORK_ACCOUNT_TAG),
+        AccountFamilyV3::WindowSeal => Ok(WINDOW_SEAL_ACCOUNT_TAG),
+        AccountFamilyV3::StatisticResult => Ok(STATISTIC_RESULT_ACCOUNT_TAG),
+        _ => Err(Error::InvalidCodec),
+    }
 }
 
 fn le_u16(input: &[u8]) -> u16 {

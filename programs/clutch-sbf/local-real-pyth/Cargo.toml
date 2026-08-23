@@ -45,9 +45,16 @@ clutch-sbf-svm-tests = { path = "../svm-tests", features = ["non-production-real
 clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
+clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement" }
+clutch-product-series = { path = "../../../crates/clutch-product-series" }
+clutch-retirement = { path = "../../../crates/clutch-retirement" }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
+clutch-source-plane-v3-adapter = { path = "../../../crates/clutch-source-plane-v3-adapter" }
+clutch-source-plane-v3-runtime = { path = "../../../crates/clutch-source-plane-v3-runtime" }
+clutch-structured-claim-runtime-contract = { path = "../../../crates/clutch-structured-claim-runtime-contract" }
 
 # Exact released host SDKs matching the pinned pyth-crosschain capture. The
 # deployed programs themselves are never rebuilt from these crates: the runner
