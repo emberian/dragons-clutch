@@ -277,9 +277,6 @@ pub fn authenticate_selected_direct_pair_v1<A: AuthenticatedDirectSelectionAutho
     }
     let consideration_cash_atoms = u64::try_from(consideration_price_units / scale)
         .map_err(|_| DirectPairErrorV1::ArithmeticOverflow)?;
-    if consideration_cash_atoms == 0 {
-        return Err(DirectPairErrorV1::InexactCashConversion);
-    }
 
     authority.authenticate_selected_pair(
         selection_transcript_id,

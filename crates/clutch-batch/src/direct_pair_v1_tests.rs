@@ -267,3 +267,29 @@ fn refuses_detached_selection_digest_and_unequal_fills() {
         Err(DirectPairErrorV1::Economic(_)) | Err(DirectPairErrorV1::FillMismatch)
     ));
 }
+
+#[test]
+fn exact_zero_price_is_not_mislabeled_as_rounding() {
+    let domain = domain(2, 100);
+    let price = price(&domain, 1, 0);
+    let book = book(
+        order(10, Side::Buy, 1, 10, 0),
+        order(11, Side::Sell, 1, 10, 0),
+    );
+    let candidate = candidate(7);
+    let authority = exact_authority(&domain, &book, &price, &candidate);
+    let selected = authenticate_selected_direct_pair_v1(
+        &authority,
+        authority.transcript,
+        &domain,
+        &book,
+        &price,
+        &candidate,
+    )
+    .unwrap();
+    assert_eq!(selected.quantity(), 7);
+    assert_eq!(selected.price_units_per_egg(), 0);
+    assert_eq!(selected.consideration_price_units(), 0);
+    assert_eq!(selected.consideration_cash_atoms(), 0);
+    assert_eq!(selected.boundary(), DirectCashBoundaryV1::ExactOnly);
+}
