@@ -1524,7 +1524,7 @@ impl CandidateCrankObservation<'_> {
                 {
                     OwnerSettlementPayloadV1::FreezeEntitlement(value) => {
                         value.epoch.bytes() == epoch
-                            && value.selected_candidate == self.window.selected_candidate_artifact
+                            && value.settlement_root == self.window.selected_candidate_artifact
                     }
                     _ => false,
                 }
@@ -1576,12 +1576,14 @@ pub enum KeeperReceiptObservation {
     VirtualSplit(VirtualSplitReceiptInputV1),
     VirtualMerge(VirtualMergeReceiptInputV1),
     AccountEnd {
+        settlement_root: [u8; 32],
         owner: AuthenticatedOwnerSettlementAccountV1,
         receipt: AuthenticatedSettlementReceiptEndV1,
         epoch_generation: u64,
         joined_settlement_transition_id: [u8; 32],
     },
     FinalizeOwner {
+        settlement_root: [u8; 32],
         owner: AuthenticatedOwnerSettlementAccountV1,
         position: AuthenticatedPositionCashV1,
         fee: AuthenticatedOwnerFeeDebitV1,
@@ -1630,6 +1632,7 @@ impl KeeperReceiptObservation {
                 ))
             }
             Self::AccountEnd {
+                settlement_root,
                 owner,
                 receipt,
                 epoch_generation,
@@ -1637,7 +1640,8 @@ impl KeeperReceiptObservation {
             } => {
                 let plan = prepare_account_receipt_end_v1(owner, receipt)
                     .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
-                if epoch_generation == 0
+                if settlement_root == [0; 32]
+                    || epoch_generation == 0
                     || joined_settlement_transition_id != plan.settlement_transition_id
                 {
                     return Err(WorkflowGraphError::ActionStateMismatch);
@@ -1652,6 +1656,7 @@ impl KeeperReceiptObservation {
                 ))
             }
             Self::FinalizeOwner {
+                settlement_root,
                 owner,
                 position,
                 fee,
@@ -1660,7 +1665,7 @@ impl KeeperReceiptObservation {
             } => {
                 let _plan = prepare_realize_owner_cash_v1(owner, position, fee, pot)
                     .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
-                if settlement_cash_pot_address == [0; 32] {
+                if settlement_root == [0; 32] || settlement_cash_pot_address == [0; 32] {
                     return Err(WorkflowGraphError::ZeroIdentity);
                 }
                 Ok((
@@ -1702,15 +1707,21 @@ impl KeeperReceiptObservation {
                 value.epoch.bytes() == input.receipt.epoch
                     && value.receipt.bytes() == input.receipt.receipt
             }
-            Self::AccountEnd { owner, receipt, .. } => {
+            Self::AccountEnd {
+                settlement_root,
+                owner,
+                receipt,
+                ..
+            } => {
                 let value = clutch_general_v2_contract::AccountReceiptEndPayloadV1::decode(payload)
                     .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
                 value.epoch.bytes() == receipt.epoch
-                    && value.selected_candidate.bytes() == receipt.candidate
+                    && value.settlement_root.bytes() == settlement_root
                     && value.owner_settlement.bytes() == owner.address
                     && value.receipt.bytes() == receipt.receipt
             }
             Self::FinalizeOwner {
+                settlement_root,
                 owner,
                 position,
                 pot,
@@ -1721,7 +1732,7 @@ impl KeeperReceiptObservation {
                     clutch_general_v2_contract::FinalizeOwnerSettlementPayloadV1::decode(payload)
                         .map_err(|_| WorkflowGraphError::InvalidCanonicalPayload)?;
                 value.epoch.bytes() == owner.accumulator.expectation.epoch
-                    && value.selected_candidate.bytes() == owner.accumulator.expectation.candidate
+                    && value.settlement_root.bytes() == settlement_root
                     && value.owner_settlement.bytes() == owner.address
                     && value.position.bytes() == position.position
                     && value.settlement_cash_pot.bytes() == settlement_cash_pot_address
