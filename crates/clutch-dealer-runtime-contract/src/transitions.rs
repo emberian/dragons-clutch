@@ -462,10 +462,11 @@ fn validate_facility_root_join_v2(
     state: &DealerStateV2,
 ) -> Result<()> {
     let facility_id = genesis.facility_id_for_policy(policy)?;
-    binding.binding_id_for(genesis, policy)?;
+    let binding_id = binding.binding_id_for(genesis, policy)?;
     if state.policy_id != genesis.policy_id
         || state.facility_id != facility_id.untyped()
         || state.facility_id != binding.facility_id
+        || state.facility_position_binding_id != binding_id.untyped()
         || state.facility_position_id != position.position_id()?
         || state.facility_position_account_id != binding.facility_position_account_id
         || state.facility_replay_account_id != binding.facility_replay_account_id

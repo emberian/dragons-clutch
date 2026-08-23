@@ -20,13 +20,16 @@
 mod budget;
 mod codec;
 mod facility;
+mod fee_bindings;
 mod funding_dependencies;
 mod lease;
+mod lease_v2;
 mod lp_funding;
 mod lp_page;
 mod pda;
 mod policy;
 mod pot;
+mod pot_v2;
 mod rent;
 mod root_tombstone;
 mod state;
@@ -35,13 +38,16 @@ mod transitions;
 
 pub use budget::*;
 pub use facility::*;
+pub use fee_bindings::*;
 pub use funding_dependencies::*;
 pub use lease::*;
+pub use lease_v2::*;
 pub use lp_funding::*;
 pub use lp_page::*;
 pub use pda::*;
 pub use policy::*;
 pub use pot::*;
+pub use pot_v2::*;
 pub use rent::*;
 pub use root_tombstone::*;
 pub use state::*;
@@ -130,6 +136,9 @@ pub const DEALER_SELECTED_FEE_BINDING_CONTENT_DOMAIN_V1: &[u8] =
 /// Transcript domain for candidate-wide completed fee settlement evidence.
 pub const DEALER_CANDIDATE_FEE_SETTLEMENT_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/candidate-fee-settlement/v1\0";
+/// Transcript domain for an owner-netted selected-record abort/close receipt.
+pub const DEALER_SELECTED_FEE_ABORT_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/selected-fee-abort/v1\0";
 /// Exact content domain for `FeeBudgetV1`.
 pub const FEE_BUDGET_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/fee-budget/v1\0";
 /// Exact content domain for `LivenessBudgetV1`.

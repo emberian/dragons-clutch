@@ -20,7 +20,7 @@ pub const DEALER_STATE_MAGIC_V2: [u8; 8] = *b"DCDSTAT2";
 pub const DEALER_STATE_VERSION_V2: u16 = 2;
 /// Exact bytes in one canonical `DealerStateV2` body.
 pub const DEALER_STATE_BYTES_V2: usize =
-    HEADER_BYTES + (13 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 40 + ROOT_RENT_OWNER_BYTES;
+    HEADER_BYTES + (14 * 32) + 8 + (6 * 8) + (MAX_OUTCOMES * 8) + 40 + ROOT_RENT_OWNER_BYTES;
 
 /// Exhaustive disjoint children owned by the authoritative V2 root.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -146,6 +146,8 @@ pub enum DealerChildKindV2 {
 pub struct CountedDealerChildV2 {
     /// Immutable facility identity.
     pub facility_id: Id,
+    /// Immutable Position-authority binding identity authenticated at initialization.
+    pub facility_position_binding_id: Id,
     /// Exhaustive V2 class.
     pub kind: DealerChildKindV2,
     /// Parent generation at admission.
@@ -283,6 +285,7 @@ impl DealerStateV2 {
         for identity in [
             self.policy_id,
             self.facility_id,
+            self.facility_position_binding_id,
             self.facility_position_id,
             self.facility_position_account_id,
             self.facility_replay_account_id,
@@ -482,6 +485,7 @@ impl FixedCodec for DealerStateV2 {
         for identity in [
             self.policy_id,
             self.facility_id,
+            self.facility_position_binding_id,
             self.facility_position_id,
             self.facility_position_account_id,
             self.facility_replay_account_id,
@@ -521,6 +525,7 @@ impl FixedCodec for DealerStateV2 {
         reader.header(&DEALER_STATE_MAGIC_V2, DEALER_STATE_VERSION_V2)?;
         let policy_id = reader.id();
         let facility_id = reader.id();
+        let facility_position_binding_id = reader.id();
         let facility_position_id = reader.id();
         let facility_position_account_id = reader.id();
         let facility_replay_account_id = reader.id();
@@ -551,6 +556,7 @@ impl FixedCodec for DealerStateV2 {
         let value = Self {
             policy_id,
             facility_id,
+            facility_position_binding_id,
             facility_position_id,
             facility_position_account_id,
             facility_replay_account_id,
@@ -581,5 +587,5 @@ impl FixedCodec for DealerStateV2 {
     }
 }
 
-const _: () = assert!(DEALER_STATE_BYTES_V2 == 740);
+const _: () = assert!(DEALER_STATE_BYTES_V2 == 772);
 const _: () = assert!(DEALER_STATE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

@@ -575,6 +575,7 @@ pub fn validate_facility_initialization_v2(
     };
     if state.policy_id != genesis.policy_id
         || state.facility_id != binding.facility_id
+        || state.facility_position_binding_id != binding_id.untyped()
         || state.facility_position_id != binding.facility_position_semantic_id
         || state.facility_position_account_id != binding.facility_position_account_id
         || state.facility_replay_account_id != binding.facility_replay_account_id

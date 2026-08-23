@@ -100,6 +100,8 @@ impl DealerRootTombstoneV1 {
             || self.policy_id != genesis.policy_id
             || self.facility_id != facility_id.untyped()
             || self.facility_position_binding_id != binding_id.untyped()
+            || self.facility_position_binding_id
+                != terminal_state.facility_position_binding_id
             || self.terminal_state_id != terminal_state.state_content_id()?
             || self.dealer_state_account_id != binding.dealer_state_account_id
             || self.facility_id != terminal_state.facility_id
