@@ -16,6 +16,7 @@ mod builder;
 mod direct;
 mod position;
 mod receipt_v4;
+mod receipt_v5;
 mod successor;
 mod successor_v3;
 mod successor_v4;
@@ -46,6 +47,8 @@ pub use receipt_v4::{
     SettlementReceiptDataIdV4, SettlementReceiptRouteV4, SETTLEMENT_RECEIPT_BODY_V4_BYTES,
     SETTLEMENT_RECEIPT_DATA_ID_DOMAIN_V4, SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V4_BYTES,
 };
+
+pub use receipt_v5::{AuthenticatedSettlementReceiptEndV5, SettlementReceiptDataIdV5};
 
 pub use successor::{
     build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v2,
@@ -92,9 +95,11 @@ pub use successor_v3::{
 pub use successor_v4::{
     build_owner_settlement_expectation_basis_book_v4,
     derive_owner_finalized_row_data_id_v4, prepare_create_owner_settlement_account_v4,
-    prepare_realize_owner_cash_v4, project_owner_merge_delivery_v4,
+    prepare_realize_owner_cash_semantic_v4, prepare_realize_owner_cash_v4,
+    project_owner_merge_delivery_v4,
     project_owner_receipt_end_to_owner_v4, project_owner_settlement_account_v4,
-    OwnerCashRealizationPlanV4, OwnerFinalizedRowDataHashV4, OwnerFinalizedRowDataIdV4,
+    OwnerCashRealizationPlanV4, OwnerCashRealizationSemanticPlanV4,
+    OwnerFinalizedRowDataHashV4, OwnerFinalizedRowDataIdV4,
     OwnerMergeDeliveryEvidenceV4, OwnerMergeDeliveryProjectionV4,
     OwnerSettlementAccountProjectionV4, OwnerSettlementAccountViewV4,
     OwnerSettlementAccumulatorV4, OwnerSettlementCreatePlanV4, OwnerSettlementDispositionV4,
