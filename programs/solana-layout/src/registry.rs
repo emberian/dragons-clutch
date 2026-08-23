@@ -346,13 +346,48 @@ pub enum GeneralV2Action {
 
 impl GeneralV2Action {
     /// First allocated General V2 local action tag.
-    pub const FIRST_TAG: u8 = Self::CreateMarket as u8;
+    pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = Self::ClosePosition as u8;
+    pub const LAST_TAG: u8 = 34;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::CreateMarket => 1,
+            Self::InitEpoch => 2,
+            Self::InitOrderPage => 3,
+            Self::PlaceOrder => 4,
+            Self::CancelOrder => 5,
+            Self::FreezeEpoch => 6,
+            Self::BeginCandidate => 7,
+            Self::WriteCandidateFeed => 8,
+            Self::SealCandidate => 9,
+            Self::InitClearWork => 10,
+            Self::GrowClearWork => 11,
+            Self::AdvanceClearOrders => 12,
+            Self::AdvanceClearSlices => 13,
+            Self::CompleteCandidateVerification => 14,
+            Self::FinalizeSelection => 15,
+            Self::ExpireCandidate => 16,
+            Self::MarkWorkClosed => 17,
+            Self::ClaimCandidateBond => 18,
+            Self::ClaimCandidateWork => 19,
+            Self::CleanupCandidate => 20,
+            Self::ClaimSolver => 21,
+            Self::CloseCandidateIndexPage => 22,
+            Self::ClaimEpochUnused => 23,
+            Self::FreezeEntitlement => 24,
+            Self::EntitleSlice => 25,
+            Self::ReleaseTerminalReservation => 26,
+            Self::CloseReceipt => 27,
+            Self::CloseReservation => 28,
+            Self::ClosePage => 29,
+            Self::ClosePot => 30,
+            Self::CloseCandidate => 31,
+            Self::CloseClearWork => 32,
+            Self::CloseEpoch => 33,
+            Self::ClosePosition => 34,
+        }
     }
 
     /// Decode one allocated General V2 local action tag.

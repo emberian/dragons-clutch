@@ -1585,9 +1585,7 @@ mod extension_registry_tests {
             assert!(disabled_canonical_tag(&bytes), "action {local_action}");
             assert_eq!(
                 process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
-                Err(ProgramError::Custom(
-                    ClutchError::UnsupportedInstruction as u32
-                )),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
                 "action {local_action}"
             );
         }
