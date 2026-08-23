@@ -187,7 +187,6 @@ pub fn advance_clear_order_v1(
         || candidate_bundle != work.candidate_bundle_digest
         || domain_digest != work.economic_domain_digest
         || economic_domain_account.epoch != work.epoch
-        || market_binding.binding.is_zero()
         || market_binding.market != work.market
         || market_binding.relation_policy_id != work.relation_policy_id
         || market_binding.price_measure_policy_v1_id != work.price_measure_policy_v1_id
@@ -523,7 +522,6 @@ pub fn advance_clear_slice_v1(
         || candidate_bundle != work.candidate_bundle_digest
         || domain_digest != work.economic_domain_digest
         || economic_domain_account.epoch != work.epoch
-        || market_binding.binding.is_zero()
         || market_binding.market != work.market
         || market_binding.relation_policy_id != work.relation_policy_id
         || market_binding.price_measure_policy_v1_id != work.price_measure_policy_v1_id
@@ -532,7 +530,7 @@ pub fn advance_clear_slice_v1(
         || market_binding.outcome_count != work.outcome_count
         || market_binding.price_scale != feed.price_scale
         || market_binding.relation_policy_id
-            != relation_v2_policy_id_v1().map_err(map_runtime_projection_error)?
+            != quantized_relation_v2_policy_id_v2().map_err(map_runtime_projection_error)?
         || market_binding.score_policy_id
             != score_v2_q_policy_id_v1().map_err(map_runtime_projection_error)?
     {
@@ -685,6 +683,10 @@ pub fn score_completed_clear_work_v1(
         || feed.slice_count != work.slice_count
         || candidate_bundle_digest_v1(&CanonicalSha256, sealed_candidate_feed, true)?
             != work.candidate_bundle_digest
+        || work.relation_policy_id
+            != quantized_relation_v2_policy_id_v2().map_err(map_runtime_projection_error)?
+        || work.score_policy_id
+            != score_v2_q_policy_id_v1().map_err(map_runtime_projection_error)?
     {
         return Err(GeneralV2WorkErrorV1::BindingMismatch);
     }

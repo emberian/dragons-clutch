@@ -19,7 +19,7 @@ pub const BEGIN_CANDIDATE_PAYLOAD_BYTES: usize = 64;
 pub const OPEN_CANDIDATE_FEED_PAYLOAD_BYTES: usize = 336;
 /// Exact fixed bytes before records in an action-8 segment variant.
 pub const WRITE_CANDIDATE_FEED_FIXED_BYTES: usize = 69;
-/// Exact payload bytes shared by actions 9, 10, 14, and 32.
+/// Exact payload bytes shared by actions 9, 10, 12, 13, 14, 16, and 32.
 pub const EPOCH_NODE_PAYLOAD_BYTES: usize = 64;
 /// Exact action-15 payload bytes.
 pub const FINALIZE_SELECTION_PAYLOAD_BYTES: usize = 32;
@@ -1000,6 +1000,8 @@ pub enum IdentityLabPayloadV1<'a> {
     InitClearWork(EpochNodePayloadV1),
     /// Action 12.
     AdvanceClearOrders(EpochNodePayloadV1),
+    /// Action 13.
+    AdvanceClearSlices(EpochNodePayloadV1),
     /// Action 14.
     CompleteCandidateVerification(EpochNodePayloadV1),
     /// Action 15.
@@ -1042,6 +1044,9 @@ pub fn decode_identity_lab_payload_v1(
             EpochNodePayloadV1::decode(payload)?,
         )),
         12 => Ok(IdentityLabPayloadV1::AdvanceClearOrders(
+            EpochNodePayloadV1::decode(payload)?,
+        )),
+        13 => Ok(IdentityLabPayloadV1::AdvanceClearSlices(
             EpochNodePayloadV1::decode(payload)?,
         )),
         14 => Ok(IdentityLabPayloadV1::CompleteCandidateVerification(
@@ -1104,7 +1109,18 @@ mod tests {
             Err(CodecError::ZeroIdentity)
         );
 
-        for (action, len) in [(6, 32usize), (7, 64), (9, 64), (10, 64), (14, 64), (15, 32)] {
+        for (action, len) in [
+            (6, 32usize),
+            (7, 64),
+            (9, 64),
+            (10, 64),
+            (12, 64),
+            (13, 64),
+            (14, 64),
+            (15, 32),
+            (16, 64),
+            (32, 64),
+        ] {
             let bytes = [7u8; 64];
             assert!(decode_identity_lab_payload_v1(action, &bytes[..len]).is_ok());
             assert_eq!(
@@ -1116,6 +1132,11 @@ mod tests {
             decode_identity_lab_payload_v1(1, &[]),
             Err(CodecError::InvalidState)
         );
+        let bytes = [7u8; EPOCH_NODE_PAYLOAD_BYTES];
+        assert!(matches!(
+            decode_identity_lab_payload_v1(13, &bytes),
+            Ok(IdentityLabPayloadV1::AdvanceClearSlices(_))
+        ));
     }
 
     #[test]
