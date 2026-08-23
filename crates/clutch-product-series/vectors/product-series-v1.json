@@ -1,7 +1,108 @@
 {
   "schema": "dragons-clutch/product-series-golden/v1",
   "hash": "sha256(domain_ascii || exact_body)",
-  "fixture": "four categorical outcomes, D=L=1000, two evidence-only recovery attempts, ordinal zero",
+  "integer_encoding": "little-endian",
+  "fixed_id_notation": "[N;32] means 32 repetitions of byte N",
+  "fixture_inputs": {
+    "native_claim_basis": {
+      "basis_degree": 0,
+      "outcome_count": 4,
+      "payout_count": 4,
+      "knot_count": 3,
+      "uniform_log2_spacing": 255,
+      "ambiguity_policy_registry_value": 1,
+      "edge_policy_registry_value": 1,
+      "denominator": 1000,
+      "active_payout_weights": [[1000, 0, 0, 0], [0, 1000, 0, 0], [0, 0, 1000, 0], [0, 0, 0, 1000]],
+      "active_payout_map": [0, 1, 2, 3],
+      "active_knots": [100, 200, 300],
+      "padding": "all remaining payout weights and knots are zero; remaining payout-map bytes are 255"
+    },
+    "evidence_only_recovery": {
+      "attempt_count": 2,
+      "attempts": [
+        {"repair_generation_delta": 0, "opens_after_primary_maturity_buckets": 0, "closes_after_primary_maturity_buckets": 2},
+        {"repair_generation_delta": 1, "opens_after_primary_maturity_buckets": 2, "closes_after_primary_maturity_buckets": 5}
+      ],
+      "padding": "six zero attempts"
+    },
+    "product_template": {
+      "source_plane_contract_id": "[1;32]",
+      "source_spec_id": "[2;32]",
+      "summary_program_id": "[3;32]",
+      "native_claim_basis_id": "cd98a262aff0fbbe153a46f2d7210ba8b14a14843accc0a1c0431ece40acb9ca",
+      "evidence_only_recovery_policy_id": "e46043825d2ff7dc51aacb74c85efdc951e146222fe60d5279d50736ea5dc552",
+      "compiler_release_id": "[4;32]",
+      "statistic_registry_value": 11,
+      "coverage_policy_registry_value": 12,
+      "window_span_buckets": 4,
+      "primary_maturity_grace_buckets": 2,
+      "base_repair_generation": 10,
+      "coverage_policy_parameter": 0
+    },
+    "market_genesis_profile": {
+      "realm_id": "[20;32]",
+      "profile_id": "[21;32]",
+      "price_grid_id": "[22;32]",
+      "fee_policy_id": "[23;32]",
+      "relation_policy_id": "[24;32]",
+      "score_policy_id": "[25;32]",
+      "candidate_lifecycle_policy_id": "[26;32]",
+      "candidate_liveness_policy_id": "[27;32]",
+      "retirement_policy_id": "[28;32]",
+      "capability_profile_id": "[29;32]",
+      "terminal_disposition_registry_value": 7,
+      "native_bearer_lot": 1000
+    },
+    "series_funding_quote": {
+      "evidence_only_recovery_policy_id": "e46043825d2ff7dc51aacb74c85efdc951e146222fe60d5279d50736ea5dc552",
+      "market_core": {"lamports": 10, "collateral_atoms": 0},
+      "recovery_reserve": {"lamports": 40, "collateral_atoms": 0},
+      "source_work": {"lamports": 30, "collateral_atoms": 0},
+      "liquidity_facility": {"lamports": 40, "collateral_atoms": 100},
+      "wrapper_set": {"lamports": 50, "collateral_atoms": 10},
+      "recovery_attempt_count": 2,
+      "recovery_attempt_funding": [
+        {"max_progress_units": 3, "lamports_per_progress_unit": 5},
+        {"max_progress_units": 2, "lamports_per_progress_unit": 7}
+      ],
+      "recovery_rent_principal_lamports": 11,
+      "padding": "six zero recovery-attempt funding rows"
+    },
+    "series_attachment_plan": {
+      "funding_quote_id": "44f18205471449455ee992ec0613362f5651613c2c9819568560eebbd69cfc99",
+      "liquidity_facility_plan_id": "[41;32]",
+      "wrapper_recipe_set_id": "[42;32]"
+    },
+    "series_plan": {
+      "product_template_id": "43dc967326bddff69db86b4d4be58bab67a582b1fc558326aa9c7e4cbc158419",
+      "market_genesis_profile_id": "1a18d2658833f12fb8ea67a9a1ff6bb7331ce647fee72fe11b536d105f292f36",
+      "attachment_plan_id": "35d1e74275a4ee21d19f2b68688adefbb14e2cfe6ea4caeef83d8f9b768d602f",
+      "first_start_bucket": 100,
+      "stride_buckets": 10,
+      "instance_count": 3,
+      "creation_lead_buckets": 5,
+      "market_collateral_cap": 1000
+    },
+    "series_funding_terms": {
+      "series_plan_id": "6e7ea7187db15c1e630938ebf12bb1788b9f0089e0769c29a45270922c9be58a",
+      "lamport_principal_refund": "[50;32]",
+      "collateral_principal_refund_token_account": "[51;32]",
+      "neutral_sink": "[52;32]",
+      "collateral_mint": "[53;32]",
+      "token_program": "[54;32]"
+    },
+    "compiled_ordinal_zero": {
+      "start_bucket": 100,
+      "end_bucket_exclusive": 104,
+      "primary_maturity_bucket_exclusive": 106,
+      "absolute_recovery_attempts": [
+        {"repair_generation": 10, "opens_at_bucket": 106, "closes_at_bucket": 108},
+        {"repair_generation": 11, "opens_at_bucket": 108, "closes_at_bucket": 111}
+      ],
+      "market_collateral_cap": 1000
+    }
+  },
   "vectors": [
     {
       "type": "NativeClaimBasisV1",
@@ -34,22 +135,28 @@
       "id_hex": "761aab2328712daef75d22fce3fb7d30de79bd189869ac17ff6f941cb2aea0f9"
     },
     {
+      "type": "SeriesFundingQuoteV1",
+      "body_bytes": 264,
+      "domain": "dragons-clutch/series-funding-quote/v1",
+      "id_hex": "44f18205471449455ee992ec0613362f5651613c2c9819568560eebbd69cfc99"
+    },
+    {
       "type": "SeriesAttachmentPlanV1",
       "body_bytes": 112,
       "domain": "dragons-clutch/series-attachment-plan/v1",
-      "id_hex": "ca071886104a97791fdc473e81c28b99bc5280de653e30c5c855aabb5fee0807"
+      "id_hex": "35d1e74275a4ee21d19f2b68688adefbb14e2cfe6ea4caeef83d8f9b768d602f"
     },
     {
       "type": "SeriesPlanV4",
       "body_bytes": 152,
       "domain": "dragons-clutch/series-plan/v4",
-      "id_hex": "2a4429e1ea3b7f5d0b7481ef881719473bdfb2715d73d1edeca71b0653ece3a5"
+      "id_hex": "6e7ea7187db15c1e630938ebf12bb1788b9f0089e0769c29a45270922c9be58a"
     },
     {
       "type": "SeriesFundingTermsV1",
       "body_bytes": 208,
       "domain": "dragons-clutch/series-funding-terms/v1",
-      "id_hex": "80593f347e41cba119d24463fc8726c1882fa036ba97ccad64bd088463504600"
+      "id_hex": "573bdccadc787e4a4bc3fb70a33c47a916eee27c914a66186ab0e09f52777d53"
     }
   ]
 }

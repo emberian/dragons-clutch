@@ -19,6 +19,7 @@ mod artifacts;
 mod codec;
 mod compile;
 mod funding;
+mod registry;
 
 pub use artifacts::{
     EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV1, MarketInstancePreimageV1,
@@ -35,8 +36,13 @@ pub use compile::{
     compile_ordinal, AbsoluteRecoveryAttemptV1, CompiledOrdinalV1, CompiledScheduleV1,
 };
 pub use funding::{
-    project_component_debits, AuthenticatedFundingQuoteV1, ComponentDebitV1, ComponentStatusV1,
-    DebitProjectionV1, FulfillmentStatusV1, FundingBalancesV1,
+    project_component_debits, AdapterAuthenticatedComponentStatusV1,
+    AdapterAuthenticatedFulfillmentStatusV1, ComponentDebitV1, DebitProjectionV1,
+    FundingBalancesV1, RecoveryAttemptFundingV1, SeriesFundingQuoteV1, SERIES_FUNDING_QUOTE_BYTES,
+    SERIES_FUNDING_QUOTE_DOMAIN,
+};
+pub use registry::{
+    CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
 };
 
 use sha2::{Digest, Sha256};
@@ -131,6 +137,10 @@ typed_id!(
 );
 typed_id!(SeriesPlanId, "Typed identity of one `SeriesPlanV4`.");
 typed_id!(
+    SeriesFundingQuoteId,
+    "Typed identity of one `SeriesFundingQuoteV1`."
+);
+typed_id!(
     SeriesFundingTermsId,
     "Typed identity of one `SeriesFundingTermsV1`."
 );
@@ -169,6 +179,8 @@ pub enum Error {
     InvalidComponentStatus,
     /// Available segregated funding could not cover the projected components.
     InsufficientPrepayment,
+    /// The selected capability profile does not admit the requested semantics.
+    UnsupportedCapability,
 }
 
 /// Result alias for this allocation-free core.

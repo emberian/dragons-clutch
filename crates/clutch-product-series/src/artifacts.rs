@@ -2,7 +2,7 @@ use crate::codec::{reject_legacy_numeric_fallback, Reader, Writer};
 use crate::{
     content_id, ContentId, Error, EvidenceOnlyRecoveryPolicyId, FixedCodec, MarketGenesisProfileId,
     MarketInstanceId, NativeClaimBasisId, ProductTemplateId, Result, SeriesAttachmentPlanId,
-    SeriesFundingTermsId, SeriesPlanId,
+    SeriesFundingQuoteId, SeriesFundingTermsId, SeriesPlanId,
 };
 
 const BASIS_MAGIC: [u8; 8] = *b"DCBASIS1";
@@ -686,18 +686,14 @@ impl MarketGenesisProfileV1 {
         Ok(())
     }
 
-    /// Join the native denominator and the registry-supplied exact BURN value.
-    pub fn validate_bindings(
-        &self,
-        basis: &NativeClaimBasisV1,
-        burn_terminal_disposition_registry_value: u16,
-    ) -> Result<()> {
+    /// Join the native denominator to the exact bearer lot.
+    ///
+    /// Terminal disposition and capability support are checked by the complete
+    /// [`crate::RegistryCapabilityProjectionV1`] join.
+    pub fn validate_native_lot(&self, basis: &NativeClaimBasisV1) -> Result<()> {
         self.validate_shape()?;
         basis.validate()?;
-        if burn_terminal_disposition_registry_value == 0
-            || self.terminal_disposition_registry_value != burn_terminal_disposition_registry_value
-            || !self.native_bearer_lot.is_multiple_of(basis.denominator)
-        {
+        if !self.native_bearer_lot.is_multiple_of(basis.denominator) {
             return Err(Error::MismatchedArtifact);
         }
         Ok(())
@@ -859,7 +855,7 @@ impl FixedCodec for MarketInstancePreimageV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesAttachmentPlanV1 {
     /// Exact per-component funding quote identity.
-    pub funding_quote_id: ContentId,
+    pub funding_quote_id: SeriesFundingQuoteId,
     /// Exact liquidity-facility plan identity.
     pub liquidity_facility_plan_id: ContentId,
     /// Exact canonical wrapper-recipe set identity.
@@ -894,7 +890,7 @@ impl FixedCodec for SeriesAttachmentPlanV1 {
         writer.bytes(&ATTACHMENT_MAGIC);
         writer.u16(SCHEMA_V1);
         writer.reserved(6);
-        writer.id(self.funding_quote_id);
+        writer.id(self.funding_quote_id.content_id());
         writer.id(self.liquidity_facility_plan_id);
         writer.id(self.wrapper_recipe_set_id);
         writer.finish()
@@ -908,7 +904,7 @@ impl FixedCodec for SeriesAttachmentPlanV1 {
         }
         reader.reserved(6)?;
         let value = Self {
-            funding_quote_id: reader.id(),
+            funding_quote_id: SeriesFundingQuoteId::from_bytes(reader.id().bytes()),
             liquidity_facility_plan_id: reader.id(),
             wrapper_recipe_set_id: reader.id(),
         };
@@ -985,7 +981,7 @@ impl SeriesPlanV4 {
         Ok(current_bucket >= self.creation_open_bucket(ordinal)? && current_bucket < start)
     }
 
-    /// Validate exact referenced bodies and the final possible recovery deadline.
+    /// Validate exact market-core bodies, structural Attachment, and final deadline.
     pub fn validate_bindings(
         &self,
         template: &ProductTemplateV4,
@@ -993,11 +989,11 @@ impl SeriesPlanV4 {
         recovery: &EvidenceOnlyRecoveryPolicyV1,
         genesis: &MarketGenesisProfileV1,
         attachment: &SeriesAttachmentPlanV1,
-        burn_terminal_disposition_registry_value: u16,
+        registry: &crate::RegistryCapabilityProjectionV1,
     ) -> Result<()> {
         self.validate_shape()?;
         template.validate_bindings(basis, recovery)?;
-        genesis.validate_bindings(basis, burn_terminal_disposition_registry_value)?;
+        registry.validate_complete_join(self, template, basis, recovery, genesis)?;
         attachment.validate()?;
         if self.product_template_id != template.id()?
             || self.market_genesis_profile_id != genesis.id()?
@@ -1111,27 +1107,25 @@ impl SeriesFundingTermsV1 {
         Ok(())
     }
 
-    /// Join funding ownership to Series, Genesis, and admitted collateral.
-    ///
-    /// The final two identities are projections from an adapter-authenticated
-    /// immutable collateral policy. The policy remains their semantic owner;
-    /// this codec stores only the exact funding-side references.
+    /// Join funding ownership to Series, Genesis, and the complete Realm view.
     pub fn validate_bindings(
         &self,
         series: &SeriesPlanV4,
+        template: &ProductTemplateV4,
+        basis: &NativeClaimBasisV1,
+        recovery: &EvidenceOnlyRecoveryPolicyV1,
         genesis: &MarketGenesisProfileV1,
-        policy_admitted_collateral_mint: ContentId,
-        drivable_token_program: ContentId,
+        registry: &crate::RegistryCapabilityProjectionV1,
     ) -> Result<()> {
         self.validate_shape()?;
-        series.validate_shape()?;
-        genesis.validate_shape()?;
-        policy_admitted_collateral_mint.validate()?;
-        drivable_token_program.validate()?;
+        registry.validate_complete_join(series, template, basis, recovery, genesis)?;
         if self.series_plan_id != series.id()?
             || series.market_genesis_profile_id != genesis.id()?
-            || self.collateral_mint != policy_admitted_collateral_mint
-            || self.token_program != drivable_token_program
+            || registry.realm_collateral.realm_id != genesis.realm_id
+            || registry.realm_collateral.profile_id != genesis.profile_id
+            || self.collateral_mint != registry.realm_collateral.collateral_mint
+            || self.token_program != registry.realm_collateral.token_program
+            || self.neutral_sink != registry.realm_collateral.neutral_incinerator
         {
             return Err(Error::MismatchedArtifact);
         }

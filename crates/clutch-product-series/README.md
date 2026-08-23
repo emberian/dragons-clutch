@@ -12,6 +12,7 @@ The crucial identity split is:
 ```text
 MarketInstanceId = H(TemplateId, MarketGenesisProfileId, start, cap)
 
+SeriesFundingQuoteId   = H(exact per-component lamport/collateral amounts)
 SeriesAttachmentPlanId = H(FundingQuoteId, LiquidityPlanId, WrapperSetId)
 SeriesPlanId           = H(TemplateId, GenesisProfileId, AttachmentPlanId,
                            finite recurrence, cap)
@@ -114,28 +115,37 @@ Domain: `dragons-clutch/market-genesis-profile/v1`
 | `336..344` | native bearer lot |
 | `344..352` | reserved zero |
 
-The live join supplies the central registry's exact `BURN` disposition value
-and proves equality. The core also requires the basis denominator to divide the
-bearer lot. It does not allocate the `BURN` registry value itself.
+The live join supplies a complete market-core
+`RegistryCapabilityProjectionV1`. The pure
+core equality-checks its exact statistic, coverage, ambiguity, edge, and `BURN`
+values; capability-profile and semantic-owner identities; degree and parameter
+support; operational limits; and immutable Realm/Profile collateral facts. The
+core also requires the basis denominator to divide the bearer lot. It allocates
+no registry values. The projection is deliberately not a codec and cannot
+authenticate itself: the adapter must derive it from an authenticated central
+release manifest and immutable Realm/Profile account before live activation.
 
 ### Remaining exact bodies
 
 | Type | Bytes and offsets | Domain |
 |---|---|---|
 | `MarketInstancePreimageV1` | 88: magic `0..8`, Template ID `8..40`, GenesisProfile ID `40..72`, start `72..80`, cap `80..88` | `dragons-clutch/market-instance/v1` |
+| `SeriesFundingQuoteV1` | 264: header/count `0..16`, RecoveryPolicy ID `16..48`, five ordered `(lamports u64, collateral atoms u64)` components `48..128`, recovery rent principal `128..136`, eight `(progress cap u64, lamports/unit u64)` rows `136..264` | `dragons-clutch/series-funding-quote/v1` |
 | `SeriesAttachmentPlanV1` | 112: 16-byte header, FundingQuote ID `16..48`, LiquidityFacilityPlan ID `48..80`, WrapperRecipeSet ID `80..112` | `dragons-clutch/series-attachment-plan/v1` |
 | `SeriesPlanV4` | 152: 16-byte header, Template/Genesis/Attachment IDs `16..112`, first start `112..120`, stride `120..128`, count `128..132`, reserved `132..136`, lead `136..144`, cap `144..152` | `dragons-clutch/series-plan/v4` |
 | `SeriesFundingTermsV1` | 208: 16-byte header, Series ID `16..48`, lamport refund `48..80`, collateral refund token account `80..112`, neutral sink `112..144`, collateral mint `144..176`, token program `176..208` | `dragons-clutch/series-funding-terms/v1` |
 
 ## Pure compilation and funding
 
-`compile_ordinal` authenticates every supplied basis/recovery/Template/Genesis/
-Attachment/Series content join, validates the terminal `BURN` value and bearer
-lot, requires the Market cap to be at least one native bearer lot and an exact
-multiple of that lot, checks the final finite recovery deadline, and derives an
-absolute schedule and full-width MarketInstanceId. Series provenance and
-attachments remain next to the market result rather than entering its economic
-preimage.
+`compile_ordinal` validates every supplied basis/recovery/Template/Genesis/
+Attachment/Series content join and the complete market-core
+registry/capability/Realm projection. It checks the terminal `BURN` value and bearer lot, requires the
+Market cap to be at least one native bearer lot, an exact multiple of that lot,
+and no greater than the Realm ceiling, checks the final finite recovery
+deadline, and derives an absolute schedule and full-width MarketInstanceId.
+Series provenance and attachments remain next to the market result rather than
+entering its economic preimage. `CompiledScheduleV1::validate` is the sole pure
+owner of absolute schedule shape, ordering, generation, and padding checks.
 
 A singleton Series has the sole canonical `stride = 0`; a multi-instance
 Series requires a positive stride. This pure representation imposes no
@@ -144,21 +154,42 @@ count: checked final-range arithmetic remains the exact admission bound, while
 a live capability profile may impose and identity-bind stricter operational
 limits.
 
-`SeriesFundingTermsV1::validate_bindings` additionally requires the exact
-GenesisProfile and the collateral mint/token-program projection returned by an
-adapter-authenticated immutable Realm/Profile collateral policy. It does not
-attempt to duplicate or interpret that collateral policy.
+`SeriesFundingTermsV1::validate_bindings` repeats the complete structural join
+and additionally requires the exact Realm/Profile collateral mint, token
+program, and canonical neutral incinerator. It does not authenticate or
+duplicate the Realm collateral policy.
 
-`project_component_debits` accepts an adapter-authenticated FundingQuote view
-and exact `Absent`/`PresentExact` states. It projects independent market-core,
-recovery-reserve, source-work, liquidity, and wrapper debits with checked sums
-and segregated lamport/collateral balances. A mismatch is never a status. Market
-core and mandatory recovery state must be created or reused together.
+`SeriesFundingQuoteV1` is the sole exact owner of per-component amounts and
+recovery work pricing. It binds the exact RecoveryPolicy ID, one positive
+progress-cap/rate row per active policy attempt, zero padding, separately owned
+recovery rent, and the checked aggregate recovery component. Changing a cap or
+rate changes its typed digest even when the maximum aggregate work principal is
+unchanged. `project_component_debits` accepts the expected recovery policy, the
+exact quote, and an adapter-authenticated occurrence/Attachment/quote status. It projects
+independent market-core, recovery-reserve, source-work, liquidity, and wrapper
+debits with checked sums and segregated lamport/collateral balances. A mismatch
+is never a status. Market core and mandatory recovery state must be created or
+reused together. `PresentExactAndCapitalized` means the adapter already proved
+the exact component identity, state, and required balances; the public Rust
+value is not itself that external proof.
 
-The quote artifact remains the semantic owner of amounts; this crate does not
-persist a parallel quote DTO. Applying the projection atomically, proving
-account absence or exact existence, preserving payer/donation ownership, and
-moving real lamports/tokens are adapter obligations.
+This projection is intentionally for one occurrence only. It is not Series
+activation, prepayment, fulfillment, or refund authorization. A separate
+mutable whole-Series funding owner must bind total activation funding, cursor,
+component receipts, lapse, and refunds before any live adapter may claim that a
+finite Series is prepaid or fulfilled. Applying a one-occurrence projection
+atomically, proving absence or exact capitalized existence, preserving
+payer/donation ownership, and moving real lamports/tokens remain adapter
+obligations.
+
+The pure Series join treats nonzero LiquidityFacilityPlan and WrapperRecipeSet
+IDs as structural attachment references only. It does not authenticate those
+plan bodies, prove their component quote amounts, or prove that the selected
+runtime capability profile admits the exact liquidity-dealer and
+structured-claim releases. Live attachment activation remains fail-closed until
+an adapter-authenticated attachment-capability join supplies and checks those
+authoritative bodies. This restriction does not alter `MarketInstanceId`, from
+which operational attachments are deliberately excluded.
 
 ## Compatibility refusal and evidence
 
@@ -166,8 +197,9 @@ The legacy `DCTMPLV3` and `DCPAYTV3` magics return
 `LegacyNumericFallback`. A current V3 Template/Payout body cannot be padded,
 reinterpreted, or relabeled into these successor semantics.
 
-Golden digests are frozen in `vectors/product-series-v1.json` and independently
-asserted byte-for-byte by the adversarial integration test.
+Golden digests and every fixture input are frozen in
+`vectors/product-series-v1.json`; the adversarial integration test independently
+recomputes each digest and checks every manifest entry.
 
 ```text
 cargo test --manifest-path crates/clutch-product-series/Cargo.toml --offline --locked --release

@@ -1,4 +1,6 @@
 use clutch_product_series::*;
+use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 const BURN_REGISTRY_VALUE: u16 = 7;
 
@@ -112,9 +114,61 @@ fn genesis() -> MarketGenesisProfileV1 {
     }
 }
 
+fn registry_for(
+    template: &ProductTemplateV4,
+    basis: &NativeClaimBasisV1,
+    recovery: &EvidenceOnlyRecoveryPolicyV1,
+    genesis: &MarketGenesisProfileV1,
+) -> RegistryCapabilityProjectionV1 {
+    RegistryCapabilityProjectionV1 {
+        registry_release_id: id(70),
+        capability_profile_id: genesis.capability_profile_id,
+        statistic_registry_value: template.statistic_registry_value,
+        coverage_policy_registry_value: template.coverage_policy_registry_value,
+        ambiguity_policy_registry_value: basis.ambiguity_policy_registry_value,
+        edge_policy_registry_value: basis.edge_policy_registry_value,
+        burn_terminal_disposition_registry_value: BURN_REGISTRY_VALUE,
+        supported_basis_degrees: [true; 4],
+        max_outcome_count: 16,
+        max_degree_zero_payout_count: 16,
+        max_recovery_attempt_count: 8,
+        min_coverage_policy_parameter: 0,
+        max_coverage_policy_parameter: u64::MAX,
+        max_window_span_buckets: u64::MAX,
+        max_series_instance_count: u32::MAX,
+        semantic_owners: CapabilitySemanticOwnersV1 {
+            source_plane_contract_id: template.source_plane_contract_id,
+            source_spec_id: template.source_spec_id,
+            summary_program_id: template.summary_program_id,
+            native_claim_basis_id: basis.id().unwrap(),
+            evidence_only_recovery_policy_id: recovery.id().unwrap(),
+            product_compiler_release_id: template.compiler_release_id,
+            price_grid_id: genesis.price_grid_id,
+            fee_policy_id: genesis.fee_policy_id,
+            relation_policy_id: genesis.relation_policy_id,
+            score_policy_id: genesis.score_policy_id,
+            candidate_lifecycle_policy_id: genesis.candidate_lifecycle_policy_id,
+            candidate_liveness_policy_id: genesis.candidate_liveness_policy_id,
+            retirement_policy_id: genesis.retirement_policy_id,
+        },
+        realm_collateral: RealmCollateralProjectionV1 {
+            realm_id: genesis.realm_id,
+            profile_id: genesis.profile_id,
+            collateral_mint: id(53),
+            token_program: id(54),
+            neutral_incinerator: id(52),
+            market_collateral_cap_ceiling: 2_000,
+        },
+    }
+}
+
+fn registry() -> RegistryCapabilityProjectionV1 {
+    registry_for(&template(), &basis(), &recovery(), &genesis())
+}
+
 fn attachment() -> SeriesAttachmentPlanV1 {
     SeriesAttachmentPlanV1 {
-        funding_quote_id: id(40),
+        funding_quote_id: quote().id().unwrap(),
         liquidity_facility_plan_id: id(41),
         wrapper_recipe_set_id: id(42),
     }
@@ -191,6 +245,7 @@ fn every_codec_round_trips_and_refuses_wrong_length_or_magic() {
         collateral_cap: 1_000,
     };
     assert_codec(&market);
+    assert_codec(&quote());
     assert_codec(&attachment());
     assert_codec(&series());
     assert_codec(&funding_terms());
@@ -217,6 +272,22 @@ fn canonical_offsets_match_the_documented_wire() {
     genesis().encode_into(&mut genesis_bytes).unwrap();
     assert_eq!(&genesis_bytes[12..16], &[0; 4]);
     assert_eq!(&genesis_bytes[344..352], &[0; 8]);
+
+    let mut quote_bytes = [0; SERIES_FUNDING_QUOTE_BYTES];
+    quote().encode_into(&mut quote_bytes).unwrap();
+    assert_eq!(&quote_bytes[0..8], b"DCFQUOT1");
+    assert_eq!(quote_bytes[10], 2);
+    assert_eq!(&quote_bytes[11..16], &[0; 5]);
+    assert_eq!(&quote_bytes[16..48], &recovery().id().unwrap().bytes());
+    assert_eq!(
+        u64::from_le_bytes(quote_bytes[64..72].try_into().unwrap()),
+        40
+    );
+    assert_eq!(
+        u64::from_le_bytes(quote_bytes[128..136].try_into().unwrap()),
+        11
+    );
+    assert_eq!(&quote_bytes[168..264], &[0; 96]);
 }
 
 #[test]
@@ -228,14 +299,14 @@ fn market_identity_excludes_attachment_and_funding_choices() {
         &recovery(),
         &genesis(),
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry(),
         0,
     )
     .unwrap();
 
     for changed_attachment in [
         SeriesAttachmentPlanV1 {
-            funding_quote_id: id(60),
+            funding_quote_id: SeriesFundingQuoteId::from_bytes([60; 32]),
             ..attachment()
         },
         SeriesAttachmentPlanV1 {
@@ -255,7 +326,7 @@ fn market_identity_excludes_attachment_and_funding_choices() {
             &recovery(),
             &genesis(),
             &changed_attachment,
-            BURN_REGISTRY_VALUE,
+            &registry(),
             0,
         )
         .unwrap();
@@ -279,7 +350,7 @@ fn market_identity_commits_template_profile_start_and_cap() {
         &recovery(),
         &genesis(),
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry(),
         0,
     )
     .unwrap();
@@ -294,7 +365,7 @@ fn market_identity_commits_template_profile_start_and_cap() {
         &recovery(),
         &genesis(),
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry_for(&changed_template, &basis(), &recovery(), &genesis()),
         0,
     )
     .unwrap();
@@ -310,7 +381,7 @@ fn market_identity_commits_template_profile_start_and_cap() {
         &recovery(),
         &changed_genesis,
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry_for(&template(), &basis(), &recovery(), &changed_genesis),
         0,
     )
     .unwrap();
@@ -323,7 +394,7 @@ fn market_identity_commits_template_profile_start_and_cap() {
         &recovery(),
         &genesis(),
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry(),
         1,
     )
     .unwrap();
@@ -338,7 +409,7 @@ fn market_identity_commits_template_profile_start_and_cap() {
         &recovery(),
         &genesis(),
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry(),
         0,
     )
     .unwrap();
@@ -357,7 +428,7 @@ fn market_cap_is_one_or_more_exact_native_lots() {
             &recovery(),
             &genesis(),
             &attachment(),
-            BURN_REGISTRY_VALUE,
+            &registry(),
             0,
         ),
         Err(Error::MismatchedArtifact)
@@ -373,7 +444,7 @@ fn market_cap_is_one_or_more_exact_native_lots() {
             &recovery(),
             &genesis(),
             &attachment(),
-            BURN_REGISTRY_VALUE,
+            &registry(),
             0,
         ),
         Err(Error::MismatchedArtifact)
@@ -400,7 +471,7 @@ fn joins_and_schedule_are_exact_and_checked() {
         &recovery(),
         &genesis(),
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry(),
         0,
     )
     .unwrap();
@@ -414,10 +485,26 @@ fn joins_and_schedule_are_exact_and_checked() {
     assert!(!series().is_creation_eligible(0, 100).unwrap());
     assert_eq!(series().start_bucket(3), Err(Error::WrongOrdinal));
     funding_terms()
-        .validate_bindings(&series(), &genesis(), id(53), id(54))
+        .validate_bindings(
+            &series(),
+            &template(),
+            &basis(),
+            &recovery(),
+            &genesis(),
+            &registry(),
+        )
         .unwrap();
+    let mut wrong_collateral = registry();
+    wrong_collateral.realm_collateral.collateral_mint = id(99);
     assert_eq!(
-        funding_terms().validate_bindings(&series(), &genesis(), id(99), id(54)),
+        funding_terms().validate_bindings(
+            &series(),
+            &template(),
+            &basis(),
+            &recovery(),
+            &genesis(),
+            &wrong_collateral,
+        ),
         Err(Error::MismatchedArtifact)
     );
 
@@ -431,15 +518,201 @@ fn joins_and_schedule_are_exact_and_checked() {
             &recovery(),
             &genesis(),
             &attachment(),
-            BURN_REGISTRY_VALUE,
+            &registry(),
             0,
         ),
         Err(Error::MismatchedArtifact)
     );
+    let mut wrong_burn = registry();
+    wrong_burn.burn_terminal_disposition_registry_value = BURN_REGISTRY_VALUE + 1;
     assert_eq!(
-        genesis().validate_bindings(&basis(), BURN_REGISTRY_VALUE + 1),
+        wrong_burn.validate_complete_join(
+            &series(),
+            &template(),
+            &basis(),
+            &recovery(),
+            &genesis(),
+        ),
         Err(Error::MismatchedArtifact)
     );
+}
+
+#[test]
+fn registry_profile_join_is_total_and_realm_bounded() {
+    let validate = |projection: &RegistryCapabilityProjectionV1| {
+        projection.validate_complete_join(&series(), &template(), &basis(), &recovery(), &genesis())
+    };
+    validate(&registry()).unwrap();
+
+    let mut wrong_statistic = registry();
+    wrong_statistic.statistic_registry_value += 1;
+    assert_eq!(validate(&wrong_statistic), Err(Error::MismatchedArtifact));
+    let mut wrong_coverage = registry();
+    wrong_coverage.coverage_policy_registry_value += 1;
+    assert_eq!(validate(&wrong_coverage), Err(Error::MismatchedArtifact));
+    let mut wrong_ambiguity = registry();
+    wrong_ambiguity.ambiguity_policy_registry_value += 1;
+    assert_eq!(validate(&wrong_ambiguity), Err(Error::MismatchedArtifact));
+    let mut wrong_edge = registry();
+    wrong_edge.edge_policy_registry_value += 1;
+    assert_eq!(validate(&wrong_edge), Err(Error::MismatchedArtifact));
+    let mut wrong_burn = registry();
+    wrong_burn.burn_terminal_disposition_registry_value += 1;
+    assert_eq!(validate(&wrong_burn), Err(Error::MismatchedArtifact));
+    let mut wrong_profile = registry();
+    wrong_profile.capability_profile_id = id(99);
+    assert_eq!(validate(&wrong_profile), Err(Error::MismatchedArtifact));
+    let mut wrong_source_owner = registry();
+    wrong_source_owner.semantic_owners.source_plane_contract_id = id(99);
+    assert_eq!(
+        validate(&wrong_source_owner),
+        Err(Error::MismatchedArtifact)
+    );
+    let mut wrong_lifecycle_owner = registry();
+    wrong_lifecycle_owner
+        .semantic_owners
+        .candidate_lifecycle_policy_id = id(99);
+    assert_eq!(
+        validate(&wrong_lifecycle_owner),
+        Err(Error::MismatchedArtifact)
+    );
+    let mut wrong_realm = registry();
+    wrong_realm.realm_collateral.realm_id = id(99);
+    assert_eq!(validate(&wrong_realm), Err(Error::MismatchedArtifact));
+    let mut wrong_realm_profile = registry();
+    wrong_realm_profile.realm_collateral.profile_id = id(99);
+    assert_eq!(
+        validate(&wrong_realm_profile),
+        Err(Error::MismatchedArtifact)
+    );
+
+    let mut unsupported_degree = registry();
+    unsupported_degree.supported_basis_degrees[0] = false;
+    assert_eq!(
+        validate(&unsupported_degree),
+        Err(Error::UnsupportedCapability)
+    );
+    let mut unsupported_outcomes = registry();
+    unsupported_outcomes.max_outcome_count = 3;
+    assert_eq!(
+        validate(&unsupported_outcomes),
+        Err(Error::UnsupportedCapability)
+    );
+    let mut unsupported_payouts = registry();
+    unsupported_payouts.max_degree_zero_payout_count = 3;
+    assert_eq!(
+        validate(&unsupported_payouts),
+        Err(Error::UnsupportedCapability)
+    );
+    let mut unsupported_recovery = registry();
+    unsupported_recovery.max_recovery_attempt_count = 1;
+    assert_eq!(
+        validate(&unsupported_recovery),
+        Err(Error::UnsupportedCapability)
+    );
+    let mut unsupported_parameter = registry();
+    unsupported_parameter.min_coverage_policy_parameter = 1;
+    assert_eq!(
+        validate(&unsupported_parameter),
+        Err(Error::UnsupportedCapability)
+    );
+    let mut unsupported_window = registry();
+    unsupported_window.max_window_span_buckets = 3;
+    assert_eq!(
+        validate(&unsupported_window),
+        Err(Error::UnsupportedCapability)
+    );
+    let mut unsupported_count = registry();
+    unsupported_count.max_series_instance_count = 2;
+    assert_eq!(
+        validate(&unsupported_count),
+        Err(Error::UnsupportedCapability)
+    );
+    let mut unsupported_cap = registry();
+    unsupported_cap
+        .realm_collateral
+        .market_collateral_cap_ceiling = 999;
+    assert_eq!(
+        validate(&unsupported_cap),
+        Err(Error::UnsupportedCapability)
+    );
+
+    let mut wrong_sink = funding_terms();
+    wrong_sink.neutral_sink = id(99);
+    assert_eq!(
+        wrong_sink.validate_bindings(
+            &series(),
+            &template(),
+            &basis(),
+            &recovery(),
+            &genesis(),
+            &registry(),
+        ),
+        Err(Error::MismatchedArtifact)
+    );
+
+    let mut unrelated_template = template();
+    unrelated_template.statistic_registry_value += 1;
+    let unrelated_registry = registry_for(&unrelated_template, &basis(), &recovery(), &genesis());
+    assert_eq!(
+        funding_terms().validate_bindings(
+            &series(),
+            &unrelated_template,
+            &basis(),
+            &recovery(),
+            &genesis(),
+            &unrelated_registry,
+        ),
+        Err(Error::MismatchedArtifact)
+    );
+}
+
+#[test]
+fn compiled_schedule_validation_is_complete_and_canonical() {
+    let compiled = compile_ordinal(
+        &series(),
+        &template(),
+        &basis(),
+        &recovery(),
+        &genesis(),
+        &attachment(),
+        &registry(),
+        0,
+    )
+    .unwrap();
+    compiled.schedule.validate().unwrap();
+
+    let mut no_attempts = compiled.schedule;
+    no_attempts.recovery_attempt_count = 0;
+    assert_eq!(no_attempts.validate(), Err(Error::InvalidSchedule));
+    let mut empty_window = compiled.schedule;
+    empty_window.end_bucket_exclusive = empty_window.start_bucket;
+    assert_eq!(empty_window.validate(), Err(Error::InvalidSchedule));
+    let mut maturity_before_end = compiled.schedule;
+    maturity_before_end.primary_maturity_bucket_exclusive =
+        maturity_before_end.end_bucket_exclusive - 1;
+    assert_eq!(maturity_before_end.validate(), Err(Error::InvalidSchedule));
+    let mut opens_before_maturity = compiled.schedule;
+    opens_before_maturity.recovery_attempts[0].opens_at_bucket -= 1;
+    assert_eq!(
+        opens_before_maturity.validate(),
+        Err(Error::InvalidSchedule)
+    );
+    let mut empty_attempt = compiled.schedule;
+    empty_attempt.recovery_attempts[0].closes_at_bucket =
+        empty_attempt.recovery_attempts[0].opens_at_bucket;
+    assert_eq!(empty_attempt.validate(), Err(Error::InvalidSchedule));
+    let mut overlap = compiled.schedule;
+    overlap.recovery_attempts[1].opens_at_bucket =
+        overlap.recovery_attempts[0].closes_at_bucket - 1;
+    assert_eq!(overlap.validate(), Err(Error::InvalidSchedule));
+    let mut equal_generation = compiled.schedule;
+    equal_generation.recovery_attempts[1].repair_generation =
+        equal_generation.recovery_attempts[0].repair_generation;
+    assert_eq!(equal_generation.validate(), Err(Error::InvalidSchedule));
+    let mut dirty_tail = compiled.schedule;
+    dirty_tail.recovery_attempts[2].closes_at_bucket = 1;
+    assert_eq!(dirty_tail.validate(), Err(Error::NonCanonicalPadding));
 }
 
 #[test]
@@ -479,7 +752,7 @@ fn padding_order_and_arithmetic_refuse() {
             &recovery(),
             &genesis(),
             &attachment(),
-            BURN_REGISTRY_VALUE,
+            &registry(),
         ),
         Err(Error::ArithmeticOverflow)
     );
@@ -604,15 +877,24 @@ fn hostile_reserved_bytes_and_legacy_fallback_refuse() {
     );
 }
 
-fn quote() -> AuthenticatedFundingQuoteV1 {
-    AuthenticatedFundingQuoteV1 {
-        funding_quote_id: attachment().funding_quote_id,
+fn quote() -> SeriesFundingQuoteV1 {
+    let mut recovery_attempt_funding = [RecoveryAttemptFundingV1::ZERO; MAX_RECOVERY_ATTEMPTS];
+    recovery_attempt_funding[0] = RecoveryAttemptFundingV1 {
+        max_progress_units: 3,
+        lamports_per_progress_unit: 5,
+    };
+    recovery_attempt_funding[1] = RecoveryAttemptFundingV1 {
+        max_progress_units: 2,
+        lamports_per_progress_unit: 7,
+    };
+    SeriesFundingQuoteV1 {
+        evidence_only_recovery_policy_id: recovery().id().unwrap(),
         market_core: ComponentDebitV1 {
             lamports: 10,
             collateral_atoms: 0,
         },
         recovery_reserve: ComponentDebitV1 {
-            lamports: 20,
+            lamports: 40,
             collateral_atoms: 0,
         },
         source_work: ComponentDebitV1 {
@@ -627,19 +909,54 @@ fn quote() -> AuthenticatedFundingQuoteV1 {
             lamports: 50,
             collateral_atoms: 10,
         },
+        recovery_attempt_count: 2,
+        recovery_attempt_funding,
+        recovery_rent_principal_lamports: 11,
+    }
+}
+
+fn market_instance_id() -> MarketInstanceId {
+    MarketInstancePreimageV1 {
+        product_template_id: template().id().unwrap(),
+        market_genesis_profile_id: genesis().id().unwrap(),
+        start_bucket: 100,
+        collateral_cap: 1_000,
+    }
+    .id()
+    .unwrap()
+}
+
+fn authenticated_status(
+    market_core: AdapterAuthenticatedComponentStatusV1,
+    recovery_reserve: AdapterAuthenticatedComponentStatusV1,
+    source_work: AdapterAuthenticatedComponentStatusV1,
+    liquidity_facility: AdapterAuthenticatedComponentStatusV1,
+    wrapper_set: AdapterAuthenticatedComponentStatusV1,
+) -> AdapterAuthenticatedFulfillmentStatusV1 {
+    AdapterAuthenticatedFulfillmentStatusV1 {
+        market_instance_id: market_instance_id(),
+        attachment_plan_id: attachment().id().unwrap(),
+        funding_quote_id: quote().id().unwrap(),
+        market_core,
+        recovery_reserve,
+        source_work,
+        liquidity_facility,
+        wrapper_set,
     }
 }
 
 #[test]
 fn component_projection_debits_only_absent_exact_components() {
-    let all_absent = FulfillmentStatusV1 {
-        market_core: ComponentStatusV1::Absent,
-        recovery_reserve: ComponentStatusV1::Absent,
-        source_work: ComponentStatusV1::Absent,
-        liquidity_facility: ComponentStatusV1::Absent,
-        wrapper_set: ComponentStatusV1::Absent,
-    };
+    let all_absent = authenticated_status(
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+    );
     let projected = project_component_debits(
+        market_instance_id(),
+        &recovery(),
         &attachment(),
         &quote(),
         all_absent,
@@ -649,19 +966,21 @@ fn component_projection_debits_only_absent_exact_components() {
         },
     )
     .unwrap();
-    assert_eq!(projected.total.lamports, 150);
+    assert_eq!(projected.total.lamports, 170);
     assert_eq!(projected.total.collateral_atoms, 110);
-    assert_eq!(projected.remaining.lamports, 50);
+    assert_eq!(projected.remaining.lamports, 30);
     assert_eq!(projected.remaining.collateral_atoms, 90);
 
-    let reuse_core_and_wrapper = FulfillmentStatusV1 {
-        market_core: ComponentStatusV1::PresentExact,
-        recovery_reserve: ComponentStatusV1::PresentExact,
-        source_work: ComponentStatusV1::Absent,
-        liquidity_facility: ComponentStatusV1::Absent,
-        wrapper_set: ComponentStatusV1::PresentExact,
-    };
+    let reuse_core_and_wrapper = authenticated_status(
+        AdapterAuthenticatedComponentStatusV1::PresentExactAndCapitalized,
+        AdapterAuthenticatedComponentStatusV1::PresentExactAndCapitalized,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::PresentExactAndCapitalized,
+    );
     let projected = project_component_debits(
+        market_instance_id(),
+        &recovery(),
         &attachment(),
         &quote(),
         reuse_core_and_wrapper,
@@ -679,12 +998,14 @@ fn component_projection_debits_only_absent_exact_components() {
     assert_eq!(projected.remaining.lamports, 0);
     assert_eq!(projected.remaining.collateral_atoms, 0);
 
-    let incoherent = FulfillmentStatusV1 {
-        recovery_reserve: ComponentStatusV1::Absent,
+    let incoherent = AdapterAuthenticatedFulfillmentStatusV1 {
+        recovery_reserve: AdapterAuthenticatedComponentStatusV1::Absent,
         ..reuse_core_and_wrapper
     };
     assert_eq!(
         project_component_debits(
+            market_instance_id(),
+            &recovery(),
             &attachment(),
             &quote(),
             incoherent,
@@ -697,6 +1018,8 @@ fn component_projection_debits_only_absent_exact_components() {
     );
     assert_eq!(
         project_component_debits(
+            market_instance_id(),
+            &recovery(),
             &attachment(),
             &quote(),
             all_absent,
@@ -713,17 +1036,28 @@ fn component_projection_debits_only_absent_exact_components() {
 fn component_sum_overflow_refuses() {
     let mut hostile_quote = quote();
     hostile_quote.market_core.lamports = u64::MAX;
+    let hostile_attachment = SeriesAttachmentPlanV1 {
+        funding_quote_id: hostile_quote.id().unwrap(),
+        ..attachment()
+    };
+    let hostile_status = AdapterAuthenticatedFulfillmentStatusV1 {
+        attachment_plan_id: hostile_attachment.id().unwrap(),
+        funding_quote_id: hostile_quote.id().unwrap(),
+        ..authenticated_status(
+            AdapterAuthenticatedComponentStatusV1::Absent,
+            AdapterAuthenticatedComponentStatusV1::Absent,
+            AdapterAuthenticatedComponentStatusV1::Absent,
+            AdapterAuthenticatedComponentStatusV1::Absent,
+            AdapterAuthenticatedComponentStatusV1::Absent,
+        )
+    };
     assert_eq!(
         project_component_debits(
-            &attachment(),
+            market_instance_id(),
+            &recovery(),
+            &hostile_attachment,
             &hostile_quote,
-            FulfillmentStatusV1 {
-                market_core: ComponentStatusV1::Absent,
-                recovery_reserve: ComponentStatusV1::Absent,
-                source_work: ComponentStatusV1::Absent,
-                liquidity_facility: ComponentStatusV1::Absent,
-                wrapper_set: ComponentStatusV1::Absent,
-            },
+            hostile_status,
             FundingBalancesV1 {
                 lamports: u64::MAX,
                 collateral_atoms: u64::MAX,
@@ -731,6 +1065,133 @@ fn component_sum_overflow_refuses() {
         ),
         Err(Error::ArithmeticOverflow)
     );
+}
+
+#[test]
+fn forged_quote_or_component_status_refuses() {
+    let all_absent = authenticated_status(
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+        AdapterAuthenticatedComponentStatusV1::Absent,
+    );
+    let mut forged_quote_body = quote();
+    forged_quote_body.market_core.lamports += 1;
+    assert_eq!(
+        project_component_debits(
+            market_instance_id(),
+            &recovery(),
+            &attachment(),
+            &forged_quote_body,
+            all_absent,
+            FundingBalancesV1 {
+                lamports: u64::MAX,
+                collateral_atoms: u64::MAX,
+            },
+        ),
+        Err(Error::MismatchedArtifact)
+    );
+
+    let mut substituted_recovery_prices = quote();
+    substituted_recovery_prices.recovery_attempt_funding[0] = RecoveryAttemptFundingV1 {
+        max_progress_units: 1,
+        lamports_per_progress_unit: 15,
+    };
+    assert_eq!(
+        substituted_recovery_prices
+            .recovery_work_principal_lamports()
+            .unwrap(),
+        quote().recovery_work_principal_lamports().unwrap()
+    );
+    assert_ne!(
+        substituted_recovery_prices.id().unwrap(),
+        quote().id().unwrap()
+    );
+    assert_eq!(
+        project_component_debits(
+            market_instance_id(),
+            &recovery(),
+            &attachment(),
+            &substituted_recovery_prices,
+            all_absent,
+            FundingBalancesV1 {
+                lamports: u64::MAX,
+                collateral_atoms: u64::MAX,
+            },
+        ),
+        Err(Error::MismatchedArtifact)
+    );
+
+    let mut wrong_policy = quote();
+    wrong_policy.evidence_only_recovery_policy_id =
+        EvidenceOnlyRecoveryPolicyId::from_bytes([99; 32]);
+    assert_eq!(
+        wrong_policy.validate_recovery_binding(&recovery()),
+        Err(Error::MismatchedArtifact)
+    );
+    assert_eq!(
+        project_component_debits(
+            market_instance_id(),
+            &recovery(),
+            &attachment(),
+            &wrong_policy,
+            all_absent,
+            FundingBalancesV1 {
+                lamports: u64::MAX,
+                collateral_atoms: u64::MAX,
+            },
+        ),
+        Err(Error::MismatchedArtifact)
+    );
+    let mut wrong_attempt_count = quote();
+    wrong_attempt_count.recovery_attempt_count = 1;
+    assert_eq!(
+        wrong_attempt_count.validate(),
+        Err(Error::NonCanonicalPadding)
+    );
+    let mut wrong_recovery_total = quote();
+    wrong_recovery_total.recovery_rent_principal_lamports += 1;
+    assert_eq!(
+        wrong_recovery_total.validate(),
+        Err(Error::InvalidParameter)
+    );
+    let mut unmodeled_collateral = quote();
+    unmodeled_collateral.recovery_reserve.collateral_atoms = 1;
+    assert_eq!(
+        unmodeled_collateral.validate(),
+        Err(Error::InvalidParameter)
+    );
+
+    for forged_status in [
+        AdapterAuthenticatedFulfillmentStatusV1 {
+            market_instance_id: MarketInstanceId::from_bytes([99; 32]),
+            ..all_absent
+        },
+        AdapterAuthenticatedFulfillmentStatusV1 {
+            attachment_plan_id: SeriesAttachmentPlanId::from_bytes([99; 32]),
+            ..all_absent
+        },
+        AdapterAuthenticatedFulfillmentStatusV1 {
+            funding_quote_id: SeriesFundingQuoteId::from_bytes([99; 32]),
+            ..all_absent
+        },
+    ] {
+        assert_eq!(
+            project_component_debits(
+                market_instance_id(),
+                &recovery(),
+                &attachment(),
+                &quote(),
+                forged_status,
+                FundingBalancesV1 {
+                    lamports: u64::MAX,
+                    collateral_atoms: u64::MAX,
+                },
+            ),
+            Err(Error::MismatchedArtifact)
+        );
+    }
 }
 
 #[test]
@@ -742,7 +1203,7 @@ fn deterministic_identity_golden_vectors() {
         &recovery(),
         &genesis(),
         &attachment(),
-        BURN_REGISTRY_VALUE,
+        &registry(),
         0,
     )
     .unwrap();
@@ -753,6 +1214,7 @@ fn deterministic_identity_golden_vectors() {
             template().id().unwrap().bytes(),
             genesis().id().unwrap().bytes(),
             compiled.market_instance_id.bytes(),
+            quote().id().unwrap().bytes(),
             attachment().id().unwrap().bytes(),
             series().id().unwrap().bytes(),
             funding_terms().id().unwrap().bytes(),
@@ -779,17 +1241,243 @@ fn deterministic_identity_golden_vectors() {
                 189, 24, 152, 105, 172, 23, 255, 111, 148, 28, 178, 174, 160, 249,
             ],
             [
-                202, 7, 24, 134, 16, 74, 151, 121, 31, 220, 71, 62, 129, 194, 139, 153, 188, 82,
-                128, 222, 101, 62, 48, 197, 200, 85, 170, 187, 95, 238, 8, 7,
+                68, 241, 130, 5, 71, 20, 73, 69, 94, 233, 146, 236, 6, 19, 54, 47, 86, 81, 97, 60,
+                44, 152, 25, 86, 133, 96, 238, 187, 214, 156, 252, 153,
             ],
             [
-                42, 68, 41, 225, 234, 59, 127, 93, 11, 116, 129, 239, 136, 23, 25, 71, 59, 223,
-                178, 113, 93, 115, 209, 237, 236, 167, 27, 6, 83, 236, 227, 165,
+                53, 209, 231, 66, 117, 164, 238, 33, 209, 159, 43, 104, 104, 138, 222, 251, 177,
+                78, 44, 254, 110, 164, 202, 238, 248, 61, 143, 155, 118, 141, 96, 47,
             ],
             [
-                128, 89, 63, 52, 126, 65, 203, 161, 25, 210, 68, 99, 252, 135, 38, 193, 136, 47,
-                160, 54, 186, 151, 204, 173, 100, 189, 8, 132, 99, 80, 70, 0,
+                110, 126, 167, 24, 125, 177, 92, 30, 99, 9, 56, 235, 241, 43, 177, 120, 139, 159,
+                0, 137, 224, 118, 156, 41, 164, 82, 112, 146, 44, 155, 229, 138,
+            ],
+            [
+                87, 59, 220, 202, 220, 120, 126, 74, 75, 195, 251, 112, 163, 60, 71, 169, 22, 238,
+                226, 124, 145, 74, 102, 24, 106, 176, 224, 159, 82, 119, 125, 83,
             ],
         ]
+    );
+}
+
+fn id_hex(bytes: [u8; 32]) -> String {
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").unwrap();
+    }
+    output
+}
+
+fn assert_manifest_vector(name: &str, body_bytes: usize, domain: &[u8], id_bytes: [u8; 32]) {
+    let manifest = include_str!("../vectors/product-series-v1.json");
+    let marker = format!("\"type\": \"{name}\"");
+    let section = manifest
+        .split(&marker)
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(section.contains(&format!("\"body_bytes\": {body_bytes}")));
+    assert!(section.contains(&format!(
+        "\"domain\": \"{}\"",
+        core::str::from_utf8(domain).unwrap()
+    )));
+    assert!(section.contains(&format!("\"id_hex\": \"{}\"", id_hex(id_bytes))));
+}
+
+#[test]
+fn checked_manifest_contains_the_self_contained_fixture_and_every_vector() {
+    let manifest = include_str!("../vectors/product-series-v1.json");
+    let manifest_digest: [u8; 32] = Sha256::digest(manifest.as_bytes()).into();
+    assert_eq!(
+        id_hex(manifest_digest),
+        "a5e0d540289b7827da5ad65fd61d790ebc3bda457634ba24b538e97fecb71acb"
+    );
+    let mutated = manifest.replacen(
+        "\"first_start_bucket\": 100",
+        "\"first_start_bucket\": 101",
+        1,
+    );
+    let mutated_digest: [u8; 32] = Sha256::digest(mutated.as_bytes()).into();
+    assert_ne!(mutated_digest, manifest_digest);
+    let duplicate_key = manifest.replacen(
+        "\"fixture_inputs\": {",
+        "\"fixture_inputs\": {\"hostile\": true},\n  \"fixture_inputs\": {",
+        1,
+    );
+    let duplicate_key_digest: [u8; 32] = Sha256::digest(duplicate_key.as_bytes()).into();
+    assert_ne!(duplicate_key_digest, manifest_digest);
+    const FROZEN_FIXTURE_INPUTS: &str = r#"  "fixture_inputs": {
+    "native_claim_basis": {
+      "basis_degree": 0,
+      "outcome_count": 4,
+      "payout_count": 4,
+      "knot_count": 3,
+      "uniform_log2_spacing": 255,
+      "ambiguity_policy_registry_value": 1,
+      "edge_policy_registry_value": 1,
+      "denominator": 1000,
+      "active_payout_weights": [[1000, 0, 0, 0], [0, 1000, 0, 0], [0, 0, 1000, 0], [0, 0, 0, 1000]],
+      "active_payout_map": [0, 1, 2, 3],
+      "active_knots": [100, 200, 300],
+      "padding": "all remaining payout weights and knots are zero; remaining payout-map bytes are 255"
+    },
+    "evidence_only_recovery": {
+      "attempt_count": 2,
+      "attempts": [
+        {"repair_generation_delta": 0, "opens_after_primary_maturity_buckets": 0, "closes_after_primary_maturity_buckets": 2},
+        {"repair_generation_delta": 1, "opens_after_primary_maturity_buckets": 2, "closes_after_primary_maturity_buckets": 5}
+      ],
+      "padding": "six zero attempts"
+    },
+    "product_template": {
+      "source_plane_contract_id": "[1;32]",
+      "source_spec_id": "[2;32]",
+      "summary_program_id": "[3;32]",
+      "native_claim_basis_id": "cd98a262aff0fbbe153a46f2d7210ba8b14a14843accc0a1c0431ece40acb9ca",
+      "evidence_only_recovery_policy_id": "e46043825d2ff7dc51aacb74c85efdc951e146222fe60d5279d50736ea5dc552",
+      "compiler_release_id": "[4;32]",
+      "statistic_registry_value": 11,
+      "coverage_policy_registry_value": 12,
+      "window_span_buckets": 4,
+      "primary_maturity_grace_buckets": 2,
+      "base_repair_generation": 10,
+      "coverage_policy_parameter": 0
+    },
+    "market_genesis_profile": {
+      "realm_id": "[20;32]",
+      "profile_id": "[21;32]",
+      "price_grid_id": "[22;32]",
+      "fee_policy_id": "[23;32]",
+      "relation_policy_id": "[24;32]",
+      "score_policy_id": "[25;32]",
+      "candidate_lifecycle_policy_id": "[26;32]",
+      "candidate_liveness_policy_id": "[27;32]",
+      "retirement_policy_id": "[28;32]",
+      "capability_profile_id": "[29;32]",
+      "terminal_disposition_registry_value": 7,
+      "native_bearer_lot": 1000
+    },
+    "series_funding_quote": {
+      "evidence_only_recovery_policy_id": "e46043825d2ff7dc51aacb74c85efdc951e146222fe60d5279d50736ea5dc552",
+      "market_core": {"lamports": 10, "collateral_atoms": 0},
+      "recovery_reserve": {"lamports": 40, "collateral_atoms": 0},
+      "source_work": {"lamports": 30, "collateral_atoms": 0},
+      "liquidity_facility": {"lamports": 40, "collateral_atoms": 100},
+      "wrapper_set": {"lamports": 50, "collateral_atoms": 10},
+      "recovery_attempt_count": 2,
+      "recovery_attempt_funding": [
+        {"max_progress_units": 3, "lamports_per_progress_unit": 5},
+        {"max_progress_units": 2, "lamports_per_progress_unit": 7}
+      ],
+      "recovery_rent_principal_lamports": 11,
+      "padding": "six zero recovery-attempt funding rows"
+    },
+    "series_attachment_plan": {
+      "funding_quote_id": "44f18205471449455ee992ec0613362f5651613c2c9819568560eebbd69cfc99",
+      "liquidity_facility_plan_id": "[41;32]",
+      "wrapper_recipe_set_id": "[42;32]"
+    },
+    "series_plan": {
+      "product_template_id": "43dc967326bddff69db86b4d4be58bab67a582b1fc558326aa9c7e4cbc158419",
+      "market_genesis_profile_id": "1a18d2658833f12fb8ea67a9a1ff6bb7331ce647fee72fe11b536d105f292f36",
+      "attachment_plan_id": "35d1e74275a4ee21d19f2b68688adefbb14e2cfe6ea4caeef83d8f9b768d602f",
+      "first_start_bucket": 100,
+      "stride_buckets": 10,
+      "instance_count": 3,
+      "creation_lead_buckets": 5,
+      "market_collateral_cap": 1000
+    },
+    "series_funding_terms": {
+      "series_plan_id": "6e7ea7187db15c1e630938ebf12bb1788b9f0089e0769c29a45270922c9be58a",
+      "lamport_principal_refund": "[50;32]",
+      "collateral_principal_refund_token_account": "[51;32]",
+      "neutral_sink": "[52;32]",
+      "collateral_mint": "[53;32]",
+      "token_program": "[54;32]"
+    },
+    "compiled_ordinal_zero": {
+      "start_bucket": 100,
+      "end_bucket_exclusive": 104,
+      "primary_maturity_bucket_exclusive": 106,
+      "absolute_recovery_attempts": [
+        {"repair_generation": 10, "opens_at_bucket": 106, "closes_at_bucket": 108},
+        {"repair_generation": 11, "opens_at_bucket": 108, "closes_at_bucket": 111}
+      ],
+      "market_collateral_cap": 1000
+    }
+  },"#;
+    assert!(manifest.contains(FROZEN_FIXTURE_INPUTS));
+    assert!(manifest.contains("\"schema\": \"dragons-clutch/product-series-golden/v1\""));
+    assert!(manifest.contains("\"hash\": \"sha256(domain_ascii || exact_body)\""));
+    assert!(manifest.contains("\"integer_encoding\": \"little-endian\""));
+    assert!(manifest.contains("\"fixed_id_notation\": \"[N;32] means 32 repetitions of byte N\""));
+    assert_eq!(manifest.matches("\"type\":").count(), 9);
+
+    let compiled = compile_ordinal(
+        &series(),
+        &template(),
+        &basis(),
+        &recovery(),
+        &genesis(),
+        &attachment(),
+        &registry(),
+        0,
+    )
+    .unwrap();
+    assert_manifest_vector(
+        "NativeClaimBasisV1",
+        BASIS_BYTES,
+        NATIVE_CLAIM_BASIS_DOMAIN,
+        basis().id().unwrap().bytes(),
+    );
+    assert_manifest_vector(
+        "EvidenceOnlyRecoveryPolicyV1",
+        EVIDENCE_ONLY_RECOVERY_POLICY_BYTES,
+        RECOVERY_POLICY_DOMAIN,
+        recovery().id().unwrap().bytes(),
+    );
+    assert_manifest_vector(
+        "ProductTemplateV4",
+        PRODUCT_TEMPLATE_BYTES,
+        PRODUCT_TEMPLATE_DOMAIN,
+        template().id().unwrap().bytes(),
+    );
+    assert_manifest_vector(
+        "MarketGenesisProfileV1",
+        MARKET_GENESIS_PROFILE_BYTES,
+        MARKET_GENESIS_PROFILE_DOMAIN,
+        genesis().id().unwrap().bytes(),
+    );
+    assert_manifest_vector(
+        "MarketInstancePreimageV1",
+        MARKET_INSTANCE_PREIMAGE_BYTES,
+        MARKET_INSTANCE_DOMAIN,
+        compiled.market_instance_id.bytes(),
+    );
+    assert_manifest_vector(
+        "SeriesFundingQuoteV1",
+        SERIES_FUNDING_QUOTE_BYTES,
+        SERIES_FUNDING_QUOTE_DOMAIN,
+        quote().id().unwrap().bytes(),
+    );
+    assert_manifest_vector(
+        "SeriesAttachmentPlanV1",
+        SERIES_ATTACHMENT_PLAN_BYTES,
+        SERIES_ATTACHMENT_PLAN_DOMAIN,
+        attachment().id().unwrap().bytes(),
+    );
+    assert_manifest_vector(
+        "SeriesPlanV4",
+        SERIES_PLAN_BYTES,
+        SERIES_PLAN_DOMAIN,
+        series().id().unwrap().bytes(),
+    );
+    assert_manifest_vector(
+        "SeriesFundingTermsV1",
+        SERIES_FUNDING_TERMS_BYTES,
+        SERIES_FUNDING_TERMS_DOMAIN,
+        funding_terms().id().unwrap().bytes(),
     );
 }

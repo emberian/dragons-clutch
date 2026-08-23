@@ -1,8 +1,8 @@
 use crate::{
-    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV1, MarketInstanceId,
-    MarketInstancePreimageV1, NativeClaimBasisV1, ProductTemplateV4, Result,
-    SeriesAttachmentPlanId, SeriesAttachmentPlanV1, SeriesPlanId, SeriesPlanV4,
-    MAX_RECOVERY_ATTEMPTS,
+    Error, EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV1, MarketInstanceId,
+    MarketInstancePreimageV1, NativeClaimBasisV1, ProductTemplateV4,
+    RegistryCapabilityProjectionV1, Result, SeriesAttachmentPlanId, SeriesAttachmentPlanV1,
+    SeriesPlanId, SeriesPlanV4, MAX_RECOVERY_ATTEMPTS,
 };
 
 /// One absolute evidence-only recovery attempt derived from immutable policy.
@@ -38,6 +38,41 @@ pub struct CompiledScheduleV1 {
     pub recovery_attempt_count: u8,
     /// Absolute active attempts followed by exact zero projection padding.
     pub recovery_attempts: [AbsoluteRecoveryAttemptV1; MAX_RECOVERY_ATTEMPTS],
+}
+
+impl CompiledScheduleV1 {
+    /// Validate the total absolute schedule and canonical inactive tail.
+    pub fn validate(&self) -> Result<()> {
+        let count = usize::from(self.recovery_attempt_count);
+        if count == 0
+            || count > MAX_RECOVERY_ATTEMPTS
+            || self.start_bucket >= self.end_bucket_exclusive
+            || self.end_bucket_exclusive > self.primary_maturity_bucket_exclusive
+        {
+            return Err(Error::InvalidSchedule);
+        }
+        let mut previous_close = self.primary_maturity_bucket_exclusive;
+        let mut previous_generation = 0_u64;
+        let mut index = 0_usize;
+        while index < MAX_RECOVERY_ATTEMPTS {
+            let attempt = self.recovery_attempts[index];
+            if index < count {
+                if attempt.opens_at_bucket < self.primary_maturity_bucket_exclusive
+                    || attempt.opens_at_bucket >= attempt.closes_at_bucket
+                    || attempt.opens_at_bucket < previous_close
+                    || (index > 0 && attempt.repair_generation <= previous_generation)
+                {
+                    return Err(Error::InvalidSchedule);
+                }
+                previous_close = attempt.closes_at_bucket;
+                previous_generation = attempt.repair_generation;
+            } else if attempt != AbsoluteRecoveryAttemptV1::ZERO {
+                return Err(Error::NonCanonicalPadding);
+            }
+            index += 1;
+        }
+        Ok(())
+    }
 }
 
 /// Deterministic lowering of one ordinal with Series provenance kept separate.
@@ -86,19 +121,22 @@ fn compile_schedule(
         };
         index += 1;
     }
-    Ok(CompiledScheduleV1 {
+    let schedule = CompiledScheduleV1 {
         start_bucket,
         end_bucket_exclusive,
         primary_maturity_bucket_exclusive,
         recovery_attempt_count: recovery.attempt_count,
         recovery_attempts,
-    })
+    };
+    schedule.validate()?;
+    Ok(schedule)
 }
 
 /// Compile one ordinal after joining every exact immutable artifact.
 ///
-/// `burn_terminal_disposition_registry_value` is supplied by the central
-/// registry/release join. This core deliberately does not allocate it.
+/// The registry projection makes every market-core semantic-owner, capability, and
+/// Realm/Profile equality explicit. It remains an adapter-authenticated input;
+/// this pure core does not authenticate the central release manifest.
 #[allow(clippy::too_many_arguments)]
 pub fn compile_ordinal(
     series: &SeriesPlanV4,
@@ -107,17 +145,10 @@ pub fn compile_ordinal(
     recovery: &EvidenceOnlyRecoveryPolicyV1,
     genesis: &MarketGenesisProfileV1,
     attachment: &SeriesAttachmentPlanV1,
-    burn_terminal_disposition_registry_value: u16,
+    registry: &RegistryCapabilityProjectionV1,
     ordinal: u32,
 ) -> Result<CompiledOrdinalV1> {
-    series.validate_bindings(
-        template,
-        basis,
-        recovery,
-        genesis,
-        attachment,
-        burn_terminal_disposition_registry_value,
-    )?;
+    series.validate_bindings(template, basis, recovery, genesis, attachment, registry)?;
     let start_bucket = series.start_bucket(ordinal)?;
     let schedule = compile_schedule(template, recovery, start_bucket)?;
     let market = MarketInstancePreimageV1 {
