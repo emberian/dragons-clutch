@@ -44,6 +44,15 @@ Account quantities remain canonical decimal strings. The release join requires
 exact program, ProgramData, deployment-slot, ELF, and release-key equality.
 Rows from other releases are counted and ignored rather than blended.
 
+`operatord chain-serve --config FILE` is the live owner of these routes. Before
+binding HTTP it checks `getGenesisHash`, hostile-decodes each selected
+Program/ProgramData loader pair, checks the decoded deployment slot, and hashes
+the observed ProgramData ELF. It then repeatedly admits bounded finalized
+`getProgramAccounts` responses through `RpcIndexEngine`. Processed queries fail
+closed because this first transport does not yet own the required program,
+block, slot-update, and root WebSocket subscriptions. See
+[`CHAIN_SERVE.md`](CHAIN_SERVE.md).
+
 ## Projection semantics
 
 The console groups chain-derived account rows into Market, Product, Source,
@@ -80,11 +89,14 @@ JavaScript performs no payout, spline, approximation, or Product/Series bundle
 math. The compiler form accepts:
 
 - an exact rational definition JSON object in which all integers and rational
-  components are strings; and
-- an untrusted `dragons-clutch/compiler/production-payoff-proposal/v1` emitted
-  by an operatord/CLI adapter that calls Rust
-  `compile_production_payoff_v1` and
-  `assemble_compiled_product_series_bundle_v1`.
+  components are strings;
+- exact canonical fixed-codec Product/Series bundle inputs; and
+- an explicit expected compiler-release SHA-256 pinned by operatord.
+
+The form calls the pure bounded `POST /v1/compiler/production-payoff` endpoint.
+The same implementation is available through `operatord compile-payoff` for
+stdin/stdout proposal import. Both call Rust `compile_production_payoff_v1` and
+`assemble_compiled_product_series_bundle_v1`.
 
 The page computes the SHA-256 of canonical sorted-key UTF-8 definition JSON and
 requires the proposal to bind it and an explicit compiler-release SHA-256. It
@@ -94,9 +106,8 @@ rational error bounds, the canonical 2,352-byte native-basis proposal, its
 bundle capability-profile ID must match the explicit release selection. An
 analytic result also carries its exact certification subdivision depth.
 
-This is a consumption contract, not yet an implemented daemon endpoint: the
-current repository still needs the small Rust CLI/operatord serializer that
-turns compiler output into this JSON transport. Registration remains authority
+The compiler endpoint is loopback-only and has no RPC, wallet, signing,
+submission, registration, or persistence path. Registration remains authority
 and must reopen the registry, Source release, and every canonical artifact and
 recompute their joins.
 
@@ -129,9 +140,12 @@ Every workflow node states that authoritative accounts must be reloaded.
 - `successor-registry.js`: non-authoritative coordinate mirror and disabled
   capability reasons.
 - `successor-builder.js`: exact outer message and unsigned transaction bytes.
-- `compiler-proposal.js`: exact-rational compiler transport validation only.
+- `compiler-proposal.js`: bounded pure-compiler transport and exact proposal
+  validation; no compiler math.
 - [`COMPILER_TRANSPORT.md`](COMPILER_TRANSPORT.md): exact Rust adapter JSON
   contract and canonicalization rule.
+- [`CHAIN_SERVE.md`](CHAIN_SERVE.md): explicit bounded RPC/index configuration
+  and finalized-only live acquisition boundary.
 - `app.js`, `index.html`, `styles.css`: DOM presentation.
 - `manifest.json` and `terms.json`: retained historical evidence records; no
   shipped script loads them and they are not application defaults.

@@ -82,7 +82,7 @@
     $("read-chain").disabled = false;
     $("export-configuration").disabled = false;
     resetProjection("No operatord projection acquired for this configuration.");
-    resetCompiler("waiting for external compiler output");
+    resetCompiler("waiting for pure Rust compiler output");
   };
 
   const resetCompiler = (status) => {
@@ -273,13 +273,18 @@
     try { return JSON.parse($(id).value); } catch (_) { throw new Error(`${label} is not valid JSON.`); }
   };
 
-  const bindCompilerProposal = async () => {
+  const prepareCompilerDefinition = async () => {
     if (!state.configuration) throw new Error("Apply an explicit release configuration before binding compiler output.");
     const definitionValue = COMPILER.validateDefinition(parseJsonField("compiler-definition", "Exact rational payoff definition"));
     const inputCanonicalSha256 = await digest(new TextEncoder().encode(definitionValue.canonicalJson));
     if (inputCanonicalSha256 === null) throw new Error("Web Crypto SHA-256 is unavailable; the page refuses to bind compiler output without a cryptographic input join.");
+    return Object.freeze({ definitionValue, inputCanonicalSha256 });
+  };
+
+  const bindCompilerProposal = async (rawProposal = null, prepared = null) => {
+    const { definitionValue, inputCanonicalSha256 } = prepared || await prepareCompilerDefinition();
     const proposal = COMPILER.validateProposal(
-      parseJsonField("compiler-proposal", "operatord/CLI compiler proposal"),
+      rawProposal || parseJsonField("compiler-proposal", "operatord/CLI compiler proposal"),
       inputCanonicalSha256,
       $("compiler-release-sha256").value.trim(),
       definitionValue
@@ -323,6 +328,19 @@
     $("compiler-status").textContent = proposal.spanStatus === "certified-approximation" ? "certified approximation · registration pending" : "exact in named representation · registration pending";
     $("compiler-output").textContent = JSON.stringify(state.compilerProposal, null, 2);
     $("copy-compiler-output").disabled = false;
+  };
+
+  const compilePayoff = async () => {
+    const prepared = await prepareCompilerDefinition();
+    const proposal = await COMPILER.compileRemote(
+      state.configuration.operatorUrl,
+      $("compiler-release-sha256").value.trim(),
+      prepared.definitionValue,
+      parseJsonField("compiler-bundle-inputs", "Canonical Product/Series bundle inputs"),
+      state.configuration.bounds.maximumResponseBytes,
+      state.configuration.bounds.timeoutMilliseconds
+    );
+    await bindCompilerProposal(proposal, prepared);
   };
 
   const buildWorkflow = async () => {
@@ -369,7 +387,7 @@
 
   const initialize = () => {
     resetProjection("No configuration or account projection loaded. Nothing is inferred from fixtures or defaults.");
-    resetCompiler("waiting for external compiler output");
+    resetCompiler("waiting for pure Rust compiler output");
     $("configuration-form").addEventListener("submit", (event) => {
       event.preventDefault();
       clearError("configuration-error");
@@ -388,6 +406,14 @@
     $("copy-snapshot").addEventListener("click", () => { if (state.snapshot) copy($("snapshot-json").textContent, $("copy-snapshot")); });
     $("compiler-form").addEventListener("submit", async (event) => {
       event.preventDefault();
+      clearError("compiler-error");
+      const button = $("compile-payoff");
+      button.disabled = true;
+      button.textContent = "Compiling through bounded endpoint…";
+      try { await compilePayoff(); } catch (error) { resetCompiler("proposal refused"); setError("compiler-error", error.message); }
+      finally { button.disabled = false; button.textContent = "Compile through selected operatord"; }
+    });
+    $("bind-compiler-proposal").addEventListener("click", async () => {
       clearError("compiler-error");
       try { await bindCompilerProposal(); } catch (error) { resetCompiler("proposal refused"); setError("compiler-error", error.message); }
     });

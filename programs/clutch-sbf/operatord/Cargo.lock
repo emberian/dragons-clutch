@@ -180,6 +180,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-bspline-shape-compiler"
+version = "0.1.0"
+dependencies = [
+ "clutch-accumulator",
+ "clutch-bspline",
+ "clutch-product-series",
+ "clutch-solana-layout",
+ "clutch-structured-claim",
+ "num-bigint",
+ "num-rational",
+ "num-traits",
+ "sha2",
+]
+
+[[package]]
 name = "clutch-candidate-lifecycle"
 version = "0.1.0"
 
@@ -193,9 +208,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-collateral-adapter-v2"
+version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+ "sha2",
+]
+
+[[package]]
 name = "clutch-dealer-runtime-contract"
 version = "0.1.0"
 dependencies = [
+ "clutch-batch",
+ "clutch-fee-runtime-contract",
+ "clutch-general-v2-contract",
+ "clutch-liveness",
+ "clutch-price-measure",
  "clutch-retirement",
  "sha2",
 ]
@@ -217,6 +245,7 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-fee-runtime-contract",
  "clutch-owner-settlement",
+ "clutch-retirement",
 ]
 
 [[package]]
@@ -263,6 +292,9 @@ dependencies = [
 [[package]]
 name = "clutch-owner-settlement"
 version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+]
 
 [[package]]
 name = "clutch-price-measure"
@@ -297,11 +329,15 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
+ "clutch-collateral-adapter-v2",
+ "clutch-dealer-runtime-contract",
  "clutch-general-v2-contract",
  "clutch-kernel",
  "clutch-liveness",
+ "clutch-owner-settlement",
  "clutch-price-measure",
  "clutch-product-series",
+ "clutch-retirement",
  "clutch-solana-layout",
  "clutch-solana-reference",
  "clutch-source-plane-v3",
@@ -340,13 +376,20 @@ dependencies = [
  "base64",
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-bspline",
+ "clutch-bspline-shape-compiler",
  "clutch-client-contract",
  "clutch-local-real-pyth",
+ "clutch-product-series",
  "clutch-sbf",
  "clutch-sbf-harness",
  "clutch-solana-layout",
+ "clutch-source-plane-v3-runtime",
+ "num-bigint",
+ "num-rational",
  "serde",
  "serde_json",
+ "solana-address",
  "solana-keypair",
  "solana-sha256-hasher",
 ]
@@ -357,6 +400,8 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-collateral-adapter-v2",
+ "clutch-dealer-runtime-contract",
  "clutch-general-v2-contract",
  "clutch-kernel",
  "clutch-price-measure",
@@ -376,6 +421,8 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-collateral-adapter-v2",
+ "clutch-product-series",
  "solana-sha256-hasher",
 ]
 
@@ -806,6 +853,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "num-derive"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -814,6 +871,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
