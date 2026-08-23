@@ -28,8 +28,9 @@ are lexicographically owner-sorted for canonical account creation and paging.
 The account-neutral adapter contract binds each row to the ordered
 `owner-settlement:v1`, Epoch, final-candidate, owner PDA preimage; creates it
 with pre-fund-safe rent ownership; and stages each receipt-end accounting latch
-for an atomic join with the complete Egg/reservation transition. Terminal cash
-realization is buyer-first:
+without moving Eggs. Accounting uses a receipt-scoped `receipt_accounting_id`;
+delivery uses a distinct `delivery_transition_id`, so neither replay latch can
+stand in for the other. Terminal cash realization is buyer-first:
 consideration enters a candidate-wide liability pot before seller credit can
 leave it, while selected fees and exact rounding price units remain segregated.
 The same 256-byte body carries a typed virtual-cash direction in formerly
@@ -43,37 +44,45 @@ distinct General V2 FinalPot terminal/disposition authority is not yet owned,
 and rounding or virtual-claim principal cannot be sent to the neutral donation
 sink.
 
-The successor direct-Egg contract closes the value-plane half of receipt
-accounting without reintroducing per-slice cash rounding. It authenticates both
-frozen order memberships, both Position generations and replay accounts, both
-ENTITLED Reservations, the paired selected receipt, and both owner rows. One
-pure plan transfers the exact Egg quantity, advances quantity and exact
-price-unit ledgers, returns a completing portfolio seller's entire unfilled
-Egg vector, hands a completing buyer Reservation's cash-envelope ownership to
-the frozen owner row, and sets the independently named buy/sell receipt-end
-latches. Position cash and replay sequences are preserved; their eventual cash
-poststates remain owned by terminal owner-level realization.
-
-No General action number is assigned to this contract. A future SBF adapter
-must authenticate the opaque complete-transition identity, bind it by equality
-to its payload, and write both Positions, both Reservations, both owner rows,
-and the receipt latch atomically.
+The successor direct-Egg contract closes the value-plane half only after
+accounting and owner cash finalization have completed. Action 25 advances exact
+price units, owner rows, Reservation accounting totals, and the accounting
+latches without Egg or cash movement. Action 38 converts each complete owner
+row once and atomically joins its Position and the candidate cash pot. Its
+request ID is the adapter-authenticated data ID of the canonical finalized
+288-byte row; the row does not copy another 32 bytes merely for replay.
+Action 26 then authenticates both frozen order memberships, Position
+generations and replay accounts, Reservations, the paired selected receipt,
+and both terminal owner rows. Its one plan transfers the exact Egg quantity,
+advances delivery totals, returns a completing portfolio seller's entire
+unfilled vector, and sets independent buy/sell delivery latches. It cannot
+repeat price accounting or rounding.
 
 Virtual split and merge use separate typed contracts and cannot pass through
 the paired-direct API. Their default-deny authority records bind a checked
 relation witness, selected candidate, exact amount or receipt, direction, and
-complete transition identity. Inventory split consumes FinalPot cash principal,
-adds the same collateral principal to the Hoard, and adds one internal claim of
-every active outcome to both the FinalPot and aggregate supply. Inventory merge
-is the exact inverse. Separately, a virtual-split receipt moves one selected Egg
-from FinalPot inventory to its sole real buyer; a virtual-merge receipt moves
-one selected Egg from its sole real seller into FinalPot inventory. Only the
-real end advances a Reservation, owner row, and independent receipt latch.
+both replay identities. There is no public inventory-only plan. Action 36
+atomically moves already-finalized split principal from the owner cash pot into
+FinalPot, creates only the complete-set inventory needed by the selected real
+buyer end, updates Hoard and aggregate supply, and delivers that Egg. Action 37
+atomically accepts an already-accounted real seller Egg, burns the canonical
+available complete-set floor, and, only when the exact merge budget completes,
+turns FinalPot merge principal into the opening owner cash pot. The seller row
+is AccountingComplete/state 0 before action 37 because its later action-38
+credit depends on those proceeds; requiring state 1 there would be circular.
+
+FinalPot has one canonical 328-byte inner codec containing its one-to-one
+selected virtual budget, cash principal, native claims, and mutable inventory
+cursors. There is no separately addressed budget account, rent owner,
+lifetime, or close authority. Account address, writability, PDA ownership, and
+selected-verifier authentication remain outer adapter facts rather than a
+second persisted truth. Direct candidates canonically encode the budget as
+`None` with zero witness, amount, and cursors.
 
 The virtual cash field is principal attributed inside pooled Realm collateral.
 It is never classified as a fee, donation, revenue, rent, or liveness funding.
-Terminal FinalPot disposition and its exact join to owner cash realization
-remain separately owned integration work.
+Terminal rounding and FinalPot disposition remain separately owned integration
+work.
 
 This crate contains no Solana SDK, account memory, hashing implementation,
 dynamic allocation, fee policy selection, or persisted DTO. It does not make

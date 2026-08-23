@@ -39,10 +39,14 @@ pub use auth::{
     SOURCE_RELEASE_MANIFEST_BYTES,
 };
 pub use funding::{
-    plan_source_account_close, plan_source_account_creation, AccountCloseFundingV1,
-    AccountCreationFundingV1, RentExemptionQuoteV1, SourceAccountFundingLedgerV1,
-    SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1, SourceWorkAuthorizationV1,
-    SourceWorkKindV1, SourceWorkScheduleBindingV1,
+    authenticate_source_work_receipt_account, plan_source_account_close,
+    plan_source_account_creation, AccountCloseFundingV1, AccountCreationFundingV1,
+    AuthenticatedSourceWorkReceiptV1, RentExemptionQuoteV1, SourceAccountFundingLedgerV1,
+    SourceReceiptDispositionV1, SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
+    SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccountV1,
+    SourceWorkScheduleBindingV1, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
+    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
+    SOURCE_WORK_SCHEDULE_BYTES,
 };
 pub use ingest::{
     authenticate_open_raw_page_account, authenticate_source_generation_request,
@@ -60,11 +64,11 @@ pub use window::{
     authenticate_evaluation_authority, authenticate_raw_page_account,
     authenticate_statistic_result, authenticate_statistic_result_absence,
     authenticate_window_seal_account, authenticate_window_work_account, fold_authenticated_pages,
-    join_source_occurrence, seal_authenticated_window, AuthenticatedEvaluationV1,
-    AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1, AuthenticatedWindowEvidenceV1,
-    AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1, EvaluationAuthorityV1,
-    EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
-    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
+    join_source_occurrence, seal_authenticated_window, source_occurrence_record_id,
+    AuthenticatedEvaluationV1, AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1,
+    AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
+    EvaluationAuthorityV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1,
+    FoldPagesOutputV1, OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
     SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD, SOURCE_OCCURRENCE_RECORD_BYTES,
 };
 

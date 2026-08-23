@@ -1058,6 +1058,59 @@ impl GeneralV2Action {
     }
 }
 
+/// StructuredClaim family-local action allocations at `75/1`.
+///
+/// These tags reserve wire identity only. Every route remains capability
+/// disabled until its exact payload, account, CPI, and release contracts are
+/// admitted together.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StructuredClaimAction {
+    /// Create one immutable structured-claim descriptor.
+    CreateDescriptor = 1,
+    /// Wrap one canonical complete-set lot.
+    WrapCanonical = 2,
+    /// Wrap one explicit full-vector lot.
+    WrapFull = 3,
+    /// Unwrap one canonical complete-set lot.
+    UnwrapCanonical = 4,
+    /// Unwrap one explicit full-vector lot.
+    UnwrapFull = 5,
+    /// Compact separately observed donation residue.
+    CompactDonation = 6,
+    /// Redeem one terminal structured-claim lot.
+    RedeemTerminal = 7,
+    /// Retire one descriptor after its authenticated base vault close.
+    RetireDescriptor = 8,
+}
+
+impl StructuredClaimAction {
+    /// First allocated StructuredClaim local action tag.
+    pub const FIRST_TAG: u8 = 1;
+    /// Last allocated StructuredClaim local action tag.
+    pub const LAST_TAG: u8 = 8;
+
+    /// Return the local action tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one allocated StructuredClaim local action tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::CreateDescriptor),
+            2 => Some(Self::WrapCanonical),
+            3 => Some(Self::WrapFull),
+            4 => Some(Self::UnwrapCanonical),
+            5 => Some(Self::UnwrapFull),
+            6 => Some(Self::CompactDonation),
+            7 => Some(Self::RedeemTerminal),
+            8 => Some(Self::RetireDescriptor),
+            _ => None,
+        }
+    }
+}
+
 /// SourcePlane V3 family-local action allocations inside SourceSeries 77/v2.
 ///
 /// Tags 13 and above are disjoint Series-owned coordinates. These Source tags
@@ -1228,6 +1281,8 @@ impl RecoveryAction {
 pub enum ExtensionAction {
     /// One General V2 local action.
     GeneralV2(GeneralV2Action),
+    /// One StructuredClaim local action.
+    StructuredClaim(StructuredClaimAction),
     /// One SourcePlane V3 action in the shared SourceSeries family.
     SourceV3(SourceSeriesAction),
     /// One recurring-Series action in the shared SourceSeries family.
@@ -1241,7 +1296,9 @@ impl ExtensionAction {
     pub const fn family(self) -> ExtensionFamily {
         match self {
             Self::GeneralV2(_) => ExtensionFamily::GeneralV2,
+            Self::StructuredClaim(_) => ExtensionFamily::StructuredClaim,
             Self::SourceV3(_) | Self::RecurringSeries(_) => ExtensionFamily::SourceSeries,
+            Self::Recovery(_) => ExtensionFamily::Recovery,
         }
     }
 
@@ -1249,6 +1306,7 @@ impl ExtensionAction {
     pub const fn local_tag(self) -> u8 {
         match self {
             Self::GeneralV2(action) => action.tag(),
+            Self::StructuredClaim(action) => action.tag(),
             Self::SourceV3(action) => action.tag(),
             Self::RecurringSeries(action) => action.tag(),
             Self::Recovery(action) => action.tag(),
@@ -1282,6 +1340,12 @@ pub const fn decode_extension_action(
             Some(action) => Ok(ExtensionAction::GeneralV2(action)),
             None => Err(RegistryError::UnknownLocalAction),
         },
+        Some(ExtensionFamily::StructuredClaim) => {
+            match StructuredClaimAction::from_tag(local_action) {
+                Some(action) => Ok(ExtensionAction::StructuredClaim(action)),
+                None => Err(RegistryError::UnknownLocalAction),
+            }
+        }
         Some(ExtensionFamily::SourceSeries) => match SourceSeriesAction::from_tag(local_action) {
             Some(action) => Ok(ExtensionAction::SourceV3(action)),
             None => match RecurringSeriesAction::from_tag(local_action) {
@@ -1293,9 +1357,7 @@ pub const fn decode_extension_action(
             Some(action) => Ok(ExtensionAction::Recovery(action)),
             None => Err(RegistryError::UnknownLocalAction),
         },
-        Some(ExtensionFamily::StructuredClaim | ExtensionFamily::Dealer) => {
-            Err(RegistryError::UnknownLocalAction)
-        }
+        Some(ExtensionFamily::Dealer) => Err(RegistryError::UnknownLocalAction),
         None => Err(RegistryError::UnknownFamilyVersion),
     }
 }
@@ -1726,7 +1788,7 @@ mod tests {
     }
 
     #[test]
-    fn implemented_family_actions_are_exhaustive_and_unimplemented_families_allocate_none() {
+    fn allocated_extension_actions_are_exhaustive() {
         for local_action in u8::MIN..=u8::MAX {
             let general = decode_extension_action(74, 1, local_action);
             assert_eq!(
@@ -1743,13 +1805,20 @@ mod tests {
                         .contains(&local_action),
                 "source-series action {local_action}"
             );
+            let structured = decode_extension_action(75, 1, local_action);
+            assert_eq!(
+                structured.is_ok(),
+                (StructuredClaimAction::FIRST_TAG..=StructuredClaimAction::LAST_TAG)
+                    .contains(&local_action),
+                "structured-claim action {local_action}"
+            );
             let recovery = decode_extension_action(78, 1, local_action);
             assert_eq!(
                 recovery.is_ok(),
                 (RecoveryAction::FIRST_TAG..=RecoveryAction::LAST_TAG).contains(&local_action),
                 "recovery action {local_action}"
             );
-            for (tag, version) in [(75, 1), (76, 1)] {
+            for (tag, version) in [(76, 1)] {
                 assert_eq!(
                     decode_extension_action(tag, version, local_action),
                     Err(RegistryError::UnknownLocalAction),

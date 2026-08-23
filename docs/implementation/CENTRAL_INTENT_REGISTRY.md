@@ -81,6 +81,17 @@ General V2 reserves local actions 1 through 38, in order:
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
 
+StructuredClaim `75/1` reserves actions 1 through 8:
+
+1. `CreateDescriptor`
+2. `WrapCanonical`
+3. `WrapFull`
+4. `UnwrapCanonical`
+5. `UnwrapFull`
+6. `CompactDonation`
+7. `RedeemTerminal`
+8. `RetireDescriptor`
+
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:
 
@@ -114,33 +125,9 @@ actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
-Source/Series V2 partitions its action namespace without aliases. SourcePlane
-V3 exclusively owns local actions 1 through 12:
-
-1. `RegisterRelease`
-2. `InitializeHead`
-3. `OpenRawPage`
-4. `IngestBoundaryBatch`
-5. `SealRawPage`
-6. `InitializeWindowWork`
-7. `FoldWindowPages`
-8. `SealWindow`
-9. `EvaluateStatistic`
-10. `EmitFailureHandoff`
-11. `ReopenGeneration`
-12. `CloseGeneration`
-
-Recurring Series exclusively owns local actions 13 through 18, whose exact
-laboratory payload codecs live in `clutch_solana_layout::product_series`:
-
-13. `RegisterSeries`
-14. `ActivateFunding`
-15. `AdvanceOccurrence`
-16. `LapseOccurrence`
-17. `ObserveDonation`
-18. `CloseFunding`
-
-Allocation still grants no execution capability. The program's executable
+The exact recurring-Series laboratory payload codecs live in
+`clutch_solana_layout::product_series`. Allocation still grants no execution
+capability. The program's executable
 Source/Series set remains empty. In particular, a decoded registry release ID
 or capability-profile ID is not authority: registration stays disabled until
 the adapter authenticates the authoritative central release, and every
@@ -168,9 +155,10 @@ Recovery 78/v1 reserves these local actions, all disabled:
 8. `CloseRecoveryFunding`
 9. `CloseFailureRoot`
 
-The Structured and Dealer family action spaces remain empty: every local action
-is unknown until an atomic design wave fixes its payload and capability
-contract.
+The Dealer family action space remains empty. StructuredClaim payload codecs
+are owned by its separately integrated runtime and adapter, while Recovery
+payload/account contracts are owned by its dedicated modules; this central
+allocation duplicates neither contract and activates none of these actions.
 
 ## Coordinated successor account block
 
