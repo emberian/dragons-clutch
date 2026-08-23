@@ -17,25 +17,24 @@ use crate::instructions::genesis::{
     transfer_data, RentParameters, MAX_PERMITTED_DATA_INCREASE, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
-use clutch_batch::relation_v2::{
-    verify_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2, EconomicDomainV2,
-    PricePreconditionV2,
-};
+use clutch_batch::relation_v2::EconomicBookV2;
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_identity_lab_payload_v1, DeletableRentOwnerV1, GeneralEpochPhaseV1, Id32,
     IdentityLabPayloadV1, Sha256BackendV1, WriteCandidateFeedPayloadV1,
 };
-use clutch_price_measure::{
-    verify_quantized_price_measure_v3_smooth, AdapterBindingsV3, PriceVectorV3,
-    QuantizedAtomWitnessV3,
+use clutch_general_v2_runtime::{
+    relation_v2_policy_id_v1, score_v2_q_policy_id_v1, verify_smooth_direct_candidate_v1,
+    GeneralV2RuntimeError,
 };
 use clutch_product_series::{
-    FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
-    QuantizedEdgePolicyV1, BASIS_BYTES, MARKET_GENESIS_PROFILE_V2_BYTES,
-    PRICE_MEASURE_POLICY_BYTES,
+    FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
+    PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1, BASIS_BYTES,
+    MARKET_GENESIS_PROFILE_V2_BYTES, MARKET_INSTANCE_PREIMAGE_V2_BYTES, PRICE_MEASURE_POLICY_BYTES,
+    PRODUCT_TEMPLATE_BYTES,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
+use clutch_solana_layout::{account_len, PriceGridAccount};
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
@@ -148,6 +147,22 @@ fn require_distinct_pairs(accounts: &[AccountInfo], pairs: &[(usize, usize)]) ->
             accounts[*left].key != accounts[*right].key,
             ClutchError::AccountAlias,
         )?;
+    }
+    Ok(())
+}
+
+fn require_all_distinct(accounts: &[AccountInfo], indices: &[usize]) -> Outcome<()> {
+    let mut left = 0usize;
+    while left < indices.len() {
+        let mut right = left + 1;
+        while right < indices.len() {
+            require(
+                accounts[indices[left]].key != accounts[indices[right]].key,
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
     }
     Ok(())
 }
@@ -511,6 +526,8 @@ fn authenticate_product(
     let policy_data = borrow_data(policy_account)?;
     let policy =
         PriceMeasurePolicyV1::decode(&policy_data).map_err(|_| ClutchError::NonCanonical)?;
+    let relation_policy = relation_v2_policy_id_v1().map_err(|_| ClutchError::MismatchedState)?;
+    let score_policy = score_v2_q_policy_id_v1().map_err(|_| ClutchError::MismatchedState)?;
     require(
         basis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
             == binding.native_claim_basis_id.bytes()
@@ -524,10 +541,13 @@ fn authenticate_product(
         .validate_bindings(&basis, &policy)
         .map_err(|_| ClutchError::MismatchedState)?;
     require(
-        basis.basis_degree == binding.basis_degree
+        (2..=3).contains(&basis.basis_degree)
+            && basis.basis_degree == binding.basis_degree
             && basis.outcome_count == binding.outcome_count
             && genesis.relation_policy_id.bytes() == binding.relation_policy_id.bytes()
             && genesis.score_policy_id.bytes() == binding.score_policy_id.bytes()
+            && binding.relation_policy_id == relation_policy
+            && binding.score_policy_id == score_policy
             && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID,
         ClutchError::MismatchedState,
     )?;
@@ -1528,11 +1548,28 @@ fn init_clear_work(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CheckedVerdict {
-    Valid(contract::ScoreV2QComponentsV1),
+    Valid {
+        score: contract::ScoreV2QComponentsV1,
+        expected_rank: [u8; contract::SCORE_V2_Q_RANK_CAPACITY],
+    },
     Refused,
 }
 
-/// Authenticate Product bodies and run both independent arithmetic checkers.
+fn runtime_error_is_checked_refusal(error: GeneralV2RuntimeError) -> bool {
+    matches!(
+        error,
+        GeneralV2RuntimeError::PriceGrid(_)
+            | GeneralV2RuntimeError::PriceMeasure(_)
+            | GeneralV2RuntimeError::Relation(_)
+            | GeneralV2RuntimeError::UnsupportedCandidateKind
+            | GeneralV2RuntimeError::UnsupportedSmoothDegree
+            | GeneralV2RuntimeError::UnsupportedWitnessVersion
+            | GeneralV2RuntimeError::InvalidWitnessShape
+            | GeneralV2RuntimeError::NonCanonicalWitnessPadding
+    )
+}
+
+/// Authenticate every Product body and consume the private runtime verdict.
 #[inline(never)]
 fn checked_empty_book_verdict(
     program_id: &Pubkey,
@@ -1541,163 +1578,90 @@ fn checked_empty_book_verdict(
     node: contract::AdmissionNodeV3AccountV1,
     feed_key: &Pubkey,
     feed_data: &[u8],
+    price_grid_account: &AccountInfo,
+    template_account: &AccountInfo,
     basis_account: &AccountInfo,
     genesis_account: &AccountInfo,
     policy_account: &AccountInfo,
+    market_instance_account: &AccountInfo,
 ) -> Outcome<CheckedVerdict> {
+    require_readonly_artifact(program_id, price_grid_account, account_len::PRICE_GRID)?;
+    require_readonly_artifact(program_id, template_account, PRODUCT_TEMPLATE_BYTES)?;
     require_readonly_artifact(program_id, basis_account, BASIS_BYTES)?;
     require_readonly_artifact(program_id, genesis_account, MARKET_GENESIS_PROFILE_V2_BYTES)?;
     require_readonly_artifact(program_id, policy_account, PRICE_MEASURE_POLICY_BYTES)?;
+    require_readonly_artifact(
+        program_id,
+        market_instance_account,
+        MARKET_INSTANCE_PREIMAGE_V2_BYTES,
+    )?;
+    let price_grid = PriceGridAccount::decode(&borrow_data(price_grid_account)?)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    let price_grid_pda = seeds::grid_pda(
+        program_id,
+        &price_grid.realm.bytes(),
+        &price_grid.grid.bytes(),
+    );
+    require(
+        *price_grid_account.key == price_grid_pda.0 && price_grid.stored_bump == price_grid_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let template = ProductTemplateV4::decode(&borrow_data(template_account)?)
+        .map_err(|_| ClutchError::NonCanonical)?;
     let basis = NativeClaimBasisV1::decode(&borrow_data(basis_account)?)
         .map_err(|_| ClutchError::NonCanonical)?;
     let genesis = MarketGenesisProfileV2::decode(&borrow_data(genesis_account)?)
         .map_err(|_| ClutchError::NonCanonical)?;
     let policy = PriceMeasurePolicyV1::decode(&borrow_data(policy_account)?)
         .map_err(|_| ClutchError::NonCanonical)?;
+    let market_instance = MarketInstancePreimageV2::decode(&borrow_data(market_instance_account)?)
+        .map_err(|_| ClutchError::NonCanonical)?;
     require(
-        basis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
-            == binding.native_claim_basis_id.bytes()
-            && genesis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
-                == binding.market_genesis_profile_v2_id.bytes()
-            && policy.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
-                == binding.price_measure_policy_v1_id.bytes()
-            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID
-            && genesis.relation_policy_id.bytes() == binding.relation_policy_id.bytes()
-            && genesis.score_policy_id.bytes() == binding.score_policy_id.bytes()
-            && basis.edge_policy_registry_value == 1
-            && basis.basis_degree != 0,
+        genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID
+            && basis.edge_policy_registry_value == 1,
         ClutchError::MismatchedState,
     )?;
-    genesis
-        .validate_bindings(&basis, &policy)
-        .map_err(|_| ClutchError::MismatchedState)?;
-    let smooth_basis = policy
-        .project_smooth_basis(&basis, &genesis, QuantizedEdgePolicyV1::Clamp)
-        .map_err(|_| ClutchError::MismatchedState)?;
-    let (header, tail) = contract::complete_candidate_feed_v2(feed_data, true)?;
-    let mut prices = [0u64; contract::MAX_OUTCOMES];
-    let mut index = 0usize;
-    while index < usize::from(header.outcome_count) {
-        let at = index * 8;
-        prices[index] = u64::from_le_bytes(
-            tail.prices_le()[at..at + 8]
-                .try_into()
-                .map_err(|_| ClutchError::WrongDataLength)?,
-        );
-        index += 1;
-    }
-    let mut coordinates = [0u128; contract::MAX_QUANTIZED_ATOMS];
-    let mut masses = [0u64; contract::MAX_QUANTIZED_ATOMS];
-    index = 0;
-    while index < usize::from(header.atom_count) {
-        let at = index * contract::QUANTIZED_ATOM_BYTES;
-        coordinates[index] = u128::from_le_bytes(
-            tail.atoms_le()[at..at + 16]
-                .try_into()
-                .map_err(|_| ClutchError::WrongDataLength)?,
-        );
-        masses[index] = u64::from_le_bytes(
-            tail.atoms_le()[at + 16..at + 24]
-                .try_into()
-                .map_err(|_| ClutchError::WrongDataLength)?,
-        );
-        index += 1;
-    }
-    let price_vector = PriceVectorV3 {
-        basis_degree: header.basis_degree,
-        native_outcome_count: header.outcome_count,
-        price_scale: header.price_scale,
-        prices,
-    };
-    let observed_body =
-        contract::quantized_witness_body_digest_v3(&RuntimeSha256, id(feed_key), feed_data, true)?;
-    require(
-        observed_body == header.price_body_digest,
-        ClutchError::MismatchedState,
-    )?;
-    let bindings = AdapterBindingsV3 {
-        candidate_feed: feed_key.to_bytes(),
-        relation_domain_digest: header.economic_domain_digest.bytes(),
-        basis_digest: header.native_claim_basis_id.bytes(),
-        candidate_price_digest: header.candidate_price_digest.bytes(),
-        observed_body_digest: observed_body.bytes(),
-    };
-    let witness = QuantizedAtomWitnessV3 {
-        schema_version: header.price_witness_schema,
-        quantized_semantics_version: header.quantized_semantics_version,
-        candidate_feed: feed_key.to_bytes(),
-        relation_domain_digest: header.economic_domain_digest.bytes(),
-        basis_digest: header.native_claim_basis_id.bytes(),
-        candidate_price_digest: header.candidate_price_digest.bytes(),
-        body_digest: observed_body.bytes(),
-        basis_degree: header.basis_degree,
-        native_outcome_count: header.outcome_count,
-        atom_count: header.atom_count,
-        common_denominator: header.common_denominator,
-        atom_coordinates: coordinates,
-        atom_masses: masses,
-    };
-    if policy
-        .validate_witness_contract(&basis, &price_vector, &witness, binding.price_scale)
-        .is_err()
-        || verify_quantized_price_measure_v3_smooth(
-            &bindings,
-            &smooth_basis,
-            &price_vector,
-            &witness,
-        )
-        .is_err()
-    {
-        return Ok(CheckedVerdict::Refused);
-    }
-    let economic_domain = EconomicDomainV2 {
-        relation_version: domain.transcript.relation_version,
-        market_semantics_digest: domain.transcript.market_instance_v2_id.bytes(),
-        epoch_semantics_digest: domain.transcript.epoch_semantics_digest.bytes(),
-        relation_policy_digest: domain.transcript.relation_policy_id.bytes(),
-        price_policy_digest: domain.transcript.price_measure_policy_v1_id.bytes(),
-        epoch_index: domain.transcript.epoch_index,
-        outcome_count: domain.transcript.outcome_count,
-        price_scale: domain.transcript.price_scale,
-    };
-    let price = PricePreconditionV2 {
-        policy_digest: binding.price_measure_policy_v1_id.bytes(),
-        semantic_price_digest: header.candidate_price_digest.bytes(),
-        prices,
-    };
-    let economic = match verify_economic_candidate_v2(
-        &economic_domain,
+    let verified = match verify_smooth_direct_candidate_v1(
+        id(feed_key),
+        feed_data,
+        &node,
+        &domain,
+        &binding,
+        &price_grid,
+        &template,
+        &basis,
+        &policy,
+        &genesis,
+        &market_instance,
+        QuantizedEdgePolicyV1::Clamp,
         &EconomicBookV2::empty(),
-        &price,
-        &EconomicCandidateV2 {
-            fills: [0; clutch_batch::MAX_ORDERS],
-            honored_aon_mask: header.honored_aon_mask,
-            virtual_split: header.virtual_split,
-            virtual_merge: header.virtual_merge,
-        },
     ) {
         Ok(value) => value,
-        Err(_) => return Ok(CheckedVerdict::Refused),
+        Err(error) if runtime_error_is_checked_refusal(error) => {
+            return Ok(CheckedVerdict::Refused)
+        }
+        Err(_) => return Err(ClutchError::MismatchedState.into()),
     };
-    let base = Id32::from_bytes(economic.economic_candidate_digest);
+    let header = contract::CandidateFeedHeaderV2::decode_account(feed_data, true)?;
+    let base = header.base_relation_candidate_id;
     require(
-        base == header.base_relation_candidate_id
-            && base == header.settlement_candidate_id
-            && base == node.base_relation_candidate_id
-            && base == node.settlement_candidate_id
-            && header.settlement_witness_digest
-                == contract::empty_settlement_witness_digest_v1(&RuntimeSha256, base)?
+        header.settlement_witness_digest
+            == contract::empty_settlement_witness_digest_v1(&RuntimeSha256, base)?
             && node.settlement_witness_digest == header.settlement_witness_digest
             && node.candidate_bundle_digest
                 == contract::candidate_bundle_digest_v1(&RuntimeSha256, feed_data, true)?,
         ClutchError::MismatchedState,
     )?;
-    Ok(CheckedVerdict::Valid(contract::ScoreV2QComponentsV1 {
-        certified_risk_flow_atoms: economic.score.risk.certified_risk_flow_atoms,
-        cash_equivalent_direct_flow_atoms: economic.score.cash_equivalent_direct_flow_atoms,
-        virtual_churn_atoms: economic.score.virtual_churn_atoms,
-        settlement_candidate_id: base,
-    }))
+    let economics = verified.economics();
+    Ok(CheckedVerdict::Valid {
+        score: contract::ScoreV2QComponentsV1 {
+            certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
+            cash_equivalent_direct_flow_atoms: economics.score.cash_equivalent_direct_flow_atoms,
+            virtual_churn_atoms: economics.score.virtual_churn_atoms,
+            settlement_candidate_id: base,
+        },
+        expected_rank: *verified.rank_key(),
+    })
 }
 
 #[inline(never)]
@@ -1706,9 +1670,9 @@ fn complete_candidate_verification(
     accounts: &[AccountInfo],
     request: contract::EpochNodePayloadV1,
 ) -> Outcome<()> {
-    // The authenticated Genesis and PriceMeasure policy bodies are explicit
-    // metas. Their earlier omission would have made bare IDs behavioral truth.
-    require_count(accounts, 12)?;
+    // Every immutable body needed by the typed runtime join is an explicit
+    // meta. Bare IDs never become behavioral truth.
+    require_count(accounts, 15)?;
     require_writable_destination(&accounts[0])?;
     require_role(
         program_id,
@@ -1745,41 +1709,21 @@ fn complete_candidate_verification(
         ClutchError::WrongProgramOwner,
     )?;
     require(!accounts[6].is_writable, ClutchError::UnexpectedWritable)?;
-    require_readonly_artifact(program_id, &accounts[7], BASIS_BYTES)?;
-    require_readonly_artifact(program_id, &accounts[8], MARKET_GENESIS_PROFILE_V2_BYTES)?;
-    require_readonly_artifact(program_id, &accounts[9], PRICE_MEASURE_POLICY_BYTES)?;
+    require_readonly_artifact(program_id, &accounts[7], account_len::PRICE_GRID)?;
+    require_readonly_artifact(program_id, &accounts[8], PRODUCT_TEMPLATE_BYTES)?;
+    require_readonly_artifact(program_id, &accounts[9], BASIS_BYTES)?;
+    require_readonly_artifact(program_id, &accounts[10], MARKET_GENESIS_PROFILE_V2_BYTES)?;
+    require_readonly_artifact(program_id, &accounts[11], PRICE_MEASURE_POLICY_BYTES)?;
+    require_readonly_artifact(program_id, &accounts[12], MARKET_INSTANCE_PREIMAGE_V2_BYTES)?;
     require(
-        accounts[10].owner == program_id,
+        accounts[13].owner == program_id,
         ClutchError::WrongProgramOwner,
     )?;
-    require_writable_destination(&accounts[10])?;
-    let slot = read_clock_slot(&accounts[11])?;
-    require_distinct_pairs(
+    require_writable_destination(&accounts[13])?;
+    let slot = read_clock_slot(&accounts[14])?;
+    require_all_distinct(
         accounts,
-        &[
-            (1, 2),
-            (1, 3),
-            (1, 4),
-            (1, 5),
-            (1, 6),
-            (1, 10),
-            (2, 3),
-            (2, 4),
-            (2, 5),
-            (2, 6),
-            (2, 10),
-            (3, 4),
-            (3, 5),
-            (3, 6),
-            (3, 10),
-            (4, 5),
-            (4, 6),
-            (4, 10),
-            (5, 6),
-            (5, 10),
-            (6, 10),
-            (0, 10),
-        ],
+        &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
     )?;
     let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[1])?)?;
     let window = contract::CandidateWindowV4AccountV1::decode(&borrow_data(&accounts[2])?)?;
@@ -1788,9 +1732,9 @@ fn complete_candidate_verification(
     let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[5])?)?;
     let feed_data = borrow_data(&accounts[6])?;
     let feed = contract::CandidateFeedHeaderV2::decode_account(&feed_data, true)?;
-    let work = contract::ClearWorkHeaderV2::decode_account(&borrow_data(&accounts[10])?)?;
+    let work = contract::ClearWorkHeaderV2::decode_account(&borrow_data(&accounts[13])?)?;
     require_compartment_balance(&accounts[6], feed.rent, &[feed.close_reward_lamports])?;
-    require_compartment_balance(&accounts[10], work.rent, &[work.reward_remaining])?;
+    require_compartment_balance(&accounts[13], work.rent, &[work.reward_remaining])?;
     require(
         request.epoch == id(accounts[1].key)
             && request.node == id(accounts[5].key)
@@ -1814,7 +1758,7 @@ fn complete_candidate_verification(
     )?;
     let work_pda = seeds::general_v2_work_pda(program_id, &accounts[5].key.to_bytes());
     require(
-        *accounts[10].key == work_pda.0 && work.stored_bump == work_pda.1,
+        *accounts[13].key == work_pda.0 && work.stored_bump == work_pda.1,
         ClutchError::WrongPda,
     )?;
     let verdict = checked_empty_book_verdict(
@@ -1827,13 +1771,20 @@ fn complete_candidate_verification(
         &accounts[7],
         &accounts[8],
         &accounts[9],
+        &accounts[10],
+        &accounts[11],
+        &accounts[12],
     )?;
     drop(feed_data);
+    let expected_rank = match verdict {
+        CheckedVerdict::Valid { expected_rank, .. } => Some(expected_rank),
+        CheckedVerdict::Refused => None,
+    };
     let post = contract::complete_candidate_verification_poststate_v1(
         contract::CompleteCandidateVerificationTransitionV1 {
             current_slot: slot,
             verdict: match verdict {
-                CheckedVerdict::Valid(score) => {
+                CheckedVerdict::Valid { score, .. } => {
                     contract::EmptyBookVerificationVerdictV1::Valid(score)
                 }
                 CheckedVerdict::Refused => contract::EmptyBookVerificationVerdictV1::Refused,
@@ -1845,8 +1796,11 @@ fn complete_candidate_verification(
             binding: &binding,
         },
     )?;
-    move_lamports(&accounts[10], &accounts[0], post.keeper_reward)?;
-    encode_account(&accounts[10], |out| {
+    if let Some(rank) = expected_rank {
+        require(post.node.rank_key == rank, ClutchError::MismatchedState)?;
+    }
+    move_lamports(&accounts[13], &accounts[0], post.keeper_reward)?;
+    encode_account(&accounts[13], |out| {
         post.work
             .encode(&mut out[..contract::CLEAR_WORK_HEADER_BYTES])
     })?;

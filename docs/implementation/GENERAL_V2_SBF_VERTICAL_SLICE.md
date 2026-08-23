@@ -364,7 +364,9 @@ claim that a built ELF or local-bank transaction has exercised it yet.
 12. Clock sysvar, read-only
 
 Authenticate the full MarketInstanceV2 join through the MarketBinding PDA and
-require the exact next Epoch index. Derive the four frozen child PDAs,
+require the canonical RelationV2 and ScoreV2-Q policy identities, a smooth
+degree-two or degree-three basis, and the exact next Epoch index. Derive the
+four frozen child PDAs,
 calculate full rent principals without
 discounting hostile prefunds, route prefunds into donation compartments,
 prepay the fixed 789-byte SelectedCandidate rent principal into the Budget's
@@ -491,23 +493,31 @@ count atomically. Do not reinstate the legacy roughly 50 KiB staged-grow path.
 4. EconomicDomain, read-only
 5. AdmissionNode, writable
 6. sealed CandidateFeed, read-only
-7. authenticated NativeClaimBasis artifact, read-only
-8. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
-9. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
-10. ClearWork, writable
-11. Clock sysvar, read-only
+7. canonical PriceGrid PDA, read-only and program-owned
+8. authenticated ProductTemplateV4 artifact, read-only and program-owned
+9. authenticated NativeClaimBasis artifact, read-only and program-owned
+10. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
+11. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
+12. authenticated MarketInstancePreimageV2 artifact, read-only and program-owned
+13. ClearWork, writable
+14. Clock sysvar, read-only
 
-Only `[S,V)` admits ordinary completion. The identity-only lab uses the
-bounded zero-order/zero-slice RelationV2 path plus the exact PriceMeasure V3
-check. A well-formed, authenticated but economically invalid candidate returns
-success after terminalizing the node as `VerifiedRefused`. Malformed bytes,
-bad authority, broken binding, or corrupt persisted state return an error and
-roll back.
+Only `[S,V)` admits ordinary completion. The identity-only lab consumes
+`clutch-general-v2-runtime::verify_smooth_direct_candidate_v1` over the bounded
+zero-order/zero-slice RelationV2 book. That private-construction result joins
+the full Product/Genesis/MarketInstance/PriceGrid bodies, canonical policy IDs,
+the V3 quantized witness, owner-blind RelationV2, and ScoreV2-Q. A well-formed,
+authenticated but economically invalid candidate returns success after
+terminalizing the node as `VerifiedRefused`. Malformed bytes, bad authority,
+broken binding, or corrupt persisted state return an error and roll back.
 
-A valid completion recomputes the base and final identities, computes the score
-and 88-byte rank, terminalizes the node, updates Window counts and best node,
-and pays only present-funded checked-work rewards. The adapter never trusts the
-candidate's claimed final identity.
+A valid completion recomputes the base and final identities and obtains the
+88-byte rank from the private checked wrapper. The mutation owner independently
+re-encodes the score fields with the authenticated Node ordinal, and the
+adapter requires byte equality before writing. It then terminalizes the node,
+updates Window counts and best node, and pays only present-funded checked-work
+rewards. The adapter never trusts a candidate-supplied score, rank, ordinal, or
+final identity.
 
 ### 6.8 `FinalizeSelection`
 

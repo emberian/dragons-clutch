@@ -19,7 +19,7 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
 /// Non-production General V2 empty-book identity laboratory.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v3";
+    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v4";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-full")]
@@ -42,8 +42,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x79, 0xc3, 0x6a, 0x49, 0x67, 0x2a, 0x75, 0x4f, 0xa7, 0x20, 0x0d, 0x91, 0x70, 0xc3, 0x27, 0xde,
-    0xb3, 0x04, 0xe1, 0xe3, 0x80, 0xe7, 0xdc, 0xc4, 0x6d, 0x73, 0x8f, 0xa9, 0xba, 0xaf, 0x28, 0x95,
+    0x6b, 0x03, 0x9f, 0x08, 0xcc, 0x74, 0xf9, 0x4a, 0x73, 0xb9, 0xa8, 0xb3, 0x06, 0x43, 0x1a, 0xb3,
+    0x2b, 0x40, 0xc1, 0x88, 0x03, 0xdc, 0x1d, 0x07, 0x3a, 0xb4, 0xe6, 0x53, 0x3c, 0x87, 0x89, 0xd5,
 ];
 
 /// Whether this artifact is the explicitly non-production identity lab.

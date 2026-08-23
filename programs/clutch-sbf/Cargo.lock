@@ -69,6 +69,18 @@ name = "clutch-general-v2-contract"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-general-v2-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-general-v2-contract",
+ "clutch-price-measure",
+ "clutch-product-series",
+ "clutch-solana-layout",
+ "sha2",
+]
+
+[[package]]
 name = "clutch-keeper"
 version = "0.1.0"
 dependencies = [
@@ -117,6 +129,7 @@ dependencies = [
  "clutch-bspline",
  "clutch-bspline-accumulator",
  "clutch-general-v2-contract",
+ "clutch-general-v2-runtime",
  "clutch-kernel",
  "clutch-liveness",
  "clutch-price-measure",
