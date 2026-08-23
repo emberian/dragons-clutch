@@ -25,11 +25,11 @@ pub const GENERAL_REPLAY_EXTENSION_V1_BYTES: usize = 136;
 pub const GENERAL_REPLAY_ACCOUNT_V1_BYTES: usize =
     clutch_retirement::PURPOSE_REPLAY_V3_PREFIX_BYTES + GENERAL_REPLAY_EXTENSION_V1_BYTES;
 /// Domain for one exact General Position pre/post delta.
-pub const GENERAL_REPLAY_DELTA_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/general-replay/delta/v1\0";
+pub const GENERAL_REPLAY_DELTA_DOMAIN_V1: &[u8] = b"dragons-clutch/general-replay/delta/v1\0";
 
 const SETTLEMENT_FAMILY: u8 = 1;
 const STRUCTURED_EXCHANGE_FAMILY: u8 = 2;
+const COLLATERAL_CASH_FAMILY: u8 = 3;
 const TRANSITION_VERSION_V1: u8 = 1;
 const OWNER_ACCOUNTING_ROLE: u8 = 1;
 const OWNER_CASH_ROLE: u8 = 2;
@@ -38,10 +38,19 @@ const DIRECT_SELLER_ROLE: u8 = 4;
 const VIRTUAL_SPLIT_BUYER_ROLE: u8 = 5;
 const VIRTUAL_MERGE_SELLER_ROLE: u8 = 6;
 const STRUCTURED_GENERAL_ROLE: u8 = 7;
+const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralReplayTransitionKindV1 {
+    /// Legacy Intent `Endow`, promoted to the canonical Holder→Hoard deposit.
+    Endow,
+    /// Legacy Intent `WithdrawCash`, promoted to canonical Hoard→Holder exit.
+    WithdrawCash,
+    /// Legacy Intent `Split`, locking cash as complete-set backing.
+    Split,
+    /// Legacy Intent `Merge`, unlocking complete-set backing into cash.
+    Merge,
     /// Action 25 owner accounting; the Position body is unchanged.
     AccountReceiptEnd,
     /// Action 38 owner cash realization.
@@ -61,6 +70,30 @@ pub enum GeneralReplayTransitionKindV1 {
 impl GeneralReplayTransitionKindV1 {
     fn coordinates(self) -> (u8, u8, u8, u8) {
         match self {
+            Self::Endow => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::WithdrawCash => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::Split => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                3,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::Merge => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                4,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
             Self::AccountReceiptEnd => (
                 SETTLEMENT_FAMILY,
                 TRANSITION_VERSION_V1,
@@ -106,13 +139,32 @@ impl GeneralReplayTransitionKindV1 {
         }
     }
 
-    fn from_coordinates(
-        family: u8,
-        version: u8,
-        action: u8,
-        role: u8,
-    ) -> Result<Self, CodecError> {
+    fn from_coordinates(family: u8, version: u8, action: u8, role: u8) -> Result<Self, CodecError> {
         match (family, version, action, role) {
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Endow),
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::WithdrawCash),
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                3,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Split),
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                4,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Merge),
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 25, OWNER_ACCOUNTING_ROLE) => {
                 Ok(Self::AccountReceiptEnd)
             }
@@ -131,17 +183,14 @@ impl GeneralReplayTransitionKindV1 {
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 37, VIRTUAL_MERGE_SELLER_ROLE) => {
                 Ok(Self::VirtualMergeSeller)
             }
-            (
-                STRUCTURED_EXCHANGE_FAMILY,
-                TRANSITION_VERSION_V1,
-                35,
-                STRUCTURED_GENERAL_ROLE,
-            ) => Ok(Self::StructuredGeneral),
+            (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
+                Ok(Self::StructuredGeneral)
+            }
             _ => Err(CodecError::InvalidState),
         }
     }
 
-    /// Exact centrally allocated General action number.
+    /// Exact owner-local action coordinate within this Replay family.
     pub fn action(self) -> u8 {
         self.coordinates().2
     }
@@ -374,7 +423,9 @@ pub fn project_general_position_replay_prestate_v1<B>(
 where
     B: PositionV3Sha256Backend + ReplayV3HashBackend,
 {
-    position.validate().map_err(|_| CodecError::MismatchedBinding)?;
+    position
+        .validate()
+        .map_err(|_| CodecError::MismatchedBinding)?;
     let position_fields = position.semantic.fields();
     let derived_position_id = position
         .semantic
@@ -555,7 +606,11 @@ where
     let unchanged_required = kind == GeneralReplayTransitionKindV1::AccountReceiptEnd;
     let changed_required = matches!(
         kind,
-        GeneralReplayTransitionKindV1::DirectBuyer
+        GeneralReplayTransitionKindV1::Endow
+            | GeneralReplayTransitionKindV1::WithdrawCash
+            | GeneralReplayTransitionKindV1::Split
+            | GeneralReplayTransitionKindV1::Merge
+            | GeneralReplayTransitionKindV1::DirectBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
             | GeneralReplayTransitionKindV1::StructuredGeneral
     );
