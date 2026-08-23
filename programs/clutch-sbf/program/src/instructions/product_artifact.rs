@@ -799,6 +799,7 @@ impl AuthenticatedRegistryCapabilityReleaseV3 {
 pub struct AuthenticatedRegistryCapabilityV3 {
     series_registry_account: Pubkey,
     series_plan_id: SeriesPlanV5Id,
+    compiler_bundle_id: ContentId,
     program_account: Pubkey,
     programdata_account: Pubkey,
     release_artifact_account: Pubkey,
@@ -817,6 +818,11 @@ impl AuthenticatedRegistryCapabilityV3 {
     /// Exact registered recurring Series.
     pub const fn series_plan_id(self) -> SeriesPlanV5Id {
         self.series_plan_id
+    }
+
+    /// Exact BundleV5 identity retained by the hostile-decoded SeriesRegistryV2.
+    pub const fn compiler_bundle_id(self) -> ContentId {
+        self.compiler_bundle_id
     }
 
     /// Current executable Program account authenticated for this receipt.
@@ -993,6 +999,7 @@ pub fn authenticate_registry_capability_v3(
     Ok(AuthenticatedRegistryCapabilityV3 {
         series_registry_account: registry_refs.series_registry_account,
         series_plan_id: registry_refs.series_plan_id,
+        compiler_bundle_id: registry_refs.compiler_bundle_id,
         program_account: authenticated.program_account,
         programdata_account: authenticated.programdata_account,
         release_artifact_account: authenticated.release_artifact_account,
