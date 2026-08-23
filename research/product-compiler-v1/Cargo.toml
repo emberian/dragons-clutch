@@ -1,0 +1,19 @@
+[package]
+name = "clutch-product-compiler-v1"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Canonical Template, Instance, and prepaid recurring Series host model for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+clutch-accumulator = { path = "../../crates/clutch-accumulator" }
+clutch-liquidity-policy-model = { path = "../liquidity-policy-model" }
+clutch-solana-layout = { path = "../../programs/solana-layout" }
+sha2 = "0.10.9"
+
+[dev-dependencies]
+serde_json = "1.0"

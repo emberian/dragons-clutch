@@ -1,0 +1,71 @@
+{
+  "schema": "dragons-clutch/product-compiler-v1/adversarial-v1",
+  "status": "model-only",
+  "identity_domain": "sha256(domain || canonical_body)",
+  "reference": {
+    "source_spec_id": "0101010101010101010101010101010101010101010101010101010101010101",
+    "terminal_template_id": "5f8b8b0829d353f716d598e76829368d2770a94463e0bafe162ab50da66ba20b",
+    "drawdown_template_id": "e433e62101951359a7e09449181d3314e395818f2d3177b7cdbc801e6a6a5e65",
+    "terminal_series_id": "4fa9658e1fc7e63e9294fca971f029a8d800f25fa55288861314329e08abd3f6",
+    "ordinal_zero_instance_id": "95f6df0466f42bfde92e87252e647e241c4ef7b0947a392c2be41b1db2f3f88e",
+    "ordinal_zero_raw_window_id": "67ac2c2d4001ae7556306f24103766d8729acf2f1ffb96153446759d1b036330",
+    "ordinal_zero_terminal_result_id": "f4a2c7dfd21edc4bc7314f1f6468a8f57d9fbf6cd097d1abc4fbd912ba8b530d",
+    "ordinal_zero_current_window_id": "3b1e5363443bec7060833c31e1cd7b9e11e99def898900aa76eae2f128a8de2b",
+    "ordinal_zero_current_terms_digest": "e85a899570149a36a679b27722c4b05fb50afc8534cffe2acd6bd17e4facd2c9",
+    "window": {
+      "first_start_bucket": 1000,
+      "span_buckets": 60,
+      "repair_grace_buckets": 10,
+      "stride_buckets": 120,
+      "instance_count": 3
+    },
+    "funding": {
+      "creation_lamports_per_instance": 20000000,
+      "liveness_lamports_per_instance": 50000000,
+      "liquidity_collateral_per_instance": 250000,
+      "future_fee_credit": 0
+    }
+  },
+  "vectors": [
+    {
+      "name": "terminal-current-lowering",
+      "expect": "accepted; current TermsAccount validates"
+    },
+    {
+      "name": "drawdown-canonical-but-not-current",
+      "expect": "Template and shared Hatchery WindowKey accepted; current Terms lowering refuses UnsupportedCurrentLowering"
+    },
+    {
+      "name": "terminal-drawdown-window-reuse",
+      "expect": "different TemplateIds/statistic-result IDs and equal raw Hatchery WindowIds for equal SourceSpec, Hatchery release, range, coverage, and generation"
+    },
+    {
+      "name": "ordinal-choice",
+      "expect": "WrongOrdinal"
+    },
+    {
+      "name": "early-or-late-instantiation",
+      "expect": "NotEligible"
+    },
+    {
+      "name": "one-lamport-liveness-shortfall",
+      "expect": "InsufficientPrepayment"
+    },
+    {
+      "name": "expired-lapse",
+      "expect": "cursor advances; creation, liveness, and liquidity compartments remain unchanged and refundable"
+    },
+    {
+      "name": "noncanonical-knot-padding",
+      "expect": "current TermsAccount codec refusal"
+    },
+    {
+      "name": "false-uniform-failure-vector",
+      "expect": "InvalidParameter; policy name cannot bless a nonuniform selected vector"
+    },
+    {
+      "name": "legacy-market-nonce-range-overflow",
+      "expect": "ArithmeticOverflow"
+    }
+  ]
+}
