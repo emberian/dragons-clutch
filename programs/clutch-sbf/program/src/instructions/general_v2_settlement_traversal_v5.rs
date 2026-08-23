@@ -76,6 +76,7 @@ pub struct AuthenticatedSettlementTraversalV5 {
     genesis: MarketGenesisProfileV2,
     feed_account: Id32,
     feed: CandidateFeedHeaderV2,
+    frame_accounts: [Id32; 11],
     traversal: Box<SettlementTraversalProjectionV4>,
 }
 
@@ -385,6 +386,19 @@ pub fn authenticate_settlement_traversal_v5(
         genesis,
         feed_account: id(frame.retained_feed.key),
         feed,
+        frame_accounts: [
+            id(frame.retained_feed.key),
+            id(frame.market_binding.key),
+            id(frame.market_runtime.key),
+            id(frame.economic_domain.key),
+            id(frame.price_grid.key),
+            id(frame.realm.key),
+            id(frame.profile.key),
+            id(frame.collateral_policy.key),
+            id(frame.token_program.key),
+            id(frame.market_instance.key),
+            id(frame.market_genesis.key),
+        ],
         traversal,
     })
 }
@@ -425,10 +439,20 @@ fn authenticate_root_settlement_traversal_v5<'a>(
     traversal: &'a AuthenticatedSettlementTraversalV5,
     access: RootTraversalAccessV5,
 ) -> Outcome<AuthenticatedRootSettlementTraversalV5<'a>> {
-    require(
-        id(root_account.key) != traversal.feed_account(),
-        ClutchError::AccountAlias,
-    )?;
+    let root_id = id(root_account.key);
+    for account in traversal.frame_accounts {
+        require(root_id != account, ClutchError::AccountAlias)?;
+    }
+    let mut page = 0u16;
+    while usize::from(page) < usize::from(traversal.traversal().order_projection().page_count()) {
+        require(
+            traversal.traversal().order_projection().page_account(page) != Some(root_id),
+            ClutchError::AccountAlias,
+        )?;
+        page = page
+            .checked_add(1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    }
     let feed = traversal.feed();
     let root = match access {
         RootTraversalAccessV5::ReadOnly => authenticate_readonly_general_settlement_root_v1(

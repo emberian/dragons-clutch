@@ -109,6 +109,7 @@ fn authenticate_general_settlement_root_v1(
     let account = &accounts[IX_SETTLEMENT_ROOT];
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
     match access {
         RootAccessV1::ReadOnly => {
             require(!account.is_writable, ClutchError::UnexpectedWritable)?;
