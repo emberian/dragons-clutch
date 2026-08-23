@@ -177,11 +177,10 @@ dependencies = [
  "clutch-liveness",
  "clutch-price-measure",
  "clutch-product-series",
- "clutch-source-plane-v3",
- "clutch-source-plane-v3-adapter",
- "clutch-source-plane-v3-runtime",
  "clutch-solana-layout",
  "clutch-solana-reference",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-adapter",
  "clutch-source-plane-v3-runtime",
  "solana-account-info",
  "solana-cpi",
@@ -192,46 +191,6 @@ dependencies = [
  "solana-pubkey",
  "solana-sdk-ids",
  "solana-sha256-hasher",
-]
-
-[[package]]
-name = "clutch-source-plane-v3"
-version = "0.1.0"
-dependencies = [
- "sha2",
-]
-
-[[package]]
-name = "clutch-source-plane-v3-adapter"
-version = "0.1.0"
-dependencies = [
- "clutch-source-plane-v3",
- "clutch-source-profile-v1",
- "clutch-terminal-identity-v1",
- "sha2",
-]
-
-[[package]]
-name = "clutch-source-plane-v3-runtime"
-version = "0.1.0"
-dependencies = [
- "clutch-source-plane-v3",
- "clutch-source-plane-v3-adapter",
- "sha2",
-]
-
-[[package]]
-name = "clutch-source-profile-v1"
-version = "0.1.0"
-dependencies = [
- "sha2",
-]
-
-[[package]]
-name = "clutch-terminal-identity-v1"
-version = "0.1.0"
-dependencies = [
- "clutch-liveness",
 ]
 
 [[package]]
@@ -290,6 +249,7 @@ dependencies = [
 name = "clutch-source-plane-v3-runtime"
 version = "0.1.0"
 dependencies = [
+ "clutch-product-series",
  "clutch-source-plane-v3",
  "clutch-source-plane-v3-adapter",
  "clutch-terminal-identity-v1",
