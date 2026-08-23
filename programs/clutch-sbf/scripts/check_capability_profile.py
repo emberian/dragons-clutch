@@ -409,7 +409,17 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
 
 
 def cargo_features(build_contract: dict[str, Any]) -> list[str]:
-    features = ["custom-heap", str(build_contract["cargo_profile_feature"])]
+    profile_feature = str(build_contract["cargo_profile_feature"])
+    features = ["custom-heap"]
+    # Cargo's default route enables the named ``default`` feature in addition
+    # to every feature it expands to.  That marker has no cfg-gated behavior in
+    # the program, but rustc still includes the complete feature set in crate
+    # identity.  Preserve the marker for the full profile so the explicit and
+    # Cargo-default routes compile the same crate identity and therefore the
+    # same deployable bytes.  Narrow profiles must keep defaults disabled.
+    if profile_feature == "profile-full":
+        features.append("default")
+    features.append(profile_feature)
     source_feature = SOURCE_IDENTITY_FEATURE[str(build_contract["source_identity"])]
     if source_feature is not None:
         features.append(source_feature)

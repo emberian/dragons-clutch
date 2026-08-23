@@ -43,6 +43,24 @@ class DiagnosticError(ValueError):
     """A deterministic diagnostic refusal."""
 
 
+def explicit_profile_features(feature: str) -> list[str]:
+    """Return the complete Cargo feature set for one explicit profile build.
+
+    Cargo enables its named ``default`` feature on the default route.  Even
+    though no program source branches on that marker, omitting it changes
+    rustc's crate identity and can perturb LTO ordering.  Explicit full builds
+    retain the marker so they are byte-comparable with Cargo defaults.  Narrow
+    profiles cannot enable it because it expands to ``profile-full``.
+    """
+
+    return checker.cargo_features(
+        {
+            "cargo_profile_feature": feature,
+            "source_identity": "production-inert",
+        }
+    )
+
+
 def parse_profile_specs(values: list[str] | None) -> list[tuple[str, str]]:
     """Parse ordered, unique ``NAME=FEATURE`` diagnostic selectors."""
 
@@ -241,7 +259,11 @@ def build_once(
     ]
     if build_mode == "explicit-profile":
         command.extend(
-            ["--no-default-features", "--features", f"custom-heap,{feature}"]
+            [
+                "--no-default-features",
+                "--features",
+                ",".join(explicit_profile_features(feature)),
+            ]
         )
     elif build_mode != "cargo-default":
         raise DiagnosticError(f"unknown build mode: {build_mode}")
@@ -484,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
             profiles.append(
                 {
                     "name": name,
-                    "cargo_features": ["custom-heap", feature],
+                    "cargo_features": explicit_profile_features(feature),
                     "profile_manifest_linkage": "absent",
                     "reproducible_same_source_checkout": True,
                     "measurements": [first, second],

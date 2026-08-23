@@ -561,8 +561,54 @@ class CapabilityProfileTests(unittest.TestCase):
             mock_summary["profile_identity_sha256"],
             real_summary["profile_identity_sha256"],
         )
-        self.assertIn("non-production-mock-source", mock_summary["cargo_features"])
-        self.assertIn("non-production-real-pyth-lab", real_summary["cargo_features"])
+        self.assertEqual(
+            mock_summary["cargo_features"],
+            [
+                "custom-heap",
+                "profile-general-source-v2-point",
+                "non-production-mock-source",
+            ],
+        )
+        self.assertEqual(
+            real_summary["cargo_features"],
+            [
+                "custom-heap",
+                "profile-general-source-v2-point",
+                "non-production-real-pyth-lab",
+            ],
+        )
+
+    def test_full_profile_records_cargo_default_identity_marker(self) -> None:
+        full = checker.validate_manifest(
+            manifest(profile_feature="profile-full"), repo=ROOT
+        )
+        direct = checker.validate_manifest(
+            manifest(profile_feature="profile-direct-v3-source-v2-point"), repo=ROOT
+        )
+        full_lab = checker.validate_manifest(
+            manifest(
+                profile_feature="profile-full",
+                source_identity="non-production-real-pyth-lab",
+            ),
+            repo=ROOT,
+        )
+        self.assertEqual(
+            full["cargo_features"],
+            ["custom-heap", "default", "profile-full"],
+        )
+        self.assertEqual(
+            direct["cargo_features"],
+            ["custom-heap", "profile-direct-v3-source-v2-point"],
+        )
+        self.assertEqual(
+            full_lab["cargo_features"],
+            [
+                "custom-heap",
+                "default",
+                "profile-full",
+                "non-production-real-pyth-lab",
+            ],
+        )
 
     def test_default_equals_explicit_full_only_under_the_same_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
