@@ -5,7 +5,7 @@ deployment coordinate records. It intentionally contains no live deployment
 manifest today.
 
 Devnet records use
-`dragons-clutch/devnet-deployment-manifest/v1` and are consumed only by:
+`dragons-clutch/devnet-deployment-manifest/v2` and are consumed only by:
 
 ```text
 operatord compose-devnet-chain-config \
@@ -17,12 +17,13 @@ operatord compose-devnet-chain-config \
 The parser requires canonical compact ASCII JSON plus one newline, the exact
 Solana devnet genesis and public HTTP/WebSocket endpoints, finalized
 Program/ProgramData/deployment-slot coordinates, the checked capability
-manifest/profile/source/ELF tuple, compiler release, neutral sink, and explicit
+manifest/profile/source/ELF tuple, SHA-256 of the complete ProgramData data,
+compiler release, neutral sink, and explicit
 `not-exposed` signing/submission/deployment fields.
 
 The devnet deployment slot must be a canonical positive decimal observed from
 the finalized ProgramData account. Local `--bpf-program` releases instead use
-the synthesized slot zero and are owned only by the v6 local session seal; the
+the synthesized slot zero and are owned only by the v7 local session seal; the
 two coordinate types are deliberately not interchangeable.
 
 Deployment-manifest, capability-manifest, and built-ELF inputs are
@@ -31,7 +32,7 @@ Key-like resolved targets and symlink file leaves are refused; no wallet or
 private-key alias is an accepted deployment input.
 
 A devnet record must never be copied from or encoded as the
-`dragons-clutch/local-validator-public-manifest/v6` session seal. The composer
+`dragons-clutch/local-validator-public-manifest/v7` session seal. The composer
 performs no RPC call, wallet read, signing, submission, faucet request, or
 deployment. See
 [`REAL_INFRA_CHAIN_LAUNCH.md`](../../../docs/implementation/REAL_INFRA_CHAIN_LAUNCH.md)

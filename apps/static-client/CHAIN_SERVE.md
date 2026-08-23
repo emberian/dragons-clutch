@@ -19,7 +19,7 @@ operatord chain-serve --config chain.json [--port 9130] [--static apps/static-cl
 
 The missing session-instantiation seam is owned by
 `operatord prepare-local-chain` / `launch-local-chain`; those commands create
-the v6 seal from exact built-release, checked-profile, compiler, neutral-sink,
+the v7 seal from exact built-release, checked-profile, compiler, neutral-sink,
 Source, and validator coordinates without entering any historical mock mode.
 The separate `compose-devnet-chain-config` command accepts only the canonical
 devnet deployment-manifest schema and cannot reuse a local-session manifest.
@@ -29,10 +29,12 @@ See [`REAL_INFRA_CHAIN_LAUNCH.md`](../../docs/implementation/REAL_INFRA_CHAIN_LA
 the existing capability-profile v2 checker with deployability required and
 cross-checks its checker-emitted SHA-256 of sorted-key compact ASCII JSON,
 profile identity, measured source
-commit, and measured ELF digest against the v6 local-session seal. It hashes the
+commit, and measured ELF digest against the v7 local-session seal. It hashes the
 actual ELF file, requires the session ownership marker and exact HTTP/WebSocket
-pair, validates Program/ProgramData/slot coordinates, fixes bounded runtime
-policy, and derives the workflow identity. Missing, planning, historical,
+pair, validates Program/ProgramData/complete-data-hash/slot/locus coordinates,
+derives Product's exact `RegistryProgramReleaseV2` identity, fixes bounded
+runtime policy, and derives the operator-owned deployment-manifest, workflow,
+and release/deployment binding identities. Missing, planning, historical,
 unsealed, stale-decoder, or mismatched inputs fail closed.
 
 The central registry's exact enabled intent triples—not a second operatord or
@@ -70,7 +72,8 @@ untrusted RPC and refuses to bind Glass unless that one endpoint reports:
 3. the Program is executable, both accounts are owned by the pinned
    Upgradeable Loader, and the Program body links the exact ProgramData address;
 4. ProgramData decodes canonically and names the configured deployment slot;
-5. SHA-256 of the exact ELF suffix equals `elfSha256`.
+5. SHA-256 of the complete ProgramData data equals `programDataSha256`; and
+6. SHA-256 of the exact ELF suffix equals `elfSha256`.
 
 It checks the same coordinates again after each complete scan and only then
 exposes `SharedIndexApi`, so an observation that changes across the scan keeps
@@ -125,7 +128,8 @@ HTTP and WebSocket URL plus a display coordinate containing only
 scheme/authority and redacted path/query markers. It never returns raw URL
 userinfo, path tokens, or query credentials. Userinfo is rejected at config
 admission. Glass accepts only the daemon's redacted/hash endpoint bindings and
-exact composed manifest/profile/source/Program/ProgramData/slot/ELF projection;
+exact composed capability/profile/source/Program/ProgramData/complete-data
+hash/slot/locus/ELF/Product-release/operator-deployment projection;
 it has no caller-shaped RPC or release fields to compare or override. Its
 displayed/copied configuration is redacted too. For
 processed reads it brackets its bounded GET sequence with acquisition-state

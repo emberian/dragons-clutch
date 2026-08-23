@@ -6,6 +6,10 @@ adapter. It does not define compiler math. The adapter calls
 Rust codecs, calls `assemble_compiled_product_series_bundle_v1`, and serializes
 the result below. Glass treats every result as an untrusted proposal.
 
+The proposal's `registryReleaseId` and `capabilityProfileId` must both equal the
+daemon-projected checked release. Either mismatch refuses the browser join;
+compiler bytes never define deployment identity.
+
 Start the same-origin static client and compiler endpoint with an explicit
 compiler build/release digest:
 

@@ -25,10 +25,12 @@ The form requires and embeds no more than:
 - browser account, response-byte, timeout, and slot-lag bounds.
 
 Cluster/genesis identity, credential-redacted endpoint bindings, the current
-decoder set, Program/ProgramData/slot/ELF tuple, canonical capability-manifest
-digest, measured source commit, capability-profile identity, decoder families,
-and centrally enabled intent triples arrive only in `/v1/acquisition`. Glass
-requires exactly one release and rechecks it against `/v1/releases`.
+decoder set, Program/ProgramData/complete-data-hash/slot/locus/ELF tuple,
+canonical capability-manifest identity, Product `RegistryProgramReleaseV2`
+identity, operator deployment-manifest/workflow/binding identities, measured
+source commit, capability-profile identity, decoder families, and centrally
+enabled intent triples arrive only in `/v1/acquisition`. Glass requires exactly
+one release and rechecks it against `/v1/releases`.
 
 The validator URLs are configuration bindings only. Browser code contacts the
 selected operatord URL and only with sequential `GET` requests to:
@@ -44,14 +46,16 @@ selected operatord URL and only with sequential `GET` requests to:
 
 Response bodies are byte-budgeted while streaming and then shape-bounded.
 Account quantities remain canonical decimal strings. The release join requires
-exact program, ProgramData, deployment-slot, ELF, manifest, profile, source,
-enabled-intent, and release-key equality.
+exact program, ProgramData, complete ProgramData hash, contextual zero/positive
+slot and locus, ELF, Product release, operator deployment binding, capability
+manifest, profile, source, enabled-intent, family, and release-key equality.
 Rows from other releases are counted and ignored rather than blended.
 
 `operatord chain-serve --config FILE` is the live owner of these routes. Before
 binding HTTP it checks `getGenesisHash`, hostile-decodes each selected
-Program/ProgramData loader pair, checks the decoded deployment slot, and hashes
-the observed ProgramData ELF. It then repeatedly admits bounded finalized
+Program/ProgramData loader pair, checks the decoded deployment slot, hashes the
+complete observed ProgramData data, and separately hashes its ELF suffix. It
+then repeatedly admits bounded finalized
 `getProgramAccounts` responses through `RpcIndexEngine`. One bounded ordered
 WebSocket owner admits the complete program, block, slot-update, and root
 subscription set. It keeps processed reads withdrawn across registration,
@@ -141,7 +145,8 @@ configuration join, not a measurement of the running binary. It
 then displays exact-in-span versus certified-approximation status, all exact
 rational error bounds, the canonical 2,352-byte native-basis proposal, its
   certificate, and the 528-byte bundle plus all sixteen typed identities. The
-bundle capability-profile ID must match the daemon-projected checked release. An
+bundle RegistryProgramReleaseV2 and capability-profile IDs must match the
+daemon-projected checked release. An
 analytic result also carries its exact certification subdivision depth.
 
 The compiler endpoint is loopback-only and has no RPC, wallet, signing,

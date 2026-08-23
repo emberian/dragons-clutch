@@ -57,9 +57,11 @@ The builder feature now also exposes two reusable boundaries:
   ports, mint identity, warp slot, digest-bound genesis-account files, and
   explicit main-program/adapter `--bpf-program` releases without starting a
   process. Each program tuple carries its Program, ProgramData, deployment
-  slot, expected ELF digest, and absolute `.so` path. The deployment slot is
-  exactly zero because pinned Agave synthesizes that value in ProgramData at
-  genesis; historical public-cluster slots are not valid local coordinates.
+  slot, complete synthesized ProgramData-data digest, expected ELF digest, and
+  absolute `.so` path. The deployment slot is exactly zero because pinned
+  Agave synthesizes that value in ProgramData at genesis; historical
+  public-cluster slots are not valid local coordinates. The public v7 seal
+  records the full metadata-plus-ELF hash separately from the ELF-suffix hash.
   The eventual process launcher must check the staged bytes against each
   digest immediately before using the argv. Existing input aliases are resolved
   before reads, key-like resolved targets and symlink leaves are refused, and a

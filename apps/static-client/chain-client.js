@@ -197,6 +197,9 @@
       clusterKey: configuration.clusterKey,
       rpcHttpEndpoint: configuration.rpcHttpEndpoint,
       rpcWebsocketEndpoint: configuration.rpcWebsocketEndpoint,
+      deploymentManifestId: configuration.deploymentManifestId,
+      workflowId: configuration.workflowId,
+      releaseDeploymentBindingId: configuration.releaseDeploymentBindingId,
       release: configuration.release
     }) : "not-acquired"
   });
@@ -321,7 +324,10 @@
     };
     const rpcHttpEndpoint = endpoint(binding.rpcHttpEndpoint, "transportBinding.rpcHttpEndpoint");
     const rpcWebsocketEndpoint = endpoint(binding.rpcWebsocketEndpoint, "transportBinding.rpcWebsocketEndpoint");
-    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v3"
+    const deploymentManifestId = hash32(binding.deploymentManifestId, "transportBinding.deploymentManifestId");
+    const workflowId = hash32(binding.workflowId, "transportBinding.workflowId");
+    const releaseDeploymentBindingId = hash32(binding.releaseDeploymentBindingId, "transportBinding.releaseDeploymentBindingId");
+    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v4"
         || binding.verificationDisposition !== "last-complete-untrusted-http-release-bracket"
         || binding.authorityEligible !== false
         || text(binding.clusterKey, "transportBinding.clusterKey", 128) !== clusterKey
@@ -333,9 +339,17 @@
     const programId = nonzeroAddress(boundRelease.programId, "transportBinding.release.programId");
     const programData = nonzeroAddress(boundRelease.programData, "transportBinding.release.programData");
     if (programId === programData) throw new Error("daemon-projected Program and ProgramData identities alias.");
-    const deploymentSlot = positiveDecimal(boundRelease.deploymentSlot, "transportBinding.release.deploymentSlot").toString();
+    const deploymentSlot = decimal(boundRelease.deploymentSlot, "transportBinding.release.deploymentSlot").toString();
+    const releaseLocus = text(boundRelease.releaseLocus, "transportBinding.release.releaseLocus", 48);
+    if ((releaseLocus === "synthesized-genesis-zero" && deploymentSlot !== "0")
+        || (releaseLocus === "observed-positive" && deploymentSlot === "0")
+        || !["synthesized-genesis-zero", "observed-positive"].includes(releaseLocus)) {
+      throw new Error("daemon-projected release locus and deployment slot are not disjoint.");
+    }
+    const programDataSha256 = hash32(boundRelease.programDataSha256, "transportBinding.release.programDataSha256");
     const elfSha256 = hash32(boundRelease.elfSha256, "transportBinding.release.elfSha256");
-    const releaseManifestSha256 = hash32(boundRelease.releaseManifestSha256, "transportBinding.release.releaseManifestSha256");
+    const capabilityManifestId = hash32(boundRelease.capabilityManifestId, "transportBinding.release.capabilityManifestId");
+    const registryReleaseId = hash32(boundRelease.registryReleaseId, "transportBinding.release.registryReleaseId");
     const capabilityProfileId = hash32(boundRelease.capabilityProfileId, "transportBinding.release.capabilityProfileId");
     if (typeof boundRelease.sourceCommit !== "string" || !COMMIT.test(boundRelease.sourceCommit)) throw new Error("daemon-projected source commit is not a full lowercase Git identity.");
     if (!Array.isArray(boundRelease.families) || boundRelease.families.length === 0 || boundRelease.families.length > 16) throw new Error("transportBinding.release.families is invalid.");
@@ -357,12 +371,12 @@
       }
       return coordinate;
     }));
-    const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
-    if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
-    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, enabledIntents, families, releaseKey: expectedReleaseKey });
+    const expectedReleaseKey = `registry-release-v2:${registryReleaseId}`;
+    if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its Product RegistryProgramReleaseV2 identity.");
+    const release = Object.freeze({ programId, programData, programDataSha256, deploymentSlot, releaseLocus, elfSha256, capabilityManifestId, registryReleaseId, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, enabledIntents, families, releaseKey: expectedReleaseKey });
     const configuration = Object.freeze({
       ...target,
-      schema: "dragons-clutch/browser-daemon-chain-projection/v3",
+      schema: "dragons-clutch/browser-daemon-chain-projection/v4",
       authority: "untrusted-operatord-projection",
       decoderSet: DECODER_SET,
       clusterName,
@@ -370,6 +384,9 @@
       clusterKey,
       rpcHttpEndpoint,
       rpcWebsocketEndpoint,
+      deploymentManifestId,
+      workflowId,
+      releaseDeploymentBindingId,
       release
     });
     requirePlain(raw.processedSemantics, "acquisition.processedSemantics");
@@ -430,6 +447,9 @@
         decoderSet: binding.decoderSet,
         rpcHttpEndpoint,
         rpcWebsocketEndpoint,
+        deploymentManifestId,
+        workflowId,
+        releaseDeploymentBindingId,
         releaseKey: configuration.release.releaseKey
       }),
       configuration
@@ -438,7 +458,21 @@
 
   const validateReleaseResponse = (raw, configuration) => {
     requirePlain(raw, "releases response");
-    if (raw.cluster !== configuration.clusterKey || raw.authorityEligible !== false || !Array.isArray(raw.releases) || raw.releases.length > 256) throw new Error("release response does not match the selected cluster, trust boundary, or bounds.");
+    if (raw.schema !== "dragons-clutch/operator-release-projection/v2"
+        || raw.cluster !== configuration.clusterKey
+        || raw.authorityEligible !== false
+        || hash32(raw.deploymentManifestId, "releases.deploymentManifestId") !== configuration.deploymentManifestId
+        || hash32(raw.workflowId, "releases.workflowId") !== configuration.workflowId
+        || hash32(raw.releaseDeploymentBindingId, "releases.releaseDeploymentBindingId") !== configuration.releaseDeploymentBindingId
+        || !Array.isArray(raw.releases)
+        || raw.releases.length > 256) throw new Error("release response does not match the selected cluster, deployment binding, trust boundary, or bounds.");
+    requirePlain(raw.transportBinding, "releases response transportBinding");
+    if (raw.transportBinding.schema !== "dragons-clutch/operator-rpc-transport-binding/v4"
+        || hash32(raw.transportBinding.deploymentManifestId, "releases.transportBinding.deploymentManifestId") !== configuration.deploymentManifestId
+        || hash32(raw.transportBinding.workflowId, "releases.transportBinding.workflowId") !== configuration.workflowId
+        || hash32(raw.transportBinding.releaseDeploymentBindingId, "releases.transportBinding.releaseDeploymentBindingId") !== configuration.releaseDeploymentBindingId) {
+      throw new Error("release response is detached from the acquisition deployment binding.");
+    }
     const releases = raw.releases.map((release, index) => {
       requirePlain(release, `releases[${index}]`);
       if (!Array.isArray(release.families) || release.families.length === 0 || release.families.length > 16) throw new Error(`releases[${index}].families is invalid.`);
@@ -446,9 +480,12 @@
         releaseKey: text(release.releaseKey, `releases[${index}].releaseKey`, 256),
         programId: address(release.programId, `releases[${index}].programId`),
         programData: address(release.programData, `releases[${index}].programData`),
+        programDataSha256: hash32(release.programDataSha256, `releases[${index}].programDataSha256`),
         elfSha256: hash32(release.elfSha256, `releases[${index}].elfSha256`),
-        deploymentSlot: positiveDecimal(release.deploymentSlot, `releases[${index}].deploymentSlot`).toString(),
-        releaseManifestSha256: hash32(release.releaseManifestSha256, `releases[${index}].releaseManifestSha256`),
+        deploymentSlot: decimal(release.deploymentSlot, `releases[${index}].deploymentSlot`).toString(),
+        releaseLocus: text(release.releaseLocus, `releases[${index}].releaseLocus`, 48),
+        capabilityManifestId: hash32(release.capabilityManifestId, `releases[${index}].capabilityManifestId`),
+        registryReleaseId: hash32(release.registryReleaseId, `releases[${index}].registryReleaseId`),
         capabilityProfileId: hash32(release.capabilityProfileId, `releases[${index}].capabilityProfileId`),
         sourceCommit: typeof release.sourceCommit === "string" && COMMIT.test(release.sourceCommit) ? release.sourceCommit : (() => { throw new Error(`releases[${index}].sourceCommit is invalid.`); })(),
         enabledIntents: Object.freeze(Array.isArray(release.enabledIntents) ? release.enabledIntents : (() => { throw new Error(`releases[${index}].enabledIntents is invalid.`); })()),
@@ -457,7 +494,21 @@
     });
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
     if (!selected) throw new Error("operatord release endpoint does not expose its acquisition-bound release key.");
-    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents)) {
+    if ((selected.releaseLocus === "synthesized-genesis-zero" && selected.deploymentSlot !== "0")
+        || (selected.releaseLocus === "observed-positive" && selected.deploymentSlot === "0")
+        || !["synthesized-genesis-zero", "observed-positive"].includes(selected.releaseLocus)
+        || selected.programId !== configuration.release.programId
+        || selected.programData !== configuration.release.programData
+        || selected.programDataSha256 !== configuration.release.programDataSha256
+        || selected.elfSha256 !== configuration.release.elfSha256
+        || selected.deploymentSlot !== configuration.release.deploymentSlot
+        || selected.releaseLocus !== configuration.release.releaseLocus
+        || selected.capabilityManifestId !== configuration.release.capabilityManifestId
+        || selected.registryReleaseId !== configuration.release.registryReleaseId
+        || selected.capabilityProfileId !== configuration.release.capabilityProfileId
+        || selected.sourceCommit !== configuration.release.sourceCommit
+        || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents)
+        || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
       throw new Error("operatord release endpoint differs from its acquisition transport binding.");
     }
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });
@@ -547,6 +598,8 @@
       const observedCommitment = actionValue.observedCommitment;
       if (observedCommitment !== "processed" && observedCommitment !== "finalized") throw new Error(`keeper.actions[${index}].observedCommitment is invalid.`);
       if (actionValue.effectiveCommitment !== configuration.commitment) throw new Error(`keeper.actions[${index}].effectiveCommitment is invalid.`);
+      const cursorWorkflowId = hash32(actionValue.cursor.workflowId, `keeper.actions[${index}].cursor.workflowId`);
+      if (cursorWorkflowId !== configuration.workflowId) throw new Error(`keeper.actions[${index}].cursor.workflowId differs from the operator deployment workflow.`);
       return Object.freeze({
         account: address(actionValue.account, `keeper.actions[${index}].account`),
         releaseKey: text(actionValue.releaseKey, `keeper.actions[${index}].releaseKey`, 256),
@@ -557,7 +610,7 @@
         branch: validateBranch(actionValue.branch, `keeper.actions[${index}].branch`),
         dependencies: Object.freeze(actionValue.dependencies.map((dependency, dependencyIndex) => address(dependency, `keeper.actions[${index}].dependencies[${dependencyIndex}]`))),
         cursor: Object.freeze({
-          workflowId: hash32(actionValue.cursor.workflowId, `keeper.actions[${index}].cursor.workflowId`),
+          workflowId: cursorWorkflowId,
           lane: text(actionValue.cursor.lane, `keeper.actions[${index}].cursor.lane`, 48),
           generation: positiveDecimal(actionValue.cursor.generation, `keeper.actions[${index}].cursor.generation`).toString(),
           phase: decimal(actionValue.cursor.phase, `keeper.actions[${index}].cursor.phase`, 65535n).toString(),
@@ -643,14 +696,20 @@
     const unsafeForkAccounts = annotated.filter((accountValue) => accountValue.forkState === "dead-fork" || accountValue.forkState === "unidentified-fork").length;
     const staleAccounts = annotated.filter((accountValue) => accountValue.stale).length;
     const snapshot = {
-      schema: "dragons-clutch/operatord-chain-projection/v1",
+      schema: "dragons-clutch/operatord-chain-projection/v2",
       authority: "untrusted-projection",
       configuration: redactedConfiguration(configuration),
       health,
       acquisition,
       release: Object.freeze({
         observed: releases.selected,
-        declaredManifestSha256: configuration.release.releaseManifestSha256,
+        declaredCapabilityManifestId: configuration.release.capabilityManifestId,
+        registryReleaseId: configuration.release.registryReleaseId,
+        programDataSha256: configuration.release.programDataSha256,
+        releaseLocus: configuration.release.releaseLocus,
+        deploymentManifestId: configuration.deploymentManifestId,
+        workflowId: configuration.workflowId,
+        releaseDeploymentBindingId: configuration.releaseDeploymentBindingId,
         declaredSourceCommit: configuration.release.sourceCommit,
         declaredCapabilityProfileId: configuration.release.capabilityProfileId,
         manifestSourceCapabilityAuthentication: "daemon reports offline checker + sealed deployment + measured ELF join; browser treats this as an untrusted projection"
@@ -694,6 +753,9 @@
     const endAcquisition = validateAcquisition(await reader.get("/v1/acquisition"), target);
     if (endAcquisition.configuration.clusterKey !== configuration.clusterKey
         || endAcquisition.configuration.release.releaseKey !== configuration.release.releaseKey
+        || endAcquisition.configuration.deploymentManifestId !== configuration.deploymentManifestId
+        || endAcquisition.configuration.workflowId !== configuration.workflowId
+        || endAcquisition.configuration.releaseDeploymentBindingId !== configuration.releaseDeploymentBindingId
         || endAcquisition.configuration.rpcHttpEndpoint.bindingSha256 !== configuration.rpcHttpEndpoint.bindingSha256
         || endAcquisition.configuration.rpcWebsocketEndpoint.bindingSha256 !== configuration.rpcWebsocketEndpoint.bindingSha256) {
       throw new Error("Daemon chain/release/endpoint binding changed during acquisition; reacquire instead of mixing generations.");

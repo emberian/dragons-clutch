@@ -20,7 +20,7 @@ const browserRealm = (...scripts) => {
 
 test("startup_has_no_embedded_chain_program_release_or_fixture_truth", () => {
   assert.match(html, /id="operator-url"/);
-  for (const id of ["cluster-name", "genesis-hash", "rpc-http-url", "rpc-websocket-url", "decoder-set", "program-id", "program-data", "deployment-slot", "elf-sha256", "release-manifest-sha256", "source-commit", "capability-profile-id"]) assert.doesNotMatch(html, new RegExp(`id="${id}"`));
+  for (const id of ["cluster-name", "genesis-hash", "rpc-http-url", "rpc-websocket-url", "decoder-set", "program-id", "program-data", "program-data-sha256", "deployment-slot", "release-locus", "elf-sha256", "capability-manifest-id", "registry-release-id", "deployment-manifest-id", "workflow-id", "release-deployment-binding-id", "source-commit", "capability-profile-id"]) assert.doesNotMatch(html, new RegExp(`id="${id}"`));
   assert.doesNotMatch(html, /<script src="(?:embedded-data|protocol-client|protocol-contracts|native-bspline-v1)\.js"/);
   assert.doesNotMatch(html, /value="(?:https?:\/\/|wss?:\/\/|[1-9][0-9]*|[1-9A-HJ-NP-Za-km-z]{32,44}|[0-9a-f]{40,64})"/);
   assert.match(app, /Nothing is inferred from fixtures or defaults/);
@@ -38,7 +38,7 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   for (const endpoint of ["/v1/health", "/v1/acquisition", "/v1/releases", "/v1/accounts?commitment=", "/v1/keeper/next?commitment=", "/v1/forks"]) assert.match(chain, new RegExp(endpoint.replace(/[?]/g, "\\?")));
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
-  assert.match(chain, /release key does not bind its exact coordinates and manifest/);
+  assert.match(chain, /release key does not bind its Product RegistryProgramReleaseV2 identity/);
 });
 
 test("browser_target_contains_only_operatord_commitment_and_local_bounds", () => {
@@ -72,10 +72,18 @@ test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_tr
         accounts: [], requiredSigners: [], equations: [{ name: "exact conservation", unit: { kind: "collateral-atoms", mint: bytes(7) }, left: "340282366920938463463374607431768211455", right: "340282366920938463463374607431768211455" }]
       }]
     }, {
-      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32) }
+      clusterKey: "local-validator:genesis",
+      deploymentManifestId: "05".repeat(32),
+      workflowId: "06".repeat(32),
+      releaseDeploymentBindingId: "07".repeat(32),
+      release: { programId, programData: bytes(3), programDataSha256: "08".repeat(32), deploymentSlot: "0", releaseLocus: "synthesized-genesis-zero", elfSha256: "01".repeat(32), capabilityManifestId: "02".repeat(32), registryReleaseId: "09".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32) }
     }, "1232");
   })()`, context);
-  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v4");
+  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v5");
+  assert.equal(output.release.deploymentSlot, "0");
+  assert.equal(output.release.releaseLocus, "synthesized-genesis-zero");
+  assert.equal(output.release.registryReleaseId, "09".repeat(32));
+  assert.equal(output.release.releaseDeploymentBindingId, "07".repeat(32));
   assert.equal(output.message.recentBlockhash, "11111111111111111111111111111111");
   assert.equal(output.hasRecentBlockhash, false);
   assert.equal(output.signed, false);

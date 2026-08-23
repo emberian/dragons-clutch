@@ -3,9 +3,9 @@
 `operatord` now has two deliberately separate release-coordinate paths:
 
 - `launch-local-chain` creates a fresh marked local-validator session, writes
-  the v6 public session seal through `SessionLayout`, starts only the exact
+  the v7 public session seal through `SessionLayout`, starts only the exact
   validator binary and ELF files named by the checked launch input, observes
-  that validator's loopback genesis hash, composes the v2 chain configuration,
+  that validator's loopback genesis hash, composes the v3 chain configuration,
   and serves the chain-attached static client.
 - `compose-devnet-chain-config` consumes a canonical, independently recorded
   devnet deployment manifest and emits a chain configuration. It never creates
@@ -108,6 +108,13 @@ devnet deployment slots are therefore invalid local coordinates and are never
 reported by the local seal or served chain configuration. RPC WebSocket is
 exactly `rpc_port + 1`, and every fixed/dynamic port is disjoint.
 
+The v7 seal also records SHA-256 of the complete synthesized ProgramData data,
+not merely its ELF suffix. For pinned Agave 4.0.2 commit `549805f3`, that data
+is the exact bincode `ProgramData` metadata—little-endian tag `3`, slot `0`,
+`Some`, and the all-zero `--bpf-program` upgrade-authority address—followed by
+the ELF. The launcher derives this hash from the staged ELF and rechecks the
+staged executable immediately before spawn.
+
 The launcher accepts at most 16 external programs and 256 genesis accounts.
 External ELF bytes are capped at 80 MiB in aggregate, genesis JSON bytes at
 64 MiB in aggregate, and all staged inputs at 384 MiB in aggregate, in addition
@@ -160,13 +167,16 @@ The devnet owner accepts exactly compact JSON in the following field order,
 followed by one newline:
 
 ```json
-{"schema":"dragons-clutch/devnet-deployment-manifest/v1","network":"solana-devnet","genesis_hash":"EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG","rpc_http_url":"https://api.devnet.solana.com","rpc_websocket_url":"wss://api.devnet.solana.com/","release_coordinates":"observed-finalized","program_id":"BASE58_PROGRAM","program_data":"BASE58_PROGRAM_DATA","deployment_slot":"POSITIVE_DECIMAL","elf_sha256":"64-lowercase-hex","capability_manifest_sha256":"64-lowercase-hex","capability_profile_identity":"64-lowercase-hex","source_commit":"40-or-64-lowercase-hex","compiler_release_sha256":"64-lowercase-hex","source_neutral_sink":"BASE58_ADDRESS","signing":"not-exposed","submission":"not-exposed","deployment":"not-exposed"}
+{"schema":"dragons-clutch/devnet-deployment-manifest/v2","network":"solana-devnet","genesis_hash":"EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG","rpc_http_url":"https://api.devnet.solana.com","rpc_websocket_url":"wss://api.devnet.solana.com/","release_coordinates":"observed-finalized","program_id":"BASE58_PROGRAM","program_data":"BASE58_PROGRAM_DATA","program_data_sha256":"64-lowercase-hex","deployment_slot":"POSITIVE_DECIMAL","elf_sha256":"64-lowercase-hex","capability_manifest_sha256":"64-lowercase-hex","capability_profile_identity":"64-lowercase-hex","source_commit":"40-or-64-lowercase-hex","compiler_release_sha256":"64-lowercase-hex","source_neutral_sink":"BASE58_ADDRESS","signing":"not-exposed","submission":"not-exposed","deployment":"not-exposed"}
 ```
 
 This manifest is a post-deployment coordinate record. It is not produced by
-the local launcher and must never name `local-validator` or the v6 local
+the local launcher and must never name `local-validator` or the v7 local
 session schema. Its deployment slot is a canonical positive value observed
-from the finalized public-cluster ProgramData account; zero is refused.
+from the finalized public-cluster ProgramData account; zero is refused. Its
+`program_data_sha256` is the digest of the complete observed ProgramData data,
+including loader metadata and ELF; the separate `elf_sha256` remains an exact
+check of the decoded ELF suffix.
 Composition independently checks the deployable capability
 manifest and the built ELF, binds the canonical deployment-manifest digest into
 the workflow identity, and emits only read-only `chain-serve` configuration:
@@ -183,3 +193,21 @@ operatord chain-serve --config /absolute/devnet-chain.json
 The second command performs bounded read-only release checks when explicitly
 run. Neither command exposes deployment authority, wallet material, signing,
 submission, or faucet access.
+
+## Release and deployment identity ownership
+
+The v3 chain configuration keeps one owner for each fact. Product's
+`RegistryProgramReleaseV2` owns only loader-observable coordinates: Program,
+ProgramData, complete ProgramData-data SHA-256, capability-manifest identity,
+deployment slot, and the disjoint `SynthesizedGenesisZero` or
+`ObservedPositive` locus. The composer derives and emits its exact Product ID;
+the checker recomputes that ID rather than trusting caller text.
+
+The operator separately owns the selected network genesis and the exact source
+deployment-manifest digest. Domain-separated workflow and release/deployment
+binding IDs join those two facts to the Product release ID. The checker
+recomputes both joins, and the runtime independently checks the configured RPC
+genesis plus the complete ProgramData and ELF hashes before or after every
+finalized scan. A local zero-slot release cannot be reinterpreted as an
+observed public release, and a positive public slot cannot enter the sealed
+local workflow.

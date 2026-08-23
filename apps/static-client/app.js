@@ -115,9 +115,15 @@
       definition("Canonical decoder set", snapshot.configuration.decoderSet),
       definition("Program", release.programId),
       definition("ProgramData", release.programData),
+      definition("Complete ProgramData SHA-256", release.programDataSha256),
       definition("Deployment slot", release.deploymentSlot),
+      definition("Release locus", release.releaseLocus),
       definition("ELF SHA-256", release.elfSha256),
-      definition("Release-manifest SHA-256", snapshot.release.declaredManifestSha256),
+      definition("Capability manifest ID", snapshot.release.declaredCapabilityManifestId),
+      definition("RegistryProgramReleaseV2 ID", snapshot.release.registryReleaseId),
+      definition("Deployment manifest ID", snapshot.release.deploymentManifestId),
+      definition("Deployment workflow ID", snapshot.release.workflowId),
+      definition("Release/deployment binding ID", snapshot.release.releaseDeploymentBindingId),
       definition("Source commit", snapshot.release.declaredSourceCommit),
       definition("Capability profile", snapshot.release.declaredCapabilityProfileId),
       definition("Decoded families", release.families.join(", ")),
@@ -288,8 +294,10 @@
       context.definitionValue
     );
     const profileId = proposal.compiledProductSeriesBundle.identities.capabilityProfileId;
-    if (profileId !== context.configuration.release.capabilityProfileId) {
-      throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
+    const registryReleaseId = proposal.compiledProductSeriesBundle.identities.registryReleaseId;
+    if (profileId !== context.configuration.release.capabilityProfileId
+        || registryReleaseId !== context.configuration.release.registryReleaseId) {
+      throw new Error("Compiler output release/profile identities differ from the daemon-projected RegistryProgramReleaseV2 coordinates.");
     }
 
     state.compilerProposal = Object.freeze({
@@ -311,6 +319,7 @@
       definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
       definition("Certification subdivision depth", proposal.subdivisionDepth),
       definition("Bundle ID / bytes", `${proposal.compiledProductSeriesBundle.id} / ${proposal.compiledProductSeriesBundle.byteLength}`),
+      definition("RegistryProgramReleaseV2 join", registryReleaseId),
       definition("Capability profile join", profileId),
       definition("Registration authority", "false — every body and join must be recomputed onchain")
     );
@@ -357,7 +366,7 @@
     }
     const transactionSha256 = await digest(fromHex(transaction.serializedTransactionHex));
     const output = Object.freeze({
-      schema: "dragons-clutch/operator/resumable-workflow-node/v1",
+      schema: "dragons-clutch/operator/resumable-workflow-node/v2",
       authority: "untrusted-chain-projection-plus-explicit-semantic-owner-material",
       release: transaction.release,
       observation: Object.freeze({

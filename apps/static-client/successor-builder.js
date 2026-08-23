@@ -346,14 +346,20 @@
       clusterKey: configuration.clusterKey,
       programId,
       programData: configuration.release.programData,
+      programDataSha256: configuration.release.programDataSha256,
       deploymentSlot: configuration.release.deploymentSlot,
+      releaseLocus: configuration.release.releaseLocus,
       elfSha256: configuration.release.elfSha256,
-      releaseManifestSha256: configuration.release.releaseManifestSha256,
+      capabilityManifestId: configuration.release.capabilityManifestId,
+      registryReleaseId: configuration.release.registryReleaseId,
+      deploymentManifestId: configuration.deploymentManifestId,
+      workflowId: configuration.workflowId,
+      releaseDeploymentBindingId: configuration.releaseDeploymentBindingId,
       sourceCommit: configuration.release.sourceCommit,
       capabilityProfileId: configuration.release.capabilityProfileId
     });
     return Object.freeze({
-      schema: "dragons-clutch/operator/unsigned-protocol-transaction/v4",
+      schema: "dragons-clutch/operator/unsigned-protocol-transaction/v5",
       authority: "local-construction-from-explicit-semantic-owner-material",
       release,
       flows: Object.freeze(uniqueFlows),
