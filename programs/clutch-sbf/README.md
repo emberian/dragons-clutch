@@ -56,6 +56,26 @@ A refusal reads no account, writes no byte, and reports no success.
 Full write-up, including the ladder of harnesses tried, the deferred-check list,
 and honest claim language: [`docs/implementation/SBF_BRINGUP.md`](../../docs/implementation/SBF_BRINGUP.md).
 
+The separately identified `non-production-product-series-lab` profile admits
+only typed immutable Product/Series artifact publication in addition to the
+full profile. Artifact kinds `32..=40` are refused by ordinary profiles. Its
+real-SBF bank gate publishes all nine exact bodies; the largest 2,352-byte
+basis crosses 13 ordered writes. It exercises hostile context/digest/cursor,
+nonzero sequence, a self-hashed malformed body, and incomplete-seal rollback;
+checks exact program ownership and rent; and proves a second upload converges
+on the same content PDA:
+
+```sh
+cd programs/clutch-sbf/svm-tests
+./run_svm_tests.sh --non-production-product-series-lab \
+  product_series_artifact_catalog_is_real_resumable_and_fail_closed
+```
+
+This profile does not register or activate a Series, hold prepaid funding, or
+create a Market. Those routes remain blocked on SourcePlane V3, authenticated
+registry selectors, full-width Instance identity, and mutable component-owned
+funding state.
+
 ```sh
 # one-time source/build preparation; subsequent builds are offline
 tools/agave-loopback-validator/fetch-source.sh

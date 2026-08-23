@@ -18,12 +18,17 @@ default = ["profile-full"]
 profile-full = []
 profile-direct-v3-source-v2-point = []
 profile-general-source-v2-point = []
+# Makes the successor Product/Series artifact kinds decodable for the explicit
+# local-bank vertical slice.  The discriminants remain centrally allocated in
+# every build, but ordinary deployable profiles refuse their bytes.
+non-production-product-series-lab = ["dep:clutch-product-series"]
 
 [dependencies]
 # The relation whose order types the page→order projection maps onto.  Both
 # crates live inside the no_alloc boundary: no_std, no heap, fixed arrays only.
 clutch-batch = { path = "../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
+clutch-product-series = { path = "../../crates/clutch-product-series", optional = true }
 
 [target.'cfg(target_os = "solana")'.dependencies]
 # Safe wrapper around Solana's native SHA-256 syscall.  Order-page verification

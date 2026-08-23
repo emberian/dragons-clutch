@@ -42,7 +42,7 @@ pub const SERIES_PLAN_V5_BYTES: usize = 152;
 /// SHA-256 domain for [`SeriesFundingTermsV2`].
 pub const SERIES_FUNDING_TERMS_V2_DOMAIN: &[u8] = b"dragons-clutch/series-funding-terms/v2";
 /// Exact canonical byte length of [`SeriesFundingTermsV2`].
-pub const SERIES_FUNDING_TERMS_V2_BYTES: usize = 208;
+pub const SERIES_FUNDING_TERMS_V2_BYTES: usize = 240;
 
 const _: () = assert!(MAX_OUTCOMES == clutch_price_measure::MAX_OUTCOMES);
 const _: () = assert!(MAX_PAYOUTS == clutch_price_measure::MAX_OUTCOMES);
@@ -51,10 +51,10 @@ const _: () = assert!(PRICE_MEASURE_POLICY_BYTES == 96);
 const _: () = assert!(MARKET_GENESIS_PROFILE_V2_BYTES == 416);
 const _: () = assert!(MARKET_INSTANCE_PREIMAGE_V2_BYTES == 88);
 const _: () = assert!(SERIES_PLAN_V5_BYTES == 152);
-const _: () = assert!(SERIES_FUNDING_TERMS_V2_BYTES == 208);
+const _: () = assert!(SERIES_FUNDING_TERMS_V2_BYTES == 240);
 
-/// Immutable selection of the only price-measure semantics compatible with
-/// today's quantized settlement payouts for basis degrees zero through three.
+/// Immutable selection of quantized price-measure semantics and a bounded
+/// subset of the checker release's supported domain.
 ///
 /// This artifact deliberately admits only the V3 quantized atom checker. A
 /// future continuous-price profile needs a distinct policy schema and identity;
@@ -67,13 +67,13 @@ pub struct PriceMeasurePolicyV1 {
     pub checker_version: u8,
     /// Exact shared quantized evaluator and reconstruction semantics version.
     pub quantized_semantics_version: u8,
-    /// Smallest admitted B-spline degree; exactly zero in this schema.
+    /// Smallest admitted B-spline degree within the checker release's range.
     pub minimum_basis_degree: u8,
-    /// Largest admitted B-spline degree; exactly three in this schema.
+    /// Largest admitted B-spline degree within the checker release's range.
     pub maximum_basis_degree: u8,
     /// Maximum active outcome width, at most sixteen.
     pub maximum_outcome_count: u8,
-    /// Maximum active atom count; exactly the selected outcome bound.
+    /// Maximum active atom count, independently bounded by outcome width.
     pub maximum_atom_count: u8,
     /// Largest admitted immutable payout denominator.
     pub maximum_payout_denominator: u64,
@@ -84,16 +84,18 @@ pub struct PriceMeasurePolicyV1 {
 }
 
 impl PriceMeasurePolicyV1 {
-    /// Validate the exact production quantized checker and its bounded domain.
+    /// Validate the exact quantized checker and its policy-selected bounded domain.
     pub fn validate(&self) -> Result<()> {
         self.checker_release_id.validate()?;
         if self.checker_version != PRICE_MEASURE_WITNESS_VERSION_V3
             || self.quantized_semantics_version != QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1
-            || self.minimum_basis_degree != QUANTIZED_PRICE_MEASURE_MIN_DEGREE_V3
-            || self.maximum_basis_degree != QUANTIZED_PRICE_MEASURE_MAX_DEGREE_V3
+            || self.minimum_basis_degree < QUANTIZED_PRICE_MEASURE_MIN_DEGREE_V3
+            || self.maximum_basis_degree > QUANTIZED_PRICE_MEASURE_MAX_DEGREE_V3
+            || self.minimum_basis_degree > self.maximum_basis_degree
             || self.maximum_outcome_count < 2
             || usize::from(self.maximum_outcome_count) > MAX_OUTCOMES
-            || self.maximum_atom_count != self.maximum_outcome_count
+            || self.maximum_atom_count == 0
+            || self.maximum_atom_count > self.maximum_outcome_count
             || self.maximum_payout_denominator == 0
             || self.maximum_witness_denominator == 0
             || self.maximum_price_scale == 0
@@ -1022,8 +1024,10 @@ pub struct SeriesFundingTermsV2 {
     pub lamport_principal_refund: ContentId,
     /// Token account receiving refundable collateral principal.
     pub collateral_principal_refund_token_account: ContentId,
-    /// Immutable neutral destination for unowned residue.
-    pub neutral_sink: ContentId,
+    /// Receive-only token account for unowned collateral residue.
+    pub neutral_collateral_disposition_token_account: ContentId,
+    /// System-owned account for unowned lamport residue.
+    pub neutral_lamport_sink: ContentId,
     /// Exact collateral mint selected through the Realm/Profile.
     pub collateral_mint: ContentId,
     /// Exact admitted token-program identity.
@@ -1034,14 +1038,27 @@ impl SeriesFundingTermsV2 {
     /// Validate exact local shape.
     pub fn validate_shape(&self) -> Result<()> {
         self.series_plan_id.validate()?;
-        for id in [
+        let roles = [
             self.lamport_principal_refund,
             self.collateral_principal_refund_token_account,
-            self.neutral_sink,
+            self.neutral_collateral_disposition_token_account,
+            self.neutral_lamport_sink,
             self.collateral_mint,
             self.token_program,
-        ] {
+        ];
+        for id in roles {
             id.validate()?;
+        }
+        let mut left = 0_usize;
+        while left < roles.len() {
+            let mut right = left + 1;
+            while right < roles.len() {
+                if roles[left] == roles[right] {
+                    return Err(Error::InvalidParameter);
+                }
+                right += 1;
+            }
+            left += 1;
         }
         Ok(())
     }
@@ -1074,7 +1091,9 @@ impl SeriesFundingTermsV2 {
             || registry.realm_collateral.profile_id != genesis.profile_id
             || self.collateral_mint != registry.realm_collateral.collateral_mint
             || self.token_program != registry.realm_collateral.token_program
-            || self.neutral_sink != registry.realm_collateral.neutral_incinerator
+            || self.neutral_collateral_disposition_token_account
+                != registry.realm_collateral.neutral_incinerator
+            || self.neutral_lamport_sink != registry.realm_collateral.neutral_lamport_sink
         {
             return Err(Error::MismatchedArtifact);
         }
@@ -1103,7 +1122,8 @@ impl FixedCodec for SeriesFundingTermsV2 {
         writer.id(self.series_plan_id.content_id());
         writer.id(self.lamport_principal_refund);
         writer.id(self.collateral_principal_refund_token_account);
-        writer.id(self.neutral_sink);
+        writer.id(self.neutral_collateral_disposition_token_account);
+        writer.id(self.neutral_lamport_sink);
         writer.id(self.collateral_mint);
         writer.id(self.token_program);
         writer.finish()
@@ -1120,7 +1140,8 @@ impl FixedCodec for SeriesFundingTermsV2 {
             series_plan_id: SeriesPlanV5Id::from_bytes(reader.id().bytes()),
             lamport_principal_refund: reader.id(),
             collateral_principal_refund_token_account: reader.id(),
-            neutral_sink: reader.id(),
+            neutral_collateral_disposition_token_account: reader.id(),
+            neutral_lamport_sink: reader.id(),
             collateral_mint: reader.id(),
             token_program: reader.id(),
         };
@@ -1291,6 +1312,7 @@ fn validate_realm_collateral(value: RealmCollateralProjectionV1) -> Result<()> {
         value.collateral_mint,
         value.token_program,
         value.neutral_incinerator,
+        value.neutral_lamport_sink,
     ] {
         id.validate()?;
     }
