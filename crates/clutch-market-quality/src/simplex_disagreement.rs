@@ -5,7 +5,52 @@
 //! market quote and a benchmark only after authenticating both semantic
 //! owners. The arithmetic remains symmetric under input exchange.
 
-use crate::{Error, ExactSimplexPricesV1, PortfolioDomainV1, Result};
+use crate::{is_zero_identity, Error, ExactSimplexPricesV1, PortfolioDomainV1, Result};
+
+/// Adapter-bound identity and source authority for one exact simplex price.
+///
+/// Construction checks only nonzero identity shape. The adapter remains
+/// responsible for proving that `price_id` authenticates these exact vector
+/// bytes and that `source_authority_id` is authorized to publish them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundExactSimplexPriceV1 {
+    source_authority_id: [u8; 32],
+    price_id: [u8; 32],
+    prices: ExactSimplexPricesV1,
+}
+
+impl BoundExactSimplexPriceV1 {
+    /// Bind one exact simplex to adapter-authenticated source and body IDs.
+    pub fn new(
+        source_authority_id: [u8; 32],
+        price_id: [u8; 32],
+        prices: ExactSimplexPricesV1,
+    ) -> Result<Self> {
+        if is_zero_identity(&source_authority_id) || is_zero_identity(&price_id) {
+            return Err(Error::ZeroIdentity);
+        }
+        Ok(Self {
+            source_authority_id,
+            price_id,
+            prices,
+        })
+    }
+
+    /// Adapter-authenticated source authority identity.
+    pub const fn source_authority_id(&self) -> [u8; 32] {
+        self.source_authority_id
+    }
+
+    /// Adapter-authenticated identity of the exact price body.
+    pub const fn price_id(&self) -> [u8; 32] {
+        self.price_id
+    }
+
+    /// Checked exact simplex price body.
+    pub const fn prices(&self) -> ExactSimplexPricesV1 {
+        self.prices
+    }
+}
 
 /// Exact rational disagreement between two prices over one contingent domain.
 ///
@@ -27,6 +72,48 @@ pub struct ExactSimplexDisagreementV1 {
     left_only_support_mask: u16,
     right_only_support_mask: u16,
     shared_positive_support_mask: u16,
+}
+
+/// Source- and body-bound exact disagreement for safe projection into UX or
+/// telemetry.
+///
+/// This wrapper prevents a caller from relabeling an arithmetic result with a
+/// different source or price identity. It still does not decide whether either
+/// authenticated source is economically meaningful or fair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundExactSimplexDisagreementV1 {
+    left_source_authority_id: [u8; 32],
+    left_price_id: [u8; 32],
+    right_source_authority_id: [u8; 32],
+    right_price_id: [u8; 32],
+    comparison: ExactSimplexDisagreementV1,
+}
+
+impl BoundExactSimplexDisagreementV1 {
+    /// Adapter-authenticated source identity for the left price.
+    pub const fn left_source_authority_id(&self) -> [u8; 32] {
+        self.left_source_authority_id
+    }
+
+    /// Adapter-authenticated exact left price body identity.
+    pub const fn left_price_id(&self) -> [u8; 32] {
+        self.left_price_id
+    }
+
+    /// Adapter-authenticated source identity for the right price.
+    pub const fn right_source_authority_id(&self) -> [u8; 32] {
+        self.right_source_authority_id
+    }
+
+    /// Adapter-authenticated exact right price body identity.
+    pub const fn right_price_id(&self) -> [u8; 32] {
+        self.right_price_id
+    }
+
+    /// Exact authority-neutral arithmetic comparison.
+    pub const fn comparison(&self) -> &ExactSimplexDisagreementV1 {
+        &self.comparison
+    }
 }
 
 impl ExactSimplexDisagreementV1 {
@@ -184,6 +271,25 @@ pub fn compare_exact_simplex_prices_v1(
     })
 }
 
+/// Compare two adapter-bound simplex prices and retain both provenance pairs.
+///
+/// No boolean authentication flag is accepted. Callers must construct each
+/// private-field input from explicit source and price identities before the
+/// comparison can be projected downstream.
+pub fn compare_bound_exact_simplex_prices_v1(
+    left: BoundExactSimplexPriceV1,
+    right: BoundExactSimplexPriceV1,
+) -> Result<BoundExactSimplexDisagreementV1> {
+    let comparison = compare_exact_simplex_prices_v1(left.prices, right.prices)?;
+    Ok(BoundExactSimplexDisagreementV1 {
+        left_source_authority_id: left.source_authority_id,
+        left_price_id: left.price_id,
+        right_source_authority_id: right.source_authority_id,
+        right_price_id: right.price_id,
+        comparison,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +391,40 @@ mod tests {
         assert_eq!(
             compare_exact_simplex_prices_v1(left, foreign),
             Err(Error::MismatchedPortfolioDomain)
+        );
+    }
+
+    #[test]
+    fn bound_comparison_retains_both_exact_provenance_pairs() {
+        let domain = domain(2);
+        let left = BoundExactSimplexPriceV1::new(
+            [3; 32],
+            [4; 32],
+            prices(domain, 10, &[3, 7]),
+        )
+        .unwrap();
+        let right = BoundExactSimplexPriceV1::new(
+            [5; 32],
+            [6; 32],
+            prices(domain, 10, &[4, 6]),
+        )
+        .unwrap();
+        let certificate = compare_bound_exact_simplex_prices_v1(left, right).unwrap();
+
+        assert_eq!(certificate.left_source_authority_id(), [3; 32]);
+        assert_eq!(certificate.left_price_id(), [4; 32]);
+        assert_eq!(certificate.right_source_authority_id(), [5; 32]);
+        assert_eq!(certificate.right_price_id(), [6; 32]);
+        assert_eq!(certificate.comparison().total_variation_numerator(), 10);
+        assert_eq!(certificate.comparison().cross_scale_denominator(), 100);
+
+        assert_eq!(
+            BoundExactSimplexPriceV1::new([0; 32], [4; 32], left.prices()),
+            Err(Error::ZeroIdentity)
+        );
+        assert_eq!(
+            BoundExactSimplexPriceV1::new([3; 32], [0; 32], left.prices()),
+            Err(Error::ZeroIdentity)
         );
     }
 }
