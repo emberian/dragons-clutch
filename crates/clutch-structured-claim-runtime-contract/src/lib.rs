@@ -22,6 +22,7 @@ mod position_transfer;
 mod recipe;
 mod replay_v3;
 mod runtime;
+mod terminal;
 mod wire;
 
 pub use construction::{
@@ -83,6 +84,12 @@ pub use runtime::{
     MarketChangingWrapperTransitionPlanV1, StructuredClaimRuntimeAddressesV1,
     TerminalRedemptionPlanV1, VaultMutationRequestV1, WrapperMintProjectionV1,
     WrapperTokenProjectionV1, WrapperTransitionPlanV1,
+};
+pub use terminal::{
+    prepare_structured_descriptor_terminal_v1, StructuredDescriptorTerminalPlanV1,
+    StructuredProductWrapperTerminalProjectionV1, StructuredRootCloseDispositionV1,
+    STRUCTURED_DESCRIPTOR_ACTIVE_BODY_DOMAIN_V1, STRUCTURED_DESCRIPTOR_CLOSE_RECEIPT_DOMAIN_V1,
+    STRUCTURED_DESCRIPTOR_RETIRED_BODY_DOMAIN_V1,
 };
 pub use wire::{
     decode_structured_claim_payload_v1, CreateDescriptorPayloadV1, StructuredClaimActionV1,

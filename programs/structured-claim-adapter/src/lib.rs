@@ -50,10 +50,12 @@ pub use envelope::{
 };
 pub use handler::{
     authenticate_base_vault_creation_v1, authenticate_base_vault_retirement_v1,
-    prepare_create_descriptor_v1, prepare_mutation_v1, BaseCapabilityVerifierV1, BaseCpiV1,
-    BaseVaultCreationEvidenceV1, BoundBaseVaultCreationV1, BoundBaseVaultRetirementV1,
+    authenticate_structured_terminal_v1, prepare_create_descriptor_v1, prepare_mutation_v1,
+    BaseCapabilityVerifierV1, BaseCpiV1, BaseVaultCreationEvidenceV1,
+    BoundBaseVaultCreationV1, BoundBaseVaultRetirementV1, BoundStructuredTerminalV1,
     CreateDescriptorContextV1, DescriptorWriteV1, ExecutionStepV1, MutationContextV1,
-    PreparedStructuredClaimRouteV1, PreparedStructuredClaimSemanticV1, StepReceiptV1,
+    PreparedStructuredClaimRouteV1, PreparedStructuredClaimSemanticV1,
+    StructuredTerminalEvidenceV1, StructuredTerminalVerifierV1, StepReceiptV1,
     SystemPdaOperationV1, Token2022CpiV1, MAX_EXECUTION_STEPS,
 };
 #[cfg(target_os = "solana")]

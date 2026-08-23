@@ -135,7 +135,7 @@ impl StructuredMarketRootBindingV1 {
     }
 
     /// Stable root binding identity through the supplied SHA-256 boundary.
-    pub fn id<H: WrapperRecipeHashV1>(self, hasher: &H) -> Result<ContentId> {
+    pub fn id<H: WrapperRecipeHashV1 + ?Sized>(self, hasher: &H) -> Result<ContentId> {
         let preimage = self.encode_preimage()?;
         let id = ContentId::from_bytes(
             hasher.hashv(&[STRUCTURED_MARKET_ROOT_BINDING_DOMAIN_V1, &preimage]),
@@ -242,6 +242,28 @@ pub struct StructuredMarketRootV1 {
 }
 
 impl StructuredMarketRootV1 {
+    /// Reconcile unsolicited lamports immediately before a descriptor/root
+    /// mutation. The persisted principal is immutable; every excess lamport is
+    /// donation residue and can only increase while the account remains live.
+    /// This observation does not consume a semantic transition sequence.
+    pub fn observe_lamport_balance(self, observed_lamports: u64) -> Result<Self> {
+        self.validate()?;
+        let observed_donation_lamports = observed_lamports
+            .checked_sub(self.rent_principal_lamports)
+            .ok_or(Error::ArithmeticUnderflow)?;
+        if observed_donation_lamports < self.current_donation_lamports
+            || observed_donation_lamports < self.donation_floor_lamports
+        {
+            return Err(Error::InvariantViolation);
+        }
+        let next = Self {
+            current_donation_lamports: observed_donation_lamports,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Initialize the root with its first authenticated descriptor.
     #[allow(clippy::too_many_arguments)]
     pub fn initialize<H: WrapperRecipeHashV1>(
@@ -334,7 +356,7 @@ impl StructuredMarketRootV1 {
     }
 
     /// Seal one exact descriptor terminal and optionally close the whole family.
-    pub fn seal_descriptor_terminal<H: WrapperRecipeHashV1>(
+    pub fn seal_descriptor_terminal<H: WrapperRecipeHashV1 + ?Sized>(
         self,
         current_product_lineage: StructuredProductLineageV1,
         descriptor_id: ContentId,
@@ -598,7 +620,7 @@ impl StructuredMarketRootV1 {
     }
 }
 
-fn derive_market_terminal_receipt_v1<H: WrapperRecipeHashV1>(
+fn derive_market_terminal_receipt_v1<H: WrapperRecipeHashV1 + ?Sized>(
     terminal_without_receipt: StructuredMarketRootV1,
     hasher: &H,
 ) -> Result<ContentId> {
@@ -731,7 +753,7 @@ pub fn structured_descriptor_admission_receipt_v1<H: WrapperRecipeHashV1>(
     Ok(id)
 }
 
-fn terminal_receipt<H: WrapperRecipeHashV1>(
+fn terminal_receipt<H: WrapperRecipeHashV1 + ?Sized>(
     previous: ContentId,
     descriptor_id: ContentId,
     receipt_id: ContentId,
