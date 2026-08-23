@@ -79,11 +79,18 @@ pub fn process(
         (SourceSeriesAction::IngestBoundaryBatch, SourceSeriesPayloadV2::Transition(intent)) => {
             process_ingest_boundary(program_id, accounts, sequence, intent)
         }
+        (SourceSeriesAction::SealRawPage, SourceSeriesPayloadV2::Transition(intent)) => {
+            super::source_series_successor::process_seal_raw_page(
+                program_id, accounts, sequence, intent,
+            )
+        }
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
 
-fn require_live_intent(
+/// Require the exact current adapter program, submitting keeper, and an
+/// unexpired Clock-slot bound before any successor state transition.
+pub(super) fn require_live_intent(
     program_id: &Pubkey,
     keeper: &AccountInfo<'_>,
     intent: IntentPreimageV3,

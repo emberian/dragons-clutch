@@ -162,4 +162,5 @@ pub mod series_failure_funding;
 pub mod source_ingest;
 pub mod source_ingest_v2;
 pub mod source_series;
+pub mod source_series_successor;
 pub mod split;

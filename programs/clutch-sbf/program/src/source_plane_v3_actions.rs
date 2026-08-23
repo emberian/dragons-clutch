@@ -531,6 +531,10 @@ pub struct SealRawPageExecutionV1 {
     pub semantic: clutch_source_plane_v3_runtime::SealOpenPageOutputV1,
     /// Exact immutable RawPage rent postimage.
     pub page_funding: ImmutableAccountFundingV1,
+    /// Exact immutable RawPage envelope persisted by this instruction.
+    pub page_header: RuntimeAccountHeaderV1,
+    /// Digest of the complete immutable RawPage account postimage.
+    pub page_account_data_id: ContentId,
     /// SourceHead postimage and lineage CAS.
     pub head: MutateRuntimeAccountResultV1,
     /// OpenRawPage close/refund/sink postimage.
@@ -1047,7 +1051,7 @@ pub fn seal_raw_page(
         semantic.sealed_page.id().map_err(source_core)?,
     )
     .map_err(source_pda)?;
-    let (page_funding, _, _) = create_immutable_runtime_account(
+    let (page_funding, page_header, page_account_data_id) = create_immutable_runtime_account(
         program_id,
         route,
         &page_recipe,
@@ -1077,6 +1081,8 @@ pub fn seal_raw_page(
     Ok(SealRawPageExecutionV1 {
         semantic,
         page_funding,
+        page_header,
+        page_account_data_id,
         head: head_postimage,
         open_close,
     })

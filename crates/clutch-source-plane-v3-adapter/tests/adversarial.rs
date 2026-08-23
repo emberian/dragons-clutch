@@ -406,6 +406,132 @@ fn page_and_window() -> (WindowSpecV3, RawPageV3) {
 }
 
 #[test]
+fn promoted_seal_projection_binds_exact_images_and_prefund_close() {
+    let plane = source_plane();
+    let head_before = SourceHeadV3::new(id(2), 100, 0).unwrap();
+    let open_before = head_before
+        .open_page()
+        .unwrap()
+        .append_observation(RawRecordV3::observation(100, 101, 7, 8, 9))
+        .unwrap();
+    let sealed_page = open_before.seal().unwrap();
+    let head_after = head_before.commit_page(&sealed_page).unwrap();
+    let head_runtime = RuntimeMutationProjectionV1 {
+        account_data_before_id: id(20),
+        account_data_after_id: id(21),
+        generation: 3,
+    };
+    let open_runtime = RuntimeCloseProjectionV1 {
+        account_data_id: id(22),
+        generation: 4,
+        principal_recipient: ContentId::ZERO,
+        payer_principal_lamports: 0,
+        neutral_sink: id(23),
+        neutral_surplus_lamports: 800,
+    };
+    let page_runtime = RuntimeCreationProjectionV1 {
+        account_data_id: id(24),
+        generation: 1,
+        payer: ContentId::ZERO,
+        rent_principal_lamports: 0,
+    };
+    let plan = project_runtime_seal_raw_page(
+        &plane,
+        &head_before,
+        &open_before,
+        &head_after,
+        &sealed_page,
+        head_runtime,
+        open_runtime,
+        page_runtime,
+        id(25),
+    )
+    .unwrap();
+    assert_eq!(plan.action(), TransitionActionV3::SealRawPage);
+    assert_eq!((plan.mutation_count(), plan.creation_count(), plan.close_count()), (1, 1, 1));
+    assert_eq!(plan.close(0).unwrap().principal_recipient, ContentId::ZERO);
+    assert_eq!(plan.close(0).unwrap().payer_principal_lamports, 0);
+    assert_eq!(plan.creation(0).unwrap().payer, ContentId::ZERO);
+    assert_eq!(plan.creation(0).unwrap().rent_principal_lamports, 0);
+
+    let rebound = project_runtime_seal_raw_page(
+        &plane,
+        &head_before,
+        &open_before,
+        &head_after,
+        &sealed_page,
+        RuntimeMutationProjectionV1 {
+            account_data_after_id: id(26),
+            ..head_runtime
+        },
+        open_runtime,
+        page_runtime,
+        id(25),
+    )
+    .unwrap();
+    assert_ne!(plan.id().unwrap(), rebound.id().unwrap());
+    let different_receipt = project_runtime_seal_raw_page(
+        &plane,
+        &head_before,
+        &open_before,
+        &head_after,
+        &sealed_page,
+        head_runtime,
+        open_runtime,
+        page_runtime,
+        id(27),
+    )
+    .unwrap();
+    assert_ne!(plan.id().unwrap(), different_receipt.id().unwrap());
+
+    assert_eq!(
+        project_runtime_seal_raw_page(
+            &plane,
+            &head_before,
+            &open_before,
+            &head_before,
+            &sealed_page,
+            head_runtime,
+            open_runtime,
+            page_runtime,
+            id(25),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+    assert_eq!(
+        project_runtime_seal_raw_page(
+            &plane,
+            &head_before,
+            &open_before,
+            &head_after,
+            &sealed_page,
+            head_runtime,
+            RuntimeCloseProjectionV1 {
+                principal_recipient: id(28),
+                ..open_runtime
+            },
+            page_runtime,
+            id(25),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+    assert_eq!(
+        project_runtime_seal_raw_page(
+            &plane,
+            &head_before,
+            &open_before,
+            &head_after,
+            &sealed_page,
+            head_runtime,
+            open_runtime,
+            page_runtime,
+            ContentId::ZERO,
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+}
+
+#[test]
 fn window_core_requires_v3_maturity_while_adapter_reads_remain_opaque() {
     let plane = source_plane();
     let (window, page) = page_and_window();
