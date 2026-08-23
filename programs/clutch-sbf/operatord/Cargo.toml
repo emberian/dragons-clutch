@@ -35,6 +35,10 @@ clutch-solana-layout = { path = "../../solana-layout" }
 # role vectors are asserted against the program's numbers rather than against
 # a comment.  Already in this graph through `clutch-sbf-harness`.
 clutch-sbf = { path = "../program" }
+# Host-only typed construction for the real-Pyth laboratory plane. This crate
+# never enters the SBF artifact; operatord resolves its signer roles and owns
+# the separate sign/submit boundary.
+clutch-local-real-pyth = { path = "../local-real-pyth", default-features = false, features = ["builder"] }
 # The host relation twin the trade session's auto-crank runs: one canonical
 # candidate constructor and one canonical pairing constructor, the same two
 # the sealed lane's plan generator calls.  There is no second solver here and
