@@ -372,6 +372,7 @@ pub trait PortfolioAdapterV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSelectedPortfolioOrderV2 {
     record: SelectedPortfolioOrderRecordV2,
+    order: crate::relation_v2::EconomicOrderV2,
 }
 
 impl AuthenticatedSelectedPortfolioOrderV2 {
@@ -393,6 +394,15 @@ impl AuthenticatedSelectedPortfolioOrderV2 {
 
     pub const fn position_account_id(&self) -> PortfolioIdentityV2 {
         self.record.position_account_id
+    }
+
+    /// Exact RelationV2 order authenticated at `record.order_index`.
+    ///
+    /// RelationV2 remains the sole coefficient owner.  This value is exposed
+    /// only through the private membership capability; a detached order value
+    /// cannot recreate that capability.
+    pub const fn economic_order(&self) -> &crate::relation_v2::EconomicOrderV2 {
+        &self.order
     }
 }
 
@@ -549,7 +559,7 @@ fn authenticate_selected_portfolio_order_with_access_v2<A: PortfolioAdapterV2>(
     ) {
         return Err(PortfolioExecutionErrorV2::SelectionMembershipAuthenticationFailed);
     }
-    Ok(AuthenticatedSelectedPortfolioOrderV2 { record })
+    Ok(AuthenticatedSelectedPortfolioOrderV2 { record, order })
 }
 
 /// Private capability for one exact, exclusive, full coefficient-vector pair.

@@ -72,10 +72,17 @@ fn page_set(order_count: u8) -> PortfolioBookPageSetRecordV2 {
     let page_count = (count.checked_sub(1).unwrap() / 16)
         .checked_add(1)
         .unwrap();
+    page_set_with_allocated_pages(order_count, u8::try_from(page_count).unwrap())
+}
+
+fn page_set_with_allocated_pages(
+    order_count: u8,
+    allocated_page_count: u8,
+) -> PortfolioBookPageSetRecordV2 {
     let mut page_account_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
     let mut page_semantic_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
     let mut page = 0usize;
-    while page < page_count {
+    while page < usize::from(allocated_page_count) {
         let page_byte = u8::try_from(page).unwrap();
         page_account_ids[page] = id(80u8.checked_add(page_byte).unwrap());
         page_semantic_ids[page] = id(90u8.checked_add(page_byte).unwrap());
@@ -84,7 +91,7 @@ fn page_set(order_count: u8) -> PortfolioBookPageSetRecordV2 {
     PortfolioBookPageSetRecordV2 {
         version: PORTFOLIO_BOOK_AUTHORITY_VERSION_V2,
         outcome_count: u8::try_from(MAX_OUTCOMES).unwrap(),
-        page_count: u8::try_from(page_count).unwrap(),
+        page_count: allocated_page_count,
         order_count,
         traversal_index: 12,
         settlement_root_epoch_generation: 4,
@@ -215,9 +222,44 @@ fn fixed_page_set_codec_refuses_padding_and_noncanonical_geometry() {
     );
 
     let mut wrong_page_count = record;
-    wrong_page_count.page_count = 3;
+    wrong_page_count.page_count = 0;
     assert_eq!(
         wrong_page_count.encode_into(&mut bytes),
+        Err(PortfolioBookAuthorityErrorV2::InvalidPageGeometry)
+    );
+}
+
+#[test]
+fn churned_sparse_book_authenticates_every_frozen_allocated_page() {
+    let sparse = page_set_with_allocated_pages(3, 4);
+    let adapter = BookAdapter {
+        projected_book: Some(economic_book(3)),
+        reject_role: None,
+        root_writable: true,
+        observed_pages: Cell::new(0),
+    };
+    let authenticated = authenticate_complete_portfolio_book_for_root_transition_v2(
+        &adapter,
+        id(200),
+        &domain(),
+        sparse,
+    )
+    .unwrap();
+    assert_eq!(authenticated.page_count(), 4);
+    assert_eq!(authenticated.order_count(), 3);
+    assert_eq!(adapter.observed_pages.get(), 4);
+
+    let mut bytes = [0u8; PORTFOLIO_BOOK_PAGE_SET_RECORD_V2_BYTES];
+    sparse.encode_into(&mut bytes).unwrap();
+    assert_eq!(PortfolioBookPageSetRecordV2::decode(&bytes), Ok(sparse));
+}
+
+#[test]
+fn sparse_geometry_still_refuses_live_orders_beyond_allocated_capacity() {
+    let impossible = page_set_with_allocated_pages(17, 1);
+    let mut bytes = [0u8; PORTFOLIO_BOOK_PAGE_SET_RECORD_V2_BYTES];
+    assert_eq!(
+        impossible.encode_into(&mut bytes),
         Err(PortfolioBookAuthorityErrorV2::InvalidPageGeometry)
     );
 }

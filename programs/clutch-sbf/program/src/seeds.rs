@@ -66,6 +66,9 @@ pub const SEED_FRACTIONAL_POLICY_V2: &[u8] =
 /// Sole aggregate numerator-credit ledger V1.
 pub const SEED_FRACTIONAL_LEDGER_V1: &[u8] =
     clutch_fractional_redemption_runtime::FRACTIONAL_LEDGER_PDA_PREFIX;
+/// Owner-scoped exact numerator credit and permanent tombstone V2.
+pub const SEED_FRACTIONAL_CREDIT_V2: &[u8] =
+    clutch_fractional_redemption_runtime::FRACTIONAL_CREDIT_PDA_PREFIX;
 /// Reference-only external-shadow account seed prefix.
 pub const SEED_EXTERNAL: &[u8] = b"dragons-clutch:external:v1";
 /// Reference-only replay-sequence account seed prefix.
@@ -883,6 +886,18 @@ pub fn fractional_policy_v2_pda(
 /// Canonical sole aggregate-credit ledger for one fractional policy.
 pub fn fractional_ledger_v1_pda(program_id: &Pubkey, policy_account: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_FRACTIONAL_LEDGER_V1, policy_account])
+}
+
+/// Canonical owner-scoped Fractional credit/tombstone address.
+pub fn fractional_credit_v2_pda(
+    program_id: &Pubkey,
+    policy_account: &[u8; 32],
+    claimant: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_FRACTIONAL_CREDIT_V2, policy_account, claimant],
+    )
 }
 
 /// Canonical disabled selected fee-record address for one SelectedCandidate.

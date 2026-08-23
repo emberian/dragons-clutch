@@ -37,6 +37,7 @@ const STRUCTURED_EXCHANGE_FAMILY: u8 = 2;
 const COLLATERAL_CASH_FAMILY: u8 = 3;
 const FRACTIONAL_REDEMPTION_FAMILY: u8 = 4;
 const CLAIM_REPRESENTATION_FAMILY: u8 = 5;
+const DEALER_FAMILY: u8 = 6;
 const TRANSITION_VERSION_V1: u8 = 1;
 const OWNER_ACCOUNTING_ROLE: u8 = 1;
 const OWNER_CASH_ROLE: u8 = 2;
@@ -51,6 +52,8 @@ const PORTFOLIO_PAIR_BUYER_ROLE: u8 = 10;
 const PORTFOLIO_PAIR_SELLER_ROLE: u8 = 11;
 const PORTFOLIO_ARCHIVE_BUYER_ROLE: u8 = 12;
 const PORTFOLIO_ARCHIVE_SELLER_ROLE: u8 = 13;
+const DEALER_BUYER_ROLE: u8 = 12;
+const DEALER_SELLER_ROLE: u8 = 13;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
@@ -102,6 +105,17 @@ pub enum GeneralReplayTransitionKindV1 {
     FractionalTransferCreditPayout,
     /// FractionalRedemption action 7 internal credit-payout endpoint.
     FractionalMergeCreditPayout,
+    /// Dealer action 15 buyer collection releases reserved cash into custody.
+    DealerCollectBuyer,
+    /// Dealer action 15 seller collection moves Reservation-owned Eggs and
+    /// may return an unfilled remainder to the Position.
+    DealerCollectSeller,
+    /// Dealer action 16 buyer delivery credits native Eggs and closes the
+    /// Position's Reservation liability.
+    DealerDeliverBuyer,
+    /// Dealer action 16 seller delivery credits cash and closes the
+    /// Position's Reservation liability.
+    DealerDeliverSeller,
 }
 
 impl GeneralReplayTransitionKindV1 {
@@ -245,6 +259,30 @@ impl GeneralReplayTransitionKindV1 {
                 7,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ),
+            Self::DealerCollectBuyer => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                15,
+                DEALER_BUYER_ROLE,
+            ),
+            Self::DealerCollectSeller => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                15,
+                DEALER_SELLER_ROLE,
+            ),
+            Self::DealerDeliverBuyer => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                16,
+                DEALER_BUYER_ROLE,
+            ),
+            Self::DealerDeliverSeller => (
+                DEALER_FAMILY,
+                TRANSITION_VERSION_V1,
+                16,
+                DEALER_SELLER_ROLE,
+            ),
         }
     }
 
@@ -367,6 +405,18 @@ impl GeneralReplayTransitionKindV1 {
                 7,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ) => Ok(Self::FractionalMergeCreditPayout),
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 15, DEALER_BUYER_ROLE) => {
+                Ok(Self::DealerCollectBuyer)
+            }
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 15, DEALER_SELLER_ROLE) => {
+                Ok(Self::DealerCollectSeller)
+            }
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 16, DEALER_BUYER_ROLE) => {
+                Ok(Self::DealerDeliverBuyer)
+            }
+            (DEALER_FAMILY, TRANSITION_VERSION_V1, 16, DEALER_SELLER_ROLE) => {
+                Ok(Self::DealerDeliverSeller)
+            }
             _ => Err(CodecError::InvalidState),
         }
     }
@@ -971,6 +1021,8 @@ where
         GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
             | GeneralReplayTransitionKindV1::RetirePortfolioPairBuyerArchive
             | GeneralReplayTransitionKindV1::RetirePortfolioPairSellerArchive
+            | GeneralReplayTransitionKindV1::DealerDeliverBuyer
+            | GeneralReplayTransitionKindV1::DealerDeliverSeller
     );
     let expected_outstanding_reservations = if retires_reservation_child {
         pre_fields
@@ -1025,6 +1077,9 @@ where
             | GeneralReplayTransitionKindV1::StructuredGeneral
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalExact
             | GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit
+            | GeneralReplayTransitionKindV1::DealerCollectBuyer
+            | GeneralReplayTransitionKindV1::DealerDeliverBuyer
+            | GeneralReplayTransitionKindV1::DealerDeliverSeller
     );
     if (unchanged_required
         && (position_poststate.semantic != position_prestate.semantic
@@ -1193,6 +1248,54 @@ mod tests {
                 PORTFOLIO_ARCHIVE_SELLER_ROLE,
             )),
             Err(CodecError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn dealer_collect_deliver_tuples_are_exact_and_role_disjoint() {
+        let mut collect_buyer = advanced_extension(15, DEALER_BUYER_ROLE);
+        collect_buyer[130] = DEALER_FAMILY;
+        let mut collect_seller = advanced_extension(15, DEALER_SELLER_ROLE);
+        collect_seller[130] = DEALER_FAMILY;
+        let mut deliver_buyer = advanced_extension(16, DEALER_BUYER_ROLE);
+        deliver_buyer[130] = DEALER_FAMILY;
+        let mut deliver_seller = advanced_extension(16, DEALER_SELLER_ROLE);
+        deliver_seller[130] = DEALER_FAMILY;
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&collect_buyer)
+                .unwrap()
+                .last_kind(),
+            Some(GeneralReplayTransitionKindV1::DealerCollectBuyer)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&collect_seller)
+                .unwrap()
+                .last_kind(),
+            Some(GeneralReplayTransitionKindV1::DealerCollectSeller)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&deliver_buyer)
+                .unwrap()
+                .last_kind(),
+            Some(GeneralReplayTransitionKindV1::DealerDeliverBuyer)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&deliver_seller)
+                .unwrap()
+                .last_kind(),
+            Some(GeneralReplayTransitionKindV1::DealerDeliverSeller)
+        );
+        collect_buyer[130] = SETTLEMENT_FAMILY;
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&collect_buyer),
+            Err(CodecError::InvalidState)
+        );
+        deliver_seller[132] = DEALER_BUYER_ROLE;
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&deliver_seller)
+                .unwrap()
+                .last_kind(),
+            Some(GeneralReplayTransitionKindV1::DealerDeliverBuyer)
         );
     }
 }

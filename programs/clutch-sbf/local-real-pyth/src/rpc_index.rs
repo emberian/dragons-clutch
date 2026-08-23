@@ -94,12 +94,18 @@ pub struct RpcClusterBinding {
 
 impl RpcClusterBinding {
     pub fn validate(&self) -> Result<()> {
+        let local_validator = self.cluster_name == "local-validator";
+        let local_endpoints = self.rpc_http_url.starts_with("http://127.0.0.1:")
+            && self
+                .rpc_websocket_url
+                .starts_with("ws://127.0.0.1:");
         if self.cluster_name.trim().is_empty()
             || self.genesis_hash.len() < 32
             || self.genesis_hash.len() > 64
             || self.genesis_hash.chars().any(char::is_whitespace)
             || !safe_endpoint(&self.rpc_http_url, false)
             || !safe_endpoint(&self.rpc_websocket_url, true)
+            || (local_validator && !local_endpoints)
         {
             return Err(RpcIndexError::InvalidCluster);
         }
@@ -206,7 +212,6 @@ impl IndexedProgramRelease {
             || self.program_data == Address::default()
             || self.program_id == self.program_data
             || self.elf_sha256 == [0; 32]
-            || self.deployment_slot == 0
             || self.release_manifest_sha256 == [0; 32]
             || self.capability_profile_id == [0; 32]
             || !matches!(self.source_commit.len(), 40 | 64)
@@ -311,6 +316,14 @@ impl RpcIndexPlan {
         let mut programs = BTreeSet::new();
         for release in &self.releases {
             release.validate()?;
+            let slot_matches_cluster = if self.cluster.cluster_name == "local-validator" {
+                release.deployment_slot == 0
+            } else {
+                release.deployment_slot != 0
+            };
+            if !slot_matches_cluster {
+                return Err(RpcIndexError::InvalidRelease);
+            }
             if !programs.insert(release.program_id) {
                 return Err(RpcIndexError::DuplicateRelease);
             }
@@ -1075,6 +1088,38 @@ mod tests {
         let mut value = release();
         value.source_commit = "0".repeat(40);
         assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
+    }
+
+    #[test]
+    fn deployment_slot_locus_is_cluster_specific() {
+        let bounds = RpcAcquisitionBounds {
+            maximum_accounts_per_scan: 1,
+            maximum_account_data_bytes: 1,
+            maximum_total_response_bytes: 1,
+            maximum_subscriptions: 4,
+        };
+        let mut local_release = release();
+        local_release.deployment_slot = 0;
+        let mut plan = RpcIndexPlan {
+            cluster: RpcClusterBinding {
+                cluster_name: "local-validator".to_string(),
+                genesis_hash: "11".repeat(16),
+                rpc_http_url: "http://127.0.0.1:9137".to_string(),
+                rpc_websocket_url: "ws://127.0.0.1:9138".to_string(),
+            },
+            releases: vec![local_release],
+            bounds,
+        };
+        assert!(plan.validate().is_ok());
+        plan.releases[0].deployment_slot = 1;
+        assert_eq!(plan.validate(), Err(RpcIndexError::InvalidRelease));
+
+        plan.cluster.cluster_name = "solana-devnet".to_string();
+        plan.cluster.rpc_http_url = "https://api.devnet.solana.com".to_string();
+        plan.cluster.rpc_websocket_url = "wss://api.devnet.solana.com/".to_string();
+        assert!(plan.validate().is_ok());
+        plan.releases[0].deployment_slot = 0;
+        assert_eq!(plan.validate(), Err(RpcIndexError::InvalidRelease));
     }
 
     #[test]

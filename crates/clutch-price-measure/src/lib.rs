@@ -15,8 +15,8 @@
 //! additionally binds complete Market/Terms/Basis identities and checks direct
 //! payout-denominator-scale integer equations for live degrees two and three.
 //! Its bounded inverse constructors emit independently reverified exact
-//! singleton, pair, and triple certificates without introducing another
-//! rounding boundary.
+//! singleton, pair, triple, quartet, and general support-through-outcome-count
+//! certificates without introducing another rounding boundary.
 //! All profiles reconstruct every simplex-price coordinate with exact integer
 //! arithmetic. This crate does not
 //! parse Solana accounts, compute cryptographic digests, select candidates,
@@ -27,6 +27,7 @@ use clutch_bspline::{BasisSpec, ValidatedBasisSpec};
 
 mod atom_mixture_v1;
 mod atom_solver_v1;
+mod fraction_free_v1;
 mod quantized_v3;
 
 pub use atom_mixture_v1::{
@@ -38,13 +39,19 @@ pub use atom_mixture_v1::{
     QUANTIZED_ATOM_MIXTURE_SEMANTICS_VERSION_V1,
 };
 pub use atom_solver_v1::{
-    solve_quantized_atom_pair_hull_v1, solve_quantized_atom_support3_hull_v1,
-    ExactQuantizedAtomSolutionV1, ExactQuantizedSupport3SolutionV1,
+    solve_quantized_atom_hull_v1, solve_quantized_atom_pair_hull_v1,
+    solve_quantized_atom_support3_hull_v1, solve_quantized_atom_support4_hull_v1,
+    ExactQuantizedAllSupportSolutionV1, ExactQuantizedAtomSolutionV1,
+    ExactQuantizedSupport3SolutionV1, ExactQuantizedSupport4SolutionV1,
+    QuantizedAtomAllSupportSolverOutcomeV1, QuantizedAtomAllSupportSolverPlanV1,
+    QuantizedAtomAllSupportSolverReportV1,
     QuantizedAtomPairSolverErrorV1, QuantizedAtomPairSolverOutcomeV1,
     QuantizedAtomPairSolverPlanV1, QuantizedAtomPairSolverReportV1,
     QuantizedAtomSearchCoordinatesV1, QuantizedAtomSolverErrorV1,
     QuantizedAtomSupport3SolverOutcomeV1,
     QuantizedAtomSupport3SolverPlanV1, QuantizedAtomSupport3SolverReportV1,
+    QuantizedAtomSupport4SolverOutcomeV1, QuantizedAtomSupport4SolverPlanV1,
+    QuantizedAtomSupport4SolverReportV1,
     ResultAtomSolverV1, ResultPairSolverV1,
     MAX_QUANTIZED_ATOM_SOLVER_COORDINATES_V1,
 };

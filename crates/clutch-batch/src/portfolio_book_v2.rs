@@ -188,12 +188,15 @@ impl PortfolioBookPageSetRecordV2 {
         {
             return Err(PortfolioBookAuthorityErrorV2::InvalidPageGeometry);
         }
-        let expected_page_count = order_count
-            .checked_sub(1)
-            .ok_or(PortfolioBookAuthorityErrorV2::InvalidPageGeometry)?
-            / PORTFOLIO_BOOK_ORDERS_PER_PAGE_V2
-            + 1;
-        if page_count != expected_page_count || self.settlement_root_epoch_generation == 0 {
+        let allocated_capacity = page_count
+            .checked_mul(PORTFOLIO_BOOK_ORDERS_PER_PAGE_V2)
+            .ok_or(PortfolioBookAuthorityErrorV2::ArithmeticOverflow)?;
+        // Page count is frozen allocation geometry, not a projection of the
+        // current live-order count. Churn can leave one live order spread
+        // across all four authenticated V5 pages. The account adapter must
+        // authenticate every active page identity; this codec only proves the
+        // live prefix fits within the declared allocation.
+        if order_count > allocated_capacity || self.settlement_root_epoch_generation == 0 {
             return Err(PortfolioBookAuthorityErrorV2::InvalidPageGeometry);
         }
         let base_identities = [
@@ -445,6 +448,39 @@ pub fn authenticate_complete_portfolio_book_ref_v2<'a, A: PortfolioBookAdapterV2
     Ok(AuthenticatedCompletePortfolioBookRefV2 {
         page_set,
         economic_book,
+    })
+}
+
+/// Authenticate a read-only-root complete book directly into caller-owned
+/// storage and return only a borrowed private capability.
+///
+/// This is the frame-bounded counterpart of
+/// [`authenticate_complete_portfolio_book_v2`]. It is used by settlement
+/// consumers which must authenticate the counted root but do not mutate it.
+pub fn authenticate_complete_portfolio_book_into_v2<
+    'a,
+    A: PortfolioBookInPlaceAdapterV2,
+>(
+    adapter: &A,
+    owner_program_id: PortfolioBookIdentityV2,
+    domain: &EconomicDomainV2,
+    page_set: PortfolioBookPageSetRecordV2,
+    output: &'a mut EconomicBookV2,
+) -> Result<AuthenticatedCompletePortfolioBookRefV2<'a>, PortfolioBookAuthorityErrorV2> {
+    let projection = authenticate_complete_portfolio_book_accounts_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        page_set,
+        false,
+    )?;
+    if !adapter.project_complete_economic_book_into(&projection, output) {
+        return Err(PortfolioBookAuthorityErrorV2::ProjectionAuthenticationFailed);
+    }
+    validate_projected_complete_book_v2(output, domain, projection.page_set.order_count)?;
+    Ok(AuthenticatedCompletePortfolioBookRefV2 {
+        page_set: projection.page_set,
+        economic_book: output,
     })
 }
 

@@ -17,6 +17,14 @@ operatord compose-chain-config \
 operatord chain-serve --config chain.json [--port 9130] [--static apps/static-client]
 ```
 
+The missing session-instantiation seam is owned by
+`operatord prepare-local-chain` / `launch-local-chain`; those commands create
+the v6 seal from exact built-release, checked-profile, compiler, neutral-sink,
+Source, and validator coordinates without entering any historical mock mode.
+The separate `compose-devnet-chain-config` command accepts only the canonical
+devnet deployment-manifest schema and cannot reuse a local-session manifest.
+See [`REAL_INFRA_CHAIN_LAUNCH.md`](../../docs/implementation/REAL_INFRA_CHAIN_LAUNCH.md).
+
 `chain.json` is output, not caller-authored input. The offline composer invokes
 the existing capability-profile v2 checker with deployability required and
 cross-checks its checker-emitted SHA-256 of sorted-key compact ASCII JSON,

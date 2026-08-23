@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use clutch_collateral_adapter_v2::{
-    accept_fractional_external_claim_redemption_v3, prepare_fractional_claim_ledger_founding_v3,
+    accept_fractional_external_claim_redemption_v3,
+    accept_fractional_external_credit_payout_v3, prepare_fractional_claim_ledger_founding_v3,
     prepare_fractional_claim_ledger_retirement_v3, prepare_fractional_claim_ledger_successor_v3,
     prepare_fractional_claim_redemption_v3, prepare_fractional_external_claim_redemption_v3,
+    prepare_fractional_external_credit_payout_v3,
     AcceptedBearerRedemptionCollateralV3, AcceptedClaimRedemptionCollateralV2,
     AcceptedFractionalBearerClaimBurnV3, BoundClaimIssuanceV1, BoundCollateralProfileV2,
     ClaimLedgerV3, ClaimRedemptionCollateralRequestV2, FractionalBindingStateV1,
@@ -11,6 +13,7 @@ use clutch_collateral_adapter_v2::{
     FractionalClaimLedgerRetirementPlanV3, FractionalClaimRedemptionPlanV3,
     FractionalClaimSupplyMutationV3, FractionalPayoutDispositionV3, HoardV2, Id,
     MarketLiabilityLifecycleV1, PreparedFractionalExternalClaimRedemptionV3,
+    PreparedFractionalExternalCreditPayoutV3,
     ResolutionPayoutProjectionV5, ResolutionPayoutUnitBoundaryV5, ResolutionStateV5, ResolutionV5,
 };
 use clutch_general_v2_contract::{
@@ -85,7 +88,7 @@ fn map_collateral<T>(result: clutch_collateral_adapter_v2::Result<T>) -> Result<
 /// Private fields prevent a transition from accepting a policy, aggregate
 /// ledger, Resolution projection, collateral release, or claim release that
 /// has not passed the complete pure join in [`bind_fractional_context_v1`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundFractionalContextV1 {
     policy_account: Identity32V1,
     policy: FractionalPolicyV2,
@@ -1599,6 +1602,211 @@ pub fn redeem_bearer_to_credit_v1(
     )
 }
 
+/// Prepared credited bearer redemption before either external effect.
+///
+/// Credit and collateral successors remain private until the independent claim
+/// adapter accepts the exact Token-2022 burn. This is the credited analogue of
+/// [`PreparedBearerExactRedemptionV1`], not a second custody owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedBearerCreditRedemptionV1 {
+    context: BoundFractionalContextV1,
+    source: BearerClaimPrestateV1,
+    outcome: u8,
+    quantity: u64,
+    resolution_payout: ResolutionPayoutProjectionV5,
+    ledger_after: FractionalLedgerV1,
+    credit_after: FractionalCreditV2,
+    custody: PreparedFractionalExternalClaimRedemptionV3,
+    used_common_lot_fast_path: bool,
+}
+
+impl PreparedBearerCreditRedemptionV1 {
+    /// Canonical private ClaimLedger/0xa5 plan the claim adapter must bind.
+    pub const fn fractional_claim_ledger(self) -> FractionalClaimLedgerPlanV3 {
+        self.custody.fractional()
+    }
+
+    /// Exact claimant authenticated by the source account bytes.
+    pub const fn claimant(self) -> Identity32V1 {
+        self.source.claimant
+    }
+
+    /// Exact selected outcome.
+    pub const fn outcome(self) -> u8 {
+        self.outcome
+    }
+
+    /// Exact bearer quantity to burn.
+    pub const fn quantity(self) -> u64 {
+        self.quantity
+    }
+
+    /// Runtime-observed materialized supplies before the burn.
+    pub const fn observed_materialized_supply(self) -> [u64; MAX_OUTCOMES] {
+        self.source.observed_materialized_supply
+    }
+}
+
+/// Burn-accepted credited bearer redemption. Only this capability exposes the
+/// exact Realm collateral request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BurnAcceptedBearerCreditRedemptionV1 {
+    prepared: PreparedBearerCreditRedemptionV1,
+    burn: AcceptedFractionalBearerClaimBurnV3,
+}
+
+impl BurnAcceptedBearerCreditRedemptionV1 {
+    /// Exact claim-bound zero/nonzero collateral request.
+    pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.prepared.custody.collateral_request()
+    }
+}
+
+/// Prepare arbitrary bearer redemption without exposing payout or credit state.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_bearer_credit_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    expected_credit_sequence: u64,
+    credit_prestate: CreditPrestateV1,
+    source: BearerClaimPrestateV1,
+    outcome: u8,
+    quantity: u64,
+) -> Result<PreparedBearerCreditRedemptionV1> {
+    source.validate(context, outcome, quantity)?;
+    let (mut credit_after, created_count) = open_credit(
+        context,
+        credit_prestate,
+        source.claimant,
+        expected_credit_sequence,
+    )?;
+    let prior = credit_after.numerator;
+    let (paid_atoms, residue, resolution_payout) =
+        checked_redemption(context, outcome, quantity, prior)?;
+    credit_after.numerator = residue;
+    let mut ledger_after = context.ledger.advanced(expected_ledger_sequence)?;
+    ledger_after.active_credit_accounts = ledger_after
+        .active_credit_accounts
+        .checked_add(created_count)
+        .ok_or(Error::Arithmetic)?;
+    ledger_after.aggregate_credit_numerator = ledger_after
+        .aggregate_credit_numerator
+        .checked_sub(u128::from(prior))
+        .and_then(|value| value.checked_add(u128::from(residue)))
+        .ok_or(Error::AggregateMismatch)?;
+    credit_after.validate_with(
+        context.policy_account,
+        context.policy,
+        context.ledger_account,
+        ledger_after,
+        context.payout,
+    )?;
+    let before_id = collateral_id(context.ledger.state_id()?);
+    let after_id = collateral_id(ledger_after.state_id()?);
+    let custody = map_collateral(prepare_fractional_external_claim_redemption_v3(
+        context.hoard,
+        context.claim_ledger,
+        before_id,
+        after_id,
+        expected_ledger_sequence,
+        outcome,
+        quantity,
+        source.observed_materialized_supply,
+        paid_atoms,
+        collateral_id(source.claimant),
+        collateral_id(source.collateral_destination),
+        &FractionalSha256V1,
+    ))?;
+    let fractional = custody.fractional();
+    if fractional.fractional_ledger_before_id() != before_id
+        || fractional.fractional_ledger_after_id() != after_id
+        || fractional.consumed_sequence() != expected_ledger_sequence
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_solvency(
+        context.payout,
+        custody.claim_ledger_after(),
+        custody.hoard_after(),
+        ledger_after.aggregate_credit_numerator,
+    )?;
+    Ok(PreparedBearerCreditRedemptionV1 {
+        context,
+        source,
+        outcome,
+        quantity,
+        resolution_payout,
+        ledger_after,
+        credit_after,
+        custody,
+        used_common_lot_fast_path: quantity.is_multiple_of(context.policy.common_lot),
+    })
+}
+
+/// Accept the independent Token-2022 burn before exposing credited payout authority.
+pub fn accept_bearer_credit_burn_v1(
+    prepared: PreparedBearerCreditRedemptionV1,
+    burn: AcceptedFractionalBearerClaimBurnV3,
+) -> Result<BurnAcceptedBearerCreditRedemptionV1> {
+    let intent = burn.burn_intent();
+    if burn.fractional() != prepared.custody.fractional()
+        || burn.claim_binding_id().bytes() != prepared.source.claim_issuance_binding.bytes()
+        || burn.claimant().bytes() != prepared.source.claimant.bytes()
+        || burn.outcome() != prepared.outcome
+        || burn.quantity() != prepared.quantity
+        || intent.mint.bytes() != prepared.source.claim_mint.bytes()
+        || intent.source_token_account.bytes() != prepared.source.claim_token_account.bytes()
+        || intent.claimant.bytes() != prepared.source.claimant.bytes()
+        || intent.quantity != prepared.quantity
+    {
+        return Err(Error::ClaimPlaneRefused);
+    }
+    Ok(BurnAcceptedBearerCreditRedemptionV1 { prepared, burn })
+}
+
+/// Accept Realm collateral postconditions and publish the complete credited successor.
+pub fn finish_bearer_credit_v1(
+    burned: BurnAcceptedBearerCreditRedemptionV1,
+    collateral: AcceptedBearerRedemptionCollateralV3,
+) -> Result<RedemptionPlanV1> {
+    let accepted_nonzero = match collateral {
+        AcceptedBearerRedemptionCollateralV3::Zero(_) => None,
+        AcceptedBearerRedemptionCollateralV3::Nonzero(accepted) => Some(accepted),
+    };
+    let custody_after = map_collateral(accept_fractional_external_claim_redemption_v3(
+        burned.prepared.custody,
+        collateral,
+    ))?;
+    let source = BearerClaimSourceV1 {
+        claimant: burned.prepared.source.claimant,
+        claim_token_account: burned.prepared.source.claim_token_account,
+        claim_mint: burned.prepared.source.claim_mint,
+        collateral_destination: burned.prepared.source.collateral_destination,
+        claim_issuance_binding: burned.prepared.source.claim_issuance_binding,
+        source_claim_atoms: burned.prepared.source.source_claim_atoms,
+        observed_materialized_supply: burned.prepared.source.observed_materialized_supply,
+        accepted_collateral: accepted_nonzero,
+    };
+    let mut source_after = bearer_poststate(
+        burned.prepared.context,
+        source,
+        burned.prepared.quantity,
+        burned.prepared.custody.payout_atoms(),
+        custody_after,
+    )?;
+    source_after.burn_receipt_id = Some(runtime_identity(burned.burn.burn_receipt_id())?);
+    Ok(RedemptionPlanV1 {
+        resolution_payout: burned.prepared.resolution_payout,
+        ledger_after: burned.prepared.ledger_after,
+        custody_after,
+        credit_after: Some(burned.prepared.credit_after),
+        paid_atoms: burned.prepared.custody.payout_atoms(),
+        claimant_numerator_after: burned.prepared.credit_after.numerator,
+        used_common_lot_fast_path: burned.prepared.used_common_lot_fast_path,
+        source_after: RedemptionSourcePoststateV1::Bearer(source_after),
+    })
+}
+
 /// Destination that receives a whole collateral atom created by credit merge.
 #[derive(Clone, Copy, Debug)]
 pub enum CreditPayoutTargetV1 {
@@ -1727,38 +1935,16 @@ pub struct CreditTransferPlanV1 {
     pub payout_after: CreditPayoutPoststateV1,
 }
 
-/// Transfer an explicit numerator amount between same-domain owner credits.
-///
-/// Destination claimant acceptance, any destination account creation, and the
-/// whole-atom payout are one atomic plan. No numerator is tokenized or erased.
-#[allow(clippy::too_many_arguments)]
-pub fn transfer_credit_v1(
-    context: BoundFractionalContextV1,
-    expected_ledger_sequence: u64,
-    source: FractionalCreditV2,
-    expected_source_sequence: u64,
-    destination: CreditPrestateV1,
-    destination_claimant: Identity32V1,
-    expected_destination_sequence: u64,
-    numerator: u64,
-    payout_target: CreditPayoutTargetV1,
-) -> Result<CreditTransferPlanV1> {
-    transfer_credit_with_kind_v1(
-        context,
-        expected_ledger_sequence,
-        source,
-        expected_source_sequence,
-        destination,
-        destination_claimant,
-        expected_destination_sequence,
-        numerator,
-        payout_target,
-        GeneralReplayTransitionKindV1::FractionalTransferCreditPayout,
-    )
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparedCreditTransferStateV1 {
+    source_after: FractionalCreditV2,
+    destination_after: FractionalCreditV2,
+    ledger_after: FractionalLedgerV1,
+    paid_atoms: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn transfer_credit_with_kind_v1(
+fn prepare_credit_transfer_state_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
     source: FractionalCreditV2,
@@ -1767,9 +1953,7 @@ fn transfer_credit_with_kind_v1(
     destination_claimant: Identity32V1,
     expected_destination_sequence: u64,
     numerator: u64,
-    payout_target: CreditPayoutTargetV1,
-    replay_kind: GeneralReplayTransitionKindV1,
-) -> Result<CreditTransferPlanV1> {
+) -> Result<PreparedCreditTransferStateV1> {
     if numerator == 0 {
         return Err(Error::ZeroQuantity);
     }
@@ -1834,25 +2018,252 @@ fn transfer_credit_with_kind_v1(
         ledger_after,
         context.payout,
     )?;
-    let custody_after = prepare_canonical_redemption(
-        context,
-        ledger_after,
-        expected_ledger_sequence,
-        FractionalClaimSupplyMutationV3::Unchanged,
-        paid_atoms,
-        payout_target.disposition(),
-    )?;
-    Ok(CreditTransferPlanV1 {
+    Ok(PreparedCreditTransferStateV1 {
         source_after,
         destination_after,
         ledger_after,
-        custody_after,
         paid_atoms,
+    })
+}
+
+/// Fully authenticated credit aggregation before Realm collateral movement.
+///
+/// Source, destination, aggregate-ledger, ClaimLedger, and Hoard successors
+/// remain private. Only the exact collateral request is exposed for adapter
+/// execution; final successors require its accepted postcondition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedExternalCreditTransferV1 {
+    context: BoundFractionalContextV1,
+    source_after: FractionalCreditV2,
+    destination_after: FractionalCreditV2,
+    ledger_after: FractionalLedgerV1,
+    custody: PreparedFractionalExternalCreditPayoutV3,
+    paid_atoms: u64,
+    claimant: Identity32V1,
+    collateral_destination: Identity32V1,
+}
+
+impl PreparedExternalCreditTransferV1 {
+    /// Exact Realm-selected collateral request admitted by both credits.
+    pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.custody.collateral_request()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_external_credit_transfer_state_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    collateral_destination: Identity32V1,
+) -> Result<PreparedExternalCreditTransferV1> {
+    let state = prepare_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+    )?;
+    let before_id = collateral_id(context.ledger.state_id()?);
+    let after_id = collateral_id(state.ledger_after.state_id()?);
+    let custody = map_collateral(prepare_fractional_external_credit_payout_v3(
+        context.hoard,
+        context.claim_ledger,
+        before_id,
+        after_id,
+        expected_ledger_sequence,
+        state.paid_atoms,
+        collateral_id(destination_claimant),
+        collateral_id(collateral_destination),
+        &FractionalSha256V1,
+    ))?;
+    if custody.fractional().fractional_ledger_before_id() != before_id
+        || custody.fractional().fractional_ledger_after_id() != after_id
+        || custody.fractional().consumed_sequence() != expected_ledger_sequence
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_solvency(
+        context.payout,
+        custody.claim_ledger_after(),
+        custody.hoard_after(),
+        state.ledger_after.aggregate_credit_numerator,
+    )?;
+    Ok(PreparedExternalCreditTransferV1 {
+        context,
+        source_after: state.source_after,
+        destination_after: state.destination_after,
+        ledger_after: state.ledger_after,
+        custody,
+        paid_atoms: state.paid_atoms,
+        claimant: destination_claimant,
+        collateral_destination,
+    })
+}
+
+/// Prepare an explicit source numerator transfer with external payout.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_external_credit_transfer_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    collateral_destination: Identity32V1,
+) -> Result<PreparedExternalCreditTransferV1> {
+    prepare_external_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+        collateral_destination,
+    )
+}
+
+/// Prepare a full nonzero source-credit merge with external payout.
+///
+/// With no Position/GEN1 consumer, a merge is intentionally the canonical
+/// full-source instance of transfer and produces the same successor as an
+/// explicit transfer of that numerator. It does not invent an external replay
+/// owner merely to preserve a redundant action label.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_external_credit_merge_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    collateral_destination: Identity32V1,
+) -> Result<PreparedExternalCreditTransferV1> {
+    prepare_external_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        source.numerator,
+        collateral_destination,
+    )
+}
+
+/// Accept Realm collateral postconditions and expose one atomic credit plan.
+pub fn finish_external_credit_transfer_v1(
+    prepared: PreparedExternalCreditTransferV1,
+    collateral: AcceptedBearerRedemptionCollateralV3,
+) -> Result<CreditTransferPlanV1> {
+    let custody_after = map_collateral(accept_fractional_external_credit_payout_v3(
+        prepared.custody,
+        collateral,
+    ))?;
+    Ok(CreditTransferPlanV1 {
+        source_after: prepared.source_after,
+        destination_after: prepared.destination_after,
+        ledger_after: prepared.ledger_after,
+        custody_after,
+        paid_atoms: prepared.paid_atoms,
+        payout_after: CreditPayoutPoststateV1::External {
+            claimant: prepared.claimant,
+            collateral_hoard: Identity32V1::new(
+                prepared.context.collateral.market().hoard_token_account.bytes(),
+            )
+            .map_err(|_| Error::CollateralRefused)?,
+            collateral_destination: prepared.collateral_destination,
+            payout_atoms: prepared.paid_atoms,
+        },
+    })
+}
+
+/// Transfer an explicit numerator amount between same-domain owner credits.
+///
+/// Destination claimant acceptance, any destination account creation, and the
+/// whole-atom payout are one atomic plan. No numerator is tokenized or erased.
+#[allow(clippy::too_many_arguments)]
+pub fn transfer_credit_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    payout_target: CreditPayoutTargetV1,
+) -> Result<CreditTransferPlanV1> {
+    transfer_credit_with_kind_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+        payout_target,
+        GeneralReplayTransitionKindV1::FractionalTransferCreditPayout,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transfer_credit_with_kind_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    payout_target: CreditPayoutTargetV1,
+    replay_kind: GeneralReplayTransitionKindV1,
+) -> Result<CreditTransferPlanV1> {
+    let state = prepare_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+    )?;
+    let custody_after = prepare_canonical_redemption(
+        context,
+        state.ledger_after,
+        expected_ledger_sequence,
+        FractionalClaimSupplyMutationV3::Unchanged,
+        state.paid_atoms,
+        payout_target.disposition(),
+    )?;
+    Ok(CreditTransferPlanV1 {
+        source_after: state.source_after,
+        destination_after: state.destination_after,
+        ledger_after: state.ledger_after,
+        custody_after,
+        paid_atoms: state.paid_atoms,
         payout_after: credit_payout_poststate(
             context,
             payout_target,
             destination_claimant,
-            paid_atoms,
+            state.paid_atoms,
             custody_after,
             replay_kind,
         )?,
@@ -2491,6 +2902,7 @@ pub fn project_fractional_family_terminal_receipt_v1(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedFractionalFamilyTerminalPostwriteV1 {
     family_terminal: FractionalFamilyTerminalReceiptV1,
+    terminal_requirement: FractionalDomainTerminalRequirementV1,
     verification_id: Identity32V1,
 }
 
@@ -2498,6 +2910,11 @@ impl VerifiedFractionalFamilyTerminalPostwriteV1 {
     /// Exact Fractional-owned receipt consumed by Product family terminality.
     pub const fn family_terminal(self) -> FractionalFamilyTerminalReceiptV1 {
         self.family_terminal
+    }
+
+    /// Exact close-plan requirement reauthenticated against all postimages.
+    pub const fn terminal_requirement(self) -> FractionalDomainTerminalRequirementV1 {
+        self.terminal_requirement
     }
 
     /// Commitment to the exact terminal postwrite and pre-deletion balances.
@@ -2608,6 +3025,7 @@ pub fn verify_fractional_family_terminal_postwrite_v1(
         Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
     Ok(VerifiedFractionalFamilyTerminalPostwriteV1 {
         family_terminal: terminal,
+        terminal_requirement: requirement,
         verification_id,
     })
 }
