@@ -215,7 +215,13 @@ pub fn build(
     }
     terms.expected_start_bucket = start_bucket;
     terms.expected_end_bucket_exclusive = end_bucket_exclusive;
-    terms.maturity_horizon_buckets = 2;
+    // The source seam requires maturity to be the first bucket after the
+    // complete observation window. A one-boundary fixture therefore uses a
+    // horizon of two buckets; wider windows must grow with their exact active
+    // width rather than inheriting that one-boundary constant.
+    terms.maturity_horizon_buckets = bucket_count
+        .checked_add(1)
+        .expect("laboratory maturity horizon fits u64");
     terms.terms = Hash32::ZERO;
     terms.terms = terms
         .recomputed_terms_digest()
@@ -1639,6 +1645,8 @@ mod tests {
         .expect("Terms fixture decodes");
         assert_eq!(terms.expected_start_bucket, 29_790_526);
         assert_eq!(terms.expected_end_bucket_exclusive, 29_790_528);
+        assert_eq!(terms.maturity_horizon_buckets, 3);
+        assert_eq!(lab.window.maturity_bucket_exclusive(), 29_790_529);
         assert_eq!(lab.start_bucket, 29_790_526);
         assert_eq!(lab.end_bucket_exclusive, 29_790_528);
     }
