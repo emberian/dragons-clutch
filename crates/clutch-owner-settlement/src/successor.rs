@@ -311,6 +311,29 @@ pub struct OwnerSettlementAccumulatorV2 {
     pub state: u8,
 }
 
+/// Immutable terminal projection from one exact finalized V2 row.
+///
+/// This value contains no account/PDA authority. Retirement and fee adapters
+/// must bind its exact body to the strictly decoded `0x81/2` account and the
+/// canonical finalized-row data ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementTerminalProjectionV2 {
+    expectation: OwnerSettlementExpectationV2,
+    finalized_body: [u8; OWNER_SETTLEMENT_BODY_V2_BYTES],
+}
+
+impl OwnerSettlementTerminalProjectionV2 {
+    /// Immutable presence-explicit selected expectation.
+    pub const fn expectation(&self) -> OwnerSettlementExpectationV2 {
+        self.expectation
+    }
+
+    /// Exact canonical state-one row body.
+    pub const fn finalized_body(&self) -> &[u8; OWNER_SETTLEMENT_BODY_V2_BYTES] {
+        &self.finalized_body
+    }
+}
+
 impl OwnerSettlementAccumulatorV2 {
     /// Create an empty V2 accumulator.
     pub fn new(expectation: OwnerSettlementExpectationV2) -> Result<Self> {
@@ -323,6 +346,18 @@ impl OwnerSettlementAccumulatorV2 {
             completed_sell_order_mask: 0,
             consumed_slice_count: 0,
             state: 0,
+        })
+    }
+
+    /// Project one finalized row for typed fee and retirement joins.
+    pub fn terminal_projection(self) -> Result<OwnerSettlementTerminalProjectionV2> {
+        self.validate()?;
+        if self.state != 1 {
+            return Err(Error::Incomplete);
+        }
+        Ok(OwnerSettlementTerminalProjectionV2 {
+            expectation: self.expectation,
+            finalized_body: self.encode_body()?,
         })
     }
 
