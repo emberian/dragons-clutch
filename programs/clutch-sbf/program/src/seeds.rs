@@ -177,7 +177,7 @@ pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
-    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
 /// Disabled selected composite-fee record seed prefix.
 pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
     clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
@@ -437,7 +437,12 @@ pub fn general_v2_selected_pda(
     )
 }
 
-/// Canonical disabled owner-settlement address for one selected owner row.
+/// Canonical disabled presence-explicit owner-settlement address for one
+/// selected owner row.
+///
+/// The withdrawn V1 row used a different seed domain. Keeping V2 on its own
+/// address prevents a prefunded or historical V1 account from being promoted
+/// into the zero-price-safe successor by changing only its outer version.
 pub fn general_v2_owner_settlement_pda(
     program_id: &Pubkey,
     epoch: &[u8; 32],
