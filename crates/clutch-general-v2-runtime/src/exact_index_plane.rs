@@ -387,13 +387,17 @@ pub fn stream_counted_exact_index_root_v1(
         let value = input.traversal.settlement_slice(slice).ok_or(ExactIndexPlaneErrorV1::CandidateTraversal)?;
         match (value.buy(), value.sell(), value.route()) {
             (SettlementLegV1::Order(buy), SettlementLegV1::Order(sell), SettlementRouteV1::Direct) => {
-                add_count(adjacency_output, &mut totals, buy, value.quantity())?;
-                add_count(adjacency_output, &mut totals, sell, value.quantity())?;
+                add_count(adjacency_output, &mut totals, feed.order_count, buy,
+                    ExactIndexOrderSideV1::Buy, value.quantity())?;
+                add_count(adjacency_output, &mut totals, feed.order_count, sell,
+                    ExactIndexOrderSideV1::Sell, value.quantity())?;
             }
             (SettlementLegV1::Order(buy), SettlementLegV1::Split, SettlementRouteV1::SplitToBuy) =>
-                add_count(adjacency_output, &mut totals, buy, value.quantity())?,
+                add_count(adjacency_output, &mut totals, feed.order_count, buy,
+                    ExactIndexOrderSideV1::Buy, value.quantity())?,
             (SettlementLegV1::Merge, SettlementLegV1::Order(sell), SettlementRouteV1::SellToMerge) =>
-                add_count(adjacency_output, &mut totals, sell, value.quantity())?,
+                add_count(adjacency_output, &mut totals, feed.order_count, sell,
+                    ExactIndexOrderSideV1::Sell, value.quantity())?,
             _ => return Err(ExactIndexPlaneErrorV1::CandidateTraversal),
         }
         slice = slice.checked_add(1).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
@@ -429,6 +433,14 @@ pub fn stream_counted_exact_index_root_v1(
         }
         slice = slice.checked_add(1).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
     }
+    order = 0;
+    while order < usize::from(feed.order_count) {
+        let row = read_directory(adjacency_output, order)?;
+        let end = row.first_slice_ref.checked_add(row.slice_ref_count)
+            .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+        if cursors[order] != end { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
+        order += 1;
+    }
     let plane_id = derive_plane_id(input.settlement_root, input.settlement_root_account,
         input.traversal.selected_feed_account(), input.feed_full_data.full_data_id,
         input.traversal.owner_order_set_digest(), input.locator_create.account,
@@ -463,12 +475,16 @@ pub fn stream_counted_exact_index_root_v1(
         adjacency_data_id, plane_id })
 }
 
-fn add_count(body: &mut [u8], totals: &mut [u64; MAX_ORDERS], order: u8, quantity: u64)
+fn add_count(body: &mut [u8], totals: &mut [u64; MAX_ORDERS], order_count: u8,
+    order: u8, expected_side: ExactIndexOrderSideV1, quantity: u64)
     -> Result<(), ExactIndexPlaneErrorV1>
 {
     let index = usize::from(order);
-    if index >= MAX_ORDERS || quantity == 0 { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
+    if order >= order_count || index >= MAX_ORDERS || quantity == 0 {
+        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+    }
     let mut row = read_directory(body, index)?;
+    if row.side != expected_side { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
     row.slice_ref_count = row.slice_ref_count.checked_add(1).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
     totals[index] = totals[index].checked_add(quantity).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
     write_directory(body, index, row)
@@ -477,6 +493,7 @@ fn write_reference(body: &mut [u8], order_count: u8, cursors: &mut [u16; MAX_ORD
     order: u8, slice: u16) -> Result<(), ExactIndexPlaneErrorV1>
 {
     let index = usize::from(order);
+    if order >= order_count { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
     let row = read_directory(body, index)?;
     let cursor = cursors[index];
     let end = row.first_slice_ref.checked_add(row.slice_ref_count).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
