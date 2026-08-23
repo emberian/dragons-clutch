@@ -13,8 +13,8 @@
 //! post-CPI reconciliation.
 //!
 //! The default adapter keeps every family-local action disabled. The distinct
-//! `live-canonical-wrapper` build admits exactly actions 1, 2, and 4 for the
-//! separately deployed wrapper ELF; all other coordinates still refuse after
+//! `live-current-wrapper` build admits exactly actions 1 through 5 for the
+//! separately deployed wrapper ELF; terminal coordinates still refuse after
 //! reading only the three-byte extension header.
 
 mod accounts;
@@ -36,10 +36,11 @@ pub use accounts::{
 };
 pub use custody::{
     authenticate_structured_custody_call_v1, prepare_structured_custody_call_v1, AdapterSha256V1,
-    AuthenticatedStructuredCustodyCallV1, BasePositionTransferCpiV1, CpiAccountMetaV1,
-    PositionV3WriteV1, ReplayV3WriteV1, StructuredCustodyPdaVerifierV1,
-    StructuredCustodyPoststateV1, StructuredCustodyScratchV1, BASE_POSITION_TRANSFER_CPI_BYTES,
-    MAX_CUSTODY_REPLAY_V3_WRITE_BYTES, POSITION_V3_WRITE_BYTES, STRUCTURED_CUSTODY_ACCOUNT_COUNT,
+    prepare_current_structured_position_poststate_v1, AuthenticatedStructuredCustodyCallV1,
+    BasePositionTransferCpiV1, CpiAccountMetaV1, PositionV3WriteV1, ReplayV3WriteV1,
+    StructuredCustodyPdaVerifierV1, StructuredCustodyPoststateV1, StructuredCustodyScratchV1,
+    BASE_POSITION_TRANSFER_CPI_BYTES, MAX_CUSTODY_REPLAY_V3_WRITE_BYTES,
+    POSITION_V3_WRITE_BYTES, STRUCTURED_CUSTODY_ACCOUNT_COUNT,
     STRUCTURED_CUSTODY_CLAIM_LEDGER_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
     STRUCTURED_CUSTODY_HOARD_BODY_DOMAIN_V1, STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
     STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1,

@@ -43,7 +43,8 @@ use crate::runtime_contract::{
 };
 use crate::{
     decode_owned_descriptor_v1, is_zero, AccountRoleV1, BasePositionPdaVerifierV1,
-    BoundDescriptorV1, Error, Key, RawAccountV1, Result, RuntimeDeploymentsV1,
+    BoundDescriptorV1, CurrentStructuredTransitionPlanV1, Error, Key, RawAccountV1, Result,
+    RuntimeDeploymentsV1,
 };
 
 /// Digest domain for an exact canonical live descriptor body.
@@ -430,6 +431,178 @@ pub fn prepare_structured_custody_call_v1<P: StructuredCustodyPdaVerifierV1>(
         scratch,
         verifier,
         false,
+    )
+}
+
+/// Build exact Position/Replay V3 postimages for a current full-width route.
+///
+/// The caller must have produced `plan` directly from the same authenticated
+/// Hoard V2, ClaimLedger V3, Position, mint, and holder prestates. This helper
+/// independently re-decodes both purpose-owned Position/Replay pairs, checks
+/// the plan's owner semantic IDs against the presented bytes, and advances the
+/// General and Structured replay owners exactly once around the plan receipt.
+/// It performs no write and grants no CPI authority by itself.
+pub fn prepare_current_structured_position_poststate_v1<
+    P: StructuredCustodyPdaVerifierV1,
+>(
+    accounts: &[RawAccountV1<'_>],
+    descriptor: &BoundDescriptorV1,
+    plan: CurrentStructuredTransitionPlanV1,
+    verifier: &P,
+) -> Result<StructuredCustodyPoststateV1> {
+    if accounts.len() < STRUCTURED_CUSTODY_ACCOUNT_COUNT
+        || !matches!(
+            plan.action,
+            StructuredClaimActionV1::WrapFull
+                | StructuredClaimActionV1::UnwrapFull
+                | StructuredClaimActionV1::RedeemTerminal
+        )
+        || is_zero(&plan.transition_id)
+    {
+        return Err(Error::CustodyAuthorityMismatch);
+    }
+    let base_program = descriptor.identity().deployment.base_program;
+    if accounts[IX_BASE_PROGRAM].key != base_program {
+        return Err(Error::CustodyAuthorityMismatch);
+    }
+    let sha = AdapterSha256V1;
+    let hoard = HoardV2::decode(accounts[IX_HOARD_V2].data)
+        .map_err(|_| Error::BaseClosureMismatch)?;
+    let claim_ledger = ClaimLedgerV3::decode(accounts[IX_CLAIM_LEDGER_V3].data)
+        .map_err(|_| Error::BaseClosureMismatch)?;
+    if hoard
+        .semantic_id(&sha)
+        .map_err(|_| Error::BaseClosureMismatch)?
+        .bytes()
+        != plan.hoard_before_id
+        || claim_ledger
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.claim_ledger_before_id
+        || plan
+            .hoard_after
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.hoard_after_id
+        || plan
+            .claim_ledger_after
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.claim_ledger_after_id
+    {
+        return Err(Error::BaseClosureMismatch);
+    }
+
+    let source = authenticate_position_v3(
+        &accounts[IX_SOURCE_POSITION],
+        base_program,
+        verifier,
+    )?;
+    let source_replay = authenticate_replay_v3(
+        &accounts[IX_SOURCE_REPLAY],
+        accounts[IX_SOURCE_POSITION].key,
+        source,
+        base_program,
+        verifier,
+        sha,
+    )?;
+    let destination = authenticate_position_v3(
+        &accounts[IX_DESTINATION_POSITION],
+        base_program,
+        verifier,
+    )?;
+    let destination_replay = authenticate_replay_v3(
+        &accounts[IX_DESTINATION_REPLAY],
+        accounts[IX_DESTINATION_POSITION].key,
+        destination,
+        base_program,
+        verifier,
+        sha,
+    )?;
+    for (position, replay, position_account, replay_account) in [
+        (
+            source,
+            &source_replay,
+            &accounts[IX_SOURCE_POSITION],
+            &accounts[IX_SOURCE_REPLAY],
+        ),
+        (
+            destination,
+            &destination_replay,
+            &accounts[IX_DESTINATION_POSITION],
+            &accounts[IX_DESTINATION_REPLAY],
+        ),
+    ] {
+        validate_position_pair(
+            position,
+            replay,
+            position_account,
+            replay_account,
+            descriptor.identity().claim.basis.market,
+            hoard.realm_id.bytes(),
+            hoard.collateral_policy_id.bytes(),
+            hoard.collateral_release_id.bytes(),
+            claim_ledger.outcome_count,
+            claim_ledger,
+        )?;
+    }
+    let user_after = plan.user_after.ok_or(Error::PostStateMismatch)?;
+    let (source_projection, destination_projection) = match plan.action {
+        StructuredClaimActionV1::WrapFull => {
+            if source.purpose() != PositionPurposeV3::General
+                || destination.purpose() != PositionPurposeV3::StructuredClaim
+            {
+                return Err(Error::CustodyAuthorityMismatch);
+            }
+            (user_after, plan.vault_after)
+        }
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => {
+            if source.purpose() != PositionPurposeV3::StructuredClaim
+                || destination.purpose() != PositionPurposeV3::General
+            {
+                return Err(Error::CustodyAuthorityMismatch);
+            }
+            (plan.vault_after, user_after)
+        }
+        _ => return Err(Error::CustodyAuthorityMismatch),
+    };
+    let source_post = position_successor(source, source_projection)?;
+    let destination_post = position_successor(destination, destination_projection)?;
+    let source_position_pre_id = source
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let destination_position_pre_id = destination
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let source_replay_pre_id = source_replay
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let destination_replay_pre_id = destination_replay
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    prepare_custody_poststate(
+        accounts,
+        descriptor,
+        plan.action,
+        source,
+        source_post,
+        source_replay,
+        source_position_pre_id,
+        source_replay_pre_id,
+        destination,
+        destination_post,
+        destination_replay,
+        destination_position_pre_id,
+        destination_replay_pre_id,
+        plan.transition_id,
+        sha,
     )
 }
 

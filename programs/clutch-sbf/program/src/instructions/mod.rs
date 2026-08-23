@@ -156,3 +156,6 @@ pub mod source_ingest;
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod split;
+/// Wrapper-signed Structured custody and current full-vector lifecycle.
+#[cfg(feature = "non-production-structured-custody-lab")]
+pub mod structured_custody;

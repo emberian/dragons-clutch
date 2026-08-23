@@ -29,7 +29,7 @@ pub const CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/current-position-projection/v1\0";
 
 const POSITION_PROJECTION_PREIMAGE_BYTES: usize = 232;
-const TRANSITION_PREIMAGE_BYTES: usize = 680;
+const TRANSITION_PREIMAGE_BYTES: usize = 808;
 
 /// Current physical accounts bound by a quantity-changing Structured route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1028,6 +1028,7 @@ fn finish_plan<B: PositionV3Sha256Backend>(
         claim_ledger_after_id,
         resolution_semantic_id,
         liability_receipt_id,
+        donated_internal,
         backend,
     )?;
     Ok(CurrentStructuredTransitionPlanV1 {
@@ -1118,6 +1119,7 @@ fn transition_id<B: PositionV3Sha256Backend>(
     ledger_after_id: Key,
     resolution_id: Key,
     liability_receipt_id: Key,
+    donated_internal: [u64; MAX_OUTCOMES],
     backend: &B,
 ) -> Result<Key> {
     let mut body = [0_u8; TRANSITION_PREIMAGE_BYTES];
@@ -1157,6 +1159,9 @@ fn transition_id<B: PositionV3Sha256Backend>(
         payout_cash_atoms,
         donated_cash_atoms,
     ] {
+        put(&mut body, &mut cursor, &value.to_le_bytes())?;
+    }
+    for value in donated_internal {
         put(&mut body, &mut cursor, &value.to_le_bytes())?;
     }
     if cursor != TRANSITION_PREIMAGE_BYTES {
@@ -1312,5 +1317,73 @@ mod tests {
         let mut value = liabilities(MarketLiabilityLifecycleV1::Open);
         value.claim_ledger.realm_id = id(44);
         assert!(validate_liability_successors(value.hoard, value.claim_ledger).is_err());
+    }
+
+    #[test]
+    fn transition_receipt_commits_every_donated_outcome_atom() {
+        let accounts = CurrentStructuredQuantityAccountsV1 {
+            descriptor: [1; 32],
+            wrapper_product_id: [2; 32],
+            user_position: [3; 32],
+            user_replay: [4; 32],
+            vault_position: [5; 32],
+            vault_replay: [6; 32],
+            mint: [7; 32],
+            holder: [8; 32],
+            actor: [9; 32],
+        };
+        let mut donation = [0_u64; MAX_OUTCOMES];
+        let first = transition_id(
+            StructuredClaimActionV1::CompactDonation,
+            accounts,
+            0,
+            10,
+            10,
+            0,
+            0,
+            0,
+            3,
+            4,
+            [10; 32],
+            [11; 32],
+            [12; 32],
+            [13; 32],
+            [14; 32],
+            [15; 32],
+            [16; 32],
+            [17; 32],
+            [0; 32],
+            [0; 32],
+            donation,
+            &Hash,
+        )
+        .expect("first receipt");
+        donation[MAX_OUTCOMES - 1] = 1;
+        let second = transition_id(
+            StructuredClaimActionV1::CompactDonation,
+            accounts,
+            0,
+            10,
+            10,
+            0,
+            0,
+            0,
+            3,
+            4,
+            [10; 32],
+            [11; 32],
+            [12; 32],
+            [13; 32],
+            [14; 32],
+            [15; 32],
+            [16; 32],
+            [17; 32],
+            [0; 32],
+            [0; 32],
+            donation,
+            &Hash,
+        )
+        .expect("second receipt");
+        assert_ne!(first, second);
     }
 }

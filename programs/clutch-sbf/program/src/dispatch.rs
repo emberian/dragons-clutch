@@ -64,6 +64,8 @@ use crate::instructions::general_v2_direct_v5;
 use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
+#[cfg(feature = "non-production-structured-custody-lab")]
+use crate::instructions::structured_custody;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
     fractional_redemption, genesis, market_init, observe_resolve, orders_batch, source_ingest_v2,
@@ -125,6 +127,8 @@ enum Route {
     GeneralV2,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
+    #[cfg(feature = "non-production-structured-custody-lab")]
+    StructuredClaim,
     DecodeOnly,
 }
 
@@ -253,6 +257,20 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                     }) =>
             {
                 Route::GeneralV2
+            }
+            #[cfg(feature = "non-production-structured-custody-lab")]
+            Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG)
+                if instruction_data.get(14).copied()
+                    == Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION)
+                    && instruction_data.get(15).copied().is_some_and(|action| {
+                        capabilities::extension_intent_action_enabled(
+                            clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG,
+                            clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION,
+                            action,
+                        )
+                    }) =>
+            {
+                Route::StructuredClaim
             }
             #[cfg(feature = "non-production-product-series-lab")]
             Some(clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG)
@@ -442,6 +460,10 @@ pub fn process(
         Route::GeneralV2 => process_general_v2(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
+        #[cfg(feature = "non-production-structured-custody-lab")]
+        Route::StructuredClaim => {
+            process_structured_claim(program_id, accounts, instruction_data)
+        }
         Route::DecodeOnly => decode_only(instruction_data),
     }
 }
@@ -615,6 +637,15 @@ fn process_general_v2(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
+        #[cfg(feature = "non-production-structured-custody-lab")]
+        ExtensionAction::GeneralV2(
+            clutch_solana_layout::registry::GeneralV2Action::TransferPositionAssets,
+        ) => structured_custody::process(
+            program_id,
+            accounts,
+            request.sequence,
+            request.envelope.payload,
+        ),
         ExtensionAction::GeneralV2(
             action @ clutch_solana_layout::registry::GeneralV2Action::ConsumeDirectReceiptEggs,
         ) => general_v2_direct_v5::process(
@@ -641,6 +672,46 @@ fn process_general_v2(
         | ExtensionAction::RecurringSeries(_)
         | ExtensionAction::Recovery(_)
         | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
+    }
+}
+
+#[cfg(feature = "non-production-structured-custody-lab")]
+#[inline(never)]
+fn process_structured_claim(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::StructuredClaim(
+            clutch_solana_layout::registry::StructuredClaimAction::CreateDescriptor,
+        ) => structured_custody::process_create(
+            program_id,
+            accounts,
+            request.sequence,
+            request.envelope.payload,
+        ),
+        ExtensionAction::StructuredClaim(
+            clutch_solana_layout::registry::StructuredClaimAction::WrapFull,
+        ) => structured_custody::process_full_vector(
+            program_id,
+            accounts,
+            request.sequence,
+            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::WrapFull,
+            request.envelope.payload,
+        ),
+        ExtensionAction::StructuredClaim(
+            clutch_solana_layout::registry::StructuredClaimAction::UnwrapFull,
+        ) => structured_custody::process_full_vector(
+            program_id,
+            accounts,
+            request.sequence,
+            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::UnwrapFull,
+            request.envelope.payload,
+        ),
+        _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
 
@@ -2058,15 +2129,31 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION,
                 local_action,
             );
-            assert!(
-                disabled_canonical_tag(&bytes),
-                "structured-claim action {local_action}"
+            let enabled = capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG,
+                clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION,
+                local_action,
             );
             assert_eq!(
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
-                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                disabled_canonical_tag(&bytes),
+                !enabled,
                 "structured-claim action {local_action}"
             );
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            if enabled {
+                assert_ne!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "enabled structured-claim action {local_action} must reach its strict account decoder"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "disabled structured-claim action {local_action}"
+                );
+            }
         }
         for local_action in clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
             ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG
