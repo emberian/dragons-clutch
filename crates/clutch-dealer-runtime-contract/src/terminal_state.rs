@@ -281,7 +281,8 @@ pub fn close_dealer_position_replay_v2(
     receipt: &DealerTerminalStateReceiptV2,
     terminal_position: &DealerPositionObservationV3,
     position_tombstone: PositionTombstoneV3,
-    replay_close: crate::DealerReplayClosePlanV1,
+    terminal_replay: &DealerFacilityReplayV1,
+    terminal_replay_semantic_id: Id,
 ) -> Result<DealerStateV2> {
     state.validate_against_policy(policy)?;
     receipt.validate()?;
@@ -297,6 +298,8 @@ pub fn close_dealer_position_replay_v2(
     if position_tombstone != expected_tombstone {
         return Err(Error::MismatchedBinding);
     }
+    terminal_replay.validate()?;
+    terminal_replay_semantic_id.validate_live()?;
     let position = position_tombstone.fields();
     if state.phase != DealerPhaseV2::Retiring
         || state.children.facility_positions != 1
@@ -322,8 +325,13 @@ pub fn close_dealer_position_replay_v2(
         || receipt.terminal_child_sequence != state.child_sequence
         || terminal_position.account_id != state.facility_position_account_id
         || terminal_position.semantic_id != state.facility_position_id
-        || replay_close.replay_account_id() != state.facility_replay_account_id
-        || replay_close.terminal_state_receipt_id() != receipt.receipt_id()?
+        || terminal_replay.replay_account_id() != state.facility_replay_account_id
+        || terminal_replay.facility_position_account_id() != state.facility_position_account_id
+        || terminal_replay.facility_position_binding_id() != state.facility_position_binding_id
+        || terminal_replay.position_generation() != state.generation
+        || terminal_replay.lifecycle() != clutch_retirement::ReplayV3Lifecycle::Terminal
+        || terminal_replay.terminal_state_receipt_id() != receipt.receipt_id()?
+        || terminal_replay.replay_id()? != terminal_replay_semantic_id
         || Id::from_bytes(position.owner.bytes()) != state.facility_id
         || Id::from_bytes(position.controller.bytes()) != receipt.dealer_state_account_id
         || Id::from_bytes(position.replay_account.bytes()) != state.facility_replay_account_id
@@ -341,9 +349,9 @@ pub fn close_dealer_position_replay_v2(
             .map_err(|_| Error::MismatchedBinding)?
             .bytes(),
     );
-    next.terminal_replay_semantic_id = replay_close.terminal_replay_semantic_id();
-    next.terminal_replay_intent_id = replay_close.last_transition_intent_id();
-    next.terminal_state_receipt_id = replay_close.terminal_state_receipt_id();
+    next.terminal_replay_semantic_id = terminal_replay_semantic_id;
+    next.terminal_replay_intent_id = terminal_replay.last_transition_intent_id();
+    next.terminal_state_receipt_id = terminal_replay.terminal_state_receipt_id();
     next.child_sequence = next
         .child_sequence
         .checked_add(2)
