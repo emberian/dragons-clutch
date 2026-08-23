@@ -44,6 +44,8 @@ pub mod cash_exit;
 pub mod construction;
 /// Non-production immutable Dealer-policy catalog transport.
 pub mod dealer_policy;
+/// Capability-disabled Dealer facility account and instruction contracts.
+pub mod dealer_runtime;
 pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod external_exit;

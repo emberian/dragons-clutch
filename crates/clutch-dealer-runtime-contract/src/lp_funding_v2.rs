@@ -20,7 +20,7 @@ use crate::{
     DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransitionIntentV1,
     DealerTransitionLivenessModeV1, DeletableRentOwnerV1, Error, FixedCodec, Id,
     LpEntryV2, LpPageV2, PreparedDealerPositionPairTransferV1,
-    PreparedDealerReplayTransitionV1, Result, DEALER_LP_PAGE_SET_INIT_DOMAIN_V1,
+    PreparedDealerReplayTransitionV1, Result, DEALER_LP_PAGE_SET_INIT_DOMAIN_V2,
     LP_ENTRIES_PER_PAGE, NO_NEXT_LP_PAGE,
 };
 
@@ -548,7 +548,7 @@ fn initial_page_prefix(
     state_account_id: Id,
 ) -> Result<Id> {
     let mut hasher = Sha256::new();
-    hasher.update(DEALER_LP_PAGE_SET_INIT_DOMAIN_V1);
+    hasher.update(DEALER_LP_PAGE_SET_INIT_DOMAIN_V2);
     for identity in [
         policy.policy_id()?,
         state.facility_id,

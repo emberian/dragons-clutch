@@ -130,6 +130,9 @@ pub const DEALER_ACTION_LIVENESS_RECEIPT_CONTENT_DOMAIN_V1: &[u8] =
 /// Initial domain for the canonical sealed LP page-set fold.
 pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/lp-page-set/init/v1\0";
+/// Initial transcript domain for the PositionV3-bound V2 LP prefix chain.
+pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/init/v2\0";
 /// Per-page domain for the canonical sealed LP page-set fold.
 pub const DEALER_LP_PAGE_SET_STEP_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/lp-page-set/step/v1\0";
