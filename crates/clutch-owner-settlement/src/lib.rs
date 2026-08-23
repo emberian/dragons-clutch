@@ -11,7 +11,19 @@
 //! expected order and slice has completed. This makes the runtime boundary
 //! identical to the relation's owner-level `TerminalOwnerFloor` arithmetic.
 
+mod adapter;
 mod builder;
+
+pub use adapter::{
+    authenticate_owner_settlement_account_v1, prepare_account_receipt_end_v1,
+    prepare_create_owner_settlement_account_v1, prepare_realize_owner_cash_v1, AdapterDerivedPdaV1,
+    AuthenticatedOwnerFeeDebitV1, AuthenticatedOwnerSettlementAccountV1,
+    AuthenticatedPositionCashV1, AuthenticatedSettlementReceiptEndV1, OwnerCashRealizationPlanV1,
+    OwnerSettlementAccountViewV1, OwnerSettlementCreateFundingV1, OwnerSettlementCreatePlanV1,
+    OwnerSettlementReceiptAccountingPlanV1, SelectedOwnerRowAuthorityV1,
+    SettlementCashPotExpectationV1, SettlementCashPotV1, OWNER_SETTLEMENT_PDA_DOMAIN_V1,
+    SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+};
 
 pub use builder::{
     build_owner_settlement_book_v1, CandidateSettlementTotalsV1, OwnerSettlementBookV1,
@@ -55,6 +67,12 @@ pub enum Error {
     InsufficientCash,
     /// A finalized or closed owner row was asked to mutate.
     Terminal,
+    /// An account owner, address, bump, writable bit, or rent fact is invalid.
+    InvalidAccount,
+    /// The selected-candidate, receipt, fee, or terminal authority is absent.
+    AuthorityUnavailable,
+    /// A buyer-first settlement pot cannot yet fund this owner's seller credit.
+    SettlementLiquidityUnavailable,
     /// Prospective state does not close the exact conservation equations.
     InvariantViolation,
 }
@@ -124,7 +142,13 @@ impl OwnerSettlementExpectationV1 {
 
     /// Validate identity, disjoint masks, funding shape, and nonempty work.
     pub fn validate(&self) -> Result<()> {
-        let keys = [self.market, self.epoch, self.candidate, self.owner];
+        let keys = [
+            self.market,
+            self.epoch,
+            self.candidate,
+            self.owner,
+            self.owner_order_set_digest,
+        ];
         let mut left = 0_usize;
         while left < keys.len() {
             if keys[left] == [0; 32] {
@@ -139,8 +163,7 @@ impl OwnerSettlementExpectationV1 {
             }
             left += 1;
         }
-        if self.owner_order_set_digest == [0; 32]
-            || self.price_scale == 0
+        if self.price_scale == 0
             || self.expected_slice_count == 0
             || (self.expected_buy_order_mask & self.expected_sell_order_mask) != 0
             || (self.expected_buy_order_mask == 0 && self.expected_sell_order_mask == 0)
@@ -344,7 +367,11 @@ impl OwnerSettlementAccumulatorV1 {
     }
 
     /// Mark a finalized, fully consumed owner row as a permanent tombstone.
-    pub fn retire(&mut self) -> Result<()> {
+    ///
+    /// This is deliberately crate-private. The General V2 FinalPot terminal
+    /// authority does not exist yet, so no public adapter may retire the row
+    /// and discard its once-only evidence independently of whole-book closure.
+    pub(crate) fn mark_retired(&mut self) -> Result<()> {
         self.validate()?;
         if self.state != 1 {
             return Err(Error::Incomplete);
@@ -604,9 +631,7 @@ fn put<const N: usize>(output: &mut [u8; N], cursor: &mut usize, bytes: &[u8]) -
 }
 
 fn take<'a>(input: &'a [u8], cursor: &mut usize, width: usize) -> Result<&'a [u8]> {
-    let end = cursor
-        .checked_add(width)
-        .ok_or(Error::ArithmeticOverflow)?;
+    let end = cursor.checked_add(width).ok_or(Error::ArithmeticOverflow)?;
     let value = input.get(*cursor..end).ok_or(Error::InvalidExpectation)?;
     *cursor = end;
     Ok(value)
