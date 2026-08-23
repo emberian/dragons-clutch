@@ -817,7 +817,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
                 &signer,
             )?
-            .backing_after
+            .backing_after()
         }
     };
 

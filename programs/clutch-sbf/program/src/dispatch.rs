@@ -55,16 +55,11 @@ use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
-    artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
-    orders_batch, source_ingest_v2, split,
+    artifact, collateral_cash_v3, complete_set_v3, external_exit, genesis, market_init,
+    merge_materialize, observe_resolve, orders_batch, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
-#[cfg(any(
-    feature = "profile-non-production-dealer-policy-catalog-lab",
-    feature = "profile-non-production-general-v2-empty-book-identity-lab",
-    feature = "non-production-product-series-lab"
-))]
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 #[cfg(any(
@@ -72,13 +67,7 @@ use clutch_solana_layout::Intent;
     feature = "profile-direct-v3-source-v2-point"
 ))]
 use clutch_solana_reference::DirectV3Request;
-#[cfg(any(
-    feature = "profile-non-production-dealer-policy-catalog-lab",
-    feature = "profile-non-production-general-v2-empty-book-identity-lab",
-    feature = "non-production-product-series-lab"
-))]
-use clutch_solana_reference::ExtensionRequest;
-use clutch_solana_reference::{Action, Request};
+use clutch_solana_reference::{Action, ExtensionRequest, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -358,8 +347,15 @@ pub fn process(
     if route_hint(instruction_data) != Route::DealerPolicy {
         return Err(ClutchError::UnsupportedInstruction.into());
     }
-    if let Some(action) = disabled_source_v3_action(instruction_data) {
-        return crate::source_plane_v3::process_reserved_disabled(action);
+    if let Some(action) = source_v3_action(instruction_data) {
+        if !capabilities::extension_intent_action_enabled(
+            clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+            clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+            action.tag(),
+        ) {
+            return crate::source_plane_v3::process_reserved_disabled(action);
+        }
+        return process_source_v3(program_id, accounts, instruction_data);
     }
     if let Some(action) = disabled_dealer_facility_action(instruction_data) {
         return crate::instructions::dealer_runtime::process_reserved_disabled(action);
@@ -458,21 +454,37 @@ fn process_recurring_series(
     }
 }
 
-/// Identify one exact allocated-but-disabled SourcePlane V3 action without
-/// decoding or inspecting its payload accounts.
-fn disabled_source_v3_action(
+/// Identify one exact canonical SourceSeries request without inspecting any
+/// account. Capability refusal still happens before the account-role decoder.
+fn source_v3_action(
     instruction_data: &[u8],
 ) -> Option<clutch_solana_layout::registry::SourceSeriesAction> {
-    if !disabled_canonical_tag(instruction_data) {
-        return None;
-    }
-    match clutch_solana_layout::registry::decode_extension_action(
-        instruction_data[13],
-        instruction_data[14],
-        instruction_data[15],
-    ) {
-        Ok(clutch_solana_layout::registry::ExtensionAction::SourceV3(action)) => Some(action),
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    match request.envelope.action {
+        ExtensionAction::SourceV3(action) => Some(action),
         _ => None,
+    }
+}
+
+/// Decode the strict SourceSeries successor envelope after the exact central
+/// capability check and enter its frozen wire/account contract.
+#[inline(never)]
+fn process_source_v3(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::SourceV3(action) => crate::instructions::source_series::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        _ => unexpected_route(),
     }
 }
 
@@ -584,15 +596,14 @@ fn process_split(
             market,
             owner,
             quantity,
-        }) => split::process(
+        }) => complete_set_v3::process_complete_set_v3(
             program_id,
             accounts,
-            &split::SplitRequest {
-                sequence: request.sequence,
-                market,
-                owner,
-                quantity,
-            },
+            request.sequence,
+            market,
+            owner,
+            quantity,
+            complete_set_v3::CompleteSetActionV3::Split,
         ),
         _ => unexpected_route(),
     }
@@ -606,8 +617,20 @@ fn process_merge_materialize(
 ) -> Outcome<()> {
     let request = Request::decode(instruction_data)?;
     match request.action {
-        Action::Layout(Intent::Merge { .. })
-        | Action::Layout(Intent::Materialize { .. })
+        Action::Layout(Intent::Merge {
+            market,
+            owner,
+            quantity,
+        }) => complete_set_v3::process_complete_set_v3(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            owner,
+            quantity,
+            complete_set_v3::CompleteSetActionV3::Merge,
+        ),
+        Action::Layout(Intent::Materialize { .. })
         | Action::Layout(Intent::Dematerialize { .. }) => {
             merge_materialize::process(program_id, accounts, &request)
         }
@@ -673,7 +696,7 @@ fn process_cash_exit(
     let request = Request::decode(instruction_data)?;
     match request.action {
         Action::Layout(Intent::WithdrawCash { .. }) => {
-            cash_exit::process(program_id, accounts, &request)
+            collateral_cash_v3::process_withdraw_cash_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
@@ -759,9 +782,11 @@ fn process_genesis(
         | Action::Layout(Intent::InitPriceGrid { .. })
         | Action::Layout(Intent::InitTerms { .. })
         | Action::Layout(Intent::InitOrderPage { .. })
-        | Action::Layout(Intent::Endow { .. })
         | Action::Layout(Intent::CloseRevenuePolicyRecord { .. }) => {
             genesis::process(program_id, accounts, &request)
+        }
+        Action::Layout(Intent::Endow { .. }) => {
+            collateral_cash_v3::process_endow_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }

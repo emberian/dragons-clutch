@@ -10,3 +10,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
+# The General SBF product reaches the resumable checkpoint codec through many
+# handlers.  This internal code-generation selector lets that product share
+# primitive codec bodies without changing the host/default or Direct builds.
+profile-general-source-v2-point = []

@@ -26,6 +26,8 @@ const SEAL_ACCOUNT_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-se
 const FOLD_DOMAIN: &[u8] = b"dragons-clutch/window-page-fold-batch/v1";
 const WINDOW_EVIDENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-evidence/v1";
 const EVALUATION_AUTHORITY_DOMAIN: &[u8] = b"dragons-clutch/evaluation-authority/v1";
+const EVALUATION_RELEASE_DOMAIN: &[u8] =
+    b"dragons-clutch/source-evaluation-release-binding/v1";
 const EVALUATION_DOMAIN: &[u8] = b"dragons-clutch/authenticated-evaluation/v1";
 const RESULT_ABSENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-statistic-result-absence/v1";
 const RESULT_ACCOUNT_AUTH_DOMAIN: &[u8] =
@@ -439,6 +441,23 @@ pub struct EvaluationReleaseBindingV1 {
     pub summary_program_id: ContentId,
 }
 
+impl EvaluationReleaseBindingV1 {
+    /// Validate the complete reviewed evaluator release selection.
+    pub fn validate(&self) -> Result<()> {
+        self.deployment.validate()?;
+        live_id(self.summary_program_id)
+    }
+
+    /// Content identity selected by the immutable Source release.
+    pub fn id(&self) -> Result<ContentId> {
+        self.validate()?;
+        let mut bytes = [0; 64];
+        bytes[..32].copy_from_slice(&self.deployment.id()?.bytes());
+        bytes[32..].copy_from_slice(&self.summary_program_id.bytes());
+        Ok(domain_id(EVALUATION_RELEASE_DOMAIN, &bytes))
+    }
+}
+
 /// Runtime-authenticated evaluator authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EvaluationAuthorityV1 {
@@ -472,11 +491,15 @@ impl EvaluationAuthorityV1 {
 
 /// Authenticate evaluator executable/ProgramData bytes and SummaryProgram identity.
 pub fn authenticate_evaluation_authority(
+    route: AuthenticatedSourceRouteV1,
     binding: EvaluationReleaseBindingV1,
     summary_program: SummaryProgramV3,
     program: RuntimeAccountViewV1<'_>,
     programdata: RuntimeAccountViewV1<'_>,
 ) -> Result<EvaluationAuthorityV1> {
+    if binding.id()? != route.evaluation_release_id() {
+        return Err(Error::MismatchedBinding);
+    }
     summary_program.validate()?;
     if summary_program.id()? != binding.summary_program_id {
         return Err(Error::MismatchedBinding);

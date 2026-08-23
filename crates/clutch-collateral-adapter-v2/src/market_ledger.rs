@@ -16,7 +16,8 @@ use clutch_retirement::{
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    digest, AcceptedPositionCollateralTransferV3, CustodyTransferKindV2, Error, Id, Result,
+    digest, AcceptedClaimRedemptionCollateralV2, AcceptedPositionCollateralTransferV3,
+    CustodyTransferKindV2, Error, Id, Result,
 };
 
 /// Reused historical Hoard discriminator under the full-width V2 layout.
@@ -54,6 +55,9 @@ pub const FRACTIONAL_CLAIM_REDEMPTION_DOMAIN_V3: &[u8] =
 /// Explicit absent-0xa5 founding join domain.
 pub const FRACTIONAL_CLAIM_LEDGER_FOUNDING_DOMAIN_V3: &[u8] =
     b"dragons-clutch/claim-ledger/fractional-founding/v3\0";
+/// Exhausted ClaimLedger/0xa5 retirement transition domain.
+pub const FRACTIONAL_CLAIM_LEDGER_RETIREMENT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/claim-ledger/fractional-retirement/v3\0";
 
 const HEADER_BYTES: usize = 16;
 const HOARD_ID_COUNT: usize = 7;
@@ -645,6 +649,120 @@ pub fn prepare_fractional_claim_ledger_founding_v3<B: PositionV3Sha256Backend>(
     })
 }
 
+/// Exact exhausted ClaimLedger successor paired with the final live 0xa5
+/// retirement successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalClaimLedgerRetirementPlanV3 {
+    claim_ledger_before_id: Id,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_retirement_id: Id,
+    claim_ledger_after: ClaimLedgerV3,
+    claim_ledger_after_id: Id,
+    transition_id: Id,
+    consumed_sequence: u64,
+}
+
+impl FractionalClaimLedgerRetirementPlanV3 {
+    /// Resolved ClaimLedger semantic ID before terminalization.
+    pub const fn claim_ledger_before_id(self) -> Id {
+        self.claim_ledger_before_id
+    }
+
+    /// Final live 0xa5 semantic ID before its retirement successor.
+    pub const fn fractional_ledger_before_id(self) -> Id {
+        self.fractional_ledger_before_id
+    }
+
+    /// Exact 0xa5 retirement successor semantic ID.
+    pub const fn fractional_ledger_retirement_id(self) -> Id {
+        self.fractional_ledger_retirement_id
+    }
+
+    /// Complete ClaimLedger successor in Retiring lifecycle.
+    pub const fn claim_ledger_after(self) -> ClaimLedgerV3 {
+        self.claim_ledger_after
+    }
+
+    /// Retiring ClaimLedger semantic ID.
+    pub const fn claim_ledger_after_id(self) -> Id {
+        self.claim_ledger_after_id
+    }
+
+    /// Shared terminal transition identity retained as the last latch.
+    pub const fn transition_id(self) -> Id {
+        self.transition_id
+    }
+
+    /// Exact consumed fractional sequence.
+    pub const fn consumed_sequence(self) -> u64 {
+        self.consumed_sequence
+    }
+}
+
+/// Move an exhausted resolved ClaimLedger to Retiring while committing the
+/// exact final 0xa5 successor. K and live-credit count remain authenticated by
+/// the Fractional owner; the SBF composer must prove both are zero before it
+/// may consume this pure plan and delete 0xa5.
+pub fn prepare_fractional_claim_ledger_retirement_v3<B: PositionV3Sha256Backend>(
+    claim_ledger: ClaimLedgerV3,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_retirement_id: Id,
+    consumed_sequence: u64,
+    backend: &B,
+) -> Result<FractionalClaimLedgerRetirementPlanV3> {
+    claim_ledger.validate()?;
+    fractional_ledger_before_id.require_live()?;
+    fractional_ledger_retirement_id.require_live()?;
+    if claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || claim_ledger.next_fractional_sequence != consumed_sequence
+        || fractional_ledger_before_id == fractional_ledger_retirement_id
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let mut index = 0usize;
+    while index < usize::from(claim_ledger.outcome_count) {
+        if claim_ledger.aggregate_internal_supply[index] != 0
+            || claim_ledger.aggregate_materialized_supply[index] != 0
+        {
+            return Err(Error::AggregateLiabilityInsufficient);
+        }
+        index += 1;
+    }
+    let claim_ledger_before_id = claim_ledger.semantic_id(backend)?;
+    let next_fractional_sequence = consumed_sequence.checked_add(1).ok_or(Error::Arithmetic)?;
+    let transition_id = digest(
+        FRACTIONAL_CLAIM_LEDGER_RETIREMENT_DOMAIN_V3,
+        &[
+            &claim_ledger.market_instance_id.bytes(),
+            &claim_ledger.fractional_policy_id.bytes(),
+            &claim_ledger.fractional_ledger_account.bytes(),
+            &fractional_ledger_before_id.bytes(),
+            &fractional_ledger_retirement_id.bytes(),
+            &claim_ledger_before_id.bytes(),
+            &consumed_sequence.to_le_bytes(),
+            &[MarketLiabilityLifecycleV1::Retiring as u8],
+        ],
+    );
+    transition_id.require_live()?;
+    let claim_ledger_after = ClaimLedgerV3 {
+        lifecycle: MarketLiabilityLifecycleV1::Retiring,
+        next_fractional_sequence,
+        last_fractional_transition_id: transition_id,
+        ..claim_ledger
+    };
+    claim_ledger_after.validate()?;
+    let claim_ledger_after_id = claim_ledger_after.semantic_id(backend)?;
+    Ok(FractionalClaimLedgerRetirementPlanV3 {
+        claim_ledger_before_id,
+        fractional_ledger_before_id,
+        fractional_ledger_retirement_id,
+        claim_ledger_after,
+        claim_ledger_after_id,
+        transition_id,
+        consumed_sequence,
+    })
+}
+
 /// Atomic Hoard/ClaimLedger half of one fractional redemption or credit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalClaimRedemptionPlanV3 {
@@ -653,6 +771,7 @@ pub struct FractionalClaimRedemptionPlanV3 {
     hoard_after: HoardV2,
     hoard_after_id: Id,
     payout_atoms: u64,
+    disposition: FractionalPayoutDispositionV3,
     receipt_id: Id,
 }
 
@@ -682,10 +801,28 @@ impl FractionalClaimRedemptionPlanV3 {
         self.payout_atoms
     }
 
+    /// Whether paid atoms become Position cash or leave token custody.
+    pub const fn disposition(self) -> FractionalPayoutDispositionV3 {
+        self.disposition
+    }
+
     /// Canonical atomic redemption receipt.
     pub const fn receipt_id(self) -> Id {
         self.receipt_id
     }
+}
+
+/// Custody classification of whole atoms paid by fractional redemption.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalPayoutDispositionV3 {
+    /// Locked principal becomes canonical PositionV3 cash and stays in Hoard.
+    InternalPositionCash,
+    /// Locked principal leaves Hoard through an accepted Realm-selected CPI.
+    /// `None` is canonical only for a zero payout, which emits no CPI.
+    ExternalCustodyTransfer {
+        /// Exact accepted claim-redemption custody movement when nonzero.
+        accepted: Option<AcceptedClaimRedemptionCollateralV2>,
+    },
 }
 
 /// Burn or preserve native supply, advance the 0xa5 latch, and release exactly
@@ -699,6 +836,7 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
     consumed_sequence: u64,
     mutation: FractionalClaimSupplyMutationV3,
     payout_atoms: u64,
+    disposition: FractionalPayoutDispositionV3,
     backend: &B,
 ) -> Result<FractionalClaimRedemptionPlanV3> {
     hoard.validate()?;
@@ -720,11 +858,52 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
         backend,
     )?;
     let hoard_before_id = hoard.semantic_id(backend)?;
+    let locked_claim_principal_atoms = hoard
+        .locked_claim_principal_atoms
+        .checked_sub(payout_atoms)
+        .ok_or(Error::AggregateLiabilityInsufficient)?;
+    let (cash_liability_atoms, custody_receipt_id) = match disposition {
+        FractionalPayoutDispositionV3::InternalPositionCash => (
+            hoard
+                .cash_liability_atoms
+                .checked_add(payout_atoms)
+                .ok_or(Error::Arithmetic)?,
+            Id::ZERO,
+        ),
+        FractionalPayoutDispositionV3::ExternalCustodyTransfer { accepted } => {
+            match (payout_atoms, accepted) {
+                (0, None) => (hoard.cash_liability_atoms, Id::ZERO),
+                (0, Some(_)) | (_, None) => return Err(Error::MismatchedBinding),
+                (amount, Some(accepted)) => {
+                    let custody = accepted.custody();
+                    let request = accepted.request();
+                    let backing_after = accepted.backing_after();
+                    let visible_hoard_after = custody
+                        .hoard_atoms_after
+                        .ok_or(Error::PostAdmissionFailed)?;
+                    let required_custody_atoms = hoard
+                        .cash_liability_atoms
+                        .checked_add(locked_claim_principal_atoms)
+                        .ok_or(Error::Arithmetic)?;
+                    if request.claim_redemption_id != fractional.transition_id
+                        || request.payout_atoms != amount
+                        || custody.kind != CustodyTransferKindV2::ClaimRedemption
+                        || custody.source_semantic_owner != hoard.market_instance_id
+                        || custody.amount_atoms != amount
+                        || backing_after.locked_atoms != locked_claim_principal_atoms
+                        || backing_after.cap_atoms != hoard.collateral_cap_atoms
+                        || visible_hoard_after < required_custody_atoms
+                    {
+                        return Err(Error::PostAdmissionFailed);
+                    }
+                    (hoard.cash_liability_atoms, accepted.receipt_id())
+                }
+            }
+        }
+    };
     let hoard_after = HoardV2 {
-        locked_claim_principal_atoms: hoard
-            .locked_claim_principal_atoms
-            .checked_sub(payout_atoms)
-            .ok_or(Error::AggregateLiabilityInsufficient)?,
+        locked_claim_principal_atoms,
+        cash_liability_atoms,
         ..hoard
     };
     hoard_after.validate()?;
@@ -735,6 +914,10 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
     let receipt_id = digest(
         FRACTIONAL_CLAIM_REDEMPTION_DOMAIN_V3,
         &[
+            &[match disposition {
+                FractionalPayoutDispositionV3::InternalPositionCash => 1,
+                FractionalPayoutDispositionV3::ExternalCustodyTransfer { .. } => 2,
+            }],
             &hoard.market_instance_id.bytes(),
             &fractional.transition_id.bytes(),
             &fractional.claim_ledger_before_id.bytes(),
@@ -742,6 +925,7 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
             &hoard_before_id.bytes(),
             &hoard_after_id.bytes(),
             &payout_atoms.to_le_bytes(),
+            &custody_receipt_id.bytes(),
         ],
     );
     receipt_id.require_live()?;
@@ -751,6 +935,7 @@ pub fn prepare_fractional_claim_redemption_v3<B: PositionV3Sha256Backend>(
         hoard_after,
         hoard_after_id,
         payout_atoms,
+        disposition,
         receipt_id,
     })
 }

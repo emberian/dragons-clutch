@@ -1,17 +1,18 @@
-//! Reusable host-only construction boundary for the local real-Pyth lab.
+//! Reusable host-only construction boundary for real SourceSeries workflows.
 //!
-//! The campaign binary remains the evidence runner. This library exposes the
-//! same real receiver/source-aware plane to a daemon-owned local session so a
-//! later interactive loop does not grow a second serializer or fall back to
-//! the mock-source Friday fixture.
+//! The default library exposes only fail-closed operator/index construction.
+//! Synthetic observations, captured Pyth executables, fixture signing, and the
+//! local campaign binary require the explicit `campaign` laboratory feature.
 
 #[cfg(feature = "operator")]
 pub mod account_index;
+#[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]
 pub mod index_service;
 #[cfg(feature = "operator")]
 pub mod operatord;
+#[cfg(feature = "campaign")]
 pub mod plane;
 #[cfg(feature = "campaign")]
 pub mod provider;
@@ -19,6 +20,7 @@ pub mod provider;
 pub mod rpc_index;
 #[cfg(feature = "builder")]
 pub mod session;
+#[cfg(feature = "campaign")]
 pub mod session_builder;
 pub mod transaction_builder;
 pub mod workflow_graph;
