@@ -126,6 +126,8 @@ pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
 /// Per-window authenticated source-archive account seed prefix.
 pub const SEED_SOURCE_ARCHIVE: &[u8] = crate::source_archive::SOURCE_ARCHIVE_SEED_V1;
+/// Product-owned immutable Source occurrence seed prefix for SourceSeries 77/v2.
+pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Per-Realm revenue-policy record seed prefix; exactly 32 bytes (the seed
 /// cap), the string `docs/design/REVENUE_POLICY_V1.md` §3 names.
 pub const SEED_REVENUE_POLICY: &[u8] = b"dragons-clutch:revenue-policy:v1";
@@ -213,6 +215,14 @@ pub fn source_spec_pda(program_id: &Pubkey, feed: &[u8; 32]) -> (Pubkey, u8) {
 /// Canonical sealed source-archive address and bump for one exact window.
 pub fn source_archive_pda(program_id: &Pubkey, feed: &[u8; 32], window: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_SOURCE_ARCHIVE, feed, window])
+}
+
+/// Canonical Product-owned Source occurrence address by exact 184-byte body identity.
+pub fn source_occurrence_pda(program_id: &Pubkey, occurrence_record_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SOURCE_OCCURRENCE_V1, occurrence_record_id],
+    )
 }
 
 /// Canonical single-active-work address for one Market.

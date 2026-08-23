@@ -60,11 +60,11 @@ pub use window::{
     authenticate_evaluation_authority, authenticate_raw_page_account,
     authenticate_statistic_result, authenticate_statistic_result_absence,
     authenticate_window_seal_account, authenticate_window_work_account, fold_authenticated_pages,
-    join_source_occurrence, seal_authenticated_window, AuthenticatedEvaluationV1,
-    AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1, AuthenticatedWindowEvidenceV1,
-    AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1, EvaluationAuthorityV1,
-    EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
-    OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
+    join_source_occurrence, seal_authenticated_window, source_occurrence_record_id,
+    AuthenticatedEvaluationV1, AuthenticatedRawPageV1, AuthenticatedStatisticResultAbsenceV1,
+    AuthenticatedWindowEvidenceV1, AuthenticatedWindowSealAccountV1, AuthenticatedWindowWorkV1,
+    EvaluationAuthorityV1, EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1,
+    FoldPagesOutputV1, OccurrenceDispositionV1, OccurrenceSourceReceiptV1, SourceFailureKindV1,
     SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD, SOURCE_OCCURRENCE_RECORD_BYTES,
 };
 
