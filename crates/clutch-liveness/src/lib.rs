@@ -1136,8 +1136,8 @@ pub fn admit_market<const N: usize>(
 pub struct IntentFeeCarry {
     owner: Id,
     intent_id: Id,
-    denominator: u64,
-    remainder: u64,
+    denominator: u128,
+    remainder: u128,
     paid_atoms: u64,
     closed: bool,
 }
@@ -1146,12 +1146,18 @@ pub struct IntentFeeCarry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FeeCharge {
     pub atoms: u64,
-    pub remainder: u64,
+    pub remainder: u128,
     pub terminal: bool,
 }
 
 impl IntentFeeCarry {
-    pub fn admit(owner: Id, intent_id: Id, denominator: u64) -> Result<Self, Error> {
+    /// Open one carry under the exact denominator frozen by the fee policy.
+    ///
+    /// The width is intentionally `u128`: the selected composite base uses
+    /// `10_000 * price_scale^2 * 10_000`, which exceeds `u64` for admitted
+    /// price scales above 429,496.  Narrowing that denominator would make the
+    /// kernel disagree with the verifier before an account codec even exists.
+    pub fn admit(owner: Id, intent_id: Id, denominator: u128) -> Result<Self, Error> {
         live_id(owner)?;
         live_id(intent_id)?;
         if denominator == 0 {
@@ -1175,11 +1181,11 @@ impl IntentFeeCarry {
         self.intent_id
     }
 
-    pub const fn denominator(self) -> u64 {
+    pub const fn denominator(self) -> u128 {
         self.denominator
     }
 
-    pub const fn remainder(self) -> u64 {
+    pub const fn remainder(self) -> u128 {
         self.remainder
     }
 
@@ -1212,11 +1218,15 @@ impl IntentFeeCarry {
         mut self,
         owner: Id,
         intent_id: Id,
-        exact_numerator: u64,
+        exact_numerator: u128,
     ) -> Result<(Self, FeeCharge), Error> {
         self.authenticate(owner, intent_id)?;
-        let accumulated = add(self.remainder, exact_numerator)?;
-        let atoms = accumulated / self.denominator;
+        let accumulated = self
+            .remainder
+            .checked_add(exact_numerator)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let atoms =
+            u64::try_from(accumulated / self.denominator).map_err(|_| Error::ArithmeticOverflow)?;
         self.remainder = accumulated % self.denominator;
         self.paid_atoms = add(self.paid_atoms, atoms)?;
         Ok((
@@ -1279,7 +1289,7 @@ impl EnvelopedIntentFeeCarry {
     pub fn admit(
         owner: Id,
         intent_id: Id,
-        denominator: u64,
+        denominator: u128,
         worst_case_fee_atoms: u64,
         max_fee_atoms: u64,
     ) -> Result<Self, Error> {
@@ -1317,9 +1327,11 @@ impl EnvelopedIntentFeeCarry {
         self,
         owner: Id,
         intent_id: Id,
-        exact_numerator: u64,
+        exact_numerator: u128,
     ) -> Result<(Self, FeeCharge), Error> {
-        let (carry, charge) = self.carry.charge_fragment(owner, intent_id, exact_numerator)?;
+        let (carry, charge) = self
+            .carry
+            .charge_fragment(owner, intent_id, exact_numerator)?;
         let next = Self {
             carry,
             max_fee_atoms: self.max_fee_atoms,
@@ -1766,12 +1778,12 @@ mod tests {
 
     #[test]
     fn persistent_fee_carry_is_owned_and_fragmentation_invariant() {
-        for denominator in 1..=31u64 {
-            for total in 0..=127u64 {
+        for denominator in 1..=31u128 {
+            for total in 0..=127u128 {
                 let whole = IntentFeeCarry::admit(id(1), id(2), denominator).unwrap();
                 let (whole, _) = whole.charge_fragment(id(1), id(2), total).unwrap();
                 let (whole, terminal) = whole.close(id(1), id(2)).unwrap();
-                assert_eq!(whole.paid_atoms(), total.div_ceil(denominator));
+                assert_eq!(u128::from(whole.paid_atoms()), total.div_ceil(denominator));
                 assert!(terminal.terminal);
                 for first in 0..=total {
                     let carry = IntentFeeCarry::admit(id(1), id(2), denominator).unwrap();
@@ -1828,7 +1840,7 @@ mod tests {
     /// zero envelope's meaning ("no fee, ever") is bit-exact.
     #[test]
     fn zero_rate_carry_is_exactly_zero_through_every_path() {
-        for denominator in 1..=17u64 {
+        for denominator in 1..=17u128 {
             for fragments in 1..=5usize {
                 let mut carry =
                     EnvelopedIntentFeeCarry::admit(id(1), id(2), denominator, 0, 0).unwrap();
@@ -1875,7 +1887,7 @@ mod tests {
         // remainder they would leave commits a ceil atom the envelope
         // cannot pay.
         let zero = EnvelopedIntentFeeCarry::admit(id(1), id(2), 10, 0, 0).unwrap();
-        for numerator in [1u64, 5, 9, 10, 11, 1_000] {
+        for numerator in [1u128, 5, 9, 10, 11, 1_000] {
             assert_eq!(
                 zero.charge_fragment(id(1), id(2), numerator),
                 Err(Error::FeeEnvelopeExceeded),
@@ -1904,6 +1916,115 @@ mod tests {
         assert_eq!(terminal.atoms, 1);
         assert_eq!(closed.carry().paid_atoms(), 1);
         assert_eq!(closed.max_fee_atoms(), 1);
+    }
+
+    /// The selected composite relation and this persistent carry must operate
+    /// on one identical rational.  The high-scale row deliberately has a
+    /// denominator above `u64::MAX`; it is the regression that the former
+    /// narrow carry could not represent even though the relation admitted it.
+    #[test]
+    fn composite_quote_and_persistent_carry_agree_at_full_width() {
+        use clutch_batch::relation_v1::{composite_fee_quote, MAX_OUTCOMES, TEST_COMPOSITE_LAB};
+
+        let clutch_batch::relation_v1::FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps,
+            floor_range_bps,
+        } = TEST_COMPOSITE_LAB
+        else {
+            unreachable!()
+        };
+
+        for scale in [10_000u64, 1_000_000, 1_000_000_000] {
+            let mut payoffs = [0u64; MAX_OUTCOMES];
+            payoffs[1] = 100;
+            let mut prices = [0u64; MAX_OUTCOMES];
+            prices[0] = scale / 2;
+            prices[1] = scale - prices[0];
+            let quote = composite_fee_quote(
+                &payoffs,
+                &prices,
+                2,
+                scale,
+                dispersion_bps,
+                floor_range_bps,
+                0,
+            )
+            .unwrap();
+            if scale == 1_000_000_000 {
+                assert!(quote.base_denominator > u128::from(u64::MAX));
+            }
+            let ceiling = u64::try_from(quote.terminal_ceil_atoms).unwrap();
+
+            let carry = EnvelopedIntentFeeCarry::admit(
+                id(1),
+                id(2),
+                quote.base_denominator,
+                ceiling,
+                ceiling,
+            )
+            .unwrap();
+            let (carry, fragment) = carry
+                .charge_fragment(id(1), id(2), quote.base_numerator)
+                .unwrap();
+            assert_eq!(u128::from(fragment.atoms), quote.floor_atoms);
+            assert_eq!(fragment.remainder, quote.carry);
+            assert_eq!(carry.carry().remainder(), quote.carry);
+            assert_eq!(carry.committed_atoms(), Ok(ceiling));
+            let (closed, terminal) = carry.close(id(1), id(2)).unwrap();
+            assert_eq!(
+                u128::from(closed.carry().paid_atoms()),
+                quote.terminal_ceil_atoms
+            );
+            assert_eq!(terminal.atoms, u64::from(quote.carry != 0));
+
+            // Three fragments of the same exact numerator produce the same
+            // paid total and terminal carry; no fragment gets its own round.
+            let first = quote.base_numerator / 3;
+            let second = quote.base_numerator / 3;
+            let third = quote.base_numerator - first - second;
+            let mut fragmented = EnvelopedIntentFeeCarry::admit(
+                id(1),
+                id(2),
+                quote.base_denominator,
+                ceiling,
+                ceiling,
+            )
+            .unwrap();
+            for numerator in [first, second, third] {
+                fragmented = fragmented
+                    .charge_fragment(id(1), id(2), numerator)
+                    .unwrap()
+                    .0;
+            }
+            let (fragmented, _) = fragmented.close(id(1), id(2)).unwrap();
+            assert_eq!(fragmented.carry().paid_atoms(), closed.carry().paid_atoms());
+        }
+    }
+
+    /// Hostile widths fail closed: adding a fragment cannot wrap the exact
+    /// numerator, a quotient that cannot become a collateral `u64` atom count
+    /// refuses, and the monotone paid counter cannot roll over.
+    #[test]
+    fn full_width_fee_carry_refuses_every_overflow_boundary() {
+        let carry = IntentFeeCarry::admit(id(1), id(2), u128::MAX).unwrap();
+        let (near, _) = carry.charge_fragment(id(1), id(2), u128::MAX - 1).unwrap();
+        assert_eq!(
+            near.charge_fragment(id(1), id(2), 2),
+            Err(Error::ArithmeticOverflow)
+        );
+
+        let unit = IntentFeeCarry::admit(id(1), id(2), 1).unwrap();
+        assert_eq!(
+            unit.charge_fragment(id(1), id(2), u128::from(u64::MAX) + 1),
+            Err(Error::ArithmeticOverflow)
+        );
+        let (full, _) = unit
+            .charge_fragment(id(1), id(2), u128::from(u64::MAX))
+            .unwrap();
+        assert_eq!(
+            full.charge_fragment(id(1), id(2), 1),
+            Err(Error::ArithmeticOverflow)
+        );
     }
 
     /// The B4b grief rider's arithmetic: close refuses while any served
