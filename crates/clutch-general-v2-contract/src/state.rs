@@ -4,9 +4,9 @@ use crate::{
     CodecError, FirstAdmittedTieV1, Reader, Writer, ADMISSION_NODE_ACCOUNT_TAG,
     ADMISSION_NODE_ACCOUNT_VERSION, CANDIDATE_FEED_ACCOUNT_TAG, CANDIDATE_FEED_ACCOUNT_VERSION,
     CANDIDATE_FEED_STAGE_ACCOUNT_TAG, CANDIDATE_FEED_STAGE_ACCOUNT_VERSION, CLEAR_WORK_ACCOUNT_TAG,
-    CLEAR_WORK_ACCOUNT_VERSION, ECONOMIC_DOMAIN_ACCOUNT_TAG, ECONOMIC_DOMAIN_ACCOUNT_VERSION,
-    EPOCH_BUDGET_ACCOUNT_TAG, EPOCH_BUDGET_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG,
-    GENERAL_EPOCH_ACCOUNT_VERSION, ID_BYTES, MARKET_BINDING_ACCOUNT_TAG,
+    CLEAR_WORK_ACCOUNT_VERSION, CLEAR_WORK_ACCOUNT_VERSION_V3, ECONOMIC_DOMAIN_ACCOUNT_TAG,
+    ECONOMIC_DOMAIN_ACCOUNT_VERSION, EPOCH_BUDGET_ACCOUNT_TAG, EPOCH_BUDGET_ACCOUNT_VERSION,
+    GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION, ID_BYTES, MARKET_BINDING_ACCOUNT_TAG,
     MARKET_BINDING_ACCOUNT_VERSION, MARKET_RUNTIME_ACCOUNT_TAG, MARKET_RUNTIME_ACCOUNT_VERSION,
     MAX_ORDERS, MAX_ORDERS_U8, MAX_OUTCOMES, MAX_OUTCOMES_U8, MAX_QUANTIZED_ATOMS,
     MAX_QUANTIZED_ATOMS_U8, MAX_SLICES, MAX_SLICES_U16, SCORE_V2_Q_ACTIVE_RANK_BYTES,
@@ -64,6 +64,8 @@ pub const ADMISSION_NODE_ACCOUNT_BYTES: usize = 743;
 pub const CANDIDATE_FEED_HEADER_BYTES: usize = 538;
 /// Exact ClearWork fixed header, including its SHA checkpoint.
 pub const CLEAR_WORK_HEADER_BYTES: usize = 672;
+/// Exact resumable RelationV2 ClearWork V3 fixed header.
+pub const CLEAR_WORK_V3_HEADER_BYTES: usize = 710;
 /// Exact epoch Budget account bytes.
 pub const EPOCH_BUDGET_ACCOUNT_BYTES: usize = 272;
 /// Exact immutable Market-binding account bytes.
@@ -3020,6 +3022,36 @@ impl Sha256CheckpointV1 {
         }
         Ok(())
     }
+
+    /// Project into the canonical RelationV2 stream checkpoint without
+    /// changing a byte of continuation state.
+    pub fn relation_v2(
+        self,
+    ) -> Result<clutch_batch::relation_v2::EconomicSha256CheckpointV2, CodecError> {
+        self.validate()?;
+        let value = clutch_batch::relation_v2::EconomicSha256CheckpointV2 {
+            state: self.state,
+            block: self.block,
+            block_len: self.block_len,
+            total_len: self.total_len,
+        };
+        value.validate().map_err(|_| CodecError::InvalidState)
+    }
+
+    /// Persist an exact checkpoint returned by the RelationV2 stream owner.
+    pub fn from_relation_v2(
+        value: clutch_batch::relation_v2::EconomicSha256CheckpointV2,
+    ) -> Result<Self, CodecError> {
+        value.validate().map_err(|_| CodecError::InvalidState)?;
+        let checkpoint = Self {
+            state: value.state,
+            block: value.block,
+            block_len: value.block_len,
+            total_len: value.total_len,
+        };
+        checkpoint.validate()?;
+        Ok(checkpoint)
+    }
 }
 
 /// Active-width RelationV2 and settlement verification checkpoint.
@@ -3269,6 +3301,454 @@ fn validate_clear_work_tail(input: &[u8], header: ClearWorkHeaderV2) -> Result<(
         return Err(CodecError::NonCanonicalPadding);
     }
     if header.phase == 1 {
+        let unprocessed_at = matrix_at
+            .checked_add(
+                usize::from(header.order_cursor)
+                    .checked_mul(usize::from(header.outcome_count))
+                    .and_then(|value| value.checked_mul(8))
+                    .ok_or(CodecError::ArithmeticOverflow)?,
+            )
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        if input[unprocessed_at..].iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+    }
+    Ok(())
+}
+
+/// Checked economic disposition of a resumable RelationV2 Work successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClearWorkVerificationStateV1 {
+    /// Page/order or settlement-slice verification remains incomplete.
+    Pending,
+    /// The complete owner-blind relation accepted the exact submitted candidate.
+    Valid,
+    /// An authenticated economic or settlement input proved the candidate invalid.
+    Refused,
+}
+
+impl ClearWorkVerificationStateV1 {
+    const fn to_byte(self) -> u8 {
+        match self {
+            Self::Pending => 0,
+            Self::Valid => 1,
+            Self::Refused => 2,
+        }
+    }
+
+    fn from_byte(value: u8) -> Result<Self, CodecError> {
+        match value {
+            0 => Ok(Self::Pending),
+            1 => Ok(Self::Valid),
+            2 => Ok(Self::Refused),
+            _ => Err(CodecError::InvalidState),
+        }
+    }
+}
+
+/// Resumable one-page/one-order RelationV2 and settlement checkpoint.
+///
+/// V3 deliberately does not reinterpret V2. It adds the exact frozen-page
+/// cursor, predecessor identity, and checked-refusal latch that a nonempty
+/// relation needs while retaining the same active-width flow/leg tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClearWorkV3AccountV1 {
+    /// Parent Epoch.
+    pub epoch: Id32,
+    /// Admission node.
+    pub node: Id32,
+    /// Actual General V2 MarketRuntime PDA.
+    pub market: Id32,
+    /// Frozen order set.
+    pub order_set: Id32,
+    /// Canonical feed account.
+    pub feed: Id32,
+    /// Commitment-opened bundle digest.
+    pub candidate_bundle_digest: Id32,
+    /// Typed final candidate ID.
+    pub settlement_candidate_id: Id32,
+    /// Base RelationV2 candidate ID.
+    pub base_relation_candidate_id: Id32,
+    /// Relation policy.
+    pub relation_policy_id: Id32,
+    /// Canonical EconomicDomainV2 digest.
+    pub economic_domain_digest: Id32,
+    /// Authenticated NativeClaimBasisV1 identity.
+    pub native_claim_basis_id: Id32,
+    /// Canonical price-semantics digest.
+    pub candidate_price_digest: Id32,
+    /// Price-measure policy.
+    pub price_measure_policy_v1_id: Id32,
+    /// Score policy.
+    pub score_policy_id: Id32,
+    /// Authenticated certificate body digest.
+    pub price_body_digest: Id32,
+    /// Last successfully folded live order, absent before the first.
+    pub previous_order_id: Id32,
+    /// Parent Epoch generation.
+    pub epoch_generation: u64,
+    /// Disjoint Work rent owner.
+    pub rent: DeletableRentOwnerV1,
+    /// Unpaid Work reward reserve.
+    pub reward_remaining: u64,
+    /// Already paid monotone progress rewards.
+    pub reward_earned: u64,
+    /// Declared settlement slices.
+    pub slice_count: u16,
+    /// Next settlement slice.
+    pub slice_cursor: u16,
+    /// Frozen page count, learned from authenticated page zero.
+    pub page_count: u16,
+    /// Next frozen page.
+    pub page_cursor: u16,
+    /// Active outcomes.
+    pub outcome_count: u8,
+    /// Active dense live orders.
+    pub order_count: u8,
+    /// Next dense live order.
+    pub order_cursor: u8,
+    /// Next populated slot within `page_cursor`.
+    pub slot_cursor: u8,
+    /// Idle/orders/slices/complete phase.
+    pub phase: u8,
+    /// Direct or CoveredDealer.
+    pub candidate_kind: SettlementCandidateKindV1,
+    /// Must equal V3.
+    pub price_witness_schema: u8,
+    /// Must equal quantized integer-grid semantics V1.
+    pub quantized_semantics_version: u8,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Checked relation disposition.
+    pub verification_state: ClearWorkVerificationStateV1,
+    /// Reserved zero flags.
+    pub flags: u8,
+    /// Canonical RelationV2 candidate-identity continuation after live orders.
+    pub sha256: Sha256CheckpointV1,
+}
+
+impl ClearWorkV3AccountV1 {
+    /// Validate exact dimensions, page/order cursors, verdict partition, and funding.
+    pub fn validate(self) -> Result<(), CodecError> {
+        for id in [
+            self.epoch,
+            self.node,
+            self.market,
+            self.order_set,
+            self.feed,
+            self.candidate_bundle_digest,
+            self.settlement_candidate_id,
+            self.base_relation_candidate_id,
+            self.relation_policy_id,
+            self.economic_domain_digest,
+            self.native_claim_basis_id,
+            self.candidate_price_digest,
+            self.price_measure_policy_v1_id,
+            self.score_policy_id,
+            self.price_body_digest,
+        ] {
+            live(id)?;
+        }
+        if self.epoch_generation == 0
+            || self
+                .reward_remaining
+                .checked_add(self.reward_earned)
+                .is_none()
+            || !(2..=MAX_OUTCOMES_U8).contains(&self.outcome_count)
+            || self.order_count > MAX_ORDERS_U8
+            || self.slice_count > MAX_SLICES_U16
+            || self.order_cursor > self.order_count
+            || self.slice_cursor > self.slice_count
+            || self.page_count > 4
+            || self.page_cursor > self.page_count
+            || self.phase > 3
+            || self.price_witness_schema != PRICE_MEASURE_WITNESS_SCHEMA_V3
+            || self.quantized_semantics_version != QUANTIZED_PRICE_MEASURE_SEMANTICS_V1
+            || self.flags != 0
+            || (self.order_cursor == 0) != self.previous_order_id.is_zero()
+        {
+            return Err(CodecError::InvalidState);
+        }
+        self.rent.validate()?;
+        if self.candidate_kind == SettlementCandidateKindV1::Direct
+            && self.settlement_candidate_id != self.base_relation_candidate_id
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        match self.verification_state {
+            ClearWorkVerificationStateV1::Pending => match self.phase {
+                0 => {
+                    if self.order_cursor != 0
+                        || self.slice_cursor != 0
+                        || self.page_count != 0
+                        || self.page_cursor != 0
+                        || self.slot_cursor != 0
+                        || self.sha256
+                            != (Sha256CheckpointV1 {
+                                state: SHA256_INITIAL_STATE_V1,
+                                block: [0; 64],
+                                block_len: 0,
+                                total_len: 0,
+                            })
+                    {
+                        return Err(CodecError::InvalidState);
+                    }
+                }
+                1 => {
+                    if self.page_count == 0 || self.page_cursor >= self.page_count {
+                        return Err(CodecError::InvalidState);
+                    }
+                }
+                _ => return Err(CodecError::InvalidState),
+            },
+            ClearWorkVerificationStateV1::Valid => {
+                if !matches!(self.phase, 2 | 3)
+                    || self.page_count == 0
+                    || self.page_cursor != self.page_count
+                    || self.slot_cursor != 0
+                    || self.order_cursor != self.order_count
+                    || (self.phase == 3 && self.slice_cursor != self.slice_count)
+                {
+                    return Err(CodecError::InvalidState);
+                }
+            }
+            ClearWorkVerificationStateV1::Refused => {
+                if self.phase != 3
+                    || (self.order_cursor < self.order_count && self.slice_cursor != 0)
+                {
+                    return Err(CodecError::InvalidState);
+                }
+            }
+        }
+        self.sha256.validate()
+    }
+
+    /// Encode the exact V3 header. The caller owns the active-width tail.
+    pub fn encode(self, out: &mut [u8]) -> Result<(), CodecError> {
+        self.validate()?;
+        let mut w = Writer::exact(out, CLEAR_WORK_V3_HEADER_BYTES)?;
+        header(
+            &mut w,
+            CLEAR_WORK_ACCOUNT_TAG,
+            CLEAR_WORK_ACCOUNT_VERSION_V3,
+        )?;
+        for id in [
+            self.epoch,
+            self.node,
+            self.market,
+            self.order_set,
+            self.feed,
+            self.candidate_bundle_digest,
+            self.settlement_candidate_id,
+            self.base_relation_candidate_id,
+            self.relation_policy_id,
+            self.economic_domain_digest,
+            self.native_claim_basis_id,
+            self.candidate_price_digest,
+            self.price_measure_policy_v1_id,
+            self.score_policy_id,
+            self.price_body_digest,
+            self.previous_order_id,
+        ] {
+            w.bytes(&id.bytes())?;
+        }
+        for value in [
+            self.epoch_generation,
+            self.reward_remaining,
+            self.reward_earned,
+        ] {
+            w.u64(value)?;
+        }
+        write_rent(&mut w, self.rent)?;
+        for value in [
+            self.slice_count,
+            self.slice_cursor,
+            self.page_count,
+            self.page_cursor,
+        ] {
+            w.u16(value)?;
+        }
+        for value in [
+            self.outcome_count,
+            self.order_count,
+            self.order_cursor,
+            self.slot_cursor,
+            self.phase,
+            self.candidate_kind.to_byte(),
+            self.price_witness_schema,
+            self.quantized_semantics_version,
+            self.stored_bump,
+            self.verification_state.to_byte(),
+            self.flags,
+        ] {
+            w.u8(value)?;
+        }
+        write_sha(&mut w, self.sha256)?;
+        w.finish()
+    }
+
+    /// Decode and validate one exact active-width V3 account.
+    pub fn decode_account(input: &[u8]) -> Result<Self, CodecError> {
+        if input.len() < CLEAR_WORK_V3_HEADER_BYTES {
+            return Err(CodecError::WrongLength);
+        }
+        let mut r = Reader::exact(
+            &input[..CLEAR_WORK_V3_HEADER_BYTES],
+            CLEAR_WORK_V3_HEADER_BYTES,
+        )?;
+        check_header(
+            &mut r,
+            CLEAR_WORK_ACCOUNT_TAG,
+            CLEAR_WORK_ACCOUNT_VERSION_V3,
+        )?;
+        let value = Self {
+            epoch: read_id(&mut r)?,
+            node: read_id(&mut r)?,
+            market: read_id(&mut r)?,
+            order_set: read_id(&mut r)?,
+            feed: read_id(&mut r)?,
+            candidate_bundle_digest: read_id(&mut r)?,
+            settlement_candidate_id: read_id(&mut r)?,
+            base_relation_candidate_id: read_id(&mut r)?,
+            relation_policy_id: read_id(&mut r)?,
+            economic_domain_digest: read_id(&mut r)?,
+            native_claim_basis_id: read_id(&mut r)?,
+            candidate_price_digest: read_id(&mut r)?,
+            price_measure_policy_v1_id: read_id(&mut r)?,
+            score_policy_id: read_id(&mut r)?,
+            price_body_digest: read_id(&mut r)?,
+            previous_order_id: Id32::from_bytes(r.array()?),
+            epoch_generation: r.u64()?,
+            reward_remaining: r.u64()?,
+            reward_earned: r.u64()?,
+            rent: read_rent(&mut r)?,
+            slice_count: r.u16()?,
+            slice_cursor: r.u16()?,
+            page_count: r.u16()?,
+            page_cursor: r.u16()?,
+            outcome_count: r.u8()?,
+            order_count: r.u8()?,
+            order_cursor: r.u8()?,
+            slot_cursor: r.u8()?,
+            phase: r.u8()?,
+            candidate_kind: SettlementCandidateKindV1::from_byte(r.u8()?)?,
+            price_witness_schema: r.u8()?,
+            quantized_semantics_version: r.u8()?,
+            stored_bump: r.u8()?,
+            verification_state: ClearWorkVerificationStateV1::from_byte(r.u8()?)?,
+            flags: r.u8()?,
+            sha256: read_sha(&mut r)?,
+        };
+        r.finish()?;
+        value.validate()?;
+        if input.len() != clear_work_v3_account_len(value.outcome_count, value.order_count)? {
+            return Err(CodecError::WrongLength);
+        }
+        validate_clear_work_v3_tail(input, value)?;
+        Ok(value)
+    }
+}
+
+/// Compute the exact V3 active-width Work account length.
+pub fn clear_work_v3_account_len(outcomes: u8, orders: u8) -> Result<usize, CodecError> {
+    if !(2..=MAX_OUTCOMES_U8).contains(&outcomes) || orders > MAX_ORDERS_U8 {
+        return Err(CodecError::InvalidCount);
+    }
+    CLEAR_WORK_V3_HEADER_BYTES
+        .checked_add(usize::from(outcomes) * 16)
+        .and_then(|value| value.checked_add(usize::from(outcomes) * usize::from(orders) * 8))
+        .ok_or(CodecError::ArithmeticOverflow)
+}
+
+/// Exact aggregate RelationV2 flow vectors persisted in a V3 Work tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClearWorkRelationFlowsV1 {
+    /// Aggregate filled buy legs; inactive outcomes are canonical zeroes.
+    pub aggregate_buy_flow: [u64; MAX_OUTCOMES],
+    /// Aggregate filled sell legs; inactive outcomes are canonical zeroes.
+    pub aggregate_sell_flow: [u64; MAX_OUTCOMES],
+}
+
+/// Decode the canonical aggregate RelationV2 flow vectors from a V3 Work.
+pub fn decode_clear_work_v3_relation_flows(
+    input: &[u8],
+) -> Result<ClearWorkRelationFlowsV1, CodecError> {
+    let header = ClearWorkV3AccountV1::decode_account(input)?;
+    let mut aggregate_buy_flow = [0u64; MAX_OUTCOMES];
+    let mut aggregate_sell_flow = [0u64; MAX_OUTCOMES];
+    let mut outcome = 0usize;
+    while outcome < usize::from(header.outcome_count) {
+        let at = CLEAR_WORK_V3_HEADER_BYTES
+            .checked_add(
+                outcome
+                    .checked_mul(16)
+                    .ok_or(CodecError::ArithmeticOverflow)?,
+            )
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        aggregate_buy_flow[outcome] = read_u64_at(input, at)?;
+        aggregate_sell_flow[outcome] = read_u64_at(input, at + 8)?;
+        outcome += 1;
+    }
+    Ok(ClearWorkRelationFlowsV1 {
+        aggregate_buy_flow,
+        aggregate_sell_flow,
+    })
+}
+
+/// Decode one already-folded order's exact filled-leg vector.
+///
+/// Rows at or beyond `order_cursor` remain canonical zeroes and are not
+/// observable as accepted relation state.
+pub fn decode_clear_work_v3_filled_legs(
+    input: &[u8],
+    order_index: u8,
+) -> Result<[u64; MAX_OUTCOMES], CodecError> {
+    let header = ClearWorkV3AccountV1::decode_account(input)?;
+    if order_index >= header.order_cursor {
+        return Err(CodecError::InvalidState);
+    }
+    let matrix_at = CLEAR_WORK_V3_HEADER_BYTES
+        .checked_add(
+            usize::from(header.outcome_count)
+                .checked_mul(16)
+                .ok_or(CodecError::ArithmeticOverflow)?,
+        )
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let row_at = matrix_at
+        .checked_add(
+            usize::from(order_index)
+                .checked_mul(usize::from(header.outcome_count))
+                .and_then(|value| value.checked_mul(8))
+                .ok_or(CodecError::ArithmeticOverflow)?,
+        )
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let mut filled_legs = [0u64; MAX_OUTCOMES];
+    let mut outcome = 0usize;
+    while outcome < usize::from(header.outcome_count) {
+        filled_legs[outcome] = read_u64_at(input, row_at + (outcome * 8))?;
+        outcome += 1;
+    }
+    Ok(filled_legs)
+}
+
+fn validate_clear_work_v3_tail(
+    input: &[u8],
+    header: ClearWorkV3AccountV1,
+) -> Result<(), CodecError> {
+    let accumulators_bytes = usize::from(header.outcome_count)
+        .checked_mul(16)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let matrix_at = CLEAR_WORK_V3_HEADER_BYTES
+        .checked_add(accumulators_bytes)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if header.phase == 0
+        && input[CLEAR_WORK_V3_HEADER_BYTES..]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return Err(CodecError::NonCanonicalPadding);
+    }
+    if header.order_cursor < header.order_count {
         let unprocessed_at = matrix_at
             .checked_add(
                 usize::from(header.order_cursor)
@@ -4108,11 +4588,16 @@ const _: () = assert!(CANDIDATE_FEED_HEADER_BYTES == 2 + (13 * 32) + (7 * 8) + 1
 const _: () = assert!(
     CLEAR_WORK_HEADER_BYTES == 2 + (15 * 32) + (3 * 8) + 48 + 4 + 9 + SHA256_CHECKPOINT_BYTES
 );
+const _: () = assert!(
+    CLEAR_WORK_V3_HEADER_BYTES == 2 + (16 * 32) + (3 * 8) + 48 + 8 + 11 + SHA256_CHECKPOINT_BYTES
+);
 const _: () = assert!(EPOCH_BUDGET_ACCOUNT_BYTES == 2 + (4 * 32) + (11 * 8) + 48 + 6);
 const _: () = assert!(MARKET_BINDING_ACCOUNT_BYTES == 2 + (12 * 32) + (18 * 8) + 4 + 6);
 const _: () = assert!(candidate_feed_max_len() == 6970);
 const _: () = assert!(clear_work_max_len() == 9120);
 const _: () = assert!(clear_work_max_len() < 10 * 1024);
+const _: () = assert!(clear_work_v3_max_len() == 9158);
+const _: () = assert!(clear_work_v3_max_len() < 10 * 1024);
 
 const fn candidate_feed_max_len() -> usize {
     CANDIDATE_FEED_HEADER_BYTES
@@ -4123,6 +4608,10 @@ const fn candidate_feed_max_len() -> usize {
 }
 const fn clear_work_max_len() -> usize {
     CLEAR_WORK_HEADER_BYTES + (MAX_OUTCOMES * 16) + (MAX_OUTCOMES * MAX_ORDERS * 8)
+}
+
+const fn clear_work_v3_max_len() -> usize {
+    CLEAR_WORK_V3_HEADER_BYTES + (MAX_OUTCOMES * 16) + (MAX_OUTCOMES * MAX_ORDERS * 8)
 }
 
 #[cfg(test)]
@@ -4405,6 +4894,48 @@ mod tests {
         }
     }
 
+    fn work_v3_header() -> ClearWorkV3AccountV1 {
+        let work = work_header();
+        ClearWorkV3AccountV1 {
+            epoch: work.epoch,
+            node: work.node,
+            market: work.market,
+            order_set: work.order_set,
+            feed: work.feed,
+            candidate_bundle_digest: work.candidate_bundle_digest,
+            settlement_candidate_id: work.settlement_candidate_id,
+            base_relation_candidate_id: work.base_relation_candidate_id,
+            relation_policy_id: work.relation_policy_id,
+            economic_domain_digest: work.economic_domain_digest,
+            native_claim_basis_id: work.native_claim_basis_id,
+            candidate_price_digest: work.candidate_price_digest,
+            price_measure_policy_v1_id: work.price_measure_policy_v1_id,
+            score_policy_id: work.score_policy_id,
+            price_body_digest: work.price_body_digest,
+            previous_order_id: Id32::ZERO,
+            epoch_generation: work.epoch_generation,
+            rent: work.rent,
+            reward_remaining: work.reward_remaining,
+            reward_earned: work.reward_earned,
+            slice_count: work.slice_count,
+            slice_cursor: 0,
+            page_count: 0,
+            page_cursor: 0,
+            outcome_count: work.outcome_count,
+            order_count: work.order_count,
+            order_cursor: 0,
+            slot_cursor: 0,
+            phase: 0,
+            candidate_kind: work.candidate_kind,
+            price_witness_schema: work.price_witness_schema,
+            quantized_semantics_version: work.quantized_semantics_version,
+            stored_bump: 11,
+            verification_state: ClearWorkVerificationStateV1::Pending,
+            flags: 0,
+            sha256: work.sha256,
+        }
+    }
+
     fn budget() -> EpochBudgetV2AccountV1 {
         EpochBudgetV2AccountV1 {
             epoch: id(1),
@@ -4514,6 +5045,8 @@ mod tests {
         assert_eq!(candidate_feed_account_len(16, 64, 16, 416), Ok(6970));
         assert_eq!(CLEAR_WORK_HEADER_BYTES, 672);
         assert_eq!(clear_work_account_len(16, 64), Ok(9120));
+        assert_eq!(CLEAR_WORK_V3_HEADER_BYTES, 710);
+        assert_eq!(clear_work_v3_account_len(16, 64), Ok(9158));
         assert_eq!(EPOCH_BUDGET_ACCOUNT_BYTES, 272);
         assert_eq!(MARKET_BINDING_ACCOUNT_BYTES, 540);
         assert_eq!(ECONOMIC_DOMAIN_ACCOUNT_BYTES, 297);
@@ -5168,6 +5701,64 @@ mod tests {
         let mut invalid_phase = work;
         invalid_phase.phase = 2;
         assert_eq!(invalid_phase.validate(), Err(CodecError::InvalidState));
+
+        const WORK_V3_LEN: usize = CLEAR_WORK_V3_HEADER_BYTES + (3 * 16) + (3 * 8);
+        let work_v3 = work_v3_header();
+        let mut work_v3_bytes = [0u8; WORK_V3_LEN];
+        work_v3
+            .encode(&mut work_v3_bytes[..CLEAR_WORK_V3_HEADER_BYTES])
+            .unwrap();
+        assert_eq!(
+            ClearWorkV3AccountV1::decode_account(&work_v3_bytes),
+            Ok(work_v3)
+        );
+        assert_eq!(
+            ClearWorkV3AccountV1::decode_account(&work_v3_bytes[..WORK_V3_LEN - 1]),
+            Err(CodecError::WrongLength)
+        );
+        work_v3_bytes[CLEAR_WORK_V3_HEADER_BYTES] = 1;
+        assert_eq!(
+            ClearWorkV3AccountV1::decode_account(&work_v3_bytes),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut false_verdict = work_v3;
+        false_verdict.verification_state = ClearWorkVerificationStateV1::Valid;
+        assert_eq!(false_verdict.validate(), Err(CodecError::InvalidState));
+        assert_eq!(
+            ClearWorkHeaderV2::decode_account(&work_v3_bytes),
+            Err(CodecError::WrongVersion)
+        );
+
+        let mut folded_v3 = work_v3;
+        folded_v3.page_count = 1;
+        folded_v3.phase = 1;
+        folded_v3.order_cursor = 1;
+        folded_v3.previous_order_id = id(41);
+        let mut folded_v3_bytes = [0u8; WORK_V3_LEN];
+        folded_v3
+            .encode(&mut folded_v3_bytes[..CLEAR_WORK_V3_HEADER_BYTES])
+            .unwrap();
+        folded_v3_bytes[CLEAR_WORK_V3_HEADER_BYTES..CLEAR_WORK_V3_HEADER_BYTES + 8]
+            .copy_from_slice(&7u64.to_le_bytes());
+        folded_v3_bytes[CLEAR_WORK_V3_HEADER_BYTES + 8..CLEAR_WORK_V3_HEADER_BYTES + 16]
+            .copy_from_slice(&3u64.to_le_bytes());
+        let row_at = CLEAR_WORK_V3_HEADER_BYTES + (3 * 16);
+        folded_v3_bytes[row_at..row_at + 8].copy_from_slice(&5u64.to_le_bytes());
+        assert_eq!(
+            decode_clear_work_v3_relation_flows(&folded_v3_bytes),
+            Ok(ClearWorkRelationFlowsV1 {
+                aggregate_buy_flow: [7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                aggregate_sell_flow: [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            })
+        );
+        assert_eq!(
+            decode_clear_work_v3_filled_legs(&folded_v3_bytes, 0),
+            Ok([5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        );
+        assert_eq!(
+            decode_clear_work_v3_filled_legs(&folded_v3_bytes, 1),
+            Err(CodecError::InvalidState)
+        );
     }
 
     #[test]

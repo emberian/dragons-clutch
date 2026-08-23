@@ -77,6 +77,8 @@ pub const RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V3: u8 = 3;
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
 /// General V2 active-width ClearWork successor account version.
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION: u8 = 2;
+/// Resumable RelationV2 General ClearWork successor account version.
+pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION_V3: u8 = 3;
 /// General V2 active-width sealed-feed successor account discriminator.
 pub const GENERAL_V2_FEED_ACCOUNT_TAG: u8 = 18;
 /// General V2 active-width sealed-feed successor account version.
@@ -508,6 +510,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-clear-work-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
+            version: GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-clear-work-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1600,6 +1611,10 @@ mod tests {
             (
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
+                GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION_V3,
             ),
             (GENERAL_V2_FEED_ACCOUNT_TAG, GENERAL_V2_FEED_ACCOUNT_VERSION),
             (
