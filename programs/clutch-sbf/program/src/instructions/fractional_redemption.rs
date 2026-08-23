@@ -946,6 +946,7 @@ fn require_bearer_account_contract(
         .ok_or(ClutchError::Arithmetic)?;
     require_count(accounts, expected_count)?;
     require_signer(&accounts[bearer_ix::CLAIMANT])?;
+    require_correlated_bearer_loader_aliases_v2(accounts)?;
     let selected_mint = bearer_ix::OUTCOME_MINTS + usize::from(selected_outcome);
     let mut index = 0usize;
     while index < accounts.len() {
@@ -972,11 +973,7 @@ fn require_bearer_account_contract(
         )?;
         let mut other = index + 1;
         while other < accounts.len() {
-            let token_program_alias = (index == bearer_ix::COLLATERAL_TOKEN_PROGRAM
-                && other == bearer_ix::OUTCOME_TOKEN_PROGRAM)
-                || (index == bearer_ix::OUTCOME_TOKEN_PROGRAM
-                    && other == bearer_ix::COLLATERAL_TOKEN_PROGRAM);
-            if !token_program_alias {
+            if !bearer_loader_alias_pair_v2(index, other) {
                 require(
                     accounts[index].key != accounts[other].key,
                     ClutchError::AccountAlias,
@@ -1008,6 +1005,74 @@ enum CreditFundingAdmissionV1 {
 
 fn identity32(bytes: [u8; 32]) -> Outcome<Identity32V1> {
     Identity32V1::new(bytes).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+fn bearer_loader_alias_pair_v2(left: usize, right: usize) -> bool {
+    matches!(
+        (left, right),
+        (
+            bearer_ix::COLLATERAL_TOKEN_PROGRAM,
+            bearer_ix::OUTCOME_TOKEN_PROGRAM
+        ) | (
+            bearer_ix::OUTCOME_TOKEN_PROGRAM,
+            bearer_ix::COLLATERAL_TOKEN_PROGRAM
+        ) | (
+            bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA,
+            bearer_ix::OUTCOME_TOKEN_PROGRAMDATA
+        ) | (
+            bearer_ix::OUTCOME_TOKEN_PROGRAMDATA,
+            bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA
+        )
+    )
+}
+
+fn require_correlated_loader_alias_keys_v2(
+    collateral_program: [u8; 32],
+    outcome_program: [u8; 32],
+    collateral_programdata: [u8; 32],
+    outcome_programdata: [u8; 32],
+) -> Outcome<()> {
+    require(
+        (collateral_program == outcome_program)
+            == (collateral_programdata == outcome_programdata),
+        ClutchError::AccountAlias,
+    )
+}
+
+fn require_correlated_bearer_loader_aliases_v2(
+    accounts: &[AccountInfo<'_>],
+) -> Outcome<()> {
+    require_correlated_loader_alias_keys_v2(
+        accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[bearer_ix::OUTCOME_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[bearer_ix::COLLATERAL_TOKEN_PROGRAMDATA]
+            .key
+            .to_bytes(),
+        accounts[bearer_ix::OUTCOME_TOKEN_PROGRAMDATA]
+            .key
+            .to_bytes(),
+    )
+}
+
+#[cfg(test)]
+mod loader_alias_tests {
+    use super::*;
+
+    #[test]
+    fn bearer_loader_aliases_refuse_half_and_cross_pairs() {
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [1; 32], [2; 32], [2; 32])
+            .is_ok());
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [3; 32], [2; 32], [4; 32])
+            .is_ok());
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [1; 32], [2; 32], [4; 32])
+            .is_err());
+        assert!(require_correlated_loader_alias_keys_v2([1; 32], [3; 32], [2; 32], [2; 32])
+            .is_err());
+        assert!(!bearer_loader_alias_pair_v2(
+            bearer_ix::COLLATERAL_TOKEN_PROGRAM,
+            bearer_ix::OUTCOME_TOKEN_PROGRAMDATA,
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1779,6 +1844,7 @@ fn require_bearer_credit_account_contract(
     let expected = funding_index + if creation { CREDIT_CREATION_SUFFIX_ACCOUNTS_V1 } else { 0 };
     require_count(accounts, expected)?;
     require_signer(&accounts[bearer_ix::CLAIMANT])?;
+    require_correlated_bearer_loader_aliases_v2(accounts)?;
     let selected_mint = bearer_ix::OUTCOME_MINTS + usize::from(selected_outcome);
     let payer_alias = creation && accounts[bearer_ix::CLAIMANT].key == accounts[funding_index].key;
     let mut index = 0usize;
@@ -1803,14 +1869,10 @@ fn require_bearer_credit_account_contract(
         require(accounts[index].is_signer == expected_signer, ClutchError::MismatchedState)?;
         let mut other = index + 1;
         while other < accounts.len() {
-            let token_program_alias = (index == bearer_ix::COLLATERAL_TOKEN_PROGRAM
-                && other == bearer_ix::OUTCOME_TOKEN_PROGRAM)
-                || (index == bearer_ix::OUTCOME_TOKEN_PROGRAM
-                    && other == bearer_ix::COLLATERAL_TOKEN_PROGRAM);
             let payer_alias = creation
                 && ((index == bearer_ix::CLAIMANT && other == funding_index)
                     || (index == funding_index && other == bearer_ix::CLAIMANT));
-            if !token_program_alias && !payer_alias {
+            if !bearer_loader_alias_pair_v2(index, other) && !payer_alias {
                 require(accounts[index].key != accounts[other].key, ClutchError::AccountAlias)?;
             }
             other += 1;

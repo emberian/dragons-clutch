@@ -1,16 +1,22 @@
 use clutch_bspline::EdgePolicy;
 use clutch_bspline_shape_compiler::exact_market::{
-    compile_exact_market_v1, ExactMarketCompilerErrorV1, ExactMarketCompilerRequestV1,
-    ExactMarketCoordinateCoverageV1, ExactMarketManifestErrorV1,
-    ExactMarketSearchOutcomeV1, ExactMarketWorkManifestV1,
-    EXACT_MARKET_WORK_MANIFEST_BYTES_V1,
+    bind_exact_market_bundle_v5, compile_exact_market_v1, ExactMarketBundleSidecarV1,
+    ExactMarketCompilerErrorV1, ExactMarketCompilerRequestV1,
+    ExactMarketCoordinateCoverageV1, ExactMarketManifestErrorV1, ExactMarketSearchOutcomeV1,
+    ExactMarketWorkManifestV1, COMPILED_PRODUCT_SERIES_BUNDLE_V5_ARTIFACT_KIND,
+    EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V1, EXACT_MARKET_WORK_MANIFEST_BYTES_V1,
 };
 use clutch_bspline_shape_compiler::production::{
     compile_production_payoff_v1, ExactCategoricalPayoffDefinitionV1,
     ExactSmoothPayoffDefinitionV1, ProductionPayoffDefinitionV1,
     SmoothNativeBasisDefinitionV1,
 };
-use clutch_product_series::{ContentId, PAYOUT_MAP_UNUSED};
+use clutch_product_series::{
+    CompiledProductSeriesBundleV5, ContentId, EvidenceOnlyRecoveryPolicyId,
+    MarketGenesisProfileV2Id, PriceMeasurePolicyV1Id, ProductTemplateId,
+    RegistryCapabilityProfileV4Id, SeriesAttachmentPlanV4Id, SeriesFundingQuoteV4Id,
+    SeriesFundingTermsV2Id, SeriesPlanV5Id, PAYOUT_MAP_UNUSED,
+};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 
@@ -63,6 +69,29 @@ fn compiled_degree_three(
         ProductionPayoffDefinitionV1::ExactSmooth(smooth_definition(3)),
     )
     .unwrap()
+}
+
+fn bundle_v5(
+    compiled: &clutch_bspline_shape_compiler::production::CompiledProductionPayoffV1,
+) -> CompiledProductSeriesBundleV5 {
+    CompiledProductSeriesBundleV5 {
+        registry_release_id: id(10),
+        capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes([11; 32]),
+        source_release_manifest_id: id(12),
+        source_plane_contract_id: id(13),
+        source_spec_id: id(14),
+        summary_program_id: id(15),
+        product_compiler_release_id: id(16),
+        native_claim_basis_id: compiled.native_claim_basis_id,
+        evidence_only_recovery_policy_id: EvidenceOnlyRecoveryPolicyId::from_bytes([17; 32]),
+        product_template_id: ProductTemplateId::from_bytes([18; 32]),
+        price_measure_policy_id: PriceMeasurePolicyV1Id::from_bytes([19; 32]),
+        market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes(id(2).bytes()),
+        funding_quote_id: SeriesFundingQuoteV4Id::from_bytes([21; 32]),
+        attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([22; 32]),
+        series_plan_id: SeriesPlanV5Id::from_bytes([23; 32]),
+        funding_terms_id: SeriesFundingTermsV2Id::from_bytes([24; 32]),
+    }
 }
 
 fn request(
@@ -271,4 +300,61 @@ fn certificate_and_terms_tampering_fail_closed() {
     )
     .unwrap();
     assert!(output.verify(&different_terms).is_err());
+}
+
+#[test]
+fn current_bundle_sidecar_is_fixed_canonical_and_reopens_every_join() {
+    let compiled = compiled_degree_three();
+    let bundle = bundle_v5(&compiled);
+    let exact_market = compile_exact_market_v1(
+        &compiled,
+        request(&[7, 6, 6, 6, 7], &[0, 2, 4, 6, 8], 10),
+    )
+    .unwrap();
+    let sidecar = bind_exact_market_bundle_v5(&compiled, &bundle, &exact_market).unwrap();
+    assert_eq!(
+        sidecar.bundle_artifact_kind(),
+        COMPILED_PRODUCT_SERIES_BUNDLE_V5_ARTIFACT_KIND
+    );
+    assert!(sidecar.bundle_artifact_context().is_zero());
+    assert_eq!(sidecar.bundle_v5_id(), bundle.id().unwrap());
+    assert_eq!(sidecar.work_manifest_id(), exact_market.manifest_id);
+    assert_eq!(
+        sidecar.certificate_output_id(),
+        exact_market.manifest.certificate_output_id()
+    );
+    let mut bytes = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V1];
+    sidecar.encode_into(&mut bytes).unwrap();
+    assert_eq!(ExactMarketBundleSidecarV1::decode(&bytes), Ok(sidecar));
+    sidecar.verify(&compiled, &bundle, &exact_market).unwrap();
+
+    let mut wrong_kind = bytes;
+    wrong_kind[12] = 56;
+    assert_eq!(
+        ExactMarketBundleSidecarV1::decode(&wrong_kind),
+        Err(ExactMarketManifestErrorV1::InvalidDiscriminant)
+    );
+    let mut nonzero_context = bytes;
+    nonzero_context[16] = 1;
+    assert_eq!(
+        ExactMarketBundleSidecarV1::decode(&nonzero_context),
+        Err(ExactMarketManifestErrorV1::NonCanonicalPadding)
+    );
+}
+
+#[test]
+fn bundle_sidecar_refuses_a_parallel_basis_truth() {
+    let compiled = compiled_degree_three();
+    let mut bundle = bundle_v5(&compiled);
+    bundle.native_claim_basis_id =
+        clutch_product_series::NativeClaimBasisId::from_bytes([99; 32]);
+    let exact_market = compile_exact_market_v1(
+        &compiled,
+        request(&[7, 6, 6, 6, 7], &[0, 2, 4, 6, 8], 10),
+    )
+    .unwrap();
+    assert_eq!(
+        bind_exact_market_bundle_v5(&compiled, &bundle, &exact_market),
+        Err(ExactMarketCompilerErrorV1::OutputMismatch)
+    );
 }

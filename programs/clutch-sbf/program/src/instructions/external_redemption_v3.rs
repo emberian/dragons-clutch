@@ -8,7 +8,7 @@
 //! remainder projection.
 
 use crate::accounts::{expect_pda, require, Outcome};
-use crate::claim_release::authenticate_claim_issuance_with_programdata_v1;
+use crate::claim_release::authenticate_claim_issuance_release_with_programdata_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
 use crate::{seeds, token};
@@ -314,7 +314,7 @@ pub fn process_external_redemption_v3(
     )?;
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[ix::RESOLUTION], liabilities)?;
-    let claim = authenticate_claim_issuance_with_programdata_v1(
+    let claim = authenticate_claim_issuance_release_with_programdata_v1(
         liabilities.bound,
         &accounts[ix::OUTCOME_TOKEN_PROGRAM],
         &accounts[ix::OUTCOME_TOKEN_PROGRAMDATA],
@@ -328,7 +328,7 @@ pub fn process_external_redemption_v3(
     )?;
     let token_before = bearer_observation(accounts, request.outcome)?;
     let prepared = prepare_bearer_claim_redemption_v3(
-        claim,
+        claim.bound(),
         resolution.account_id,
         resolution.resolution,
         CollateralId::from_bytes(accounts[ix::MARKET_RUNTIME].key.to_bytes()),
@@ -437,6 +437,10 @@ pub fn process_external_redemption_v3(
             EXTERNAL_REDEMPTION_RUNTIME_RECEIPT_DOMAIN_V3,
             &accepted.receipt_id().bytes(),
             &value_authority.receipt_id.bytes(),
+            &claim.receipt_id().bytes(),
+            &claim.token_programdata().bytes(),
+            &claim.deployment_slot().to_le_bytes(),
+            &claim.loader_receipt_id().bytes(),
         ])
         .to_bytes(),
     );

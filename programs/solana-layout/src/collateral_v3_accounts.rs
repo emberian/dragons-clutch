@@ -339,15 +339,16 @@ impl CollateralAccountContractV3 {
 
     /// Whether this exact action permits these two logical roles to share a key.
     ///
-    /// The sole exception is the two read-only token-program roles on claim
-    /// representation and external-redemption routes. No state, mint, holder,
-    /// authority, signer, or other program role may alias.
+    /// Claim routes admit the two read-only token-program roles. External
+    /// redemption also admits their ProgramData roles, but the whole-list
+    /// validator requires both alias decisions to agree. No state, mint,
+    /// holder, authority, signer, or other program role may alias.
     pub const fn allows_alias(
         self,
         left: CollateralAccountRoleV3,
         right: CollateralAccountRoleV3,
     ) -> bool {
-        self.action.permits_token_program_alias()
+        (self.action.permits_token_program_alias()
             && matches!(
                 (left, right),
                 (
@@ -357,7 +358,18 @@ impl CollateralAccountContractV3 {
                     CollateralAccountRoleV3::OutcomeTokenProgram,
                     CollateralAccountRoleV3::CollateralTokenProgram
                 )
-            )
+            ))
+            || (matches!(self.action, CollateralActionV3::RedeemExternal)
+                && matches!(
+                    (left, right),
+                    (
+                        CollateralAccountRoleV3::CollateralTokenProgramData,
+                        CollateralAccountRoleV3::OutcomeTokenProgramData
+                    ) | (
+                        CollateralAccountRoleV3::OutcomeTokenProgramData,
+                        CollateralAccountRoleV3::CollateralTokenProgramData
+                    )
+                ))
     }
 
     /// Whether a read-only role may inherit transaction-level writable
@@ -575,9 +587,10 @@ pub fn account_contract_v3(
 
 /// Validate exact count, live keys, effective privileges, and aliases.
 ///
-/// Privileges are compared after unioning the two permitted same-key token
-/// program roles, matching Solana's effective privilege behavior. Every other
-/// duplicate key is refused.
+/// Privileges are compared after unioning permitted same-key token-program
+/// roles and, on external redemption, their correlated ProgramData roles.
+/// Program and ProgramData alias decisions must agree; every other duplicate
+/// key is refused.
 pub fn validate_collateral_account_metas_v3(
     action: CollateralActionV3,
     outcome_count: u8,
@@ -610,6 +623,27 @@ where
     }
     if observed_len > contract.len() {
         return Err(CodecError::TrailingBytes);
+    }
+    if action == CollateralActionV3::RedeemExternal {
+        let collateral_program = observed_at(
+            external_redemption_indices_v3::COLLATERAL_TOKEN_PROGRAM,
+        )
+        .ok_or(CodecError::Truncated)?;
+        let outcome_program = observed_at(external_redemption_indices_v3::OUTCOME_TOKEN_PROGRAM)
+            .ok_or(CodecError::Truncated)?;
+        let collateral_programdata = observed_at(
+            external_redemption_indices_v3::COLLATERAL_TOKEN_PROGRAMDATA,
+        )
+        .ok_or(CodecError::Truncated)?;
+        let outcome_programdata = observed_at(
+            external_redemption_indices_v3::OUTCOME_TOKEN_PROGRAMDATA,
+        )
+        .ok_or(CodecError::Truncated)?;
+        if (collateral_program.key == outcome_program.key)
+            != (collateral_programdata.key == outcome_programdata.key)
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
     }
     for index in 0..observed_len {
         let account = observed_at(index).ok_or(CodecError::Truncated)?;
@@ -957,15 +991,6 @@ mod tests {
                 validate_collateral_account_metas_v3(action, 2, selected, &accounts),
                 Ok(())
             );
-
-            let programdata =
-                role_index(contract, CollateralAccountRoleV3::OutcomeTokenProgramData);
-            let mut deployment_alias = observed(action, 2, selected);
-            deployment_alias[programdata].key = deployment_alias[outcome_program].key;
-            assert_eq!(
-                validate_collateral_account_metas_v3(action, 2, selected, &deployment_alias),
-                Err(CodecError::MismatchedBinding)
-            );
         }
     }
 
@@ -1072,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_two_token_program_roles_may_alias_on_three_claim_routes() {
+    fn claim_loader_aliases_are_exact_and_correlated() {
         for action in [
             CollateralActionV3::Materialize,
             CollateralActionV3::Dematerialize,
@@ -1086,6 +1111,17 @@ mod tests {
                 role_index(contract, CollateralAccountRoleV3::OutcomeTokenProgram);
             let mut accounts = observed(action, 2, selected);
             accounts[outcome_program].key = accounts[collateral_program].key;
+            if action == CollateralActionV3::RedeemExternal {
+                let collateral_programdata = role_index(
+                    contract,
+                    CollateralAccountRoleV3::CollateralTokenProgramData,
+                );
+                let outcome_programdata = role_index(
+                    contract,
+                    CollateralAccountRoleV3::OutcomeTokenProgramData,
+                );
+                accounts[outcome_programdata].key = accounts[collateral_programdata].key;
+            }
             assert_eq!(
                 validate_collateral_account_metas_v3(action, 2, selected, &accounts),
                 Ok(())
@@ -1106,6 +1142,42 @@ mod tests {
                 Err(CodecError::MismatchedBinding)
             );
         }
+
+        let action = CollateralActionV3::RedeemExternal;
+        let selected = Some(0);
+        let contract = account_contract_v3(action, 2, selected).unwrap();
+        let collateral_program =
+            role_index(contract, CollateralAccountRoleV3::CollateralTokenProgram);
+        let outcome_program = role_index(contract, CollateralAccountRoleV3::OutcomeTokenProgram);
+        let collateral_programdata = role_index(
+            contract,
+            CollateralAccountRoleV3::CollateralTokenProgramData,
+        );
+        let outcome_programdata = role_index(
+            contract,
+            CollateralAccountRoleV3::OutcomeTokenProgramData,
+        );
+
+        let mut program_only = observed(action, 2, selected);
+        program_only[outcome_program].key = program_only[collateral_program].key;
+        assert_eq!(
+            validate_collateral_account_metas_v3(action, 2, selected, &program_only),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut programdata_only = observed(action, 2, selected);
+        programdata_only[outcome_programdata].key = programdata_only[collateral_programdata].key;
+        assert_eq!(
+            validate_collateral_account_metas_v3(action, 2, selected, &programdata_only),
+            Err(CodecError::MismatchedBinding)
+        );
+
+        let mut cross_alias = observed(action, 2, selected);
+        cross_alias[outcome_programdata].key = cross_alias[collateral_program].key;
+        assert_eq!(
+            validate_collateral_account_metas_v3(action, 2, selected, &cross_alias),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 
     #[test]
