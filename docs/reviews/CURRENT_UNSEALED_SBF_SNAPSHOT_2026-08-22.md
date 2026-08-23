@@ -82,8 +82,15 @@ programs/clutch-sbf/svm-tests/run_svm_tests.sh --non-production-mock-source
 programs/clutch-sbf/svm-tests/run_svm_tests.sh \
   --non-production-real-pyth-lab \
   real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic
+(cd programs/clutch-sbf/svm-tests && \
+  cargo test --locked --features non-production-real-pyth-lab \
+    --test r2_v2_wire -- --nocapture --test-threads=1)
 programs/clutch-sbf/scripts/run_keeper_gate.sh
 ```
+
+The feature-gated runner first builds and identity-checks the exact laboratory
+ELF. The following scoped Cargo command is the recorded ten-test R2 subtotal;
+the filtered runner line alone establishes only its named joined lifecycle.
 
 The keeper gate executed 24 permissionless actions and one owner-signed action.
 It deliberately killed the first keeper after four actions during incomplete
