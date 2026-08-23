@@ -78,6 +78,8 @@ pub struct RealmCollateralProjectionV1 {
     pub token_program: ContentId,
     /// Canonical neutral incinerator or disposition account.
     pub neutral_incinerator: ContentId,
+    /// Canonical System-owned destination for unowned lamport residue.
+    pub neutral_lamport_sink: ContentId,
     /// Maximum per-market collateral cap admitted by this Realm/Profile.
     pub market_collateral_cap_ceiling: u64,
 }
@@ -90,6 +92,7 @@ impl RealmCollateralProjectionV1 {
             self.collateral_mint,
             self.token_program,
             self.neutral_incinerator,
+            self.neutral_lamport_sink,
         ] {
             id.validate()?;
         }

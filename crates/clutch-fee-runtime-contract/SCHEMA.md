@@ -1,27 +1,88 @@
 # Fee runtime account-neutral schema V1
 
-Status: **PURE INNER CODECS / NO SBF TAGS, PDA SEEDS, ACTIONS, OR LIVE
+Status: **PURE INNER CODECS / OWNER TAG-VERSION RESERVED / NO LIVE
 CAPABILITY** (2026-08-23).
 
-Every body begins with an eight-byte discriminator, little-endian `u16`
-version `1`, and zero `u16` flags. Decode requires the exact length, zero
-padding, semantic reconstruction through the authoritative constructor, and
-byte equality with the canonical re-encoding. Persisted derived words never
-become an independent truth.
+Every body begins with an eight-byte discriminator and little-endian `u16`
+version. The five original bodies use version `1` plus zero `u16` flags. The
+owner finalization uses version `2`, followed by its terminal outcome and a
+zero byte; candidate terminal bodies use version `1`, followed by their typed
+outcome/count header. Decode requires exact length, canonical zero padding,
+and semantic validation. Persisted derived words never become an independent
+truth.
 
 | Semantic account | Discriminator | Exact bytes | Semantic reconstruction | Mutation owner |
 | --- | --- | ---: | --- | --- |
 | Selected fee record | `DCFEESEL` | 336 | `SelectedCompositeFeeV1::select` from exact batch and revenue preimages | Immutable after selected-candidate creation |
-| Owner fee carry | `DCFEECRY` | 128 | `OwnerFeeCarryV1::restore`, bound to selected fee record and owner | `OwnerFeeTransitionIntentV1`; terminal once |
+| Owner fee carry | `DCFEECRY` | 128 | `OwnerFeeCarryV1::restore`, bound to selected fee record and owner | `OwnerFeeTransitionIntentV1`; one-way outer `0x83/1` prestate |
 | Payer allocation | `DCFEEPAY` | 2,680 | `allocate_payer_debit` from authenticated assessment and pre-transition signed envelopes | Same owner transition; temporary snapshot |
 | Recipient allocation | `DCFEEREC` | 2,640 | `allocate_recipients` from selected policy and candidate-verified standing makers | `RecipientAllocationIntentV1`; candidate-wide temporary snapshot |
 | Treasury ledger | `DCFEETRY` | 144 | `TreasuryLedgerV1::restore`, bound to selected treasury owner and ordinary Position | Begin/credit/settle transitions; owner-authorized ordinary withdrawal |
+| Owner fee finalization | `DCFEEFIN` / inner v2 | 496 | Settled path from the exact General owner-cash realization plan; abort path from the exact owner transition and signed envelopes | In-place outer `0x83/2` successor; immutable until candidate terminal consumes and closes it |
+| Fee closure manifest | `DCFEECLS` | 224 | Canonical outcome/count/totals plus authenticated ordered closure-set data digest | Candidate-wide immutable terminal evidence |
+| Fee-record terminal | `DCFEEEND` | 544 | Exact selected book, owner finalizations, recipient allocation, treasury state, value disposition, and closure manifest | Candidate-wide immutable terminal evidence |
 
 The payer and recipient snapshots deliberately bind all 64 fixed-capacity
 identity/amount rows. They are not permanent revenue pots and must be retired
 after their settlement obligations close. Their measured rent/compute cost is
 still a capability-profile gate; these codecs do not claim the representation
 is deployable or optimal.
+
+## In-place owner finalization
+
+The owner carry keeps the same `(fee record, owner)` PDA and outer account tag
+`0x83`. Its canonical outer forms are:
+
+| State | Outer version | Inner bytes | Bump/flags | Exact outer bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Mutable carry | 1 | 128 | 2 | 132 |
+| Immutable finalization | 2 | 496 | 2 | 500 |
+
+The v2 transition is not a reinterpretation of v1. It atomically authenticates
+the complete deleted `0x84` payer-allocation data ID, final 288-byte owner-row
+data ID, Position and cash-pot pre/post values, exact owner fee, and the data ID
+of the canonical rent-ledger transition. No opaque duplicate finalization ID is
+persisted: the one-way `0x83/1 -> 0x83/2` transition and final owner-row data ID
+are the replay fact.
+
+`OwnerFeeRentDispositionV2` requires the realloc top-up to be
+`max(v2_rent_minimum - observed_balance, 0)` and requires its authenticated
+top-up payer to equal the existing carry rent-refund owner. Carry donation is
+preserved as donation; it may reduce present top-up need but never becomes
+refundable principal. Payer-allocation principal and donation are separately
+committed for atomic refund/neutral-sink disposition. Fee value, Hoard
+principal, collateral, keeper funds, and liveness budgets cannot enter this
+calculation.
+
+The owner finalization is temporary immutable evidence. Candidate terminal
+consumes it, closes it, and accounts for that close in `DCFEECLS`. The payer
+snapshot was already closed atomically during owner finalization and has no
+independent receipt account; its exact disposition is committed through the
+persisted rent-transition data digest.
+
+## Candidate-wide terminal receipts
+
+Both settled and abort construction require the complete canonical owner book.
+Every owner receipt must match its lexicographic book row and the sum of owner
+fees must equal the book's candidate-selected `u128` fee total. Settled closure
+also authenticates fee settlement, recipient allocation, and terminal treasury
+ledger state. Abort closure requires the same selected recipient-allocation
+snapshot but zero treasury credit, withdrawal, and availability; authorization
+is released rather than collected.
+
+`DCFEECLS` binds one immutable data digest for the canonical closure ordering:
+selected fee record, recipient allocation, treasury ledger, then owner
+finalizations in book order. Its account count is exactly `owner_count + 3`.
+Rent principal refunds and hostile-prefund neutral-sink credits are conserved
+separately. `DCFEEEND` binds that manifest plus the selected economic identities,
+settled/released totals, recipient amounts, and external value-disposition and
+terminal-authority receipt identities.
+
+`GeneralOwnerFeeFinalizationProjectionV2` and
+`GeneralFeeTerminalProjectionV1` expose the authenticated owner and candidate
+facts without creating parallel semantic owners. `DealerFeeTerminalProjectionV1`
+exposes only fee policy/candidate/outcome identity and returns zero for fee,
+Hoard, or liveness funding availability.
 
 ## Typed identity joins
 
