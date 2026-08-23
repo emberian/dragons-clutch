@@ -330,9 +330,10 @@ runtime elsewhere does not make a route executable.
 | `0x87/1` | General V2 | settlement cash pot |
 | `0x88/1` | StructuredClaim | descriptor |
 | `0x89/1` | General V2 | FinalPot |
-| `0x8a/1` | SourcePlane V3 | release |
+| `0x8a/1` | SourcePlane V3 | historical release without receiver deployment authentication; never executable |
+| `0x8a/2` | SourcePlane V3 | receiver-release-authenticated release |
 | `0x8b/1` | SourcePlane V3 | head |
-| `0x8c/1` | SourcePlane V3 | reopen lineage |
+| `0x8c/2` | SourcePlane V3 | release/route-bound reopen lineage |
 | `0x8d/1` | SourcePlane V3 | open raw page |
 | `0x8e/1` | SourcePlane V3 | immutable raw page |
 | `0x8f/1` | SourcePlane V3 | window work |

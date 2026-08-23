@@ -329,7 +329,9 @@ impl OwnedInstructionDraft {
         if call_ordinal == 0
             || !matches!(
                 action,
-                SourceSeriesAction::InitializeHead | SourceSeriesAction::OpenRawPage
+                SourceSeriesAction::InitializeHead
+                    | SourceSeriesAction::OpenRawPage
+                    | SourceSeriesAction::IngestBoundaryBatch
             )
         {
             return Err(ConstructionError::UnallocatedRegistryCoordinate);
@@ -907,6 +909,7 @@ mod tests {
         let keeper_index = match action {
             SourceSeriesAction::InitializeHead => 14,
             SourceSeriesAction::OpenRawPage => 15,
+            SourceSeriesAction::IngestBoundaryBatch => 20,
             _ => unreachable!(),
         };
         let payer_index = keeper_index + 1;
@@ -952,6 +955,37 @@ mod tests {
         let decoded = ExtensionRequest::decode(draft.data()).unwrap();
         assert_eq!(decoded.sequence, 7);
         assert_eq!(decoded.envelope.action, ExtensionAction::SourceV3(action));
+        assert_eq!(
+            draft.runtime_admission,
+            RuntimeAdmission::ReleaseBoundEnabled
+        );
+    }
+
+    #[test]
+    fn enabled_ingest_request_uses_the_frozen_twenty_four_account_contract() {
+        let action = SourceSeriesAction::IngestBoundaryBatch;
+        let accounts = source_accounts(action, true);
+        assert_eq!(accounts.len(), 24);
+        let draft = OwnedInstructionDraft::enabled_source_successor(
+            "ingest-source-boundary",
+            owner(),
+            Address::new_from_array([2; 32]),
+            accounts,
+            vec![Address::new_from_array([30; 32])],
+            vec![ExactEquation {
+                name: "append-boundary call quote".into(),
+                unit: IntegerUnit::Lamports,
+                left: 11,
+                right: 11,
+            }],
+            action,
+            9,
+            &[8; 160],
+        )
+        .unwrap();
+        let decoded = ExtensionRequest::decode(draft.data()).unwrap();
+        assert_eq!(decoded.envelope.action, ExtensionAction::SourceV3(action));
+        assert_eq!(decoded.sequence, 9);
         assert_eq!(
             draft.runtime_admission,
             RuntimeAdmission::ReleaseBoundEnabled

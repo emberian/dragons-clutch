@@ -241,8 +241,11 @@ pub const GENERAL_V2_FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
 pub const GENERAL_V2_FINAL_POT_ACCOUNT_VERSION: u8 = 1;
 /// Immutable authenticated SourcePlane V3 release account discriminator.
 pub const SOURCE_V3_RELEASE_ACCOUNT_TAG: u8 = 0x8a;
-/// SourcePlane V3 release account version.
-pub const SOURCE_V3_RELEASE_ACCOUNT_VERSION: u8 = 1;
+/// Historical SourcePlane V3 release account version. Its 1,008-byte body did
+/// not authenticate the upgradeable receiver release and is never executable.
+pub const SOURCE_V3_RELEASE_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current SourcePlane V3 release account version.
+pub const SOURCE_V3_RELEASE_ACCOUNT_VERSION: u8 = 2;
 /// Mutable SourcePlane V3 head account discriminator.
 pub const SOURCE_V3_HEAD_ACCOUNT_TAG: u8 = 0x8b;
 /// SourcePlane V3 head account version.
@@ -1045,10 +1048,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: SOURCE_V3_RELEASE_ACCOUNT_TAG,
+            version: SOURCE_V3_RELEASE_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-release-v1-account-historical",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_RELEASE_ACCOUNT_TAG,
             version: SOURCE_V3_RELEASE_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-v3-release-v1-account",
+        name: "source-v3-release-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2627,6 +2639,10 @@ mod tests {
     #[test]
     fn source_v3_account_block_is_complete_and_disabled() {
         let expected = [
+            (
+                SOURCE_V3_RELEASE_ACCOUNT_TAG,
+                SOURCE_V3_RELEASE_ACCOUNT_VERSION_V1,
+            ),
             (
                 SOURCE_V3_RELEASE_ACCOUNT_TAG,
                 SOURCE_V3_RELEASE_ACCOUNT_VERSION,

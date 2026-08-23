@@ -109,6 +109,7 @@ clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement" }
 clutch-retirement = { path = "../../../crates/clutch-retirement" }
 clutch-price-measure = { path = "../../../crates/clutch-price-measure" }
 clutch-product-series = { path = "../../../crates/clutch-product-series" }
+clutch-pyth-parser-v1 = { path = "../../../crates/clutch-pyth-parser-v1" }
 # The liveness kernel's `TreasuryServiceLedger` — the B4b mid-epoch-close
 # grief rider as fixed-memory bookkeeping.  Already in the graph through
 # `clutch-batch-policy-identity`; naming it here is what lets
