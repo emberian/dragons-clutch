@@ -45,7 +45,9 @@ selected operatord URL and only with sequential `GET` requests to:
 Response bodies are byte-budgeted while streaming and then shape-bounded.
 Account quantities remain canonical decimal strings. The release join requires
 exact program, ProgramData, deployment-slot, ELF, manifest, profile, source,
-enabled-intent, and release-key equality.
+enabled-intent, decoder-family, and release-key equality. Duplicate releases,
+duplicate selected account addresses, cross-family kind labels, and a release
+or decoder-family change during the acquisition bracket are refused.
 Rows from other releases are counted and ignored rather than blended.
 
 `operatord chain-serve --config FILE` is the live owner of these routes. Before
@@ -77,6 +79,14 @@ When a checked release explicitly selects the `fractional` family, Glass
 recognizes only the current Resolution-data-bound Policy V2, Ledger V1, Credit
 V2, and Tombstone V2 layouts. Withdrawn fractional V1 layouts are not fallback
 DTOs, and their presence does not create redemption capability.
+
+The current `series` decoder also owns the exact Product/Series account frames
+that are actually available onchain: the shared Product MarketLifecycleRoot V1,
+the per-Series MarketLink V1, SeriesRegistry V1, and SeriesFunding V1. Dealer
+coverage includes CoveredDealerSelection V1. These rows are hostile-decoded
+through the canonical Rust codecs and remain untrusted projections. The client
+has no placeholder Product artifact kinds and refuses any daemon row whose
+kind/family pair is outside the exact current decoder catalog.
 
 ## Projection semantics
 

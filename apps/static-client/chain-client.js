@@ -28,84 +28,83 @@
     recovery: "Recovery",
     other: "Other release state"
   });
-  const KIND_GROUPS = Object.freeze({
-    "collateral-hoard-v2": "collateral",
-    "collateral-claim-ledger-v3": "collateral",
-    "collateral-resolution-v5": "collateral",
-    "fractional-policy-v2": "collateral",
-    "fractional-ledger-v1": "collateral",
-    "fractional-credit-v2": "collateral",
-    "fractional-credit-tombstone-v2": "collateral",
-    "general-market-runtime": "market",
-    "general-epoch": "market",
-    "general-economic-domain": "market",
-    "general-market-binding": "market",
-    "general-order-page-v5": "market",
-    "general-reservation-v9": "settlement",
-    "general-candidate-window": "market",
-    "series-registry": "product",
-    "structured-claim-descriptor": "product",
-    "product-capability-registry": "product",
-    "product-capability-registry-v2": "product",
-    "compiled-product-series-bundle": "product",
-    "product-compiler-output": "product",
-    "product-artifact": "product",
-    "series-funding": "series",
-    "source-release": "source",
-    "source-head": "source",
-    "source-open-raw-page": "source",
-    "source-raw-page": "source",
-    "source-window-work": "source",
-    "source-window-seal": "source",
-    "source-statistic-result": "source",
-    "source-lineage": "source",
-    "source-work-receipt": "source",
-    "general-admission-node": "candidate",
-    "general-candidate-feed-stage": "candidate",
-    "general-candidate-feed": "candidate",
-    "general-clear-work": "candidate",
-    "general-selected-candidate": "candidate",
-    "general-epoch-budget": "candidate",
-    "general-owner-settlement": "settlement",
-    "general-owner-settlement-v5": "settlement",
-    "general-settlement-receipt-v5": "settlement",
-    "general-settlement-root-v1": "settlement",
-    "general-owner-settlement-v3": "settlement",
-    "owner-settlement-v3": "settlement",
-    "general-settlement-cash-pot": "settlement",
-    "general-final-pot": "settlement",
-    "fee-selected-record": "settlement",
-    "fee-owner-carry": "settlement",
-    "fee-owner-finalization": "settlement",
-    "fee-payer-allocation": "settlement",
-    "fee-recipient-allocation": "settlement",
-    "fee-treasury-ledger": "settlement",
-    "liveness-policy": "settlement",
-    "liveness-compartment": "settlement",
-    "position-v3": "settlement",
-    "replay-v3": "settlement",
-    "dealer-policy-v1": "liquidity",
-    "dealer-liveness-schedule-v1": "liquidity",
-    "dealer-state-v2": "liquidity",
-    "dealer-funded-dependencies-v2": "liquidity",
-    "dealer-lp-page-v2": "liquidity",
-    "dealer-lease-v2": "liquidity",
-    "dealer-settlement-pot-v2": "liquidity",
-    "dealer-epoch-binding-v2": "liquidity",
-    "dealer-terminal-allocation-v1": "liquidity",
-    "dealer-claim-work-v1": "liquidity",
-    "dealer-root-tombstone-v2": "liquidity",
-    "dealer-exit-ticket-v1": "liquidity",
-    "dealer-action-receipt-v1": "liquidity",
-    "dealer-replay": "liquidity",
-    "failure-external-root": "recovery",
-    "failure-market-root-v2": "recovery",
-    "failure-liveness-policy": "recovery",
-    "failure-recovery-compartment": "recovery",
-    "failure-replay-tombstone": "recovery",
-    "failure-interval-consensus-work-v1": "recovery",
-    "failure-interval-consensus-replay-v1": "recovery"
+  const kind = (family, group) => Object.freeze({ family, group });
+  // Exact names emitted by CanonicalAccountKind::name. This is a hostile-wire
+  // allowlist, not a second decoder and not a capability/allocation mirror.
+  const KIND_CATALOG = Object.freeze({
+    "collateral-hoard-v2": kind("collateral", "collateral"),
+    "collateral-claim-ledger-v3": kind("collateral", "collateral"),
+    "collateral-resolution-v5": kind("collateral", "collateral"),
+    "fractional-policy-v2": kind("fractional", "collateral"),
+    "fractional-ledger-v1": kind("fractional", "collateral"),
+    "fractional-credit-v2": kind("fractional", "collateral"),
+    "fractional-credit-tombstone-v2": kind("fractional", "collateral"),
+    "general-market-runtime": kind("general", "market"),
+    "general-epoch": kind("general", "market"),
+    "general-economic-domain": kind("general", "market"),
+    "general-market-binding": kind("general", "market"),
+    "general-order-page-v5": kind("general", "market"),
+    "general-reservation-v9": kind("general", "settlement"),
+    "general-candidate-window": kind("general", "market"),
+    "general-admission-node": kind("general", "candidate"),
+    "general-candidate-feed-stage": kind("general", "candidate"),
+    "general-candidate-feed": kind("general", "candidate"),
+    "general-clear-work": kind("general", "candidate"),
+    "general-selected-candidate": kind("general", "candidate"),
+    "general-epoch-budget": kind("general", "candidate"),
+    "general-owner-settlement-v5": kind("general", "settlement"),
+    "general-settlement-receipt-v5": kind("general", "settlement"),
+    "general-settlement-root-v1": kind("general", "settlement"),
+    "general-settlement-cash-pot": kind("general", "settlement"),
+    "general-final-pot": kind("general", "settlement"),
+    "product-market-lifecycle-root-v1": kind("series", "product"),
+    "product-series-market-link-v1": kind("series", "series"),
+    "series-registry": kind("series", "product"),
+    "series-funding": kind("series", "series"),
+    "source-release": kind("source", "source"),
+    "source-head": kind("source", "source"),
+    "source-open-raw-page": kind("source", "source"),
+    "source-raw-page": kind("source", "source"),
+    "source-window-work": kind("source", "source"),
+    "source-window-seal": kind("source", "source"),
+    "source-statistic-result": kind("source", "source"),
+    "source-lineage": kind("source", "source"),
+    "source-work-receipt": kind("source", "source"),
+    "fee-selected-record": kind("fees", "settlement"),
+    "fee-owner-carry": kind("fees", "settlement"),
+    "fee-owner-finalization": kind("fees", "settlement"),
+    "fee-payer-allocation": kind("fees", "settlement"),
+    "fee-recipient-allocation": kind("fees", "settlement"),
+    "fee-treasury-ledger": kind("fees", "settlement"),
+    "liveness-policy": kind("liveness", "settlement"),
+    "liveness-compartment": kind("liveness", "settlement"),
+    "position-v3": kind("position-v3", "settlement"),
+    "replay-v3": kind("replay-v3", "settlement"),
+    "structured-claim-descriptor": kind("structured-claim", "product"),
+    "dealer-policy-v1": kind("dealer", "liquidity"),
+    "dealer-liveness-schedule-v1": kind("dealer", "liquidity"),
+    "dealer-state-v2": kind("dealer", "liquidity"),
+    "dealer-funded-dependencies-v2": kind("dealer", "liquidity"),
+    "dealer-lp-page-v2": kind("dealer", "liquidity"),
+    "dealer-lease-v2": kind("dealer", "liquidity"),
+    "dealer-settlement-pot-v2": kind("dealer", "liquidity"),
+    "dealer-epoch-binding-v2": kind("dealer", "liquidity"),
+    "dealer-terminal-allocation-v1": kind("dealer", "liquidity"),
+    "dealer-claim-work-v1": kind("dealer", "liquidity"),
+    "dealer-root-tombstone-v2": kind("dealer", "liquidity"),
+    "dealer-exit-ticket-v1": kind("dealer", "liquidity"),
+    "dealer-action-receipt-v1": kind("dealer", "liquidity"),
+    "dealer-covered-selection-v1": kind("dealer", "liquidity"),
+    "dealer-replay": kind("dealer", "liquidity"),
+    "failure-external-root": kind("failure", "recovery"),
+    "failure-market-root-v2": kind("failure", "recovery"),
+    "failure-liveness-policy": kind("failure", "recovery"),
+    "failure-recovery-compartment": kind("failure", "recovery"),
+    "failure-replay-tombstone": kind("failure", "recovery"),
+    "failure-interval-consensus-work-v1": kind("failure", "recovery"),
+    "failure-interval-consensus-replay-v1": kind("failure", "recovery")
   });
+  const CANONICAL_FAMILIES = new Set(Object.values(KIND_CATALOG).map((entry) => entry.family));
 
   const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
   const requirePlain = (value, name) => {
@@ -145,6 +144,32 @@
   const bool = (value, name) => {
     if (typeof value !== "boolean") throw new Error(`${name} must be boolean.`);
     return value;
+  };
+
+  const validateFamilies = (raw, name) => {
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > 16) throw new Error(`${name} is invalid.`);
+    const families = raw.map((family, index) => text(family, `${name}[${index}]`, 40));
+    if (families.some((family) => !CANONICAL_FAMILIES.has(family)) || new Set(families).size !== families.length) throw new Error(`${name} contains an unknown or duplicate decoder family.`);
+    return Object.freeze(families);
+  };
+
+  const validateEnabledIntents = (raw, name) => {
+    if (!Array.isArray(raw) || raw.length > 256) throw new Error(`${name} is invalid.`);
+    return Object.freeze(raw.map((intent, index) => {
+      requirePlain(intent, `${name}[${index}]`);
+      const coordinate = Object.freeze({
+        familyTag: positiveDecimal(intent.familyTag, `${name}[${index}].familyTag`, 255n).toString(),
+        familyVersion: positiveDecimal(intent.familyVersion, `${name}[${index}].familyVersion`, 255n).toString(),
+        localAction: decimal(intent.localAction, `${name}[${index}].localAction`, 255n).toString()
+      });
+      if (index > 0) {
+        const previous = raw[index - 1];
+        const previousKey = [Number(previous.familyTag), Number(previous.familyVersion), Number(previous.localAction)];
+        const key = [Number(coordinate.familyTag), Number(coordinate.familyVersion), Number(coordinate.localAction)];
+        if (previousKey[0] > key[0] || (previousKey[0] === key[0] && (previousKey[1] > key[1] || (previousKey[1] === key[1] && previousKey[2] >= key[2])))) throw new Error(`${name} is not strictly canonical.`);
+      }
+      return coordinate;
+    }));
   };
 
   const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
@@ -338,25 +363,8 @@
     const releaseManifestSha256 = hash32(boundRelease.releaseManifestSha256, "transportBinding.release.releaseManifestSha256");
     const capabilityProfileId = hash32(boundRelease.capabilityProfileId, "transportBinding.release.capabilityProfileId");
     if (typeof boundRelease.sourceCommit !== "string" || !COMMIT.test(boundRelease.sourceCommit)) throw new Error("daemon-projected source commit is not a full lowercase Git identity.");
-    if (!Array.isArray(boundRelease.families) || boundRelease.families.length === 0 || boundRelease.families.length > 16) throw new Error("transportBinding.release.families is invalid.");
-    const families = Object.freeze(boundRelease.families.map((family, index) => text(family, `transportBinding.release.families[${index}]`, 40)));
-    if (new Set(families).size !== families.length) throw new Error("daemon-projected families are not unique.");
-    if (!Array.isArray(boundRelease.enabledIntents) || boundRelease.enabledIntents.length > 256) throw new Error("transportBinding.release.enabledIntents is invalid.");
-    const enabledIntents = Object.freeze(boundRelease.enabledIntents.map((intent, index) => {
-      requirePlain(intent, `transportBinding.release.enabledIntents[${index}]`);
-      const coordinate = Object.freeze({
-        familyTag: positiveDecimal(intent.familyTag, `enabledIntents[${index}].familyTag`, 255n).toString(),
-        familyVersion: positiveDecimal(intent.familyVersion, `enabledIntents[${index}].familyVersion`, 255n).toString(),
-        localAction: decimal(intent.localAction, `enabledIntents[${index}].localAction`, 255n).toString()
-      });
-      if (index > 0) {
-        const previous = boundRelease.enabledIntents[index - 1];
-        const previousKey = [Number(previous.familyTag), Number(previous.familyVersion), Number(previous.localAction)];
-        const key = [Number(coordinate.familyTag), Number(coordinate.familyVersion), Number(coordinate.localAction)];
-        if (previousKey.join(".") === key.join(".") || previousKey[0] > key[0] || (previousKey[0] === key[0] && (previousKey[1] > key[1] || (previousKey[1] === key[1] && previousKey[2] >= key[2])))) throw new Error("daemon-projected enabled intents are not strictly canonical.");
-      }
-      return coordinate;
-    }));
+    const families = validateFamilies(boundRelease.families, "transportBinding.release.families");
+    const enabledIntents = validateEnabledIntents(boundRelease.enabledIntents, "transportBinding.release.enabledIntents");
     const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
     if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
     const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, enabledIntents, families, releaseKey: expectedReleaseKey });
@@ -441,7 +449,6 @@
     if (raw.cluster !== configuration.clusterKey || raw.authorityEligible !== false || !Array.isArray(raw.releases) || raw.releases.length > 256) throw new Error("release response does not match the selected cluster, trust boundary, or bounds.");
     const releases = raw.releases.map((release, index) => {
       requirePlain(release, `releases[${index}]`);
-      if (!Array.isArray(release.families) || release.families.length === 0 || release.families.length > 16) throw new Error(`releases[${index}].families is invalid.`);
       return Object.freeze({
         releaseKey: text(release.releaseKey, `releases[${index}].releaseKey`, 256),
         programId: address(release.programId, `releases[${index}].programId`),
@@ -451,13 +458,14 @@
         releaseManifestSha256: hash32(release.releaseManifestSha256, `releases[${index}].releaseManifestSha256`),
         capabilityProfileId: hash32(release.capabilityProfileId, `releases[${index}].capabilityProfileId`),
         sourceCommit: typeof release.sourceCommit === "string" && COMMIT.test(release.sourceCommit) ? release.sourceCommit : (() => { throw new Error(`releases[${index}].sourceCommit is invalid.`); })(),
-        enabledIntents: Object.freeze(Array.isArray(release.enabledIntents) ? release.enabledIntents : (() => { throw new Error(`releases[${index}].enabledIntents is invalid.`); })()),
-        families: Object.freeze(release.families.map((family, familyIndex) => text(family, `releases[${index}].families[${familyIndex}]`, 40)))
+        enabledIntents: validateEnabledIntents(release.enabledIntents, `releases[${index}].enabledIntents`),
+        families: validateFamilies(release.families, `releases[${index}].families`)
       });
     });
+    if (new Set(releases.map((release) => release.releaseKey)).size !== releases.length) throw new Error("operatord release endpoint repeats a release key.");
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
     if (!selected) throw new Error("operatord release endpoint does not expose its acquisition-bound release key.");
-    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents)) {
+    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents) || JSON.stringify(selected.families) !== JSON.stringify(configuration.release.families)) {
       throw new Error("operatord release endpoint differs from its acquisition transport binding.");
     }
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });
@@ -477,6 +485,10 @@
     requirePlain(raw.decode, `accounts[${index}].decode`);
     if (raw.decode.status !== "canonical" && raw.decode.status !== "requires-context") throw new Error(`accounts[${index}] has an unknown decode status.`);
     const requirement = raw.decode.status === "requires-context" ? text(raw.decode.requirement, `accounts[${index}].decode.requirement`, 240) : null;
+    const family = text(raw.family, `accounts[${index}].family`, 40);
+    const accountKind = text(raw.kind, `accounts[${index}].kind`, 80);
+    const catalog = KIND_CATALOG[accountKind];
+    if (!catalog || catalog.family !== family) throw new Error(`accounts[${index}] names an unknown or cross-family canonical decoder kind.`);
     return Object.freeze({
       address: address(raw.address, `accounts[${index}].address`),
       owner: address(raw.owner, `accounts[${index}].owner`),
@@ -490,8 +502,8 @@
       dataSha256: hash32(raw.dataSha256, `accounts[${index}].dataSha256`),
       accountTag: decimal(raw.accountTag, `accounts[${index}].accountTag`, 255n).toString(),
       accountVersion: decimal(raw.accountVersion, `accounts[${index}].accountVersion`, 255n).toString(),
-      family: text(raw.family, `accounts[${index}].family`, 40),
-      kind: text(raw.kind, `accounts[${index}].kind`, 80),
+      family,
+      kind: accountKind,
       decode: Object.freeze({ status: raw.decode.status, requirement }),
       generation: raw.generation === null ? null : decimal(raw.generation, `accounts[${index}].generation`).toString(),
       primaryBinding: raw.primaryBinding === null ? null : hash32(raw.primaryBinding, `accounts[${index}].primaryBinding`),
@@ -508,6 +520,9 @@
     const all = raw.accounts.map((accountValue, index) => validateAccount(accountValue, index, configuration.commitment));
     const selected = all.filter((accountValue) => accountValue.releaseKey === configuration.release.releaseKey);
     if (selected.some((accountValue) => accountValue.owner !== configuration.release.programId)) throw new Error("A selected-release account owner differs from the selected program.");
+    const selectedFamilies = new Set(configuration.release.families);
+    if (selected.some((accountValue) => !selectedFamilies.has(accountValue.family))) throw new Error("A selected-release account names a decoder family absent from the checked release.");
+    if (new Set(selected.map((accountValue) => accountValue.address)).size !== selected.length) throw new Error("The selected-release projection repeats an account address.");
     return Object.freeze({ selected: Object.freeze(selected), ignoredOtherReleases: String(all.length - selected.length) });
   };
 
@@ -571,11 +586,9 @@
 
   const maximumSlot = (values) => values.reduce((maximum, value) => value > maximum ? value : maximum, 0n);
   const accountGroup = (kind) => {
-    if (KIND_GROUPS[kind]) return KIND_GROUPS[kind];
-    if (kind.startsWith("source-")) return "source";
-    if (kind.startsWith("dealer-")) return "liquidity";
-    if (kind.startsWith("failure-")) return "recovery";
-    return "other";
+    const catalog = KIND_CATALOG[kind];
+    if (!catalog) throw new Error(`Canonical decoder kind ${kind} has no current client catalog entry.`);
+    return catalog.group;
   };
 
   const deriveSnapshot = (configuration, health, acquisition, releases, accountResponse, keeperActions, forks, remainingResponseBytes) => {
@@ -693,7 +706,7 @@
     const forks = validateForks(await reader.get("/v1/forks"));
     const endAcquisition = validateAcquisition(await reader.get("/v1/acquisition"), target);
     if (endAcquisition.configuration.clusterKey !== configuration.clusterKey
-        || endAcquisition.configuration.release.releaseKey !== configuration.release.releaseKey
+        || JSON.stringify(endAcquisition.configuration.release) !== JSON.stringify(configuration.release)
         || endAcquisition.configuration.rpcHttpEndpoint.bindingSha256 !== configuration.rpcHttpEndpoint.bindingSha256
         || endAcquisition.configuration.rpcWebsocketEndpoint.bindingSha256 !== configuration.rpcWebsocketEndpoint.bindingSha256) {
       throw new Error("Daemon chain/release/endpoint binding changed during acquisition; reacquire instead of mixing generations.");

@@ -28,6 +28,27 @@ test("startup_has_no_embedded_chain_program_release_or_fixture_truth", () => {
   for (const obsolete of ["manifest.json", "terms.json", "successor-registry.js"]) assert.equal(fs.existsSync(path.join(root, obsolete)), false, obsolete);
 });
 
+test("current_projection_catalog_has_real_product_series_and_dealer_accounts_only", () => {
+  for (const current of [
+    "product-market-lifecycle-root-v1",
+    "product-series-market-link-v1",
+    "series-registry",
+    "series-funding",
+    "dealer-covered-selection-v1"
+  ]) assert.match(chain, new RegExp(`"${current}"`));
+  for (const placeholder of [
+    "product-capability-registry",
+    "compiled-product-series-bundle",
+    "product-compiler-output",
+    "product-artifact",
+    "general-owner-settlement-v3",
+    "owner-settlement-v3"
+  ]) assert.doesNotMatch(chain, new RegExp(`"${placeholder}"`));
+  assert.match(chain, /unknown or cross-family canonical decoder kind/);
+  assert.match(chain, /selected-release projection repeats an account address/);
+  assert.match(chain, /JSON\.stringify\(selected\.families\).*JSON\.stringify\(configuration\.release\.families\)/s);
+});
+
 test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection_only", () => {
   assert.match(chain, /method:\s*"GET"/);
   assert.match(chain, /credentials:\s*"omit"/);
@@ -39,6 +60,7 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
+  assert.match(app, /Enabled registry coordinates/);
 });
 
 test("browser_target_contains_only_operatord_commitment_and_local_bounds", () => {

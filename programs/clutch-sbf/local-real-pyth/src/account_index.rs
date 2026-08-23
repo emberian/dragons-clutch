@@ -15,10 +15,11 @@ use clutch_collateral_adapter_v2::{
     RESOLUTION_V5_TAG, RESOLUTION_V5_VERSION,
 };
 use clutch_dealer_runtime_contract::{
-    DealerActionReceiptV1, DealerClaimWorkV1, DealerEpochBindingV2, DealerExitTicketV1,
-    DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1,
-    DealerPolicyV1, DealerRootTombstoneV2, DealerStateV2, DealerTerminalAllocationV1,
-    FixedCodec as DealerFixedCodec, LpPageV2, SettlementPotV2, DEALER_FACILITY_REPLAY_BYTES_V1,
+    CoveredDealerSelectionV1, DealerActionReceiptV1, DealerClaimWorkV1, DealerEpochBindingV2,
+    DealerExitTicketV1, DealerFacilityReplayV1, DealerFundedDependenciesV2, DealerLeaseV2,
+    DealerLivenessScheduleV1, DealerPolicyV1, DealerRootTombstoneV2, DealerStateV2,
+    DealerTerminalAllocationV1, FixedCodec as DealerFixedCodec, LpPageV2, SettlementPotV2,
+    DEALER_FACILITY_REPLAY_BYTES_V1,
 };
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
 use clutch_fractional_redemption_runtime::{
@@ -78,7 +79,10 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
-use clutch_solana_layout::product_series::{SeriesFundingAccountV1, SeriesRegistryAccountV1};
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV1, SeriesFundingAccountV1, SeriesMarketLinkAccountV1,
+    SeriesRegistryAccountV1,
+};
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
 use clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5;
@@ -175,6 +179,8 @@ pub enum CanonicalAccountKind {
     GeneralSettlementRoot,
     GeneralSettlementCashPot,
     GeneralFinalPot,
+    ProductMarketLifecycleRootV1,
+    ProductSeriesMarketLinkV1,
     SeriesRegistry,
     SeriesFunding,
     SourceRelease,
@@ -210,6 +216,7 @@ pub enum CanonicalAccountKind {
     DealerRootTombstoneV2,
     DealerExitTicket,
     DealerActionReceipt,
+    DealerCoveredSelection,
     DealerReplay,
     FailureExternalRoot,
     FailureMarketRootV2,
@@ -249,6 +256,8 @@ impl CanonicalAccountKind {
             Self::GeneralSettlementRoot => "general-settlement-root-v1",
             Self::GeneralSettlementCashPot => "general-settlement-cash-pot",
             Self::GeneralFinalPot => "general-final-pot",
+            Self::ProductMarketLifecycleRootV1 => "product-market-lifecycle-root-v1",
+            Self::ProductSeriesMarketLinkV1 => "product-series-market-link-v1",
             Self::SeriesRegistry => "series-registry",
             Self::SeriesFunding => "series-funding",
             Self::SourceRelease => "source-release",
@@ -284,6 +293,7 @@ impl CanonicalAccountKind {
             Self::DealerRootTombstoneV2 => "dealer-root-tombstone-v2",
             Self::DealerExitTicket => "dealer-exit-ticket-v1",
             Self::DealerActionReceipt => "dealer-action-receipt-v1",
+            Self::DealerCoveredSelection => "dealer-covered-selection-v1",
             Self::DealerReplay => "dealer-replay",
             Self::FailureExternalRoot => "failure-external-root",
             Self::FailureMarketRootV2 => "failure-market-root-v2",
@@ -866,6 +876,43 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
 
 fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if tag_version(
+        data,
+        registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
+        registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION,
+    ) {
+        let value = MarketLifecycleRootAccountV1::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let binding = value.state.binding();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::ProductMarketLifecycleRootV1,
+        );
+        projection.generation = Some(binding.generation);
+        projection.primary_binding = Some(binding.market_instance_id.bytes());
+        projection.secondary_binding = Some(
+            binding
+                .id()
+                .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?
+                .bytes(),
+        );
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
+        registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION,
+    ) {
+        let value = SeriesMarketLinkAccountV1::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let binding = value.state.binding();
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::ProductSeriesMarketLinkV1,
+        );
+        projection.generation = Some(binding.generation);
+        projection.primary_binding = Some(binding.market_instance_id.bytes());
+        projection.secondary_binding = Some(binding.series_plan_id.bytes());
+        Ok(Some(projection))
+    } else if tag_version(
         data,
         registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
         registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
@@ -1509,6 +1556,21 @@ fn decode_dealer(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(value.facility_generation);
         projection.primary_binding = Some(value.facility_id.bytes());
         projection.secondary_binding = Some(value.receipt_account_id.bytes());
+        return Ok(Some(projection));
+    }
+    if let Some(value) = decode_current_dealer_body::<CoveredDealerSelectionV1>(
+        data,
+        registry::DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+        registry::DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
+        registry::DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+    )? {
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerCoveredSelection,
+        );
+        projection.generation = Some(value.dealer_generation);
+        projection.primary_binding = Some(value.market_instance_v2_id.bytes());
+        projection.secondary_binding = Some(value.facility_id.bytes());
         return Ok(Some(projection));
     }
 
@@ -2515,6 +2577,22 @@ mod current_decoder_tests {
             Err(AccountIndexError::CanonicalDecodeRefused)
         );
 
+        for (tag, version) in [
+            (
+                registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
+                registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION,
+            ),
+            (
+                registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
+                registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION,
+            ),
+        ] {
+            assert_eq!(
+                decode_series(&[tag, version]),
+                Err(AccountIndexError::CanonicalDecodeRefused)
+            );
+        }
+
         assert_eq!(decode_dealer(b"DCDSTAT1"), Ok(None));
         assert_eq!(
             decode_dealer(&[
@@ -2575,6 +2653,10 @@ mod current_decoder_tests {
             (
                 registry::DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
                 registry::DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+            ),
+            (
+                registry::DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+                registry::DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
             ),
         ] {
             assert_eq!(

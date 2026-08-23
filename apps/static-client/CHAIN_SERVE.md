@@ -60,6 +60,13 @@ MarketRoot V2 semantic body and exact interval-consensus work/replay accounts,
 not merely their outer tag. Withdrawn versions do not silently enter the live
 projection.
 
+Product/Series discovery includes the exact `0xaa/1` MarketLifecycleRoot and
+`0xad/1` SeriesMarketLink account frames in addition to SeriesRegistry and
+SeriesFunding. Dealer discovery includes the exact `0xae/1`
+CoveredDealerSelection body. The browser admits only the corresponding current
+Rust-emitted family/kind catalog; unknown, historical, cross-family, or
+placeholder labels fail closed.
+
 ## What is checked before serving
 
 The process makes bounded read-only calls to the explicitly configured,

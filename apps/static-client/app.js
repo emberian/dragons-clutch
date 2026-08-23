@@ -121,6 +121,9 @@
       definition("Source commit", snapshot.release.declaredSourceCommit),
       definition("Capability profile", snapshot.release.declaredCapabilityProfileId),
       definition("Decoded families", release.families.join(", ")),
+      definition("Enabled registry coordinates", release.enabledIntents.length === 0
+        ? "none — transaction construction refuses every successor coordinate"
+        : release.enabledIntents.map((intent) => `${intent.familyTag}/${intent.familyVersion}/${intent.localAction}`).join(", ")),
       definition("Manifest/capability authentication", snapshot.release.manifestSourceCapabilityAuthentication)
     );
   };
