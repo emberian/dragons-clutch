@@ -4146,6 +4146,15 @@ pub enum MergePaymentFinalizationSourceV5 {
     FeeFinalizationV4 = 2,
 }
 
+impl MergePaymentFinalizationSourceV5 {
+    const fn code(self) -> u8 {
+        match self {
+            Self::ZeroFeeReplay => 1,
+            Self::FeeFinalizationV4 => 2,
+        }
+    }
+}
+
 /// One atomic V5 action-40 poststate bundle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeMergeReceiptPaymentPlanV5 {
@@ -4315,7 +4324,7 @@ fn derive_merge_payment_owner_finalization_evidence_v5(
     hash.update(owner.bytes());
     hash.update(finalized_owner_row_data_id.bytes());
     hash.update(pot_poststate_data_id.bytes());
-    hash.update([source as u8]);
+    hash.update([source.code()]);
     hash.update(source_data_id.bytes());
     Id32::new(hash.finalize().into()).map_err(SettlementAdapterErrorV1::Contract)
 }
