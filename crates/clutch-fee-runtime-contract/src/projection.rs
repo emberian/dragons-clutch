@@ -340,6 +340,166 @@ pub struct SelectedOwnerFeeBookV1 {
     selected_fee_atoms: u128,
 }
 
+/// Exact canonical selected-owner fee-book transcript width.
+pub const SELECTED_OWNER_FEE_BOOK_V1_BYTES: usize =
+    8 + 2 + 2 + (3 * 32) + 1 + 7 + 16 + (MAX_ORDERS * (32 + 8));
+/// Canonical selected-owner fee-book transcript discriminator.
+pub const SELECTED_OWNER_FEE_BOOK_MAGIC_V1: [u8; 8] = *b"DCFEEBOK";
+/// Content-ID domain for the complete canonical owner fee book.
+pub const SELECTED_OWNER_FEE_BOOK_DATA_ID_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/selected-owner-fee-book/v1\0";
+
+/// Minimal exact hash seam for one fixed owner-fee book transcript.
+pub trait SelectedOwnerFeeBookHashV1 {
+    /// SHA-256 over the named domain and exact fixed-width body.
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32];
+}
+
+/// Encode the complete canonical owner-sorted fee book.
+pub fn encode_selected_owner_fee_book_v1(
+    book: &SelectedOwnerFeeBookV1,
+) -> Result<[u8; SELECTED_OWNER_FEE_BOOK_V1_BYTES]> {
+    let mut output = [0u8; SELECTED_OWNER_FEE_BOOK_V1_BYTES];
+    let mut at = 0usize;
+    fn put(output: &mut [u8], at: &mut usize, bytes: &[u8]) -> Result<()> {
+        let end = at.checked_add(bytes.len()).ok_or(Error::ArithmeticOverflow)?;
+        let target = output.get_mut(*at..end).ok_or(Error::InvalidWidth)?;
+        target.copy_from_slice(bytes);
+        *at = end;
+        Ok(())
+    }
+    put(&mut output, &mut at, &SELECTED_OWNER_FEE_BOOK_MAGIC_V1)?;
+    put(&mut output, &mut at, &1u16.to_le_bytes())?;
+    put(&mut output, &mut at, &0u16.to_le_bytes())?;
+    put(&mut output, &mut at, &book.fee_record.0)?;
+    put(&mut output, &mut at, &book.settlement_candidate.0)?;
+    put(&mut output, &mut at, &book.revenue_policy.0)?;
+    put(&mut output, &mut at, &[book.owner_count])?;
+    put(&mut output, &mut at, &[0; 7])?;
+    put(
+        &mut output,
+        &mut at,
+        &book.selected_fee_atoms.to_le_bytes(),
+    )?;
+    let mut index = 0usize;
+    while index < MAX_ORDERS {
+        put(&mut output, &mut at, &book.rows[index].owner)?;
+        put(
+            &mut output,
+            &mut at,
+            &book.rows[index].fee_atoms.to_le_bytes(),
+        )?;
+        index += 1;
+    }
+    if at != output.len() {
+        return Err(Error::InvalidWidth);
+    }
+    Ok(output)
+}
+
+/// Derive the complete owner-fee book's canonical content identity.
+pub fn selected_owner_fee_book_data_id_v1<H: SelectedOwnerFeeBookHashV1>(
+    book: &SelectedOwnerFeeBookV1,
+    hash: &H,
+) -> Result<Id> {
+    let body = encode_selected_owner_fee_book_v1(book)?;
+    live(book.fee_record)?;
+    live(book.settlement_candidate)?;
+    live(book.revenue_policy)?;
+    let data_id = Id(hash.sha256(
+        SELECTED_OWNER_FEE_BOOK_DATA_ID_DOMAIN_V1,
+        &body,
+    ));
+    live(data_id)?;
+    Ok(data_id)
+}
+
+/// Candidate-wide recipient allocation certified by the complete fee book.
+///
+/// The immutable program-owned outer is the persistence authority. Structural
+/// decode alone does not recreate the creation-time proof; the only live
+/// creation path must consume [`SelectedOwnerFeeBookV1`] and an exhaustive
+/// traversal-derived owner-order-set digest/count.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CertifiedRecipientAllocationV2 {
+    allocation: RecipientAllocationV1,
+    owner_fee_book_data_id: Id,
+    owner_order_set_digest: Id,
+    owner_count: u16,
+}
+
+impl CertifiedRecipientAllocationV2 {
+    /// Exact recipient allocation and collected total.
+    pub const fn allocation(&self) -> RecipientAllocationV1 {
+        self.allocation
+    }
+
+    /// Content identity of the canonical complete selected-owner fee book.
+    pub const fn owner_fee_book_data_id(&self) -> Id {
+        self.owner_fee_book_data_id
+    }
+
+    /// Exhaustive traversal's immutable owner-order-set digest.
+    pub const fn owner_order_set_digest(&self) -> Id {
+        self.owner_order_set_digest
+    }
+
+    /// Exact number of canonical participating owner rows.
+    pub const fn owner_count(&self) -> u16 {
+        self.owner_count
+    }
+
+    pub(crate) fn restore_persisted(
+        allocation: RecipientAllocationV1,
+        owner_fee_book_data_id: Id,
+        owner_order_set_digest: Id,
+        owner_count: u16,
+    ) -> Result<Self> {
+        live(owner_fee_book_data_id)?;
+        live(owner_order_set_digest)?;
+        if owner_count == 0
+            || usize::from(owner_count) > MAX_ORDERS
+            || allocation.collected_fee_atoms() == 0
+        {
+            return Err(Error::InvalidAccountData);
+        }
+        Ok(Self {
+            allocation,
+            owner_fee_book_data_id,
+            owner_order_set_digest,
+            owner_count,
+        })
+    }
+}
+
+/// Certify recipient allocation against every canonical selected-owner row.
+pub fn certify_recipient_allocation_v2<H: SelectedOwnerFeeBookHashV1>(
+    selected: &SelectedCompositeFeeV1,
+    book: &SelectedOwnerFeeBookV1,
+    owner_order_set_digest: Id,
+    allocation: RecipientAllocationV1,
+    hash: &H,
+) -> Result<CertifiedRecipientAllocationV2> {
+    live(owner_order_set_digest)?;
+    let owner_count = u16::from(book.owner_count);
+    let selected_fee_atoms = u64::try_from(book.selected_fee_atoms)
+        .map_err(|_| Error::AmountOutOfRange)?;
+    if book.fee_record != selected.fee_record()
+        || book.settlement_candidate != selected.selected_candidate()
+        || book.revenue_policy != selected.revenue_policy()
+        || allocation.fee_record() != selected.fee_record()
+        || allocation.collected_fee_atoms() != selected_fee_atoms
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    CertifiedRecipientAllocationV2::restore_persisted(
+        allocation,
+        selected_owner_fee_book_data_id_v1(book, hash)?,
+        owner_order_set_digest,
+        owner_count,
+    )
+}
+
 impl SelectedOwnerFeeBookV1 {
     pub const fn fee_record(&self) -> Id {
         self.fee_record
@@ -1129,6 +1289,19 @@ mod tests {
         Id([byte; 32])
     }
 
+    #[derive(Debug)]
+    struct BookHash;
+
+    impl SelectedOwnerFeeBookHashV1 for BookHash {
+        fn sha256(&self, _domain: &[u8], body: &[u8]) -> [u8; 32] {
+            let mut id = [0u8; 32];
+            id[0] = body[0];
+            id[1] = body[SELECTED_OWNER_FEE_BOOK_V1_BYTES - 1];
+            id[31] = 1;
+            id
+        }
+    }
+
     fn selected() -> SelectedCompositeFeeV1 {
         let batch = FrozenPolicyV1 {
             allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
@@ -1367,6 +1540,28 @@ mod tests {
         .unwrap();
         assert_eq!(book.owner_count, 1);
         assert_eq!(book.selected_fee_atoms, 7);
+        let allocation = RecipientAllocationV1::restore_persisted(
+            selected.fee_record(),
+            0,
+            [Id([0; 32]); MAX_FEE_ROWS_V1],
+            [0; MAX_FEE_ROWS_V1],
+            0,
+            0,
+            7,
+            7,
+        )
+        .unwrap();
+        let certified = certify_recipient_allocation_v2(
+            &selected,
+            &book,
+            id(31),
+            allocation,
+            &BookHash,
+        )
+        .unwrap();
+        assert_eq!(certified.owner_count(), 1);
+        assert_eq!(certified.allocation().collected_fee_atoms(), 7);
+        assert_eq!(certified.owner_order_set_digest(), id(31));
 
         let mut wrong_total = totals;
         wrong_total.selected_fee_atoms = 8;

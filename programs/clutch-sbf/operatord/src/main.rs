@@ -11,21 +11,24 @@
 //! the same library the sealed lane's plan generator is, and
 //! `operatord replay` byte-diffs that claim.
 //!
-//! Nothing this daemon produces is evidence about a deployment, devnet, or
-//! mainnet. Watch and Friday Trade carry the explicit mock-source profile;
-//! `pyth-live` separately supervises the real router/receiver local laboratory
-//! without reading a retained transcript or giving the browser key material.
+//! The chain-attached surface is `chain-serve` and requires an explicit
+//! genesis/release/decoder configuration. Historical mock and synthetic
+//! laboratories remain reachable only through command modes whose names begin
+//! with `non-production-`; none is a live discovery fallback.
 
 mod bot;
 mod builders;
 mod bus;
 mod chain_server;
+mod compose_chain_config;
 mod crank;
 mod decode;
+mod devnet_deployment;
 mod friday;
 mod http;
 mod index_api;
 mod integer;
+mod local_validator_launcher;
 mod payoff_compiler;
 mod plan;
 mod processed_ws;
@@ -63,16 +66,72 @@ pub(crate) fn repo_path(relative: &str) -> PathBuf {
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
-         operatord serve [--mode watch|trade|pyth-local|pyth-live] [--port N] [--rpc-port N] [--faucet-port N] \
+         operatord serve --mode non-production-mock-watch|non-production-mock-trade|non-production-retained-source-v2|non-production-synthetic-source-v2-live [--port N] [--rpc-port N] [--faucet-port N] \
          [--gossip-port N] [--dynamic-port-range START-END] [--work DIR] [--static DIR] \
          [--freeze-window SLOTS] [--transcript DIR] [--exit-when-done]\n  \
          operatord emit <plan-dir>\n  \
          operatord replay <plan-dir>\n  \
          operatord compiler-serve --compiler-release-sha256 HASH [--port N] [--static DIR]\n  \
          operatord compile-payoff --compiler-release-sha256 HASH < request.json\n  \
-         operatord chain-serve --config FILE [--port N] [--static DIR]"
+         operatord chain-serve --config FILE [--port N] [--static DIR]\n  \
+         operatord compose-chain-config --local-release-manifest FILE --capability-manifest FILE \
+         --cluster-name NAME --expected-genesis HASH --rpc-http-url URL --rpc-websocket-url URL\n  \
+         operatord prepare-local-chain --config FILE --capability-manifest FILE\n  \
+         operatord launch-local-chain --config FILE --capability-manifest FILE [--port N] [--static DIR]\n  \
+         operatord compose-devnet-chain-config --deployment-manifest FILE \
+         --capability-manifest FILE --built-elf FILE"
     );
     process::exit(2)
+}
+
+fn parse_devnet_compose(
+    mut args: impl Iterator<Item = String>,
+) -> Result<devnet_deployment::ComposeDevnetOptions> {
+    let mut deployment_manifest = None;
+    let mut capability_manifest = None;
+    let mut built_elf = None;
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--deployment-manifest" => deployment_manifest = Some(PathBuf::from(value()?)),
+            "--capability-manifest" => capability_manifest = Some(PathBuf::from(value()?)),
+            "--built-elf" => built_elf = Some(PathBuf::from(value()?)),
+            other => return Err(format!("unknown compose-devnet-chain-config flag {other}").into()),
+        }
+    }
+    Ok(devnet_deployment::ComposeDevnetOptions {
+        deployment_manifest: deployment_manifest
+            .ok_or("compose-devnet-chain-config requires --deployment-manifest FILE")?,
+        capability_manifest: capability_manifest
+            .ok_or("compose-devnet-chain-config requires --capability-manifest FILE")?,
+        built_elf: built_elf.ok_or("compose-devnet-chain-config requires --built-elf FILE")?,
+    })
+}
+
+fn parse_local_launch(
+    mut args: impl Iterator<Item = String>,
+) -> Result<local_validator_launcher::LocalLaunchOptions> {
+    let mut config = None;
+    let mut capability_manifest = None;
+    let mut server_port = 9130_u16;
+    let mut statics = repo_path("apps/static-client");
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--config" => config = Some(PathBuf::from(value()?)),
+            "--capability-manifest" => capability_manifest = Some(PathBuf::from(value()?)),
+            "--port" => server_port = value()?.parse()?,
+            "--static" => statics = PathBuf::from(value()?),
+            other => return Err(format!("unknown local-chain flag {other}").into()),
+        }
+    }
+    Ok(local_validator_launcher::LocalLaunchOptions {
+        config: config.ok_or("local-chain command requires --config FILE")?,
+        capability_manifest: capability_manifest
+            .ok_or("local-chain command requires --capability-manifest FILE")?,
+        server_port,
+        statics,
+    })
 }
 
 struct CompilerServeOptions {
@@ -124,6 +183,41 @@ struct ChainServeOptions {
     config: PathBuf,
 }
 
+fn parse_compose_chain_config(
+    mut args: impl Iterator<Item = String>,
+) -> Result<compose_chain_config::ComposeOptions> {
+    let mut local_release_manifest = None;
+    let mut capability_manifest = None;
+    let mut cluster_name = None;
+    let mut expected_genesis = None;
+    let mut rpc_http_url = None;
+    let mut rpc_websocket_url = None;
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--local-release-manifest" => local_release_manifest = Some(PathBuf::from(value()?)),
+            "--capability-manifest" => capability_manifest = Some(PathBuf::from(value()?)),
+            "--cluster-name" => cluster_name = Some(value()?),
+            "--expected-genesis" => expected_genesis = Some(value()?),
+            "--rpc-http-url" => rpc_http_url = Some(value()?),
+            "--rpc-websocket-url" => rpc_websocket_url = Some(value()?),
+            other => return Err(format!("unknown compose-chain-config flag {other}").into()),
+        }
+    }
+    Ok(compose_chain_config::ComposeOptions {
+        local_release_manifest: local_release_manifest
+            .ok_or("compose-chain-config requires --local-release-manifest FILE")?,
+        capability_manifest: capability_manifest
+            .ok_or("compose-chain-config requires --capability-manifest FILE")?,
+        cluster_name: cluster_name.ok_or("compose-chain-config requires --cluster-name NAME")?,
+        expected_genesis: expected_genesis
+            .ok_or("compose-chain-config requires --expected-genesis HASH")?,
+        rpc_http_url: rpc_http_url.ok_or("compose-chain-config requires --rpc-http-url URL")?,
+        rpc_websocket_url: rpc_websocket_url
+            .ok_or("compose-chain-config requires --rpc-websocket-url URL")?,
+    })
+}
+
 fn parse_chain_serve(mut args: impl Iterator<Item = String>) -> Result<ChainServeOptions> {
     let mut port = 9130_u16;
     let mut statics = repo_path("apps/static-client");
@@ -161,7 +255,7 @@ struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            mode: "watch".to_string(),
+            mode: String::new(),
             port: 9130,
             rpc_port: 9137,
             // Agave reserves rpc_port + 1 (9138) for RPC WebSocket.
@@ -200,10 +294,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options> {
     Ok(options)
 }
 
-/// Dispatch on the session mode: watch the sealed lane's plan, or trade the
-/// Friday clutch.  The two share the prologue and nothing else.
+/// Dispatch one explicitly named non-production laboratory session.
 fn dispatch(options: Options) -> Result<()> {
-    if options.mode != "pyth-local" {
+    if options.mode.is_empty() {
+        return Err("serve requires an explicit non-production --mode; use chain-serve --config FILE for real/local chain discovery".into());
+    }
+    if options.mode != "non-production-retained-source-v2" {
         toolchain::validate_validator_network(
             Some(options.port),
             options.rpc_port,
@@ -213,8 +309,8 @@ fn dispatch(options: Options) -> Result<()> {
         )?;
     }
     match options.mode.as_str() {
-        "watch" => serve(options),
-        "trade" => trade::serve(trade::Options {
+        "non-production-mock-watch" => serve(options),
+        "non-production-mock-trade" => trade::serve(trade::Options {
             port: options.port,
             rpc_port: options.rpc_port,
             faucet_port: options.faucet_port,
@@ -225,18 +321,18 @@ fn dispatch(options: Options) -> Result<()> {
             freeze_window: options.freeze_window,
             exit_when_settled: options.exit_when_done,
         }),
-        "pyth-local" => pyth::serve(pyth::Options {
+        "non-production-retained-source-v2" => pyth::serve(pyth::Options {
             port: options.port,
             transcript: options
                 .transcript
-                .ok_or("pyth-local mode requires --transcript DIR")?,
+                .ok_or("non-production-retained-source-v2 mode requires --transcript DIR")?,
             statics: options.statics,
             exit_when_done: options.exit_when_done,
         }),
-        "pyth-live" => {
+        "non-production-synthetic-source-v2-live" => {
             if options.transcript.is_some() {
                 return Err(
-                    "pyth-live refuses --transcript; use pyth-local for retained evidence".into(),
+                    "non-production-synthetic-source-v2-live refuses --transcript; use non-production-retained-source-v2 for retained evidence".into(),
                 );
             }
             pyth_live::serve(pyth_live::Options {
@@ -251,7 +347,7 @@ fn dispatch(options: Options) -> Result<()> {
             })
         }
         other => Err(format!(
-            "unknown session mode {other}; try watch, trade, pyth-local, or pyth-live"
+            "unknown session mode {other}; every laboratory mode must use its complete non-production-* name"
         )
         .into()),
     }
@@ -276,6 +372,7 @@ fn banner(
 ) -> Value {
     json!({
         "type": "identity",
+        "mode": "non-production-mock-watch",
         "integer_transport": integer::TRANSPORT,
         "source_profile": artifact.source_profile,
         "elf_path": artifact.path.display().to_string(),
@@ -527,6 +624,20 @@ fn main() {
         "chain-serve" => parse_chain_serve(args).and_then(|options| {
             chain_server::serve(options.port, options.statics, &options.config)
         }),
+        "compose-chain-config" => parse_compose_chain_config(args).and_then(|options| {
+            print!("{}", compose_chain_config::compose(&options)?);
+            Ok(())
+        }),
+        "prepare-local-chain" => parse_local_launch(args).and_then(|options| {
+            print!("{}", local_validator_launcher::prepare_only(&options)?);
+            Ok(())
+        }),
+        "launch-local-chain" => parse_local_launch(args)
+            .and_then(|options| local_validator_launcher::launch_and_serve(&options)),
+        "compose-devnet-chain-config" => parse_devnet_compose(args).and_then(|options| {
+            print!("{}", devnet_deployment::compose(&options)?);
+            Ok(())
+        }),
         _ => usage(),
     };
     if let Err(error) = outcome {
@@ -537,7 +648,14 @@ fn main() {
 
 #[cfg(test)]
 mod option_tests {
-    use super::{parse, toolchain};
+    use super::{dispatch, parse, toolchain, Options};
+
+    #[test]
+    fn serve_has_no_implicit_laboratory_mode() {
+        let error = dispatch(Options::default()).unwrap_err().to_string();
+        assert!(error.contains("requires an explicit non-production --mode"));
+        assert!(error.contains("chain-serve --config FILE"));
+    }
 
     #[test]
     fn parses_an_explicit_disjoint_validator_network() {
@@ -560,6 +678,7 @@ mod option_tests {
         .unwrap();
         assert_eq!(options.gossip_port, 9570);
         assert_eq!(options.dynamic_port_range, "9571-9620");
+        assert!(options.mode.is_empty());
         toolchain::validate_validator_network(
             Some(options.port),
             options.rpc_port,
@@ -573,12 +692,16 @@ mod option_tests {
     #[test]
     fn live_pyth_mode_is_explicit_and_does_not_imply_a_transcript() {
         let options = parse(
-            ["--mode", "pyth-live", "--exit-when-done"]
-                .into_iter()
-                .map(str::to_string),
+            [
+                "--mode",
+                "non-production-synthetic-source-v2-live",
+                "--exit-when-done",
+            ]
+            .into_iter()
+            .map(str::to_string),
         )
         .unwrap();
-        assert_eq!(options.mode, "pyth-live");
+        assert_eq!(options.mode, "non-production-synthetic-source-v2-live");
         assert!(options.exit_when_done);
         assert!(options.transcript.is_none());
         assert!(options.work.is_none());

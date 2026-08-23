@@ -206,6 +206,15 @@ FractionalRedemption 79/v1 reserves these local actions, all disabled:
 9. `SealClaimsExhausted`
 10. `CloseEmptyLedger`
 
+Actions 2, 3, and 9 have complete staged SBF handlers, but this does not alter
+their central status: all ten tuples remain `ReservedDisabled`. Action 3 binds
+the full authenticated outcome-mint vector, accepts the exact independent
+Token-2022 burn before exposing the Realm collateral request, and atomically
+writes Hoard/ClaimLedger/`0xa5`. Action 9 advances only ClaimLedger and `0xa5`
+after canonical supply is exactly zero. Product's exact action-1 family
+admission producer and an explicit deployable release profile remain required
+before any tuple can be enabled.
+
 The current account coordinates are `0xa4/2` for the immutable
 Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
 credit and live-credit count, `0xa6/2` for one owner-scoped canonical numerator,
@@ -226,9 +235,13 @@ never owned either identity and remains the sole aggregate-credit owner.
 
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
-backing live. `CloseEmptyLedger` requires claims, aggregate credit, live credit
-accounts, and claim backing all to be zero. It then closes both `0xa4` and
-`0xa5` under one private ProductOccurrenceRoot terminal authorization, refunds
+backing live. ClaimLedger V3 begins with an explicit unlatched fractional state
+and zero a4/a5 identities; Resolution activation preserves it. Only Fractional
+Initialize can atomically latch both exact accounts, sequence zero-to-one, and
+the Product five-family admission receipt. `CloseEmptyLedger` requires claims,
+aggregate credit, live credit accounts, and claim backing all to be zero. It
+then closes both `0xa4` and `0xa5` under one private Product five-family
+terminal authorization, refunds
 each account's stored rent payer independently, and routes only hostile or
 unsolicited lamports to the neutral sink. It therefore cannot sweep Hoard
 principal, reinterpret donation surplus as revenue, strand policy rent, permit
@@ -242,12 +255,12 @@ integrated runtime and adapter, while Recovery payload/account contracts are
 owned by its dedicated modules; this central allocation duplicates neither
 contract and activates none of those actions.
 
-## General SettlementReceipt V3 allocation
+## General SettlementReceipt successor allocation
 
-The central collision ledger reserves main-account coordinate `0x0f/3` for the
-217-byte General SettlementReceipt successor. This is a fresh version of the
-existing receipt tag, not a reinterpretation of `0x0f/2`; the two hostile
-decoders refuse each other. Runtime capability remains disabled.
+The central collision ledger preserves main-account coordinate `0x0f/3` as the
+withdrawn 217-byte General SettlementReceipt history. It was a fresh version
+of the existing receipt tag, not a reinterpretation of `0x0f/2`; the hostile
+decoders still refuse each other, but no executable route may create V3.
 
 V3 uses the fresh PDA seed tuple
 `["general-receipt:v3", Epoch_PDA, final SettlementCandidateId,
@@ -259,18 +272,38 @@ contract domains; neither ID is accepted from a caller or persisted. The
 receipt data ID instead hashes the authenticated PDA plus the exact current
 217-byte prestate, so both mutable latch families are committed.
 
-## General OwnerSettlement V3 allocation
+V3 and same-width V4 are now historical, withdrawn schemas. The sole future
+route is `0x0f/5`, exactly 298 bytes under the fresh `general-receipt:v5` PDA
+domain: the complete 217-byte V4 state machine, a one-byte typed transition
+kind, a 32-byte transition commitment, and the exact 48-byte deletable-rent
+owner. Kind zero requires a permanently zero commitment. Kind one is the
+exclusive portfolio-pair V2 route: its commitment is zero only before
+delivery and becomes one nonzero immutable hash atomically with the terminal
+delivery latch. The exact portfolio preimage includes the V5 pre-data ID and
+all transition/post semantic fields but excludes the circular V5 post-data ID;
+the post-data ID then commits the stored hash. Unknown kinds and mismatched
+kind/commitment states are refused.
 
-The central ledger reserves `0x81/3` as `ReservedDisabled` for the canonical
-General owner row. Its exact 292 bytes are tag `0x81`, version `3`, the
-authoritative 288-byte `clutch-owner-settlement` V3 semantic body, stored bump,
-and one reserved-zero flags byte. The strict outer decoder authenticates the
-V3 envelope before invoking the V3 body decoder.
+## General OwnerSettlement successor allocation
+
+The central ledger preserves withdrawn `0x81/3` history for the former General
+owner row. Its exact 292 bytes are tag `0x81`, version `3`, the authoritative
+288-byte `clutch-owner-settlement` V3 semantic body, stored bump, and one
+reserved-zero flags byte. The strict outer decoder remains available only for
+historical decoding; no executable route may create or mutate it.
 
 Coordinates `0x81/1` and `0x81/2` remain separately reserved but withdrawn.
 Future routes recognize neither as V3 and perform no migration or
 reinterpretation. The canonical PDA tuple is `owner-settlement:v3`, counted
 Epoch PDA, final `SettlementCandidateId`, and semantic owner.
+
+V4 added exact merge-delivery accounting but remained unable to own its close
+refund because its creation plan named no persisted rent-ledger schema. It is
+therefore historical and withdrawn. The sole future row is `0x81/5`, exactly
+340 bytes: tag/version, the unchanged authoritative 288-byte V4 semantic body,
+one exact 48-byte deletable-rent owner, stored V5 bump, and zero flags. Its PDA
+and account-data identity use fresh `/v5` domains; V1 through V4 cannot alias
+or enter future executable routes.
 
 ## General OrderPage V5 allocation
 
@@ -308,14 +341,17 @@ price artifacts, and present-funded liveness before capability admission.
 
 The central collision ledger is the sole allocation owner for the following
 coordinated successor block. Dealer policy transport rows are
-`NonProductionLab`; historical Reservation V5 is `Frozen`; current unactivated
-rows are `ReservedDisabled`; and rows named withdrawn remain occupied as
-`Withdrawn`. An account codec or pure runtime elsewhere does not make a route
-executable.
+`NonProductionLab`; current unactivated rows are `ReservedDisabled`; and
+historical General Reservation/receipt/owner-row coordinates and withdrawn
+Fractional V1 coordinates remain occupied as `Withdrawn`. An account codec or
+pure runtime elsewhere does not make a route executable.
 
 | tag/version | owner | account |
 |---:|---|---|
-| `0x13/5` | retirement history | frozen counted General Reservation V5 (627 bytes); withdrawn from future creation and never reinterpreted |
+| `0x0f/3` | settlement history | historical General receipt V3 (217 bytes); withdrawn |
+| `0x0f/4` | settlement history | historical merge-payment receipt V4 (217 bytes); withdrawn |
+| `0x0f/5` | General V2 | sole future rent-owned typed receipt V5 (298 bytes) |
+| `0x13/5` | retirement history | withdrawn counted General Reservation V5 (627 bytes); never reinterpreted |
 | `0x13/7` | retirement history | withdrawn provisional deletable General Reservation V7 (675 bytes); no live route and never reinterpreted |
 | `0x13/9` | General V2 | sole future rent-owned Reservation V9 (666 bytes); V4 live creation withdrawn |
 | `0x7d/1` | Dealer | staged policy |
@@ -324,12 +360,18 @@ executable.
 | `0x80/1` | Recurring Series | present-funding compartments |
 | `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
 | `0x81/2` | General V2 | withdrawn presence-explicit owner settlement V2; never a live alias |
-| `0x81/3` | General V2 | canonical Reservation-handoff owner settlement V3 |
-| `0x81/4` | General V2 | canonical counted merge-delivery owner settlement V4 (292 bytes) |
+| `0x81/3` | General V2 | historical Reservation-handoff owner settlement V3; withdrawn |
+| `0x81/4` | General V2 | historical merge-delivery owner settlement V4 (292 bytes); withdrawn |
+| `0x81/5` | General V2 | sole future rent-owned owner settlement V5 (340 bytes) |
 | `0x82/1` | General V2 | selected fee record |
-| `0x83/1` | General V2 | owner fee carry |
-| `0x84/1` | General V2 | payer allocation |
-| `0x85/1` | General V2 | recipient allocation |
+| `0x83/1` | General V2 history | withdrawn owner fee carry without persisted rent ownership |
+| `0x83/2` | General V2 history | withdrawn terminal carry receipt without persisted rent ownership |
+| `0x83/3` | General V2 | sole future rent-owned live owner fee carry (180 bytes) |
+| `0x83/4` | General V2 | sole future rent-owned terminal carry receipt (548 bytes) |
+| `0x84/1` | General V2 history | withdrawn payer allocation without persisted rent ownership |
+| `0x84/2` | General V2 | sole future rent-owned payer allocation (2,732 bytes) |
+| `0x85/1` | General V2 history | recipient allocation without complete fee-book or rent ownership |
+| `0x85/2` | General V2 | sole future rent-owned complete-book-certified recipient allocation (2,764 bytes) |
 | `0x86/1` | General V2 | treasury ledger |
 | `0x87/1` | General V2 | settlement cash pot |
 | `0x88/1` | StructuredClaim | descriptor |
@@ -348,7 +390,7 @@ executable.
 | `0x94/1` | Dealer | authoritative State V2 with persisted terminal evidence (980 bytes) |
 | `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
 | `0x98/1` | Dealer | immutable-after-activation LP page V2 (980 bytes) |
-| `0x99/1` | Dealer | selected-artifact-bound one-generation Lease V2 (1,076 bytes) |
+| `0x99/1` | Dealer | root-counted CoveredDealer-selection-bound one-generation Lease V2 (1,140 bytes) |
 | `0x9a/1` | Dealer | SettlementPot V2 (1,236 bytes) |
 | `0x9b/1` | Dealer | counted General-generation-bound Epoch V2 (780 bytes) |
 | `0x9c/1` | Dealer | page terminal allocation (756 bytes) |
@@ -368,7 +410,11 @@ executable.
 | `0xa7/2` | FractionalRedemption/replay | Resolution-V5-data-bound zero-credit tombstone (232 bytes) |
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
-| `0xaa/1` | Product | reserved occurrence-scoped terminal root |
+| `0xaa/1` | Product | shared MarketLifecycleRoot V1; phased prepaid founding and whole-Market terminal owner |
+| `0xab/1` | Failure | reusable exclusive interval-session cell retained through Market terminality |
+| `0xac/1` | Failure/history | append-only aggregate interval-session history |
+| `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
+| `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

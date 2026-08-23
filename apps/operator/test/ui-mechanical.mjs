@@ -262,7 +262,7 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
     source("pyth.js"),
     source("stream.js"),
   ]);
-  assert.match(app, /identity\.mode === "pyth-local"/);
+  assert.match(app, /identity\.mode === "non-production-retained-source-v2"/);
   assert.match(app, /READ-ONLY RETAINED TRANSCRIPT/);
   assert.match(stream, /case "pyth-campaign"/);
   for (const phrase of [
@@ -424,7 +424,7 @@ test("live Pyth projection admits only exact unretained terminal closure", () =>
   const run = {
     type: "live-real-pyth-run",
     schema: "dragons-clutch/operator/live-real-pyth-run/v1",
-    mode: "pyth-live",
+    mode: "non-production-synthetic-source-v2-live",
     phase: "running",
     campaign_mode: "joined-multiboundary-v1",
     retained_transcript: false,
@@ -481,7 +481,7 @@ test("the live Pyth page is read-only and the launcher disables transcript reten
     readFile(new URL("../../programs/clutch-sbf/operatord/src/pyth_live.rs", here), "utf8"),
   ]);
   assert.match(app, /LIVE CHILD \/ NOT RETAINED \/ BROWSER READ-ONLY/);
-  assert.match(app, /identity\.mode === "pyth-live"/);
+  assert.match(app, /identity\.mode === "non-production-synthetic-source-v2-live"/);
   for (const phrase of [
     "LIVE, NOT RETAINED",
     "real captured router/receiver laboratory",

@@ -20,12 +20,12 @@
 //! - This join owns only the canonical fixed policy identities selecting those
 //!   already-owned semantics for General V2.
 //!
-//! [`verify_smooth_direct_candidate_v1`] retains its original API name but now
-//! admits the complete Product-selected V3 quantized family: mapped degree
-//! zero and smooth degrees one through three. It verifies one already-submitted
-//! candidate and returns a canonical rank. It does not establish global
-//! optimality, authorize settlement, authenticate a Solana account owner/PDA,
-//! or move assets.
+//! [`verify_smooth_direct_candidate_v1`] remains the legacy complete V3-family
+//! reference API. The successor builder and SBF source path instead require
+//! [`verify_quantized_relation_price_admission_v2`] and admit only degrees two
+//! and three covered by the exact finite atom-mixture verifier. Neither path
+//! establishes global optimality, authorizes settlement, authenticates a
+//! Solana account owner/PDA, or moves assets.
 //!
 //! There is exactly one payout rounding boundary: the Product-selected
 //! largest-remainder/lowest-outcome-index quantizer executed by the immutable
@@ -36,6 +36,7 @@ use clutch_batch::relation_v2::{
     price_semantics_digest_v2, verify_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2,
     EconomicDomainV2, EconomicErrorV2, PricePreconditionV2, VerifiedEconomicsV2,
 };
+use clutch_batch::dealer_leg_v2::DealerErrorV2;
 use clutch_general_v2_contract::{
     candidate_bundle_digest_v1, candidate_feed_tail_v2, economic_domain_digest_v2,
     encode_score_v2_q_cost_first_admitted_tie_v1,
@@ -65,12 +66,20 @@ use sha2::{Digest, Sha256};
 
 mod builder;
 mod candidate_cost;
+mod covered_dealer;
+mod quantized_relation_v2;
+mod portfolio_retirement;
 mod settlement;
+mod settlement_root_projection;
 mod work;
 
 pub use builder::*;
 pub use candidate_cost::*;
+pub use covered_dealer::*;
+pub use quantized_relation_v2::*;
+pub use portfolio_retirement::*;
 pub use settlement::*;
+pub use settlement_root_projection::*;
 pub use work::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -489,6 +498,8 @@ pub enum GeneralV2RuntimeError {
     AtomMixture(AtomMixtureErrorV1),
     /// The owner-blind economic relation refused the candidate.
     Relation(EconomicErrorV2),
+    /// The complete book and signed quote failed the covered-Dealer relation.
+    Dealer(DealerErrorV2),
     /// Owner membership, immutable policy, or exact cost derivation refused.
     CandidateCost(CandidateCostErrorV1),
     /// This path admits Direct candidates only.
@@ -497,7 +508,7 @@ pub enum GeneralV2RuntimeError {
     InvalidAdmissionState,
     /// A Product, Market, Epoch, domain, feed, or policy identity disagreed.
     BindingMismatch,
-    /// An authenticated basis was outside the V3 degree-zero-through-three domain.
+    /// An authenticated basis was outside the selected verifier's degree domain.
     UnsupportedSmoothDegree,
     /// Witness schema or quantized semantic version was not the frozen pair.
     UnsupportedWitnessVersion,
@@ -546,6 +557,12 @@ impl From<AtomMixtureErrorV1> for GeneralV2RuntimeError {
 impl From<EconomicErrorV2> for GeneralV2RuntimeError {
     fn from(value: EconomicErrorV2) -> Self {
         Self::Relation(value)
+    }
+}
+
+impl From<DealerErrorV2> for GeneralV2RuntimeError {
+    fn from(value: DealerErrorV2) -> Self {
+        Self::Dealer(value)
     }
 }
 
@@ -967,9 +984,12 @@ fn verify_smooth_direct_candidate_with_score_policy_v1(
 
     let rank_key = encode_score_v2_q_first_admitted_tie_v1(
         ScoreV2QComponentsV1 {
-            certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
-            cash_equivalent_direct_flow_atoms: economics.score.cash_equivalent_direct_flow_atoms,
-            virtual_churn_atoms: economics.score.virtual_churn_atoms,
+            certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
+            cash_equivalent_direct_flow_atoms: economics
+                .score
+                .score()
+                .cash_equivalent_direct_flow_atoms,
+            virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
             settlement_candidate_id: header.settlement_candidate_id,
         },
         FirstAdmittedTieV1 {
@@ -1075,11 +1095,12 @@ pub fn verify_smooth_direct_candidate_costed_v1(
     let rank_key = encode_score_v2_q_cost_first_admitted_tie_v1(
         ScoreV2QCostComponentsV1 {
             score: ScoreV2QComponentsV1 {
-                certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
+                certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
                 cash_equivalent_direct_flow_atoms: economics
                     .score
+                    .score()
                     .cash_equivalent_direct_flow_atoms,
-                virtual_churn_atoms: economics.score.virtual_churn_atoms,
+                virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
                 settlement_candidate_id: header.settlement_candidate_id,
             },
             owner_net_cost_atoms: cost_certificate.owner_net_cost_atoms(),

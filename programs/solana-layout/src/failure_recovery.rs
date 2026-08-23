@@ -15,6 +15,21 @@ pub const FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2: usize = 2_168;
 /// Exact framed failure semantic-root account width.
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1: usize =
     FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2;
+/// Exact semantic body used by the shared-Market admission codec.
+pub const FAILURE_MARKET_ADMISSION_BODY_BYTES_V1: usize = 1_200;
+/// Reserved zero bytes retained inside the existing funded `0xa0` width.
+pub const FAILURE_MARKET_ROOT_RESERVED_BYTES_V2: usize =
+    FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2 - FAILURE_MARKET_ADMISSION_BODY_BYTES_V1;
+/// The shared-Market successor deliberately preserves the funded `0xa0` size.
+pub const FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2: usize = FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1;
+/// Exact semantic body of the market-scoped mutable Failure runtime.
+pub const FAILURE_MARKET_RUNTIME_BODY_BYTES_V1: usize = 2_048;
+/// Reserved zero tail retained inside the canonical `0xa0` funded width.
+pub const FAILURE_MARKET_RUNTIME_RESERVED_BYTES_V1: usize =
+    FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2 - FAILURE_MARKET_RUNTIME_BODY_BYTES_V1;
+/// Exact framed mutable Market runtime account width.
+pub const FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1: usize =
+    FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1;
 /// Exact immutable liveness-policy body owned by `clutch-liveness`.
 pub const FAILURE_LIVENESS_POLICY_BODY_BYTES_V1: usize = 1_132;
 /// Exact framed immutable liveness-policy account width.
@@ -315,6 +330,125 @@ pub struct FailureAccountBodyV1<'a> {
     pub stored_bump: u8,
     /// Complete semantic-owner bytes with no copied fields.
     pub body: &'a [u8],
+}
+
+/// Canonical shared-Market `0xa0/v2` policy and funding admission record.
+///
+/// The semantic bytes are owned by `clutch-failure-policy-runtime`; this
+/// hostile-byte frame owns only the global tag/version/bump and requires all
+/// future space to remain zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRootAccountV2 {
+    /// Canonical PDA bump.
+    pub bump: u8,
+    /// Complete canonical Failure Market admission body.
+    pub admission_body: [u8; FAILURE_MARKET_ADMISSION_BODY_BYTES_V1],
+}
+
+impl FailureMarketRootAccountV2 {
+    /// Encode every byte and clear the entire successor reserve.
+    pub fn encode_into(
+        &self,
+        output: &mut [u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2],
+    ) -> Result<()> {
+        if self.admission_body.iter().all(|byte| *byte == 0) {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG;
+        output[1] = registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2;
+        output[2] = self.bump;
+        output[FAILURE_ACCOUNT_HEADER_BYTES_V1
+            ..FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_MARKET_ADMISSION_BODY_BYTES_V1]
+            .copy_from_slice(&self.admission_body);
+        Ok(())
+    }
+
+    /// Decode exact hostile bytes and reject prior or noncanonical versions.
+    pub fn decode(input: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2]) -> Result<Self> {
+        if input[0] != registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2 {
+            return Err(CodecError::WrongVersion);
+        }
+        if input[3] != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let admission_end =
+            FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_MARKET_ADMISSION_BODY_BYTES_V1;
+        if input[admission_end..].iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let mut admission_body = [0u8; FAILURE_MARKET_ADMISSION_BODY_BYTES_V1];
+        admission_body.copy_from_slice(&input[FAILURE_ACCOUNT_HEADER_BYTES_V1..admission_end]);
+        if admission_body.iter().all(|byte| *byte == 0) {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(Self {
+            bump: input[2],
+            admission_body,
+        })
+    }
+}
+
+/// Canonical market-scoped mutable `0xa0/v3` Failure runtime record.
+///
+/// The semantic bytes are owned by `clutch-failure-policy-runtime`. This
+/// hostile frame rejects both occurrence-scoped V1 and immutable-admission V2
+/// bytes, while retaining the already prepaid physical account width.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRuntimeRootAccountV1 {
+    /// Canonical existing FailureRuntimeRoot PDA bump.
+    pub bump: u8,
+    /// Complete canonical market-scoped runtime body.
+    pub runtime_body: [u8; FAILURE_MARKET_RUNTIME_BODY_BYTES_V1],
+}
+
+impl FailureMarketRuntimeRootAccountV1 {
+    /// Encode every framed byte and clear the entire reserved tail.
+    pub fn encode_into(
+        &self,
+        output: &mut [u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1],
+    ) -> Result<()> {
+        if self.runtime_body.iter().all(|byte| *byte == 0) {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG;
+        output[1] = registry::FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_VERSION_V1;
+        output[2] = self.bump;
+        output[FAILURE_ACCOUNT_HEADER_BYTES_V1
+            ..FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_MARKET_RUNTIME_BODY_BYTES_V1]
+            .copy_from_slice(&self.runtime_body);
+        Ok(())
+    }
+
+    /// Decode exact hostile bytes and reject other `0xa0` meanings.
+    pub fn decode(input: &[u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1]) -> Result<Self> {
+        if input[0] != registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_VERSION_V1 {
+            return Err(CodecError::WrongVersion);
+        }
+        if input[3] != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let runtime_end = FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_MARKET_RUNTIME_BODY_BYTES_V1;
+        if input[runtime_end..].iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let mut runtime_body = [0u8; FAILURE_MARKET_RUNTIME_BODY_BYTES_V1];
+        runtime_body.copy_from_slice(&input[FAILURE_ACCOUNT_HEADER_BYTES_V1..runtime_end]);
+        if runtime_body.iter().all(|byte| *byte == 0) {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(Self {
+            bump: input[2],
+            runtime_body,
+        })
+    }
 }
 
 /// Decode one exact framed failure/liveness account.
@@ -1644,6 +1778,69 @@ mod tests {
                 RecoveryAccountRoleV1::ResolutionV5,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn market_root_v2_preserves_width_and_rejects_padding_or_prior_version() {
+        assert_eq!(
+            FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
+            FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1
+        );
+        let value = FailureMarketRootAccountV2 {
+            bump: 7,
+            admission_body: [9; FAILURE_MARKET_ADMISSION_BODY_BYTES_V1],
+        };
+        let mut bytes = [0u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2];
+        value.encode_into(&mut bytes).unwrap();
+        assert_eq!(FailureMarketRootAccountV2::decode(&bytes), Ok(value));
+
+        let mut old_version = bytes;
+        old_version[1] = registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION;
+        assert_eq!(
+            FailureMarketRootAccountV2::decode(&old_version),
+            Err(CodecError::WrongVersion)
+        );
+
+        let mut noncanonical = bytes;
+        noncanonical[FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2 - 1] = 1;
+        assert_eq!(
+            FailureMarketRootAccountV2::decode(&noncanonical),
+            Err(CodecError::NonCanonicalPadding)
+        );
+    }
+
+    #[test]
+    fn market_runtime_v3_rejects_admission_or_legacy_bytes_and_reserved_tail() {
+        assert_eq!(
+            FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
+            FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1
+        );
+        let value = FailureMarketRuntimeRootAccountV1 {
+            bump: 8,
+            runtime_body: [7; FAILURE_MARKET_RUNTIME_BODY_BYTES_V1],
+        };
+        let mut bytes = [0u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1];
+        value.encode_into(&mut bytes).unwrap();
+        assert_eq!(FailureMarketRuntimeRootAccountV1::decode(&bytes), Ok(value));
+
+        for wrong_version in [
+            registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION,
+            registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2,
+        ] {
+            let mut wrong = bytes;
+            wrong[1] = wrong_version;
+            assert_eq!(
+                FailureMarketRuntimeRootAccountV1::decode(&wrong),
+                Err(CodecError::WrongVersion)
+            );
+        }
+
+        let mut noncanonical = bytes;
+        noncanonical[FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1 - 1] = 1;
+        assert_eq!(
+            FailureMarketRuntimeRootAccountV1::decode(&noncanonical),
+            Err(CodecError::NonCanonicalPadding)
         );
     }
 }

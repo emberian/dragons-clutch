@@ -4,7 +4,6 @@
 
   const CHAIN = root.GlassChainClient;
   const BUILDER = root.GlassSuccessorBuilder;
-  const REGISTRY = root.GlassSuccessorRegistry;
   const COMPILER = root.GlassCompilerProposal;
   const state = { configuration: null, snapshot: null, compilerProposal: null, construction: null };
   let compilerRevision = 0;
@@ -49,20 +48,7 @@
 
   const readConfigurationForm = () => ({
     operatorUrl: $("operator-url").value.trim(),
-    clusterName: $("cluster-name").value.trim(),
-    genesisHash: $("genesis-hash").value.trim(),
-    rpcHttpUrl: $("rpc-http-url").value.trim(),
-    rpcWebsocketUrl: $("rpc-websocket-url").value.trim(),
     commitment: $("commitment").value,
-    release: {
-      programId: $("program-id").value.trim(),
-      programData: $("program-data").value.trim(),
-      deploymentSlot: $("deployment-slot").value.trim(),
-      elfSha256: $("elf-sha256").value.trim(),
-      releaseManifestSha256: $("release-manifest-sha256").value.trim(),
-      sourceCommit: $("source-commit").value.trim(),
-      capabilityProfileId: $("capability-profile-id").value.trim()
-    },
     bounds: {
       maximumAccounts: $("maximum-accounts").value.trim(),
       maximumResponseBytes: $("maximum-response-bytes").value.trim(),
@@ -77,12 +63,12 @@
     state.compilerProposal = null;
     state.construction = null;
     const status = $("configuration-status");
-    status.className = "status-panel ready";
-    status.textContent = `Explicit target recorded for ${configuration.clusterKey}. No endpoint has been contacted yet.`;
-    $("configuration-json").textContent = JSON.stringify(configuration, null, 2);
+    status.className = "status-panel incomplete";
+    status.textContent = "Explicit operatord target recorded. Cluster, RPC identity, decoder set, and release remain unknown until bounded acquisition.";
+    $("configuration-json").textContent = JSON.stringify(CHAIN.redactedConfiguration(configuration), null, 2);
     $("read-chain").disabled = false;
     $("export-configuration").disabled = false;
-    resetProjection("No operatord projection acquired for this configuration.");
+    resetProjection("No daemon-projected chain release has been acquired from this operatord.");
     resetCompiler("waiting for pure Rust compiler output");
   };
 
@@ -126,6 +112,7 @@
     const release = snapshot.release.observed;
     target.append(
       definition("Cluster identity", snapshot.configuration.clusterKey),
+      definition("Canonical decoder set", snapshot.configuration.decoderSet),
       definition("Program", release.programId),
       definition("ProgramData", release.programData),
       definition("Deployment slot", release.deploymentSlot),
@@ -152,7 +139,8 @@
       metric("Unsafe fork rows", finality.unsafeForkAccountCount, finality.unsafeForkAccountCount === "0" ? "good" : "bad"),
       metric("Bootstrap", snapshot.acquisition.bootstrapComplete ? "complete" : "incomplete", snapshot.acquisition.bootstrapComplete ? "good" : "warn"),
       metric("Pending accounts", snapshot.acquisition.pendingAccounts, snapshot.acquisition.pendingAccounts === "0" ? "good" : "warn"),
-      metric("Processed transport", finality.processedTransport ? `${finality.processedTransport.phase} · generation ${finality.processedTransport.connectionGeneration} · rollback epoch ${finality.processedTransport.rollbackEpoch}` : "not configured", finality.requestedCommitment === "processed" ? "warn" : ""),
+      metric("Processed transport", finality.processedTransport ? `${finality.processedTransport.phase} · generation ${finality.processedTransport.connectionGeneration} · rollback epoch ${finality.processedTransport.rollbackEpoch} · WS genesis ${finality.processedTransport.websocketGenesisMatched ? "matched" : "unmatched"}` : "not configured", finality.requestedCommitment === "processed" ? "warn" : ""),
+      metric("Processed removals", finality.processedTransport ? `${finality.processedTransport.accountProjectionsWithdrawn} withdrawn / ${finality.processedTransport.accountRemovalEvents} observed` : "0", finality.processedTransport && finality.processedTransport.accountProjectionsWithdrawn !== "0" ? "warn" : ""),
       metric("Response budget left", `${snapshot.acquisitionBounds.remainingResponseBytes} bytes`)
     );
   };
@@ -184,6 +172,7 @@
       definition("Slot / lag", `${account.slot} / ${account.slotLag}`),
       definition("Lamports", account.lamports),
       definition("Data bytes", account.dataBytes),
+      definition("Codec tag / version", `${account.accountTag} / ${account.accountVersion}`),
       definition("Generation", account.generation),
       definition("Primary binding", account.primaryBinding),
       definition("Secondary binding", account.secondaryBinding),
@@ -219,22 +208,22 @@
   const renderKeeper = (snapshot) => {
     const select = $("keeper-action");
     reset(select);
-    const manual = create("option", null, "Manual explicit construction (no keeper cursor)");
+    const manual = create("option", null, snapshot.keeperActions.length === 0
+      ? "Manual explicit construction (no keeper cursor)"
+      : `${snapshot.keeperActions.length} projected keeper cursor(s); action coordinates not authenticated`);
     manual.value = "";
     select.append(manual);
-    snapshot.keeperActions.forEach((action, index) => {
-      const option = create("option", null, `${action.action} · ${short(action.account)} · slot ${action.accountSlot}`);
-      option.value = String(index);
-      select.append(option);
-    });
     const processed = snapshot.finality.requestedCommitment === "processed";
-    select.disabled = processed;
+    select.disabled = true;
     $("build-workflow").disabled = processed;
   };
 
   const renderSnapshot = async (snapshot) => {
+    state.configuration = snapshot.sourceConfiguration;
     state.snapshot = snapshot;
     state.construction = null;
+    $("configuration-status").textContent = `Daemon projects ${snapshot.configuration.clusterKey} and release ${short(snapshot.release.observed.releaseKey)}. This remains untrusted browser state.`;
+    $("configuration-json").textContent = JSON.stringify(CHAIN.redactedConfiguration(state.configuration), null, 2);
     const status = $("projection-status");
     const unsafe = snapshot.finality.unsafeForkAccountCount !== "0";
     const stale = snapshot.finality.staleAccountCount !== "0";
@@ -263,17 +252,7 @@
 
   const requireKeeperJoin = (draft, keeper) => {
     if (!keeper) return null;
-    const coordinate = REGISTRY.keeperCoordinates[keeper.action];
-    if (!coordinate) throw new Error(`Keeper action ${keeper.action} has no exact browser-side successor coordinate; construction refuses instead of guessing.`);
-    if (!draft.instructions || !draft.instructions[0] || draft.instructions[0].family !== coordinate.family || draft.instructions[0].localAction !== String(coordinate.localAction)) {
-      throw new Error(`The first draft instruction must be ${coordinate.family}/${coordinate.localAction} for keeper action ${keeper.action}.`);
-    }
-    const metas = new Set(draft.instructions.flatMap((instruction) => Array.isArray(instruction.accounts) ? instruction.accounts.map((meta) => meta.address) : []));
-    for (const required of [keeper.account, ...keeper.dependencies]) {
-      if (!metas.has(required)) throw new Error(`Keeper dependency ${required} is absent from the explicit transaction metas.`);
-      if (!state.snapshot.accounts.some((account) => account.address === required)) throw new Error(`Keeper dependency ${required} is absent from the acquired selected-release projection.`);
-    }
-    return coordinate;
+    throw new Error(`Keeper action ${keeper.action} has no release-authenticated action coordinate in operatord; construction refuses instead of consulting a browser allocation mirror.`);
   };
 
   const parseJsonField = (id, label) => {
@@ -283,7 +262,7 @@
   const prepareCompilerRequest = async () => {
     const configuration = state.configuration;
     const revision = compilerRevision;
-    if (!configuration) throw new Error("Apply an explicit release configuration before binding compiler output.");
+    if (!configuration || !configuration.release) throw new Error("Acquire the daemon-projected checked release before binding compiler output.");
     const definitionValue = COMPILER.validateDefinition(parseJsonField("compiler-definition", "Exact rational payoff definition"));
     const compilerReleaseSha256 = $("compiler-release-sha256").value.trim();
     const request = COMPILER.buildRequest(
@@ -310,7 +289,7 @@
     );
     const profileId = proposal.compiledProductSeriesBundle.identities.capabilityProfileId;
     if (profileId !== context.configuration.release.capabilityProfileId) {
-      throw new Error("Compiler output capabilityProfileId differs from the explicitly selected release profile.");
+      throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
     }
 
     state.compilerProposal = Object.freeze({
@@ -364,13 +343,18 @@
 
   const buildWorkflow = async () => {
     if (!state.configuration || !state.snapshot) throw new Error("Acquire a chain projection before constructing a workflow node.");
-    if (state.snapshot.configuration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
+    if (state.snapshot.sourceConfiguration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
     if (state.snapshot.finality.requestedCommitment === "processed") throw new Error("Processed observations are rollbackable and never authority-eligible; switch to finalized and reacquire before constructing a workflow.");
     let draft;
     try { draft = JSON.parse($("draft-json").value); } catch (_) { throw new Error("Semantic-owner draft is not valid JSON."); }
     const keeper = keeperForSelection();
     const coordinate = requireKeeperJoin(draft, keeper);
     const transaction = BUILDER.build(draft, state.configuration, $("packet-limit").value.trim());
+    const enabledCoordinates = new Set(state.configuration.release.enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
+    for (const instruction of transaction.instructionCoordinates) {
+      const key = `${instruction.familyTag}:${instruction.familyVersion}:${instruction.localAction}`;
+      if (!enabledCoordinates.has(key)) throw new Error(`Successor coordinate ${key} is not enabled by the daemon-projected checked central registry; disabled capabilities are non-actionable.`);
+    }
     const transactionSha256 = await digest(fromHex(transaction.serializedTransactionHex));
     const output = Object.freeze({
       schema: "dragons-clutch/operator/resumable-workflow-node/v1",
@@ -428,7 +412,7 @@
       } catch (error) { resetProjection(`Acquisition refused: ${error.message}`); setError("configuration-error", error.message); }
       finally { button.disabled = false; button.textContent = "Read bounded operatord state"; }
     });
-    $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(state.configuration, null, 2), $("export-configuration")); });
+    $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(CHAIN.redactedConfiguration(state.configuration), null, 2), $("export-configuration")); });
     $("copy-snapshot").addEventListener("click", () => { if (state.snapshot) copy($("snapshot-json").textContent, $("copy-snapshot")); });
     for (const id of ["compiler-release-sha256", "compiler-definition", "compiler-bundle-inputs"]) {
       $(id).addEventListener("input", () => { compilerRevision += 1; });

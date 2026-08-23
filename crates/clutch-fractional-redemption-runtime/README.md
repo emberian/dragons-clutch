@@ -1,8 +1,12 @@
 # Exact fractional-redemption runtime contract
 
 This crate promotes `research/fractional-redemption` into a safe, `no_std`,
-allocation-free, fixed-layout runtime contract. It does **not** enable a Solana
-route. Intent family `79/v1`, actions `1..=10`, and account coordinates
+allocation-free, fixed-layout runtime contract. The SBF adapter contains the
+complete action-2 exact-internal, action-3 exact-bearer, and action-9
+claims-exhausted handlers, but their capability remains disabled
+until Product's canonical Hoard/ClaimLedger founding, Resolution activation,
+and family-admission account producers land. Intent family `79/v1`, actions
+`1..=10`, and account coordinates
 `0xa4/v2`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2` are centrally reserved as
 `ReservedDisabled`.
 
@@ -32,6 +36,15 @@ custody/replay bodies. The Realm collateral and independent Token-2022 claim
 contracts remain the only CPI authorities. Every mutation commits exact
 `0xa5` pre/post semantic IDs into the matching ClaimLedger successor; their
 sequences cannot advance independently.
+
+ClaimLedger V3 begins in the explicit fractional `OpenUnlatched` state with
+zero policy/ledger identities. This fractional state is distinct from the
+Market liability lifecycle and survives Resolution activation unchanged.
+Only `Initialize` may move it once to `Latched`: that transition stores the
+exact a4/v2 and a5/v1 accounts, advances sequence zero to one, and emits the
+private child receipt consumed by Product's five-family Market aggregator.
+No credit liability or fractional action can exist before the latch, and no
+Resolution transition may populate or relatch these identities.
 
 Internal actions consume the canonical General `GEN1` Replay extension rather
 than a Fractional-owned replay projection. Its frozen family/action/role
@@ -63,48 +76,96 @@ accepted Realm-selected claim-redemption CPI receipt and bind its transition,
 semantic owner, amount, and destination. A zero payout changes neither Hoard
 classification and admits no external CPI receipt.
 
+The exact bearer adapter orders its two external effects. Fractional first
+prepares a private `0xa5`/ClaimLedger/Hoard successor. The independent claim
+adapter must then accept the exact selected Token-2022 mint and source-account
+burn before the Realm collateral request becomes visible. After collateral is
+accepted, one final capability exposes all three poststates for atomic
+writeback. Runtime-observed mint supplies may synchronize materialized supply
+downward to recognize direct holder burns, but never upward; the full observed
+vector is committed by the ClaimLedger transition and the post-burn vector
+must differ at exactly the selected mint by exactly the requested quantity.
+
 The only terminal policy is `RetainUntilExactAggregation`. If all native claims
 are gone but aggregate credit is `D*A+r`, voluntary aggregation can pay `A`
 whole atoms. When `r != 0`, the remaining credits and claim backing stay live.
 The close route requires claims, aggregate credit, live credit accounts, and
 claim backing all to be zero. It closes the policy and aggregate ledger only
-under the matching private ProductOccurrenceRoot terminal authorization,
+under the matching private Product five-family terminal authorization,
 refunds their stored rent payers independently, and sends only excess lamports
 to the neutral sink. It therefore cannot sweep a final Hoard atom, reinterpret
 donation surplus as revenue, strand policy rent, permit reinitialization,
 invent a reserve, or silently forfeit a claimant numerator.
 
-## Disabled Solana account contract
+The Fractional-owned terminal receipt commits the full a4/a5 and ClaimLedger
+terminal tuple, both exact rent splits, and a separately adapter-authenticated
+Fractional runtime/capability release ID. Product consumes that receipt; it may
+not invent the release, substitute the Realm collateral release, or turn the
+pure close plan into authority. Fractional now exposes only crate-private SBF
+postwrite capabilities: the admission capability authenticates the exact
+writable a4/a5/ClaimLedger founding bodies and PDAs, while the terminal
+capability authenticates the exact Retiring ClaimLedger body, both live
+pre-deletion account bodies, both observed rent balances, and an action-10
+release narrowed from the loader-authenticated registry capability. Product's
+consumer can accept those private values but cannot construct them or replace
+their receipt. The shared actions 1 and 10 remain disabled until Product lands
+the atomic aggregator/root consumers and its private Foundation preallocation
+authority.
+
+## Solana activation boundary
 
 The frozen future account order is:
 
 - `Initialize`: payer; MarketInstance; Realm; collateral Profile/policy;
   Resolution; claim-issuance binding; policy PDA; ledger PDA; ClaimLedger V3;
   System Program; Rent sysvar; neutral sink; capability/release manifest.
-- Internal redeem: owner; policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
-  Position V3; Replay V3; capability manifest. Credited form appends
-  credit/tombstone, payer, System Program, and neutral sink.
-- Bearer redeem: claimant; policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
-  outcome mint; bearer source; Realm Hoard; collateral destination;
-  claim token program; collateral token program; capability manifest; exact
-  claim/collateral release record. Credited form appends credit/tombstone,
-  payer, System Program, and neutral sink.
-- Transfer/merge: source and destination claimant signers; policy; ledger;
-  source and destination credits; ClaimLedger V3; Hoard V2; exact Position/Replay or
-  external collateral payout target; collateral release/program; funding and
-  tombstone metas; capability manifest.
-- Close credit: claimant; policy; ledger; ClaimLedger V3; live credit; stored
-  rent payer; neutral sink; System Program; capability manifest; Resolution.
-- Terminal seal: policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
-  capability manifest.
+- Exact internal redeem: owner; Realm; collateral Profile/policy/program;
+  MarketBinding; MarketRuntime; MarketInstance artifact; Hoard V2; ClaimLedger
+  V3; Resolution V5; fractional policy; aggregate ledger; Position V3; GEN1
+  Replay. Credited form appends credit/tombstone, authenticated Product Market
+  root, its neutral sink, and Rent sysvar; fresh/reopen mode then appends an
+  arbitrary writable signer payer and the System Program.
+- Exact bearer redeem: claimant; Realm; collateral Profile/policy/token program;
+  MarketBinding; MarketRuntime; MarketInstance artifact; writable Hoard V2 and
+  ClaimLedger V3; Resolution V5; fractional policy; writable aggregate ledger;
+  collateral mint; writable destination; Hoard authority; writable Hoard token;
+  outcome token program; writable bearer source; then one mint per active
+  outcome, with only the selected mint writable. Credited form appends, after
+  those mints, credit/tombstone, authenticated Product Market root, its neutral
+  sink, and Rent sysvar; fresh/reopen mode then appends payer and System.
+- Transfer/merge: source and destination claimant signers; Realm collateral
+  profile/policy/program; MarketBinding/Runtime/Instance; writable Hoard V2 and
+  ClaimLedger V3; Resolution; policy; ledger; both credits; then either exact
+  Position/GEN1 or collateral mint/destination/Hoard authority/Hoard token;
+  Product root; neutral sink; Rent. Fresh/reopen destinations append payer and
+  System. External payout authority stays private until both credits advance.
+  Without a Position/GEN1 consumer, external `MergeCredit` is intentionally
+  the full-source instance of `TransferCredit`; it does not invent a replay
+  account merely to persist two labels for the same exact successor.
+- Close credit: claimant; Realm collateral profile/policy/program;
+  MarketBinding/Runtime/Instance; Hoard V2; ClaimLedger V3; Resolution; policy;
+  ledger; live credit; stored rent payer; Product root; writable neutral sink;
+  Rent. Only the refundable principal returns to the payer; only donation and
+  excess go to the neutral sink; permanent tombstone principal stays put.
+- Terminal seal: Realm; collateral Profile/policy/token program; MarketBinding;
+  MarketRuntime; MarketInstance artifact; Hoard V2; writable ClaimLedger V3;
+  Resolution V5; policy; writable aggregate ledger.
 - Terminal close: policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
-  writable ProductOccurrenceRoot authorization; capability manifest; policy
+  writable Product five-family aggregator authorization; capability manifest; policy
   rent payer; ledger rent payer; neutral sink. It deletes `0xa4` and `0xa5`
   atomically and advances ClaimLedger to Retiring.
 
-`refuse_disabled_fractional_redemption_v1` returns `CapabilityDisabled` before
-parsing the payload or inspecting these accounts. Activation must atomically
-replace that refusal with owner/PDA/signature checks, canonical Resolution and
-ClaimLedger V3/Hoard V2 decoding, exact Token-2022 burn and Realm-collateral CPI
-postchecks, Position/Replay V3 writeback, rent admission, and a checked release
-manifest tuple.
+Disabled tuples refuse before parsing payloads or inspecting accounts. Actions
+2 through 9 already perform their complete typed authentication, external-
+effect ordering where applicable, and atomic writeback. Action 2 remains
+independent of bearer claim-release availability. Enabling actions 1 and 2
+together still depends on Product exposing its stable per-slot Foundation
+preallocation authority and atomic family-admission consumer. Slots 11 and 12
+are Product-prefunded, zero-data, System-owned writable PDAs before action 1;
+Fractional will allocate, assign, and write those exact prestates without
+debiting or refunding them again. Product remains the sole owner of the
+Foundation debit/donation evidence and persisted typed claim-issuance binding;
+the Fractional adapter will not invent a duplicate owner or provision mock
+state. Action 10 analogously waits only for Product's private terminal
+consumer; Fractional already owns the release authentication, terminal
+postwrite verification, account deletion, and the two exact rent splits.

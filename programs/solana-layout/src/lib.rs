@@ -40,6 +40,7 @@ pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod failure_recovery;
 pub mod failure_interval_consensus;
+pub mod failure_market_interval_v2;
 pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod order_page_v5;
@@ -52,6 +53,7 @@ pub mod reservation_v9;
 pub mod settlement_receipt_v3;
 pub mod source_series;
 pub mod settlement_receipt_v4;
+pub mod settlement_receipt_v5;
 pub mod resolution_work;
 pub mod revenue;
 pub mod stream;
@@ -927,6 +929,9 @@ pub mod account_version {
     /// Same-width General receipt with a distinct merge-payment transition.
     /// V3 bytes are deliberately not reinterpreted.
     pub const SETTLEMENT_RECEIPT_V4: u8 = 4;
+    /// Rent-owned receipt with a typed specialized-transition commitment.
+    /// V4 bytes remain historical and are never reinterpreted.
+    pub const SETTLEMENT_RECEIPT_V5: u8 = 5;
     /// Resolution account.
     pub const RESOLUTION: u8 = 2;
     /// Streaming-checkpoint account; introduced by the clearing plane.
@@ -1045,6 +1050,9 @@ pub mod account_len {
     /// General settlement receipt V4 bytes. V4 changes lifecycle semantics and
     /// transition domains without changing the rent footprint.
     pub const SETTLEMENT_RECEIPT_V4: usize = SETTLEMENT_RECEIPT;
+    /// Rent-owned General receipt V5 bytes: V4 semantics, one typed 33-byte
+    /// transition compartment, and one exact 48-byte deletable-rent owner.
+    pub const SETTLEMENT_RECEIPT_V5: usize = SETTLEMENT_RECEIPT_V4 + 33 + 48;
     /// Resolution account bytes.
     pub const RESOLUTION: usize = 2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1;
     /// Streaming-checkpoint account bytes: the header, the layout-owned
@@ -7826,6 +7834,7 @@ mod tests {
         assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
         assert_eq!(account_len::SETTLEMENT_RECEIPT_V3, 217);
         assert_eq!(account_len::SETTLEMENT_RECEIPT_V4, 217);
+        assert_eq!(account_len::SETTLEMENT_RECEIPT_V5, 298);
         assert_eq!(account_len::RESOLUTION, 165);
         assert_eq!(ORDER_RECORD_BYTES, 107);
         assert_eq!(PORTFOLIO_RECORD_BYTES, 235);

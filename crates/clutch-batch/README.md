@@ -50,9 +50,9 @@ Executable facts:
 
 ## ScoreV2-Q core interface
 
-`src/score_v2.rs` implements the production-quality core arithmetic for the
-complete-set-quotiented successor score, without selecting it in the V1
-relation or any SBF profile. It independently derives
+`src/score_v2.rs` owns the production kernel for the complete-set-quotiented
+successor score, without selecting it in the V1 relation or an SBF profile.
+The kernel independently derives
 `d_i = B_i - sigma = E_i - mu` and ranks valid submitted candidates by:
 
 1. maximum `max(d) - min(d)`;
@@ -81,6 +81,13 @@ canonical virtual split-or-merge, per-outcome conservation, and both
 `d_i = B_i - sigma = E_i - mu` derivations. It SHA-256 commits every canonical
 economic input using a local safe, allocation-free FIPS-180 implementation and
 feeds the full digest into ScoreV2-Q.
+
+Successful verification returns a private-field, domain-bound score
+certificate retaining the exact canonical score input and independently
+derived direct flow. `relation_v2_ranking` reverifies every candidate against
+one immutable domain, book, and price precondition, then retains the best valid
+submitted candidate by the certificate's deterministic total order. It makes
+no optimality claim.
 
 Price coherence remains an upstream semantic precondition. RelationV2
 recomputes a proof-independent semantic digest from the immutable domain,
@@ -133,6 +140,74 @@ and every canonical fill and envelope row. Both exclude proof bodies and
 derived allocation bytes.
 This module still contains no accounts, custody, token logic, registry lookup,
 authorization, lifecycle transition, or SBF dispatch.
+
+## Complete portfolio book authority (`portfolio_book_v2`)
+
+`src/portfolio_book_v2.rs` freezes the nonpersisted Dealer consumption seam.
+Its canonical 568-byte identity record binds one read-only counted
+SettlementRoot, retained Feed/traversal, order set, selection witness, and the
+active prefix of at most four OrderPage V5 accounts. Page geometry is exactly
+16 slots per page and 64 RelationV2 rows total; inactive page identities must
+be zero. Pages are generationless because OrderPage V5 owns no such field.
+
+The constructor accepts no `EconomicBookV2` from the caller. A private adapter
+must authenticate the exact Root/Feed/page accounts, decode every active slot,
+and return the complete owner-blind RelationV2 projection. The capability is
+minted only after the projected book validates at the exact domain and order
+count. It is not a second persisted coefficient owner; Dealer may consume the
+private capability to derive its allocation order set, but it may not accept
+caller-shaped rows or coefficients.
+
+`authenticate_complete_portfolio_book_ref_v2` is the frame-bounded equivalent
+for SBF. It borrows the exact book from adapter-owned bounded heap storage, so
+the 64-row projection is neither caller input nor copied into a 4-KiB frame;
+the original owned constructor remains available to host consumers.
+
+## Account-ready exact portfolio pair (`portfolio_execution_v2`)
+
+`src/portfolio_execution_v2.rs` replaces the old content-only atomic portfolio
+seam with a narrow execution authority contract. `EconomicOrderV2` remains the
+only coefficient owner. A canonical 560-byte selected-order record binds an
+adapter-authenticated counted SettlementRoot, retained Feed/traversal,
+OrderPage, page slot, dense RelationV2 index, owner, Position incarnation,
+selected fill, and settlement witness; it does not carry a second coefficient,
+quantity, limit, or policy DTO.
+
+The private pair capability admits only one exclusive full pair with opposite
+sides, distinct owners and Positions, no virtual conversion, and exact equality
+of every cell in the full 16-wide RelationV2 coefficient arrays. It values the
+pair as `sum(coeff_i * price_i) * filled_units` in checked `u128` and performs
+one named `ExactReceiptDivisionV1` conversion by the integer price scale. A
+remainder refuses instead of selecting an unnamed beneficiary.
+
+The prepared account transition is indivisible. It authenticates the exact
+counted SettlementRoot/retained-Feed traversal, both ENTITLED Reservations,
+both Position V3 prestates, both purpose Replay V3 prestates, and the complete
+canonical active prefix of one through sixteen counted/rent-owned 298-byte
+SettlementReceipt V5 siblings through a private adapter capability seam. It derives exact cash
+debit/refund/credit and the
+16-wide native-Egg debit/credit, requires both Reservations' canonical CONSUMED
+postimages, keeps Position incarnation generations stable, advances each Replay
+ordinal once, and commits all pre/post semantic identities plus the complete
+sibling-set digest into a canonical 680-byte replay-sensitive vector-transition
+preimage. Every sibling must enter delivery as `PortfolioPairPending` (kind
+`1`, zero commitment); the shared exact V5-domain hash is set once as
+`PortfolioPairCommitted` in every sibling postimage, so this pair creates no
+uncounted account or liability. Persisted records and decoded receipt preimages
+are untrusted projections; only the private prepared capability authorizes an
+adapter to compose writes and CPIs.
+
+The same module exposes a nonpersisted
+`AuthenticatedPortfolioReceiptSiblingSetV2` producer/consumer capability. It
+derives the exhaustive active sibling prefix from the authenticated exact pair
+and retained-Feed traversal facts; strict slice/outcome order, both dense order
+indices, exact quantity/price, and the zero tail are checked before General may
+materialize any sibling as `PortfolioPairPending`. Hostile packet counts are
+only frame delimiters.
+
+This is account-ready pure contract code, not a routed SBF instruction or
+deployment result. The remaining live work is listed in
+[`PORTFOLIO_EXECUTION_V2.md`](PORTFOLIO_EXECUTION_V2.md).
 
 Not implemented, and refused rather than guessed: portfolio marginal lot
 rationing (`P-b` returns `PolicyVariantUnimplemented`), the `N-c` owner-aware

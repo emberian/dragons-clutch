@@ -12,13 +12,16 @@
 //! rent, projected future fees, Dealer budgets, or liveness capitalization.
 
 use clutch_owner_settlement::{
-    AuthenticatedPositionV3, OwnerCashRealizationPlanV2, SettlementCashPotV1,
+    AuthenticatedPositionV3, OwnerCashRealizationPlanV2, OwnerCashRealizationSemanticPlanV4,
+    SettlementCashPotV1,
 };
 
 use crate::allocation::RecipientAllocationV1;
 use crate::integration::CandidateFeeSettlementV1;
 use crate::intent::RecipientAllocationIntentV1;
-use crate::projection::{AuthenticatedSelectedOwnerFeeV2, SelectedOwnerFeeBookV1};
+use crate::projection::{
+    AuthenticatedSelectedOwnerFeeV2, AuthenticatedSelectedOwnerFeeV4, SelectedOwnerFeeBookV1,
+};
 use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, independent, live, Error, Id, Result, MAX_FEE_ROWS_V1};
@@ -292,6 +295,82 @@ impl OwnerFeeFinalizationReceiptV1 {
             position_debit_atoms: disposition.debit_atoms,
             position_credit_atoms: disposition.credit_atoms,
             released_cash_atoms: disposition.released_cash_atoms,
+            replay_next_sequence: bindings.replay_next_sequence,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Construct the current delivery-complete successor from the outer-
+    /// neutral V4 realization shared by the rent-owned General V5 row.
+    ///
+    /// The adapter must independently authenticate and exact-join the full
+    /// V5 row poststate data ID, Position semantic ID, Replay successor, pot
+    /// data ID, and persisted rent transition carried in `bindings`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn settle_delivery_complete_v4(
+        selected: &SelectedCompositeFeeV1,
+        projection: &AuthenticatedSelectedOwnerFeeV4,
+        carry: &OwnerFeeCarryV1,
+        bindings: OwnerFeeFinalizationBindingsV2,
+        plan: &OwnerCashRealizationSemanticPlanV4,
+    ) -> Result<Self> {
+        bindings.validate()?;
+        let expectation = plan.expectation();
+        let disposition = plan.disposition();
+        let position = plan.position();
+        let position_fields = position.semantic.fields();
+        let settlement_cash_pot = plan.settlement_cash_pot();
+        settlement_cash_pot
+            .validate()
+            .map_err(|_| Error::InvalidAccountData)?;
+        let owner = Id(projection.row().owner);
+        if projection.fee_record() != selected.fee_record()
+            || projection.settlement_candidate() != selected.selected_candidate()
+            || projection.revenue_policy() != selected.revenue_policy()
+            || projection.expectation() != expectation
+            || projection.owner_settlement_account().0 != plan.owner_settlement_account()
+            || carry.fee_record() != selected.fee_record()
+            || carry.owner() != owner
+            || carry.denominator() != selected.carry_denominator()
+            || !carry.is_closed()
+            || carry.remainder() != 0
+            || carry.paid_atoms() != projection.row().fee_atoms
+            || expectation.owner() != owner.0
+            || expectation.candidate() != selected.selected_candidate().0
+            || expectation.selected_fee_atoms() != carry.paid_atoms()
+            || settlement_cash_pot.expectation.candidate != selected.selected_candidate().0
+            || settlement_cash_pot.expectation.fee_record != selected.fee_record().0
+            || disposition.selected_fee_atoms() != carry.paid_atoms()
+            || position_fields.owner.bytes() != owner.0
+            || bindings.owner_settlement_account.0 != plan.owner_settlement_account()
+            || bindings.rent_disposition.carry_account != projection.carry_account()
+            || bindings.rent_disposition.payer_allocation_account
+                != projection.payer_allocation_account()
+            || bindings.payer_allocation_data_id != projection.payer_allocation_data_id()
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            runtime_release: bindings.runtime_release,
+            fee_record: selected.fee_record(),
+            settlement_candidate: selected.selected_candidate(),
+            owner,
+            payer_allocation_data_id: bindings.payer_allocation_data_id,
+            owner_settlement_account: bindings.owner_settlement_account,
+            owner_settlement_final_data_id: bindings.owner_settlement_final_data_id,
+            position: Id(position.account),
+            settlement_cash_pot: bindings.settlement_cash_pot,
+            rent_disposition_data_id: bindings.rent_disposition.data_id,
+            position_poststate_semantic_id: bindings.position_poststate_semantic_id,
+            replay_poststate_semantic_id: bindings.replay_poststate_semantic_id,
+            settlement_cash_pot_poststate_data_id: bindings
+                .settlement_cash_pot_poststate_data_id,
+            outcome: OwnerFeeFinalizationOutcomeV2::Settled,
+            authorized_fee_atoms: carry.paid_atoms(),
+            position_debit_atoms: disposition.total_debit_atoms(),
+            position_credit_atoms: disposition.credit_atoms(),
+            released_cash_atoms: disposition.released_cash_atoms(),
             replay_next_sequence: bindings.replay_next_sequence,
         };
         value.validate()?;

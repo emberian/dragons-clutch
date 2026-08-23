@@ -20,6 +20,7 @@
 mod action_receipt;
 mod budget;
 mod codec;
+mod covered_dealer_selection;
 mod epoch_v2;
 mod exit_ticket;
 mod facility;
@@ -53,6 +54,7 @@ mod transitions_v3;
 
 pub use action_receipt::*;
 pub use budget::*;
+pub use covered_dealer_selection::*;
 pub use epoch_v2::*;
 pub use exit_ticket::*;
 pub use facility::*;
@@ -200,6 +202,12 @@ pub const DEALER_CANDIDATE_FEE_SETTLEMENT_CONTENT_DOMAIN_V1: &[u8] =
 /// Transcript domain for an owner-netted selected-record abort/close receipt.
 pub const DEALER_SELECTED_FEE_ABORT_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/selected-fee-abort/v1\0";
+/// Exact signed transcript domain for a permissionlessly relayed Dealer quote.
+pub const DEALER_QUOTE_ADMISSION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/quote-admission/v1\0";
+/// Exact content domain for the counted Dealer selection attachment.
+pub const DEALER_COVERED_SELECTION_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/covered-selection/v1\0";
 /// Exact content domain for `FeeBudgetV1`.
 pub const FEE_BUDGET_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/fee-budget/v1\0";
 /// Exact content domain for `LivenessBudgetV1`.

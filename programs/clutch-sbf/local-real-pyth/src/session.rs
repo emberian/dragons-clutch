@@ -14,14 +14,14 @@ use std::fs::{self, OpenOptions, Permissions};
 use std::io::Write as _;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub type Result<T> = std::result::Result<T, SessionError>;
 
 /// Marker proving a directory was created by this lifecycle owner.
 pub const SESSION_MARKER: &str = "dragons-clutch/local-validator-session/v1\n";
 /// Public, secret-free configuration artifact written into every session.
-pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v5";
+pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v6";
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -79,6 +79,7 @@ impl LocalValidatorPorts {
     pub fn validate(self) -> Result<()> {
         let fixed = [self.rpc, self.rpc_websocket, self.faucet, self.gossip];
         if fixed.iter().any(|port| *port == 0)
+            || self.rpc.checked_add(1) != Some(self.rpc_websocket)
             || self.dynamic_start == 0
             || self.dynamic_start > self.dynamic_end
         {
@@ -133,6 +134,8 @@ impl RealSourceAcquisitionV3 {
             } => {
                 if !https_rpc_url.starts_with("https://")
                     || https_rpc_url.contains('@')
+                    || https_rpc_url.contains('?')
+                    || https_rpc_url.contains('#')
                     || *maximum_account_reads == 0
                     || *maximum_account_reads > 1_024
                 {
@@ -211,12 +214,12 @@ impl RealSourceConfigV3 {
                 "real Source parser, receiver, transport, feed, and Config identities are invalid",
             ));
         }
-        if self.receiver_deployment_slot == 0
-            || self.parser_deployment_slot == 0
-            || self.transport_deployment_slot == 0
+        if self.receiver_deployment_slot != 0
+            || self.parser_deployment_slot != 0
+            || self.transport_deployment_slot != 0
         {
             return Err(SessionError::InvalidSource(
-                "real Source deployment slots must be nonzero",
+                "locally synthesized Source deployment slots must be zero",
             ));
         }
         require_digest(self.feed_id, "real source feed identity is zero")?;
@@ -234,10 +237,12 @@ impl RealSourceConfigV3 {
     }
 }
 
-/// Expected upgradeable program release loaded by the local validator.
-/// Construction records Program, ProgramData, slot, and ELF digest; the
-/// process launcher remains responsible for checking the ELF bytes before
-/// using the argv.
+/// Expected upgradeable program release synthesized by the local validator.
+/// Agave's `--bpf-program` genesis path writes a ProgramData slot of zero, so
+/// local release coordinates require that exact slot. Public-cluster release
+/// coordinates are owned by a separate manifest and must not use this type.
+/// Construction records Program, ProgramData, and ELF digest; the process
+/// launcher remains responsible for checking the ELF bytes before using argv.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalProgramRelease {
     pub program_id: Address,
@@ -247,12 +252,46 @@ pub struct LocalProgramRelease {
     pub elf_path: PathBuf,
 }
 
+/// Cross-manifest seal for a chain-attached local release. Semantic capability
+/// rows stay owned by the capability-profile manifest; this record pins that
+/// checked owner to the exact deployed ELF and local runtime coordinates.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckedChainReleaseBinding {
+    /// SHA-256 of the capability manifest's sorted-key, compact, ASCII JSON
+    /// encoding, as emitted by `check_capability_profile.py`.
+    pub capability_manifest_sha256: [u8; 32],
+    pub capability_profile_id: [u8; 32],
+    pub source_commit: String,
+    pub compiler_release_sha256: [u8; 32],
+    pub source_neutral_sink: Address,
+}
+
+impl CheckedChainReleaseBinding {
+    pub fn validate(&self) -> Result<()> {
+        if self.capability_manifest_sha256 == [0; 32]
+            || self.capability_profile_id == [0; 32]
+            || self.compiler_release_sha256 == [0; 32]
+            || self.source_neutral_sink == Address::default()
+            || !matches!(self.source_commit.len(), 40 | 64)
+            || !self
+                .source_commit
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(SessionError::InvalidRelease(
+                "checked local chain-release binding is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl LocalProgramRelease {
     pub fn validate(&self) -> Result<()> {
         if self.program_id == Address::default()
             || self.program_data == Address::default()
             || self.program_id == self.program_data
-            || self.deployment_slot == 0
+            || self.deployment_slot != 0
             || !self.elf_path.is_absolute()
             || self.elf_path == Path::new("/")
             || self.elf_path.extension().and_then(|value| value.to_str()) != Some("so")
@@ -274,6 +313,7 @@ pub struct LocalSessionConfig {
     pub root: PathBuf,
     pub ports: LocalValidatorPorts,
     pub clutch_release: LocalProgramRelease,
+    pub checked_chain_release: CheckedChainReleaseBinding,
     /// External parser/transport releases loaded alongside Clutch. Source V3
     /// itself executes inside `clutch_release`, never as a second adapter ELF.
     pub external_program_releases: Vec<LocalProgramRelease>,
@@ -285,6 +325,7 @@ impl LocalSessionConfig {
         validate_root(&self.root)?;
         self.ports.validate()?;
         self.clutch_release.validate()?;
+        self.checked_chain_release.validate()?;
         self.source.validate()?;
         let clutch_identities = [
             self.clutch_release.program_id,
@@ -428,6 +469,43 @@ impl SessionLayout {
         let mut body = String::new();
         writeln!(body, "schema={PUBLIC_MANIFEST_SCHEMA}").expect("String write is infallible");
         writeln!(body, "network=local-validator").expect("String write is infallible");
+        writeln!(body, "release_coordinates=sealed").expect("String write is infallible");
+        writeln!(
+            body,
+            "decoder_set={}",
+            crate::account_index::CANONICAL_ACCOUNT_DECODER_SET
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "capability_manifest_sha256={}",
+            hex(&config.checked_chain_release.capability_manifest_sha256)
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "capability_profile_identity={}",
+            hex(&config.checked_chain_release.capability_profile_id)
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "source_commit={}",
+            config.checked_chain_release.source_commit
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "compiler_release_sha256={}",
+            hex(&config.checked_chain_release.compiler_release_sha256)
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
+            "source_neutral_sink={}",
+            config.checked_chain_release.source_neutral_sink
+        )
+        .expect("String write is infallible");
         writeln!(body, "rpc_http={}", config.ports.rpc_http()).expect("String write is infallible");
         writeln!(body, "rpc_websocket={}", config.ports.rpc_websocket())
             .expect("String write is infallible");
@@ -715,12 +793,16 @@ impl LocalValidatorInvocation {
                 "local validator invocation is not explicitly bound",
             ));
         }
+        let release_addresses = core::iter::once(&config.clutch_release)
+            .chain(&config.external_program_releases)
+            .flat_map(|release| [release.program_id, release.program_data])
+            .collect::<BTreeSet<_>>();
         let mut addresses = BTreeSet::new();
         for account in genesis_accounts {
             account.validate(layout.root())?;
-            if !addresses.insert(account.address) {
+            if release_addresses.contains(&account.address) || !addresses.insert(account.address) {
                 return Err(SessionError::InvalidRelease(
-                    "local genesis account address is duplicated",
+                    "local genesis account aliases a release or is duplicated",
                 ));
             }
         }
@@ -821,9 +903,26 @@ impl EphemeralKeyRoster {
 }
 
 fn validate_root(root: &Path) -> Result<()> {
-    if !root.is_absolute() || root == Path::new("/") || root.ancestors().count() < 3 {
+    let has_only_normal_text_components = root.to_str().is_some_and(|text| {
+        text.strip_prefix('/').is_some_and(|remainder| {
+            !remainder.is_empty()
+                && remainder
+                    .split('/')
+                    .all(|component| {
+                        !component.is_empty() && component != "." && component != ".."
+                    })
+        })
+    });
+    if !root.is_absolute()
+        || root == Path::new("/")
+        || root.ancestors().count() < 3
+        || !has_only_normal_text_components
+        || root
+            .components()
+            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
         return Err(SessionError::InvalidRoot(
-            "local session root must be a narrow absolute path",
+            "local session root must be a narrow, normal absolute path",
         ));
     }
     let name = root
@@ -832,10 +931,55 @@ fn validate_root(root: &Path) -> Result<()> {
         .ok_or(SessionError::InvalidRoot(
             "local session root has no UTF-8 leaf",
         ))?;
-    if name.is_empty() || name == ".solana" || name == "id.json" {
+    let key_like = root.components().any(|component| {
+        let Component::Normal(value) = component else {
+            return false;
+        };
+        let value = value.to_string_lossy().to_ascii_lowercase();
+        value == ".solana"
+            || value == "ephemeral-keys"
+            || value == "id.json"
+            || [
+                "wallet",
+                "keypair",
+                "private-key",
+                "private_key",
+                "mnemonic",
+                "seed",
+                "secret",
+                "keystore",
+                "recovery-phrase",
+                "recovery_phrase",
+            ]
+            .iter()
+            .any(|marker| value.contains(*marker))
+    });
+    if name.is_empty() || key_like {
         return Err(SessionError::InvalidRoot(
             "local session root resembles a wallet path",
         ));
+    }
+    let mut prefix = PathBuf::from("/");
+    for component in root.components() {
+        let Component::Normal(value) = component else {
+            continue;
+        };
+        prefix.push(value);
+        match fs::symlink_metadata(&prefix) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(SessionError::InvalidRoot(
+                    "local session root has a symlink ancestor",
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(SessionError::InvalidRoot(
+                    "local session root ancestor is not a directory",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(SessionError::Io(error)),
+        }
     }
     Ok(())
 }
@@ -891,6 +1035,18 @@ mod tests {
         assert!(ports.validate().is_ok());
         assert!(require_loopback_endpoint(&ports.rpc_http(), "http://").is_ok());
         assert!(require_loopback_endpoint(&ports.rpc_websocket(), "ws://").is_ok());
+        assert!(LocalValidatorPorts {
+            rpc_websocket: 9140,
+            ..ports
+        }
+        .validate()
+        .is_err());
+        assert!(RealSourceAcquisitionV3::BoundedPublicRead {
+            https_rpc_url: "https://api.devnet.solana.com/?api-key=secret".into(),
+            maximum_account_reads: 16,
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -910,16 +1066,49 @@ mod tests {
     }
 
     #[test]
+    fn session_root_refuses_non_normal_and_key_material_paths() {
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/session")).is_ok());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/../session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/./session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch//session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/wallet/session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/session/seed.json")).is_err());
+    }
+
+    #[test]
+    fn session_root_refuses_a_symlink_ancestor() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_nanos();
+        let temporary = fs::canonicalize(std::env::temp_dir())
+            .expect("temporary directory has a canonical path");
+        let base = temporary.join(format!(
+            "dragons-clutch-root-alias-{}-{nonce}",
+            std::process::id()
+        ));
+        let actual = base.join("actual");
+        let alias = base.join("alias");
+        fs::create_dir(&base).expect("test base is fresh");
+        fs::create_dir(&actual).expect("test target is fresh");
+        std::os::unix::fs::symlink(&actual, &alias).expect("test alias is created");
+        assert!(validate_root(&alias.join("session")).is_err());
+        fs::remove_file(alias).expect("test alias is removed");
+        fs::remove_dir(actual).expect("test target is removed");
+        fs::remove_dir(base).expect("test base is removed");
+    }
+
+    #[test]
     fn source_executes_in_clutch_with_distinct_parser_receiver_and_transport() {
         let program = |byte, digest, name: &str| LocalProgramRelease {
             program_id: Address::new_from_array([byte; 32]),
             program_data: Address::new_from_array([byte + 20; 32]),
-            deployment_slot: 100 + u64::from(byte),
+            deployment_slot: 0,
             elf_sha256: [digest; 32],
             elf_path: PathBuf::from(format!("/tmp/{name}.so")),
         };
         let mut config = LocalSessionConfig {
-            root: PathBuf::from("/tmp/dragons-clutch-session-test"),
+            root: PathBuf::from("/private/tmp/dragons-clutch-session-test"),
             ports: LocalValidatorPorts {
                 rpc: 9137,
                 rpc_websocket: 9138,
@@ -929,6 +1118,13 @@ mod tests {
                 dynamic_end: 9250,
             },
             clutch_release: program(1, 11, "clutch"),
+            checked_chain_release: CheckedChainReleaseBinding {
+                capability_manifest_sha256: [18; 32],
+                capability_profile_id: [19; 32],
+                source_commit: "20".repeat(20),
+                compiler_release_sha256: [21; 32],
+                source_neutral_sink: Address::new_from_array([22; 32]),
+            },
             external_program_releases: vec![
                 program(2, 12, "receiver"),
                 program(3, 13, "parser"),
@@ -937,19 +1133,19 @@ mod tests {
             source: RealSourceConfigV3 {
                 receiver_program: Address::new_from_array([2; 32]),
                 receiver_program_data: Address::new_from_array([22; 32]),
-                receiver_deployment_slot: 102,
+                receiver_deployment_slot: 0,
                 receiver_config: Address::new_from_array([5; 32]),
                 receiver_release_sha256: [12; 32],
                 parser_program: Address::new_from_array([3; 32]),
                 parser_program_data: Address::new_from_array([23; 32]),
-                parser_deployment_slot: 103,
+                parser_deployment_slot: 0,
                 parser_config: Address::new_from_array([6; 32]),
                 parser_release_sha256: [13; 32],
                 feed_account: Address::new_from_array([7; 32]),
                 feed_id: [15; 32],
                 transport_program: Address::new_from_array([4; 32]),
                 transport_program_data: Address::new_from_array([24; 32]),
-                transport_deployment_slot: 104,
+                transport_deployment_slot: 0,
                 transport_release_sha256: [14; 32],
                 source_spec_id: [16; 32],
                 acquisition: RealSourceAcquisitionV3::PinnedLocalCapture {

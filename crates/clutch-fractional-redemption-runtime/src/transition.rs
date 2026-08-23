@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use clutch_collateral_adapter_v2::{
-    prepare_fractional_claim_ledger_founding_v3, prepare_fractional_claim_ledger_retirement_v3,
-    prepare_fractional_claim_ledger_successor_v3, prepare_fractional_claim_redemption_v3,
-    AcceptedClaimRedemptionCollateralV2, BoundClaimIssuanceV1, BoundCollateralProfileV2,
-    ClaimLedgerV3, FractionalClaimLedgerFoundingPlanV3, FractionalClaimLedgerPlanV3,
+    accept_fractional_external_claim_redemption_v3,
+    accept_fractional_external_credit_payout_v3, prepare_fractional_claim_ledger_founding_v3,
+    prepare_fractional_claim_ledger_retirement_v3, prepare_fractional_claim_ledger_successor_v3,
+    prepare_fractional_claim_redemption_v3, prepare_fractional_external_claim_redemption_v3,
+    prepare_fractional_external_credit_payout_v3,
+    AcceptedBearerRedemptionCollateralV3, AcceptedClaimRedemptionCollateralV2,
+    AcceptedFractionalBearerClaimBurnV3, BoundClaimIssuanceV1, BoundCollateralProfileV2,
+    ClaimLedgerV3, ClaimRedemptionCollateralRequestV2, FractionalBindingStateV1,
+    FractionalClaimLedgerFoundingPlanV3, FractionalClaimLedgerPlanV3,
     FractionalClaimLedgerRetirementPlanV3, FractionalClaimRedemptionPlanV3,
     FractionalClaimSupplyMutationV3, FractionalPayoutDispositionV3, HoardV2, Id,
-    MarketLiabilityLifecycleV1, ResolutionPayoutProjectionV5, ResolutionPayoutUnitBoundaryV5,
-    ResolutionStateV5, ResolutionV5,
+    MarketLiabilityLifecycleV1, PreparedFractionalExternalClaimRedemptionV3,
+    PreparedFractionalExternalCreditPayoutV3,
+    ResolutionPayoutProjectionV5, ResolutionPayoutUnitBoundaryV5, ResolutionStateV5, ResolutionV5,
 };
 use clutch_general_v2_contract::{
     project_general_replay_transition_v1, GeneralPositionReplayPrestateV1,
@@ -24,6 +30,24 @@ use crate::{
     Error, FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerPhaseV1,
     FractionalLedgerV1, FractionalPolicyV2, PayoutVectorV1, Result, MAX_OUTCOMES,
 };
+
+/// Semantic domain for the unique Fractional child admission consumed by the
+/// Product five-family Market aggregator.
+pub const FRACTIONAL_FAMILY_ADMISSION_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-admission/v1\0";
+/// Semantic domain proving exact a4/a5/ClaimLedger founding postimages.
+pub const FRACTIONAL_FAMILY_ADMISSION_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-admission-postwrite/v1\0";
+/// Semantic domain for the exact terminal Fractional child receipt consumed by
+/// the Product market-family aggregator.
+pub const FRACTIONAL_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-terminal/v1\0";
+/// Semantic domain committing the two independent rent-return dispositions.
+pub const FRACTIONAL_FAMILY_RENT_DISPOSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-rent-disposition/v1\0";
+/// Semantic domain proving exact a4/a5/ClaimLedger terminal postimages before deletion.
+pub const FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-terminal-postwrite/v1\0";
 
 #[derive(Clone, Copy, Debug)]
 struct FractionalSha256V1;
@@ -64,7 +88,7 @@ fn map_collateral<T>(result: clutch_collateral_adapter_v2::Result<T>) -> Result<
 /// Private fields prevent a transition from accepting a policy, aggregate
 /// ledger, Resolution projection, collateral release, or claim release that
 /// has not passed the complete pure join in [`bind_fractional_context_v1`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundFractionalContextV1 {
     policy_account: Identity32V1,
     policy: FractionalPolicyV2,
@@ -78,7 +102,7 @@ pub struct BoundFractionalContextV1 {
     resolution_data_id: Identity32V1,
     payout: PayoutVectorV1,
     collateral: BoundCollateralProfileV2,
-    claims: BoundClaimIssuanceV1,
+    claims: Option<BoundClaimIssuanceV1>,
 }
 
 impl BoundFractionalContextV1 {
@@ -131,7 +155,7 @@ impl BoundFractionalContextV1 {
         self.collateral
     }
     /// Independent claim-issuance capability.
-    pub const fn claims(self) -> BoundClaimIssuanceV1 {
+    pub const fn claims(self) -> Option<BoundClaimIssuanceV1> {
         self.claims
     }
 
@@ -177,6 +201,7 @@ fn validate_canonical_ledgers(
     map_collateral(claim_ledger.validate())?;
     map_collateral(hoard.validate())?;
     if ledger.claim_ledger_account != claim_ledger_account
+        || claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
         || claim_ledger.market_instance_id != collateral_id(policy.market_instance)
         || claim_ledger.realm_id != collateral_id(policy.realm)
         || claim_ledger.fractional_policy_id != collateral_id(policy_account)
@@ -265,7 +290,77 @@ pub fn bind_fractional_context_v1(
         resolution_data_id,
         payout,
         collateral,
-        claims,
+        claims: Some(claims),
+    })
+}
+
+/// Bind the canonical subset needed by an internal Position redemption.
+///
+/// This is deliberately not sufficient for a bearer action: the resulting
+/// context carries no authenticated claim-program capability and every bearer
+/// source refuses it. Native internal claims are instead authenticated by the
+/// canonical Position V3, ClaimLedger V3, and purpose-owned GEN1 Replay.
+#[allow(clippy::too_many_arguments)]
+pub fn bind_fractional_internal_context_v1(
+    policy_account: Identity32V1,
+    policy: FractionalPolicyV2,
+    ledger_account: Identity32V1,
+    ledger: FractionalLedgerV1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger: ClaimLedgerV3,
+    hoard: HoardV2,
+    resolution: ResolutionV5,
+    collateral: BoundCollateralProfileV2,
+) -> Result<BoundFractionalContextV1> {
+    map_collateral(resolution.validate())?;
+    if resolution.state != ResolutionStateV5::Finalized
+        || resolution.facts.market_instance_id != collateral_id(policy.market_instance)
+        || resolution.facts.native_claim_basis_id != claim_ledger.native_claim_basis_id
+        || resolution.facts.generation != policy.domain_generation
+        || resolution.facts.outcome_count != policy.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let payout = PayoutVectorV1::from_resolution_v5(resolution)?;
+    let resolution_semantic_id = runtime_identity(
+        resolution
+            .semantic_id(&FractionalSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    let resolution_data_id = runtime_identity(
+        resolution
+            .data_id(collateral_id(policy.resolution_account))
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    policy.validate_internal_join(payout, resolution_data_id, collateral)?;
+    ledger.validate_with_policy(policy_account, policy)?;
+    if policy_account == ledger_account {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_ledgers(
+        policy_account,
+        policy,
+        ledger_account,
+        ledger,
+        claim_ledger_account,
+        claim_ledger,
+        hoard,
+        collateral,
+    )?;
+    Ok(BoundFractionalContextV1 {
+        policy_account,
+        policy,
+        ledger_account,
+        ledger,
+        claim_ledger_account,
+        claim_ledger,
+        hoard,
+        resolution,
+        resolution_semantic_id,
+        resolution_data_id,
+        payout,
+        collateral,
+        claims: None,
     })
 }
 
@@ -276,6 +371,174 @@ pub struct FractionalInitializationPlanV1 {
     pub ledger_after: FractionalLedgerV1,
     /// Canonical ClaimLedger V3 founding successor.
     pub claim_ledger: FractionalClaimLedgerFoundingPlanV3,
+    /// Exact child receipt presented to the Product five-family aggregator.
+    pub family_admission: FractionalFamilyAdmissionReceiptV1,
+}
+
+/// Private-field receipt proving one exact a4/a5/ClaimLedger founding latch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalFamilyAdmissionReceiptV1 {
+    market_instance: Identity32V1,
+    domain_generation: u64,
+    claim_issuance_binding: Identity32V1,
+    policy_account: Identity32V1,
+    policy_state_id: Identity32V1,
+    ledger_account: Identity32V1,
+    ledger_state_id: Identity32V1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger_before_id: Identity32V1,
+    claim_ledger_after_id: Identity32V1,
+    latch_transition_id: Identity32V1,
+    receipt_id: Identity32V1,
+}
+
+impl FractionalFamilyAdmissionReceiptV1 {
+    /// Full shared Market identity.
+    pub const fn market_instance(self) -> Identity32V1 {
+        self.market_instance
+    }
+    /// Exact nonzero fractional domain generation.
+    pub const fn domain_generation(self) -> u64 {
+        self.domain_generation
+    }
+    /// Exact canonical claim-issuance binding persisted by Product Foundation.
+    pub const fn claim_issuance_binding(self) -> Identity32V1 {
+        self.claim_issuance_binding
+    }
+    /// Exact immutable a4/v2 physical account.
+    pub const fn policy_account(self) -> Identity32V1 {
+        self.policy_account
+    }
+    /// Immutable a4/v2 state identity.
+    pub const fn policy_state_id(self) -> Identity32V1 {
+        self.policy_state_id
+    }
+    /// Exact a5/v1 physical account.
+    pub const fn ledger_account(self) -> Identity32V1 {
+        self.ledger_account
+    }
+    /// Founding a5/v1 state identity.
+    pub const fn ledger_state_id(self) -> Identity32V1 {
+        self.ledger_state_id
+    }
+    /// Exact canonical ClaimLedger V3 physical account.
+    pub const fn claim_ledger_account(self) -> Identity32V1 {
+        self.claim_ledger_account
+    }
+    /// ClaimLedger semantic identity before the one-way latch.
+    pub const fn claim_ledger_before_id(self) -> Identity32V1 {
+        self.claim_ledger_before_id
+    }
+    /// ClaimLedger semantic identity after the one-way latch.
+    pub const fn claim_ledger_after_id(self) -> Identity32V1 {
+        self.claim_ledger_after_id
+    }
+    /// Atomic ClaimLedger/a5 founding transition identity.
+    pub const fn latch_transition_id(self) -> Identity32V1 {
+        self.latch_transition_id
+    }
+    /// Unique receipt identity consumed by Product family admission.
+    pub const fn receipt_id(self) -> Identity32V1 {
+        self.receipt_id
+    }
+}
+
+/// Structurally verified a4/a5/ClaimLedger founding postimages.
+///
+/// This pure value is not Solana account authority. The adapter must decode
+/// the three exact program-owned postwrite accounts and keep its authenticated
+/// wrapper private before Product may consume the embedded family receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedFractionalFamilyAdmissionPostwriteV1 {
+    family_admission: FractionalFamilyAdmissionReceiptV1,
+    verification_id: Identity32V1,
+}
+
+impl VerifiedFractionalFamilyAdmissionPostwriteV1 {
+    /// Exact Fractional-owned receipt consumed by Product family admission.
+    pub const fn family_admission(self) -> FractionalFamilyAdmissionReceiptV1 {
+        self.family_admission
+    }
+
+    /// Commitment to the three exact canonical postimages.
+    pub const fn verification_id(self) -> Identity32V1 {
+        self.verification_id
+    }
+}
+
+/// Verify the exact founding postimages before Product admits the Fractional child.
+///
+/// Physical owner, PDA, writable, allocation, rent, and framed-byte checks
+/// remain the SBF adapter's responsibility. This function prevents that
+/// adapter from promoting caller-shaped decoded values or a mismatched latch.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_fractional_family_admission_postwrite_v1(
+    plan: FractionalInitializationPlanV1,
+    policy_account: Identity32V1,
+    policy: FractionalPolicyV2,
+    ledger_account: Identity32V1,
+    ledger: FractionalLedgerV1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger: ClaimLedgerV3,
+) -> Result<VerifiedFractionalFamilyAdmissionPostwriteV1> {
+    policy.validate()?;
+    ledger.validate_with_policy(policy_account, policy)?;
+    map_collateral(claim_ledger.validate())?;
+    let receipt = plan.family_admission;
+    let policy_state_id = policy.state_id()?;
+    let ledger_state_id = ledger.state_id()?;
+    let claim_ledger_after_id = runtime_identity(
+        claim_ledger
+            .semantic_id(&FractionalSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    if ledger != plan.ledger_after
+        || claim_ledger != plan.claim_ledger.claim_ledger_after()
+        || policy_account != receipt.policy_account
+        || policy.market_instance != receipt.market_instance
+        || policy.domain_generation != receipt.domain_generation
+        || policy.claim_issuance_binding != receipt.claim_issuance_binding
+        || policy_state_id != receipt.policy_state_id
+        || ledger_account != receipt.ledger_account
+        || ledger_state_id != receipt.ledger_state_id
+        || claim_ledger_account != receipt.claim_ledger_account
+        || claim_ledger_after_id != receipt.claim_ledger_after_id
+        || claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
+        || claim_ledger.fractional_policy_id != collateral_id(policy_account)
+        || claim_ledger.fractional_ledger_account != collateral_id(ledger_account)
+        || claim_ledger.last_fractional_transition_id
+            != collateral_id(receipt.latch_transition_id)
+        || plan.claim_ledger.claim_ledger_before_id()
+            != collateral_id(receipt.claim_ledger_before_id)
+        || plan.claim_ledger.fractional_policy_id() != collateral_id(policy_account)
+        || plan.claim_ledger.fractional_ledger_account() != collateral_id(ledger_account)
+        || plan.claim_ledger.fractional_ledger_after_id() != collateral_id(ledger_state_id)
+        || plan.claim_ledger.claim_ledger_after_id() != collateral_id(claim_ledger_after_id)
+        || plan.claim_ledger.transition_id() != collateral_id(receipt.latch_transition_id)
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_ADMISSION_POSTWRITE_DOMAIN_V1);
+    for identity in [
+        receipt.receipt_id,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        claim_ledger_account,
+        receipt.claim_ledger_before_id,
+        claim_ledger_after_id,
+        receipt.latch_transition_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    let verification_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    Ok(VerifiedFractionalFamilyAdmissionPostwriteV1 {
+        family_admission: receipt,
+        verification_id,
+    })
 }
 
 /// Initialize the sole aggregate-credit owner beside an authenticated policy.
@@ -297,10 +560,11 @@ pub fn initialize_fractional_ledger_v1(
         return Err(Error::MismatchedBinding);
     }
     map_collateral(claim_ledger.validate())?;
-    if claim_ledger.market_instance_id != collateral_id(policy.market_instance)
+    if claim_ledger.fractional_binding != FractionalBindingStateV1::OpenUnlatched
+        || claim_ledger.market_instance_id != collateral_id(policy.market_instance)
         || claim_ledger.realm_id != collateral_id(policy.realm)
-        || claim_ledger.fractional_policy_id != collateral_id(policy_account)
-        || claim_ledger.fractional_ledger_account != collateral_id(ledger_account)
+        || !claim_ledger.fractional_policy_id.is_zero()
+        || !claim_ledger.fractional_ledger_account.is_zero()
         || claim_ledger.resolution_account != collateral_id(policy.resolution_account)
         || claim_ledger.outcome_count != policy.outcome_count
         || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
@@ -324,15 +588,58 @@ pub fn initialize_fractional_ledger_v1(
     let ledger_after_id = collateral_id(ledger.state_id()?);
     let claim_ledger = map_collateral(prepare_fractional_claim_ledger_founding_v3(
         claim_ledger,
+        collateral_id(policy_account),
+        collateral_id(ledger_account),
         ledger_after_id,
         &FractionalSha256V1,
     ))?;
-    if claim_ledger.fractional_ledger_account() != collateral_id(ledger_account) {
+    if claim_ledger.fractional_policy_id() != collateral_id(policy_account)
+        || claim_ledger.fractional_ledger_account() != collateral_id(ledger_account)
+    {
         return Err(Error::MismatchedBinding);
     }
+    let policy_state_id = policy.state_id()?;
+    let ledger_state_id = ledger.state_id()?;
+    let claim_ledger_before_id = runtime_identity(claim_ledger.claim_ledger_before_id())?;
+    let claim_ledger_after_id = runtime_identity(claim_ledger.claim_ledger_after_id())?;
+    let latch_transition_id = runtime_identity(claim_ledger.transition_id())?;
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_ADMISSION_RECEIPT_DOMAIN_V1);
+    for identity in [
+        policy.market_instance,
+        policy.claim_issuance_binding,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        claim_ledger_account,
+        claim_ledger_before_id,
+        claim_ledger_after_id,
+        latch_transition_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    hasher.update(policy.domain_generation.to_le_bytes());
+    let receipt_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    let family_admission = FractionalFamilyAdmissionReceiptV1 {
+        market_instance: policy.market_instance,
+        domain_generation: policy.domain_generation,
+        claim_issuance_binding: policy.claim_issuance_binding,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        claim_ledger_account,
+        claim_ledger_before_id,
+        claim_ledger_after_id,
+        latch_transition_id,
+        receipt_id,
+    };
     Ok(FractionalInitializationPlanV1 {
         ledger_after: ledger,
         claim_ledger,
+        family_admission,
     })
 }
 
@@ -391,6 +698,8 @@ pub struct BearerClaimSourceV1 {
     pub claim_issuance_binding: Identity32V1,
     /// Pre-CPI bearer balance authenticated by the Token-2022 adapter.
     pub source_claim_atoms: u64,
+    /// Exact Token-2022 mint supplies observed for every active outcome.
+    pub observed_materialized_supply: [u64; MAX_OUTCOMES],
     /// Accepted external collateral movement for a nonzero payout. This is
     /// `None` exactly when the computed payout is zero.
     pub accepted_collateral: Option<AcceptedClaimRedemptionCollateralV2>,
@@ -398,7 +707,8 @@ pub struct BearerClaimSourceV1 {
 
 impl BearerClaimSourceV1 {
     fn validate(self, context: BoundFractionalContextV1, quantity: u64) -> Result<()> {
-        if self.claim_issuance_binding.bytes() != context.claims.binding_id().bytes()
+        let claims = context.claims.ok_or(Error::ClaimPlaneRefused)?;
+        if self.claim_issuance_binding.bytes() != claims.binding_id().bytes()
             || self.claim_issuance_binding != context.policy.claim_issuance_binding
             || self.source_claim_atoms < quantity
             || self.claim_token_account == self.claim_mint
@@ -414,6 +724,54 @@ impl BearerClaimSourceV1 {
         FractionalPayoutDispositionV3::ExternalCustodyTransfer {
             accepted: self.accepted_collateral,
         }
+    }
+}
+
+/// Adapter-observed bearer prestate for the two-phase exact route.
+///
+/// This is a structural input, never authority. The independent claim adapter
+/// must reauthenticate every field and return an accepted burn capability
+/// before the collateral request can be exposed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BearerClaimPrestateV1 {
+    /// Exact claimant signer and semantic owner.
+    pub claimant: Identity32V1,
+    /// Exact bearer source token account.
+    pub claim_token_account: Identity32V1,
+    /// Exact selected native-outcome mint.
+    pub claim_mint: Identity32V1,
+    /// Exact collateral payout destination.
+    pub collateral_destination: Identity32V1,
+    /// Exact persisted independent claim-issuance binding.
+    pub claim_issuance_binding: Identity32V1,
+    /// Authenticated source balance before the burn.
+    pub source_claim_atoms: u64,
+    /// Authenticated Token-2022 mint supplies before the burn.
+    pub observed_materialized_supply: [u64; MAX_OUTCOMES],
+}
+
+impl BearerClaimPrestateV1 {
+    fn validate(self, context: BoundFractionalContextV1, outcome: u8, quantity: u64) -> Result<()> {
+        let claims = context.claims.ok_or(Error::ClaimPlaneRefused)?;
+        if self.claim_issuance_binding.bytes() != claims.binding_id().bytes()
+            || self.claim_issuance_binding != context.policy.claim_issuance_binding
+            || self.source_claim_atoms < quantity
+            || self.claim_token_account == self.claim_mint
+            || self.claim_token_account == self.collateral_destination
+            || self.claim_mint == self.collateral_destination
+            || outcome >= context.policy.outcome_count
+            || self.observed_materialized_supply[usize::from(outcome)] < quantity
+        {
+            return Err(Error::ClaimPlaneRefused);
+        }
+        let mut index = usize::from(context.policy.outcome_count);
+        while index < MAX_OUTCOMES {
+            if self.observed_materialized_supply[index] != 0 {
+                return Err(Error::ClaimPlaneRefused);
+            }
+            index += 1;
+        }
+        Ok(())
     }
 }
 
@@ -448,6 +806,9 @@ pub struct BearerPayoutPoststateV1 {
     /// Atomic fractional/ClaimLedger/Hoard transition identity that the claim
     /// burn receipt must commit.
     pub transition_id: Identity32V1,
+    /// Exact accepted independent claim-release burn receipt. Legacy pure
+    /// projections carry `None`; the executable two-phase route requires it.
+    pub burn_receipt_id: Option<Identity32V1>,
 }
 
 /// Source-specific atomic postcondition.
@@ -824,7 +1185,8 @@ fn bearer_poststate(
         .map_err(|_| Error::CollateralRefused)?,
         collateral_destination: source.collateral_destination,
         payout_atoms: paid_atoms,
-        transition_id: runtime_identity(custody.receipt_id())?,
+        transition_id: runtime_identity(custody.fractional().transition_id())?,
+        burn_receipt_id: None,
     })
 }
 
@@ -917,6 +1279,7 @@ pub fn redeem_bearer_exact_v1(
         FractionalClaimSupplyMutationV3::BurnMaterialized {
             outcome,
             amount: quantity,
+            observed_before: source.observed_materialized_supply,
         },
         source.payout_disposition(),
         |paid, custody| {
@@ -925,6 +1288,186 @@ pub fn redeem_bearer_exact_v1(
             )?))
         },
     )
+}
+
+/// Prepared exact bearer redemption before either external effect.
+///
+/// Private fields ensure callers cannot extract the collateral request before
+/// presenting an accepted burn from the independently released claim adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedBearerExactRedemptionV1 {
+    context: BoundFractionalContextV1,
+    source: BearerClaimPrestateV1,
+    outcome: u8,
+    quantity: u64,
+    resolution_payout: ResolutionPayoutProjectionV5,
+    ledger_after: FractionalLedgerV1,
+    custody: PreparedFractionalExternalClaimRedemptionV3,
+    used_common_lot_fast_path: bool,
+}
+
+impl PreparedBearerExactRedemptionV1 {
+    /// Canonical private ClaimLedger/0xa5 plan the claim adapter must bind.
+    pub const fn fractional_claim_ledger(self) -> FractionalClaimLedgerPlanV3 {
+        self.custody.fractional()
+    }
+
+    /// Exact claimant authenticated by the source account bytes.
+    pub const fn claimant(self) -> Identity32V1 {
+        self.source.claimant
+    }
+
+    /// Exact selected outcome.
+    pub const fn outcome(self) -> u8 {
+        self.outcome
+    }
+
+    /// Exact bearer quantity to burn.
+    pub const fn quantity(self) -> u64 {
+        self.quantity
+    }
+
+    /// Runtime-observed materialized supplies before the burn.
+    pub const fn observed_materialized_supply(self) -> [u64; MAX_OUTCOMES] {
+        self.source.observed_materialized_supply
+    }
+}
+
+/// Burn-accepted exact bearer redemption. Only this capability exposes the
+/// collateral request selected by the canonical Fractional transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BurnAcceptedBearerExactRedemptionV1 {
+    prepared: PreparedBearerExactRedemptionV1,
+    burn: AcceptedFractionalBearerClaimBurnV3,
+}
+
+impl BurnAcceptedBearerExactRedemptionV1 {
+    /// Exact claim-bound zero/nonzero collateral request.
+    pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.prepared.custody.collateral_request()
+    }
+}
+
+/// Prepare a two-phase exact bearer redemption without exposing any custody
+/// transfer authority before the Token-2022 burn is accepted.
+pub fn prepare_bearer_exact_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: BearerClaimPrestateV1,
+    outcome: u8,
+    quantity: u64,
+) -> Result<PreparedBearerExactRedemptionV1> {
+    source.validate(context, outcome, quantity)?;
+    let (paid_atoms, residue, resolution_payout) =
+        checked_redemption(context, outcome, quantity, 0)?;
+    if residue != 0 {
+        return Err(Error::NonIntegralLot);
+    }
+    let ledger_after = context.ledger.advanced(expected_ledger_sequence)?;
+    let before_id = collateral_id(context.ledger.state_id()?);
+    let after_id = collateral_id(ledger_after.state_id()?);
+    let custody = map_collateral(prepare_fractional_external_claim_redemption_v3(
+        context.hoard,
+        context.claim_ledger,
+        before_id,
+        after_id,
+        expected_ledger_sequence,
+        outcome,
+        quantity,
+        source.observed_materialized_supply,
+        paid_atoms,
+        collateral_id(source.claimant),
+        collateral_id(source.collateral_destination),
+        &FractionalSha256V1,
+    ))?;
+    let fractional = custody.fractional();
+    if fractional.fractional_ledger_before_id() != before_id
+        || fractional.fractional_ledger_after_id() != after_id
+        || fractional.consumed_sequence() != expected_ledger_sequence
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_solvency(
+        context.payout,
+        custody.claim_ledger_after(),
+        custody.hoard_after(),
+        ledger_after.aggregate_credit_numerator,
+    )?;
+    Ok(PreparedBearerExactRedemptionV1 {
+        context,
+        source,
+        outcome,
+        quantity,
+        resolution_payout,
+        ledger_after,
+        custody,
+        used_common_lot_fast_path: quantity.is_multiple_of(context.policy.common_lot),
+    })
+}
+
+/// Accept the independent Token-2022 burn and expose the exact collateral request.
+pub fn accept_bearer_exact_burn_v1(
+    prepared: PreparedBearerExactRedemptionV1,
+    burn: AcceptedFractionalBearerClaimBurnV3,
+) -> Result<BurnAcceptedBearerExactRedemptionV1> {
+    let intent = burn.burn_intent();
+    if burn.fractional() != prepared.custody.fractional()
+        || burn.claim_binding_id().bytes() != prepared.source.claim_issuance_binding.bytes()
+        || burn.claimant().bytes() != prepared.source.claimant.bytes()
+        || burn.outcome() != prepared.outcome
+        || burn.quantity() != prepared.quantity
+        || intent.mint.bytes() != prepared.source.claim_mint.bytes()
+        || intent.source_token_account.bytes() != prepared.source.claim_token_account.bytes()
+        || intent.claimant.bytes() != prepared.source.claimant.bytes()
+        || intent.quantity != prepared.quantity
+    {
+        return Err(Error::ClaimPlaneRefused);
+    }
+    Ok(BurnAcceptedBearerExactRedemptionV1 { prepared, burn })
+}
+
+/// Accept the Realm collateral postcondition and publish one complete atomic
+/// bearer/ClaimLedger/Hoard/0xa5 successor.
+pub fn finish_bearer_exact_v1(
+    burned: BurnAcceptedBearerExactRedemptionV1,
+    collateral: AcceptedBearerRedemptionCollateralV3,
+) -> Result<RedemptionPlanV1> {
+    let accepted_nonzero = match collateral {
+        AcceptedBearerRedemptionCollateralV3::Zero(_) => None,
+        AcceptedBearerRedemptionCollateralV3::Nonzero(accepted) => Some(accepted),
+    };
+    let custody_after = map_collateral(accept_fractional_external_claim_redemption_v3(
+        burned.prepared.custody,
+        collateral,
+    ))?;
+    let source = BearerClaimSourceV1 {
+        claimant: burned.prepared.source.claimant,
+        claim_token_account: burned.prepared.source.claim_token_account,
+        claim_mint: burned.prepared.source.claim_mint,
+        collateral_destination: burned.prepared.source.collateral_destination,
+        claim_issuance_binding: burned.prepared.source.claim_issuance_binding,
+        source_claim_atoms: burned.prepared.source.source_claim_atoms,
+        observed_materialized_supply: burned.prepared.source.observed_materialized_supply,
+        accepted_collateral: accepted_nonzero,
+    };
+    let mut source_after = bearer_poststate(
+        burned.prepared.context,
+        source,
+        burned.prepared.quantity,
+        burned.prepared.custody.payout_atoms(),
+        custody_after,
+    )?;
+    source_after.burn_receipt_id = Some(runtime_identity(burned.burn.burn_receipt_id())?);
+    Ok(RedemptionPlanV1 {
+        resolution_payout: burned.prepared.resolution_payout,
+        ledger_after: burned.prepared.ledger_after,
+        custody_after,
+        credit_after: None,
+        paid_atoms: burned.prepared.custody.payout_atoms(),
+        claimant_numerator_after: 0,
+        used_common_lot_fast_path: burned.prepared.used_common_lot_fast_path,
+        source_after: RedemptionSourcePoststateV1::Bearer(source_after),
+    })
 }
 
 fn redeem_with_credit(
@@ -1048,6 +1591,7 @@ pub fn redeem_bearer_to_credit_v1(
         FractionalClaimSupplyMutationV3::BurnMaterialized {
             outcome,
             amount: quantity,
+            observed_before: source.observed_materialized_supply,
         },
         source.payout_disposition(),
         |paid, custody| {
@@ -1056,6 +1600,211 @@ pub fn redeem_bearer_to_credit_v1(
             )?))
         },
     )
+}
+
+/// Prepared credited bearer redemption before either external effect.
+///
+/// Credit and collateral successors remain private until the independent claim
+/// adapter accepts the exact Token-2022 burn. This is the credited analogue of
+/// [`PreparedBearerExactRedemptionV1`], not a second custody owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedBearerCreditRedemptionV1 {
+    context: BoundFractionalContextV1,
+    source: BearerClaimPrestateV1,
+    outcome: u8,
+    quantity: u64,
+    resolution_payout: ResolutionPayoutProjectionV5,
+    ledger_after: FractionalLedgerV1,
+    credit_after: FractionalCreditV2,
+    custody: PreparedFractionalExternalClaimRedemptionV3,
+    used_common_lot_fast_path: bool,
+}
+
+impl PreparedBearerCreditRedemptionV1 {
+    /// Canonical private ClaimLedger/0xa5 plan the claim adapter must bind.
+    pub const fn fractional_claim_ledger(self) -> FractionalClaimLedgerPlanV3 {
+        self.custody.fractional()
+    }
+
+    /// Exact claimant authenticated by the source account bytes.
+    pub const fn claimant(self) -> Identity32V1 {
+        self.source.claimant
+    }
+
+    /// Exact selected outcome.
+    pub const fn outcome(self) -> u8 {
+        self.outcome
+    }
+
+    /// Exact bearer quantity to burn.
+    pub const fn quantity(self) -> u64 {
+        self.quantity
+    }
+
+    /// Runtime-observed materialized supplies before the burn.
+    pub const fn observed_materialized_supply(self) -> [u64; MAX_OUTCOMES] {
+        self.source.observed_materialized_supply
+    }
+}
+
+/// Burn-accepted credited bearer redemption. Only this capability exposes the
+/// exact Realm collateral request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BurnAcceptedBearerCreditRedemptionV1 {
+    prepared: PreparedBearerCreditRedemptionV1,
+    burn: AcceptedFractionalBearerClaimBurnV3,
+}
+
+impl BurnAcceptedBearerCreditRedemptionV1 {
+    /// Exact claim-bound zero/nonzero collateral request.
+    pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.prepared.custody.collateral_request()
+    }
+}
+
+/// Prepare arbitrary bearer redemption without exposing payout or credit state.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_bearer_credit_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    expected_credit_sequence: u64,
+    credit_prestate: CreditPrestateV1,
+    source: BearerClaimPrestateV1,
+    outcome: u8,
+    quantity: u64,
+) -> Result<PreparedBearerCreditRedemptionV1> {
+    source.validate(context, outcome, quantity)?;
+    let (mut credit_after, created_count) = open_credit(
+        context,
+        credit_prestate,
+        source.claimant,
+        expected_credit_sequence,
+    )?;
+    let prior = credit_after.numerator;
+    let (paid_atoms, residue, resolution_payout) =
+        checked_redemption(context, outcome, quantity, prior)?;
+    credit_after.numerator = residue;
+    let mut ledger_after = context.ledger.advanced(expected_ledger_sequence)?;
+    ledger_after.active_credit_accounts = ledger_after
+        .active_credit_accounts
+        .checked_add(created_count)
+        .ok_or(Error::Arithmetic)?;
+    ledger_after.aggregate_credit_numerator = ledger_after
+        .aggregate_credit_numerator
+        .checked_sub(u128::from(prior))
+        .and_then(|value| value.checked_add(u128::from(residue)))
+        .ok_or(Error::AggregateMismatch)?;
+    credit_after.validate_with(
+        context.policy_account,
+        context.policy,
+        context.ledger_account,
+        ledger_after,
+        context.payout,
+    )?;
+    let before_id = collateral_id(context.ledger.state_id()?);
+    let after_id = collateral_id(ledger_after.state_id()?);
+    let custody = map_collateral(prepare_fractional_external_claim_redemption_v3(
+        context.hoard,
+        context.claim_ledger,
+        before_id,
+        after_id,
+        expected_ledger_sequence,
+        outcome,
+        quantity,
+        source.observed_materialized_supply,
+        paid_atoms,
+        collateral_id(source.claimant),
+        collateral_id(source.collateral_destination),
+        &FractionalSha256V1,
+    ))?;
+    let fractional = custody.fractional();
+    if fractional.fractional_ledger_before_id() != before_id
+        || fractional.fractional_ledger_after_id() != after_id
+        || fractional.consumed_sequence() != expected_ledger_sequence
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_solvency(
+        context.payout,
+        custody.claim_ledger_after(),
+        custody.hoard_after(),
+        ledger_after.aggregate_credit_numerator,
+    )?;
+    Ok(PreparedBearerCreditRedemptionV1 {
+        context,
+        source,
+        outcome,
+        quantity,
+        resolution_payout,
+        ledger_after,
+        credit_after,
+        custody,
+        used_common_lot_fast_path: quantity.is_multiple_of(context.policy.common_lot),
+    })
+}
+
+/// Accept the independent Token-2022 burn before exposing credited payout authority.
+pub fn accept_bearer_credit_burn_v1(
+    prepared: PreparedBearerCreditRedemptionV1,
+    burn: AcceptedFractionalBearerClaimBurnV3,
+) -> Result<BurnAcceptedBearerCreditRedemptionV1> {
+    let intent = burn.burn_intent();
+    if burn.fractional() != prepared.custody.fractional()
+        || burn.claim_binding_id().bytes() != prepared.source.claim_issuance_binding.bytes()
+        || burn.claimant().bytes() != prepared.source.claimant.bytes()
+        || burn.outcome() != prepared.outcome
+        || burn.quantity() != prepared.quantity
+        || intent.mint.bytes() != prepared.source.claim_mint.bytes()
+        || intent.source_token_account.bytes() != prepared.source.claim_token_account.bytes()
+        || intent.claimant.bytes() != prepared.source.claimant.bytes()
+        || intent.quantity != prepared.quantity
+    {
+        return Err(Error::ClaimPlaneRefused);
+    }
+    Ok(BurnAcceptedBearerCreditRedemptionV1 { prepared, burn })
+}
+
+/// Accept Realm collateral postconditions and publish the complete credited successor.
+pub fn finish_bearer_credit_v1(
+    burned: BurnAcceptedBearerCreditRedemptionV1,
+    collateral: AcceptedBearerRedemptionCollateralV3,
+) -> Result<RedemptionPlanV1> {
+    let accepted_nonzero = match collateral {
+        AcceptedBearerRedemptionCollateralV3::Zero(_) => None,
+        AcceptedBearerRedemptionCollateralV3::Nonzero(accepted) => Some(accepted),
+    };
+    let custody_after = map_collateral(accept_fractional_external_claim_redemption_v3(
+        burned.prepared.custody,
+        collateral,
+    ))?;
+    let source = BearerClaimSourceV1 {
+        claimant: burned.prepared.source.claimant,
+        claim_token_account: burned.prepared.source.claim_token_account,
+        claim_mint: burned.prepared.source.claim_mint,
+        collateral_destination: burned.prepared.source.collateral_destination,
+        claim_issuance_binding: burned.prepared.source.claim_issuance_binding,
+        source_claim_atoms: burned.prepared.source.source_claim_atoms,
+        observed_materialized_supply: burned.prepared.source.observed_materialized_supply,
+        accepted_collateral: accepted_nonzero,
+    };
+    let mut source_after = bearer_poststate(
+        burned.prepared.context,
+        source,
+        burned.prepared.quantity,
+        burned.prepared.custody.payout_atoms(),
+        custody_after,
+    )?;
+    source_after.burn_receipt_id = Some(runtime_identity(burned.burn.burn_receipt_id())?);
+    Ok(RedemptionPlanV1 {
+        resolution_payout: burned.prepared.resolution_payout,
+        ledger_after: burned.prepared.ledger_after,
+        custody_after,
+        credit_after: Some(burned.prepared.credit_after),
+        paid_atoms: burned.prepared.custody.payout_atoms(),
+        claimant_numerator_after: burned.prepared.credit_after.numerator,
+        used_common_lot_fast_path: burned.prepared.used_common_lot_fast_path,
+        source_after: RedemptionSourcePoststateV1::Bearer(source_after),
+    })
 }
 
 /// Destination that receives a whole collateral atom created by credit merge.
@@ -1186,38 +1935,16 @@ pub struct CreditTransferPlanV1 {
     pub payout_after: CreditPayoutPoststateV1,
 }
 
-/// Transfer an explicit numerator amount between same-domain owner credits.
-///
-/// Destination claimant acceptance, any destination account creation, and the
-/// whole-atom payout are one atomic plan. No numerator is tokenized or erased.
-#[allow(clippy::too_many_arguments)]
-pub fn transfer_credit_v1(
-    context: BoundFractionalContextV1,
-    expected_ledger_sequence: u64,
-    source: FractionalCreditV2,
-    expected_source_sequence: u64,
-    destination: CreditPrestateV1,
-    destination_claimant: Identity32V1,
-    expected_destination_sequence: u64,
-    numerator: u64,
-    payout_target: CreditPayoutTargetV1,
-) -> Result<CreditTransferPlanV1> {
-    transfer_credit_with_kind_v1(
-        context,
-        expected_ledger_sequence,
-        source,
-        expected_source_sequence,
-        destination,
-        destination_claimant,
-        expected_destination_sequence,
-        numerator,
-        payout_target,
-        GeneralReplayTransitionKindV1::FractionalTransferCreditPayout,
-    )
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparedCreditTransferStateV1 {
+    source_after: FractionalCreditV2,
+    destination_after: FractionalCreditV2,
+    ledger_after: FractionalLedgerV1,
+    paid_atoms: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn transfer_credit_with_kind_v1(
+fn prepare_credit_transfer_state_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
     source: FractionalCreditV2,
@@ -1226,9 +1953,7 @@ fn transfer_credit_with_kind_v1(
     destination_claimant: Identity32V1,
     expected_destination_sequence: u64,
     numerator: u64,
-    payout_target: CreditPayoutTargetV1,
-    replay_kind: GeneralReplayTransitionKindV1,
-) -> Result<CreditTransferPlanV1> {
+) -> Result<PreparedCreditTransferStateV1> {
     if numerator == 0 {
         return Err(Error::ZeroQuantity);
     }
@@ -1293,25 +2018,252 @@ fn transfer_credit_with_kind_v1(
         ledger_after,
         context.payout,
     )?;
-    let custody_after = prepare_canonical_redemption(
-        context,
-        ledger_after,
-        expected_ledger_sequence,
-        FractionalClaimSupplyMutationV3::Unchanged,
-        paid_atoms,
-        payout_target.disposition(),
-    )?;
-    Ok(CreditTransferPlanV1 {
+    Ok(PreparedCreditTransferStateV1 {
         source_after,
         destination_after,
         ledger_after,
-        custody_after,
         paid_atoms,
+    })
+}
+
+/// Fully authenticated credit aggregation before Realm collateral movement.
+///
+/// Source, destination, aggregate-ledger, ClaimLedger, and Hoard successors
+/// remain private. Only the exact collateral request is exposed for adapter
+/// execution; final successors require its accepted postcondition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedExternalCreditTransferV1 {
+    context: BoundFractionalContextV1,
+    source_after: FractionalCreditV2,
+    destination_after: FractionalCreditV2,
+    ledger_after: FractionalLedgerV1,
+    custody: PreparedFractionalExternalCreditPayoutV3,
+    paid_atoms: u64,
+    claimant: Identity32V1,
+    collateral_destination: Identity32V1,
+}
+
+impl PreparedExternalCreditTransferV1 {
+    /// Exact Realm-selected collateral request admitted by both credits.
+    pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.custody.collateral_request()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_external_credit_transfer_state_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    collateral_destination: Identity32V1,
+) -> Result<PreparedExternalCreditTransferV1> {
+    let state = prepare_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+    )?;
+    let before_id = collateral_id(context.ledger.state_id()?);
+    let after_id = collateral_id(state.ledger_after.state_id()?);
+    let custody = map_collateral(prepare_fractional_external_credit_payout_v3(
+        context.hoard,
+        context.claim_ledger,
+        before_id,
+        after_id,
+        expected_ledger_sequence,
+        state.paid_atoms,
+        collateral_id(destination_claimant),
+        collateral_id(collateral_destination),
+        &FractionalSha256V1,
+    ))?;
+    if custody.fractional().fractional_ledger_before_id() != before_id
+        || custody.fractional().fractional_ledger_after_id() != after_id
+        || custody.fractional().consumed_sequence() != expected_ledger_sequence
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_canonical_solvency(
+        context.payout,
+        custody.claim_ledger_after(),
+        custody.hoard_after(),
+        state.ledger_after.aggregate_credit_numerator,
+    )?;
+    Ok(PreparedExternalCreditTransferV1 {
+        context,
+        source_after: state.source_after,
+        destination_after: state.destination_after,
+        ledger_after: state.ledger_after,
+        custody,
+        paid_atoms: state.paid_atoms,
+        claimant: destination_claimant,
+        collateral_destination,
+    })
+}
+
+/// Prepare an explicit source numerator transfer with external payout.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_external_credit_transfer_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    collateral_destination: Identity32V1,
+) -> Result<PreparedExternalCreditTransferV1> {
+    prepare_external_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+        collateral_destination,
+    )
+}
+
+/// Prepare a full nonzero source-credit merge with external payout.
+///
+/// With no Position/GEN1 consumer, a merge is intentionally the canonical
+/// full-source instance of transfer and produces the same successor as an
+/// explicit transfer of that numerator. It does not invent an external replay
+/// owner merely to preserve a redundant action label.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_external_credit_merge_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    collateral_destination: Identity32V1,
+) -> Result<PreparedExternalCreditTransferV1> {
+    prepare_external_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        source.numerator,
+        collateral_destination,
+    )
+}
+
+/// Accept Realm collateral postconditions and expose one atomic credit plan.
+pub fn finish_external_credit_transfer_v1(
+    prepared: PreparedExternalCreditTransferV1,
+    collateral: AcceptedBearerRedemptionCollateralV3,
+) -> Result<CreditTransferPlanV1> {
+    let custody_after = map_collateral(accept_fractional_external_credit_payout_v3(
+        prepared.custody,
+        collateral,
+    ))?;
+    Ok(CreditTransferPlanV1 {
+        source_after: prepared.source_after,
+        destination_after: prepared.destination_after,
+        ledger_after: prepared.ledger_after,
+        custody_after,
+        paid_atoms: prepared.paid_atoms,
+        payout_after: CreditPayoutPoststateV1::External {
+            claimant: prepared.claimant,
+            collateral_hoard: Identity32V1::new(
+                prepared.context.collateral.market().hoard_token_account.bytes(),
+            )
+            .map_err(|_| Error::CollateralRefused)?,
+            collateral_destination: prepared.collateral_destination,
+            payout_atoms: prepared.paid_atoms,
+        },
+    })
+}
+
+/// Transfer an explicit numerator amount between same-domain owner credits.
+///
+/// Destination claimant acceptance, any destination account creation, and the
+/// whole-atom payout are one atomic plan. No numerator is tokenized or erased.
+#[allow(clippy::too_many_arguments)]
+pub fn transfer_credit_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    payout_target: CreditPayoutTargetV1,
+) -> Result<CreditTransferPlanV1> {
+    transfer_credit_with_kind_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+        payout_target,
+        GeneralReplayTransitionKindV1::FractionalTransferCreditPayout,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transfer_credit_with_kind_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV2,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    payout_target: CreditPayoutTargetV1,
+    replay_kind: GeneralReplayTransitionKindV1,
+) -> Result<CreditTransferPlanV1> {
+    let state = prepare_credit_transfer_state_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+    )?;
+    let custody_after = prepare_canonical_redemption(
+        context,
+        state.ledger_after,
+        expected_ledger_sequence,
+        FractionalClaimSupplyMutationV3::Unchanged,
+        state.paid_atoms,
+        payout_target.disposition(),
+    )?;
+    Ok(CreditTransferPlanV1 {
+        source_after: state.source_after,
+        destination_after: state.destination_after,
+        ledger_after: state.ledger_after,
+        custody_after,
+        paid_atoms: state.paid_atoms,
         payout_after: credit_payout_poststate(
             context,
             payout_target,
             destination_claimant,
-            paid_atoms,
+            state.paid_atoms,
             custody_after,
             replay_kind,
         )?,
@@ -1591,7 +2543,7 @@ fn prepare_fractional_account_close_funding(
     })
 }
 
-/// Exact terminal facts a ProductOccurrenceRoot authorization must bind before
+/// Exact terminal facts a Product five-family authorization must bind before
 /// either fractional-family account may be deleted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalDomainTerminalRequirementV1 {
@@ -1687,7 +2639,7 @@ impl FractionalDomainTerminalRequirementV1 {
 /// Prepared terminal fractional-family close after all economic state is zero.
 ///
 /// This pure value is not Product authorization. The disabled SBF adapter must
-/// consume the matching private ProductOccurrenceRoot close authorization
+/// consume the matching private Product five-family close authorization
 /// before applying either deletion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EmptyLedgerClosePlanV1 {
@@ -1705,7 +2657,7 @@ impl EmptyLedgerClosePlanV1 {
         self.claim_ledger_after
     }
 
-    /// Exact facts the private ProductOccurrenceRoot authorization must match.
+    /// Exact facts the private Product five-family authorization must match.
     pub const fn terminal_requirement(self) -> FractionalDomainTerminalRequirementV1 {
         self.terminal_requirement
     }
@@ -1782,5 +2734,298 @@ pub fn close_empty_ledger_v1(
             actual_ledger_lamports,
             neutral_sink,
         )?,
+    })
+}
+
+/// Exact Fractional-owned terminal receipt for Product family retirement.
+///
+/// This projection is not adapter authority. The SBF composer must source
+/// `fractional_release_id` from the authenticated Fractional capability
+/// release, perform both exact rent dispositions, persist the ClaimLedger
+/// retirement successor, and consume this receipt in Product atomically with
+/// deleting a4/a5. Product must not derive a substitute receipt from account
+/// bytes or copy the collateral adapter release identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalFamilyTerminalReceiptV1 {
+    market_instance_id: Identity32V1,
+    domain_generation: u64,
+    policy_account: Identity32V1,
+    policy_terminal_state_id: Identity32V1,
+    ledger_account: Identity32V1,
+    ledger_terminal_state_id: Identity32V1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger_post_state_id: Identity32V1,
+    claim_ledger_transition_id: Identity32V1,
+    fractional_release_id: Identity32V1,
+    rent_disposition_id: Identity32V1,
+    receipt_id: Identity32V1,
+}
+
+impl FractionalFamilyTerminalReceiptV1 {
+    /// Exact MarketInstanceV2 identity retired by the receipt.
+    pub const fn market_instance_id(self) -> Identity32V1 {
+        self.market_instance_id
+    }
+
+    /// Exact nonzero Fractional/Resolution generation.
+    pub const fn domain_generation(self) -> u64 {
+        self.domain_generation
+    }
+
+    /// Physical immutable a4/v2 account deleted atomically.
+    pub const fn policy_account(self) -> Identity32V1 {
+        self.policy_account
+    }
+
+    /// Exact immutable policy terminal-state identity.
+    pub const fn policy_terminal_state_id(self) -> Identity32V1 {
+        self.policy_terminal_state_id
+    }
+
+    /// Physical aggregate a5/v1 account deleted atomically.
+    pub const fn ledger_account(self) -> Identity32V1 {
+        self.ledger_account
+    }
+
+    /// Exact transient a5/v1 retirement-state identity.
+    pub const fn ledger_terminal_state_id(self) -> Identity32V1 {
+        self.ledger_terminal_state_id
+    }
+
+    /// Physical ClaimLedger V3 account advanced to Retiring.
+    pub const fn claim_ledger_account(self) -> Identity32V1 {
+        self.claim_ledger_account
+    }
+
+    /// Exact Retiring ClaimLedger V3 semantic identity.
+    pub const fn claim_ledger_post_state_id(self) -> Identity32V1 {
+        self.claim_ledger_post_state_id
+    }
+
+    /// Shared terminal a5/ClaimLedger transition identity.
+    pub const fn claim_ledger_transition_id(self) -> Identity32V1 {
+        self.claim_ledger_transition_id
+    }
+
+    /// Separately authenticated Fractional runtime/capability release.
+    pub const fn fractional_release_id(self) -> Identity32V1 {
+        self.fractional_release_id
+    }
+
+    /// Exact commitment to both payer-refund and neutral-sink splits.
+    pub const fn rent_disposition_id(self) -> Identity32V1 {
+        self.rent_disposition_id
+    }
+
+    /// Unique receipt consumed by Product's Fractional family terminal step.
+    pub const fn receipt_id(self) -> Identity32V1 {
+        self.receipt_id
+    }
+}
+
+fn hash_fractional_close_funding(
+    policy: FractionalAccountCloseFundingV1,
+    ledger: FractionalAccountCloseFundingV1,
+) -> Result<Identity32V1> {
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_RENT_DISPOSITION_DOMAIN_V1);
+    for funding in [policy, ledger] {
+        hasher.update(funding.account.bytes());
+        hasher.update(funding.payer.bytes());
+        hasher.update(funding.payer_refund_lamports.to_le_bytes());
+        hasher.update(funding.neutral_sink.bytes());
+        hasher.update(funding.neutral_lamports.to_le_bytes());
+    }
+    Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
+}
+
+/// Project the sole Fractional terminal receipt after an adapter has
+/// authenticated the named Fractional capability release.
+///
+/// The release identity is intentionally distinct from the Realm collateral
+/// release persisted in a4. This function performs no deployment or manifest
+/// authentication; its result becomes authority only inside the atomic SBF
+/// composer described on [`FractionalFamilyTerminalReceiptV1`].
+pub fn project_fractional_family_terminal_receipt_v1(
+    close: EmptyLedgerClosePlanV1,
+    fractional_release_id: Identity32V1,
+) -> Result<FractionalFamilyTerminalReceiptV1> {
+    let terminal = close.terminal_requirement;
+    let rent_disposition_id =
+        hash_fractional_close_funding(close.policy_funding, close.ledger_funding)?;
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1);
+    hasher.update(terminal.market_instance_id.bytes());
+    hasher.update(terminal.domain_generation.to_le_bytes());
+    for identity in [
+        terminal.resolution_account,
+        terminal.resolution_semantic_id,
+        terminal.resolution_data_id,
+        terminal.native_claim_basis_id,
+        terminal.policy_account,
+        terminal.policy_terminal_state_id,
+        terminal.ledger_account,
+        terminal.ledger_before_state_id,
+        terminal.ledger_terminal_state_id,
+        terminal.claim_ledger_account,
+        terminal.claim_ledger_post_state_id,
+        terminal.claim_ledger_transition_id,
+        fractional_release_id,
+        rent_disposition_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    let receipt_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    Ok(FractionalFamilyTerminalReceiptV1 {
+        market_instance_id: terminal.market_instance_id,
+        domain_generation: terminal.domain_generation,
+        policy_account: terminal.policy_account,
+        policy_terminal_state_id: terminal.policy_terminal_state_id,
+        ledger_account: terminal.ledger_account,
+        ledger_terminal_state_id: terminal.ledger_terminal_state_id,
+        claim_ledger_account: terminal.claim_ledger_account,
+        claim_ledger_post_state_id: terminal.claim_ledger_post_state_id,
+        claim_ledger_transition_id: terminal.claim_ledger_transition_id,
+        fractional_release_id,
+        rent_disposition_id,
+        receipt_id,
+    })
+}
+
+/// Structurally verified terminal postimages and exact pre-deletion rent balances.
+///
+/// This value is not Product authorization and cannot authorize either account
+/// deletion. The SBF adapter must authenticate the physical accounts, the
+/// separately selected Fractional release, and Product's private terminal
+/// consumer in one instruction before applying the checked rent dispositions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedFractionalFamilyTerminalPostwriteV1 {
+    family_terminal: FractionalFamilyTerminalReceiptV1,
+    terminal_requirement: FractionalDomainTerminalRequirementV1,
+    verification_id: Identity32V1,
+}
+
+impl VerifiedFractionalFamilyTerminalPostwriteV1 {
+    /// Exact Fractional-owned receipt consumed by Product family terminality.
+    pub const fn family_terminal(self) -> FractionalFamilyTerminalReceiptV1 {
+        self.family_terminal
+    }
+
+    /// Exact close-plan requirement reauthenticated against all postimages.
+    pub const fn terminal_requirement(self) -> FractionalDomainTerminalRequirementV1 {
+        self.terminal_requirement
+    }
+
+    /// Commitment to the exact terminal postwrite and pre-deletion balances.
+    pub const fn verification_id(self) -> Identity32V1 {
+        self.verification_id
+    }
+}
+
+/// Verify exact terminal postimages before Product consumes the Fractional child.
+///
+/// The observed a5 body is intentionally the last persisted ClaimsExhausted
+/// preimage. Its one-step retirement identity is committed by the Retiring
+/// ClaimLedger postimage and the terminal receipt, then a5 is deleted without
+/// ever presenting a caller-authored transient account body.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_fractional_family_terminal_postwrite_v1(
+    close: EmptyLedgerClosePlanV1,
+    terminal: FractionalFamilyTerminalReceiptV1,
+    policy_account: Identity32V1,
+    policy: FractionalPolicyV2,
+    ledger_account: Identity32V1,
+    ledger: FractionalLedgerV1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger: ClaimLedgerV3,
+    observed_policy_lamports: u64,
+    observed_ledger_lamports: u64,
+) -> Result<VerifiedFractionalFamilyTerminalPostwriteV1> {
+    policy.validate()?;
+    ledger.validate_with_policy(policy_account, policy)?;
+    map_collateral(claim_ledger.validate())?;
+    let requirement = close.terminal_requirement;
+    let expected_terminal =
+        project_fractional_family_terminal_receipt_v1(close, terminal.fractional_release_id)?;
+    let policy_state_id = policy.state_id()?;
+    let ledger_state_id = ledger.state_id()?;
+    let claim_ledger_post_state_id = runtime_identity(
+        claim_ledger
+            .semantic_id(&FractionalSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    let expected_policy_lamports = close
+        .policy_funding
+        .payer_refund_lamports
+        .checked_add(close.policy_funding.neutral_lamports)
+        .ok_or(Error::Arithmetic)?;
+    let expected_ledger_lamports = close
+        .ledger_funding
+        .payer_refund_lamports
+        .checked_add(close.ledger_funding.neutral_lamports)
+        .ok_or(Error::Arithmetic)?;
+    if terminal != expected_terminal
+        || policy_account != requirement.policy_account
+        || policy_account != terminal.policy_account
+        || policy_state_id != requirement.policy_terminal_state_id
+        || policy_state_id != terminal.policy_terminal_state_id
+        || ledger_account != requirement.ledger_account
+        || ledger_account != terminal.ledger_account
+        || ledger_state_id != requirement.ledger_before_state_id
+        || claim_ledger_account != requirement.claim_ledger_account
+        || claim_ledger_account != terminal.claim_ledger_account
+        || claim_ledger != close.claim_ledger_after.claim_ledger_after()
+        || claim_ledger_post_state_id != requirement.claim_ledger_post_state_id
+        || claim_ledger_post_state_id != terminal.claim_ledger_post_state_id
+        || close.claim_ledger_after.fractional_ledger_before_id()
+            != collateral_id(ledger_state_id)
+        || close.claim_ledger_after.fractional_ledger_retirement_id()
+            != collateral_id(terminal.ledger_terminal_state_id)
+        || close.claim_ledger_after.transition_id()
+            != collateral_id(terminal.claim_ledger_transition_id)
+        || claim_ledger.last_fractional_transition_id
+            != collateral_id(terminal.claim_ledger_transition_id)
+        || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Retiring
+        || claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
+        || claim_ledger.fractional_policy_id != collateral_id(policy_account)
+        || claim_ledger.fractional_ledger_account != collateral_id(ledger_account)
+        || close.policy_funding.account != policy_account
+        || close.ledger_funding.account != ledger_account
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    if observed_policy_lamports != expected_policy_lamports
+        || observed_ledger_lamports != expected_ledger_lamports
+    {
+        return Err(Error::RentRefused);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V1);
+    hasher.update(terminal.market_instance_id.bytes());
+    hasher.update(terminal.domain_generation.to_le_bytes());
+    for identity in [
+        terminal.receipt_id,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        terminal.ledger_terminal_state_id,
+        claim_ledger_account,
+        claim_ledger_post_state_id,
+        terminal.claim_ledger_transition_id,
+        terminal.fractional_release_id,
+        terminal.rent_disposition_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    hasher.update(observed_policy_lamports.to_le_bytes());
+    hasher.update(observed_ledger_lamports.to_le_bytes());
+    let verification_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    Ok(VerifiedFractionalFamilyTerminalPostwriteV1 {
+        family_terminal: terminal,
+        terminal_requirement: requirement,
+        verification_id,
     })
 }

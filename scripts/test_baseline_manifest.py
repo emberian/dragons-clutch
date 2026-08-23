@@ -326,10 +326,7 @@ class BaselineManifestDeclarationTests(unittest.TestCase):
         outputs = {item["id"]: item for item in baseline_manifest.DECLARED_BUILD_OUTPUTS}
         self.assertEqual(outputs["clutch_sbf.default_program_elf"]["handoff"], None)
         self.assertEqual(outputs["clutch_sbf.non_production_mock_program_elf"]["handoff"], None)
-        self.assertEqual(
-            baseline_manifest.DERIVED_DIGESTS[0]["handoff"],
-            "62b06b2107636686648507e4f9ecd8a4d90733dcebf81177d4a63b25bc698d02",
-        )
+        self.assertEqual(baseline_manifest.DERIVED_DIGESTS, [])
 
         signed_walk = gates["sbf.committed_signed_walk"]
         self.assertIn(

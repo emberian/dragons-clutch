@@ -59,7 +59,7 @@ CARGO_NET_OFFLINE=true cargo build --locked --offline --quiet \
   --manifest-path "$root/programs/clutch-sbf/operatord/Cargo.toml"
 daemon="$root/programs/clutch-sbf/operatord/target/debug/clutch-sbf-operatord"
 args=(
-  serve --mode pyth-live
+  serve --mode non-production-synthetic-source-v2-live
   --port "$http_port"
   --rpc-port "$rpc_port"
   --faucet-port "$faucet_port"

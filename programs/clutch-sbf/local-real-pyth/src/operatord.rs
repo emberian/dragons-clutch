@@ -427,6 +427,14 @@ impl<'index> OperatorJsonApi<'index> {
                     "programData": release.program_data.to_string(),
                     "elfSha256": hex32(release.elf_sha256),
                     "deploymentSlot": release.deployment_slot.to_string(),
+                    "releaseManifestSha256": hex32(release.release_manifest_sha256),
+                    "capabilityProfileId": hex32(release.capability_profile_id),
+                    "sourceCommit": release.source_commit,
+                    "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
+                        "familyTag": intent.family_tag.to_string(),
+                        "familyVersion": intent.family_version.to_string(),
+                        "localAction": intent.local_action.to_string()
+                    })).collect::<Vec<_>>(),
                     "families": release.families.iter().map(|family| family.name()).collect::<Vec<_>>()
                 })
             })
@@ -556,6 +564,8 @@ fn account_json(version: &IndexedAccountVersion, effective: RpcCommitment) -> Va
         "rentEpoch": version.account.rent_epoch.to_string(),
         "dataBytes": version.account.data.len().to_string(),
         "dataSha256": hex32(version.data_sha256),
+        "accountTag": version.account.data.first().copied().map(|value| value.to_string()),
+        "accountVersion": version.account.data.get(1).copied().map(|value| value.to_string()),
         "family": version.projection.family.name(),
         "kind": version.projection.kind.name(),
         "decode": decode_state,

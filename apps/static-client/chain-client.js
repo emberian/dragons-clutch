@@ -3,21 +3,23 @@
  *
  * It never calls a validator RPC directly. URLs, release coordinates, and all
  * returned state are untrusted inputs checked against explicit user-selected
- * bounds before they become a visible projection.
+ * browser bounds. Cluster, endpoint, and release truth come only from the
+ * daemon's release-bound transport projection.
  */
 (function (root) {
   "use strict";
 
   const BUILDER = root.GlassSuccessorBuilder;
-  const REGISTRY = root.GlassSuccessorRegistry;
   const UINT = /^(0|[1-9][0-9]*)$/;
   const HASH32 = /^[0-9a-f]{64}$/;
-  const COMMIT = /^[0-9a-f]{40}$/;
+  const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
-  const GROUP_ORDER = Object.freeze(["market", "product", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v1-source-v3-current";
+  const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
     product: "Product",
+    collateral: "Collateral & liabilities",
     source: "Source",
     series: "Series",
     candidate: "Candidate & clearing",
@@ -27,10 +29,19 @@
     other: "Other release state"
   });
   const KIND_GROUPS = Object.freeze({
+    "collateral-hoard-v2": "collateral",
+    "collateral-claim-ledger-v3": "collateral",
+    "collateral-resolution-v5": "collateral",
+    "fractional-policy-v2": "collateral",
+    "fractional-ledger-v1": "collateral",
+    "fractional-credit-v2": "collateral",
+    "fractional-credit-tombstone-v2": "collateral",
     "general-market-runtime": "market",
     "general-epoch": "market",
     "general-economic-domain": "market",
     "general-market-binding": "market",
+    "general-order-page-v5": "market",
+    "general-reservation-v9": "settlement",
     "general-candidate-window": "market",
     "series-registry": "product",
     "structured-claim-descriptor": "product",
@@ -40,6 +51,15 @@
     "product-compiler-output": "product",
     "product-artifact": "product",
     "series-funding": "series",
+    "source-release": "source",
+    "source-head": "source",
+    "source-open-raw-page": "source",
+    "source-raw-page": "source",
+    "source-window-work": "source",
+    "source-window-seal": "source",
+    "source-statistic-result": "source",
+    "source-lineage": "source",
+    "source-work-receipt": "source",
     "general-admission-node": "candidate",
     "general-candidate-feed-stage": "candidate",
     "general-candidate-feed": "candidate",
@@ -47,19 +67,44 @@
     "general-selected-candidate": "candidate",
     "general-epoch-budget": "candidate",
     "general-owner-settlement": "settlement",
+    "general-owner-settlement-v5": "settlement",
+    "general-settlement-receipt-v5": "settlement",
+    "general-settlement-root-v1": "settlement",
     "general-owner-settlement-v3": "settlement",
     "owner-settlement-v3": "settlement",
     "general-settlement-cash-pot": "settlement",
     "general-final-pot": "settlement",
     "fee-selected-record": "settlement",
     "fee-owner-carry": "settlement",
+    "fee-owner-finalization": "settlement",
     "fee-payer-allocation": "settlement",
     "fee-recipient-allocation": "settlement",
     "fee-treasury-ledger": "settlement",
     "liveness-policy": "settlement",
     "liveness-compartment": "settlement",
     "position-v3": "settlement",
-    "replay-v3": "settlement"
+    "replay-v3": "settlement",
+    "dealer-policy-v1": "liquidity",
+    "dealer-liveness-schedule-v1": "liquidity",
+    "dealer-state-v2": "liquidity",
+    "dealer-funded-dependencies-v2": "liquidity",
+    "dealer-lp-page-v2": "liquidity",
+    "dealer-lease-v2": "liquidity",
+    "dealer-settlement-pot-v2": "liquidity",
+    "dealer-epoch-binding-v2": "liquidity",
+    "dealer-terminal-allocation-v1": "liquidity",
+    "dealer-claim-work-v1": "liquidity",
+    "dealer-root-tombstone-v2": "liquidity",
+    "dealer-exit-ticket-v1": "liquidity",
+    "dealer-action-receipt-v1": "liquidity",
+    "dealer-replay": "liquidity",
+    "failure-external-root": "recovery",
+    "failure-market-root-v2": "recovery",
+    "failure-liveness-policy": "recovery",
+    "failure-recovery-compartment": "recovery",
+    "failure-replay-tombstone": "recovery",
+    "failure-interval-consensus-work-v1": "recovery",
+    "failure-interval-consensus-replay-v1": "recovery"
   });
 
   const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -102,35 +147,21 @@
     return value;
   };
 
-  const boundedUrl = (value, name, schemes) => {
+  const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
     text(value, name, 512);
     let parsed;
     try { parsed = new URL(value); } catch (_) { throw new Error(`${name} must be an absolute URL.`); }
     if (!schemes.includes(parsed.protocol)) throw new Error(`${name} uses a disallowed URL scheme.`);
-    if (parsed.username || parsed.password || parsed.hash || parsed.search) throw new Error(`${name} must not contain credentials, a query, or a fragment.`);
+    if (parsed.username || parsed.password || parsed.hash || (!allowQuery && parsed.search)) throw new Error(`${name} must not contain userinfo, a fragment, or a disallowed query.`);
     const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
     if ((parsed.protocol === "http:" || parsed.protocol === "ws:") && !loopback) throw new Error(`${name} may use plaintext transport only on explicit loopback.`);
-    return parsed.toString().replace(/\/$/, "");
+    return preserveExact ? value : parsed.toString().replace(/\/$/, "");
   };
 
   const validateConfiguration = (raw) => {
     requirePlain(raw, "configuration");
     const operatorUrl = boundedUrl(raw.operatorUrl, "operatord URL", ["http:", "https:"]);
-    const clusterName = text(raw.clusterName, "cluster name", 48);
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(clusterName)) throw new Error("cluster name contains unsupported characters.");
-    const genesisHash = nonzeroAddress(raw.genesisHash, "genesis hash");
-    const rpcHttpUrl = boundedUrl(raw.rpcHttpUrl, "validator RPC HTTP URL", ["http:", "https:"]);
-    const rpcWebsocketUrl = boundedUrl(raw.rpcWebsocketUrl, "validator RPC WebSocket URL", ["ws:", "wss:"]);
     if (raw.commitment !== "finalized" && raw.commitment !== "processed") throw new Error("commitment must be finalized or processed.");
-    requirePlain(raw.release, "release");
-    const programId = nonzeroAddress(raw.release.programId, "release.programId");
-    const programData = nonzeroAddress(raw.release.programData, "release.programData");
-    if (programId === programData) throw new Error("Program and ProgramData addresses must be different.");
-    const deploymentSlot = positiveDecimal(raw.release.deploymentSlot, "release.deploymentSlot").toString();
-    const elfSha256 = hash32(raw.release.elfSha256, "release.elfSha256");
-    const releaseManifestSha256 = hash32(raw.release.releaseManifestSha256, "release.releaseManifestSha256");
-    const capabilityProfileId = hash32(raw.release.capabilityProfileId, "release.capabilityProfileId");
-    if (typeof raw.release.sourceCommit !== "string" || !COMMIT.test(raw.release.sourceCommit)) throw new Error("release.sourceCommit must be a full lowercase git commit identity.");
     requirePlain(raw.bounds, "bounds");
     const maximumAccounts = positiveDecimal(raw.bounds.maximumAccounts, "bounds.maximumAccounts", 4096n).toString();
     const maximumResponseBytes = positiveDecimal(raw.bounds.maximumResponseBytes, "bounds.maximumResponseBytes", 16_777_216n);
@@ -138,23 +169,37 @@
     const timeoutMilliseconds = positiveDecimal(raw.bounds.timeoutMilliseconds, "bounds.timeoutMilliseconds", 30000n);
     if (timeoutMilliseconds < 250n) throw new Error("bounds.timeoutMilliseconds must be at least 250.");
     const maximumSlotLag = decimal(raw.bounds.maximumSlotLag, "bounds.maximumSlotLag", 1_000_000n).toString();
-    const clusterKey = `${clusterName}:${genesisHash}`;
-    const releaseKey = `${programId}:${deploymentSlot}:${elfSha256}`;
     return Object.freeze({
-      schema: "dragons-clutch/browser-chain-target/v1",
-      authority: "explicit-user-selection",
+      schema: "dragons-clutch/browser-operatord-target/v3",
+      authority: "explicit-user-selected-operatord-only",
       operatorUrl,
-      clusterName,
-      genesisHash,
-      clusterKey,
-      rpcHttpUrl,
-      rpcWebsocketUrl,
       rpcContact: "operatord-only; browser does not call validator RPC",
       commitment: raw.commitment,
-      release: Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: raw.release.sourceCommit, capabilityProfileId, releaseKey }),
       bounds: Object.freeze({ maximumAccounts, maximumResponseBytes: maximumResponseBytes.toString(), timeoutMilliseconds: timeoutMilliseconds.toString(), maximumSlotLag })
     });
   };
+
+  const redactedConfiguration = (configuration) => Object.freeze({
+    schema: configuration.schema,
+    authority: configuration.authority,
+    operatorUrl: configuration.operatorUrl,
+    rpcContact: configuration.rpcContact,
+    commitment: configuration.commitment,
+    bounds: configuration.bounds,
+    decoderSet: configuration.decoderSet || "not-acquired",
+    clusterName: configuration.clusterName || "not-acquired",
+    genesisHash: configuration.genesisHash || "not-acquired",
+    clusterKey: configuration.clusterKey || "not-acquired",
+    daemonProjection: configuration.release ? Object.freeze({
+      decoderSet: configuration.decoderSet,
+      clusterName: configuration.clusterName,
+      genesisHash: configuration.genesisHash,
+      clusterKey: configuration.clusterKey,
+      rpcHttpEndpoint: configuration.rpcHttpEndpoint,
+      rpcWebsocketEndpoint: configuration.rpcWebsocketEndpoint,
+      release: configuration.release
+    }) : "not-acquired"
+  });
 
   const boundJsonShape = (value, name) => {
     let nodes = 0;
@@ -248,7 +293,7 @@
     return Object.freeze({ status: "ready", cluster: raw.cluster, projectionAuthority: "untrusted", signing: false, submission: false });
   };
 
-  const validateAcquisition = (raw, configuration) => {
+  const validateAcquisition = (raw, target) => {
     requirePlain(raw, "acquisition");
     if (raw.authority !== "untrusted read model") throw new Error("acquisition authority is not the expected untrusted read model.");
     if (bool(raw.authorityEligible, "acquisition.authorityEligible") !== false) throw new Error("operatord incorrectly marks an untrusted acquisition as authority-eligible.");
@@ -257,33 +302,87 @@
     const processedAvailable = bool(raw.processedAvailable, "acquisition.processedAvailable");
     requirePlain(raw.transportBinding, "acquisition.transportBinding");
     const binding = raw.transportBinding;
-    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v1"
+    requirePlain(binding.rpcHttpEndpoint, "transportBinding.rpcHttpEndpoint");
+    requirePlain(binding.rpcWebsocketEndpoint, "transportBinding.rpcWebsocketEndpoint");
+    const clusterName = text(binding.clusterName, "transportBinding.clusterName", 48);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(clusterName)) throw new Error("daemon-projected cluster name contains unsupported characters.");
+    const genesisHash = nonzeroAddress(binding.genesisHash, "transportBinding.genesisHash");
+    const clusterKey = `${clusterName}:${genesisHash}`;
+    const endpoint = (rawEndpoint, name) => {
+      const redacted = text(rawEndpoint.redacted, `${name}.redacted`, 512);
+      const separator = redacted.indexOf("://");
+      const remainder = separator < 1 ? "" : redacted.slice(separator + 3);
+      const boundaryCandidates = [remainder.indexOf("/"), remainder.indexOf("?")].filter((index) => index >= 0);
+      const boundary = boundaryCandidates.length === 0 ? remainder.length : Math.min(...boundaryCandidates);
+      const authority = remainder.slice(0, boundary);
+      const suffix = remainder.slice(boundary);
+      if (redacted.includes("@") || authority.length === 0 || !["", "/", "/<redacted>", "?<redacted>", "/?<redacted>", "/<redacted>?<redacted>"].includes(suffix)) throw new Error(`${name} leaks or malformedly represents endpoint credentials.`);
+      return Object.freeze({ redacted, bindingSha256: hash32(rawEndpoint.bindingSha256, `${name}.bindingSha256`) });
+    };
+    const rpcHttpEndpoint = endpoint(binding.rpcHttpEndpoint, "transportBinding.rpcHttpEndpoint");
+    const rpcWebsocketEndpoint = endpoint(binding.rpcWebsocketEndpoint, "transportBinding.rpcWebsocketEndpoint");
+    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v3"
         || binding.verificationDisposition !== "last-complete-untrusted-http-release-bracket"
         || binding.authorityEligible !== false
-        || text(binding.clusterName, "transportBinding.clusterName", 48) !== configuration.clusterName
-        || nonzeroAddress(binding.genesisHash, "transportBinding.genesisHash") !== configuration.genesisHash
-        || text(binding.clusterKey, "transportBinding.clusterKey", 128) !== configuration.clusterKey
-        || boundedUrl(binding.rpcHttpUrl, "transportBinding.rpcHttpUrl", ["http:", "https:"]) !== configuration.rpcHttpUrl
-        || boundedUrl(binding.rpcWebsocketUrl, "transportBinding.rpcWebsocketUrl", ["ws:", "wss:"]) !== configuration.rpcWebsocketUrl) {
-      throw new Error("operatord transport coordinates differ from the exact selected HTTP+WebSocket RPC target.");
+        || text(binding.clusterKey, "transportBinding.clusterKey", 128) !== clusterKey
+        || text(binding.decoderSet, "transportBinding.decoderSet", 128) !== DECODER_SET) {
+      throw new Error("operatord transport binding is internally inconsistent or not the current decoder contract.");
     }
-    if (!Array.isArray(binding.releases) || binding.releases.length === 0 || binding.releases.length > 256) throw new Error("transportBinding.releases is invalid.");
-    const boundRelease = binding.releases.find((release) => plain(release) && release.releaseKey === configuration.release.releaseKey);
-    if (!boundRelease
-        || nonzeroAddress(boundRelease.programId, "transportBinding.release.programId") !== configuration.release.programId
-        || nonzeroAddress(boundRelease.programData, "transportBinding.release.programData") !== configuration.release.programData
-        || positiveDecimal(boundRelease.deploymentSlot, "transportBinding.release.deploymentSlot").toString() !== configuration.release.deploymentSlot
-        || hash32(boundRelease.elfSha256, "transportBinding.release.elfSha256") !== configuration.release.elfSha256
-        || !Array.isArray(boundRelease.families)) {
-      throw new Error("operatord release coordinates differ from the exact selected Program/ProgramData/slot/ELF target.");
-    }
+    if (!Array.isArray(binding.releases) || binding.releases.length !== 1) throw new Error("transportBinding must expose exactly one composed release.");
+    const boundRelease = requirePlain(binding.releases[0], "transportBinding.release");
+    const programId = nonzeroAddress(boundRelease.programId, "transportBinding.release.programId");
+    const programData = nonzeroAddress(boundRelease.programData, "transportBinding.release.programData");
+    if (programId === programData) throw new Error("daemon-projected Program and ProgramData identities alias.");
+    const deploymentSlot = positiveDecimal(boundRelease.deploymentSlot, "transportBinding.release.deploymentSlot").toString();
+    const elfSha256 = hash32(boundRelease.elfSha256, "transportBinding.release.elfSha256");
+    const releaseManifestSha256 = hash32(boundRelease.releaseManifestSha256, "transportBinding.release.releaseManifestSha256");
+    const capabilityProfileId = hash32(boundRelease.capabilityProfileId, "transportBinding.release.capabilityProfileId");
+    if (typeof boundRelease.sourceCommit !== "string" || !COMMIT.test(boundRelease.sourceCommit)) throw new Error("daemon-projected source commit is not a full lowercase Git identity.");
+    if (!Array.isArray(boundRelease.families) || boundRelease.families.length === 0 || boundRelease.families.length > 16) throw new Error("transportBinding.release.families is invalid.");
+    const families = Object.freeze(boundRelease.families.map((family, index) => text(family, `transportBinding.release.families[${index}]`, 40)));
+    if (new Set(families).size !== families.length) throw new Error("daemon-projected families are not unique.");
+    if (!Array.isArray(boundRelease.enabledIntents) || boundRelease.enabledIntents.length > 256) throw new Error("transportBinding.release.enabledIntents is invalid.");
+    const enabledIntents = Object.freeze(boundRelease.enabledIntents.map((intent, index) => {
+      requirePlain(intent, `transportBinding.release.enabledIntents[${index}]`);
+      const coordinate = Object.freeze({
+        familyTag: positiveDecimal(intent.familyTag, `enabledIntents[${index}].familyTag`, 255n).toString(),
+        familyVersion: positiveDecimal(intent.familyVersion, `enabledIntents[${index}].familyVersion`, 255n).toString(),
+        localAction: decimal(intent.localAction, `enabledIntents[${index}].localAction`, 255n).toString()
+      });
+      if (index > 0) {
+        const previous = boundRelease.enabledIntents[index - 1];
+        const previousKey = [Number(previous.familyTag), Number(previous.familyVersion), Number(previous.localAction)];
+        const key = [Number(coordinate.familyTag), Number(coordinate.familyVersion), Number(coordinate.localAction)];
+        if (previousKey.join(".") === key.join(".") || previousKey[0] > key[0] || (previousKey[0] === key[0] && (previousKey[1] > key[1] || (previousKey[1] === key[1] && previousKey[2] >= key[2])))) throw new Error("daemon-projected enabled intents are not strictly canonical.");
+      }
+      return coordinate;
+    }));
+    const expectedReleaseKey = `${programId}:${deploymentSlot}:${elfSha256}:${releaseManifestSha256}`;
+    if (text(boundRelease.releaseKey, "transportBinding.release.releaseKey", 320) !== expectedReleaseKey) throw new Error("daemon-projected release key does not bind its exact coordinates and manifest.");
+    const release = Object.freeze({ programId, programData, deploymentSlot, elfSha256, releaseManifestSha256, sourceCommit: boundRelease.sourceCommit, capabilityProfileId, enabledIntents, families, releaseKey: expectedReleaseKey });
+    const configuration = Object.freeze({
+      ...target,
+      schema: "dragons-clutch/browser-daemon-chain-projection/v3",
+      authority: "untrusted-operatord-projection",
+      decoderSet: DECODER_SET,
+      clusterName,
+      genesisHash,
+      clusterKey,
+      rpcHttpEndpoint,
+      rpcWebsocketEndpoint,
+      release
+    });
     requirePlain(raw.processedSemantics, "acquisition.processedSemantics");
-    if (raw.processedSemantics.finality !== "nonfinal-rollbackable" || raw.processedSemantics.authorityEligibility !== false) throw new Error("operatord does not expose the required non-final, never-authoritative processed semantics.");
+    if (raw.processedSemantics.finality !== "nonfinal-rollbackable"
+        || raw.processedSemantics.authorityEligibility !== false
+        || typeof raw.processedSemantics.websocketGenesis !== "string"
+        || typeof raw.processedSemantics.accountRemoval !== "string") throw new Error("operatord does not expose the required genesis-bound, removal-aware, non-final, never-authoritative processed semantics.");
     const processedTransport = raw.processedTransport === null ? null : (() => {
       requirePlain(raw.processedTransport, "acquisition.processedTransport");
       return Object.freeze({
         phase: text(raw.processedTransport.phase, "processedTransport.phase", 80),
         available: bool(raw.processedTransport.available, "processedTransport.available"),
+        websocketGenesisMatched: bool(raw.processedTransport.websocketGenesisMatched, "processedTransport.websocketGenesisMatched"),
         connectionGeneration: decimal(raw.processedTransport.connectionGeneration, "processedTransport.connectionGeneration").toString(),
         rollbackEpoch: decimal(raw.processedTransport.rollbackEpoch, "processedTransport.rollbackEpoch").toString(),
         reconnectAttempt: decimal(raw.processedTransport.reconnectAttempt, "processedTransport.reconnectAttempt").toString(),
@@ -293,14 +392,24 @@
         deadSlotRollbacks: decimal(raw.processedTransport.deadSlotRollbacks, "processedTransport.deadSlotRollbacks").toString(),
         deadSlotIndexedVersionsWithdrawn: decimal(raw.processedTransport.deadSlotIndexedVersionsWithdrawn, "processedTransport.deadSlotIndexedVersionsWithdrawn").toString(),
         deadSlotBufferedAccountsWithdrawn: decimal(raw.processedTransport.deadSlotBufferedAccountsWithdrawn, "processedTransport.deadSlotBufferedAccountsWithdrawn").toString(),
+        accountRemovalEvents: decimal(raw.processedTransport.accountRemovalEvents, "processedTransport.accountRemovalEvents").toString(),
+        closedAccountRemovals: decimal(raw.processedTransport.closedAccountRemovals, "processedTransport.closedAccountRemovals").toString(),
+        ownerChangedAccountRemovals: decimal(raw.processedTransport.ownerChangedAccountRemovals, "processedTransport.ownerChangedAccountRemovals").toString(),
+        accountProjectionsWithdrawn: decimal(raw.processedTransport.accountProjectionsWithdrawn, "processedTransport.accountProjectionsWithdrawn").toString(),
         lastRollbackSlot: raw.processedTransport.lastRollbackSlot === null ? null : decimal(raw.processedTransport.lastRollbackSlot, "processedTransport.lastRollbackSlot").toString(),
+        lastRemovedAccount: raw.processedTransport.lastRemovedAccount === null ? null : nonzeroAddress(raw.processedTransport.lastRemovedAccount, "processedTransport.lastRemovedAccount"),
+        lastRemovalObservedOwner: raw.processedTransport.lastRemovalObservedOwner === null ? null : address(raw.processedTransport.lastRemovalObservedOwner, "processedTransport.lastRemovalObservedOwner"),
+        lastRemovalKind: raw.processedTransport.lastRemovalKind === null ? null : (() => {
+          if (raw.processedTransport.lastRemovalKind !== "closed" && raw.processedTransport.lastRemovalKind !== "owner-changed") throw new Error("processedTransport.lastRemovalKind is invalid.");
+          return raw.processedTransport.lastRemovalKind;
+        })(),
         lastError: raw.processedTransport.lastError === null ? null : text(raw.processedTransport.lastError, "processedTransport.lastError", 512)
       });
     })();
-    if (processedTransport === null || processedTransport.available !== processedAvailable) {
+    if (processedTransport === null || processedTransport.available !== processedAvailable || (processedAvailable && !processedTransport.websocketGenesisMatched)) {
       throw new Error("operatord processed availability differs from its exact transport-generation state.");
     }
-    if (configuration.commitment === "processed" && !processedAvailable) {
+    if (target.commitment === "processed" && !processedAvailable) {
       throw new Error(`Processed projection is withdrawn: operatord reports ${processedTransport ? processedTransport.phase : transportMode} without a complete live subscription generation.`);
     }
     return Object.freeze({
@@ -317,7 +426,13 @@
       transportMode,
       processedAvailable,
       processedTransport,
-      transportBinding: Object.freeze({ rpcHttpUrl: configuration.rpcHttpUrl, rpcWebsocketUrl: configuration.rpcWebsocketUrl, releaseKey: configuration.release.releaseKey })
+      transportBinding: Object.freeze({
+        decoderSet: binding.decoderSet,
+        rpcHttpEndpoint,
+        rpcWebsocketEndpoint,
+        releaseKey: configuration.release.releaseKey
+      }),
+      configuration
     });
   };
 
@@ -333,13 +448,17 @@
         programData: address(release.programData, `releases[${index}].programData`),
         elfSha256: hash32(release.elfSha256, `releases[${index}].elfSha256`),
         deploymentSlot: positiveDecimal(release.deploymentSlot, `releases[${index}].deploymentSlot`).toString(),
+        releaseManifestSha256: hash32(release.releaseManifestSha256, `releases[${index}].releaseManifestSha256`),
+        capabilityProfileId: hash32(release.capabilityProfileId, `releases[${index}].capabilityProfileId`),
+        sourceCommit: typeof release.sourceCommit === "string" && COMMIT.test(release.sourceCommit) ? release.sourceCommit : (() => { throw new Error(`releases[${index}].sourceCommit is invalid.`); })(),
+        enabledIntents: Object.freeze(Array.isArray(release.enabledIntents) ? release.enabledIntents : (() => { throw new Error(`releases[${index}].enabledIntents is invalid.`); })()),
         families: Object.freeze(release.families.map((family, familyIndex) => text(family, `releases[${index}].families[${familyIndex}]`, 40)))
       });
     });
     const selected = releases.find((release) => release.releaseKey === configuration.release.releaseKey);
-    if (!selected) throw new Error("operatord does not expose the explicitly selected release key.");
-    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot) {
-      throw new Error("operatord release coordinates differ from the explicit program/ProgramData/slot/ELF selection.");
+    if (!selected) throw new Error("operatord release endpoint does not expose its acquisition-bound release key.");
+    if (selected.programId !== configuration.release.programId || selected.programData !== configuration.release.programData || selected.elfSha256 !== configuration.release.elfSha256 || selected.deploymentSlot !== configuration.release.deploymentSlot || selected.releaseManifestSha256 !== configuration.release.releaseManifestSha256 || selected.capabilityProfileId !== configuration.release.capabilityProfileId || selected.sourceCommit !== configuration.release.sourceCommit || JSON.stringify(selected.enabledIntents) !== JSON.stringify(configuration.release.enabledIntents)) {
+      throw new Error("operatord release endpoint differs from its acquisition transport binding.");
     }
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });
   };
@@ -369,6 +488,8 @@
       rentEpoch: decimal(raw.rentEpoch, `accounts[${index}].rentEpoch`).toString(),
       dataBytes: decimal(raw.dataBytes, `accounts[${index}].dataBytes`).toString(),
       dataSha256: hash32(raw.dataSha256, `accounts[${index}].dataSha256`),
+      accountTag: decimal(raw.accountTag, `accounts[${index}].accountTag`, 255n).toString(),
+      accountVersion: decimal(raw.accountVersion, `accounts[${index}].accountVersion`, 255n).toString(),
       family: text(raw.family, `accounts[${index}].family`, 40),
       kind: text(raw.kind, `accounts[${index}].kind`, 80),
       decode: Object.freeze({ status: raw.decode.status, requirement }),
@@ -477,17 +598,21 @@
     });
     const groups = Object.freeze(Object.fromEntries(GROUP_ORDER.map((name) => [name, Object.freeze(annotated.filter((accountValue) => accountValue.group === name))])));
     const familySet = new Set(releases.selected.families);
-    const successorCapabilities = Object.values(REGISTRY.families).map((familyValue) => Object.freeze({
-      surface: "successor-family",
-      family: familyValue.name,
-      label: familyValue.label,
-      indexedByRelease: familySet.has(familyValue.operatorFamily),
-      allocationStatus: familyValue.allocationStatus,
-      enabled: false,
-      reason: familyValue.disabledReason || (familySet.has(familyValue.operatorFamily)
-        ? "The selected release declares this decoder family, but the central allocation is ReservedDisabled and operatord exposes no release-bound capability admission."
-        : `The selected release does not declare the ${familyValue.operatorFamily} decoder family, and the central allocation is ReservedDisabled.`)
-    }));
+    const familyTags = Object.freeze({ general: "74", "structured-claim": "75", dealer: "76", source: "77", series: "77", failure: "78", fractional: "79" });
+    const successorCapabilities = releases.selected.families.map((familyName) => {
+      const coordinates = configuration.release.enabledIntents.filter((intent) => intent.familyTag === familyTags[familyName]);
+      return Object.freeze({
+        surface: "successor-family",
+        family: familyName,
+        label: familyName,
+        indexedByRelease: true,
+        allocationStatus: coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
+        enabled: false,
+        reason: coordinates.length === 0
+          ? "The checked release exposes this current decoder family but no enabled central-registry action coordinate. It is non-actionable."
+          : `The checked release exposes ${coordinates.length} enabled coordinate(s), but this projection has no authoritative current-account runtime admission verdict. Execution remains disabled; only an explicitly labeled unsigned proposal can be constructed.`
+      });
+    });
     const productIndexed = familySet.has("series") || annotated.some((accountValue) => accountValue.group === "product" || accountValue.group === "series");
     const ownerV3Indexed = familySet.has("position-v3") || familySet.has("replay-v3") || annotated.some((accountValue) => accountValue.kind === "position-v3" || accountValue.kind === "replay-v3" || accountValue.kind.startsWith("general-owner-settlement"));
     const capabilities = Object.freeze([
@@ -517,10 +642,10 @@
     ]);
     const unsafeForkAccounts = annotated.filter((accountValue) => accountValue.forkState === "dead-fork" || accountValue.forkState === "unidentified-fork").length;
     const staleAccounts = annotated.filter((accountValue) => accountValue.stale).length;
-    return Object.freeze({
+    const snapshot = {
       schema: "dragons-clutch/operatord-chain-projection/v1",
       authority: "untrusted-projection",
-      configuration,
+      configuration: redactedConfiguration(configuration),
       health,
       acquisition,
       release: Object.freeze({
@@ -528,7 +653,7 @@
         declaredManifestSha256: configuration.release.releaseManifestSha256,
         declaredSourceCommit: configuration.release.sourceCommit,
         declaredCapabilityProfileId: configuration.release.capabilityProfileId,
-        manifestSourceCapabilityAuthentication: "not exposed by current operatord read API"
+        manifestSourceCapabilityAuthentication: "daemon reports offline checker + sealed deployment + measured ELF join; browser treats this as an untrusted projection"
       }),
       finality: Object.freeze({
         requestedCommitment: configuration.commitment,
@@ -551,19 +676,28 @@
       keeperActions,
       capabilities,
       forks
-    });
+    };
+    Object.defineProperty(snapshot, "sourceConfiguration", { value: configuration, enumerable: false });
+    return Object.freeze(snapshot);
   };
 
-  const acquire = async (configuration, fetchFunction = root.fetch.bind(root)) => {
-    const reader = new BoundedGetReader(configuration, fetchFunction);
+  const acquire = async (target, fetchFunction = root.fetch.bind(root)) => {
+    const reader = new BoundedGetReader(target, fetchFunction);
+    const acquisition = validateAcquisition(await reader.get("/v1/acquisition"), target);
+    const configuration = acquisition.configuration;
     const healthRaw = await reader.get("/v1/health");
     const health = validateHealth(healthRaw, configuration);
-    const acquisition = validateAcquisition(await reader.get("/v1/acquisition"), configuration);
     const releases = validateReleaseResponse(await reader.get("/v1/releases"), configuration);
     const accounts = validateAccountsResponse(await reader.get(`/v1/accounts?commitment=${configuration.commitment}`), configuration);
     const keeper = validateKeeper(await reader.get(`/v1/keeper/next?commitment=${configuration.commitment}`), configuration);
     const forks = validateForks(await reader.get("/v1/forks"));
-    const endAcquisition = validateAcquisition(await reader.get("/v1/acquisition"), configuration);
+    const endAcquisition = validateAcquisition(await reader.get("/v1/acquisition"), target);
+    if (endAcquisition.configuration.clusterKey !== configuration.clusterKey
+        || endAcquisition.configuration.release.releaseKey !== configuration.release.releaseKey
+        || endAcquisition.configuration.rpcHttpEndpoint.bindingSha256 !== configuration.rpcHttpEndpoint.bindingSha256
+        || endAcquisition.configuration.rpcWebsocketEndpoint.bindingSha256 !== configuration.rpcWebsocketEndpoint.bindingSha256) {
+      throw new Error("Daemon chain/release/endpoint binding changed during acquisition; reacquire instead of mixing generations.");
+    }
     if (configuration.commitment === "processed"
         && (endAcquisition.processedTransport.connectionGeneration !== acquisition.processedTransport.connectionGeneration
           || endAcquisition.processedTransport.rollbackEpoch !== acquisition.processedTransport.rollbackEpoch)) {
@@ -572,5 +706,5 @@
     return deriveSnapshot(configuration, health, endAcquisition, releases, accounts, keeper, forks, reader.remaining.toString());
   };
 
-  root.GlassChainClient = Object.freeze({ validateConfiguration, acquire, deriveSnapshot, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
+  root.GlassChainClient = Object.freeze({ validateConfiguration, redactedConfiguration, acquire, deriveSnapshot, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
 })(typeof globalThis === "object" ? globalThis : this);

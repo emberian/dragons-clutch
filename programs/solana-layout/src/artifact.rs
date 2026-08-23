@@ -35,9 +35,12 @@ use clutch_product_series::{
     SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5,
 };
 use clutch_product_series::{
-    FixedCodec, MarketInstancePreimageV2, RegistryCapabilityProfileV2, RegistryProgramReleaseV1,
+    CompiledProductSeriesBundleV2, FixedCodec, MarketInstancePreimageV2,
+    RegistryCapabilityProfileV2, RegistryProgramReleaseV1, SeriesAttachmentPlanV2,
+    SeriesFundingQuoteV2, COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
     MARKET_INSTANCE_PREIMAGE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
-    REGISTRY_PROGRAM_RELEASE_V1_BYTES,
+    REGISTRY_PROGRAM_RELEASE_V1_BYTES, SERIES_ATTACHMENT_PLAN_BYTES_V2,
+    SERIES_FUNDING_QUOTE_BYTES_V2,
 };
 use clutch_source_plane_v3_runtime::{
     SourceReleaseManifestV1, SourceReleaseManifestV2, SourceWorkScheduleBindingV1,
@@ -57,9 +60,12 @@ const COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES: usize = 528;
 
 const _: () = {
     assert!(REGISTRY_PROGRAM_RELEASE_V1_BYTES == 160);
-    assert!(REGISTRY_CAPABILITY_PROFILE_V2_BYTES == 800);
+    assert!(REGISTRY_CAPABILITY_PROFILE_V2_BYTES == 816);
     assert!(SOURCE_RELEASE_MANIFEST_V1_BYTES == 1_008);
     assert!(SOURCE_RELEASE_MANIFEST_BYTES == 1_296);
+    assert!(SERIES_FUNDING_QUOTE_BYTES_V2 == 584);
+    assert!(COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES == 528);
+    assert!(SERIES_ATTACHMENT_PLAN_BYTES_V2 == 112);
 };
 
 #[cfg(feature = "non-production-product-series-lab")]
@@ -161,6 +167,12 @@ pub enum ArtifactKind {
     MarketInstancePreimageV2 = 46,
     /// Receiver-release-authenticated SourcePlane V3 release manifest.
     SourceReleaseManifestV2 = 47,
+    /// Six-compartment recurring-Series funding quote V2.
+    SeriesFundingQuoteV2 = 48,
+    /// Exact successor compiler graph binding QuoteV2 and AttachmentV2.
+    CompiledProductSeriesBundleV2 = 49,
+    /// Operational attachment plan bound to one exact QuoteV2.
+    SeriesAttachmentPlanV2 = 50,
 }
 
 impl ArtifactKind {
@@ -203,6 +215,9 @@ impl ArtifactKind {
             45 => Ok(Self::SourceWorkScheduleV1),
             46 => Ok(Self::MarketInstancePreimageV2),
             47 => Ok(Self::SourceReleaseManifestV2),
+            48 => Ok(Self::SeriesFundingQuoteV2),
+            49 => Ok(Self::CompiledProductSeriesBundleV2),
+            50 => Ok(Self::SeriesAttachmentPlanV2),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -236,6 +251,9 @@ impl ArtifactKind {
             Self::SourceWorkScheduleV1 => SOURCE_WORK_SCHEDULE_BYTES,
             Self::MarketInstancePreimageV2 => MARKET_INSTANCE_PREIMAGE_V2_BYTES,
             Self::SourceReleaseManifestV2 => SOURCE_RELEASE_MANIFEST_BYTES,
+            Self::SeriesFundingQuoteV2 => SERIES_FUNDING_QUOTE_BYTES_V2,
+            Self::CompiledProductSeriesBundleV2 => COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
+            Self::SeriesAttachmentPlanV2 => SERIES_ATTACHMENT_PLAN_BYTES_V2,
         }
     }
 
@@ -264,6 +282,9 @@ impl ArtifactKind {
                 | Self::SourceWorkScheduleV1
                 | Self::MarketInstancePreimageV2
                 | Self::SourceReleaseManifestV2
+                | Self::SeriesFundingQuoteV2
+                | Self::CompiledProductSeriesBundleV2
+                | Self::SeriesAttachmentPlanV2
         )
     }
 }
@@ -841,6 +862,48 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::SeriesFundingQuoteV2 => {
+            let value =
+                SeriesFundingQuoteV2::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::CompiledProductSeriesBundleV2 => {
+            let value = CompiledProductSeriesBundleV2::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::SeriesAttachmentPlanV2 => {
+            let value =
+                SeriesAttachmentPlanV2::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(all(
             feature = "non-production-product-series-lab",
             not(target_os = "solana")
@@ -1200,7 +1263,7 @@ mod tests {
         );
 
         for (tag, expected) in (u8::MIN..=u8::MAX).map(|tag| {
-            let expected = if (32..=47).contains(&tag) {
+            let expected = if (32..=50).contains(&tag) {
                 Ok(match tag {
                     32 => ArtifactKind::NativeClaimBasisV1,
                     33 => ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
@@ -1218,6 +1281,9 @@ mod tests {
                     45 => ArtifactKind::SourceWorkScheduleV1,
                     46 => ArtifactKind::MarketInstancePreimageV2,
                     47 => ArtifactKind::SourceReleaseManifestV2,
+                    48 => ArtifactKind::SeriesFundingQuoteV2,
+                    49 => ArtifactKind::CompiledProductSeriesBundleV2,
+                    50 => ArtifactKind::SeriesAttachmentPlanV2,
                     _ => unreachable!(),
                 })
             } else {
@@ -1225,7 +1291,7 @@ mod tests {
             };
             (tag, expected)
         }) {
-            if (32..=47).contains(&tag) {
+            if (32..=50).contains(&tag) {
                 assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
             }
         }
@@ -1386,6 +1452,18 @@ mod tests {
         assert_eq!(
             ArtifactKind::from_byte(47),
             Ok(ArtifactKind::SourceReleaseManifestV2)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(48),
+            Ok(ArtifactKind::SeriesFundingQuoteV2)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(49),
+            Ok(ArtifactKind::CompiledProductSeriesBundleV2)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(50),
+            Ok(ArtifactKind::SeriesAttachmentPlanV2)
         );
         let source = binding(ArtifactKind::SourceReleaseManifestV1);
         assert_eq!(source.exact_len, 1_008);

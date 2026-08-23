@@ -298,6 +298,9 @@ fn registry_for(
         max_coverage_policy_parameter: u64::MAX,
         max_window_span_buckets: u64::MAX,
         max_series_instance_count: u32::MAX,
+        maximum_interval_width: 1_000,
+        maximum_coordinates_per_advance: 16,
+        maximum_recovery_progress_units_per_call: 64,
         semantic_owners: CapabilitySemanticOwnersV2 {
             source_plane_contract_id: template.source_plane_contract_id,
             source_spec_id: template.source_spec_id,

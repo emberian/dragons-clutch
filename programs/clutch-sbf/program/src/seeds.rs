@@ -60,6 +60,15 @@ pub const SEED_POSITION: &[u8] = b"dragons-clutch:position:v1";
 pub const SEED_KERNEL: &[u8] = b"dragons-clutch:kernel:v1";
 /// Full-width native ClaimLedger V3 seed prefix.
 pub const SEED_CLAIM_LEDGER_V3: &[u8] = b"dc:claim-ledger:v3";
+/// Immutable exact fractional-redemption policy V2.
+pub const SEED_FRACTIONAL_POLICY_V2: &[u8] =
+    clutch_fractional_redemption_runtime::FRACTIONAL_POLICY_PDA_PREFIX;
+/// Sole aggregate numerator-credit ledger V1.
+pub const SEED_FRACTIONAL_LEDGER_V1: &[u8] =
+    clutch_fractional_redemption_runtime::FRACTIONAL_LEDGER_PDA_PREFIX;
+/// Owner-scoped exact numerator credit and permanent tombstone V2.
+pub const SEED_FRACTIONAL_CREDIT_V2: &[u8] =
+    clutch_fractional_redemption_runtime::FRACTIONAL_CREDIT_PDA_PREFIX;
 /// Reference-only external-shadow account seed prefix.
 pub const SEED_EXTERNAL: &[u8] = b"dragons-clutch:external:v1";
 /// Reference-only replay-sequence account seed prefix.
@@ -112,8 +121,7 @@ pub const SEED_DEALER_POLICY: &[u8] = clutch_dealer_runtime_contract::DEALER_POL
 pub const SEED_DEALER_LIVENESS_SCHEDULE: &[u8] =
     clutch_dealer_runtime_contract::DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1;
 /// Immutable generic runtime-liveness policy selected by one Dealer facility.
-pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] =
-    b"dc-dealer-runtime-liveness-policy-v1";
+pub const SEED_DEALER_RUNTIME_LIVENESS_POLICY: &[u8] = b"dc-dealer-runtime-liveness-policy-v1";
 /// One facility- and compartment-scoped generic runtime-liveness account.
 pub const SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT: &[u8] = b"dc-dealer-live-account-v1";
 /// Authoritative Dealer StateV2.
@@ -145,6 +153,9 @@ pub const SEED_DEALER_EXIT_TICKET: &[u8] =
 /// Content-addressed Dealer action-work receipt.
 pub const SEED_DEALER_ACTION_RECEIPT: &[u8] =
     clutch_dealer_runtime_contract::DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1;
+/// Counted CoveredDealer selection attachment.
+pub const SEED_DEALER_COVERED_SELECTION: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_COVERED_SELECTION_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
@@ -237,9 +248,14 @@ pub const SEED_GENERAL_V2_RESERVATION_V9: &[u8] =
     clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V9;
 /// Disabled General SettlementReceipt V3 seed prefix.
 pub const SEED_GENERAL_V2_RECEIPT: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
+/// Disabled sole-future rent-owned General SettlementReceipt V5 seed prefix.
+pub const SEED_GENERAL_V2_RECEIPT_V5: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V5;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
     clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
+/// Disabled sole-future rent-owned General owner-settlement V5 seed prefix.
+pub const SEED_GENERAL_V2_OWNER_SETTLEMENT_V5: &[u8] =
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V5;
 /// Disabled selected composite-fee record seed prefix.
 pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
     clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
@@ -264,6 +280,8 @@ pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
+/// Shared-Market Failure admission root successor, disjoint from legacy V1.
+pub const SEED_FAILURE_MARKET_ROOT_V2: &[u8] = b"dc:failure-market-root:v2";
 /// Immutable runtime-liveness policy account.
 pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 /// Sole external Recovery work/rent custody account.
@@ -274,6 +292,12 @@ pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_WORK: &[u8] = b"dc:failure-interval-work:v1";
 /// Permanent exhaustive interval-consensus replay receipt.
 pub const SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY: &[u8] = b"dc:failure-interval-replay:v1";
+/// Shared Product Market lifecycle root, keyed by Market and generation.
+pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root:v1";
+/// Zero-data Product foundation principal/donation vault.
+pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
+/// Per-Series/ordinal Product Market-admission link.
+pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -362,6 +386,22 @@ pub fn failure_external_root_pda(
     )
 }
 
+/// Canonical shared-Market Failure admission root successor.
+pub fn failure_market_root_v2_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_MARKET_ROOT_V2,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
 /// Canonical immutable runtime-liveness policy account.
 pub fn failure_liveness_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_FAILURE_LIVENESS_POLICY, policy_id])
@@ -395,6 +435,54 @@ pub fn failure_replay_tombstone_pda(
             SEED_FAILURE_REPLAY_TOMBSTONE,
             market_instance_v2_id,
             &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical shared Product MarketLifecycleRoot PDA.
+pub fn product_market_lifecycle_root_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical zero-data Product FoundationVault PDA.
+pub fn product_market_foundation_vault_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical per-Series/ordinal Product Market-link PDA.
+pub fn product_series_market_link_pda(
+    program_id: &Pubkey,
+    series_plan_v5_id: &[u8; 32],
+    ordinal: u32,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_SERIES_MARKET_LINK,
+            series_plan_v5_id,
+            &ordinal.to_le_bytes(),
         ],
     )
 }
@@ -623,6 +711,25 @@ pub fn general_v2_receipt_pda(
     )
 }
 
+/// Canonical disabled rent-owned General SettlementReceipt V5 PDA.
+pub fn general_v2_receipt_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    slice_index: u16,
+) -> (Pubkey, u8) {
+    let slice_index_le = slice_index.to_le_bytes();
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_RECEIPT_V5,
+            epoch,
+            settlement_candidate,
+            &slice_index_le,
+        ],
+    )
+}
+
 /// Canonical disabled presence-explicit owner-settlement address for one
 /// selected owner row.
 ///
@@ -639,6 +746,24 @@ pub fn general_v2_owner_settlement_pda(
         program_id,
         &[
             SEED_GENERAL_V2_OWNER_SETTLEMENT,
+            epoch,
+            settlement_candidate,
+            owner,
+        ],
+    )
+}
+
+/// Canonical disabled rent-owned OwnerSettlement V5 PDA.
+pub fn general_v2_owner_settlement_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_OWNER_SETTLEMENT_V5,
             epoch,
             settlement_candidate,
             owner,
@@ -683,6 +808,41 @@ pub fn purpose_replay_v3_pda(
             &purpose_seed,
             purpose_binding,
         ],
+    )
+}
+
+/// Canonical immutable fractional policy for one exact Resolution V5 body.
+pub fn fractional_policy_v2_pda(
+    program_id: &Pubkey,
+    market_instance: &[u8; 32],
+    resolution_account: &[u8; 32],
+    resolution_data_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FRACTIONAL_POLICY_V2,
+            market_instance,
+            resolution_account,
+            resolution_data_id,
+        ],
+    )
+}
+
+/// Canonical sole aggregate-credit ledger for one fractional policy.
+pub fn fractional_ledger_v1_pda(program_id: &Pubkey, policy_account: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_FRACTIONAL_LEDGER_V1, policy_account])
+}
+
+/// Canonical owner-scoped Fractional credit/tombstone address.
+pub fn fractional_credit_v2_pda(
+    program_id: &Pubkey,
+    policy_account: &[u8; 32],
+    claimant: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_FRACTIONAL_CREDIT_V2, policy_account, claimant],
     )
 }
 
@@ -801,7 +961,12 @@ pub fn dealer_policy_stage_pda(
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_DEALER_POLICY_STAGE, &[artifact_kind], funder, policy_id],
+        &[
+            SEED_DEALER_POLICY_STAGE,
+            &[artifact_kind],
+            funder,
+            policy_id,
+        ],
     )
 }
 
@@ -820,7 +985,10 @@ pub fn dealer_runtime_liveness_policy_pda(
     program_id: &Pubkey,
     policy_id: &[u8; 32],
 ) -> (Pubkey, u8) {
-    find(program_id, &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id])
+    find(
+        program_id,
+        &[SEED_DEALER_RUNTIME_LIVENESS_POLICY, policy_id],
+    )
 }
 
 /// Canonical facility-scoped runtime-liveness compartment address.
@@ -831,7 +999,11 @@ pub fn dealer_runtime_liveness_account_pda(
 ) -> (Pubkey, u8) {
     find(
         program_id,
-        &[SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT, facility_id, &[compartment]],
+        &[
+            SEED_DEALER_RUNTIME_LIVENESS_ACCOUNT,
+            facility_id,
+            &[compartment],
+        ],
     )
 }
 
@@ -935,6 +1107,22 @@ pub fn dealer_exit_ticket_pda(
 /// Canonical content-addressed Dealer action-work receipt address.
 pub fn dealer_action_receipt_pda(program_id: &Pubkey, slot_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_ACTION_RECEIPT, slot_id])
+}
+
+/// Counted CoveredDealer selection keyed by General Epoch and final candidate.
+pub fn dealer_covered_selection_pda(
+    program_id: &Pubkey,
+    epoch_account: &[u8; 32],
+    settlement_candidate_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            SEED_DEALER_COVERED_SELECTION,
+            epoch_account,
+            settlement_candidate_id,
+        ],
+        program_id,
+    )
 }
 
 /// Canonical full-width batch-policy artifact address.
@@ -1672,6 +1860,35 @@ mod tests {
         ];
         for old in REGISTRY {
             assert_ne!(SEED_EPOCH_WINDOW, old);
+        }
+    }
+
+    #[test]
+    fn failure_market_root_successor_cannot_alias_the_legacy_root() {
+        assert_ne!(SEED_FAILURE_MARKET_ROOT_V2, SEED_FAILURE_EXTERNAL_ROOT);
+        let program_id = Pubkey::new_from_array([1; 32]);
+        let market = [2; 32];
+        assert_ne!(
+            failure_market_root_v2_pda(&program_id, &market, 3).0,
+            failure_external_root_pda(&program_id, &market, 3).0,
+        );
+    }
+
+    #[test]
+    fn product_market_and_link_prefixes_are_pairwise_disjoint() {
+        let prefixes = [
+            SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
+            SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+            SEED_PRODUCT_SERIES_MARKET_LINK,
+            SEED_FAILURE_MARKET_ROOT_V2,
+            SEED_FAILURE_EXTERNAL_ROOT,
+            SEED_FAILURE_INTERVAL_CONSENSUS_WORK,
+            SEED_FAILURE_INTERVAL_CONSENSUS_REPLAY,
+        ];
+        for (index, prefix) in prefixes.iter().enumerate() {
+            for later in prefixes.iter().skip(index + 1) {
+                assert_ne!(*prefix, *later);
+            }
         }
     }
 }

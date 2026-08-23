@@ -12,8 +12,8 @@ use clutch_retirement::{PositionV3Sha256Backend, MAX_OUTCOMES};
 use crate::{
     digest, AcceptedClaimRedemptionCollateralV2, AcceptedZeroClaimRedemptionCollateralV2,
     BoundClaimIssuanceV1, ClaimLedgerV3, ClaimRedemptionCollateralRequestV2, CollateralBackingV2,
-    CustodyTransferKindV2, Error, HoardV2, Id, MarketLiabilityLifecycleV1, ResolutionStateV5,
-    ResolutionV5, Result,
+    CustodyTransferKindV2, Error, FractionalClaimLedgerPlanV3, FractionalClaimSupplyMutationV3,
+    HoardV2, Id, MarketLiabilityLifecycleV1, ResolutionStateV5, ResolutionV5, Result,
 };
 
 /// Canonical bearer redemption transition domain.
@@ -22,6 +22,9 @@ pub const BEARER_CLAIM_REDEMPTION_TRANSITION_DOMAIN_V3: &[u8] =
 /// Accepted exact bearer burn receipt domain.
 pub const BEARER_CLAIM_BURN_RECEIPT_DOMAIN_V3: &[u8] =
     b"dragons-clutch/bearer-claim/burn-receipt/v3\0";
+/// Accepted Fractional-owned bearer burn receipt domain.
+pub const FRACTIONAL_BEARER_CLAIM_BURN_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/bearer-claim/fractional-burn-receipt/v3\0";
 /// Atomic bearer-burn/collateral-payout receipt domain.
 pub const BEARER_CLAIM_REDEMPTION_RECEIPT_DOMAIN_V3: &[u8] =
     b"dragons-clutch/bearer-claim/redemption-receipt/v3\0";
@@ -54,6 +57,197 @@ pub struct BearerClaimBurnIntentV3 {
     pub claimant: Id,
     /// Raw bearer claim atoms to burn.
     pub quantity: u64,
+}
+
+/// Prepared Token-2022 burn bound to one private canonical Fractional
+/// ClaimLedger/0xa5 successor. This value exposes no collateral request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedFractionalBearerClaimBurnV3 {
+    claim_binding_id: Id,
+    fractional: FractionalClaimLedgerPlanV3,
+    claimant: Id,
+    outcome: u8,
+    quantity: u64,
+    observed_materialized_before: [u64; MAX_OUTCOMES],
+    expected_materialized_after: [u64; MAX_OUTCOMES],
+    token_before: AdapterBearerClaimObservationV3,
+    burn_intent: BearerClaimBurnIntentV3,
+}
+
+impl PreparedFractionalBearerClaimBurnV3 {
+    /// Sole independently released Token-2022 burn admitted by this plan.
+    pub const fn burn_intent(self) -> BearerClaimBurnIntentV3 {
+        self.burn_intent
+    }
+}
+
+/// Exact accepted Token-2022 burn bound to one Fractional transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedFractionalBearerClaimBurnV3 {
+    prepared: PreparedFractionalBearerClaimBurnV3,
+    token_after: AdapterBearerClaimObservationV3,
+    burn_receipt_id: Id,
+}
+
+impl AcceptedFractionalBearerClaimBurnV3 {
+    /// Exact Token-2022 mint/source/authority/amount accepted after reload.
+    pub const fn burn_intent(self) -> BearerClaimBurnIntentV3 {
+        self.prepared.burn_intent
+    }
+
+    /// Exact Fractional ClaimLedger/0xa5 transition authenticated by the burn.
+    pub const fn fractional(self) -> FractionalClaimLedgerPlanV3 {
+        self.prepared.fractional
+    }
+
+    /// Exact accepted claim-issuance binding.
+    pub const fn claim_binding_id(self) -> Id {
+        self.prepared.claim_binding_id
+    }
+
+    /// Exact claimant whose bearer balance authorized the burn.
+    pub const fn claimant(self) -> Id {
+        self.prepared.claimant
+    }
+
+    /// Exact accepted burn receipt.
+    pub const fn burn_receipt_id(self) -> Id {
+        self.burn_receipt_id
+    }
+
+    /// Exact selected outcome.
+    pub const fn outcome(self) -> u8 {
+        self.prepared.outcome
+    }
+
+    /// Exact bearer quantity destroyed.
+    pub const fn quantity(self) -> u64 {
+        self.prepared.quantity
+    }
+
+    /// Exact selected mint/source observation accepted after the burn.
+    pub const fn token_after(self) -> AdapterBearerClaimObservationV3 {
+        self.token_after
+    }
+}
+
+/// Prepare only the bearer burn owned by the independent claim release.
+///
+/// The private Fractional plan proves which materialized ClaimLedger successor
+/// the burn must realize. This adapter never computes payout arithmetic and
+/// never becomes an alternative owner of the ClaimLedger successor.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_fractional_bearer_claim_burn_v3(
+    claim: BoundClaimIssuanceV1,
+    expected_mint_authority: Id,
+    claimant: Id,
+    outcome: u8,
+    quantity: u64,
+    observed_materialized_before: [u64; MAX_OUTCOMES],
+    token_before: AdapterBearerClaimObservationV3,
+    fractional: FractionalClaimLedgerPlanV3,
+) -> Result<PreparedFractionalBearerClaimBurnV3> {
+    claim.binding().validate()?;
+    expected_mint_authority.require_live()?;
+    claimant.require_live()?;
+    let FractionalClaimSupplyMutationV3::BurnMaterialized {
+        outcome: planned_outcome,
+        amount: planned_amount,
+        observed_before: planned_observed,
+    } = fractional.supply_mutation()
+    else {
+        return Err(Error::MismatchedBinding);
+    };
+    if outcome != planned_outcome
+        || quantity != planned_amount
+        || observed_materialized_before != planned_observed
+        || outcome >= fractional.claim_ledger_after().outcome_count
+        || quantity == 0
+        || token_before.mint.is_zero()
+        || token_before.source_token_account.is_zero()
+        || token_before.mint == token_before.source_token_account
+        || token_before.mint_authority != expected_mint_authority
+        || token_before.source_owner != claimant
+        || token_before.source_atoms < quantity
+        || token_before.mint_supply_atoms != observed_materialized_before[usize::from(outcome)]
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let mut expected_materialized_after = observed_materialized_before;
+    expected_materialized_after[usize::from(outcome)] = expected_materialized_after
+        [usize::from(outcome)]
+    .checked_sub(quantity)
+    .ok_or(Error::AggregateLiabilityInsufficient)?;
+    if fractional
+        .claim_ledger_after()
+        .aggregate_materialized_supply
+        != expected_materialized_after
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(PreparedFractionalBearerClaimBurnV3 {
+        claim_binding_id: claim.binding_id(),
+        fractional,
+        claimant,
+        outcome,
+        quantity,
+        observed_materialized_before,
+        expected_materialized_after,
+        token_before,
+        burn_intent: BearerClaimBurnIntentV3 {
+            mint: token_before.mint,
+            source_token_account: token_before.source_token_account,
+            claimant,
+            quantity,
+        },
+    })
+}
+
+/// Accept the exact selected mint/source delta after the Fractional bearer burn.
+pub fn accept_fractional_bearer_claim_burn_v3(
+    prepared: PreparedFractionalBearerClaimBurnV3,
+    observed_materialized_after: [u64; MAX_OUTCOMES],
+    token_after: AdapterBearerClaimObservationV3,
+) -> Result<AcceptedFractionalBearerClaimBurnV3> {
+    if observed_materialized_after != prepared.expected_materialized_after
+        || token_after.mint != prepared.token_before.mint
+        || token_after.mint_authority != prepared.token_before.mint_authority
+        || token_after.source_token_account != prepared.token_before.source_token_account
+        || token_after.source_owner != prepared.token_before.source_owner
+        || token_after.mint_supply_atoms
+            != observed_materialized_after[usize::from(prepared.outcome)]
+        || token_after.source_atoms
+            != prepared
+                .token_before
+                .source_atoms
+                .checked_sub(prepared.quantity)
+                .ok_or(Error::PostAdmissionFailed)?
+    {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let observed_before = encode_amounts(prepared.observed_materialized_before);
+    let observed_after = encode_amounts(observed_materialized_after);
+    let burn_receipt_id = digest(
+        FRACTIONAL_BEARER_CLAIM_BURN_RECEIPT_DOMAIN_V3,
+        &[
+            &prepared.fractional.transition_id().bytes(),
+            &prepared.claim_binding_id.bytes(),
+            &prepared.token_before.mint.bytes(),
+            &prepared.token_before.source_token_account.bytes(),
+            &prepared.claimant.bytes(),
+            &observed_before,
+            &observed_after,
+            &[prepared.outcome],
+            &prepared.quantity.to_le_bytes(),
+            &token_after.source_atoms.to_le_bytes(),
+        ],
+    );
+    burn_receipt_id.require_live()?;
+    Ok(AcceptedFractionalBearerClaimBurnV3 {
+        prepared,
+        token_after,
+        burn_receipt_id,
+    })
 }
 
 /// Prepared semantic successors whose collateral request remains private until

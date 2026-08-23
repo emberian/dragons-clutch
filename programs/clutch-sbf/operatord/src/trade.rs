@@ -1,4 +1,4 @@
-//! `operatord serve --mode trade`: the Friday clutch, opened for a person.
+//! `operatord serve --mode non-production-mock-trade`: the Friday clutch lab.
 //!
 //! Watch mode boots a validator and replays a pregenerated plan.  Trade mode
 //! boots the same validator the same way, installs the Friday clutch's frozen
@@ -68,7 +68,7 @@ fn banner(
 ) -> Value {
     json!({
         "type": "identity",
-        "mode": "trade",
+        "mode": "non-production-mock-trade",
         "integer_transport": integer::TRANSPORT,
         "source_profile": artifact.source_profile,
         "elf_path": artifact.path.display().to_string(),

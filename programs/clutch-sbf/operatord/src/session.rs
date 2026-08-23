@@ -1605,7 +1605,7 @@ impl Session {
     pub fn identity(&self) -> Value {
         let f = &self.friday;
         json!({
-            "mode": "trade",
+            "mode": "non-production-mock-trade",
             "integer_transport": integer::TRANSPORT,
             "market": clutch_sbf_harness::hex_encode(&f.market_id.bytes()),
             "market_account": f.market.address,

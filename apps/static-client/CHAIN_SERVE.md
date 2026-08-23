@@ -6,56 +6,59 @@ signer, blockhash, transaction submission, faucet, deployment, account
 creation, or persistence path.
 
 ```text
+operatord compose-chain-config \
+  --local-release-manifest /absolute/session/public-session.txt \
+  --capability-manifest /absolute/checked-profile.json \
+  --cluster-name localnet \
+  --expected-genesis HASH \
+  --rpc-http-url http://127.0.0.1:8899 \
+  --rpc-websocket-url ws://127.0.0.1:8900 > chain.json
+
 operatord chain-serve --config chain.json [--port 9130] [--static apps/static-client]
 ```
 
-The config is explicit and closed. Every integer is a canonical decimal string;
-identities are either Solana base58 addresses/hashes or lowercase 32-byte hex as
-named. No field has an inferred network or release default.
+The missing session-instantiation seam is owned by
+`operatord prepare-local-chain` / `launch-local-chain`; those commands create
+the v6 seal from exact built-release, checked-profile, compiler, neutral-sink,
+Source, and validator coordinates without entering any historical mock mode.
+The separate `compose-devnet-chain-config` command accepts only the canonical
+devnet deployment-manifest schema and cannot reuse a local-session manifest.
+See [`REAL_INFRA_CHAIN_LAUNCH.md`](../../docs/implementation/REAL_INFRA_CHAIN_LAUNCH.md).
 
-```json
-{
-  "schema": "dragons-clutch/operatord-chain-config/v1",
-  "cluster": {
-    "name": "localnet-or-devnet-label",
-    "genesisHash": "<exact Solana genesis hash>",
-    "rpcHttpUrl": "http://127.0.0.1:8899",
-    "rpcWebsocketUrl": "ws://127.0.0.1:8900"
-  },
-  "releases": [
-    {
-      "programId": "<program address>",
-      "programData": "<linked ProgramData address>",
-      "elfSha256": "<lowercase SHA-256 of ProgramData bytes after the 45-byte loader metadata>",
-      "deploymentSlot": "1",
-      "families": ["general", "source", "series", "fees", "liveness", "position-v3", "replay-v3", "structured-claim", "dealer", "failure"]
-    }
-  ],
-  "sourceNeutralSink": "<explicit Source runtime neutral-sink address>",
-  "workflowId": "<nonzero lowercase 32-byte workflow identity>",
-  "maximumKeeperActions": "256",
-  "bounds": {
-    "maximumAccountsPerScan": "4096",
-    "maximumAccountDataBytes": "1048576",
-    "maximumTotalResponseBytes": "16777216",
-    "maximumSubscriptions": "64",
-    "maximumAddresses": "4096",
-    "maximumVersionsPerAddress": "8",
-    "maximumForkNodes": "4096"
-  },
-  "pollingIntervalMilliseconds": "5000",
-  "rpcTimeoutSeconds": "30",
-  "websocketReconnectInitialMilliseconds": "250",
-  "websocketReconnectMaximumMilliseconds": "30000",
-  "compilerReleaseSha256": "<configured pure compiler build/release SHA-256>"
-}
-```
+`chain.json` is output, not caller-authored input. The offline composer invokes
+the existing capability-profile v2 checker with deployability required and
+cross-checks its checker-emitted SHA-256 of sorted-key compact ASCII JSON,
+profile identity, measured source
+commit, and measured ELF digest against the v6 local-session seal. It hashes the
+actual ELF file, requires the session ownership marker and exact HTTP/WebSocket
+pair, validates Program/ProgramData/slot coordinates, fixes bounded runtime
+policy, and derives the workflow identity. Missing, planning, historical,
+unsealed, stale-decoder, or mismatched inputs fail closed.
 
-The values above illustrate widths and shape, not a shipped network, program,
-release, wallet, or source fixture. Replace every placeholder and review every
-bound. Decoder family names are explicit operator configuration assertions about
-the selected release;
-the hostile decoder refuses unknown and ambiguous account bodies.
+The central registry's exact enabled intent triples—not a second operatord or
+browser allocation table—select action 26 and current General, Source/Series,
+Dealer, Recovery, and Fractional surfaces. Current decoder families may still
+be projected without an enabled coordinate, but that state is explicitly
+non-actionable. Every output integer is a canonical decimal string. The
+composer reads no wallet or browser session and has no RPC, signing, submission,
+deployment, or persistence path.
+
+The hostile decoder admits Source V3 runtime accounts and only the current
+Collateral Hoard V2, ClaimLedger V3, Resolution V5, and the current General
+successor versions (including Window V5, AdmissionNode V4/outer-v2,
+MarketBinding V2, ClearWork V3, rent-owned OwnerSettlement V5,
+SettlementReceipt V5, SettlementRoot V1, Reservation V9, and OrderPage V5).
+The checked `fractional` family admits only Policy V2, Ledger V1,
+Credit V2, and Tombstone V2. The reinterpreted policy/credit/tombstone V1 bytes
+are withdrawn and invisible to live discovery.
+It also admits only the current globally enveloped Dealer state graph (State,
+funded dependencies, LP pages, leases, pots, Epoch bindings, terminal work,
+tombstones, tickets, and receipts); raw historical Dealer V1 bodies are not
+live accounts, and the explicitly non-production upload-stage account is not
+discoverable here. Failure projections likewise decode the complete current
+MarketRoot V2 semantic body and exact interval-consensus work/replay accounts,
+not merely their outer tag. Withdrawn versions do not silently enter the live
+projection.
 
 ## What is checked before serving
 
@@ -72,9 +75,10 @@ untrusted RPC and refuses to bind Glass unless that one endpoint reports:
 It checks the same coordinates again after each complete scan and only then
 exposes `SharedIndexApi`, so an observation that changes across the scan keeps
 the projection withdrawn. These checks are consistency observations, not
-cryptographic chain authentication or an RPC quorum. The configured decoder-family
-list is not derived from the ELF and must not be treated as release-manifest
-proof. Every account response is still an untrusted projection:
+cryptographic chain authentication or an RPC quorum. The decoder families and
+enabled intent coordinates are derived from the checked manifest/registry join,
+but their daemon projection is not a current-account runtime capability verdict.
+Every account response is still an untrusted projection:
 onchain execution must reload complete authoritative accounts.
 
 ## Processed finality and rollback boundary
@@ -85,21 +89,29 @@ release plus `blockSubscribe`, `slotsUpdatesSubscribe`, and `rootSubscribe`.
 Before a processed generation becomes readable it:
 
 1. opens the exact configured WebSocket URL with no redirect or proxy fallback;
-2. binds every server-assigned subscription ID to its planned request;
-3. buffers notifications under the configured count and aggregate-byte bounds;
-4. runs a serialized HTTP release-check → finalized scan → release-check cycle;
-5. replays the buffered notifications in wire order; and
-6. marks the generation live only after the complete replay succeeds.
+2. sends `getGenesisHash` on that same connection and requires the exact selected
+   genesis before sending any subscription request;
+3. binds every server-assigned subscription ID to its planned request;
+4. buffers notifications under the configured count and aggregate-byte bounds;
+5. runs a serialized HTTP release-check → finalized scan → release-check cycle;
+6. replays the buffered notifications in wire order; and
+7. marks the generation live only after the complete replay succeeds.
 
 Program rows remain buffered until their slot has a unique blockhash and is
 frozen. A dead slot withdraws buffered rows and already-indexed descendants.
 Each new root must be non-regressing, uniquely block-identified, free of known
 dead ancestry, and descend from the previous observed root. Root arrival drains
-same-slot pending rows. Capacity exhaustion, ambiguous topology, closure/owner
-change, malformed input, release mismatch, idle timeout, or transport loss
-withdraws the entire generation—including processed versions, fork nodes,
-pending rows/root, and connection-scoped subscription IDs—and reconnects with
-an explicitly configured exponentially increasing, capped backoff.
+same-slot pending rows. A well-formed exact zero-lamport/empty/non-executable
+closure or a well-formed non-executable owner change creates a fork-bound,
+release-specific removal observation. It masks only that release's processed
+row, increments the rollback epoch, preserves the finalized baseline, and is
+itself reverted if its branch dies. An unknown-address removal is recorded but
+has nothing to mask. Executable owner changes, malformed changes, capacity
+exhaustion, ambiguous topology, release mismatch, idle timeout, or transport
+loss still withdraw the entire generation—including processed versions,
+removals, fork nodes, pending rows/root, and connection-scoped subscription
+IDs—and reconnect with an explicitly configured exponentially increasing,
+capped backoff.
 
 Processed output is always labeled non-final and rollbackable. It has
 `authorityEligibility: false`; the processed keeper endpoint returns no actions,
@@ -108,18 +120,24 @@ finalized projection. The common read gate is withdrawn during each release-
 bracketed finalized scan; otherwise the last complete finalized scan remains
 available while processed transport is in backoff, registration, or replay.
 
-`/v1/acquisition` echoes the exact HTTP URL, WebSocket URL, genesis binding,
-and every configured Program/ProgramData/deployment-slot/ELF coordinate. Glass
-requires exact equality with its immutable selected configuration before it
-accepts any account response. For processed reads it brackets its bounded GET
-sequence with acquisition-state reads and rejects a changed connection
-generation or rollback epoch. The echoed verification disposition means only
-that the read gate follows the last complete untrusted HTTP release bracket; it
-is explicitly not authority eligibility or cryptographic chain authentication.
+`/v1/acquisition` publishes a domain-separated SHA-256 binding for each complete
+HTTP and WebSocket URL plus a display coordinate containing only
+scheme/authority and redacted path/query markers. It never returns raw URL
+userinfo, path tokens, or query credentials. Userinfo is rejected at config
+admission. Glass accepts only the daemon's redacted/hash endpoint bindings and
+exact composed manifest/profile/source/Program/ProgramData/slot/ELF projection;
+it has no caller-shaped RPC or release fields to compare or override. Its
+displayed/copied configuration is redacted too. For
+processed reads it brackets its bounded GET sequence with acquisition-state
+reads and rejects a changed connection generation or rollback epoch. The
+echoed verification disposition means only that the read gate follows the last
+complete untrusted HTTP release bracket; it is explicitly not authority
+eligibility or cryptographic chain authentication.
 
-The HTTP genesis/release checks do not cryptographically prove that a distinct
-WebSocket service is operated by the same backend. The exact URL join prevents
-silent target substitution inside Glass; all WebSocket observations remain
+Matching `getGenesisHash` on the exact WebSocket connection prevents a silently
+different cluster from entering that processed generation. It does not prove
+that the HTTP and WebSocket services share an operator, authenticate the RPC,
+or make its observations authoritative. All WebSocket observations remain
 untrusted and onchain execution must independently reload authority.
 
 The RPC plan accepts HTTPS/WSS endpoints or canonical loopback

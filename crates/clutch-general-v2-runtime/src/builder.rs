@@ -11,8 +11,8 @@
 use core::cmp::min;
 
 use clutch_batch::relation_v2::{
-    price_semantics_digest_v2, verify_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2,
-    EconomicDomainV2, EconomicErrorV2, EconomicOrderV2, PricePreconditionV2, VerifiedEconomicsV2,
+    price_semantics_digest_v2, EconomicBookV2, EconomicCandidateV2, EconomicDomainV2,
+    EconomicErrorV2, EconomicOrderV2, PricePreconditionV2, VerifiedEconomicsV2,
 };
 use clutch_batch::{PartialPolicy, Side};
 use clutch_general_v2_contract::{
@@ -24,8 +24,8 @@ use clutch_general_v2_contract::{
     PRICE_MEASURE_WITNESS_SCHEMA_V3, QUANTIZED_PRICE_MEASURE_SEMANTICS_V1, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_price_measure::{
-    verify_quantized_price_measure_v3_degree_zero, verify_quantized_price_measure_v3_smooth,
-    AdapterBindingsV3, ErrorV3, PriceVectorV3, QuantizedAtomWitnessV3, VerifiedPriceMeasureV3,
+    verify_quantized_price_measure_v3_smooth, AdapterBindingsV3, ErrorV3, PriceVectorV3,
+    QuantizedAtomWitnessV3, VerifiedPriceMeasureV3, VerifiedQuantizedAtomMixtureV1,
     QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1,
 };
 use clutch_product_series::{
@@ -38,9 +38,10 @@ use clutch_solana_layout::{
 };
 
 use crate::{
-    relation_v2_policy_id_v1, score_v2_q_cost_policy_id_v1, score_v2_q_policy_id_v1,
-    CanonicalSha256, GeneralV2RuntimeError, QuantizedBasisProjectionV1,
-    QuantizedWitnessBodyV1,
+    bind_quantized_relation_price_certificate_v2, quantized_relation_v2_policy_id_v2,
+    score_v2_q_cost_policy_id_v1, score_v2_q_policy_id_v1,
+    verify_quantized_relation_economics_v2, CanonicalSha256, GeneralV2RuntimeError,
+    QuantizedBasisProjectionV1, QuantizedRelationPriceAuthorityV2, QuantizedWitnessBodyV1,
 };
 
 /// Largest coordinate sample retained by the fixed-memory searcher.
@@ -55,11 +56,12 @@ const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_ORDERS == 64);
 const _: () = assert!(MAX_QUANTIZED_ATOMS == 16);
 
-/// One canonical primitive finite measure proposed to the exact V3 checker.
+/// One canonical primitive finite measure proposed to the exact finite checker.
 ///
 /// This is not a proof or accepted witness by construction. The builder checks
 /// its shape, evaluates every atom through the Product-selected basis, derives
-/// exact integer prices, and then runs the authoritative V3 checker.
+/// exact integer prices, and then runs both the V3 body checker and required
+/// payout-denominator-scale atom-mixture verifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuantizedAtomProposalV1 {
     /// Active sorted support width.
@@ -288,6 +290,7 @@ pub struct BuiltDirectCandidateV1 {
     atom_proposal: QuantizedAtomProposalV1,
     witness_body: QuantizedWitnessBodyV1,
     price_measure: VerifiedPriceMeasureV3,
+    quantized_atom_mixture: VerifiedQuantizedAtomMixtureV1,
     economic_candidate: EconomicCandidateV2,
     economics: VerifiedEconomicsV2,
     economic_domain_digest: Id32,
@@ -316,9 +319,14 @@ impl BuiltDirectCandidateV1 {
         &self.witness_body
     }
 
-    /// Exact V3 checker result for the retained witness body.
+    /// Exact V3 body-checker result for the retained witness body.
     pub const fn price_measure(&self) -> &VerifiedPriceMeasureV3 {
         &self.price_measure
+    }
+
+    /// Required exact finite atom-mixture certificate for the retained price.
+    pub const fn quantized_atom_mixture(&self) -> VerifiedQuantizedAtomMixtureV1 {
+        self.quantized_atom_mixture
     }
 
     /// Exact fills, AON mask, and virtual conversion checked by RelationV2.
@@ -400,7 +408,7 @@ impl BuiltDirectCandidateV1 {
             || admission_node.market != self.market
             || admission_node.epoch != economic_domain_account.epoch
             || admission_node.market != market_binding.market
-            || admission_node.relation_policy_id != relation_v2_policy_id_v1()?
+            || admission_node.relation_policy_id != quantized_relation_v2_policy_id_v2()?
             || admission_node.admission_policy_id != market_binding.admission_policy_id
             || market_binding.relation_policy_id != admission_node.relation_policy_id
             || market_binding.score_policy_id != admission_node.score_policy_id
@@ -723,6 +731,7 @@ pub struct OwnerBlindBookProjectionV2 {
     position_generations: [u64; MAX_ORDERS],
     order_page_accounts: [Id32; MAX_ORDERS],
     order_page_indices: [u16; MAX_ORDERS],
+    order_page_slots: [u8; MAX_ORDERS],
 }
 
 impl OwnerBlindBookProjectionV2 {
@@ -773,6 +782,15 @@ impl OwnerBlindBookProjectionV2 {
     pub fn order_page_index(&self, order_index: u8) -> Option<u16> {
         if order_index < self.base.book.len {
             Some(self.order_page_indices[usize::from(order_index)])
+        } else {
+            None
+        }
+    }
+
+    /// Canonical physical V5 page-slot index containing one dense live order.
+    pub fn order_page_slot(&self, order_index: u8) -> Option<u8> {
+        if order_index < self.base.book.len {
+            Some(self.order_page_slots[usize::from(order_index)])
         } else {
             None
         }
@@ -933,7 +951,7 @@ pub fn project_owner_blind_book_v2(
         || market_binding.price_measure_policy_v1_id.bytes() != domain.price_policy_digest
         || market_binding.native_claim_basis_id
             != economic_domain_account.transcript.native_claim_basis_id
-        || market_binding.relation_policy_id != relation_v2_policy_id_v1()?
+        || market_binding.relation_policy_id != quantized_relation_v2_policy_id_v2()?
         || market_binding.score_policy_id != score_v2_q_policy_id_v1()?
     {
         return Err(CandidateBuilderErrorV1::BindingMismatch);
@@ -1073,7 +1091,7 @@ fn project_owner_blind_book_with_score_v1(
         || market_binding.price_measure_policy_v1_id.bytes() != domain.price_policy_digest
         || market_binding.native_claim_basis_id
             != economic_domain_account.transcript.native_claim_basis_id
-        || market_binding.relation_policy_id != relation_v2_policy_id_v1()?
+        || market_binding.relation_policy_id != quantized_relation_v2_policy_id_v2()?
         || market_binding.score_policy_id != expected_score_policy_id
     {
         return Err(CandidateBuilderErrorV1::BindingMismatch);
@@ -1112,6 +1130,7 @@ fn project_owner_blind_book_with_score_v1(
     let mut position_generations = [0u64; MAX_ORDERS];
     let mut order_page_accounts = [Id32::ZERO; MAX_ORDERS];
     let mut order_page_indices = [0u16; MAX_ORDERS];
+    let mut order_page_slots = [0u8; MAX_ORDERS];
     page = 0;
     while page < pages.len() {
         let header = verify_page_v5(pages[page].body)?;
@@ -1160,6 +1179,7 @@ fn project_owner_blind_book_with_score_v1(
                 position_generations[at] = verified.position_generation;
                 order_page_accounts[at] = pages[page].account;
                 order_page_indices[at] = header.page_index;
+                order_page_slots[at] = verified.slot_index;
                 book.len = book
                     .len
                     .checked_add(1)
@@ -1190,13 +1210,15 @@ fn project_owner_blind_book_with_score_v1(
         position_generations,
         order_page_accounts,
         order_page_indices,
+        order_page_slots,
     })
 }
 
 /// Search exact finite atom measures and owner-blind fills, returning the best
 /// valid submitted candidate encountered under ScoreV2-Q.
 ///
-/// The authoritative V3 and RelationV2 checkers validate every retained result.
+/// The authoritative finite atom-mixture gate and RelationV2 checker validate
+/// every retained result; the V3 checker authenticates the shared feed body.
 /// Search order is supplied proposals, sampled singleton measures, then sampled
 /// primitive pairs in coordinate/denominator/mass order. Fill search visits the
 /// empty candidate, maximal exact buy/sell ratio pairs, then the declared
@@ -1430,24 +1452,21 @@ impl<'a> PreparedBuilderContextV1<'a> {
             inputs.price_measure_policy,
             inputs.genesis,
         )?;
-        let basis = if inputs.native_basis.basis_degree == 0 {
-            QuantizedBasisProjectionV1::DegreeZero(
-                inputs
-                    .price_measure_policy
-                    .project_degree_zero_table(inputs.native_basis, inputs.genesis)?,
-            )
-        } else {
-            QuantizedBasisProjectionV1::Smooth(inputs.price_measure_policy.project_smooth_basis(
+        if !(2..=3).contains(&inputs.native_basis.basis_degree) {
+            return Err(CandidateBuilderErrorV1::BindingMismatch);
+        }
+        let basis = QuantizedBasisProjectionV1::Smooth(
+            inputs.price_measure_policy.project_smooth_basis(
                 inputs.native_basis,
                 inputs.genesis,
                 inputs.authenticated_edge_policy,
-            )?)
-        };
+            )?,
+        );
         let basis_digest = Id32::new(inputs.native_basis.id()?.bytes())?;
         let price_measure_policy_id = Id32::new(inputs.price_measure_policy.id()?.bytes())?;
         let market_instance_id = inputs.market_instance.id()?.bytes();
         let genesis_id = inputs.genesis.id()?.bytes();
-        let relation_policy_id = relation_v2_policy_id_v1()?;
+        let relation_policy_id = quantized_relation_v2_policy_id_v2()?;
         let transcript = inputs.economic_domain_account.transcript;
         let domain_digest = economic_domain_digest_v2(&CanonicalSha256, transcript)?;
         let domain = relation_domain_from_account(inputs.economic_domain_account)?;
@@ -1481,8 +1500,8 @@ impl<'a> PreparedBuilderContextV1<'a> {
             || transcript.coordinate_domain_max != inputs.genesis.coordinate_domain_max
             || inputs.price_grid.grid.bytes() != inputs.genesis.price_grid_id.bytes()
             || inputs.price_grid.realm.bytes() != inputs.genesis.realm_id.bytes()
-            || ((2..=3).contains(&basis.degree())
-                && inputs.market_binding.price_scale != basis.payout_denominator())
+            || !(2..=3).contains(&basis.degree())
+            || inputs.market_binding.price_scale != basis.payout_denominator()
         {
             return Err(CandidateBuilderErrorV1::BindingMismatch);
         }
@@ -1509,7 +1528,11 @@ impl<'a> PreparedBuilderContextV1<'a> {
     }
 }
 
-pub(crate) fn project_owner_blind_slot(
+/// Project one hostile-decoded canonical OrderPage slot into the sole
+/// owner-blind RelationV2 row shape. Adapters must authenticate the containing
+/// page/PDA/digest before calling this helper; the returned membership remains
+/// an exact projection of the same slot, not a caller-authored row DTO.
+pub fn project_owner_blind_slot(
     slot: OrderSlot,
     domain: &EconomicDomainV2,
 ) -> Result<Option<(EconomicOrderV2, FrozenOrderMembershipV1)>, CandidateBuilderErrorV1> {
@@ -1704,38 +1727,45 @@ fn consider_atom_measure(
         &witness,
         context.price_grid.price_scale,
     )?;
-    let price_measure = match &context.basis {
-        QuantizedBasisProjectionV1::DegreeZero(table) => {
-            verify_quantized_price_measure_v3_degree_zero(&bindings, table, &price, &witness)?
-        }
-        QuantizedBasisProjectionV1::Smooth(basis) => {
-            verify_quantized_price_measure_v3_smooth(&bindings, basis, &price, &witness)?
-        }
+    let QuantizedBasisProjectionV1::Smooth(basis) = context.basis else {
+        return Err(CandidateBuilderErrorV1::BindingMismatch);
     };
-    if let QuantizedBasisProjectionV1::Smooth(basis) = context.basis {
-        if (2..=3).contains(&basis.degree) {
-            crate::verify_exact_smooth_atom_mixture_v1(
-                context.market,
-                context.terms_id,
-                context.basis_digest,
-                candidate_price_digest,
-                context.coordinate_domain_min,
-                context.coordinate_domain_max,
-                basis,
-                price.prices,
-                atoms.atom_count,
-                atoms.common_denominator,
-                atoms.atom_coordinates,
-                atoms.atom_masses,
-            )?;
-        }
+    let price_measure =
+        verify_quantized_price_measure_v3_smooth(&bindings, &basis, &price, &witness)?;
+    if !(2..=3).contains(&basis.degree) || price.price_scale != basis.denominator {
+        return Err(CandidateBuilderErrorV1::BindingMismatch);
     }
+    let quantized_atom_mixture = crate::verify_exact_smooth_atom_mixture_v1(
+        context.market,
+        context.terms_id,
+        context.basis_digest,
+        candidate_price_digest,
+        context.coordinate_domain_min,
+        context.coordinate_domain_max,
+        basis,
+        price.prices,
+        atoms.atom_count,
+        atoms.common_denominator,
+        atoms.atom_coordinates,
+        atoms.atom_masses,
+    )?;
+    let precondition = PricePreconditionV2 {
+        policy_digest: context.domain.price_policy_digest,
+        semantic_price_digest: witness_body.candidate_price_digest.bytes(),
+        prices: price.prices,
+    };
+    let price_authority = bind_quantized_relation_price_certificate_v2(
+        context.domain,
+        precondition,
+        quantized_atom_mixture,
+    )?;
     search_fills(
         context,
         price,
         atoms,
         witness_body,
         price_measure,
+        price_authority,
         plan,
         report,
         best,
@@ -1848,6 +1878,7 @@ fn search_fills(
     atoms: QuantizedAtomProposalV1,
     witness_body: QuantizedWitnessBodyV1,
     price_measure: VerifiedPriceMeasureV3,
+    price_authority: QuantizedRelationPriceAuthorityV2,
     plan: BoundedSearchPlanV1,
     report: &mut CandidateSearchReportV1,
     best: &mut Option<BuiltDirectCandidateV1>,
@@ -1863,11 +1894,6 @@ fn search_fills(
         order += 1;
     }
     let mut digits = [0u8; MAX_ORDERS];
-    let precondition = PricePreconditionV2 {
-        policy_digest: context.domain.price_policy_digest,
-        semantic_price_digest: witness_body.candidate_price_digest.bytes(),
-        prices: price.prices,
-    };
     let mut considered_for_price = 0u32;
     consider_fill_witness(
         context,
@@ -1875,8 +1901,8 @@ fn search_fills(
         atoms,
         witness_body,
         price_measure,
+        price_authority,
         EconomicCandidateV2::EMPTY,
-        &precondition,
         report,
         best,
     )?;
@@ -1907,8 +1933,8 @@ fn search_fills(
                             atoms,
                             witness_body,
                             price_measure,
+                            price_authority,
                             candidate,
-                            &precondition,
                             report,
                             best,
                         )?;
@@ -1945,8 +1971,8 @@ fn search_fills(
                 atoms,
                 witness_body,
                 price_measure,
+                price_authority,
                 candidate,
-                &precondition,
                 report,
                 best,
             )?;
@@ -1966,8 +1992,8 @@ fn consider_fill_witness(
     atoms: QuantizedAtomProposalV1,
     witness_body: QuantizedWitnessBodyV1,
     price_measure: VerifiedPriceMeasureV3,
+    price_authority: QuantizedRelationPriceAuthorityV2,
     mut candidate: EconomicCandidateV2,
-    precondition: &PricePreconditionV2,
     report: &mut CandidateSearchReportV1,
     best: &mut Option<BuiltDirectCandidateV1>,
 ) -> Result<(), CandidateBuilderErrorV1> {
@@ -1980,8 +2006,11 @@ fn consider_fill_witness(
     };
     candidate.virtual_split = split;
     candidate.virtual_merge = merge;
-    let Ok(economics) =
-        verify_economic_candidate_v2(&context.domain, context.book, precondition, &candidate)
+    let Ok(economics) = verify_quantized_relation_economics_v2(
+        &price_authority,
+        context.book,
+        &candidate,
+    )
     else {
         return Ok(());
     };
@@ -1989,16 +2018,25 @@ fn consider_fill_witness(
         .valid_submitted_candidates
         .checked_add(1)
         .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
-    let replace = best
-        .as_ref()
-        .map(|current| economics.score.is_better_than(&current.economics.score))
-        .unwrap_or(true);
+    let replace = match best.as_ref() {
+        Some(current) => {
+            economics
+                .score
+                .total_order_same_domain(&current.economics.score)
+                .map_err(|error| {
+                    CandidateBuilderErrorV1::Relation(EconomicErrorV2::Score(error))
+                })?
+                == core::cmp::Ordering::Greater
+        }
+        None => true,
+    };
     if replace {
         *best = Some(BuiltDirectCandidateV1 {
             price,
             atom_proposal: atoms,
             witness_body,
             price_measure,
+            quantized_atom_mixture: price_authority.certificate(),
             economic_candidate: candidate,
             economics,
             economic_domain_digest: context.domain_digest,

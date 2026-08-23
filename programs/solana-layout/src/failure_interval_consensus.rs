@@ -18,7 +18,7 @@ const _: () = assert!(
         == registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES
 );
 const _: () = assert!(
-    4 + 3 * 8 + 12 * HASH_BYTES + REPLAY_RESERVED_BYTES_V1
+    4 + 3 * 8 + 15 * HASH_BYTES + REPLAY_RESERVED_BYTES_V1
         == registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES
 );
 
@@ -94,7 +94,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
         self.validate()?;
         output.fill(0);
         output[0] = registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG;
-        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION;
+        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION;
         output[2] = self.bump;
         output[3] = self.phase as u8;
         let mut cursor = 4;
@@ -134,7 +134,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
         if input[0] != registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_VERSION {
+        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_V1_VERSION {
             return Err(CodecError::WrongVersion);
         }
         let phase = FailureIntervalConsensusPhaseV1::decode(input[3])?;
@@ -271,6 +271,13 @@ pub struct FailureIntervalConsensusReplayAccountV1 {
     pub resolution_receipt_id: [u8; HASH_BYTES],
     /// Exact work close authorization, zero before close.
     pub close_authorization_id: [u8; HASH_BYTES],
+    /// Canonical replay-postimage identity stored on every write.
+    pub replay_receipt_id: [u8; HASH_BYTES],
+    /// Exact interval terminal receipt, zero before close.
+    pub interval_terminal_receipt_id: [u8; HASH_BYTES],
+    /// Exhaustive market-level Failure receipt, zero until Recovery and the
+    /// interval session have both terminalized.
+    pub failure_family_terminal_receipt_id: [u8; HASH_BYTES],
 }
 
 impl FailureIntervalConsensusReplayAccountV1 {
@@ -282,7 +289,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
         self.validate()?;
         output.fill(0);
         output[0] = registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG;
-        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION;
+        output[1] = registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION;
         output[2] = self.bump;
         output[3] = self.phase as u8;
         let mut cursor = 4;
@@ -302,6 +309,9 @@ impl FailureIntervalConsensusReplayAccountV1 {
             self.certificate_id,
             self.resolution_receipt_id,
             self.close_authorization_id,
+            self.replay_receipt_id,
+            self.interval_terminal_receipt_id,
+            self.failure_family_terminal_receipt_id,
         ] {
             put_id(output, &mut cursor, id);
         }
@@ -319,7 +329,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
         if input[0] != registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
         }
-        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_VERSION {
+        if input[1] != registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_V1_VERSION {
             return Err(CodecError::WrongVersion);
         }
         let phase = FailureIntervalConsensusPhaseV1::decode(input[3])?;
@@ -339,6 +349,9 @@ impl FailureIntervalConsensusReplayAccountV1 {
         let certificate_id = take_id(input, &mut cursor);
         let resolution_receipt_id = take_id(input, &mut cursor);
         let close_authorization_id = take_id(input, &mut cursor);
+        let replay_receipt_id = take_id(input, &mut cursor);
+        let interval_terminal_receipt_id = take_id(input, &mut cursor);
+        let failure_family_terminal_receipt_id = take_id(input, &mut cursor);
         if input[cursor..].iter().any(|byte| *byte != 0) {
             return Err(CodecError::NonCanonicalPadding);
         }
@@ -360,6 +373,9 @@ impl FailureIntervalConsensusReplayAccountV1 {
             certificate_id,
             resolution_receipt_id,
             close_authorization_id,
+            replay_receipt_id,
+            interval_terminal_receipt_id,
+            failure_family_terminal_receipt_id,
         };
         value.validate()?;
         Ok(value)
@@ -377,7 +393,8 @@ impl FailureIntervalConsensusReplayAccountV1 {
         ] {
             require_live(id)?;
         }
-        if self.generation == 0 || self.preserved_lamports == 0 {
+        if self.generation == 0 || self.preserved_lamports == 0 || is_zero(&self.replay_receipt_id)
+        {
             return Err(CodecError::ZeroValue);
         }
         let advanced = self.transition_nonce != 0;
@@ -392,6 +409,8 @@ impl FailureIntervalConsensusReplayAccountV1 {
                 if !is_zero(&self.certificate_id)
                     || !is_zero(&self.resolution_receipt_id)
                     || !is_zero(&self.close_authorization_id)
+                    || !is_zero(&self.interval_terminal_receipt_id)
+                    || !is_zero(&self.failure_family_terminal_receipt_id)
                 {
                     return Err(CodecError::InvalidEnum);
                 }
@@ -400,6 +419,8 @@ impl FailureIntervalConsensusReplayAccountV1 {
                 if is_zero(&self.certificate_id)
                     || is_zero(&self.resolution_receipt_id)
                     || !is_zero(&self.close_authorization_id)
+                    || !is_zero(&self.interval_terminal_receipt_id)
+                    || !is_zero(&self.failure_family_terminal_receipt_id)
                 {
                     return Err(CodecError::InvalidEnum);
                 }
@@ -408,6 +429,7 @@ impl FailureIntervalConsensusReplayAccountV1 {
                 if is_zero(&self.certificate_id)
                     || is_zero(&self.resolution_receipt_id)
                     || is_zero(&self.close_authorization_id)
+                    || is_zero(&self.interval_terminal_receipt_id)
                 {
                     return Err(CodecError::InvalidEnum);
                 }
@@ -447,4 +469,74 @@ fn take_id(input: &[u8], cursor: &mut usize) -> [u8; HASH_BYTES] {
     value.copy_from_slice(&input[*cursor..*cursor + HASH_BYTES]);
     *cursor += HASH_BYTES;
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn closed_replay() -> FailureIntervalConsensusReplayAccountV1 {
+        FailureIntervalConsensusReplayAccountV1 {
+            bump: 7,
+            phase: FailureIntervalConsensusPhaseV1::Closed,
+            generation: 3,
+            transition_nonce: 5,
+            preserved_lamports: 900,
+            interval_binding_id: [1; HASH_BYTES],
+            failure_policy_binding_id: [2; HASH_BYTES],
+            source_success_handoff_id: [3; HASH_BYTES],
+            work_account: [4; HASH_BYTES],
+            initial_work_id: [5; HASH_BYTES],
+            current_work_id: [6; HASH_BYTES],
+            current_transcript: [7; HASH_BYTES],
+            last_transition_receipt_id: [8; HASH_BYTES],
+            last_liveness_receipt_id: [9; HASH_BYTES],
+            certificate_id: [10; HASH_BYTES],
+            resolution_receipt_id: [11; HASH_BYTES],
+            close_authorization_id: [12; HASH_BYTES],
+            replay_receipt_id: [13; HASH_BYTES],
+            interval_terminal_receipt_id: [14; HASH_BYTES],
+            failure_family_terminal_receipt_id: [15; HASH_BYTES],
+        }
+    }
+
+    #[test]
+    fn replay_persists_terminal_chain_and_rejects_phase_confusion() {
+        let closed = closed_replay();
+        let mut encoded = [0; registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES];
+        closed.encode_into(&mut encoded).unwrap();
+        assert_eq!(
+            FailureIntervalConsensusReplayAccountV1::decode(&encoded),
+            Ok(closed)
+        );
+
+        let mut active = closed;
+        active.phase = FailureIntervalConsensusPhaseV1::Active;
+        active.transition_nonce = 0;
+        active.last_transition_receipt_id = [0; HASH_BYTES];
+        active.last_liveness_receipt_id = [0; HASH_BYTES];
+        active.certificate_id = [0; HASH_BYTES];
+        active.resolution_receipt_id = [0; HASH_BYTES];
+        active.close_authorization_id = [0; HASH_BYTES];
+        active.interval_terminal_receipt_id = [0; HASH_BYTES];
+        active.failure_family_terminal_receipt_id = [0; HASH_BYTES];
+        active.encode_into(&mut encoded).unwrap();
+        assert_eq!(
+            FailureIntervalConsensusReplayAccountV1::decode(&encoded),
+            Ok(active)
+        );
+
+        let mut premature_family = active;
+        premature_family.failure_family_terminal_receipt_id = [15; HASH_BYTES];
+        assert_eq!(
+            premature_family.encode_into(&mut encoded),
+            Err(CodecError::InvalidEnum)
+        );
+        let mut missing_interval_terminal = closed;
+        missing_interval_terminal.interval_terminal_receipt_id = [0; HASH_BYTES];
+        assert_eq!(
+            missing_interval_terminal.encode_into(&mut encoded),
+            Err(CodecError::InvalidEnum)
+        );
+    }
 }

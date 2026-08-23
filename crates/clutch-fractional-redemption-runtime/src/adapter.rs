@@ -311,18 +311,29 @@ impl FractionalTerminalIntentV1 {
 /// Exact Solana meta geometry frozen for a future capability review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalAccountContractV1 {
-    /// Exact account count.
+    /// Exact live-state account count, or fixed prefix width when suffixes are set.
     pub account_count: u8,
     /// Bit `i` requires account `i` to be writable.
     pub writable_mask: u32,
     /// Bit `i` requires account `i` to sign.
     pub signer_mask: u32,
+    /// One read-only/writable mint meta per active outcome follows the prefix.
+    pub outcome_mint_suffix: bool,
+    /// Fixed roles following the outcome-mint suffix.
+    pub post_mint_accounts: u8,
+    /// Fresh/reopen mode appends payer and System after the fixed Rent role.
+    pub credit_creation_suffix: bool,
+    /// External payout mode inserts this many custody roles before Product/Rent.
+    pub external_payout_extra_accounts: u8,
+    /// Writable fixed-prefix mask when external payout geometry is selected.
+    pub external_writable_mask: u32,
 }
 
 /// Return the frozen account-count and mutability contract for one action.
 ///
-/// Account-role names and order are documented in the crate README. This does
-/// not enable dispatch; the live capability table remains empty.
+/// Account-role names and order are documented in the crate README. Action 2's
+/// complete adapter uses this geometry, but the central capability tuple stays
+/// disabled until action 1 can create its canonical inputs.
 pub const fn fractional_account_contract_v1(
     action: FractionalRedemptionActionV1,
 ) -> FractionalAccountContractV1 {
@@ -331,47 +342,118 @@ pub const fn fractional_account_contract_v1(
             account_count: 13,
             writable_mask: 0b0_0001_1100_0001,
             signer_mask: 0b0_0000_0000_0001,
+            outcome_mint_suffix: false,
+            post_mint_accounts: 0,
+            credit_creation_suffix: false,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: 0b0_0001_1100_0001,
         },
         FractionalRedemptionActionV1::RedeemInternalExact => FractionalAccountContractV1 {
-            account_count: 9,
-            writable_mask: 0b0_1111_0100,
-            signer_mask: 0b0000_0001,
+            account_count: 15,
+            writable_mask: 0b111_0011_0000_0000,
+            signer_mask: 0b000_0000_0000_0001,
+            outcome_mint_suffix: false,
+            post_mint_accounts: 0,
+            credit_creation_suffix: false,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: 0b111_0011_0000_0000,
         },
         FractionalRedemptionActionV1::RedeemBearerExact => FractionalAccountContractV1 {
-            account_count: 14,
-            writable_mask: 0b00_0011_1111_0100,
-            signer_mask: 0b00_0000_0000_0001,
+            account_count: 19,
+            writable_mask: 0b101_0101_0011_0000_0000,
+            signer_mask: 0b000_0000_0000_0000_0001,
+            outcome_mint_suffix: true,
+            post_mint_accounts: 0,
+            credit_creation_suffix: false,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: 0b101_0101_0011_0000_0000,
         },
         FractionalRedemptionActionV1::RedeemInternalCredit => FractionalAccountContractV1 {
-            account_count: 13,
-            writable_mask: 0b1_0110_1111_0100,
-            signer_mask: 0b0_0100_0000_0001,
+            account_count: 19,
+            writable_mask: (1 << 8) | (1 << 9) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15),
+            signer_mask: 1,
+            outcome_mint_suffix: false,
+            post_mint_accounts: 0,
+            credit_creation_suffix: true,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: (1 << 8)
+                | (1 << 9)
+                | (1 << 12)
+                | (1 << 13)
+                | (1 << 14)
+                | (1 << 15),
         },
         FractionalRedemptionActionV1::RedeemBearerCredit => FractionalAccountContractV1 {
-            account_count: 18,
-            writable_mask: 0b10_1100_0011_1111_0100,
-            signer_mask: 0b00_1000_0000_0000_0001,
+            account_count: 19,
+            writable_mask: (1 << 8) | (1 << 9) | (1 << 12) | (1 << 14) | (1 << 16) | (1 << 18),
+            signer_mask: 1,
+            outcome_mint_suffix: true,
+            post_mint_accounts: 4,
+            credit_creation_suffix: true,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: (1 << 8)
+                | (1 << 9)
+                | (1 << 12)
+                | (1 << 14)
+                | (1 << 16)
+                | (1 << 18),
         },
         FractionalRedemptionActionV1::TransferCredit
         | FractionalRedemptionActionV1::MergeCredit => FractionalAccountContractV1 {
-            account_count: 18,
-            writable_mask: 0b00_1111_1111_1110_0011,
-            signer_mask: 0b00_0000_0000_0000_0011,
+            account_count: 21,
+            writable_mask: (1 << 9)
+                | (1 << 10)
+                | (1 << 13)
+                | (1 << 14)
+                | (1 << 15)
+                | (1 << 16)
+                | (1 << 17),
+            signer_mask: 0b11,
+            outcome_mint_suffix: false,
+            post_mint_accounts: 0,
+            credit_creation_suffix: true,
+            external_payout_extra_accounts: 2,
+            external_writable_mask: (1 << 9)
+                | (1 << 10)
+                | (1 << 13)
+                | (1 << 14)
+                | (1 << 15)
+                | (1 << 17)
+                | (1 << 19),
         },
         FractionalRedemptionActionV1::CloseZeroCredit => FractionalAccountContractV1 {
-            account_count: 10,
-            writable_mask: 0b00_0111_1100,
-            signer_mask: 0b00_0000_0001,
+            account_count: 18,
+            writable_mask: (1 << 9) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 16),
+            signer_mask: 1,
+            outcome_mint_suffix: false,
+            post_mint_accounts: 0,
+            credit_creation_suffix: false,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: (1 << 9)
+                | (1 << 12)
+                | (1 << 13)
+                | (1 << 14)
+                | (1 << 16),
         },
         FractionalRedemptionActionV1::SealClaimsExhausted => FractionalAccountContractV1 {
-            account_count: 6,
-            writable_mask: 0b00_1010,
+            account_count: 12,
+            writable_mask: 0b1001_0000_0000,
             signer_mask: 0,
+            outcome_mint_suffix: false,
+            post_mint_accounts: 0,
+            credit_creation_suffix: false,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: 0b1001_0000_0000,
         },
         FractionalRedemptionActionV1::CloseEmptyLedger => FractionalAccountContractV1 {
             account_count: 10,
             writable_mask: 0b11_1010_1011,
             signer_mask: 0,
+            outcome_mint_suffix: false,
+            post_mint_accounts: 0,
+            credit_creation_suffix: false,
+            external_payout_extra_accounts: 0,
+            external_writable_mask: 0b11_1010_1011,
         },
     }
 }

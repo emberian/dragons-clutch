@@ -2,7 +2,8 @@
 # The Operator Bench M1 gate: a person creates the Friday clutch and trades it
 # against the automaton, end to end, driven entirely through the HTTP API.
 #
-# Nothing here is pregenerated.  `operatord serve --mode trade` boots a fresh
+# Nothing here is pregenerated. `operatord serve --mode
+# non-production-mock-trade` boots a fresh
 # local validator with the Friday clutch's frozen prerequisites installed,
 # founds the eight-outcome degree-1 market with a signed `CreateMarket`, funds
 # both actors with signed `Endow` and `Split`, opens the epoch, and lets the
@@ -94,8 +95,8 @@ daemon="$root/programs/clutch-sbf/operatord/target/debug/clutch-sbf-operatord"
 [ -x "$daemon" ] || { echo "FAIL: $daemon is not executable"; exit 1; }
 
 echo
-echo "== operatord serve --mode trade =="
-"$daemon" serve --mode trade \
+echo "== operatord serve --mode non-production-mock-trade =="
+"$daemon" serve --mode non-production-mock-trade \
   --port "$http_port" --rpc-port "$rpc_port" --faucet-port "$faucet_port" \
   --gossip-port "$gossip_port" --dynamic-port-range "$dynamic_port_range" \
   --work "$work/bench" --freeze-window "$freeze_window" --exit-when-done \

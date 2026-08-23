@@ -15,9 +15,10 @@
 //! wired.
 
 use clutch_product_series::{
-    ContentId, FixedCodec, MarketInstanceV2Id, SeriesFundingComponentV1, SeriesFundingStateV1,
-    SeriesFundingTermsV2Id, SeriesPlanV5Id, SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT,
-    SERIES_FUNDING_STATE_BYTES,
+    ContentId, FixedCodec, MarketInstanceV2Id, MarketLifecycleRootV1, SeriesFundingComponentV1,
+    SeriesFundingStateV1, SeriesFundingTermsV2Id, SeriesMarketLinkV1, SeriesPlanV5Id,
+    SourceOccurrenceV1Id, MARKET_LIFECYCLE_ROOT_BYTES_V1, SERIES_FUNDING_COMPONENT_COUNT,
+    SERIES_FUNDING_STATE_BYTES, SERIES_MARKET_LINK_BYTES_V1,
 };
 
 use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
@@ -27,6 +28,14 @@ pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
 /// Exact mutable Series-funding account width.
 pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize =
     4 + 8 + (8 * SERIES_FUNDING_COMPONENT_COUNT) + SERIES_FUNDING_STATE_BYTES;
+/// Exact common header before one Product market/link semantic body.
+pub const PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1: usize = 16;
+/// Exact framed shared MarketLifecycleRoot account width.
+pub const MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + MARKET_LIFECYCLE_ROOT_BYTES_V1;
+/// Exact framed per-Series SeriesMarketLink account width.
+pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V1;
 
 /// Exact `RegisterSeries` payload width.
 pub const REGISTER_SERIES_PAYLOAD_BYTES_V1: usize = 4 * HASH_BYTES;
@@ -84,6 +93,13 @@ fn map_product_error(error: clutch_product_series::Error) -> CodecError {
         | clutch_product_series::Error::SeriesNotClosed => CodecError::InvalidCount,
         clutch_product_series::Error::LegacyNumericFallback
         | clutch_product_series::Error::UnsupportedCapability => CodecError::InvalidEnum,
+        clutch_product_series::Error::IntervalTooWide
+        | clutch_product_series::Error::WorkLimitExceeded
+        | clutch_product_series::Error::IntervalPayoutDisagreement
+        | clutch_product_series::Error::WorkIncomplete
+        | clutch_product_series::Error::WorkAlreadyComplete
+        | clutch_product_series::Error::WorkStateMismatch
+        | clutch_product_series::Error::RuntimeCapabilityDisabled => CodecError::InvalidCount,
     }
 }
 
@@ -321,6 +337,100 @@ impl SeriesFundingAccountV1 {
             flags: input[3],
         };
         value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Program-owned frame for the shared Product MarketLifecycleRoot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLifecycleRootAccountV1 {
+    /// Sole semantic lifecycle body.
+    pub state: MarketLifecycleRootV1,
+    /// Exact refundable payer-owned account rent principal.
+    pub rent_principal_lamports: u64,
+    /// Canonical MarketLifecycleRoot PDA bump.
+    pub stored_bump: u8,
+}
+
+impl MarketLifecycleRootAccountV1 {
+    /// Encode the exact hostile account frame and semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        require_exact(output, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1)?;
+        if self.rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION;
+        output[2] = self.stored_bump;
+        output[8..16].copy_from_slice(&self.rent_principal_lamports.to_le_bytes());
+        self.state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Decode the exact frame and fully validate the embedded lifecycle owner.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1)?;
+        if input[0] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let value = Self {
+            state: MarketLifecycleRootV1::decode(&input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+                .map_err(map_product_error)?,
+            rent_principal_lamports: u64::from_le_bytes(
+                input[8..16].try_into().map_err(|_| CodecError::Truncated)?,
+            ),
+            stored_bump: input[2],
+        };
+        if value.rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(value)
+    }
+}
+
+/// Program-owned frame for one Series/ordinal admission link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesMarketLinkAccountV1 {
+    /// Sole semantic SeriesMarketLink body.
+    pub state: SeriesMarketLinkV1,
+    /// Canonical SeriesMarketLink PDA bump.
+    pub stored_bump: u8,
+}
+
+impl SeriesMarketLinkAccountV1 {
+    /// Encode the exact hostile account frame and semantic body.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        require_exact(output, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?;
+        output.fill(0);
+        output[0] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION;
+        output[2] = self.stored_bump;
+        self.state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Decode the exact frame and fully validate the embedded link owner.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?;
+        if input[0] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let value = Self {
+            state: SeriesMarketLinkV1::decode(&input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+                .map_err(map_product_error)?,
+            stored_bump: input[2],
+        };
         Ok(value)
     }
 }

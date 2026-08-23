@@ -46,6 +46,8 @@ pub const DEALER_EXIT_TICKET_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-exit-v1";
 pub const DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-root-v2";
 /// Canonical PDA seed prefix for one content-addressed action receipt.
 pub const DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-action-receipt-v1";
+/// Canonical selection attachment addressed by counted Epoch and final candidate.
+pub const DEALER_COVERED_SELECTION_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-covered-v1";
 /// Canonical PDA seed prefix for segregated fee budgets.
 pub const FEE_BUDGET_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-fee-v1";
 /// Canonical PDA seed prefix for segregated liveness budgets.
@@ -102,6 +104,8 @@ pub enum DealerPdaFamilyV1 {
     ExitTicketV1 = 22,
     /// Deletable immutable action receipt addressed by its semantic slot.
     ActionReceiptV1 = 23,
+    /// Counted CoveredDealer selection attachment.
+    CoveredDealerSelectionV1 = 24,
     /// Singleton fee budget addressed by facility.
     FeeBudget = 5,
     /// Singleton liveness budget addressed by facility.
@@ -339,6 +343,18 @@ impl DealerPdaPreimageV1 {
             DEALER_EPOCH_BINDING_PDA_DOMAIN_V2,
             &facility_id.bytes(),
             &generation.to_le_bytes(),
+        )
+    }
+
+    /// CoveredDealer selection: `[b"dc-dealer-covered-v1", epoch, candidate]`.
+    pub fn covered_dealer_selection_v1(epoch_account_id: Id, candidate_id: Id) -> Result<Self> {
+        epoch_account_id.validate_live()?;
+        candidate_id.validate_live()?;
+        Self::three(
+            DealerPdaFamilyV1::CoveredDealerSelectionV1,
+            DEALER_COVERED_SELECTION_PDA_DOMAIN_V1,
+            &epoch_account_id.bytes(),
+            &candidate_id.bytes(),
         )
     }
 
