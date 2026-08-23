@@ -14,9 +14,10 @@ use crate::seeds;
 use clutch_dealer_runtime_contract::{
     dealer_runtime_liveness_policy_id_v1,
     prepare_bind_epoch_v3, prepare_dealer_sponsor_funding_transfer_v1,
-    prepare_dealer_lp_share_transfer_v1, prepare_facility_initialization_v3,
-    prepare_first_lp_page_v2, prepare_lp_contribution_v2, prepare_lp_withdrawal_v2,
-    prepare_next_lp_page_v2, DealerActionReceiptV1, DealerChildCountsV2,
+    prepare_activate_dealer_v3, prepare_dealer_lp_share_transfer_v1,
+    prepare_facility_initialization_v3, prepare_first_lp_page_v2,
+    prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
+    DealerActionReceiptV1, DealerChildCountsV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
     DealerLivenessCompartmentV1, DealerLivenessScheduleV1, DealerPhaseV2,
@@ -77,6 +78,7 @@ const INITIALIZE_ACCOUNT_COUNT: usize = 22;
 const CREATE_FIRST_LP_PAGE_ACCOUNT_COUNT: usize = 20;
 const CREATE_NEXT_LP_PAGE_ACCOUNT_COUNT: usize = 21;
 const LP_TRANSFER_ACCOUNT_COUNT: usize = 7;
+const ACTIVATE_ACCOUNT_COUNT: usize = 21;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 
 fn id(key: &Pubkey) -> Id {
@@ -529,6 +531,65 @@ fn authenticate_runtime_bundle(
     let binding = DealerRuntimeLivenessBindingV1::from_canonical(&runtime_policy, &states)
         .map_err(dealer_fault)?;
     Ok((runtime_policy, states, binding))
+}
+
+fn validate_runtime_dependency_join(
+    program_id: &Pubkey,
+    state_account: &AccountInfo<'_>,
+    policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+    state: &DealerStateV2,
+    binding: &FacilityPositionBindingV2,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime_policy: RuntimeLivenessPolicyV1,
+    runtime_binding: DealerRuntimeLivenessBindingV1,
+) -> Outcome<()> {
+    require(
+        dependency.facility_position_binding_id == binding.binding_id().map_err(dealer_fault)?
+            && dependency.bindings.runtime_liveness_binding_digest
+                == runtime_binding.binding_digest().map_err(dealer_fault)?
+            && dependency.bindings.policy_id == state.policy_id
+            && dependency.bindings.facility_id == state.facility_id
+            && dependency.bindings.liveness_schedule_id
+                == schedule.schedule_id().map_err(dealer_fault)?.untyped()
+            && dependency.bindings.liveness_schedule_id == policy.liveness_policy_id
+            && dependency.bindings.runtime_liveness_policy_id
+                == runtime_binding.runtime_policy_id()
+            && runtime_binding.realm_id() == policy.realm_id
+            && runtime_binding.lifecycle_id() == state.facility_id
+            && runtime_binding.neutral_sink() == policy.neutral_sink
+            && dependency.bindings.fee_policy_id == policy.fee_policy_id
+            && dependency.bindings.collateral_mint == policy.collateral_mint
+            && dependency.bindings.token_program == policy.token_program
+            && dependency.bindings.asset_vault_authority_account_id == id(state_account.key)
+            && dependency.bindings.neutral_sink == policy.neutral_sink
+            && dependency.bindings.dealer_liveness_work_principal_lamports
+                == schedule
+                    .dealer_runtime_work_principal_lamports()
+                    .map_err(dealer_fault)?
+            && runtime_policy.policy_id.bytes()
+                == dependency.bindings.runtime_liveness_policy_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let mut runtime_index = 1usize;
+    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
+        let compartment = match runtime_index {
+            1 => DealerLivenessCompartmentV1::Candidate,
+            2 => DealerLivenessCompartmentV1::Clearing,
+            3 => DealerLivenessCompartmentV1::Settlement,
+            4 => DealerLivenessCompartmentV1::Resolution,
+            5 => DealerLivenessCompartmentV1::Retirement,
+            6 => DealerLivenessCompartmentV1::Recovery,
+            _ => return Err(ClutchError::MismatchedState.into()),
+        };
+        require(
+            runtime_binding.owner(compartment) == id(state_account.key)
+                && runtime_binding.receipt_program_id(compartment) == id(program_id),
+            ClutchError::MismatchedState,
+        )?;
+        runtime_index += 1;
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -1641,49 +1702,17 @@ fn bind_epoch(
         &accounts[8..15],
         DealerLivenessCompartmentV1::Candidate.index(),
     )?;
-    require(
-        dependency.facility_position_binding_id == binding.binding_id().map_err(dealer_fault)?
-            && dependency.bindings.runtime_liveness_binding_digest
-                == runtime_binding.binding_digest().map_err(dealer_fault)?
-            && dependency.bindings.policy_id == state.policy_id
-            && dependency.bindings.facility_id == state.facility_id
-            && dependency.bindings.liveness_schedule_id
-                == schedule.schedule_id().map_err(dealer_fault)?.untyped()
-            && dependency.bindings.liveness_schedule_id == policy.liveness_policy_id
-            && dependency.bindings.runtime_liveness_policy_id
-                == runtime_binding.runtime_policy_id()
-            && runtime_binding.realm_id() == policy.realm_id
-            && runtime_binding.lifecycle_id() == state.facility_id
-            && runtime_binding.neutral_sink() == policy.neutral_sink
-            && dependency.bindings.fee_policy_id == policy.fee_policy_id
-            && dependency.bindings.collateral_mint == policy.collateral_mint
-            && dependency.bindings.token_program == policy.token_program
-            && dependency.bindings.asset_vault_authority_account_id == id(accounts[2].key)
-            && dependency.bindings.neutral_sink == policy.neutral_sink
-            && dependency.bindings.dealer_liveness_work_principal_lamports
-                == schedule
-                    .dealer_runtime_work_principal_lamports()
-                    .map_err(dealer_fault)?,
-        ClutchError::MismatchedState,
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
     )?;
-    let mut runtime_index = 1usize;
-    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
-        let compartment = match runtime_index {
-            1 => DealerLivenessCompartmentV1::Candidate,
-            2 => DealerLivenessCompartmentV1::Clearing,
-            3 => DealerLivenessCompartmentV1::Settlement,
-            4 => DealerLivenessCompartmentV1::Resolution,
-            5 => DealerLivenessCompartmentV1::Retirement,
-            6 => DealerLivenessCompartmentV1::Recovery,
-            _ => return Err(ClutchError::MismatchedState.into()),
-        };
-        require(
-            runtime_binding.owner(compartment) == id(accounts[2].key)
-                && runtime_binding.receipt_program_id(compartment) == id(program_id),
-            ClutchError::MismatchedState,
-        )?;
-        runtime_index += 1;
-    }
     let candidate = runtime_states[DealerLivenessCompartmentV1::Candidate.index()];
     require(
         candidate.identity.payer.bytes() == accounts[16].key.to_bytes(),
@@ -1922,51 +1951,17 @@ fn create_lp_page(
         &accounts[8..15],
         DealerLivenessCompartmentV1::Clearing.index(),
     )?;
-    require(
-        dependency.facility_position_binding_id == binding.binding_id().map_err(dealer_fault)?
-            && dependency.bindings.runtime_liveness_binding_digest
-                == runtime_binding.binding_digest().map_err(dealer_fault)?
-            && dependency.bindings.policy_id == state.policy_id
-            && dependency.bindings.facility_id == state.facility_id
-            && dependency.bindings.liveness_schedule_id
-                == schedule.schedule_id().map_err(dealer_fault)?.untyped()
-            && dependency.bindings.liveness_schedule_id == policy.liveness_policy_id
-            && dependency.bindings.runtime_liveness_policy_id
-                == runtime_binding.runtime_policy_id()
-            && runtime_binding.realm_id() == policy.realm_id
-            && runtime_binding.lifecycle_id() == state.facility_id
-            && runtime_binding.neutral_sink() == policy.neutral_sink
-            && dependency.bindings.fee_policy_id == policy.fee_policy_id
-            && dependency.bindings.collateral_mint == policy.collateral_mint
-            && dependency.bindings.token_program == policy.token_program
-            && dependency.bindings.asset_vault_authority_account_id == id(accounts[2].key)
-            && dependency.bindings.neutral_sink == policy.neutral_sink
-            && dependency.bindings.dealer_liveness_work_principal_lamports
-                == schedule
-                    .dealer_runtime_work_principal_lamports()
-                    .map_err(dealer_fault)?
-            && runtime_policy.policy_id.bytes()
-                == dependency.bindings.runtime_liveness_policy_id.bytes(),
-        ClutchError::MismatchedState,
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
     )?;
-    let mut runtime_index = 1usize;
-    while runtime_index < RUNTIME_COMPARTMENT_COUNT_V1 {
-        let compartment = match runtime_index {
-            1 => DealerLivenessCompartmentV1::Candidate,
-            2 => DealerLivenessCompartmentV1::Clearing,
-            3 => DealerLivenessCompartmentV1::Settlement,
-            4 => DealerLivenessCompartmentV1::Resolution,
-            5 => DealerLivenessCompartmentV1::Retirement,
-            6 => DealerLivenessCompartmentV1::Recovery,
-            _ => return Err(ClutchError::MismatchedState.into()),
-        };
-        require(
-            runtime_binding.owner(compartment) == id(accounts[2].key)
-                && runtime_binding.receipt_program_id(compartment) == id(program_id),
-            ClutchError::MismatchedState,
-        )?;
-        runtime_index += 1;
-    }
     let clearing = runtime_states[DealerLivenessCompartmentV1::Clearing.index()];
     require(
         clearing.identity.payer.bytes() == accounts[payer_index].key.to_bytes(),
@@ -2326,6 +2321,194 @@ fn transfer_lp_funding(
         .map_err(dealer_fault)
 }
 
+#[inline(never)]
+fn activate_facility(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, ACTIVATE_ACCOUNT_COUNT)?;
+    let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::Activate, payload_bytes)
+        .map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    require_aliases(accounts, (0, 17))?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, position, replay, replay_binding) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &policy,
+        &state,
+        false,
+    )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let schedule = authenticate_schedule(program_id, &accounts[6])?;
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[7],
+        &accounts[8..15],
+        DealerLivenessCompartmentV1::Clearing.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let clearing = runtime_states[DealerLivenessCompartmentV1::Clearing.index()];
+    require(
+        clearing.identity.payer.bytes() == accounts[17].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let tail = authenticate_lp_page(program_id, &accounts[16])?;
+    let current_slot = read_clock_slot(&accounts[18])?;
+    let rent = read_rent(&accounts[19])?;
+    require_system_program(&accounts[20])?;
+    require(
+        accounts[6].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    require_creatable(&accounts[15])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(DealerLivenessCompartmentV1::Clearing),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Clearing),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Clearing),
+        receipt_account_id: id(accounts[15].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[4].key),
+        action: DealerRuntimeActionV1::Activate,
+        compartment: DealerLivenessCompartmentV1::Clearing,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Clearing),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports
+            [DealerRuntimeActionV1::Activate as usize],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[0].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[15].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[15].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &clearing)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[7],
+        &accounts[10],
+        clearing,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt
+            .runtime_receipt_observation()
+            .map_err(dealer_fault)?,
+    )?;
+    let prepared = prepare_activate_dealer_v3(
+        &policy,
+        &binding,
+        &state,
+        id(accounts[2].key),
+        &dependency,
+        &schedule,
+        &runtime_binding,
+        &authorization,
+        current_slot,
+        &tail,
+        &position,
+        &replay,
+        replay_binding,
+    )
+    .map_err(dealer_fault)?;
+
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[15],
+        &accounts[20],
+        &rent,
+        DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_ACTION_RECEIPT,
+            &receipt_slot.bytes(),
+            &[receipt_bump],
+        ],
+    )?;
+    apply_liveness_transition(
+        &accounts[10],
+        &accounts[0],
+        &accounts[17],
+        &liveness_transition,
+    )?;
+    write_dealer_body(
+        &accounts[15],
+        DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+        DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        receipt_bump,
+        &receipt,
+    )?;
+    let tail_bump = accounts[16].data.borrow()[2];
+    write_dealer_body(
+        &accounts[16],
+        DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+        DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+        tail_bump,
+        &prepared.tail_page_after,
+    )?;
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &prepared.state_after,
+    )?;
+    prepared
+        .replay
+        .replay_post()
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
 /// Execute one facility action admitted by the non-production profile.
 pub fn process(
     program_id: &Pubkey,
@@ -2343,6 +2526,9 @@ pub fn process(
         }
         DealerFacilityAction::Contribute | DealerFacilityAction::WithdrawFunding => {
             transfer_lp_funding(program_id, accounts, sequence, action, payload)
+        }
+        DealerFacilityAction::Activate => {
+            activate_facility(program_id, accounts, sequence, payload)
         }
         DealerFacilityAction::BindEpoch => bind_epoch(program_id, accounts, sequence, payload),
         _ => super::dealer_runtime::process_reserved_disabled(action),

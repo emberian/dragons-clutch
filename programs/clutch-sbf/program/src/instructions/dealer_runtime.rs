@@ -286,6 +286,7 @@ impl DealerRuntimePayloadV1 {
             DealerFacilityAction::Initialize => 32,
             DealerFacilityAction::CreateLpPage => 20,
             DealerFacilityAction::Contribute | DealerFacilityAction::WithdrawFunding => 12,
+            DealerFacilityAction::Activate => 16,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 4,
             DealerFacilityAction::QueueExit => 16,
             DealerFacilityAction::Claim | DealerFacilityAction::Retire => 8,
@@ -338,7 +339,7 @@ impl DealerRuntimePayloadV1 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
                 }
             }
-            DealerFacilityAction::BindEpoch => {
+            DealerFacilityAction::Activate | DealerFacilityAction::BindEpoch => {
                 value.liveness_call_ordinal = read_u32(input, 16);
                 if input[20..24].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
@@ -661,17 +662,27 @@ const LP_TRANSFER: &[DealerMetaSpecV1] = &[
 ];
 
 const ACTIVATE: &[DealerMetaSpecV1] = &[
-    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, false),
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::TailPage, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
 const SPONSOR_HALT: &[DealerMetaSpecV1] = &[
@@ -1127,8 +1138,7 @@ const fn recipient_alias_allowed_v1(left: DealerMetaRoleV1, right: DealerMetaRol
 #[inline(never)]
 pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Refusal> {
     match action {
-        DealerFacilityAction::Activate
-        | DealerFacilityAction::CancelFunding
+        DealerFacilityAction::CancelFunding
         | DealerFacilityAction::RefundCancelledSponsor
         | DealerFacilityAction::LapseEpoch
         | DealerFacilityAction::SelectLeaseAndBegin
@@ -1149,6 +1159,7 @@ pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Ref
         | DealerFacilityAction::CreateLpPage
         | DealerFacilityAction::Contribute
         | DealerFacilityAction::WithdrawFunding
+        | DealerFacilityAction::Activate
         | DealerFacilityAction::BindEpoch => {
             Err(ClutchError::UnsupportedInstruction.into())
         }
