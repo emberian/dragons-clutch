@@ -621,6 +621,16 @@ impl FailureRuntimeExternalV2 {
         self.binding_id
     }
 
+    /// Exact immutable Source release manifest admitted with this occurrence.
+    pub const fn source_release_manifest_id(self) -> SourceContentId {
+        self.source_release_manifest_id
+    }
+
+    /// Complete Source owner/PDA/body authentication admitted at activation.
+    pub const fn source_release_authentication_id(self) -> SourceContentId {
+        self.source_release_authentication_id
+    }
+
     /// Durable semantic state identity, not the liveness account.
     pub const fn semantic_state_id(self) -> RecoveryIdentity {
         self.recovery.state_id()
