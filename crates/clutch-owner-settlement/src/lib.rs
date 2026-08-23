@@ -53,7 +53,8 @@ pub use virtual_claim::{
     AuthenticatedFinalPotV1, AuthenticatedMarketClaimLedgerV1,
     AuthenticatedVirtualMergeReceiptV1,
     AuthenticatedVirtualReceiptAuthorityV1, AuthenticatedVirtualSplitReceiptV1,
-    VirtualInventoryBudgetV1, VirtualInventoryPlanV1, VirtualInventoryStateV1,
+    FinalPotRetirementProjectionV1, VirtualInventoryBudgetV1, VirtualInventoryPlanV1,
+    VirtualInventoryStateV1,
     VirtualMergeCashPotPostV1,
     VirtualMergeCompositeInputV1, VirtualMergeCompositePlanV1, VirtualMergeReceiptInputV1,
     VirtualMergeReceiptAccountingInputV1, VirtualMergeReceiptAccountingPlanV1,
@@ -258,6 +259,31 @@ pub struct OwnerSettlementAccumulatorV1 {
     pub state: u8,
 }
 
+/// Immutable terminal capability derived from one finalized semantic row.
+///
+/// This value is not persisted and has no public field constructor. It can
+/// only be obtained by decoding the semantic owner's exact 288-byte body and
+/// proving the one-way finalized state. The outer adapter still must
+/// authenticate the account PDA/owner/bump and bind [`Self::finalized_body`]
+/// to the fee runtime's canonical finalized-row data ID before deletion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementTerminalProjectionV1 {
+    expectation: OwnerSettlementExpectationV1,
+    finalized_body: [u8; OWNER_SETTLEMENT_BODY_V1_BYTES],
+}
+
+impl OwnerSettlementTerminalProjectionV1 {
+    /// Immutable verifier-owned identity and exact owner totals.
+    pub const fn expectation(self) -> OwnerSettlementExpectationV1 {
+        self.expectation
+    }
+
+    /// Exact canonical finalized body covered by the fee receipt data ID.
+    pub const fn finalized_body(self) -> [u8; OWNER_SETTLEMENT_BODY_V1_BYTES] {
+        self.finalized_body
+    }
+}
+
 impl OwnerSettlementAccumulatorV1 {
     /// Create an empty accumulator from a complete verifier-owned expectation.
     pub fn new(expectation: OwnerSettlementExpectationV1) -> Result<Self> {
@@ -402,6 +428,24 @@ impl OwnerSettlementAccumulatorV1 {
             residue_price_units,
             position_cash_atoms: next_cash,
             position_reserved_cash_atoms: next_reserved,
+        })
+    }
+
+    /// Project deletion authority without mutating or inventing another row
+    /// state.
+    ///
+    /// Retirement must delete the exact finalized account in the same atomic
+    /// transaction that consumes its in-place fee-finalization receipt. A
+    /// merely accumulated row and an already-retired in-memory value both
+    /// refuse here.
+    pub fn terminal_projection(self) -> Result<OwnerSettlementTerminalProjectionV1> {
+        self.validate()?;
+        if self.state != 1 {
+            return Err(Error::Incomplete);
+        }
+        Ok(OwnerSettlementTerminalProjectionV1 {
+            expectation: self.expectation,
+            finalized_body: self.encode_body()?,
         })
     }
 

@@ -28,7 +28,8 @@ pub use account_auth::{
     authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
     authenticate_position_tombstone_v1_exact, authenticate_position_tombstone_v2_exact,
     authenticate_position_tombstone_v3_exact, authenticate_position_v2,
-    authenticate_position_v2_exact, authenticate_position_v3_exact, authenticate_replay_absence_v1_exact,
+    authenticate_position_v2_exact, authenticate_position_v3_exact,
+    authenticate_purpose_replay_v3_exact, authenticate_replay_absence_v1_exact,
     authenticate_replay_successor_v1_exact, authenticate_runtime_executable_v2,
     AbsentAccountViewV1, AccountAccessV2, AccountViewV1, AccountViewV2, AuthenticatedAccountV1,
     AuthenticatedAccountV2, CanonicalPdaV1, CountedChildSchemaV1,
@@ -63,8 +64,7 @@ pub use position_v3_bridge::{
     authenticate_and_prepare_position_replay_close_v4,
     authenticate_and_prepare_position_replay_reopen_v3, PositionReplayCloseRuntimeRequestV4,
     PositionReplayRentMinimumsV3, PositionReplayReopenRuntimeRequestV3,
-    PositionV3PurposeTerminalReceiptV1, PositionV3RetirementRealmV1,
-    PreparedPositionReplayCloseV3, PreparedPositionReplayReopenV3,
+    PositionV3RetirementRealmV1, PreparedPositionReplayCloseV3, PreparedPositionReplayReopenV3,
 };
 pub use root_bundle::{
     authenticate_terminal_epoch_root_bundle_v1, AuthenticatedEpochChildClassV1,
