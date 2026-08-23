@@ -28,6 +28,18 @@ Work price, liquidity, wrappers, funding sponsor, and refund destinations do
 not fork an economically identical market. Changing the Template, immutable
 Realm/profile venue semantics, absolute start, or collateral cap does.
 
+## SBF publication boundary
+
+The `clutch-sbf` adapter has an explicitly non-production
+`non-production-product-series-lab` profile that can publish each canonical
+body from this crate as a program-owned, content-addressed artifact. The
+adapter decodes the hostile body with this crate's codec and checks the same
+typed SHA-256 identity before sealing it. That route is an immutable catalog,
+not a Series registry, funding state, occurrence compiler, Market creator, or
+runtime price-witness activation path. In particular, freely constructible
+registry and fulfillment projections in this pure core never become onchain
+authority merely because their bodies can be published.
+
 ## Canonical rules
 
 All integers are little-endian. Decode requires the exact named byte length;

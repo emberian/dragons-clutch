@@ -1,6 +1,6 @@
 # Product compiler and recurring Series V1
 
-Status: **PROPOSED / EXECUTABLE HOST MODEL / NO SBF ROUTES** (2026-08-22)
+Status: **PROPOSED / EXECUTABLE HOST MODEL / NON-PRODUCTION SBF ARTIFACT CATALOG ONLY** (2026-08-23)
 
 Executable model: [`research/product-compiler-v1`](../../research/product-compiler-v1)
 
@@ -13,8 +13,36 @@ the canonical finite payout table, including repeated cell mappings and
 non-one-hot rows. `MarketGenesisProfileV2`,
 `MarketInstancePreimageV2`, `SeriesPlanV5`, and `SeriesFundingTermsV2` use fresh
 typed IDs, magics, domains, and schemas while preserving every V1 byte. No SBF
-route selects these artifacts yet, and runtime price-witness activation remains
-blocked on an authenticated registry-selector and exact-price adapter join.
+production route selects these artifacts. A separately identified
+non-production SBF profile now publishes the nine frozen Product/Series bodies
+through the existing resumable artifact transport. This is a typed immutable
+catalog only: it does not register or activate a Series, authenticate registry
+selectors, capitalize a funding account, compile an occurrence, or create a
+Market. Runtime price-witness activation remains blocked on an authenticated
+registry-selector and exact-price adapter join.
+
+The laboratory artifact ABI is exact:
+
+- artifact kinds `32..=40` correspond, in order, to
+  `NativeClaimBasisV1`, `EvidenceOnlyRecoveryPolicyV1`, `ProductTemplateV4`,
+  `PriceMeasurePolicyV1`, `MarketGenesisProfileV2`, `SeriesFundingQuoteV1`,
+  `SeriesAttachmentPlanV1`, `SeriesPlanV5`, and `SeriesFundingTermsV2`;
+- Begin/Write/Seal/Abort remain layout tags `18/19/20/21`, version `3`;
+- the stage PDA remains
+  `["dragons-clutch:upload:v1", funder, kind, zero-context, typed-digest]`;
+- the final PDA is
+  `["dc:product-artifact:v1", kind, typed-digest]`; and
+- the final account is the exact canonical codec body, owned by the program
+  and rent-funded by the uploader, with no wrapper, duplicate bump, or mutable
+  registry projection.
+
+Product artifact transport context is canonically zero because these typed
+bodies are reusable content, not Realm children. Realm/Profile collateral
+binding remains immutable inside `MarketGenesisProfileV2`; a future activation
+route must authenticate that body against the actual Realm/Profile and central
+registry before it may create liabilities. Ordinary profiles refuse kinds
+`32..=40`; only `non-production-product-series-lab` admits them, under its own
+capability-profile identity.
 
 ## Result first
 
@@ -25,7 +53,8 @@ The host model now defines deterministic canonical artifacts, exact recurring
 window arithmetic, finite prepayment, deterministic Instance convergence,
 shared raw-window identities, current Terms/Market compatibility lowering, a
 liquidity-policy bridge, and an associative conservative maximum-drawdown
-summary. It deliberately does not add SBF dispatcher routes.
+summary. The laboratory route above transports those artifacts without
+claiming that the host compiler has become an onchain activation boundary.
 
 Current source ingestion is a hard recurrence blocker:
 
@@ -260,8 +289,11 @@ child counters, and exact runtime account widths do not exist yet.
 
 1. Design and land SourcePlane V3: source-only FeedHead, reusable raw pages,
    immutable WindowResult, statistic-result children, retention/lease rules.
-2. Add fixed hostile-byte codecs for HatcheryProgram, SummaryProgram,
-   Template, SeriesPlan/SeriesFunding, and compact Instance.
+2. Add fixed hostile-byte codecs for HatcheryProgram, SummaryProgram, and a
+   compact persisted Instance. Product Template, basis, price policy, Genesis,
+   Series Plan, attachment, quote, and funding-terms codecs now have a
+   non-production immutable SBF publication path, but there is still no
+   authenticated Series registry or mutable funding state.
 3. Bind the full InstanceId in Market identity and add a monotone market epoch
    cursor; do not retain caller-chosen market or epoch identities.
 4. Give every Series compartment payer-principal/donation/terminal ownership

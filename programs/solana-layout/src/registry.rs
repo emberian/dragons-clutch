@@ -109,6 +109,9 @@ pub enum WireNamespace {
     MainIntent,
     /// The main program's persisted-account namespace.
     MainAccount,
+    /// Versionless typed artifact-kind discriminants nested in upload intents
+    /// and stage accounts; their enclosing formats own their own versions.
+    ArtifactKind,
 }
 
 /// Stability of one central allocation.
@@ -123,6 +126,15 @@ pub enum AllocationStatus {
 /// Coordinates occupied by one collision-ledger entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocationCoordinates {
+    /// An inclusive range of nested discriminants with no independent version.
+    UnversionedRange {
+        /// Namespace containing the range.
+        namespace: WireNamespace,
+        /// Inclusive first tag.
+        first_tag: u8,
+        /// Inclusive last tag.
+        last_tag: u8,
+    },
     /// An inclusive range in one wire namespace at one version.
     Range {
         /// Namespace containing the range.
@@ -208,6 +220,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "source-series",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::UnversionedRange {
+            namespace: WireNamespace::ArtifactKind,
+            first_tag: 1,
+            last_tag: 5,
+        },
+        status: AllocationStatus::Frozen,
+        name: "legacy-artifact-kinds",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::UnversionedRange {
+            namespace: WireNamespace::ArtifactKind,
+            first_tag: 32,
+            last_tag: 40,
+        },
+        status: AllocationStatus::Frozen,
+        name: "product-series-artifact-kinds-v1",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -708,6 +738,11 @@ mod tests {
         version: u8,
     ) -> bool {
         match coordinates {
+            AllocationCoordinates::UnversionedRange {
+                namespace: candidate_namespace,
+                first_tag,
+                last_tag,
+            } => candidate_namespace == namespace && tag >= first_tag && tag <= last_tag,
             AllocationCoordinates::Range {
                 namespace: candidate_namespace,
                 first_tag,
@@ -758,7 +793,11 @@ mod tests {
 
     #[test]
     fn collision_ledger_is_disjoint_inside_each_namespace() {
-        for namespace in [WireNamespace::MainIntent, WireNamespace::MainAccount] {
+        for namespace in [
+            WireNamespace::MainIntent,
+            WireNamespace::MainAccount,
+            WireNamespace::ArtifactKind,
+        ] {
             for tag in u8::MIN..=u8::MAX {
                 for version in u8::MIN..=u8::MAX {
                     let mut occupants = 0_u8;
@@ -769,6 +808,33 @@ mod tests {
                     }
                     assert!(occupants <= 1, "collision at {namespace:?}/{tag}/{version}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn artifact_kind_inventory_is_versionless_complete_and_frozen() {
+        for tag in u8::MIN..=u8::MAX {
+            let occupants: std::vec::Vec<_> = CENTRAL_COLLISION_LEDGER
+                .iter()
+                .filter(|entry| {
+                    coordinates_include(entry.coordinates, WireNamespace::ArtifactKind, tag, 0)
+                })
+                .collect();
+            let allocated = (1..=5).contains(&tag) || (32..=40).contains(&tag);
+            assert_eq!(occupants.len(), usize::from(allocated), "kind {tag}");
+            if let Some(entry) = occupants.first() {
+                assert_eq!(entry.status, AllocationStatus::Frozen, "kind {tag}");
+                assert!(matches!(
+                    entry.coordinates,
+                    AllocationCoordinates::UnversionedRange { .. }
+                ));
+                assert!(coordinates_include(
+                    entry.coordinates,
+                    WireNamespace::ArtifactKind,
+                    tag,
+                    u8::MAX
+                ));
             }
         }
     }

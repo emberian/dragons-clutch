@@ -104,6 +104,11 @@ pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
 /// DirectBatchPolicy V3 final-artifact seed prefix, disjoint from legacy policy.
 pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
+/// Globally content-addressed successor Product/Series artifact prefix.
+///
+/// The kind byte is a seed so transparent 32-byte typed IDs are never cast
+/// across artifact meanings. Realm binding remains inside Genesis V2.
+pub const SEED_PRODUCT_ARTIFACT_V1: &[u8] = b"dc:product-artifact:v1";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -259,6 +264,11 @@ pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) ->
 /// Canonical full-width batch-policy artifact address.
 pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_BATCH_POLICY, epoch, digest])
+}
+
+/// Canonical immutable successor Product/Series artifact address.
+pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_PRODUCT_ARTIFACT_V1, &[kind], digest])
 }
 
 /// Canonical DirectBatchPolicy V3 artifact address.

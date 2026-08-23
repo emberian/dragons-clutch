@@ -40,6 +40,12 @@ non-production-mock-source = ["clutch-sbf/non-production-mock-source"]
 # Compiles the explicit local-real Pyth release row and its SVM campaign. This
 # is a different, non-production ELF identity; the default registry is unchanged.
 non-production-real-pyth-lab = ["clutch-sbf/non-production-real-pyth-lab"]
+# Builds the separate Product/Series typed-artifact catalog ELF and only its
+# exact local-bank tests. This does not register or activate a Series.
+non-production-product-series-lab = [
+    "dep:clutch-product-series",
+    "clutch-sbf/non-production-product-series-lab",
+]
 
 [dependencies]
 # The frozen byte layouts and the reference-only codecs.  Both are
@@ -54,6 +60,7 @@ clutch-sbf = { path = "../program", features = ["laboratory-fixtures"] }
 clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-product-series = { path = "../../../crates/clutch-product-series", optional = true }
 clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
 
@@ -68,6 +75,7 @@ solana-program-pack = "=3.1.0"
 spl-token-2022-interface = "=3.1.1"
 
 [dev-dependencies]
+sha2 = "=0.10.9"
 solana-account = "=4.3.2"
 solana-clock = "=3.1.1"
 solana-instruction = "=3.4.1"

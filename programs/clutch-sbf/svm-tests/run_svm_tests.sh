@@ -15,6 +15,8 @@
 #   ./run_svm_tests.sh --non-production-mock-source [test filters ...]
 # The deployed-Pyth local campaign is a separate, explicit test-only ELF:
 #   ./run_svm_tests.sh --non-production-real-pyth-lab real_pyth_router_verifies_then_post_update
+# The Product/Series artifact catalog is also a separate local-only ELF:
+#   ./run_svm_tests.sh --non-production-product-series-lab product_series_artifact_catalog
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 program="$(cd "$here/.." && pwd)"
@@ -32,6 +34,11 @@ elif [ "${1:-}" = "--non-production-real-pyth-lab" ]; then
   profile="NON-PRODUCTION-non-production-real-pyth-lab"
   build_features=(--features non-production-real-pyth-lab)
   test_features=(--features non-production-real-pyth-lab)
+elif [ "${1:-}" = "--non-production-product-series-lab" ]; then
+  shift
+  profile="NON-PRODUCTION-non-production-product-series-lab"
+  build_features=(--features non-production-product-series-lab)
+  test_features=(--features non-production-product-series-lab)
 fi
 
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"

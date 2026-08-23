@@ -32,8 +32,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-bspline"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-liveness"
 version = "0.1.0"
+
+[[package]]
+name = "clutch-price-measure"
+version = "0.1.0"
+dependencies = [
+ "clutch-bspline",
+]
+
+[[package]]
+name = "clutch-product-series"
+version = "0.1.0"
+dependencies = [
+ "clutch-bspline",
+ "clutch-price-measure",
+ "sha2",
+]
 
 [[package]]
 name = "clutch-solana-layout"
@@ -41,6 +61,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-product-series",
  "solana-sha256-hasher",
 ]
 
