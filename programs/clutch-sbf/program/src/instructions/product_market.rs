@@ -3976,6 +3976,235 @@ fn write_market_lifecycle_root_v1<'next>(
     Ok(rebound)
 }
 
+/// Default-refusing authority for the exact Fractional-family admission write.
+pub(crate) trait AuthenticatedFractionalFamilyAdmissionRootWriteV1 {
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_fractional_family_admission_root_write_v1(
+        &self,
+        _root_account: Pubkey,
+        _root_semantic_before: ContentId,
+        _root_data_before: ContentId,
+        _root_authentication_before: ContentId,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _fractional_root_id: ContentId,
+        _family_admission_sequence: u32,
+        _fractional_admission_receipt_id: ContentId,
+        _fractional_verification_id: ContentId,
+        _fractional_postwrite_authentication_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Default-refusing authority for the exact Fractional-family terminal write.
+pub(crate) trait AuthenticatedFractionalFamilyTerminalRootWriteV1 {
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_fractional_family_terminal_root_write_v1(
+        &self,
+        _root_account: Pubkey,
+        _root_semantic_before: ContentId,
+        _root_data_before: ContentId,
+        _root_authentication_before: ContentId,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _fractional_root_id: ContentId,
+        _family_terminal_sequence: u32,
+        _fractional_terminal_receipt_id: ContentId,
+        _fractional_policy_terminal_state_id: ContentId,
+        _fractional_ledger_terminal_state_id: ContentId,
+        _fractional_verification_id: ContentId,
+        _fractional_postwrite_authentication_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+struct ExactFractionalFamilyAuthorityV1 {
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    fractional_root_id: ContentId,
+    sequence: u32,
+    receipt_id: ContentId,
+    terminal: bool,
+}
+
+impl AuthenticatedMarketFamilyAuthorityV1 for ExactFractionalFamilyAuthorityV1 {
+    fn authenticate_admission(
+        &self,
+        current: &MarketFamilyAggregatorV1,
+        family: MarketFamilyV1,
+        family_root_id: ContentId,
+        family_admission_sequence: u32,
+        admission_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if self.terminal
+            || family != MarketFamilyV1::Fractional
+            || current.binding().market_instance_id != self.market_instance_id
+            || current.binding().generation != self.generation
+            || family_root_id != self.fractional_root_id
+            || family_admission_sequence != self.sequence
+            || admission_receipt_id != self.receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticate_terminal(
+        &self,
+        current: &MarketFamilyAggregatorV1,
+        family: MarketFamilyV1,
+        family_root_id: ContentId,
+        family_terminal_sequence: u32,
+        terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if !self.terminal
+            || family != MarketFamilyV1::Fractional
+            || current.binding().market_instance_id != self.market_instance_id
+            || current.binding().generation != self.generation
+            || family_root_id != self.fractional_root_id
+            || family_terminal_sequence != self.sequence
+            || terminal_receipt_id != self.receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Persist only the exact Fractional admission authenticated by the private
+/// a4/a5/ClaimLedger postwrite owner.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_authenticated_fractional_family_admission_root_v1<
+    'next,
+    A: AuthenticatedFractionalFamilyAdmissionRootWriteV1 + ?Sized,
+>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV1<'_>,
+    family_admission_sequence: u32,
+    fractional_admission_receipt_id: ContentId,
+    fractional_verification_id: ContentId,
+    fractional_postwrite_authentication_id: ContentId,
+    authority: &A,
+    rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<AuthenticatedMarketLifecycleRootV1<'next>> {
+    let current = authenticated.state();
+    let binding = current.binding();
+    let root_semantic_before = current
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let fractional_root_id = current
+        .product_families()
+        .binding()
+        .family_root_id(MarketFamilyV1::Fractional);
+    authority.authenticate_fractional_family_admission_root_write_v1(
+        authenticated.account(),
+        root_semantic_before,
+        authenticated.data_id(),
+        authenticated.authentication_id(),
+        binding.market_instance_id,
+        binding.generation,
+        fractional_root_id,
+        family_admission_sequence,
+        fractional_admission_receipt_id,
+        fractional_verification_id,
+        fractional_postwrite_authentication_id,
+    )?;
+    let exact = ExactFractionalFamilyAuthorityV1 {
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        fractional_root_id,
+        sequence: family_admission_sequence,
+        receipt_id: fractional_admission_receipt_id,
+        terminal: false,
+    };
+    let successor = current
+        .admit_product_family_child(
+            &exact,
+            MarketFamilyV1::Fractional,
+            family_admission_sequence,
+            fractional_admission_receipt_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_market_lifecycle_root_v1(
+        program_id,
+        account,
+        authenticated,
+        &successor,
+        rebound_output,
+    )
+}
+
+/// Persist only the exact Fractional terminal receipt and a4/a5 terminal states.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_authenticated_fractional_family_terminal_root_v1<
+    'next,
+    A: AuthenticatedFractionalFamilyTerminalRootWriteV1 + ?Sized,
+>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV1<'_>,
+    family_terminal_sequence: u32,
+    fractional_terminal_receipt_id: ContentId,
+    fractional_policy_terminal_state_id: ContentId,
+    fractional_ledger_terminal_state_id: ContentId,
+    fractional_verification_id: ContentId,
+    fractional_postwrite_authentication_id: ContentId,
+    authority: &A,
+    rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<AuthenticatedMarketLifecycleRootV1<'next>> {
+    let current = authenticated.state();
+    let binding = current.binding();
+    let root_semantic_before = current
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let fractional_root_id = current
+        .product_families()
+        .binding()
+        .family_root_id(MarketFamilyV1::Fractional);
+    authority.authenticate_fractional_family_terminal_root_write_v1(
+        authenticated.account(),
+        root_semantic_before,
+        authenticated.data_id(),
+        authenticated.authentication_id(),
+        binding.market_instance_id,
+        binding.generation,
+        fractional_root_id,
+        family_terminal_sequence,
+        fractional_terminal_receipt_id,
+        fractional_policy_terminal_state_id,
+        fractional_ledger_terminal_state_id,
+        fractional_verification_id,
+        fractional_postwrite_authentication_id,
+    )?;
+    let exact = ExactFractionalFamilyAuthorityV1 {
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        fractional_root_id,
+        sequence: family_terminal_sequence,
+        receipt_id: fractional_terminal_receipt_id,
+        terminal: true,
+    };
+    let successor = current
+        .terminalize_fractional_family(
+            &exact,
+            family_terminal_sequence,
+            fractional_terminal_receipt_id,
+            fractional_policy_terminal_state_id,
+            fractional_ledger_terminal_state_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_market_lifecycle_root_v1(
+        program_id,
+        account,
+        authenticated,
+        &successor,
+        rebound_output,
+    )
+}
+
 /// Persist a pure per-Series link successor and reauthenticate exact bytes.
 fn write_series_market_link_v1<'next>(
     program_id: &Pubkey,
