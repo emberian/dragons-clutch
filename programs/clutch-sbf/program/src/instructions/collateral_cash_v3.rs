@@ -26,6 +26,8 @@ use clutch_retirement::{
     admit_deletable_rent, admit_initial_rent_split, Identity32V1, PositionPurposeV3,
     POSITION_TOMBSTONE_V3_BYTES, POSITION_V3_BYTES,
 };
+use clutch_solana_layout::collateral_v3_accounts::collateral_cash_indices_v3 as ix;
+use clutch_solana_layout::collateral_v3_accounts::CollateralActionV3;
 use clutch_solana_layout::{Hash32, Intent};
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -35,7 +37,7 @@ use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
     authenticate_general_market_liabilities_v1, authenticate_general_position_replay_v1,
-    RuntimeSha256,
+    validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
 use super::genesis::SYSTEM_PROGRAM_ID;
 
@@ -45,25 +47,6 @@ pub const WITHDRAW_ACCOUNT_COUNT_V3: usize =
 /// Exact full-width Endow account list, including owner-plane construction.
 pub const ENDOW_ACCOUNT_COUNT_V3: usize =
     clutch_solana_layout::collateral_v3_accounts::ENDOW_ACCOUNT_COUNT_V3;
-
-const IX_ACTOR: usize = 0;
-const IX_REALM: usize = 1;
-const IX_PROFILE: usize = 2;
-const IX_POLICY: usize = 3;
-const IX_TOKEN_PROGRAM: usize = 4;
-const IX_MARKET_BINDING: usize = 5;
-const IX_MARKET_RUNTIME: usize = 6;
-const IX_MARKET_INSTANCE: usize = 7;
-const IX_HOARD: usize = 8;
-const IX_CLAIM_LEDGER: usize = 9;
-const IX_POSITION: usize = 10;
-const IX_REPLAY: usize = 11;
-const IX_COLLATERAL_MINT: usize = 12;
-const IX_DESTINATION: usize = 13;
-const IX_HOARD_AUTHORITY: usize = 14;
-const IX_HOARD_TOKEN: usize = 15;
-const IX_SYSTEM: usize = 16;
-const IX_RENT: usize = 17;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WithdrawCashRequestV3 {
@@ -222,10 +205,10 @@ fn ensure_general_owner_plane_v3(
     collateral_release: [u8; 32],
     neutral_sink: [u8; 32],
 ) -> Outcome<()> {
-    let position = &accounts[IX_POSITION];
-    let replay = &accounts[IX_REPLAY];
-    super::genesis::require_system_program(&accounts[IX_SYSTEM])?;
-    let rent = super::genesis::read_rent(&accounts[IX_RENT])?;
+    let position = &accounts[ix::POSITION];
+    let replay = &accounts[ix::REPLAY];
+    super::genesis::require_system_program(&accounts[ix::SYSTEM])?;
+    let rent = super::genesis::read_rent(&accounts[ix::RENT])?;
     let existing = position.owner == program_id
         && position.data_len() == POSITION_V3_BYTES
         && replay.owner == program_id
@@ -240,7 +223,7 @@ fn ensure_general_owner_plane_v3(
             && replay.data_len() == 0,
         ClutchError::AlreadyInitialized,
     )?;
-    let purpose_binding = accounts[IX_MARKET_RUNTIME].key.to_bytes();
+    let purpose_binding = accounts[ix::MARKET_RUNTIME].key.to_bytes();
     let position_pda = seeds::position_v3_pda(
         program_id,
         &market_instance,
@@ -272,7 +255,7 @@ fn ensure_general_owner_plane_v3(
             && replay_principal != 0,
         ClutchError::WrongRentSysvar,
     )?;
-    let payer_before = accounts[IX_ACTOR].lamports();
+    let payer_before = accounts[ix::ACTOR].lamports();
     let position_admission = admit_initial_rent_split(
         identity(position.key.to_bytes())?,
         identity(owner)?,
@@ -322,9 +305,9 @@ fn ensure_general_owner_plane_v3(
     ];
     create_fully_funded_pda(
         program_id,
-        &accounts[IX_ACTOR],
+        &accounts[ix::ACTOR],
         position,
-        &accounts[IX_SYSTEM],
+        &accounts[ix::SYSTEM],
         position_live_minimum,
         position_admission.account_balance_after(),
         POSITION_V3_BYTES,
@@ -341,9 +324,9 @@ fn ensure_general_owner_plane_v3(
     ];
     create_fully_funded_pda(
         program_id,
-        &accounts[IX_ACTOR],
+        &accounts[ix::ACTOR],
         replay,
-        &accounts[IX_SYSTEM],
+        &accounts[ix::SYSTEM],
         replay_principal,
         replay_admission.account_balance_after(),
         clutch_general_v2_contract::GENERAL_REPLAY_ACCOUNT_V1_BYTES,
@@ -358,7 +341,7 @@ fn ensure_general_owner_plane_v3(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
         .copy_from_slice(founding.replay_body());
     require(
-        accounts[IX_ACTOR].lamports() == replay_admission.payer_balance_after(),
+        accounts[ix::ACTOR].lamports() == replay_admission.payer_balance_after(),
         ClutchError::AccountCreationFailed,
     )
 }
@@ -425,27 +408,33 @@ pub fn process_endow_v3(
 ) -> Outcome<()> {
     let request = decode_endow_request(request)?;
     require_count(accounts, ENDOW_ACCOUNT_COUNT_V3)?;
-    require_signer(&accounts[IX_ACTOR])?;
-    require(accounts[IX_ACTOR].is_writable, ClutchError::NotWritable)?;
+    require_signer(&accounts[ix::ACTOR])?;
+    require(accounts[ix::ACTOR].is_writable, ClutchError::NotWritable)?;
     require_distinct(accounts)?;
     require(
-        accounts[IX_ACTOR].key.to_bytes() == request.owner.bytes(),
+        accounts[ix::ACTOR].key.to_bytes() == request.owner.bytes(),
         ClutchError::UnauthorizedActor,
     )?;
 
     let liabilities = authenticate_general_market_liabilities_v1(
         program_id,
-        &accounts[IX_REALM],
-        &accounts[IX_PROFILE],
-        &accounts[IX_POLICY],
-        &accounts[IX_TOKEN_PROGRAM],
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_MARKET_INSTANCE],
-        &accounts[IX_HOARD],
-        &accounts[IX_CLAIM_LEDGER],
+        &accounts[ix::REALM],
+        &accounts[ix::PROFILE],
+        &accounts[ix::POLICY],
+        &accounts[ix::TOKEN_PROGRAM],
+        &accounts[ix::MARKET_BINDING],
+        &accounts[ix::MARKET_RUNTIME],
+        &accounts[ix::MARKET_INSTANCE],
+        &accounts[ix::HOARD],
+        &accounts[ix::CLAIM_LEDGER],
         true,
         false,
+    )?;
+    validate_full_width_collateral_accounts_v3(
+        accounts,
+        CollateralActionV3::Endow,
+        liabilities.hoard.outcome_count,
+        None,
     )?;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()
@@ -471,10 +460,10 @@ pub fn process_endow_v3(
     let position = authenticate_general_position_replay_v1(
         program_id,
         liabilities.bound,
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_POSITION],
-        &accounts[IX_REPLAY],
+        &accounts[ix::MARKET_BINDING],
+        &accounts[ix::MARKET_RUNTIME],
+        &accounts[ix::POSITION],
+        &accounts[ix::REPLAY],
         request.owner.bytes(),
         request.sequence,
     )?;
@@ -490,28 +479,28 @@ pub fn process_endow_v3(
         &liabilities.market_binding.market_instance_v2_id.bytes(),
     );
     require(
-        *accounts[IX_HOARD_AUTHORITY].key == expected_authority.0
-            && *accounts[IX_HOARD_TOKEN].key == expected_hoard_token.0
+        *accounts[ix::HOARD_AUTHORITY].key == expected_authority.0
+            && *accounts[ix::HOARD_TOKEN].key == expected_hoard_token.0
             && liabilities.hoard.authority
-                == CollateralId::from_bytes(accounts[IX_HOARD_AUTHORITY].key.to_bytes())
+                == CollateralId::from_bytes(accounts[ix::HOARD_AUTHORITY].key.to_bytes())
             && liabilities.hoard.token_account
-                == CollateralId::from_bytes(accounts[IX_HOARD_TOKEN].key.to_bytes()),
+                == CollateralId::from_bytes(accounts[ix::HOARD_TOKEN].key.to_bytes()),
         ClutchError::WrongPda,
     )?;
 
     let prepared = {
-        let mint = accounts[IX_COLLATERAL_MINT]
+        let mint = accounts[ix::COLLATERAL_MINT]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let source = accounts[IX_DESTINATION]
+        let source = accounts[ix::DESTINATION]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let hoard_token = accounts[IX_HOARD_TOKEN]
+        let hoard_token = accounts[ix::HOARD_TOKEN]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
         prepare_position_collateral_transfer_v3(
             liabilities.bound,
-            CollateralId::from_bytes(accounts[IX_POSITION].key.to_bytes()),
+            CollateralId::from_bytes(accounts[ix::POSITION].key.to_bytes()),
             position.projection,
             PositionCollateralTransferRequestV3 {
                 kind: CustodyTransferKindV2::HolderDeposit,
@@ -530,26 +519,26 @@ pub fn process_endow_v3(
                     kind: TransferAuthorityKindV2::TransactionSigner,
                     is_transaction_signer: true,
                     program_address_authenticated: false,
-                    is_writable: accounts[IX_ACTOR].is_writable,
-                    executable: accounts[IX_ACTOR].executable,
-                    data_is_empty: accounts[IX_ACTOR].data_is_empty(),
+                    is_writable: accounts[ix::ACTOR].is_writable,
+                    executable: accounts[ix::ACTOR].executable,
+                    data_is_empty: accounts[ix::ACTOR].data_is_empty(),
                 },
                 amount_atoms: request.amount_atoms,
                 locked_collateral_atoms: liabilities.hoard.locked_claim_principal_atoms,
             },
-            runtime_account_view(&accounts[IX_COLLATERAL_MINT], &mint),
-            runtime_account_view(&accounts[IX_DESTINATION], &source),
-            runtime_account_view(&accounts[IX_HOARD_TOKEN], &hoard_token),
+            runtime_account_view(&accounts[ix::COLLATERAL_MINT], &mint),
+            runtime_account_view(&accounts[ix::DESTINATION], &source),
+            runtime_account_view(&accounts[ix::HOARD_TOKEN], &hoard_token),
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
     };
     let accepted_position = invoke_deposit(
         prepared,
-        &accounts[IX_TOKEN_PROGRAM],
-        &accounts[IX_COLLATERAL_MINT],
-        &accounts[IX_DESTINATION],
-        &accounts[IX_HOARD_TOKEN],
-        &accounts[IX_ACTOR],
+        &accounts[ix::TOKEN_PROGRAM],
+        &accounts[ix::COLLATERAL_MINT],
+        &accounts[ix::DESTINATION],
+        &accounts[ix::HOARD_TOKEN],
+        &accounts[ix::ACTOR],
     )?;
     let accepted = accept_position_hoard_cash_transition_v3(
         accepted_position,
@@ -592,7 +581,7 @@ pub fn process_endow_v3(
         &RuntimeSha256,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
-    accounts[IX_POSITION]
+    accounts[ix::POSITION]
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
         .copy_from_slice(
@@ -604,12 +593,12 @@ pub fn process_endow_v3(
         .hoard()
         .hoard_after
         .encode(
-            &mut accounts[IX_HOARD]
+            &mut accounts[ix::HOARD]
                 .try_borrow_mut_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    accounts[IX_REPLAY]
+    accounts[ix::REPLAY]
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
         .copy_from_slice(replay.replay_poststate_body());
@@ -678,27 +667,33 @@ pub fn process_withdraw_cash_v3(
 ) -> Outcome<()> {
     let request = decode_withdraw_request(request)?;
     require_count(accounts, WITHDRAW_ACCOUNT_COUNT_V3)?;
-    require_signer(&accounts[IX_ACTOR])?;
+    require_signer(&accounts[ix::ACTOR])?;
     require_distinct(accounts)?;
     require(
-        accounts[IX_ACTOR].key.to_bytes() == request.owner.bytes()
-            && accounts[IX_DESTINATION].key.to_bytes() == request.destination.bytes(),
+        accounts[ix::ACTOR].key.to_bytes() == request.owner.bytes()
+            && accounts[ix::DESTINATION].key.to_bytes() == request.destination.bytes(),
         ClutchError::UnauthorizedActor,
     )?;
 
     let liabilities = authenticate_general_market_liabilities_v1(
         program_id,
-        &accounts[IX_REALM],
-        &accounts[IX_PROFILE],
-        &accounts[IX_POLICY],
-        &accounts[IX_TOKEN_PROGRAM],
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_MARKET_INSTANCE],
-        &accounts[IX_HOARD],
-        &accounts[IX_CLAIM_LEDGER],
+        &accounts[ix::REALM],
+        &accounts[ix::PROFILE],
+        &accounts[ix::POLICY],
+        &accounts[ix::TOKEN_PROGRAM],
+        &accounts[ix::MARKET_BINDING],
+        &accounts[ix::MARKET_RUNTIME],
+        &accounts[ix::MARKET_INSTANCE],
+        &accounts[ix::HOARD],
+        &accounts[ix::CLAIM_LEDGER],
         true,
         false,
+    )?;
+    validate_full_width_collateral_accounts_v3(
+        accounts,
+        CollateralActionV3::WithdrawCash,
+        liabilities.hoard.outcome_count,
+        None,
     )?;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()
@@ -708,10 +703,10 @@ pub fn process_withdraw_cash_v3(
     let position = authenticate_general_position_replay_v1(
         program_id,
         liabilities.bound,
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_POSITION],
-        &accounts[IX_REPLAY],
+        &accounts[ix::MARKET_BINDING],
+        &accounts[ix::MARKET_RUNTIME],
+        &accounts[ix::POSITION],
+        &accounts[ix::REPLAY],
         request.owner.bytes(),
         request.sequence,
     )?;
@@ -727,28 +722,28 @@ pub fn process_withdraw_cash_v3(
         &liabilities.market_binding.market_instance_v2_id.bytes(),
     );
     require(
-        *accounts[IX_HOARD_AUTHORITY].key == expected_authority.0
-            && *accounts[IX_HOARD_TOKEN].key == expected_hoard_token.0
+        *accounts[ix::HOARD_AUTHORITY].key == expected_authority.0
+            && *accounts[ix::HOARD_TOKEN].key == expected_hoard_token.0
             && liabilities.hoard.authority
-                == CollateralId::from_bytes(accounts[IX_HOARD_AUTHORITY].key.to_bytes())
+                == CollateralId::from_bytes(accounts[ix::HOARD_AUTHORITY].key.to_bytes())
             && liabilities.hoard.token_account
-                == CollateralId::from_bytes(accounts[IX_HOARD_TOKEN].key.to_bytes()),
+                == CollateralId::from_bytes(accounts[ix::HOARD_TOKEN].key.to_bytes()),
         ClutchError::WrongPda,
     )?;
 
     let prepared = {
-        let mint = accounts[IX_COLLATERAL_MINT]
+        let mint = accounts[ix::COLLATERAL_MINT]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let hoard_token = accounts[IX_HOARD_TOKEN]
+        let hoard_token = accounts[ix::HOARD_TOKEN]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let destination = accounts[IX_DESTINATION]
+        let destination = accounts[ix::DESTINATION]
             .try_borrow_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
         prepare_position_collateral_transfer_v3(
             liabilities.bound,
-            CollateralId::from_bytes(accounts[IX_POSITION].key.to_bytes()),
+            CollateralId::from_bytes(accounts[ix::POSITION].key.to_bytes()),
             position.projection,
             PositionCollateralTransferRequestV3 {
                 kind: CustodyTransferKindV2::HolderWithdrawal,
@@ -767,16 +762,16 @@ pub fn process_withdraw_cash_v3(
                     kind: TransferAuthorityKindV2::ProgramDerived,
                     is_transaction_signer: false,
                     program_address_authenticated: true,
-                    is_writable: accounts[IX_HOARD_AUTHORITY].is_writable,
-                    executable: accounts[IX_HOARD_AUTHORITY].executable,
-                    data_is_empty: accounts[IX_HOARD_AUTHORITY].data_is_empty(),
+                    is_writable: accounts[ix::HOARD_AUTHORITY].is_writable,
+                    executable: accounts[ix::HOARD_AUTHORITY].executable,
+                    data_is_empty: accounts[ix::HOARD_AUTHORITY].data_is_empty(),
                 },
                 amount_atoms: request.amount_atoms,
                 locked_collateral_atoms: liabilities.hoard.locked_claim_principal_atoms,
             },
-            runtime_account_view(&accounts[IX_COLLATERAL_MINT], &mint),
-            runtime_account_view(&accounts[IX_HOARD_TOKEN], &hoard_token),
-            runtime_account_view(&accounts[IX_DESTINATION], &destination),
+            runtime_account_view(&accounts[ix::COLLATERAL_MINT], &mint),
+            runtime_account_view(&accounts[ix::HOARD_TOKEN], &hoard_token),
+            runtime_account_view(&accounts[ix::DESTINATION], &destination),
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
     };
@@ -786,11 +781,11 @@ pub fn process_withdraw_cash_v3(
     let signer: [&[u8]; 3] = [seeds::SEED_HOARD_AUTHORITY_V2, &market_bytes, &bump];
     let accepted_position = invoke_withdrawal(
         prepared,
-        &accounts[IX_TOKEN_PROGRAM],
-        &accounts[IX_COLLATERAL_MINT],
-        &accounts[IX_HOARD_TOKEN],
-        &accounts[IX_DESTINATION],
-        &accounts[IX_HOARD_AUTHORITY],
+        &accounts[ix::TOKEN_PROGRAM],
+        &accounts[ix::COLLATERAL_MINT],
+        &accounts[ix::HOARD_TOKEN],
+        &accounts[ix::DESTINATION],
+        &accounts[ix::HOARD_AUTHORITY],
         &signer,
     )?;
     let accepted = accept_position_hoard_cash_transition_v3(
@@ -835,7 +830,7 @@ pub fn process_withdraw_cash_v3(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
 
-    accounts[IX_POSITION]
+    accounts[ix::POSITION]
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
         .copy_from_slice(
@@ -847,12 +842,12 @@ pub fn process_withdraw_cash_v3(
         .hoard()
         .hoard_after
         .encode(
-            &mut accounts[IX_HOARD]
+            &mut accounts[ix::HOARD]
                 .try_borrow_mut_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    accounts[IX_REPLAY]
+    accounts[ix::REPLAY]
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
         .copy_from_slice(replay.replay_poststate_body());
