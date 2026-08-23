@@ -7,7 +7,9 @@
     "lto": "fat",
     "overflow_checks": true,
     "platform_tools": "v1.53",
-    "rustc": "rustc 1.89.0-dev"
+    "reproducibility_scope": "two fresh target directories under one source checkout; Cargo path-dependency crate disambiguators remain checkout-path sensitive",
+    "rustc": "rustc 1.89.0-dev",
+    "source_checkout_path_sha256": "49bdc05f6cb228b2a286c13165af274ec0b75946b507ad3afa4fcc2e120448f5"
   },
   "manifest_input_source_clean": true,
   "profiles": [
@@ -114,7 +116,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 2083112,
           "elf_headroom_bytes_under_ten_sol": -646668,
-          "elf_sha256": "5fe84e20d8ae181946c384a3941e9185e821ddb422e02312b730b12d459fb662",
+          "elf_sha256": "56dd8315cf01915a149cac4a404b1055161b25e10310b1491e03e3022fe0d30f",
           "fits_under_ten_sol": false,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 14499663600,
@@ -129,7 +131,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 2083112,
           "elf_headroom_bytes_under_ten_sol": -646668,
-          "elf_sha256": "5fe84e20d8ae181946c384a3941e9185e821ddb422e02312b730b12d459fb662",
+          "elf_sha256": "56dd8315cf01915a149cac4a404b1055161b25e10310b1491e03e3022fe0d30f",
           "fits_under_ten_sol": false,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 14499663600,
@@ -392,7 +394,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 1450392,
           "elf_headroom_bytes_under_ten_sol": -13948,
-          "elf_sha256": "68c121ec7e5dee73627683eac2b9c75c653601932a06c7db7556f5660b30fdf1",
+          "elf_sha256": "bf0a069bf62b3097598283ba92367135f04a8887ef72614f3f0de3320b44e87e",
           "fits_under_ten_sol": false,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 10095932400,
@@ -407,7 +409,7 @@
           "builder_stack_frame_overwrite_diagnostics": 69,
           "elf_bytes": 1450392,
           "elf_headroom_bytes_under_ten_sol": -13948,
-          "elf_sha256": "68c121ec7e5dee73627683eac2b9c75c653601932a06c7db7556f5660b30fdf1",
+          "elf_sha256": "bf0a069bf62b3097598283ba92367135f04a8887ef72614f3f0de3320b44e87e",
           "fits_under_ten_sol": false,
           "program_account_rent_lamports": 1141440,
           "programdata_account_rent_lamports": 10095932400,
@@ -447,8 +449,8 @@
       "programs/solana-reference",
       "research/batch-policy-identity"
     ],
-    "git_commit": "51b8522cfcf2e35b054057e7cda553dc61d1f3e5",
-    "git_tree": "e53d5d03f399c1b9c81e19c037c77627bed1582b",
+    "git_commit": "256a3105e19e091b71abb00aa7755c8a3beacff2",
+    "git_tree": "98ae3763d7c664010638c16b6794a51401d620ef",
     "tracked_dirty": []
   }
 }
