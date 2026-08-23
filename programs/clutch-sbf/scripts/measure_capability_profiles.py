@@ -99,6 +99,11 @@ def version(command: list[str], *, cwd: Path) -> str:
     return run(command, cwd=cwd).splitlines()[0]
 
 
+def tool_version(command: list[str], *, cwd: Path) -> str:
+    """Retain every non-empty identity line printed by a pinned build tool."""
+    return " | ".join(line.strip() for line in run(command, cwd=cwd).splitlines() if line.strip())
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -184,8 +189,19 @@ def build_once(
     ]
     print(f"building {profile['name']} run {run_number}/2", file=sys.stderr, flush=True)
     try:
-        run(command, cwd=repo, env=env)
+        build_log = run(command, cwd=repo, env=env)
         measurement = measure_elf(readobj, output / "clutch_sbf.so", repo, run_number)
+        measurement.update(
+            {
+                "builder_stack_frame_overflow_diagnostics": build_log.count(
+                    "overflows the maximum allowed frame space"
+                ),
+                "builder_stack_frame_overwrite_diagnostics": build_log.count(
+                    "overwrites values in the frame"
+                ),
+                "builder_diagnostics_are_not_final_elf_reachability_proof": True,
+            }
+        )
         return measurement, str(work) if keep_workdirs else None
     finally:
         if not keep_workdirs:
@@ -259,7 +275,13 @@ def main() -> None:
             run_number=2,
             keep_workdirs=args.keep_workdirs,
         )
-        comparable = ("elf_sha256", "elf_bytes", "text_bytes")
+        comparable = (
+            "elf_sha256",
+            "elf_bytes",
+            "text_bytes",
+            "builder_stack_frame_overflow_diagnostics",
+            "builder_stack_frame_overwrite_diagnostics",
+        )
         reproducible = all(first[key] == second[key] for key in comparable)
         if not reproducible:
             raise SystemExit(f"non-reproducible profile build: {profile['name']}")
@@ -283,7 +305,8 @@ def main() -> None:
     tree = version(["git", "rev-parse", "HEAD^{tree}"], cwd=repo)
     document = {
         "schema": "dragons-clutch/capability-profile-measurement/v1",
-        "release_ready": not dirty,
+        "release_declaration": False,
+        "manifest_input_source_clean": not dirty,
         "source": {
             "git_commit": commit,
             "git_tree": tree,
@@ -291,10 +314,10 @@ def main() -> None:
             "tracked_dirty": dirty,
         },
         "builder": {
-            "cargo_build_sbf": version([str(cargo_build_sbf), "--version"], cwd=repo),
+            "cargo_build_sbf": tool_version([str(cargo_build_sbf), "--version"], cwd=repo),
             "platform_tools": "v1.53",
-            "rustc": version([str(rustc), "--version"], cwd=repo),
-            "llvm_readobj": version([str(readobj), "--version"], cwd=repo),
+            "rustc": tool_version([str(rustc), "--version"], cwd=repo),
+            "llvm_readobj": tool_version([str(readobj), "--version"], cwd=repo),
             "cargo_profile": "release",
             "lto": "fat",
             "codegen_units": 1,
