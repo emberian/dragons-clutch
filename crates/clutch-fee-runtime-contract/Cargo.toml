@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 clutch-batch = { path = "../clutch-batch" }
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
+clutch-owner-settlement = { path = "../clutch-owner-settlement" }
 
 [features]
 default = []

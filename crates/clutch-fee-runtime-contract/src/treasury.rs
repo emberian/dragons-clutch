@@ -1,7 +1,9 @@
 //! Treasury Position accounting and source classification.
 
-use crate::allocation::{PayerAllocationV1, RecipientAllocationV1};
-use crate::integration::FeeBearingSettlementV1;
+use crate::allocation::RecipientAllocationV1;
+use crate::integration::CandidateFeeSettlementV1;
+use crate::intent::TreasuryCreditIntentV1;
+use crate::projection::SelectedOwnerFeeBookV1;
 use crate::selected::SelectedCompositeFeeV1;
 use crate::{add, live, Error, Id, Result};
 
@@ -111,18 +113,24 @@ impl TreasuryLedgerV1 {
         Ok(self)
     }
 
-    /// Credit only collected trading-fee residual. Every principal or future
-    /// projection classification refuses before the balance changes.
-    pub fn credit(
+    /// Credit the treasury residual from the complete candidate owner-fee
+    /// book. No individual payer row can stand in for this aggregate join.
+    pub fn credit_candidate(
         mut self,
-        settlement: &FeeBearingSettlementV1,
-        payer: &PayerAllocationV1,
+        intent: &TreasuryCreditIntentV1,
+        settlement: &CandidateFeeSettlementV1,
+        book: &SelectedOwnerFeeBookV1,
         allocation: &RecipientAllocationV1,
         source: RevenueSourceV1,
     ) -> Result<Self> {
         self.open()?;
-        settlement.validate(payer, allocation)?;
-        if allocation.fee_record() != self.fee_record {
+        settlement.validate(book, allocation)?;
+        if allocation.fee_record() != self.fee_record
+            || intent.fee_record().identity() != self.fee_record
+            || intent.treasury_position() != self.treasury_position
+            || intent.settlement_candidate() != book.settlement_candidate()
+            || intent.revenue_policy() != book.revenue_policy()
+        {
             return Err(Error::MismatchedBinding);
         }
         if source != RevenueSourceV1::CollectedTradingFee {
