@@ -33,11 +33,14 @@ use clutch_general_v2_contract::{
     CandidateFeedHeaderV2,
     ConsumeDirectReceiptEggsPayloadV1, ConsumeVirtualMergeReceiptEggsPayloadV1,
     ConsumeVirtualSplitReceiptEggsPayloadV1, DeletableRentOwnerV1, EconomicDomainV2AccountV1,
-    FinalPotV1AccountV1, GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1,
-    GeneralReservationSeedTupleV3, Id32, MarketBindingV1, OwnerSettlementSeedTupleV4,
+    FinalPotV1AccountV1, GeneralPositionReplayPrestateV1,
+    GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1,
+    GeneralReservationSeedTupleV3, Id32, MarketBindingV1,
+    OwnerSettlementSeedTupleV4, OwnerSettlementSeedTupleV5, OwnerSettlementV5AccountV1,
     SettlementCashPotV1AccountV1, SettlementReceiptSeedTupleV3,
-    SettlementReceiptSeedTupleV4, SettlementRootChildStateV1, SettlementRootPhaseV1,
-    SettlementRootV1AccountV1,
+    SettlementReceiptSeedTupleV4, SettlementReceiptSeedTupleV5,
+    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
+    OWNER_SETTLEMENT_ACCOUNT_BYTES_V5, SETTLEMENT_ROOT_ACCOUNT_BYTES,
     MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{
@@ -45,7 +48,8 @@ use clutch_owner_settlement::{
     derive_settlement_receipt_data_id_v2, derive_settlement_receipt_data_id_v3,
     derive_settlement_receipt_data_id_v4,
     owner_rounding_residue_price_units, prepare_create_owner_settlement_account_v2,
-    prepare_create_owner_settlement_account_v4, project_owner_merge_delivery_v4,
+    prepare_create_owner_settlement_account_v4, prepare_realize_owner_cash_semantic_v4,
+    project_owner_merge_delivery_v4,
     project_owner_receipt_end_v2, project_owner_receipt_end_v3,
     project_owner_receipt_end_to_owner_v4,
     project_owner_settlement_account_v2,
@@ -61,7 +65,8 @@ use clutch_owner_settlement::{
     OwnerSettlementPdaProjectionV2, PresentConsiderationV2, PresentPriceV2,
     OwnerMergeDeliveryEvidenceV4, OwnerSettlementAccountViewV4, OwnerSettlementCreatePlanV4,
     OwnerSettlementExpectationBasisBookV4, OwnerSettlementExpectationBasisV4,
-    OwnerSettlementExpectationV4,
+    OwnerCashRealizationSemanticPlanV4, OwnerSettlementAccumulatorV4,
+    OwnerSettlementDispositionV4, OwnerSettlementExpectationV4,
     OwnerSettlementPdaProjectionV4, OwnerSettlementStateV4, PositionSettlementPoststateV3,
     SettlementRootOwnerRowAuthorityV4, SelectedOwnerFeeV1, SelectedOwnerRowAuthorityV2,
     SettlementCashPotExpectationV1, SettlementCashPotV1,
@@ -83,11 +88,18 @@ use clutch_solana_layout::reservation::{
     canonical_reservation_id, ReservationAccount, ReservationPlan, RESERVATION_ACCOUNT_BYTES,
     RESERVATION_STATE_ACTIVE, RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED,
 };
+use clutch_solana_layout::reservation_v9::{
+    DeletableRentOwnerV1 as LayoutDeletableRentOwnerV1,
+};
 use clutch_solana_layout::settlement_receipt_v3::{
     project_settlement_receipt_evidence_v3, SettlementReceiptAccountV3,
 };
 use clutch_solana_layout::settlement_receipt_v4::{
     project_settlement_receipt_evidence_v4, SettlementReceiptAccountV4,
+};
+use clutch_solana_layout::settlement_receipt_v5::{
+    SettlementReceiptAccountV5, SettlementReceiptEvidenceV5,
+    SettlementReceiptTransitionCommitmentV5, SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
 };
 use clutch_solana_layout::order_page_v5::{
     verify_page_v5, OrderSlotCursorV5, VerifiedOrderSlotV5,
@@ -5557,6 +5569,518 @@ pub fn derive_candidate_entitlement_projection_v4(
     })
 }
 
+/// Rebind one semantic owner to the exhaustive action-39 traversal after the
+/// counted root exists. This returns immutable BasisV4 only; it grants no
+/// cursor, fee, cash, replay, or account-write authority.
+pub fn derive_root_owner_basis_v4(
+    settlement_root_account: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    traversal: &SettlementTraversalProjectionV4,
+    owner: Id32,
+) -> Result<OwnerSettlementExpectationBasisV4, SettlementAdapterErrorV1> {
+    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)?;
+    if !matches!(
+        settlement_root.phase(),
+        SettlementRootPhaseV1::Materializing | SettlementRootPhaseV1::Settling
+    ) {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    traversal
+        .owner_basis
+        .row_for_owner(owner.bytes())
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)
+}
+
+/// Exact local facts required to allocate one future rent-owned settlement child.
+///
+/// The full rent minimum is always paid by `payer`; hostile prefunding never
+/// discounts that principal and is persisted as the donation floor. This is a
+/// structural pure input. The SBF adapter remains responsible for deriving the
+/// account PDA and authenticating every account/meta fact before allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RentOwnedSettlementCreateFundingV5 {
+    /// Dragon's Clutch program identity assigned after allocation.
+    pub program_id: Id32,
+    /// Sole payer and eventual refundable-principal recipient.
+    pub payer: Id32,
+    /// Canonical System Program identity.
+    pub system_program_id: Id32,
+    /// Current payer lamports.
+    pub payer_lamports: u64,
+    /// Hostile prefund already parked at the canonical target.
+    pub target_lamports_before: u64,
+    /// Current target owner; fresh creation requires System Program.
+    pub target_owner_before: Id32,
+    /// Current target data length; fresh creation requires zero.
+    pub target_data_len_before: u32,
+    /// Whether the target meta is writable.
+    pub target_writable: bool,
+    /// Executable targets can never become settlement children.
+    pub target_executable: bool,
+    /// Exact rent-exempt minimum for the successor account width.
+    pub rent_minimum: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RentOwnedSettlementCreatePlanV5 {
+    payer_debit_lamports: u64,
+    target_lamports_after: u64,
+    contract_rent: DeletableRentOwnerV1,
+    layout_rent: LayoutDeletableRentOwnerV1,
+}
+
+fn prepare_rent_owned_settlement_creation_v5(
+    account: Id32,
+    funding: RentOwnedSettlementCreateFundingV5,
+) -> Result<RentOwnedSettlementCreatePlanV5, SettlementAdapterErrorV1> {
+    if account.is_zero()
+        || funding.program_id.is_zero()
+        || funding.payer.is_zero()
+        || funding.system_program_id.is_zero()
+        || account == funding.program_id
+        || account == funding.payer
+        || account == funding.system_program_id
+        || funding.program_id == funding.payer
+        || funding.program_id == funding.system_program_id
+        || funding.payer == funding.system_program_id
+        || funding.target_owner_before != funding.system_program_id
+        || funding.target_data_len_before != 0
+        || !funding.target_writable
+        || funding.target_executable
+        || funding.rent_minimum == 0
+        || funding.payer_lamports < funding.rent_minimum
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let target_lamports_after = funding
+        .target_lamports_before
+        .checked_add(funding.rent_minimum)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let contract_rent = DeletableRentOwnerV1 {
+        payer: funding.payer,
+        refundable_principal: funding.rent_minimum,
+        donation_floor: funding.target_lamports_before,
+    };
+    contract_rent.validate()?;
+    let layout_rent = LayoutDeletableRentOwnerV1 {
+        payer: LayoutHash32(funding.payer.bytes()),
+        refundable_principal: funding.rent_minimum,
+        donation_floor: funding.target_lamports_before,
+    };
+    layout_rent.validate()?;
+    Ok(RentOwnedSettlementCreatePlanV5 {
+        payer_debit_lamports: funding.rent_minimum,
+        target_lamports_after,
+        contract_rent,
+        layout_rent,
+    })
+}
+
+/// Exact hostile rent-owned OwnerSettlement V5 account view.
+///
+/// This type deliberately does not claim account/PDA authority. A live adapter
+/// must rederive the fresh V5 seed address and authenticate the program owner,
+/// writable meta, bump, and exact bytes before using the returned projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementAccountViewV5<'a> {
+    /// Presented owner-row account identity.
+    pub account: Id32,
+    /// Presented program owner.
+    pub program_owner: Id32,
+    /// Exact hostile 340-byte account body.
+    pub exact_body: &'a [u8],
+    /// Current account lamports.
+    pub lamports: u64,
+    /// Current rent-exempt minimum for 340 bytes.
+    pub rent_minimum: u64,
+    /// Canonical V5 PDA bump rederived by the adapter.
+    pub canonical_bump: u8,
+    /// Whether the account is writable for this action.
+    pub writable: bool,
+}
+
+/// Structural exact projection of one canonical rent-owned owner row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementAccountProjectionV5 {
+    account: Id32,
+    program_owner: Id32,
+    seed: OwnerSettlementSeedTupleV5,
+    envelope: OwnerSettlementV5AccountV1,
+    exact_body: [u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5],
+    data_id: Id32,
+    lamports: u64,
+    rent_minimum: u64,
+}
+
+impl OwnerSettlementAccountProjectionV5 {
+    /// Canonical V5 row account presented by the adapter.
+    pub const fn account(&self) -> Id32 {
+        self.account
+    }
+
+    /// Expected Dragon's Clutch program owner.
+    pub const fn program_owner(&self) -> Id32 {
+        self.program_owner
+    }
+
+    /// Fresh V5 seed tuple committed by the semantic row.
+    pub const fn seed(&self) -> OwnerSettlementSeedTupleV5 {
+        self.seed
+    }
+
+    /// Exact decoded rent-owned envelope.
+    pub const fn envelope(&self) -> OwnerSettlementV5AccountV1 {
+        self.envelope
+    }
+
+    /// Exact current 340-byte account body.
+    pub const fn exact_body(&self) -> &[u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5] {
+        &self.exact_body
+    }
+
+    /// Full V5 account-data identity, including rent owner and stored bump.
+    pub const fn data_id(&self) -> Id32 {
+        self.data_id
+    }
+
+    /// Current account lamports.
+    pub const fn lamports(&self) -> u64 {
+        self.lamports
+    }
+
+    /// Current rent-exempt minimum.
+    pub const fn rent_minimum(&self) -> u64 {
+        self.rent_minimum
+    }
+}
+
+/// Decode and structurally bind one exact rent-owned OwnerSettlement V5 row.
+pub fn project_owner_settlement_account_v5(
+    view: OwnerSettlementAccountViewV5<'_>,
+    expected_program_id: Id32,
+    seed: OwnerSettlementSeedTupleV5,
+) -> Result<OwnerSettlementAccountProjectionV5, SettlementAdapterErrorV1> {
+    if view.account.is_zero()
+        || expected_program_id.is_zero()
+        || view.account == expected_program_id
+        || view.program_owner != expected_program_id
+        || !view.writable
+        || view.exact_body.len() != OWNER_SETTLEMENT_ACCOUNT_BYTES_V5
+        || view.rent_minimum == 0
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let envelope = OwnerSettlementV5AccountV1::decode(view.exact_body)?;
+    let expectation = envelope.semantic.expectation();
+    if envelope.stored_bump != view.canonical_bump
+        || seed.epoch() != &expectation.epoch()
+        || seed.settlement_candidate() != &expectation.candidate()
+        || seed.owner() != &expectation.owner()
+        || view.lamports < view.rent_minimum
+        || view.lamports
+            < envelope
+                .rent
+                .refundable_principal
+                .checked_add(envelope.rent.donation_floor)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let exact_body = envelope.encode_exact()?;
+    if exact_body.as_slice() != view.exact_body {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let data_id = envelope.data_id(&CanonicalSha256)?;
+    Ok(OwnerSettlementAccountProjectionV5 {
+        account: view.account,
+        program_owner: expected_program_id,
+        seed,
+        envelope,
+        exact_body,
+        data_id,
+        lamports: view.lamports,
+        rent_minimum: view.rent_minimum,
+    })
+}
+
+/// Exact full-rent creation plan for one pristine OwnerSettlement V5 row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementCreatePlanV5 {
+    account: Id32,
+    program_id: Id32,
+    seed: OwnerSettlementSeedTupleV5,
+    bump: u8,
+    payer: Id32,
+    payer_debit_lamports: u64,
+    target_lamports_after: u64,
+    envelope: OwnerSettlementV5AccountV1,
+    exact_body: [u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5],
+    data_id: Id32,
+}
+
+impl OwnerSettlementCreatePlanV5 {
+    pub const fn account(&self) -> Id32 { self.account }
+    pub const fn program_id(&self) -> Id32 { self.program_id }
+    pub const fn seed(&self) -> OwnerSettlementSeedTupleV5 { self.seed }
+    pub const fn bump(&self) -> u8 { self.bump }
+    pub const fn payer(&self) -> Id32 { self.payer }
+    pub const fn payer_debit_lamports(&self) -> u64 { self.payer_debit_lamports }
+    pub const fn target_lamports_after(&self) -> u64 { self.target_lamports_after }
+    pub const fn envelope(&self) -> OwnerSettlementV5AccountV1 { self.envelope }
+    pub const fn exact_body(&self) -> &[u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5] {
+        &self.exact_body
+    }
+    pub const fn data_id(&self) -> Id32 { self.data_id }
+}
+
+/// Create the exact pristine V5 row from a verifier-derived owner expectation.
+///
+/// This is a structural constructor, not execution authority. Action 24 must
+/// first derive `expectation` from the exhaustive root-bound traversal and the
+/// authenticated fee snapshot, then atomically join this plan to the root
+/// child-count successor.
+pub fn prepare_create_owner_settlement_account_v5(
+    account: Id32,
+    seed: OwnerSettlementSeedTupleV5,
+    bump: u8,
+    expectation: OwnerSettlementExpectationV4,
+    funding: RentOwnedSettlementCreateFundingV5,
+) -> Result<OwnerSettlementCreatePlanV5, SettlementAdapterErrorV1> {
+    expectation.validate()?;
+    if seed.epoch() != &expectation.epoch()
+        || seed.settlement_candidate() != &expectation.candidate()
+        || seed.owner() != &expectation.owner()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let creation = prepare_rent_owned_settlement_creation_v5(account, funding)?;
+    let envelope = OwnerSettlementV5AccountV1 {
+        semantic: OwnerSettlementAccumulatorV4::new(expectation)?,
+        rent: creation.contract_rent,
+        stored_bump: bump,
+        flags: 0,
+    };
+    let exact_body = envelope.encode_exact()?;
+    let data_id = envelope.data_id(&CanonicalSha256)?;
+    Ok(OwnerSettlementCreatePlanV5 {
+        account,
+        program_id: funding.program_id,
+        seed,
+        bump,
+        payer: funding.payer,
+        payer_debit_lamports: creation.payer_debit_lamports,
+        target_lamports_after: creation.target_lamports_after,
+        envelope,
+        exact_body,
+        data_id,
+    })
+}
+
+/// Exact full-rent creation plan for one General-kind SettlementReceipt V5.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementReceiptCreatePlanV5 {
+    account: Id32,
+    program_id: Id32,
+    seed: SettlementReceiptSeedTupleV5,
+    bump: u8,
+    payer: Id32,
+    payer_debit_lamports: u64,
+    target_lamports_after: u64,
+    receipt: SettlementReceiptAccountV5,
+    evidence: SettlementReceiptEvidenceV5,
+}
+
+impl SettlementReceiptCreatePlanV5 {
+    pub const fn account(&self) -> Id32 { self.account }
+    pub const fn program_id(&self) -> Id32 { self.program_id }
+    pub const fn seed(&self) -> SettlementReceiptSeedTupleV5 { self.seed }
+    pub const fn bump(&self) -> u8 { self.bump }
+    pub const fn payer(&self) -> Id32 { self.payer }
+    pub const fn payer_debit_lamports(&self) -> u64 { self.payer_debit_lamports }
+    pub const fn target_lamports_after(&self) -> u64 { self.target_lamports_after }
+    pub const fn receipt(&self) -> SettlementReceiptAccountV5 { self.receipt }
+    pub const fn evidence(&self) -> SettlementReceiptEvidenceV5 { self.evidence }
+    pub const fn exact_body(&self) -> &[u8; SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5] {
+        self.evidence.exact_body()
+    }
+}
+
+/// Wrap one pristine General receipt semantic state in the sole live V5 outer.
+pub fn prepare_create_settlement_receipt_v5(
+    account: Id32,
+    seed: SettlementReceiptSeedTupleV5,
+    bump: u8,
+    semantic: SettlementReceiptAccountV4,
+    funding: RentOwnedSettlementCreateFundingV5,
+) -> Result<SettlementReceiptCreatePlanV5, SettlementAdapterErrorV1> {
+    semantic.validate()?;
+    if semantic.stored_bump != bump
+        || seed.epoch() != &semantic.epoch.bytes()
+        || seed.settlement_candidate() != &semantic.candidate.bytes()
+        || seed.slice_index_le() != &semantic.slice_index.to_le_bytes()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let creation = prepare_rent_owned_settlement_creation_v5(account, funding)?;
+    let receipt = SettlementReceiptAccountV5::new(
+        semantic,
+        SettlementReceiptTransitionCommitmentV5::None,
+        creation.layout_rent,
+    )?;
+    let evidence = receipt.evidence(LayoutHash32(account.bytes()))?;
+    Ok(SettlementReceiptCreatePlanV5 {
+        account,
+        program_id: funding.program_id,
+        seed,
+        bump,
+        payer: funding.payer,
+        payer_debit_lamports: creation.payer_debit_lamports,
+        target_lamports_after: creation.target_lamports_after,
+        receipt,
+        evidence,
+    })
+}
+
+/// Structural V5 row/Position/cash-pot/root successor for action 38.
+///
+/// Fee-bearing composition must additionally authenticate the deleted payer
+/// snapshot and durable `0x83/2` receipt. Zero-fee composition must derive its
+/// domain-separated row+pot evidence. Neither evidence source is caller data in
+/// this arithmetic plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerCashRealizationPlanV5 {
+    settlement_root_account: Id32,
+    settlement_root_poststate: SettlementRootV1AccountV1,
+    settlement_cash_pot_account: Id32,
+    owner_settlement_account: Id32,
+    owner_settlement_seed: OwnerSettlementSeedTupleV5,
+    owner_settlement_prestate_data_id: Id32,
+    owner_settlement_poststate: OwnerSettlementV5AccountV1,
+    owner_settlement_poststate_body: [u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5],
+    finalized_owner_row_data_id: Id32,
+    pot_poststate_data_id: Id32,
+    semantic: OwnerCashRealizationSemanticPlanV4,
+    fee_finalization_required: bool,
+}
+
+impl OwnerCashRealizationPlanV5 {
+    pub const fn settlement_root_account(&self) -> Id32 { self.settlement_root_account }
+    pub const fn settlement_root_poststate(&self) -> &SettlementRootV1AccountV1 {
+        &self.settlement_root_poststate
+    }
+    pub const fn settlement_cash_pot_account(&self) -> Id32 {
+        self.settlement_cash_pot_account
+    }
+    pub const fn owner_settlement_account(&self) -> Id32 { self.owner_settlement_account }
+    pub const fn owner_settlement_seed(&self) -> OwnerSettlementSeedTupleV5 {
+        self.owner_settlement_seed
+    }
+    pub const fn owner_settlement_prestate_data_id(&self) -> Id32 {
+        self.owner_settlement_prestate_data_id
+    }
+    pub const fn owner_settlement_poststate(&self) -> OwnerSettlementV5AccountV1 {
+        self.owner_settlement_poststate
+    }
+    pub const fn owner_settlement_poststate_body(
+        &self,
+    ) -> &[u8; OWNER_SETTLEMENT_ACCOUNT_BYTES_V5] {
+        &self.owner_settlement_poststate_body
+    }
+    pub const fn finalized_owner_row_data_id(&self) -> Id32 {
+        self.finalized_owner_row_data_id
+    }
+    pub const fn pot_poststate_data_id(&self) -> Id32 { self.pot_poststate_data_id }
+    pub const fn semantic(&self) -> &OwnerCashRealizationSemanticPlanV4 { &self.semantic }
+    pub const fn position(&self) -> PositionSettlementPoststateV3 { self.semantic.position() }
+    pub const fn settlement_cash_pot(&self) -> SettlementCashPotV1 {
+        self.semantic.settlement_cash_pot()
+    }
+    pub const fn disposition(&self) -> OwnerSettlementDispositionV4 {
+        self.semantic.disposition()
+    }
+    pub const fn fee_finalization_required(&self) -> bool { self.fee_finalization_required }
+}
+
+/// Realize one exact AccountingComplete V5 row against Position/Replay and pot.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_realize_owner_cash_v5(
+    settlement_root_account: Id32,
+    settlement_root: &SettlementRootV1AccountV1,
+    traversal: &SettlementTraversalProjectionV4,
+    owner_settlement: &OwnerSettlementAccountProjectionV5,
+    settlement_cash_pot_account: Id32,
+    position_replay: GeneralPositionReplayPrestateV1,
+    pot_before: SettlementCashPotV1,
+) -> Result<OwnerCashRealizationPlanV5, SettlementAdapterErrorV1> {
+    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)?;
+    if settlement_root.phase() != SettlementRootPhaseV1::Settling
+        || settlement_root.cash_pot_state() != SettlementRootChildStateV1::Live
+        || settlement_cash_pot_account != settlement_root.settlement_cash_pot()
+        || pot_before.expectation != settlement_root.cash_pot_expectation()?
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let envelope = owner_settlement.envelope;
+    let expectation = envelope.semantic.expectation();
+    let owner = Id32::new(expectation.owner())?;
+    let basis = derive_root_owner_basis_v4(
+        settlement_root_account,
+        settlement_root,
+        traversal,
+        owner,
+    )?;
+    if !expectation_matches_basis_v4(expectation, basis)
+        || owner_settlement.seed.epoch() != &settlement_root.epoch().bytes()
+        || owner_settlement.seed.settlement_candidate()
+            != &settlement_root.settlement_candidate_id().bytes()
+        || owner_settlement.seed.owner() != &owner.bytes()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let position = position_replay.position();
+    let semantic = prepare_realize_owner_cash_semantic_v4(
+        owner_settlement.account.bytes(),
+        envelope.semantic,
+        position,
+        pot_before,
+    )?;
+    let semantic_body = *semantic.owner_settlement_body();
+    let finalized_semantic = OwnerSettlementAccumulatorV4::decode_body(
+        clutch_owner_settlement::OWNER_SETTLEMENT_OUTER_TAG_V4,
+        clutch_owner_settlement::OWNER_SETTLEMENT_OUTER_VERSION_V4,
+        &semantic_body,
+    )?;
+    let owner_settlement_poststate = OwnerSettlementV5AccountV1 {
+        semantic: finalized_semantic,
+        rent: envelope.rent,
+        stored_bump: envelope.stored_bump,
+        flags: envelope.flags,
+    };
+    let owner_settlement_poststate_body = owner_settlement_poststate.encode_exact()?;
+    let finalized_owner_row_data_id = owner_settlement_poststate.data_id(&CanonicalSha256)?;
+    let pot_poststate_data_id = clutch_general_v2_contract::settlement_cash_pot_poststate_data_id_v1(
+        semantic.settlement_cash_pot(),
+        &CanonicalSha256,
+    )?;
+    let fee_finalization_required = !settlement_root.fee_record().is_zero();
+    let settlement_root_poststate =
+        settlement_root.complete_owner_finalization(fee_finalization_required)?;
+    Ok(OwnerCashRealizationPlanV5 {
+        settlement_root_account,
+        settlement_root_poststate,
+        settlement_cash_pot_account,
+        owner_settlement_account: owner_settlement.account,
+        owner_settlement_seed: owner_settlement.seed,
+        owner_settlement_prestate_data_id: owner_settlement.data_id,
+        owner_settlement_poststate,
+        owner_settlement_poststate_body,
+        finalized_owner_row_data_id,
+        pot_poststate_data_id,
+        semantic,
+        fee_finalization_required,
+    })
+}
+
 const fn frozen_identity(value: Id32) -> [u8; 32] {
     value.bytes()
 }
@@ -8798,6 +9322,89 @@ mod scalable_receipt_end_tests {
         value[..5].copy_from_slice(&[buy_kind, buy, sell_kind, sell, 1]);
         value[5..].copy_from_slice(&quantity.to_le_bytes());
         value
+    }
+
+    fn fresh_receipt_semantic_v5() -> SettlementReceiptAccountV4 {
+        SettlementReceiptAccountV4 {
+            epoch: LayoutHash32([1; 32]),
+            market: LayoutHash32([2; 32]),
+            candidate: LayoutHash32([3; 32]),
+            buy_order_id: LayoutHash32([4; 32]),
+            sell_order_id: LayoutHash32([5; 32]),
+            consideration_price_units: 21,
+            quantity: 7,
+            settled_quantity: 0,
+            price: 3,
+            sequence: 1,
+            slice_index: 0,
+            outcome: 1,
+            leg_kind: RECEIPT_LEG_DIRECT,
+            consumed_flags: 0,
+            stored_bump: 9,
+            accounted_end_mask: 0,
+        }
+    }
+
+    #[test]
+    fn v5_receipt_creation_never_discounts_full_rent_for_hostile_prefund() {
+        let semantic = fresh_receipt_semantic_v5();
+        let seed = SettlementReceiptSeedTupleV5::new(id(1), id(3), 0).unwrap();
+        let plan = prepare_create_settlement_receipt_v5(
+            id(6),
+            seed,
+            9,
+            semantic,
+            RentOwnedSettlementCreateFundingV5 {
+                program_id: id(7),
+                payer: id(8),
+                system_program_id: id(9),
+                payer_lamports: 1_000,
+                target_lamports_before: 41,
+                target_owner_before: id(9),
+                target_data_len_before: 0,
+                target_writable: true,
+                target_executable: false,
+                rent_minimum: 100,
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.payer_debit_lamports(), 100);
+        assert_eq!(plan.target_lamports_after(), 141);
+        assert_eq!(plan.receipt().rent().refundable_principal, 100);
+        assert_eq!(plan.receipt().rent().donation_floor, 41);
+        assert_eq!(
+            plan.receipt().transition(),
+            SettlementReceiptTransitionCommitmentV5::None
+        );
+        assert_ne!(plan.evidence().receipt_data_id(), LayoutHash32::ZERO);
+    }
+
+    #[test]
+    fn v5_receipt_creation_refuses_short_payer_and_non_system_target() {
+        let semantic = fresh_receipt_semantic_v5();
+        let seed = SettlementReceiptSeedTupleV5::new(id(1), id(3), 0).unwrap();
+        let mut funding = RentOwnedSettlementCreateFundingV5 {
+            program_id: id(7),
+            payer: id(8),
+            system_program_id: id(9),
+            payer_lamports: 99,
+            target_lamports_before: 500,
+            target_owner_before: id(9),
+            target_data_len_before: 0,
+            target_writable: true,
+            target_executable: false,
+            rent_minimum: 100,
+        };
+        assert_eq!(
+            prepare_create_settlement_receipt_v5(id(6), seed, 9, semantic, funding),
+            Err(SettlementAdapterErrorV1::BindingMismatch)
+        );
+        funding.payer_lamports = 100;
+        funding.target_owner_before = funding.program_id;
+        assert_eq!(
+            prepare_create_settlement_receipt_v5(id(6), seed, 9, semantic, funding),
+            Err(SettlementAdapterErrorV1::BindingMismatch)
+        );
     }
 
     #[test]
