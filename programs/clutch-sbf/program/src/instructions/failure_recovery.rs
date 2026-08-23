@@ -22,16 +22,15 @@ use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
 use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock};
 use clutch_failure_policy_adapter::external_v2::{
     authenticate_external_root_v2, initialize_external_root_v2, project_external_recovery_close_v2,
-    project_external_root_close_v2, project_external_semantic_transition_v2,
-    project_external_work_transition_v2, AuthenticatedExternalRootV2, ExternalAdapterErrorV2,
-    ExternalRecoveryCloseV2, ExternalRootCloseV2, ExternalRootFundingObservationV2,
-    ExternalRootInitializationV2, ExternalSemanticMutationV2, ExternalWorkMutationV2,
+    project_external_semantic_transition_v2, project_external_work_transition_v2,
+    AuthenticatedExternalRootV2, ExternalAdapterErrorV2, ExternalRecoveryCloseV2,
+    ExternalRootFundingObservationV2, ExternalRootInitializationV2, ExternalSemanticMutationV2,
+    ExternalWorkMutationV2,
 };
 use clutch_failure_policy_adapter::{AccountId, AccountView};
 use clutch_failure_policy_runtime::external_v2::{
-    AuthenticatedRelationResultV2, FailureExternalAdmissionReceiptV2,
-    FailureExternalTerminalJoinV2, FailureExternalTransitionPlanV2,
-    FailureRecoveryTerminalReceiptV2, FailureRuntimeExternalV2, RelationDispositionV2,
+    FailureExternalAdmissionReceiptV2, FailureExternalTransitionPlanV2,
+    FailureRecoveryTerminalReceiptV2, FailureRuntimeExternalV2,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_compartment_account_v1, decode_runtime_policy_account_v1,
@@ -43,16 +42,14 @@ use clutch_liveness::Id as LivenessId;
 use clutch_solana_layout::failure_recovery::{
     account_metas_v1, decode_failure_account_body_v1, decode_payload_v1,
     encode_failure_account_header_v1, AcceptRecoveryWorkV1, AdvanceRecoveryScheduleV1,
-    CloseFailureRootV1, CloseRecoveryFundingV1, FailureRecoveryPayloadV1,
-    FailureReplayTombstonePhaseV1, FailureReplayTombstoneV1, RecoveryAccountRoleV1,
-    RecoveryCommonV1, ResolveCallerFundedV1, ResolvePaidRecoveryV1, TriggerRelationRefusalV1,
-    TriggerSourceFailureV1, ACCEPT_RECOVERY_WORK_METAS_V1, CLOSE_FAILURE_ROOT_METAS_V1,
-    CLOSE_RECOVERY_FUNDING_METAS_V1, FAILURE_ACCOUNT_HEADER_BYTES_V1,
-    FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
-    FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2,
-    FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
-    FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1, INITIALIZE_FAILURE_ROOT_METAS_V1,
-    RESOLVE_PAID_RECOVERY_METAS_V1,
+    CloseRecoveryFundingV1, FailureRecoveryPayloadV1, FailureReplayTombstonePhaseV1,
+    FailureReplayTombstoneV1, RecoveryAccountRoleV1, RecoveryCommonV1, TriggerSourceFailureV1,
+    ACCEPT_RECOVERY_WORK_METAS_V1, CLOSE_RECOVERY_FUNDING_METAS_V1,
+    FAILURE_ACCOUNT_HEADER_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
+    FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1,
+    FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
+    FAILURE_LIVENESS_POLICY_BODY_BYTES_V1, FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1,
+    INITIALIZE_FAILURE_ROOT_METAS_V1,
 };
 use clutch_solana_layout::registry::{self, RecoveryAction};
 use clutch_source_plane_v3_runtime::{
@@ -85,6 +82,13 @@ pub fn process(
     )?;
     Err(ClutchError::UnsupportedInstruction.into())
 }
+
+// Relation-refusal, both resolution actions, and semantic-root close
+// intentionally have no mutation helpers here. Their allocated wire shapes do
+// not grant authority: the repository has no persisted relation-execution
+// result owner and no per-occurrence zero-liability retirement owner yet.
+// Keeping these paths absent prevents caller-built relation or retirement DTOs
+// from becoming executable authority while those separate owners are built.
 
 /// Source-owned maturity-failure join. Private fields prevent ID-only use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,70 +187,6 @@ impl AuthenticatedSourceSuccessJoinV1 {
             release,
             handoff,
             source,
-        })
-    }
-}
-
-/// Relation-owner authentication over one physical result account and its
-/// private-field semantic projection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedRelationJoinV1 {
-    account: Pubkey,
-    result: AuthenticatedRelationResultV2,
-}
-
-impl AuthenticatedRelationJoinV1 {
-    /// Bind the physical relation account authenticated by its owning adapter
-    /// to the exact semantic record committed by the payload.
-    pub fn from_relation_adapter(
-        account: Pubkey,
-        result: AuthenticatedRelationResultV2,
-        expected_record_id: [u8; 32],
-    ) -> Outcome<Self> {
-        require(
-            !is_zero_pubkey(&account) && result.relation_record_id == expected_record_id,
-            ClutchError::MismatchedState,
-        )?;
-        Ok(Self { account, result })
-    }
-}
-
-/// Retirement-owner authentication over the exact physical root consumed by
-/// failure closure. Private fields prevent the failure handler from treating a
-/// caller-provided 32-byte identity as retirement authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedRetirementRootJoinV1 {
-    account: Pubkey,
-    retirement_root_id: [u8; 32],
-    binding_id: [u8; 32],
-    market_instance_v2_id: [u8; 32],
-    generation: u64,
-}
-
-impl AuthenticatedRetirementRootJoinV1 {
-    /// Construct only in the retirement adapter after authenticating its
-    /// owner, PDA, complete body, and terminal state.
-    pub fn from_retirement_adapter(
-        account: Pubkey,
-        retirement_root_id: [u8; 32],
-        binding_id: [u8; 32],
-        market_instance_v2_id: [u8; 32],
-        generation: u64,
-    ) -> Outcome<Self> {
-        require(
-            !is_zero_pubkey(&account)
-                && !is_zero_id(retirement_root_id)
-                && !is_zero_id(binding_id)
-                && !is_zero_id(market_instance_v2_id)
-                && generation != 0,
-            ClutchError::MismatchedState,
-        )?;
-        Ok(Self {
-            account,
-            retirement_root_id,
-            binding_id,
-            market_instance_v2_id,
-            generation,
         })
     }
 }
@@ -739,17 +679,6 @@ pub fn plan_source_failure_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
-/// Plan a frozen-relation refusal trigger against an authenticated root.
-pub fn plan_relation_refusal_v1(
-    root: AuthenticatedExternalRootV2,
-    source: AuthenticatedSourceSuccessJoinV1,
-    relation: AuthenticatedRelationResultV2,
-) -> Outcome<FailureExternalTransitionPlanV2> {
-    root.runtime()
-        .plan_trigger_relation_refusal(source.handoff, relation, source.release)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
-}
-
 /// Plan one Clock-driven schedule advance using only the release-embedded
 /// Clock policy and the canonical sysvar snapshot.
 pub fn plan_schedule_advance_v1(
@@ -794,56 +723,6 @@ pub fn plan_accept_recovery_work_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
-/// Plan accepted caller-funded evidence with no keeper movement.
-pub fn plan_caller_funded_resolution_v1(
-    root: AuthenticatedExternalRootV2,
-    source: AuthenticatedSourceSuccessJoinV1,
-    relation: AuthenticatedRelationResultV2,
-    clock_account: &AccountInfo<'_>,
-) -> Outcome<FailureExternalTransitionPlanV2> {
-    let runtime = root.runtime();
-    let accepted = runtime
-        .accept_resolution(source.handoff, relation, source.release)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let policy = source.release.clock_policy();
-    let snapshot = authenticate_clock_snapshot_v1(clock_account)?;
-    require(
-        snapshot.slot >= source.handoff.clock().slot
-            && snapshot.unix_timestamp >= source.handoff.clock().unix_timestamp,
-        ClutchError::MismatchedState,
-    )?;
-    let clock = RecoveryClock {
-        slot: snapshot.slot,
-        unix_timestamp: i64::try_from(snapshot.unix_timestamp)
-            .map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?,
-        current_bucket: policy
-            .bucket_at_timestamp(snapshot.unix_timestamp)
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-    };
-    runtime
-        .plan_resolve_caller_funded(clock, accepted)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
-}
-
-/// Plan accepted evidence plus one final liveness-paid repair unit.
-pub fn plan_paid_resolution_v1(
-    root: AuthenticatedExternalRootV2,
-    source: AuthenticatedSourceSuccessJoinV1,
-    relation: AuthenticatedRelationResultV2,
-    reward_recipient: &Pubkey,
-    scheduled_ceiling_lamports: u64,
-) -> Outcome<FailureExternalTransitionPlanV2> {
-    root.runtime()
-        .plan_resolve_paid_repair(
-            source.handoff,
-            relation,
-            source.release,
-            RecoveryIdentity::from_bytes(reward_recipient.to_bytes()),
-            scheduled_ceiling_lamports,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
-}
-
 /// Execute the complete typed Source-failure trigger handler.
 pub fn handle_source_failure_v1<'a>(
     program_id: &Pubkey,
@@ -856,31 +735,6 @@ pub fn handle_source_failure_v1<'a>(
     require_current_after(accounts, 5, source.handoff.clock())?;
     let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
     let plan = plan_source_failure_v1(root, source)?;
-    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
-}
-
-/// Execute the complete typed relation-refusal trigger handler.
-pub fn handle_relation_refusal_v1<'a>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'a>],
-    payload: TriggerRelationRefusalV1,
-    source: AuthenticatedSourceSuccessJoinV1,
-    relation: AuthenticatedRelationJoinV1,
-) -> Outcome<ExternalSemanticMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::TriggerRelationRefusal, accounts)?;
-    require_success_source_accounts(source, &accounts[1..])?;
-    require_current_after(accounts, 6, source.handoff.clock())?;
-    require(
-        *accounts[5].key == relation.account
-            && relation.result.relation_record_id == payload.relation_record_id
-            && matches!(
-                relation.result.disposition,
-                RelationDispositionV2::Refused(value) if value.code() == payload.refusal_code
-            ),
-        ClutchError::MismatchedState,
-    )?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
-    let plan = plan_relation_refusal_v1(root, source, relation.result)?;
     apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
 }
 
@@ -933,65 +787,8 @@ pub fn handle_accept_recovery_work_v1<'a>(
     )
 }
 
-/// Execute accepted caller-funded evidence with no liveness payment.
-pub fn handle_caller_funded_resolution_v1<'a>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'a>],
-    payload: ResolveCallerFundedV1,
-    source: AuthenticatedSourceSuccessJoinV1,
-    relation: AuthenticatedRelationJoinV1,
-) -> Outcome<ExternalSemanticMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::ResolveCallerFunded, accounts)?;
-    require_success_source_accounts(source, &accounts[1..])?;
-    require(
-        *accounts[5].key == relation.account
-            && relation.result.relation_record_id == payload.relation_record_id
-            && relation.result.disposition == RelationDispositionV2::Accepted,
-        ClutchError::MismatchedState,
-    )?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
-    let plan = plan_caller_funded_resolution_v1(root, source, relation.result, &accounts[6])?;
-    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
-}
-
-/// Execute accepted evidence plus one final liveness-paid repair unit.
-pub fn handle_paid_resolution_v1<'a>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'a>],
-    payload: ResolvePaidRecoveryV1,
-    source: AuthenticatedSourceSuccessJoinV1,
-    relation: AuthenticatedRelationJoinV1,
-) -> Outcome<ExternalWorkMutationV2> {
-    authenticate_ordered_metas_v1(RecoveryAction::ResolvePaidRecovery, accounts)?;
-    require_success_source_accounts(source, &accounts[3..])?;
-    require_current_after(accounts, 10, source.handoff.clock())?;
-    require(
-        *accounts[7].key == relation.account
-            && relation.result.relation_record_id == payload.relation_record_id
-            && relation.result.disposition == RelationDispositionV2::Accepted
-            && accounts[8].key.to_bytes() == payload.reward_recipient,
-        ClutchError::MismatchedState,
-    )?;
-    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
-    let plan = plan_paid_resolution_v1(
-        root,
-        source,
-        relation.result,
-        accounts[8].key,
-        payload.scheduled_ceiling_lamports,
-    )?;
-    apply_work_transition_v1(
-        program_id,
-        RecoveryAction::ResolvePaidRecovery,
-        accounts,
-        &FailureRecoveryPayloadV1::ResolvePaidRecovery(payload),
-        plan,
-    )
-}
-
-/// Apply a trigger, schedule advance, or caller-funded resolution to the root
-/// only. Work-bearing plans are refused by the semantic adapter.
-pub fn apply_semantic_transition_v1(
+/// Apply a Source failure trigger or schedule advance to the root only.
+fn apply_semantic_transition_v1(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     common: RecoveryCommonV1,
@@ -1009,8 +806,8 @@ pub fn apply_semantic_transition_v1(
 }
 
 /// Atomically apply the failure-root and sole liveness Recovery work mutation.
-/// `accounts` must use the accepted-work or paid-resolution ordered contract.
-pub fn apply_work_transition_v1<'a>(
+/// `accounts` must use the accepted-work ordered contract.
+fn apply_work_transition_v1<'a>(
     program_id: &Pubkey,
     action: RecoveryAction,
     accounts: &'a [AccountInfo<'a>],
@@ -1026,18 +823,6 @@ pub fn apply_work_transition_v1<'a>(
                 ACCEPT_RECOVERY_WORK_METAS_V1,
                 7usize,
                 8usize,
-                value.common,
-                value.source_success_handoff_id,
-                value.reward_recipient,
-                value.scheduled_ceiling_lamports,
-            ),
-            (
-                RecoveryAction::ResolvePaidRecovery,
-                FailureRecoveryPayloadV1::ResolvePaidRecovery(value),
-            ) => (
-                RESOLVE_PAID_RECOVERY_METAS_V1,
-                8usize,
-                9usize,
                 value.common,
                 value.source_success_handoff_id,
                 value.reward_recipient,
@@ -1119,62 +904,6 @@ pub fn apply_recovery_close_v1<'a>(
         ClutchError::MismatchedState,
     )?;
     apply_liveness_close(recovery_account, payer, sink, &close.liveness)?;
-    Ok(close)
-}
-
-/// Close only the resolved semantic root after Recovery-close, retirement,
-/// pre-funded replay, and final Source joins have all been authenticated.
-pub fn apply_failure_root_close_v1<'a>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'a>],
-    payload: CloseFailureRootV1,
-    join: FailureExternalTerminalJoinV2,
-    retirement: AuthenticatedRetirementRootJoinV1,
-    source_release: AuthenticatedSourceReleaseV1,
-) -> Outcome<ExternalRootCloseV2> {
-    require_count(accounts, CLOSE_FAILURE_ROOT_METAS_V1.len())?;
-    authenticate_ordered_metas_v1(RecoveryAction::CloseFailureRoot, accounts)?;
-    let root_account = &accounts[0];
-    let payer = &accounts[1];
-    let sink = &accounts[2];
-    let closed_recovery = &accounts[3];
-    let retirement_root = &accounts[4];
-    let tombstone_account = &accounts[5];
-    let source_release_account = &accounts[6];
-    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
-    let current_recovery_terminal = root
-        .runtime()
-        .recovery_terminal_receipt()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        join.id().bytes() == payload.failure_terminal_join_id
-            && join.recovery_terminal_receipt_id() == current_recovery_terminal.id()
-            && join.transition_nonce() == payload.common.expected_transition_nonce
-            && join.retirement_root_id() == payload.retirement_root_id
-            && join.replay_tombstone_id() == payload.replay_tombstone_id
-            && join.source_release_receipt_id() == payload.source_release_receipt_id
-            && retirement.account == *retirement_root.key
-            && retirement.retirement_root_id == join.retirement_root_id()
-            && retirement.binding_id == payload.common.binding_id
-            && retirement.market_instance_v2_id == payload.common.market_instance_v2_id
-            && retirement.generation == payload.common.generation,
-        ClutchError::MismatchedState,
-    )?;
-    require(
-        source_release.id().bytes() == payload.source_release_receipt_id
-            && source_release.account().bytes() == source_release_account.key.to_bytes(),
-        ClutchError::MismatchedState,
-    )?;
-    require_closed_recovery(root.runtime(), closed_recovery)?;
-    terminalize_tombstone(program_id, tombstone_account, payload, join)?;
-    let close = project_external_root_close_v2(root, join).map_err(map_external_error)?;
-    require(
-        close.root == id(root_account.key)
-            && close.root_rent_payer == id(payer.key)
-            && close.neutral_sink == id(sink.key),
-        ClutchError::MismatchedState,
-    )?;
-    apply_root_close(root_account, payer, sink, close)?;
     Ok(close)
 }
 
@@ -1537,73 +1266,6 @@ fn write_root_poststate(
     Ok(())
 }
 
-fn terminalize_tombstone(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    payload: CloseFailureRootV1,
-    join: FailureExternalTerminalJoinV2,
-) -> Outcome<()> {
-    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
-    require(account.is_writable, ClutchError::NotWritable)?;
-    require(
-        account.data_len() == FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1,
-        ClutchError::WrongDataLength,
-    )?;
-    let mut data = account
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let tombstone = FailureReplayTombstoneV1::decode(&data)?;
-    expect_pda(
-        account.key,
-        seeds::failure_replay_tombstone_pda(
-            program_id,
-            &payload.common.market_instance_v2_id,
-            payload.common.generation,
-        ),
-        Some(tombstone.stored_bump),
-    )?;
-    let persisted_balance = tombstone
-        .permanent_rent_lamports
-        .checked_add(tombstone.prior_donation_lamports)
-        .ok_or(ClutchError::Arithmetic)?;
-    require(
-        account.lamports() >= persisted_balance
-            && account.key.to_bytes() == payload.replay_tombstone_id
-            && tombstone.phase == FailureReplayTombstonePhaseV1::Pending
-            && tombstone.binding_id == payload.common.binding_id
-            && tombstone.market_instance_v2_id == payload.common.market_instance_v2_id
-            && tombstone.generation == payload.common.generation,
-        ClutchError::MismatchedState,
-    )?;
-    let terminal = tombstone
-        .terminalized(
-            join.id().bytes(),
-            join.retirement_root_id(),
-            join.source_release_receipt_id(),
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    terminal.encode(&mut data)?;
-    Ok(())
-}
-
-fn require_closed_recovery(
-    runtime: FailureRuntimeExternalV2,
-    account: &AccountInfo<'_>,
-) -> Outcome<()> {
-    require(
-        account.key.to_bytes() == runtime.recovery_compartment_account_id().bytes(),
-        ClutchError::WrongPda,
-    )?;
-    require(
-        *account.owner == SYSTEM_PROGRAM_ID
-            && account.lamports() == 0
-            && account.data_len() == 0
-            && !account.executable
-            && !account.is_writable,
-        ClutchError::MismatchedState,
-    )
-}
-
 fn require_failure_source_accounts(
     source: AuthenticatedSourceFailureJoinV1,
     accounts: &[AccountInfo<'_>],
@@ -1656,48 +1318,6 @@ fn require_current_after(
         current.slot >= source_clock.slot && current.unix_timestamp >= source_clock.unix_timestamp,
         ClutchError::MismatchedState,
     )
-}
-
-fn apply_root_close(
-    root: &AccountInfo<'_>,
-    payer: &AccountInfo<'_>,
-    sink: &AccountInfo<'_>,
-    close: ExternalRootCloseV2,
-) -> Outcome<()> {
-    require(
-        close
-            .root_rent_refund_lamports
-            .checked_add(close.neutral_sink_lamports)
-            .ok_or(ClutchError::Arithmetic)?
-            == root.lamports(),
-        ClutchError::MismatchedState,
-    )?;
-    let payer_after = payer
-        .lamports()
-        .checked_add(close.root_rent_refund_lamports)
-        .ok_or(ClutchError::Arithmetic)?;
-    let sink_after = sink
-        .lamports()
-        .checked_add(close.neutral_sink_lamports)
-        .ok_or(ClutchError::Arithmetic)?;
-    {
-        let mut root_lamports = root
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let mut payer_lamports = payer
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        let mut sink_lamports = sink
-            .try_borrow_mut_lamports()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        **root_lamports = 0;
-        **payer_lamports = payer_after;
-        **sink_lamports = sink_after;
-    }
-    root.resize(0)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    root.assign(&SYSTEM_PROGRAM_ID);
-    Ok(())
 }
 
 fn require_transfer(
@@ -1889,14 +1509,6 @@ fn id(key: &Pubkey) -> AccountId {
 
 fn liveness_id(key: &Pubkey) -> LivenessId {
     LivenessId::from_bytes(key.to_bytes())
-}
-
-fn is_zero_pubkey(key: &Pubkey) -> bool {
-    key.to_bytes().iter().all(|byte| *byte == 0)
-}
-
-fn is_zero_id(id: [u8; 32]) -> bool {
-    id.iter().all(|byte| *byte == 0)
 }
 
 fn array_at<const N: usize>(input: &[u8], offset: usize) -> Outcome<[u8; N]> {
