@@ -14,8 +14,9 @@ use crate::seeds;
 use clutch_dealer_runtime_contract::{
     dealer_runtime_liveness_policy_id_v1,
     prepare_bind_epoch_v3, prepare_dealer_sponsor_funding_transfer_v1,
-    prepare_activate_dealer_v3, prepare_dealer_lp_share_transfer_v1,
-    prepare_facility_initialization_v3, prepare_first_lp_page_v2,
+    prepare_activate_dealer_v3, prepare_cancel_stale_funding_v3,
+    prepare_dealer_lp_share_transfer_v1, prepare_facility_initialization_v3,
+    prepare_first_lp_page_v2,
     prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
     DealerActionReceiptV1, DealerChildCountsV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
@@ -79,6 +80,7 @@ const CREATE_FIRST_LP_PAGE_ACCOUNT_COUNT: usize = 20;
 const CREATE_NEXT_LP_PAGE_ACCOUNT_COUNT: usize = 21;
 const LP_TRANSFER_ACCOUNT_COUNT: usize = 7;
 const ACTIVATE_ACCOUNT_COUNT: usize = 21;
+const CANCEL_FUNDING_ACCOUNT_COUNT: usize = 20;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 
 fn id(key: &Pubkey) -> Id {
@@ -2509,6 +2511,185 @@ fn activate_facility(
         .map_err(dealer_fault)
 }
 
+#[inline(never)]
+fn cancel_stale_funding(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, CANCEL_FUNDING_ACCOUNT_COUNT)?;
+    let payload =
+        DealerRuntimePayloadV1::decode(DealerFacilityAction::CancelFunding, payload_bytes)
+            .map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    require_aliases(accounts, (0, 16))?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, position, replay, replay_binding) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &policy,
+        &state,
+        false,
+    )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let schedule = authenticate_schedule(program_id, &accounts[6])?;
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[7],
+        &accounts[8..15],
+        DealerLivenessCompartmentV1::Recovery.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let recovery = runtime_states[DealerLivenessCompartmentV1::Recovery.index()];
+    require(
+        recovery.identity.payer.bytes() == accounts[16].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let current_slot = read_clock_slot(&accounts[17])?;
+    let rent = read_rent(&accounts[18])?;
+    require_system_program(&accounts[19])?;
+    require(
+        accounts[6].lamports() >= rent.minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    require_creatable(&accounts[15])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(DealerLivenessCompartmentV1::Recovery),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Recovery),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Recovery),
+        receipt_account_id: id(accounts[15].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[4].key),
+        action: DealerRuntimeActionV1::CancelFunding,
+        compartment: DealerLivenessCompartmentV1::Recovery,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Recovery),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports
+            [DealerRuntimeActionV1::CancelFunding as usize],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[0].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[15].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[15].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &recovery)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[7],
+        &accounts[14],
+        recovery,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt
+            .runtime_receipt_observation()
+            .map_err(dealer_fault)?,
+    )?;
+    let prepared = prepare_cancel_stale_funding_v3(
+        &policy,
+        &binding,
+        &state,
+        id(accounts[2].key),
+        &dependency,
+        &schedule,
+        &runtime_binding,
+        &authorization,
+        current_slot,
+        &position,
+        &replay,
+        replay_binding,
+    )
+    .map_err(dealer_fault)?;
+
+    create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[15],
+        &accounts[19],
+        &rent,
+        DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+        &[
+            seeds::SEED_DEALER_ACTION_RECEIPT,
+            &receipt_slot.bytes(),
+            &[receipt_bump],
+        ],
+    )?;
+    apply_liveness_transition(
+        &accounts[14],
+        &accounts[0],
+        &accounts[16],
+        &liveness_transition,
+    )?;
+    write_dealer_body(
+        &accounts[15],
+        DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+        DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+        receipt_bump,
+        &receipt,
+    )?;
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &prepared.state_after,
+    )?;
+    prepared
+        .replay
+        .replay_post()
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
 /// Execute one facility action admitted by the non-production profile.
 pub fn process(
     program_id: &Pubkey,
@@ -2529,6 +2710,9 @@ pub fn process(
         }
         DealerFacilityAction::Activate => {
             activate_facility(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::CancelFunding => {
+            cancel_stale_funding(program_id, accounts, sequence, payload)
         }
         DealerFacilityAction::BindEpoch => bind_epoch(program_id, accounts, sequence, payload),
         _ => super::dealer_runtime::process_reserved_disabled(action),
