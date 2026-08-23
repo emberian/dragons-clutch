@@ -16,6 +16,7 @@ mod builder;
 mod direct;
 mod position;
 mod successor;
+mod successor_v3;
 mod virtual_claim;
 
 pub use adapter::{
@@ -55,6 +56,27 @@ pub use successor::{
     OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V2, OWNER_SETTLEMENT_BODY_V2_BYTES,
     OWNER_SETTLEMENT_PDA_DOMAIN_V2, SETTLEMENT_RECEIPT_DATA_ID_DOMAIN_V2,
     SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V2_BYTES,
+};
+
+pub use successor_v3::{
+    build_owner_settlement_expectation_basis_book_v3,
+    derive_owner_finalized_row_data_id_v3, derive_settlement_receipt_data_id_v3,
+    prepare_create_owner_settlement_account_v3, prepare_realize_owner_cash_v3,
+    project_owner_receipt_end_v3, project_owner_settlement_account_v3,
+    AuthenticatedReservationHandoffV3, AuthenticatedSettlementReceiptEndV3,
+    OwnerCashRealizationPlanV3, OwnerFinalizedRowDataHashV3, OwnerFinalizedRowDataIdV3,
+    OwnerSettlementAccountProjectionV3, OwnerSettlementAccountViewV3,
+    OwnerSettlementAccumulatorV3, OwnerSettlementCreatePlanV3, OwnerSettlementDispositionV3,
+    OwnerSettlementExpectationBasisBookV3, OwnerSettlementExpectationBasisV3,
+    OwnerSettlementExpectationV3, OwnerSettlementPdaProjectionV3,
+    OwnerSettlementReceiptAccountingProjectionV3, OwnerSettlementStateV3,
+    OwnerSettlementTerminalProjectionV3, SelectedOwnerRowAuthorityV3,
+    SettlementReceiptDataHashV3, SettlementReceiptDataIdV3, SettlementReceiptRouteV3,
+    VerifiedSettlementOrderV3,
+    OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V3, OWNER_SETTLEMENT_BODY_V3_BYTES,
+    OWNER_SETTLEMENT_OUTER_TAG_V3, OWNER_SETTLEMENT_OUTER_VERSION_V3,
+    OWNER_SETTLEMENT_PDA_DOMAIN_V3, SETTLEMENT_RECEIPT_BODY_V3_BYTES,
+    SETTLEMENT_RECEIPT_DATA_ID_DOMAIN_V3, SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V3_BYTES,
 };
 
 pub use direct::{
