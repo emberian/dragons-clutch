@@ -14,8 +14,9 @@ use crate::seeds;
 use clutch_dealer_runtime_contract::{
     dealer_runtime_liveness_policy_id_v1,
     prepare_bind_epoch_v3, prepare_dealer_sponsor_funding_transfer_v1,
-    prepare_facility_initialization_v3, prepare_first_lp_page_v2, prepare_next_lp_page_v2,
-    DealerActionReceiptV1, DealerChildCountsV2,
+    prepare_dealer_lp_share_transfer_v1, prepare_facility_initialization_v3,
+    prepare_first_lp_page_v2, prepare_lp_contribution_v2, prepare_lp_withdrawal_v2,
+    prepare_next_lp_page_v2, DealerActionReceiptV1, DealerChildCountsV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
     DealerLivenessCompartmentV1, DealerLivenessScheduleV1, DealerPhaseV2,
@@ -75,6 +76,7 @@ use super::genesis::{read_rent, require_creatable, require_system_program};
 const INITIALIZE_ACCOUNT_COUNT: usize = 22;
 const CREATE_FIRST_LP_PAGE_ACCOUNT_COUNT: usize = 20;
 const CREATE_NEXT_LP_PAGE_ACCOUNT_COUNT: usize = 21;
+const LP_TRANSFER_ACCOUNT_COUNT: usize = 7;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 
 fn id(key: &Pubkey) -> Id {
@@ -314,6 +316,7 @@ fn authenticate_position_and_replay(
     replay_account: &AccountInfo<'_>,
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
     state: &DealerStateV2,
+    position_writable: bool,
 ) -> Outcome<(
     FacilityPositionBindingV2,
     DealerPositionObservationV3,
@@ -329,8 +332,12 @@ fn authenticate_position_and_replay(
         ClutchError::WrongProgramOwner,
     )?;
     require(
-        !position_account.is_writable,
-        ClutchError::UnexpectedWritable,
+        position_account.is_writable == position_writable,
+        if position_writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
     )?;
     require(replay_account.is_writable, ClutchError::NotWritable)?;
     require(
@@ -613,7 +620,7 @@ fn require_initialize_aliases(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
 }
 
 #[inline(never)]
-fn authenticate_sponsor_position(
+fn authenticate_controlled_general_position(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     actor: Id,
@@ -931,8 +938,12 @@ fn initialize_facility(
     require_initialize_aliases(accounts)?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[2])?;
-    let (sponsor_position, sponsor_projection) =
-        authenticate_sponsor_position(program_id, &accounts[3], id(accounts[0].key), &policy)?;
+    let (sponsor_position, sponsor_projection) = authenticate_controlled_general_position(
+        program_id,
+        &accounts[3],
+        id(accounts[0].key),
+        &policy,
+    )?;
     let sponsor = Id::from_bytes(sponsor_position.owner().bytes());
     let genesis = DealerFacilityGenesisV1 {
         policy_id: Id::from_bytes(policy_id),
@@ -1615,6 +1626,7 @@ fn bind_epoch(
         &accounts[4],
         &policy,
         &state,
+        false,
     )?;
     require(
         replay.next_transition_ordinal() == payload.expected_replay_ordinal,
@@ -1895,6 +1907,7 @@ fn create_lp_page(
         &accounts[4],
         &policy,
         &state,
+        false,
     )?;
     require(
         replay.next_transition_ordinal() == payload.expected_replay_ordinal,
@@ -2152,6 +2165,167 @@ fn create_lp_page(
         .map_err(dealer_fault)
 }
 
+#[inline(never)]
+fn transfer_lp_funding(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DealerFacilityAction,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require_count(accounts, LP_TRANSFER_ACCOUNT_COUNT)?;
+    let payload = DealerRuntimePayloadV1::decode(action, payload_bytes).map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(!accounts[0].is_writable, ClutchError::UnexpectedWritable)?;
+    require_aliases(accounts, (accounts.len(), accounts.len()))?;
+
+    let runtime_action = match action {
+        DealerFacilityAction::Contribute => DealerRuntimeActionV1::Contribute,
+        DealerFacilityAction::WithdrawFunding => DealerRuntimeActionV1::WithdrawFunding,
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state(program_id, &accounts[2])?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (binding, facility_observation, replay, replay_binding) =
+        authenticate_position_and_replay(
+            program_id,
+            &accounts[2],
+            &accounts[3],
+            &accounts[4],
+            &policy,
+            &state,
+            true,
+        )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let (lp_position, lp_projection) = authenticate_controlled_general_position(
+        program_id,
+        &accounts[5],
+        id(accounts[0].key),
+        &policy,
+    )?;
+    let page = authenticate_lp_page(program_id, &accounts[6])?;
+    require(
+        page.page_ordinal == payload.page_ordinal,
+        ClutchError::MismatchedState,
+    )?;
+    let market = DealerPositionMarketJoinV1 {
+        market_instance_v2_id: policy.market_instance_v2_id,
+        realm_id: policy.realm_id,
+        collateral_policy_id: binding.collateral_policy_id,
+        collateral_release_id: binding.collateral_release_id,
+        outcome_count: policy.outcome_count,
+    };
+    let lp_owner = Id::from_bytes(lp_position.owner().bytes());
+    let transfer = prepare_dealer_lp_share_transfer_v1(
+        runtime_action,
+        &policy,
+        market,
+        lp_owner,
+        payload.share_delta,
+        DealerTransferPositionV3::General {
+            account_id: id(accounts[5].key),
+            position: lp_projection,
+        },
+        DealerTransferPositionV3::Facility {
+            account_id: id(accounts[3].key),
+            position: facility_observation.projection,
+        },
+    )
+    .map_err(dealer_fault)?;
+    let (page_after, state_after, replay_after, facility_post, lp_post) = match action {
+        DealerFacilityAction::Contribute => {
+            let prepared = prepare_lp_contribution_v2(
+                &policy,
+                &state,
+                id(accounts[2].key),
+                &page,
+                lp_owner,
+                payload.share_delta,
+                transfer,
+                &replay,
+                replay_binding,
+            )
+            .map_err(dealer_fault)?;
+            (
+                prepared.page_after,
+                prepared.state_after,
+                prepared.replay.replay_post(),
+                prepared.transfer.destination_post(),
+                prepared.transfer.source_post(),
+            )
+        }
+        DealerFacilityAction::WithdrawFunding => {
+            let prepared = prepare_lp_withdrawal_v2(
+                &policy,
+                &state,
+                id(accounts[2].key),
+                &page,
+                lp_owner,
+                payload.share_delta,
+                transfer,
+                &replay,
+                replay_binding,
+            )
+            .map_err(dealer_fault)?;
+            (
+                prepared.page_after,
+                prepared.state_after,
+                prepared.replay.replay_post(),
+                prepared.transfer.source_post(),
+                prepared.transfer.destination_post(),
+            )
+        }
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+
+    accounts[3]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &facility_post
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    accounts[5]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &lp_post
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    let page_bump = accounts[6].data.borrow()[2];
+    write_dealer_body(
+        &accounts[6],
+        DEALER_LP_PAGE_V2_ACCOUNT_TAG,
+        DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
+        page_bump,
+        &page_after,
+    )?;
+    let state_bump = accounts[2].data.borrow()[2];
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V2_ACCOUNT_TAG,
+        DEALER_STATE_V2_ACCOUNT_VERSION,
+        state_bump,
+        &state_after,
+    )?;
+    replay_after
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)
+}
+
 /// Execute one facility action admitted by the non-production profile.
 pub fn process(
     program_id: &Pubkey,
@@ -2166,6 +2340,9 @@ pub fn process(
         }
         DealerFacilityAction::CreateLpPage => {
             create_lp_page(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::Contribute | DealerFacilityAction::WithdrawFunding => {
+            transfer_lp_funding(program_id, accounts, sequence, action, payload)
         }
         DealerFacilityAction::BindEpoch => bind_epoch(program_id, accounts, sequence, payload),
         _ => super::dealer_runtime::process_reserved_disabled(action),

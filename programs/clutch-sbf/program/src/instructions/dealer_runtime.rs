@@ -1127,9 +1127,7 @@ const fn recipient_alias_allowed_v1(left: DealerMetaRoleV1, right: DealerMetaRol
 #[inline(never)]
 pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Refusal> {
     match action {
-        DealerFacilityAction::Contribute
-        | DealerFacilityAction::WithdrawFunding
-        | DealerFacilityAction::Activate
+        DealerFacilityAction::Activate
         | DealerFacilityAction::CancelFunding
         | DealerFacilityAction::RefundCancelledSponsor
         | DealerFacilityAction::LapseEpoch
@@ -1149,6 +1147,8 @@ pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Ref
         // reaching this function. Keep direct internal misuse fail-closed.
         DealerFacilityAction::Initialize
         | DealerFacilityAction::CreateLpPage
+        | DealerFacilityAction::Contribute
+        | DealerFacilityAction::WithdrawFunding
         | DealerFacilityAction::BindEpoch => {
             Err(ClutchError::UnsupportedInstruction.into())
         }
