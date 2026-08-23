@@ -11,7 +11,13 @@
 
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_admission::{
+    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+};
+use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
+use crate::instructions::product_market::{
+    authenticate_market_instance_terminal_v1, AuthenticatedMarketInstanceTerminalV1,
+};
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellPlanV2,
@@ -19,6 +25,7 @@ use clutch_failure_policy_runtime::market_interval_cell_v2::{
     FailureMarketIntervalCellV2, FAILURE_MARKET_INTERVAL_CELL_BYTES_V2,
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
+    plan_close_failure_market_interval_accounts_v2, FailureMarketIntervalCloseAuthorizationIdV2,
     FailureMarketIntervalFamilySealReceiptV2, FailureMarketIntervalFundingReceiptV2,
     FailureMarketIntervalHistoryAppendReceiptV2, FailureMarketIntervalHistoryPlanV2,
     FailureMarketIntervalHistoryStateIdV2, FailureMarketIntervalHistoryV2,
@@ -40,6 +47,8 @@ const CELL_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-cell-account-authentication/v2";
 const HISTORY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-history-account-authentication/v2";
+const CLOSE_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/failure-market-interval-physical-close/v2";
 
 const _: () =
     assert!(FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2 == FAILURE_MARKET_INTERVAL_CELL_BYTES_V2);
@@ -127,6 +136,69 @@ impl AuthenticatedFailureMarketIntervalAccountsV2 {
     /// Market-scoped liveness quote admission used for hostile decoding.
     pub(crate) const fn quote(self) -> FailureMarketRecoveryQuoteAdmissionReceiptV1 {
         self.quote
+    }
+}
+
+/// Exact authenticated physical close of the sealed reusable interval pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureMarketIntervalCloseV2 {
+    id: ProductContentId,
+    close_authorization_id: FailureMarketIntervalCloseAuthorizationIdV2,
+    market_terminal_authentication_id: ProductContentId,
+    cell_account: Pubkey,
+    history_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_sink: Pubkey,
+    refunded_principal_lamports: u64,
+    neutralized_donation_lamports: u64,
+}
+
+impl AuthenticatedFailureMarketIntervalCloseV2 {
+    /// Complete Product/Failure/physical close authentication.
+    pub(crate) const fn id(self) -> ProductContentId {
+        self.id
+    }
+
+    /// Pure Failure close authorization consumed by the writer.
+    pub(crate) const fn close_authorization_id(
+        self,
+    ) -> FailureMarketIntervalCloseAuthorizationIdV2 {
+        self.close_authorization_id
+    }
+
+    /// Live Product terminal-account authentication consumed by this close.
+    pub(crate) const fn market_terminal_authentication_id(self) -> ProductContentId {
+        self.market_terminal_authentication_id
+    }
+
+    /// Deleted reusable-cell account.
+    pub(crate) const fn cell_account(self) -> Pubkey {
+        self.cell_account
+    }
+
+    /// Deleted append-only history account.
+    pub(crate) const fn history_account(self) -> Pubkey {
+        self.history_account
+    }
+
+    /// Immutable principal recipient.
+    pub(crate) const fn rent_refund_owner(self) -> Pubkey {
+        self.rent_refund_owner
+    }
+
+    /// Immutable unsolicited-lamport sink.
+    pub(crate) const fn neutral_sink(self) -> Pubkey {
+        self.neutral_sink
+    }
+
+    /// Exact principal returned to the immutable refund owner.
+    pub(crate) const fn refunded_principal_lamports(self) -> u64 {
+        self.refunded_principal_lamports
+    }
+
+    /// Exact unsolicited surplus sent only to the immutable neutral sink.
+    pub(crate) const fn neutralized_donation_lamports(self) -> u64 {
+        self.neutralized_donation_lamports
     }
 }
 
@@ -504,6 +576,184 @@ pub(crate) fn write_failure_market_interval_family_seal_v2(
         history_data_id,
         history_authentication_id,
         ..authenticated
+    })
+}
+
+/// Close the reusable cell first and append-only history second, only after
+/// the exact sealed Failure-family receipt has been consumed by Product's
+/// authenticated whole-Market terminal root.
+///
+/// Both accounts remain readable until every semantic and physical prestate
+/// check succeeds. The two accounts and both recipients are then mutated in
+/// one outer instruction; any later refusal rolls the entire batch back.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn close_failure_market_interval_accounts_v2<'a>(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'a>,
+    market_root_account: &AccountInfo<'a>,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    rent_refund_owner: &AccountInfo<'a>,
+    neutral_sink: &AccountInfo<'a>,
+    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
+    seal: FailureMarketIntervalFamilySealReceiptV2,
+    market_terminal: AuthenticatedMarketInstanceTerminalV1,
+) -> Outcome<AuthenticatedFailureMarketIntervalCloseV2> {
+    require(
+        !admission_root_account.is_writable && !market_root_account.is_writable,
+        ClutchError::UnexpectedWritable,
+    )?;
+    let live_admission =
+        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+    let live_market_terminal = authenticate_market_instance_terminal_v1(
+        program_id,
+        market_root_account,
+        authenticated.cell.market_instance_id(),
+        authenticated.cell.generation(),
+    )?;
+    require(
+        live_admission.account() == authenticated.admission_root_account
+            && live_admission.state().binding().id()
+                == authenticated.cell.failure_policy_binding_id()
+            && live_market_terminal == market_terminal
+            && market_terminal.root_account() == *market_root_account.key
+            && authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Idle
+            && market_terminal.owner_program() == *program_id
+            && market_terminal.market_instance_id() == authenticated.cell.market_instance_id()
+            && market_terminal.generation() == authenticated.cell.generation()
+            && market_terminal.failure_terminal_receipt_id().bytes()
+                == seal.facts().family_terminal_receipt_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        *admission_root_account.key != *market_root_account.key
+            && *admission_root_account.key != *cell_account.key
+            && *admission_root_account.key != *history_account.key
+            && *admission_root_account.key != *rent_refund_owner.key
+            && *admission_root_account.key != *neutral_sink.key
+            && *market_root_account.key != *cell_account.key
+            && *market_root_account.key != *history_account.key
+            && *market_root_account.key != *rent_refund_owner.key
+            && *market_root_account.key != *neutral_sink.key
+            && *cell_account.key != *history_account.key
+            && *cell_account.key != *rent_refund_owner.key
+            && *cell_account.key != *neutral_sink.key
+            && *history_account.key != *rent_refund_owner.key
+            && *history_account.key != *neutral_sink.key
+            && *rent_refund_owner.key != *neutral_sink.key,
+        ClutchError::AccountAlias,
+    )?;
+    for recipient in [rent_refund_owner, neutral_sink] {
+        require(recipient.is_writable, ClutchError::NotWritable)?;
+        require(!recipient.is_signer, ClutchError::NonCanonical)?;
+        require(!recipient.executable, ClutchError::ExecutableAccount)?;
+    }
+    authenticate_close_account_prestate(
+        program_id,
+        cell_account,
+        authenticated.cell_account,
+        authenticated.cell_data_id,
+        authenticated.cell_observed_lamports,
+    )?;
+    authenticate_close_account_prestate(
+        program_id,
+        history_account,
+        authenticated.history_account,
+        authenticated.history_data_id,
+        authenticated.history_observed_lamports,
+    )?;
+    let plan = plan_close_failure_market_interval_accounts_v2(
+        authenticated.history,
+        seal,
+        cell_account.lamports(),
+        history_account.lamports(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        plan.work_account.bytes() == cell_account.key.to_bytes()
+            && plan.history_account.bytes() == history_account.key.to_bytes()
+            && plan.rent_refund_owner.bytes() == rent_refund_owner.key.to_bytes()
+            && plan.neutral_sink.bytes() == neutral_sink.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let refunded_principal_lamports = plan
+        .work_rent_refund_lamports
+        .checked_add(plan.history_rent_refund_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let neutralized_donation_lamports = plan
+        .work_donation_lamports
+        .checked_add(plan.history_donation_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let closed_account_lamports = cell_account
+        .lamports()
+        .checked_add(history_account.lamports())
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        refunded_principal_lamports
+            .checked_add(neutralized_donation_lamports)
+            .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+            == closed_account_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let refund_after = rent_refund_owner
+        .lamports()
+        .checked_add(refunded_principal_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let sink_after = neutral_sink
+        .lamports()
+        .checked_add(neutralized_donation_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    {
+        let mut cell_lamports = cell_account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut history_lamports = history_account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut refund_lamports = rent_refund_owner
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut sink_lamports = neutral_sink
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **cell_lamports = 0;
+        **history_lamports = 0;
+        **refund_lamports = refund_after;
+        **sink_lamports = sink_after;
+    }
+    cell_account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    cell_account.assign(&SYSTEM_PROGRAM_ID);
+    history_account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    history_account.assign(&SYSTEM_PROGRAM_ID);
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            CLOSE_AUTHENTICATION_DOMAIN_V2,
+            &plan.authorization_id.bytes(),
+            &market_terminal.id().bytes(),
+            cell_account.key.as_ref(),
+            history_account.key.as_ref(),
+            rent_refund_owner.key.as_ref(),
+            neutral_sink.key.as_ref(),
+            &refunded_principal_lamports.to_le_bytes(),
+            &neutralized_donation_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_data_id(id)?;
+    Ok(AuthenticatedFailureMarketIntervalCloseV2 {
+        id,
+        close_authorization_id: plan.authorization_id,
+        market_terminal_authentication_id: market_terminal.id(),
+        cell_account: *cell_account.key,
+        history_account: *history_account.key,
+        rent_refund_owner: *rent_refund_owner.key,
+        neutral_sink: *neutral_sink.key,
+        refunded_principal_lamports,
+        neutralized_donation_lamports,
     })
 }
 
