@@ -20,7 +20,7 @@ use clutch_product_series::{
     RegistryProgramReleaseV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
     SeriesAttachmentPlanV1, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3, SeriesAttachmentPlanV4,
     SeriesFundingQuoteV1, SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4,
-    SeriesFundingTermsV2, SeriesPlanV5, SeriesPlanV5Id,
+    SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
@@ -234,12 +234,18 @@ pub struct AuthenticatedSeriesRegistryCapabilityRefsV1 {
 pub struct AuthenticatedSeriesRegistryCapabilityRefsV2 {
     series_registry_account: Pubkey,
     series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: SeriesFundingTermsV2Id,
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
     compiler_bundle_id: ContentId,
 }
 
 impl AuthenticatedSeriesRegistryCapabilityRefsV2 {
+    /// Exact funding terms retained by the hostile-decoded current registry.
+    pub const fn funding_terms_id(self) -> SeriesFundingTermsV2Id {
+        self.funding_terms_id
+    }
+
     /// Exact BundleV5 identity retained by the current SeriesRegistry.
     pub const fn compiler_bundle_id(self) -> ContentId {
         self.compiler_bundle_id
@@ -373,6 +379,7 @@ fn authenticate_series_registry_capability_refs_v2_with_role(
     Ok(AuthenticatedSeriesRegistryCapabilityRefsV2 {
         series_registry_account: *account.key,
         series_plan_id: value.series_plan_id,
+        funding_terms_id: value.funding_terms_id,
         registry_release_id: value.registry_release_id,
         capability_profile_id: value.capability_profile_id,
         compiler_bundle_id: value.compiler_bundle_id.content_id(),
@@ -799,6 +806,7 @@ impl AuthenticatedRegistryCapabilityReleaseV3 {
 pub struct AuthenticatedRegistryCapabilityV3 {
     series_registry_account: Pubkey,
     series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: SeriesFundingTermsV2Id,
     compiler_bundle_id: ContentId,
     program_account: Pubkey,
     programdata_account: Pubkey,
@@ -818,6 +826,11 @@ impl AuthenticatedRegistryCapabilityV3 {
     /// Exact registered recurring Series.
     pub const fn series_plan_id(self) -> SeriesPlanV5Id {
         self.series_plan_id
+    }
+
+    /// Exact funding terms retained by the hostile-decoded current SeriesRegistry.
+    pub const fn funding_terms_id(self) -> SeriesFundingTermsV2Id {
+        self.funding_terms_id
     }
 
     /// Exact BundleV5 identity retained by the hostile-decoded SeriesRegistryV2.
@@ -999,6 +1012,7 @@ pub fn authenticate_registry_capability_v3(
     Ok(AuthenticatedRegistryCapabilityV3 {
         series_registry_account: registry_refs.series_registry_account,
         series_plan_id: registry_refs.series_plan_id,
+        funding_terms_id: registry_refs.funding_terms_id,
         compiler_bundle_id: registry_refs.compiler_bundle_id,
         program_account: authenticated.program_account,
         programdata_account: authenticated.programdata_account,
