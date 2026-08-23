@@ -56,7 +56,7 @@ use clutch_general_v2_runtime::{
     derive_root_owner_basis_v4, derive_settlement_root_expectation_from_certified_fee_v2,
     derive_zero_fee_owner_finalization_evidence_v5, prepare_realize_owner_cash_v5,
     project_owner_settlement_account_v5, CandidateEntitlementProjectionV4,
-    OwnerCashRealizationPlanV5, OwnerRowFeeEvidenceV4, OwnerSettlementAccountProjectionV5,
+    OwnerCashRealizationPlanV5, OwnerRowFeeEvidenceV5, OwnerSettlementAccountProjectionV5,
     OwnerSettlementAccountViewV5, SettlementRootExpectationProjectionV1,
     SettlementTraversalProjectionV4,
 };
@@ -661,12 +661,12 @@ impl PreparedOwnerFeeAction24V5 {
     }
 
     /// Dependency-ready input for the pure General row materializer.
-    pub const fn owner_row_fee_evidence(&self) -> OwnerRowFeeEvidenceV4 {
+    pub const fn owner_row_fee_evidence(&self) -> OwnerRowFeeEvidenceV5 {
         match self.evidence {
             PreparedOwnerFeeEvidenceV5::CandidateFee(value) => {
-                OwnerRowFeeEvidenceV4::CandidateFee(value.selected_fee())
+                OwnerRowFeeEvidenceV5::CandidateFee(value.selected_fee())
             }
-            PreparedOwnerFeeEvidenceV5::NoFeeRecord(_) => OwnerRowFeeEvidenceV4::NoFeeRecord,
+            PreparedOwnerFeeEvidenceV5::NoFeeRecord(_) => OwnerRowFeeEvidenceV5::NoFeeRecord,
         }
     }
 }
