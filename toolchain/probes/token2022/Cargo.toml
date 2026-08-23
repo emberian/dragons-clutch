@@ -34,6 +34,10 @@ solana-program-error = "=3.0.1"
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
 spl-token-2022-interface = "=3.1.1"
+# Instruction and fixed-layout client for the comparative legacy-program test.
+# The executable under test still comes from solana-program-binaries, not this
+# interface crate.
+spl-token-interface = "=3.0.0"
 
 [dev-dependencies]
 solana-account = "=4.3.2"

@@ -3,7 +3,7 @@
 Status: **feasibility probe, 2026-08-18**. Not a program, not a component of
 the protocol, not evidence about Dragon's Clutch.
 
-This directory answers one question and no others: *can the Token-2022 leg of
+This directory primarily answers one question: *can the Token-2022 leg of
 [`SOLANA_REFERENCE_ADAPTER.md`](../../../docs/implementation/SOLANA_REFERENCE_ADAPTER.md)
 obligations 5-7 be built on this host, and does the V1 collateral matrix
 actually refuse what it says it refuses when it is run against bytes a real
@@ -37,10 +37,24 @@ into an accept-or-refuse decision under a V1 Realm collateral profile. Its
 anything observed on chain are directly comparable. The Python model decides
 over a hand-built snapshot; this decides over bytes the token program wrote.
 
-`tests/token2022_probe.rs` drives six scenarios against the bank. Four are
+The probe also carries one comparative legacy SPL scenario for the collateral
+adapter V2 design. Against the real `spl_p_token-1.0.0.so` BPF artifact that
+`solana-program-binaries` installs at the legacy program id in the same local
+bank, it establishes that checked transfers preserve exact raw atoms, a wallet
+cannot spend from a PDA-owned account, and legacy `InitializeImmutableOwner` is
+only a compatibility no-op: the current owner can still rotate account
+ownership. This does not make the current Clutch SBF adapter legacy-routeable
+or identify a production deployment; it pins why a future legacy profile needs
+a separately named PDA-sole-signer/release-bound custody theorem.
+
+The comparative run is recorded separately in
+[`evidence/legacy_spl_addendum_2026-08-22.txt`](evidence/legacy_spl_addendum_2026-08-22.txt).
+
+`tests/token2022_probe.rs` drives seven scenarios against the bank. Four are
 positive or negative admission decisions, one is the mint/burn/transfer
-lifecycle, and one deliberately admits a mint V1 forbids so that the refusals
-are falsifiable rather than vacuous.
+lifecycle, one deliberately admits a mint V1 forbids so that the refusals are
+falsifiable rather than vacuous, and one compares legacy SPL's exact transfer
+and weaker owner-guard semantics.
 
 ## Toolchain
 

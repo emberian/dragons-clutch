@@ -1,0 +1,12 @@
+[workspace]
+
+[package]
+name = "clutch-collateral-adapter-conformance"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Host-only conformance model for Realm-selected collateral adapters"
+
+[lints.rust]
+unsafe_code = "forbid"

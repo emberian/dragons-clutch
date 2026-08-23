@@ -1,12 +1,15 @@
 //! Token-2022 probe scenarios, executed by the in-process Agave bank that
 //! `solana-program-test` starts.
 //!
-//! Every fact asserted below was produced by the real Token-2022 program ELF
-//! that `solana-program-binaries` installs at genesis, not by a model of it.
-//! What that does establish: Token-2022 mints, token accounts, mint, burn and
-//! transfer are reachable in this environment, atoms move the way the adapter's
-//! conservation obligations assume, and the `COLLATERAL_PROFILES.md` matrix
-//! refuses a hostile mint when it is run against bytes that program wrote.
+//! Every Token-2022 fact asserted below was produced by the real Token-2022
+//! program ELF that `solana-program-binaries` installs at genesis, not by a
+//! model of it. The comparative legacy test executes the separately pinned
+//! `spl_p_token-1.0.0.so` BPF artifact installed at the legacy program id by the
+//! same harness. What that establishes: both token families are reachable in
+//! this environment, atoms move the way the adapter's conservation obligations
+//! assume, the `COLLATERAL_PROFILES.md` matrix refuses a hostile Token-2022 mint
+//! when run against bytes that program wrote, and the two owner-guard semantics
+//! are observably different.
 //!
 //! What it does **not** establish: nothing here is a Dragon's Clutch program.
 //! There is no CPI, no PDA signature, no clutch instruction, no kernel, and no
@@ -20,6 +23,7 @@ use {
     solana_address::Address,
     solana_instruction::Instruction,
     solana_keypair::Keypair,
+    solana_program_pack::Pack,
     solana_program_test::{tokio, BanksClient, ProgramTest},
     solana_signer::Signer,
     solana_system_interface::instruction as system_instruction,
@@ -36,6 +40,8 @@ use {
         state::{Account as TokenAccount, Mint},
     },
 };
+
+use spl_token_interface as legacy_token;
 
 const DECIMALS: u8 = 6;
 const CEILING: u64 = 1_000_000_000_000_000;
@@ -858,5 +864,231 @@ async fn a_widened_profile_would_admit_the_fee_mint_and_lose_atoms() {
          shortfall={}",
         observation.extensions,
         deposited - spendable
+    );
+}
+
+/// Legacy SPL can satisfy the exact visible-atom transfer equation, but its
+/// `InitializeImmutableOwner` instruction is explicitly a compatibility no-op.
+/// This is the runtime distinction a successor collateral adapter must retain:
+/// legacy custody relies on a PDA sole-signer plus a pinned Clutch release that
+/// exposes no owner-authority-change route; it must never be relabelled as the
+/// stronger Token-2022 immutable-owner guarantee.
+#[tokio::test]
+async fn legacy_spl_moves_exact_atoms_but_immutable_owner_is_a_noop() {
+    use legacy_token::{instruction as legacy_instruction, state as legacy_state};
+
+    let mut probe = Probe::start().await;
+    let mint_authority = Keypair::new();
+    let holder = Keypair::new();
+    let replacement_owner = Keypair::new();
+    let mint = Keypair::new();
+
+    let mint_rent = probe.rent_for(legacy_state::Mint::LEN).await;
+    probe
+        .send(
+            &[
+                system_instruction::create_account(
+                    &probe.payer.pubkey(),
+                    &mint.pubkey(),
+                    mint_rent,
+                    legacy_state::Mint::LEN as u64,
+                    &legacy_token::id(),
+                ),
+                legacy_instruction::initialize_mint2(
+                    &legacy_token::id(),
+                    &mint.pubkey(),
+                    &mint_authority.pubkey(),
+                    None,
+                    DECIMALS,
+                )
+                .unwrap(),
+            ],
+            &[&mint],
+        )
+        .await;
+
+    let holder_account = Keypair::new();
+    let mutable_account = Keypair::new();
+    let account_rent = probe.rent_for(legacy_state::Account::LEN).await;
+    probe
+        .send(
+            &[
+                system_instruction::create_account(
+                    &probe.payer.pubkey(),
+                    &holder_account.pubkey(),
+                    account_rent,
+                    legacy_state::Account::LEN as u64,
+                    &legacy_token::id(),
+                ),
+                legacy_instruction::initialize_account3(
+                    &legacy_token::id(),
+                    &holder_account.pubkey(),
+                    &mint.pubkey(),
+                    &holder.pubkey(),
+                )
+                .unwrap(),
+                system_instruction::create_account(
+                    &probe.payer.pubkey(),
+                    &mutable_account.pubkey(),
+                    account_rent,
+                    legacy_state::Account::LEN as u64,
+                    &legacy_token::id(),
+                ),
+                legacy_instruction::initialize_immutable_owner(
+                    &legacy_token::id(),
+                    &mutable_account.pubkey(),
+                )
+                .unwrap(),
+                legacy_instruction::initialize_account3(
+                    &legacy_token::id(),
+                    &mutable_account.pubkey(),
+                    &mint.pubkey(),
+                    &holder.pubkey(),
+                )
+                .unwrap(),
+            ],
+            &[&holder_account, &mutable_account],
+        )
+        .await;
+
+    probe
+        .send(
+            &[
+                legacy_instruction::mint_to(
+                    &legacy_token::id(),
+                    &mint.pubkey(),
+                    &holder_account.pubkey(),
+                    &mint_authority.pubkey(),
+                    &[],
+                    1_000_000,
+                )
+                .unwrap(),
+                legacy_instruction::set_authority(
+                    &legacy_token::id(),
+                    &mint.pubkey(),
+                    None,
+                    legacy_instruction::AuthorityType::MintTokens,
+                    &mint_authority.pubkey(),
+                    &[],
+                )
+                .unwrap(),
+            ],
+            &[&mint_authority],
+        )
+        .await;
+
+    // The compatibility instruction did not make the owner immutable: the
+    // current owner can still change it.  A legacy adapter therefore cannot
+    // claim Token-2022's token-enforced owner lock.
+    probe
+        .send(
+            &[legacy_instruction::set_authority(
+                &legacy_token::id(),
+                &mutable_account.pubkey(),
+                Some(&replacement_owner.pubkey()),
+                legacy_instruction::AuthorityType::AccountOwner,
+                &holder.pubkey(),
+                &[],
+            )
+            .unwrap()],
+            &[&holder],
+        )
+        .await;
+    let mutable_state =
+        legacy_state::Account::unpack(&probe.account_data(mutable_account.pubkey()).await).unwrap();
+    assert_eq!(mutable_state.owner, replacement_owner.pubkey());
+
+    // A PDA-shaped owner has no off-chain signer.  Deposits remain ordinary
+    // holder-signed transfers and preserve exact atoms.
+    let fake_program_id = Address::new_from_array([0x91; 32]);
+    let (hoard_authority, _bump) =
+        Address::find_program_address(&[b"probe:legacy-hoard"], &fake_program_id);
+    let hoard = Keypair::new();
+    probe
+        .send(
+            &[
+                system_instruction::create_account(
+                    &probe.payer.pubkey(),
+                    &hoard.pubkey(),
+                    account_rent,
+                    legacy_state::Account::LEN as u64,
+                    &legacy_token::id(),
+                ),
+                legacy_instruction::initialize_account3(
+                    &legacy_token::id(),
+                    &hoard.pubkey(),
+                    &mint.pubkey(),
+                    &hoard_authority,
+                )
+                .unwrap(),
+            ],
+            &[&hoard],
+        )
+        .await;
+
+    let source_before =
+        legacy_state::Account::unpack(&probe.account_data(holder_account.pubkey()).await)
+            .unwrap()
+            .amount;
+    let hoard_before = legacy_state::Account::unpack(&probe.account_data(hoard.pubkey()).await)
+        .unwrap()
+        .amount;
+    let supply_before = legacy_state::Mint::unpack(&probe.account_data(mint.pubkey()).await)
+        .unwrap()
+        .supply;
+    probe
+        .send(
+            &[legacy_instruction::transfer_checked(
+                &legacy_token::id(),
+                &holder_account.pubkey(),
+                &mint.pubkey(),
+                &hoard.pubkey(),
+                &holder.pubkey(),
+                &[],
+                600_000,
+                DECIMALS,
+            )
+            .unwrap()],
+            &[&holder],
+        )
+        .await;
+    let source_after =
+        legacy_state::Account::unpack(&probe.account_data(holder_account.pubkey()).await)
+            .unwrap()
+            .amount;
+    let hoard_after = legacy_state::Account::unpack(&probe.account_data(hoard.pubkey()).await)
+        .unwrap()
+        .amount;
+    let supply_after = legacy_state::Mint::unpack(&probe.account_data(mint.pubkey()).await)
+        .unwrap()
+        .supply;
+    assert_eq!(source_before - source_after, 600_000);
+    assert_eq!(hoard_after - hoard_before, 600_000);
+    assert_eq!(supply_before, supply_after);
+
+    let code = probe
+        .send_expecting_refusal(
+            &[legacy_instruction::transfer_checked(
+                &legacy_token::id(),
+                &hoard.pubkey(),
+                &mint.pubkey(),
+                &holder_account.pubkey(),
+                &holder.pubkey(),
+                &[],
+                1,
+                DECIMALS,
+            )
+            .unwrap()],
+            &[&holder],
+        )
+        .await;
+    assert_eq!(code, legacy_token::error::TokenError::OwnerMismatch as u32);
+
+    println!(
+        "PROBE legacy_spl: exact_debit={} exact_credit={} supply_delta={} \
+         immutable_owner_noop=true wallet_withdrawal_refused_with=Custom({code})",
+        source_before - source_after,
+        hoard_after - hoard_before,
+        supply_after as i128 - supply_before as i128,
     );
 }

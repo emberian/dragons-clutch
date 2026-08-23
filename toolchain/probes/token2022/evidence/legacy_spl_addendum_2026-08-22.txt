@@ -1,0 +1,23 @@
+Dragon's Clutch collateral-program probe -- legacy SPL comparative addendum
+date            : 2026-08-22 (America/New_York)
+host            : Darwin arm64 / Darwin 25.6.0
+toolchain       : rustc 1.93.1 (01f6ddf75 2026-02-11)
+network         : none; cargo --locked and local in-process bank
+
+harness         : solana-program-test 4.2.1 (feature agave-unstable-api)
+program source  : solana-program-binaries 4.2.1
+legacy program  : spl_p_token-1.0.0.so installed at
+                  TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
+ELF sha256      : 8190d3f7ceb6cb7a7a8d8924bff89f9f611e15ce1f806f2b6237f3311a98f697
+ELF bytes       : 108600
+client library  : spl-token-interface 3.0.0
+
+This is a local SBF-artifact result. It is not a public-cluster result and does
+not authenticate which build is deployed at the legacy address on any cluster.
+
+---- cargo +1.93.1 test --locked legacy_spl_moves_exact_atoms_but_immutable_owner_is_a_noop -- --nocapture --test-threads=1 ----
+running 1 test
+test legacy_spl_moves_exact_atoms_but_immutable_owner_is_a_noop ... PROBE legacy_spl: exact_debit=600000 exact_credit=600000 supply_delta=0 immutable_owner_noop=true wallet_withdrawal_refused_with=Custom(4)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out
