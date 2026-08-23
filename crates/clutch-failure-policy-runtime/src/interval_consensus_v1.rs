@@ -86,7 +86,7 @@ typed_interval_id!(
 );
 typed_interval_id!(
     FailureIntervalConsensusTerminalReceiptIdV1,
-    "Typed terminal receipt consumed by the Product occurrence lifecycle owner."
+    "Typed terminal receipt consumed by the shared Product MarketLifecycle owner."
 );
 
 /// Complete facts the account adapter must authenticate after atomic funding.
@@ -98,16 +98,17 @@ typed_interval_id!(
 pub struct FailureIntervalConsensusFundingFactsV1 {
     /// Immutable Failure policy binding.
     pub failure_policy_binding_id: FailurePolicyBindingId,
-    /// Full-width V2 economic occurrence.
+    /// Full-width V2 economic Market.
     pub market_instance_id: MarketInstanceV2Id,
-    /// Shared occurrence/liveness generation.
+    /// Shared Market Failure/liveness generation.
     pub generation: u64,
     /// Dedicated mutable `0xab/v1` work account.
     pub work_account: FailureIntervalConsensusAccountIdV1,
     /// Dedicated permanent `0xac/v1` replay account.
     pub replay_account: FailureIntervalConsensusAccountIdV1,
-    /// Immutable principal payer and rent-refund recipient.
-    pub rent_payer: FailureIntervalConsensusAccountIdV1,
+    /// Immutable rent-principal refund owner recorded by prepaid custody.
+    /// This identity is data, not a required transaction signer.
+    pub rent_refund_owner: FailureIntervalConsensusAccountIdV1,
     /// Immutable sink for preexisting or later donation lamports.
     pub neutral_sink: FailureIntervalConsensusAccountIdV1,
     /// Exact refundable work-account rent principal supplied now.
@@ -130,7 +131,7 @@ pub struct FailureIntervalConsensusFundingFactsV1 {
     pub recovery_compartment_account_id: LivenessId,
     /// Immutable liveness policy.
     pub liveness_policy_id: LivenessId,
-    /// Exact occurrence lifecycle shared by liveness.
+    /// Exact Market Failure lifecycle shared by liveness.
     pub liveness_lifecycle_id: LivenessId,
     /// Exact liveness quote schedule for every bounded call.
     pub recovery_quote_schedule_id: LivenessId,
@@ -139,8 +140,10 @@ pub struct FailureIntervalConsensusFundingFactsV1 {
 /// Adapter-owned authority proving present interval funding.
 ///
 /// Implementors must be private types minted only after authenticating the
-/// Product/Series occurrence debit, the two canonical PDAs and postbalances,
-/// and the already funded liveness Recovery compartment. The default refuses.
+/// shared MarketLifecycle capitalization, founder-only typed MarketCore debit,
+/// the two canonical PDAs and postbalances, and the already funded liveness
+/// Recovery compartment. The stored refund owner need not sign. The default
+/// refuses.
 pub trait AuthenticatedFailureIntervalConsensusFundingV1 {
     /// Authenticate every exact expected funding fact.
     fn authenticate_interval_consensus_funding(
@@ -216,7 +219,7 @@ pub struct FailureIntervalConsensusStateV1 {
     funding_receipt_id: FailureIntervalConsensusFundingReceiptIdV1,
     work_account: FailureIntervalConsensusAccountIdV1,
     replay_account: FailureIntervalConsensusAccountIdV1,
-    rent_payer: FailureIntervalConsensusAccountIdV1,
+    rent_refund_owner: FailureIntervalConsensusAccountIdV1,
     neutral_sink: FailureIntervalConsensusAccountIdV1,
     work_rent_principal_lamports: u64,
     replay_rent_principal_lamports: u64,
@@ -248,7 +251,7 @@ pub struct FailureIntervalConsensusPersistedFactsV1 {
     pub binding_id: FailureIntervalConsensusBindingIdV1,
     /// Parent Failure policy binding.
     pub failure_policy_binding_id: FailurePolicyBindingId,
-    /// Full-width V2 economic occurrence.
+    /// Full-width V2 economic Market.
     pub market_instance_id: MarketInstanceV2Id,
     /// Exact Failure/liveness generation.
     pub generation: u64,
@@ -265,7 +268,7 @@ pub struct FailureIntervalConsensusPersistedFactsV1 {
     /// Canonical permanent replay account.
     pub replay_account: FailureIntervalConsensusAccountIdV1,
     /// Immutable work-rent refund recipient.
-    pub rent_payer: FailureIntervalConsensusAccountIdV1,
+    pub rent_refund_owner: FailureIntervalConsensusAccountIdV1,
     /// Immutable donation sink.
     pub neutral_sink: FailureIntervalConsensusAccountIdV1,
     /// Exact refundable work rent principal.
@@ -366,7 +369,7 @@ impl FailureIntervalConsensusStateV1 {
             funding_receipt_id: self.funding_receipt_id,
             work_account: self.work_account,
             replay_account: self.replay_account,
-            rent_payer: self.rent_payer,
+            rent_refund_owner: self.rent_refund_owner,
             neutral_sink: self.neutral_sink,
             work_rent_principal_lamports: self.work_rent_principal_lamports,
             replay_rent_principal_lamports: self.replay_rent_principal_lamports,
@@ -407,18 +410,18 @@ impl FailureIntervalConsensusStateV1 {
         require_live(self.funding_receipt_id.bytes())?;
         require_live(self.work_account.bytes())?;
         require_live(self.replay_account.bytes())?;
-        require_live(self.rent_payer.bytes())?;
+        require_live(self.rent_refund_owner.bytes())?;
         require_live(self.neutral_sink.bytes())?;
         require_live(self.initial_work_id.bytes())?;
         require_live(self.current_work_id.bytes())?;
         require_live(self.current_transcript.bytes())?;
         if self.generation == 0
             || self.work_account == self.replay_account
-            || self.work_account == self.rent_payer
+            || self.work_account == self.rent_refund_owner
             || self.work_account == self.neutral_sink
-            || self.replay_account == self.rent_payer
+            || self.replay_account == self.rent_refund_owner
             || self.replay_account == self.neutral_sink
-            || self.rent_payer == self.neutral_sink
+            || self.rent_refund_owner == self.neutral_sink
             || self.work_rent_principal_lamports == 0
             || self.replay_rent_principal_lamports == 0
             || self.replay_preserved_lamports < self.replay_rent_principal_lamports
@@ -509,7 +512,7 @@ fn state_from_persisted_facts(
         funding_receipt_id: facts.funding_receipt_id,
         work_account: facts.work_account,
         replay_account: facts.replay_account,
-        rent_payer: facts.rent_payer,
+        rent_refund_owner: facts.rent_refund_owner,
         neutral_sink: facts.neutral_sink,
         work_rent_principal_lamports: facts.work_rent_principal_lamports,
         replay_rent_principal_lamports: facts.replay_rent_principal_lamports,
@@ -627,7 +630,7 @@ pub fn begin_failure_interval_consensus_v1(
         funding_receipt_id: funding.id,
         work_account: facts.work_account,
         replay_account: facts.replay_account,
-        rent_payer: facts.rent_payer,
+        rent_refund_owner: facts.rent_refund_owner,
         neutral_sink: facts.neutral_sink,
         work_rent_principal_lamports: facts.work_rent_principal_lamports,
         replay_rent_principal_lamports: facts.replay_rent_principal_lamports,
@@ -933,7 +936,7 @@ impl FailureIntervalConsensusResolutionReceiptV1 {
         self.market_instance_id
     }
 
-    /// Exact occurrence generation.
+    /// Exact Market Failure generation.
     pub const fn generation(self) -> u64 {
         self.generation
     }
@@ -1050,7 +1053,7 @@ impl FailureIntervalConsensusClosePlanV1 {
         self.replay
     }
 
-    /// Product occurrence lifecycle receipt.
+    /// Shared Product MarketLifecycle receipt.
     pub const fn terminal_receipt(self) -> FailureIntervalConsensusTerminalReceiptV1 {
         self.terminal_receipt
     }
@@ -1061,7 +1064,7 @@ impl FailureIntervalConsensusClosePlanV1 {
     }
 }
 
-/// Private-field terminal capability for Product's occurrence lifecycle owner.
+/// Private-field terminal capability for Product's shared MarketLifecycle owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureIntervalConsensusTerminalReceiptV1 {
     id: FailureIntervalConsensusTerminalReceiptIdV1,
@@ -1083,7 +1086,7 @@ impl FailureIntervalConsensusTerminalReceiptV1 {
         self.interval_binding_id
     }
 
-    /// Full-width V2 economic occurrence.
+    /// Full-width V2 economic Market.
     pub const fn market_instance_id(self) -> MarketInstanceV2Id {
         self.market_instance_id
     }
@@ -1162,7 +1165,7 @@ pub fn plan_close_failure_interval_consensus_work_v1(
     close_hasher.update(state.binding_id.bytes());
     close_hasher.update(state.work_account.bytes());
     close_hasher.update(state.replay_account.bytes());
-    close_hasher.update(state.rent_payer.bytes());
+    close_hasher.update(state.rent_refund_owner.bytes());
     close_hasher.update(state.neutral_sink.bytes());
     close_hasher.update(state.work_rent_principal_lamports.to_le_bytes());
     close_hasher.update(donation_lamports.to_le_bytes());
@@ -1173,7 +1176,7 @@ pub fn plan_close_failure_interval_consensus_work_v1(
         FailureIntervalConsensusCloseAuthorizationIdV1::from_bytes(close_hasher.finalize().into());
     let movements = FailureIntervalConsensusWorkClosePlanV1 {
         work_account: state.work_account,
-        rent_refund_recipient: state.rent_payer,
+        rent_refund_recipient: state.rent_refund_owner,
         rent_refund_lamports: state.work_rent_principal_lamports,
         donation_sink: state.neutral_sink,
         donation_lamports,
@@ -1244,18 +1247,18 @@ fn validate_funding_facts(
         || facts.liveness_policy_id != runtime.liveness_policy_id()
         || facts.liveness_lifecycle_id != runtime.liveness_lifecycle_id()
         || facts.recovery_quote_schedule_id != runtime.recovery_quote_schedule_id()
-        || facts.rent_payer.bytes() != runtime.recovery_payer().bytes()
+        || facts.rent_refund_owner.bytes() != runtime.recovery_refund_owner().bytes()
         || facts.neutral_sink.bytes() != runtime.recovery_neutral_sink().bytes()
         || !live(facts.work_account.bytes())
         || !live(facts.replay_account.bytes())
-        || !live(facts.rent_payer.bytes())
+        || !live(facts.rent_refund_owner.bytes())
         || !live(facts.neutral_sink.bytes())
         || facts.work_account == facts.replay_account
-        || facts.work_account == facts.rent_payer
+        || facts.work_account == facts.rent_refund_owner
         || facts.work_account == facts.neutral_sink
-        || facts.replay_account == facts.rent_payer
+        || facts.replay_account == facts.rent_refund_owner
         || facts.replay_account == facts.neutral_sink
-        || facts.rent_payer == facts.neutral_sink
+        || facts.rent_refund_owner == facts.neutral_sink
         || facts.work_account.bytes() == facts.recovery_compartment_account_id.bytes()
         || facts.replay_account.bytes() == facts.recovery_compartment_account_id.bytes()
         || facts.work_account.bytes() == runtime.semantic_state_id().bytes()
@@ -1485,7 +1488,7 @@ fn hash_funding_facts(hasher: &mut Sha256, facts: FailureIntervalConsensusFundin
     hasher.update(facts.generation.to_le_bytes());
     hasher.update(facts.work_account.bytes());
     hasher.update(facts.replay_account.bytes());
-    hasher.update(facts.rent_payer.bytes());
+    hasher.update(facts.rent_refund_owner.bytes());
     hasher.update(facts.neutral_sink.bytes());
     hasher.update(facts.work_rent_principal_lamports.to_le_bytes());
     hasher.update(facts.replay_rent_principal_lamports.to_le_bytes());
@@ -1538,7 +1541,7 @@ mod tests {
             funding_receipt_id: FailureIntervalConsensusFundingReceiptIdV1::from_bytes([7; 32]),
             work_account: FailureIntervalConsensusAccountIdV1::from_bytes([8; 32]),
             replay_account: FailureIntervalConsensusAccountIdV1::from_bytes([9; 32]),
-            rent_payer: FailureIntervalConsensusAccountIdV1::from_bytes([10; 32]),
+            rent_refund_owner: FailureIntervalConsensusAccountIdV1::from_bytes([10; 32]),
             neutral_sink: FailureIntervalConsensusAccountIdV1::from_bytes([11; 32]),
             work_rent_principal_lamports: 100,
             replay_rent_principal_lamports: 200,
