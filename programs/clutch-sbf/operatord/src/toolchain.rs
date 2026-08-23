@@ -77,10 +77,14 @@ pub fn build_sbf() -> PathBuf {
     tool("CARGO_BUILD_SBF", "cargo-build-sbf")
 }
 pub fn test_validator() -> PathBuf {
+    let cache_root = env::var("CLUTCH_AGAVE_LOOPBACK_CACHE").map_or_else(
+        |_| crate::repo_path(".cache/agave-loopback-validator"),
+        PathBuf::from,
+    );
     env::var("CLUTCH_LOOPBACK_TEST_VALIDATOR")
         .or_else(|_| env::var("SOLANA_TEST_VALIDATOR"))
         .map_or_else(
-            |_| crate::repo_path(".cache/agave-loopback-validator/bin/solana-test-validator"),
+            |_| cache_root.join("bin/solana-test-validator"),
             PathBuf::from,
         )
 }
