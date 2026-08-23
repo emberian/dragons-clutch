@@ -8,6 +8,7 @@
 use solana_address::Address;
 use solana_keypair::{write_keypair_file, Keypair, Signer};
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions, Permissions};
 use std::io::Write as _;
@@ -207,7 +208,10 @@ impl LocalProgramRelease {
         if self.program_id == Address::default() {
             return Err(SessionError::InvalidRelease("program identity is zero"));
         }
-        require_digest(self.elf_sha256, "program ELF digest is zero")
+        if self.elf_sha256 == [0; 32] {
+            return Err(SessionError::InvalidRelease("program ELF digest is zero"));
+        }
+        Ok(())
     }
 }
 
@@ -414,6 +418,117 @@ struct OwnedSessionKey {
 /// represented here are ones created by this roster below the marked session.
 pub struct EphemeralKeyRoster {
     keys: Vec<OwnedSessionKey>,
+}
+
+/// One exact account body loaded at validator genesis. The role is descriptive;
+/// the address and pinned body digest are authoritative construction facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalGenesisAccountFile {
+    pub role: String,
+    pub address: Address,
+    pub account_json: PathBuf,
+    pub body_sha256: [u8; 32],
+}
+
+impl LocalGenesisAccountFile {
+    fn validate(&self, session_root: &Path) -> Result<()> {
+        if self.role.trim().is_empty()
+            || self.address == Address::default()
+            || self.body_sha256 == [0; 32]
+            || !self.account_json.is_absolute()
+            || self
+                .account_json
+                .starts_with(session_root.join("ephemeral-keys"))
+        {
+            return Err(SessionError::InvalidRelease(
+                "local genesis account fixture is incomplete or key-like",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Pure argv construction for the selected local validator. Building this
+/// value does not inspect a process, open RPC, start a validator, or sign.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalValidatorInvocation {
+    executable: PathBuf,
+    arguments: Vec<OsString>,
+}
+
+impl LocalValidatorInvocation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        validator_binary: PathBuf,
+        config: &LocalSessionConfig,
+        layout: &SessionLayout,
+        mint_authority: Address,
+        warp_slot: u64,
+        genesis_accounts: &[LocalGenesisAccountFile],
+    ) -> Result<Self> {
+        config.validate()?;
+        if !validator_binary.is_absolute()
+            || layout.root != config.root
+            || mint_authority == Address::default()
+            || warp_slot == 0
+        {
+            return Err(SessionError::InvalidRelease(
+                "local validator invocation is not explicitly bound",
+            ));
+        }
+        let mut addresses = BTreeSet::new();
+        for account in genesis_accounts {
+            account.validate(layout.root())?;
+            if !addresses.insert(account.address) {
+                return Err(SessionError::InvalidRelease(
+                    "local genesis account address is duplicated",
+                ));
+            }
+        }
+
+        let mut arguments = vec![
+            OsString::from("--ledger"),
+            layout.ledger.as_os_str().to_owned(),
+            OsString::from("--reset"),
+            OsString::from("--quiet"),
+            OsString::from("--bind-address"),
+            OsString::from("127.0.0.1"),
+            OsString::from("--rpc-port"),
+            OsString::from(config.ports.rpc.to_string()),
+            OsString::from("--faucet-port"),
+            OsString::from(config.ports.faucet.to_string()),
+            OsString::from("--gossip-port"),
+            OsString::from(config.ports.gossip.to_string()),
+            OsString::from("--dynamic-port-range"),
+            OsString::from(format!(
+                "{}-{}",
+                config.ports.dynamic_start, config.ports.dynamic_end
+            )),
+            OsString::from("--mint"),
+            OsString::from(mint_authority.to_string()),
+            OsString::from("--warp-slot"),
+            OsString::from(warp_slot.to_string()),
+        ];
+        for account in genesis_accounts {
+            arguments.push(OsString::from("--account"));
+            arguments.push(OsString::from(account.address.to_string()));
+            arguments.push(account.account_json.as_os_str().to_owned());
+        }
+        Ok(Self {
+            executable: validator_binary,
+            arguments,
+        })
+    }
+
+    #[must_use]
+    pub fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    #[must_use]
+    pub fn arguments(&self) -> &[OsString] {
+        &self.arguments
+    }
 }
 
 impl EphemeralKeyRoster {

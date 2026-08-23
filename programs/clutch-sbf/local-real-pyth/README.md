@@ -41,7 +41,10 @@ The builder feature now also exposes two reusable boundaries:
   default wallet, has no key loader or signer method, refuses path reuse, and
   removes a session only through an explicit marker-checked `destroy` call.
   Real-source configuration is either one SHA-256-pinned local capture or a
-  credential-free HTTPS reader with an exact account-read ceiling.
+  credential-free HTTPS reader with an exact account-read ceiling. The same
+  module constructs the selected validator's loopback-only argv, ledger,
+  ports, mint identity, warp slot, and digest-bound genesis-account files
+  without starting a process.
 - `transaction_builder` accepts instruction bytes from their semantic owner,
   binds them to package/schema/release identity, preserves exact integer
   balance equations, and assembles unsigned blockhash-free Solana transactions.
@@ -50,7 +53,12 @@ The builder feature now also exposes two reusable boundaries:
   claims. Main-program successor envelopes use the central family allocation;
   SourcePlane and liveness keep their separately owned codecs. The resulting
   object always reports `signed=false` and `submitted=false`, and reserved SBF
-  routes remain labeled `ReservedDisabled`.
+  routes remain labeled `ReservedDisabled`. `build_current_workflow` refuses
+  to substitute any missing flow: it requires SourcePlane V3, General V2
+  candidate work, settlement, fees, direct Eggs, liveness, Series, and
+  structured claims. Cursor-bearing work remains an ordered unsigned sequence;
+  settlement, fees, direct Eggs, and settlement liveness are assembled into one
+  atomic unsigned transaction.
 
 Run from the repository root:
 

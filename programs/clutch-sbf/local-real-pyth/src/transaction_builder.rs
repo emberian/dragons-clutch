@@ -466,6 +466,35 @@ pub struct UnsignedProtocolTransaction {
     pub submitted: bool,
 }
 
+/// Complete construction input for the eight currently identified operator
+/// flows. Each vector is nonempty by contract. Candidate/source/Series/wrapper
+/// actions remain separate transactions so their cursors can advance between
+/// observations. Settlement, fees, direct Eggs, and its liveness movement are
+/// intentionally joined into one atomic transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentProtocolWorkflowDraft {
+    pub source_plane_v3: Vec<OwnedInstructionDraft>,
+    pub general_candidate: Vec<OwnedInstructionDraft>,
+    pub general_settlement: Vec<OwnedInstructionDraft>,
+    pub general_fees: Vec<OwnedInstructionDraft>,
+    pub direct_eggs: Vec<OwnedInstructionDraft>,
+    pub settlement_liveness: Vec<OwnedInstructionDraft>,
+    pub product_series: Vec<OwnedInstructionDraft>,
+    pub structured_claim: Vec<OwnedInstructionDraft>,
+}
+
+/// Unsigned, ordered output of [`CurrentProtocolWorkflowDraft`]. No field is
+/// an execution receipt and no step is advanced from another step's expected
+/// poststate without an external account reload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentProtocolWorkflowConstruction {
+    pub source_plane_v3: Vec<UnsignedProtocolTransaction>,
+    pub general_candidate: Vec<UnsignedProtocolTransaction>,
+    pub atomic_general_settlement: UnsignedProtocolTransaction,
+    pub product_series: Vec<UnsignedProtocolTransaction>,
+    pub structured_claim: Vec<UnsignedProtocolTransaction>,
+}
+
 /// Release-bound outer builder. It never accepts or returns a keypair.
 pub struct ProtocolTransactionBuilder {
     payer: Address,
@@ -565,6 +594,64 @@ impl ProtocolTransactionBuilder {
         })
     }
 
+    /// Construct the current end-to-end work inventory without signing or
+    /// silently substituting a missing flow. The semantic owners remain
+    /// responsible for deriving each successive payload from freshly
+    /// authenticated state; this method only preserves the declared order.
+    pub fn build_current_workflow(
+        &self,
+        workflow: &CurrentProtocolWorkflowDraft,
+    ) -> Result<CurrentProtocolWorkflowConstruction> {
+        let source_plane_v3 =
+            self.build_sequence(ProtocolFlow::SourcePlaneV3, &workflow.source_plane_v3)?;
+        let general_candidate = self.build_sequence(
+            ProtocolFlow::GeneralV2Candidate,
+            &workflow.general_candidate,
+        )?;
+        require_nonempty_flow(
+            ProtocolFlow::GeneralV2Settlement,
+            &workflow.general_settlement,
+        )?;
+        require_nonempty_flow(ProtocolFlow::GeneralV2Fees, &workflow.general_fees)?;
+        require_nonempty_flow(ProtocolFlow::DirectEggSettlement, &workflow.direct_eggs)?;
+        require_nonempty_flow(ProtocolFlow::Liveness, &workflow.settlement_liveness)?;
+        let mut settlement = Vec::with_capacity(
+            workflow.general_settlement.len()
+                + workflow.general_fees.len()
+                + workflow.direct_eggs.len()
+                + workflow.settlement_liveness.len(),
+        );
+        settlement.extend(workflow.general_settlement.iter().cloned());
+        settlement.extend(workflow.general_fees.iter().cloned());
+        settlement.extend(workflow.direct_eggs.iter().cloned());
+        settlement.extend(workflow.settlement_liveness.iter().cloned());
+        let atomic_general_settlement = self.build_atomic(&settlement)?;
+        let product_series =
+            self.build_sequence(ProtocolFlow::ProductSeries, &workflow.product_series)?;
+        let structured_claim =
+            self.build_sequence(ProtocolFlow::StructuredClaim, &workflow.structured_claim)?;
+        Ok(CurrentProtocolWorkflowConstruction {
+            source_plane_v3,
+            general_candidate,
+            atomic_general_settlement,
+            product_series,
+            structured_claim,
+        })
+    }
+
+    fn build_sequence(
+        &self,
+        expected: ProtocolFlow,
+        drafts: &[OwnedInstructionDraft],
+    ) -> Result<Vec<UnsignedProtocolTransaction>> {
+        require_nonempty_flow(expected, drafts)?;
+        let mut plans = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            plans.push(self.build_atomic(core::slice::from_ref(draft))?);
+        }
+        Ok(plans)
+    }
+
     /// Release digest carried by construction metadata. A transaction cannot
     /// authenticate this digest by itself; a launcher must join it to the ELF
     /// it explicitly loads into the local validator.
@@ -572,6 +659,16 @@ impl ProtocolTransactionBuilder {
     pub const fn clutch_release_sha256(&self) -> [u8; 32] {
         self.clutch_release_sha256
     }
+}
+
+fn require_nonempty_flow(expected: ProtocolFlow, drafts: &[OwnedInstructionDraft]) -> Result<()> {
+    if drafts.is_empty() {
+        return Err(ConstructionError::EmptyBundle);
+    }
+    if drafts.iter().any(|draft| draft.flow != expected) {
+        return Err(ConstructionError::WrongFlow);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
