@@ -150,31 +150,28 @@ disabled-coordinate refusal, account-read ordering, and admitted-route behavior
 therefore remain separate promotion gates. No narrow-profile linked identity
 manifest, public deployment, or runtime CU evidence exists here.
 
-## Cargo-default identity fork
+## Historical Cargo-default identity fork
 
-`program/Cargo.toml` defines defaults as exactly `custom-heap` plus
-`profile-full`. The explicit full command selects that same effective feature
-set with `--no-default-features --features custom-heap,profile-full`. The
-diagnostic also built the no-feature-arguments Cargo-default route twice. It is
-self-reproducible and has the same length, section sizes, syscall surface, and
-frame counts, but its stripped ELF SHA-256 is
-`0dfab671ed8fb528a60e5f2296cad8cc449d7ebc8ddf8e0499822bf635dbbce9`,
-not the explicit artifact's `053df6…`.
+The retained JSON records the pre-canonicalization result for source commit
+`0ba5cfa`. Its explicit command enabled `custom-heap,profile-full`, while the
+no-feature-arguments route also enabled Cargo's named `default` marker. The
+marker expands to those same two behavioral features, but it remains a third
+rustc feature-identity input. The old explicit and default builds were each
+self-reproducible and had the same length, section sizes, syscall surface, and
+frame counts, but their stripped ELF SHA-256 identities were respectively
+`053df6…` and
+`0dfab671ed8fb528a60e5f2296cad8cc449d7ebc8ddf8e0499822bf635dbbce9`.
+The retained diagnostic correctly records `REFUSE` for those old invocations
+and remains immutable historical evidence.
 
-Concretely, the explicit full invocation passes
-`--no-default-features --features custom-heap,profile-full`; the Cargo-default
-invocation omits both flags and relies on `program/Cargo.toml` defaults. Those
-routes currently select the same effective feature names but do not produce
-the same stripped bytes. `byte_identical_to_explicit_profile` is therefore
-derived only from ELF SHA-256 and is false. The stricter schema-V2 equivalence
-gate compares the complete `comparable_measurement` record and also refuses.
-
-Therefore the current schema-V2 rule that default equal explicit correctly
-refuses this checkout. Before linked measurement can pass, choose and document
-one canonical release invocation. Either diagnose and remove the Cargo/rustc
-code-layout difference until exact stripped bytes agree, or revise the schema
-through review to make the explicit invocation the sole artifact identity.
-Do not silently compare only sizes or copy one hash over the other.
+The cause and fix are now established in
+[`DEFAULT_EXPLICIT_ELF_IDENTITY_AUDIT_2026-08-23.md`](DEFAULT_EXPLICIT_ELF_IDENTITY_AUDIT_2026-08-23.md).
+Canonical explicit full builds retain the marker with
+`--no-default-features --features custom-heap,default,profile-full`. Two fresh
+canonical explicit builds and two fresh Cargo-default builds of the same
+archived `0ba5cfa` tree all produced the `0dfab671…` artifact with an empty
+strict-comparison mismatch set and `PASS`. Narrow profiles still omit
+`default`, because enabling it would also enable `profile-full`.
 
 The final-frame reporter now removes only rustc's per-compilation legacy symbol
 hash from the named deepest function. This avoids a false mismatch in audit

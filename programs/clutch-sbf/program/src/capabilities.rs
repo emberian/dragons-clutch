@@ -100,9 +100,9 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether a family-local action has an allocation in the central registry.
 ///
-/// Allocation does not imply execution capability.  Currently only General V2
-/// local actions 1 through 34 are allocated; the other family action spaces
-/// remain intentionally empty until their payload contracts are fixed.
+/// Allocation does not imply execution capability. General V2 and the bounded
+/// SourcePlane V3 portion of SourceSeries have registered local actions; every
+/// exact tuple remains separately disabled until its handler is admitted.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
@@ -114,9 +114,10 @@ pub const fn extension_intent_action_allocated(
             family_version,
             local_action,
         ),
-        Ok(clutch_solana_layout::registry::ExtensionAction::GeneralV2(
-            _
-        ))
+        Ok(
+            clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
+                | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
+        )
     )
 }
 
@@ -185,13 +186,21 @@ mod tests {
         for family_tag in u8::MIN..=u8::MAX {
             for family_version in u8::MIN..=3 {
                 for local_action in u8::MIN..=u8::MAX {
-                    let expected_allocated = family_tag
+                    let general = family_tag
                         == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
                         && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
                             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
                             .contains(&local_action);
+                    let source = family_tag
+                        == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::SourceSeriesAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::SourceSeriesAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general || source;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,

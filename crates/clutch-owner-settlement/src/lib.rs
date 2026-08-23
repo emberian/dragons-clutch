@@ -13,7 +13,9 @@
 
 mod adapter;
 mod builder;
+mod direct;
 mod final_pot;
+mod virtual_claim;
 
 pub use adapter::{
     authenticate_owner_settlement_account_v1, prepare_account_receipt_end_v1,
@@ -22,20 +24,43 @@ pub use adapter::{
     AuthenticatedPositionCashV1, AuthenticatedSettlementReceiptEndV1, OwnerCashRealizationPlanV1,
     OwnerSettlementAccountViewV1, OwnerSettlementCreateFundingV1, OwnerSettlementCreatePlanV1,
     OwnerSettlementReceiptAccountingPlanV1, SelectedOwnerRowAuthorityV1,
-    SettlementCashPotExpectationV1, SettlementCashPotV1, OWNER_SETTLEMENT_PDA_DOMAIN_V1,
-    SETTLEMENT_CASH_POT_BODY_V1_BYTES,
+    SettlementCashPotExpectationV1, SettlementCashPotV1, VirtualCashDirectionV1,
+    OWNER_SETTLEMENT_PDA_DOMAIN_V1, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
 };
 
 pub use builder::{
     build_owner_settlement_book_v1, CandidateSettlementTotalsV1, OwnerSettlementBookV1,
     SelectedOwnerFeeV1, VerifiedSettlementOrderV1,
 };
-pub use final_pot::*;
+
+pub use direct::{
+    prepare_direct_egg_settlement_v1, AuthenticatedDirectSettlementReceiptV1,
+    AuthenticatedOrderMembershipV1, AuthenticatedPositionV1, AuthenticatedReservationV1,
+    DirectEggSettlementInputV1, DirectEggSettlementPlanV1, DirectEggTransferAuditV1, OrderKindV1,
+    ReservationStateV1, DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
+};
+
+pub use final_pot::{
+    prepare_retire_owner_settlement_row_v1, AuthenticatedRoundingDischargeV1,
+    AuthenticatedSelectedFeeDischargeV1, AuthenticatedVirtualClaimDischargeV1,
+    FinalPotAuthorityBindingsV1, FinalPotRetirementDispositionV1,
+    FinalPotVirtualClaimOpeningV1, GeneralV2FinalPotV1, OwnerSettlementRowRetirementPlanV1,
+    GENERAL_V2_FINAL_POT_BODY_V1_BYTES,
+};
+
+pub use virtual_claim::{
+    prepare_virtual_merge_inventory_v1, prepare_virtual_merge_receipt_v1,
+    prepare_virtual_split_inventory_v1, prepare_virtual_split_receipt_v1,
+    AuthenticatedFinalPotV1, AuthenticatedMarketClaimLedgerV1,
+    AuthenticatedVirtualInventoryBudgetV1, AuthenticatedVirtualMergeReceiptV1,
+    AuthenticatedVirtualReceiptAuthorityV1, AuthenticatedVirtualSplitReceiptV1,
+    VirtualInventoryPlanV1, VirtualInventoryStateV1, VirtualMergeReceiptInputV1,
+    VirtualMergeReceiptPlanV1, VirtualReceiptKindV1, VirtualSplitReceiptInputV1,
+    VirtualSplitReceiptPlanV1,
+};
 
 /// Maximum orders in one frozen General book.
 pub const MAX_ORDERS: usize = 64;
-/// Maximum active General V2 outcomes retained by virtual-claim compartments.
-pub const MAX_OUTCOMES: usize = 16;
 /// Exact persisted owner-settlement semantic body width.
 ///
 /// General V2's central account registry owns the eventual outer tag/version;

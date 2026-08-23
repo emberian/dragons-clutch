@@ -75,7 +75,13 @@ ELF and a real-Pyth laboratory ELF therefore cannot share a capability identity
 even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
 
-The producer builds `profile-full` explicitly twice. Only a
+The producer builds `profile-full` explicitly twice. Its explicit feature list
+is `custom-heap,default,profile-full`: Cargo's default route enables the named
+`default` marker as well as the two features to which it expands. No program
+source branches on that marker, but rustc includes the complete enabled-feature
+set in crate identity, so omitting it can perturb LTO ordering and produce a
+different ELF. Narrow profiles continue to disable defaults and do not enable
+the marker, because it would expand to `profile-full`. Only a
 `production-inert` full profile is also built once through Cargo defaults, and
 the default artifact must equal the explicit artifact while bound to the same
 identity manifest. A laboratory full profile is a distinct identity and cannot
