@@ -113,8 +113,6 @@ pub enum FailureMarketIntervalCellDispositionV2 {
     Resolved = 1,
     /// The finite authenticated progress budget was exhausted.
     Exhausted = 2,
-    /// A separately authenticated source/evaluator owner refused the session.
-    Refused = 3,
 }
 
 impl FailureMarketIntervalCellDispositionV2 {
@@ -123,7 +121,6 @@ impl FailureMarketIntervalCellDispositionV2 {
             Self::None => 0,
             Self::Resolved => 1,
             Self::Exhausted => 2,
-            Self::Refused => 3,
         }
     }
 
@@ -132,7 +129,6 @@ impl FailureMarketIntervalCellDispositionV2 {
             0 => Ok(Self::None),
             1 => Ok(Self::Resolved),
             2 => Ok(Self::Exhausted),
-            3 => Ok(Self::Refused),
             _ => Err(Error::InvalidEnum),
         }
     }
@@ -577,6 +573,9 @@ pub struct FailureMarketIntervalCellActivationFactsV2 {
     pub session_binding_id: SourceContentId,
     /// Authenticated Source successful-evaluation handoff.
     pub source_handoff_id: SourceContentId,
+    /// Exact link-scoped Source repair generation; intentionally distinct
+    /// from the shared Failure/liveness generation.
+    pub source_repair_generation: u64,
     /// Per-Series absolute attempt/window schedule.
     pub session_schedule_id: SourceContentId,
     /// Derived zero-based Market recovery attempt row.
@@ -671,7 +670,6 @@ pub fn plan_activate_failure_market_interval_cell_v2<
             != cell.failure_policy_binding_id.bytes()
         || source_success.occurrence().market_instance_id().bytes()
             != cell.market_instance_id.bytes()
-        || source_success.occurrence().repair_generation() != cell.generation
         || quote_facts.failure_policy_binding_id != cell.failure_policy_binding_id
     {
         return Err(Error::BindingMismatch);
@@ -702,6 +700,7 @@ pub fn plan_activate_failure_market_interval_cell_v2<
         completed_session_count: cell.completed_session_count,
         session_binding_id,
         source_handoff_id: source_success.id(),
+        source_repair_generation: source_success.occurrence().repair_generation(),
         session_schedule_id,
         attempt_index,
         product_work_id,
@@ -724,6 +723,12 @@ pub fn plan_activate_failure_market_interval_cell_v2<
     hasher.update(quote.id().bytes());
     hasher.update(session_binding_id.bytes());
     hasher.update(source_success.id().bytes());
+    hasher.update(
+        source_success
+            .occurrence()
+            .repair_generation()
+            .to_le_bytes(),
+    );
     hasher.update(session_schedule_id.bytes());
     hasher.update([attempt_index]);
     hasher.update(product_work_id.bytes());
