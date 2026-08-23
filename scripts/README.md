@@ -51,6 +51,27 @@ Focused declaration checks are standard-library only:
 python3 -m unittest scripts/test_baseline_manifest.py
 ```
 
+### `rent_capital_time_audit.py`
+
+Reproduces the dated rent/capital-time review's exact integer arithmetic for
+loader-v3 persistent rent, active-width ClearWork and CandidateFeed comparisons,
+ReceiptPage crossover and full-book projection, finite-Series capital-time, and
+the compressed claim-basis model. Its JSON output labels historical artifact,
+source-derived, and model-only values separately and expressly makes no current
+linked ELF, CU, account-meta, stack, deployment, or cluster claim.
+
+The check mode also verifies SHA-256 provenance for every source used by its
+frozen examples:
+
+```sh
+python3 scripts/rent_capital_time_audit.py --check
+python3 -m unittest scripts/test_rent_capital_time_audit.py
+python3 scripts/rent_capital_time_audit.py
+```
+
+See
+[`docs/reviews/RENT_COMPUTE_CAPITAL_TIME_AUDIT_2026-08-23.md`](../docs/reviews/RENT_COMPUTE_CAPITAL_TIME_AUDIT_2026-08-23.md).
+
 ### `dependency_license_check.py`
 
 In-repo original of the dependency/license closure checker the Persvati
