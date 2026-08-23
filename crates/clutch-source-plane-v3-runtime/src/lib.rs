@@ -62,8 +62,9 @@ pub use ingest::{
 pub use lineage::{
     advance_lineage_state, authenticate_reopen_lineage_account, authorize_reopen,
     close_lineage_generation, open_lineage_generation, AuthenticatedReopenLineageV1,
-    LineageAccessV1, LineageFamilyV1, ReopenAuthorizationV1, ReopenLineageV1,
+    LineageAccessV1, LineageFamilyV1, ReopenAuthorizationV1, ReopenLineageV1, ReopenLineageV2,
     REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, REOPEN_LINEAGE_BYTES,
+    REOPEN_LINEAGE_V2_BYTES,
 };
 pub use window::{
     authenticate_evaluation_authority, authenticate_raw_page_account,

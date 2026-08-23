@@ -47,6 +47,7 @@ pub mod projection;
 pub mod registry;
 pub mod reservation;
 pub mod settlement_receipt_v3;
+pub mod source_series;
 pub mod resolution_work;
 pub mod revenue;
 pub mod stream;

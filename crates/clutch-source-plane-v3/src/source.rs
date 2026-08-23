@@ -89,7 +89,7 @@ const KNOWN_SUMMARY_FEATURES: u64 = FEATURE_TERMINAL_INTERVAL | FEATURE_DRAWDOWN
 /// Reviewed SourcePlane release and exact closed codec contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourcePlaneProgramV3 {
-    /// Reviewed release-manifest digest.
+    /// Reviewed evaluator-release binding selected by the Source release.
     pub release_id: ContentId,
     /// Exact SourcePlane schema version.
     pub source_plane_version: u16,

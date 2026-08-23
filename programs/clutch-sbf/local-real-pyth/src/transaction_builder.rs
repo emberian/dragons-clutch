@@ -20,8 +20,6 @@ pub type Result<T> = std::result::Result<T, ConstructionError>;
 /// Construction artifact schema. This is not a release or execution receipt.
 pub const CONSTRUCTION_PLAN_SCHEMA: &str =
     "dragons-clutch/operator/unsigned-protocol-transaction/v3";
-/// SourcePlane V3 adapter intent magic owned by that adapter's codec.
-pub const SOURCE_PLANE_V3_INTENT_MAGIC: [u8; 8] = *b"DCSP3INT";
 /// Runtime liveness intent magic owned by the liveness adapter codec.
 pub const LIVENESS_RUNTIME_V1_INTENT_MAGIC: [u8; 8] = *b"DCLINT01";
 
@@ -209,8 +207,6 @@ impl ExactEquation {
 /// How the semantic owner encoded the instruction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OwnedWireContract {
-    /// Exact SourcePlane V3 intent preimage, including `DCSP3INT`.
-    SourcePlaneV3 { exact_bytes: usize },
     /// Exact liveness runtime intent, including `DCLINT01`.
     LivenessRuntimeV1 { exact_bytes: usize },
     /// Main-program successor envelope. The central registry owns family tag
@@ -235,31 +231,6 @@ pub struct OwnedInstructionDraft {
 }
 
 impl OwnedInstructionDraft {
-    /// Wrap an exact SourcePlane V3 adapter preimage without re-encoding it.
-    pub fn source_plane_v3(
-        action_name: impl Into<String>,
-        semantic_owner: SemanticOwner,
-        program_id: Address,
-        accounts: Vec<AccountMeta>,
-        required_signers: Vec<Address>,
-        equations: Vec<ExactEquation>,
-        exact_bytes: usize,
-        data: Vec<u8>,
-    ) -> Result<Self> {
-        Self::owned_bytes(
-            ProtocolFlow::SourcePlaneV3,
-            action_name,
-            semantic_owner,
-            program_id,
-            accounts,
-            required_signers,
-            equations,
-            OwnedWireContract::SourcePlaneV3 { exact_bytes },
-            data,
-            None,
-        )
-    }
-
     /// Wrap an exact liveness runtime intent without creating a parallel codec.
     pub fn liveness(
         action_name: impl Into<String>,
@@ -433,20 +404,6 @@ impl OwnedInstructionDraft {
             }
         }
         match self.wire {
-            OwnedWireContract::SourcePlaneV3 { exact_bytes } => {
-                if self.registry_binding.is_some() {
-                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
-                }
-                if self.flow != ProtocolFlow::SourcePlaneV3 {
-                    return Err(ConstructionError::WrongFlow);
-                }
-                if self.data.len() != exact_bytes {
-                    return Err(ConstructionError::WrongWireLength);
-                }
-                if !self.data.starts_with(&SOURCE_PLANE_V3_INTENT_MAGIC) {
-                    return Err(ConstructionError::WrongWirePrefix);
-                }
-            }
             OwnedWireContract::LivenessRuntimeV1 { exact_bytes } => {
                 if self.registry_binding.is_some() {
                     return Err(ConstructionError::UnallocatedRegistryCoordinate);
