@@ -1,8 +1,10 @@
 use clutch_source_plane_v3::ContentId;
 
+use crate::account::RuntimeAccountHeaderV1;
 use crate::auth::{domain_id, live_id, AuthenticatedSourceRouteV1, RuntimeKey};
 use crate::lineage::ReopenAuthorizationV1;
 use crate::{Error, Result};
+use clutch_source_plane_v3_adapter::AccountFamilyV3;
 
 const CREATION_FUNDING_DOMAIN: &[u8] = b"dragons-clutch/source-account-creation-funding/v1";
 const CLOSE_FUNDING_DOMAIN: &[u8] = b"dragons-clutch/source-account-close-funding/v1";
@@ -86,6 +88,25 @@ impl SourceAccountFundingLedgerV1 {
         self.payer_principal_lamports
             .checked_add(self.donation_lamports)
             .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Construct the exact prefund-safe runtime account header.
+    pub fn runtime_header(
+        self,
+        family: AccountFamilyV3,
+        bump: u8,
+    ) -> Result<RuntimeAccountHeaderV1> {
+        self.validate()?;
+        let header = RuntimeAccountHeaderV1 {
+            family,
+            bump,
+            principal_recipient: self.principal_recipient,
+            payer_principal_lamports: self.payer_principal_lamports,
+            donation_floor_lamports: self.donation_lamports,
+            generation: self.generation,
+        };
+        header.validate(self.neutral_sink)?;
+        Ok(header)
     }
 }
 

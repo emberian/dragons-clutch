@@ -15,5 +15,4 @@ default = []
 [dependencies]
 clutch-source-plane-v3 = { path = "../clutch-source-plane-v3" }
 clutch-source-plane-v3-adapter = { path = "../clutch-source-plane-v3-adapter" }
-clutch-terminal-identity-v1 = { path = "../../research/terminal-identity-v1" }
 sha2 = { version = "0.10.9", default-features = false }
