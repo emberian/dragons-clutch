@@ -14,6 +14,7 @@
 
 use crate::bus::Bus;
 use crate::friday::{Friday, Row};
+use crate::integer;
 use crate::session::Session;
 use crate::{rpc, toolchain};
 use serde_json::{json, Value};
@@ -68,6 +69,7 @@ fn banner(
     json!({
         "type": "identity",
         "mode": "trade",
+        "integer_transport": integer::TRANSPORT,
         "source_profile": artifact.source_profile,
         "elf_path": artifact.path.display().to_string(),
         "elf_bytes": artifact.bytes,
@@ -219,38 +221,64 @@ pub fn serve(options: Options) -> Result<()> {
 /// limit.  What that becomes on the wire is decided in `builders.rs` and
 /// serialized by the harness.
 fn respond(session: &Arc<Session>, request: &Value) -> Value {
+    handle(session, request).unwrap_or_else(|error| {
+        json!({
+            "ok": false,
+            "integer_transport": integer::TRANSPORT,
+            "detail": error.to_string()
+        })
+    })
+}
+
+fn handle(session: &Arc<Session>, request: &Value) -> Result<Value> {
+    if request
+        .get("integer_transport")
+        .is_some_and(|value| value.as_str() != Some(integer::TRANSPORT))
+    {
+        return Err(format!(
+            "unsupported integer_transport; expected {}",
+            integer::TRANSPORT
+        )
+        .into());
+    }
     let name = request.get("action").and_then(Value::as_str).unwrap_or("");
-    let number = |field: &str| request.get(field).and_then(Value::as_u64);
-    let vector = |field: &str| -> Vec<u64> {
-        request
-            .get(field)
-            .and_then(Value::as_array)
-            .map(|values| values.iter().filter_map(Value::as_u64).collect())
-            .unwrap_or_default()
+    let number =
+        |field: &str| -> Result<u64> { integer::field_u64(request, field).map_err(Into::into) };
+    let vector = |field: &str| -> Result<Vec<u64>> {
+        integer::field_u64_values(request, field).map_err(Into::into)
     };
-    let side = || u8::from(request.get("side").and_then(Value::as_str) == Some("sell"));
-    let outcome = || u8::try_from(number("outcome").unwrap_or(0)).unwrap_or(u8::MAX);
-    let result = match name {
+    let side = || -> Result<u8> {
+        match request.get("side").and_then(Value::as_str) {
+            Some("buy") => Ok(0),
+            Some("sell") => Ok(1),
+            _ => Err("side must be exactly \"buy\" or \"sell\"".into()),
+        }
+    };
+    match name {
         "status" => Ok(session.snapshot()),
-        "bot" => Ok(json!({"ok": true, "disclosure": session.bot.disclosure()})),
+        "bot" => Ok(json!({
+            "ok": true,
+            "integer_transport": integer::TRANSPORT,
+            "disclosure": session.bot.disclosure()
+        })),
         "place" => session.place_single(
-            outcome(),
-            side(),
-            number("quantity").unwrap_or(0),
-            number("limit").unwrap_or(0),
+            u8::try_from(number("outcome")?)?,
+            side()?,
+            number("quantity")?,
+            number("limit")?,
         ),
         "place-portfolio" => session.place_portfolio(
-            &vector("coefficients"),
-            side(),
-            number("lots").unwrap_or(0),
-            number("limit_per_lot").unwrap_or(0),
+            &vector("coefficients")?,
+            side()?,
+            number("lots")?,
+            number("limit_per_lot")?,
         ),
-        "endow" => session.endow(number("amount").unwrap_or(0)),
-        "split" => session.split(number("quantity").unwrap_or(0)),
-        "cancel" => session.cancel(number("rank").unwrap_or(0)),
-        "propose" => Ok(session.propose(&vector("belief"))),
-        "weights" => Ok(session.weights_at(number("cents").unwrap_or(0))),
-        "paint" => session.paint(&vector("belief")),
+        "endow" => session.endow(number("amount")?),
+        "split" => session.split(number("quantity")?),
+        "cancel" => session.cancel(number("rank")?),
+        "propose" => Ok(session.propose(&vector("belief")?)),
+        "weights" => Ok(session.weights_at(number("cents")?)),
+        "paint" => session.paint(&vector("belief")?),
         "freeze" => {
             let worker = Arc::clone(session);
             thread::spawn(move || {
@@ -260,6 +288,7 @@ fn respond(session: &Arc<Session>, request: &Value) -> Value {
             });
             Ok(json!({
                 "ok": true,
+                "integer_transport": integer::TRANSPORT,
                 "detail": "closing at the deadline, then driving the epoch to settled; \
                            watch the step log",
             }))
@@ -268,6 +297,5 @@ fn respond(session: &Arc<Session>, request: &Value) -> Value {
             "ok": false,
             "detail": format!("a trade session has no action named {other:?}"),
         })),
-    };
-    result.unwrap_or_else(|error| json!({"ok": false, "detail": error.to_string()}))
+    }
 }

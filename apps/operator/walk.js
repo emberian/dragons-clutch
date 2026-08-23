@@ -5,7 +5,7 @@
  * that greyed those rows out or hid them behind an error style would be
  * throwing away the half of the walk that shows the boundaries hold. */
 
-import { el, fields, digest, numeric, row } from "./dom.js";
+import { decimalPercent, el, exactInteger, fields, digest, numeric, row } from "./dom.js";
 import { act } from "./action.js";
 
 /* The per-transaction compute ceiling the plan measures against.  Overridden
@@ -71,7 +71,7 @@ const computeBar = (units, ceiling) => {
     cell.append(el("span", "cu-value muted", "not reported"));
     return cell;
   }
-  const share = Math.max(0, Math.min(1, units / ceiling));
+  const share = decimalPercent(units, ceiling) / 100;
   const track = el("div", "cu-track");
   const bar = el("div", "cu-bar");
   bar.style.width = `${(share * 100).toFixed(2)}%`;
@@ -128,7 +128,7 @@ const stepRow = (state, step, ceiling) => {
     ["transaction bytes", numeric(step.bytes)],
     ["declared reloads", numeric(step.reloads)]
   ];
-  if (typeof record.slot === "number") facts.push(["confirmed slot", numeric(record.slot)]);
+  if (exactInteger(record.slot) !== null) facts.push(["confirmed slot", numeric(record.slot)]);
   if (record.confirmation) facts.push(["commitment", record.confirmation]);
   if (step.wait_slot) facts.push(["waits for slot", numeric(step.wait_slot)]);
   if (step.wait_after) facts.push(["waits for", `${step.wait_after.step} + ${step.wait_after.delta}`]);

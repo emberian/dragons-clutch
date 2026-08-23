@@ -9,6 +9,7 @@
 use crate::bus::Bus;
 use crate::crank::Crank;
 use crate::decode;
+use crate::integer;
 use crate::plan::{Compare, Plan, Step};
 use crate::rpc;
 use serde_json::{json, Value};
@@ -179,8 +180,8 @@ impl Walker<'_> {
                 "state": if step.kind == "accept" { "accepted" } else { "refused" },
                 "kind": step.kind,
                 "confirmation": status.get("confirmationStatus").and_then(Value::as_str).unwrap_or("unknown"),
-                "slot": slot,
-                "cu": rpc::compute_units(self.url, &signature),
+                "slot": integer::u64_value(slot),
+                "cu": integer::optional_u64(rpc::compute_units(self.url, &signature)),
                 "reloads": step.compare.len() + step.identical_to_pre.len(),
                 "signature": signature,
             }));
@@ -192,8 +193,11 @@ impl Walker<'_> {
     fn honour_waits(&self, step: &Step, slots: &BTreeMap<String, u64>) -> Result<()> {
         let mut tick = |now: u64, target: u64, reason: &str| {
             self.publish(&json!({
-                "type": "clock", "slot": now, "target": target, "reason": reason,
-                "remaining": target.saturating_sub(now),
+                "type": "clock",
+                "slot": integer::u64_value(now),
+                "target": integer::u64_value(target),
+                "reason": reason,
+                "remaining": integer::u64_value(target.saturating_sub(now)),
             }));
         };
         if let Some(target) = step.wait_slot {
@@ -347,9 +351,9 @@ impl Walker<'_> {
             eggs[1] += held[1];
             rows.push(json!({
                 "role": entry.role,
-                "cash": row_cash,
-                "reserved": u64_at(bytes, offsets.position_reserved),
-                "eggs": held,
+                "cash": integer::u64_value(row_cash),
+                "reserved": integer::u64_value(u64_at(bytes, offsets.position_reserved)),
+                "eggs": integer::u64_values(held),
             }));
         }
         let locked = latest
@@ -370,12 +374,12 @@ impl Walker<'_> {
             "complete": pending.is_empty(),
             "pending": pending,
             "rows": rows,
-            "cash_total": cash,
-            "eggs": eggs,
-            "locked": locked,
-            "custody": custody,
-            "endowed_total": rules.endowed_total,
-            "split_total": rules.split_total,
+            "cash_total": integer::u64_value(cash),
+            "eggs": integer::u64_values(eggs),
+            "locked": integer::optional_u64(locked),
+            "custody": integer::optional_u64(custody),
+            "endowed_total": integer::u64_value(rules.endowed_total),
+            "split_total": integer::u64_value(rules.split_total),
         })
     }
 
@@ -413,8 +417,10 @@ pub fn conservation_epilogue(plan: &Plan, terminal: &Terminal) -> (Value, bool) 
         eggs[0] += held[0];
         eggs[1] += held[1];
         rows.push(json!({
-            "role": entry.role, "cash": row_cash,
-            "reserved": u64_at(&bytes, offsets.position_reserved), "eggs": held,
+            "role": entry.role,
+            "cash": integer::u64_value(row_cash),
+            "reserved": integer::u64_value(u64_at(&bytes, offsets.position_reserved)),
+            "eggs": integer::u64_values(held),
         }));
     }
     let locked = u64_at(&image(&rules.hoard), offsets.hoard_collateral);
@@ -439,7 +445,12 @@ pub fn conservation_epilogue(plan: &Plan, terminal: &Terminal) -> (Value, bool) 
     ];
     let mut green = true;
     let render = |label: &str, got: u64, want: u64| {
-        json!({"label": label, "observed": got, "expected": want, "ok": got == want})
+        json!({
+            "label": label,
+            "observed": integer::u64_value(got),
+            "expected": integer::u64_value(want),
+            "ok": got == want
+        })
     };
     let checks: Vec<Value> = checks
         .iter()
@@ -454,9 +465,13 @@ pub fn conservation_epilogue(plan: &Plan, terminal: &Terminal) -> (Value, bool) 
     (
         json!({
             "type": "conservation", "live": false, "complete": true, "pending": [],
-            "rows": rows, "cash_total": cash, "eggs": eggs,
-            "locked": locked, "custody": custody,
-            "endowed_total": rules.endowed_total, "split_total": rules.split_total,
+            "rows": rows,
+            "cash_total": integer::u64_value(cash),
+            "eggs": integer::u64_values(eggs),
+            "locked": integer::u64_value(locked),
+            "custody": integer::u64_value(custody),
+            "endowed_total": integer::u64_value(rules.endowed_total),
+            "split_total": integer::u64_value(rules.split_total),
             "checks": checks, "identities": identities,
             "verdict": if green { "RE-DERIVED-FROM-OBSERVED-BYTES" } else { "FAIL" },
         }),

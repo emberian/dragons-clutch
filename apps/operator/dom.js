@@ -51,14 +51,57 @@ export const digest = (value) => {
   return node;
 };
 
+const CANONICAL_INTEGER = /^(?:0|-?[1-9]\d*)$/;
+
+export const exactInteger = (value) => {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "string" && CANONICAL_INTEGER.test(value)) return BigInt(value);
+  if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+  return null;
+};
+
 export const numeric = (value) => {
   if (value === null || value === undefined) return "—";
-  if (typeof value === "bigint") return value.toLocaleString("en-US");
-  if (typeof value === "string" && /^-?\d+$/.test(value)) {
-    return BigInt(value).toLocaleString("en-US");
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value.toLocaleString("en-US");
-  }
+  const exact = exactInteger(value);
+  if (exact !== null) return exact.toLocaleString("en-US");
+  if (typeof value === "number") return "INVALID UNSAFE NUMBER";
   return String(value);
+};
+
+/* Exact arithmetic for visual projections. The inputs remain decimal strings
+ * through the calculation; only a bounded percentage in 0..100 becomes a
+ * Number for CSS/SVG coordinates. */
+export const decimalDifference = (left, right) => {
+  const one = exactInteger(left);
+  const two = exactInteger(right);
+  if (one === null || two === null) return null;
+  return (one - two).toString();
+};
+
+export const decimalPercent = (part, whole) => {
+  const numerator = exactInteger(part);
+  const denominator = exactInteger(whole);
+  if (numerator === null || denominator === null || denominator <= 0n) return 0;
+  const bounded = numerator < 0n ? 0n : numerator > denominator ? denominator : numerator;
+  return Number((bounded * 10_000n) / denominator) / 100;
+};
+
+export const decimalMax = (values, fallback = "0") => {
+  let greatest = exactInteger(fallback);
+  if (greatest === null) greatest = 0n;
+  values.forEach((value) => {
+    const candidate = exactInteger(value);
+    if (candidate !== null && candidate > greatest) greatest = candidate;
+  });
+  return greatest.toString();
+};
+
+export const decimalCents = (value) => {
+  const cents = exactInteger(value);
+  if (cents === null || cents < 0n) return "INVALID CENTS";
+  const dollars = cents / 100n;
+  const remainder = cents % 100n;
+  return remainder === 0n
+    ? `$${dollars}`
+    : `$${dollars}.${remainder.toString().padStart(2, "0")}`;
 };

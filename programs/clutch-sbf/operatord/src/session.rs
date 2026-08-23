@@ -19,6 +19,7 @@ use crate::builders;
 use crate::bus::Bus;
 use crate::decode;
 use crate::friday::{Friday, EPOCH_INDEX, LADDER_STEP, OUTCOMES, PRICE_SCALE};
+use crate::integer;
 use crate::quantize::{belief_on_ladder, resolution_weights, PAYOUT_DENOMINATOR};
 use crate::rpc;
 use clutch_batch::relation_v1::{
@@ -147,7 +148,7 @@ impl Session {
         let slot = status
             .get("slot")
             .and_then(Value::as_u64)
-            .unwrap_or_default();
+            .ok_or("confirmation carries no unsigned slot")?;
         let accepted = error.is_null();
         self.publish(&json!({
             "type": "step",
@@ -157,8 +158,8 @@ impl Session {
             "state": if accepted { "accepted" } else { "refused" },
             "confirmation": status.get("confirmationStatus").and_then(Value::as_str)
                 .unwrap_or("unknown"),
-            "slot": slot,
-            "cu": rpc::compute_units(&self.url, &signature),
+            "slot": integer::u64_value(slot),
+            "cu": integer::optional_u64(rpc::compute_units(&self.url, &signature)),
             "bytes": signed.len(),
             "signature": signature,
             "error": error,
@@ -167,10 +168,18 @@ impl Session {
         }));
         self.sweep(live)?;
         if accepted {
-            Ok(json!({"ok": true, "ordinal": ordinal, "signature": signature, "slot": slot}))
+            Ok(json!({
+                "ok": true,
+                "integer_transport": integer::TRANSPORT,
+                "ordinal": ordinal,
+                "signature": signature,
+                "slot": integer::u64_value(slot)
+            }))
         } else {
             Ok(json!({
-                "ok": false, "ordinal": ordinal, "signature": signature,
+                "ok": false,
+                "integer_transport": integer::TRANSPORT,
+                "ordinal": ordinal, "signature": signature,
                 "detail": format!("the bank refused {name}: {error}"),
             }))
         }
@@ -248,9 +257,9 @@ impl Session {
             }
             rows.push(json!({
                 "role": actor.role,
-                "cash": position.cash_atoms,
-                "reserved": position.reserved_cash_atoms,
-                "eggs": position.internal[..8].to_vec(),
+                "cash": integer::u64_value(position.cash_atoms),
+                "reserved": integer::u64_value(position.reserved_cash_atoms),
+                "eggs": integer::u64_values(position.internal[..8].iter().copied()),
             }));
         }
         for (role, bytes) in &live.latest {
@@ -321,13 +330,13 @@ impl Session {
             "complete": pending.is_empty() && locked.is_some() && custody.is_some(),
             "pending": pending,
             "rows": rows,
-            "cash_total": cash,
-            "reserved_total": reserved,
-            "eggs": eggs,
-            "locked": locked,
-            "custody": custody,
-            "endowed_total": live.endowed_total,
-            "split_total": live.split_total,
+            "cash_total": integer::u64_value(cash),
+            "reserved_total": integer::u64_value(reserved),
+            "eggs": integer::u64_values(eggs),
+            "locked": integer::optional_u64(locked),
+            "custody": integer::optional_u64(custody),
+            "endowed_total": integer::u64_value(live.endowed_total),
+            "split_total": integer::u64_value(live.split_total),
             "identities": identities,
         })
     }
@@ -339,21 +348,26 @@ impl Session {
             .iter()
             .map(|order| {
                 json!({
-                    "rank": order.rank, "owner": order.owner_role, "kind": order.kind,
+                    "rank": integer::u64_value(order.rank),
+                    "owner": order.owner_role, "kind": order.kind,
                     "outcome": order.outcome,
                     "side": if order.side == 0 { "buy" } else { "sell" },
-                    "quantity": order.quantity, "limit": order.limit,
+                    "quantity": integer::u64_value(order.quantity),
+                    "limit": integer::u64_value(order.limit),
                     "retired": order.retired,
                 })
             })
             .collect();
         json!({
             "type": "session",
+            "integer_transport": integer::TRANSPORT,
             "phase": live.phase,
-            "epoch_index": EPOCH_INDEX,
-            "freeze_deadline_slot": live.freeze_deadline,
-            "next_rank": live.next_rank,
-            "human_belief": live.human_belief,
+            "epoch_index": integer::u64_value(EPOCH_INDEX),
+            "freeze_deadline_slot": integer::u64_value(live.freeze_deadline),
+            "next_rank": integer::u64_value(live.next_rank),
+            "human_belief": live.human_belief.as_ref().map(|values| {
+                integer::u64_values(values.iter().copied())
+            }),
             "orders": orders,
         })
     }
@@ -802,19 +816,20 @@ impl Session {
                 Some(json!({
                     "outcome": index,
                     "side": if side == 0 { "buy" } else { "sell" },
-                    "quantity": self.bot.size,
-                    "limit": mine,
-                    "crosses_rank": resting.rank,
-                    "their_limit": theirs,
+                    "quantity": integer::u64_value(self.bot.size),
+                    "limit": integer::u64_value(mine),
+                    "crosses_rank": integer::u64_value(resting.rank),
+                    "their_limit": integer::u64_value(*theirs),
                 }))
             })
             .collect();
         json!({
             "ok": true,
+            "integer_transport": integer::TRANSPORT,
             "label": "MODEL-ONLY",
             "note": "nothing here has been submitted; the bank has committed none of it",
-            "belief": belief,
-            "ladder_step": LADDER_STEP,
+            "belief": integer::u64_values(belief),
+            "ladder_step": integer::u64_value(LADDER_STEP),
             "proposed": proposals,
         })
     }
@@ -826,10 +841,7 @@ impl Session {
         if proposal.get("ok").and_then(Value::as_bool) != Some(true) {
             return Ok(proposal);
         }
-        let belief: Vec<u64> = proposal["belief"]
-            .as_array()
-            .map(|values| values.iter().filter_map(Value::as_u64).collect())
-            .unwrap_or_default();
+        let belief = integer::field_u64_values(&proposal, "belief")?;
         {
             let mut live = self.lock();
             live.human_belief = Some(belief.clone());
@@ -837,16 +849,16 @@ impl Session {
         self.publish(&json!({
             "type": "belief",
             "label": "MODEL-ONLY",
-            "belief": belief,
+            "belief": integer::u64_values(belief.iter().copied()),
             "proposed": proposal["proposed"].clone(),
         }));
         let mut placed = Vec::new();
         let mut skipped = Vec::new();
         for entry in proposal["proposed"].as_array().unwrap_or(&Vec::new()) {
-            let outcome = u8::try_from(entry["outcome"].as_u64().unwrap_or(0)).unwrap_or(0);
+            let outcome = u8::try_from(integer::field_u64(entry, "outcome")?)?;
             let side = u8::from(entry["side"].as_str() == Some("sell"));
-            let quantity = entry["quantity"].as_u64().unwrap_or(0);
-            let limit = entry["limit"].as_u64().unwrap_or(0);
+            let quantity = integer::field_u64(entry, "quantity")?;
+            let limit = integer::field_u64(entry, "limit")?;
             let outcome_value = self.place_single(outcome, side, quantity, limit)?;
             if outcome_value.get("ok").and_then(Value::as_bool) == Some(true) {
                 placed.push(outcome_value);
@@ -858,7 +870,11 @@ impl Session {
             }
         }
         Ok(json!({
-            "ok": true, "belief": belief, "placed": placed, "skipped": skipped,
+            "ok": true,
+            "integer_transport": integer::TRANSPORT,
+            "belief": integer::u64_values(belief),
+            "placed": placed,
+            "skipped": skipped,
         }))
     }
 
@@ -880,8 +896,11 @@ impl Session {
             let target = live.freeze_deadline;
             let mut tick = |now: u64, target: u64, reason: &str| {
                 self.publish(&json!({
-                    "type": "clock", "slot": now, "target": target, "reason": reason,
-                    "remaining": target.saturating_sub(now),
+                    "type": "clock",
+                    "slot": integer::u64_value(now),
+                    "target": integer::u64_value(target),
+                    "reason": reason,
+                    "remaining": integer::u64_value(target.saturating_sub(now)),
                 }));
             };
             rpc::wait_for_slot(&self.url, target, "freeze deadline", &mut tick)?;
@@ -953,12 +972,14 @@ impl Session {
         let fills = candidate.fills[..book.len as usize].to_vec();
         self.publish(&json!({
             "type": "clearing",
-            "prices": prices[..usize::from(OUTCOMES)].to_vec(),
+            "prices": integer::u64_values(
+                prices[..usize::from(OUTCOMES)].iter().copied()
+            ),
             "price_basis": basis,
-            "fills": fills,
+            "fills": integer::u64_values(fills.iter().copied()),
             "slices": witness.len,
-            "virtual_split": candidate.virtual_split,
-            "virtual_merge": candidate.virtual_merge,
+            "virtual_split": integer::u64_value(candidate.virtual_split),
+            "virtual_merge": integer::u64_value(candidate.virtual_merge),
             /* "Verified" is the program's own name for a candidate status and
              * is not this bench's word for its own evidence.  Nothing here is
              * verified; the bank either accepts the candidate carrying these
@@ -1099,8 +1120,11 @@ impl Session {
         ));
         let mut tick = |now: u64, target: u64, reason: &str| {
             self.publish(&json!({
-                "type": "clock", "slot": now, "target": target, "reason": reason,
-                "remaining": target.saturating_sub(now),
+                "type": "clock",
+                "slot": integer::u64_value(now),
+                "target": integer::u64_value(target),
+                "reason": reason,
+                "remaining": integer::u64_value(target.saturating_sub(now)),
             }));
         };
         rpc::wait_for_slot(&self.url, target, "candidate window", &mut tick)?;
@@ -1294,7 +1318,9 @@ impl Session {
                 Ok(_) => {
                     self.publish(&json!({
                         "type": "clearing-attempt", "basis": basis, "taken": true,
-                        "prices": prices[..usize::from(OUTCOMES)].to_vec(),
+                        "prices": integer::u64_values(
+                            prices[..usize::from(OUTCOMES)].iter().copied()
+                        ),
                         "attempts": attempts,
                     }));
                     return Ok((prices, basis));
@@ -1303,7 +1329,9 @@ impl Session {
                     let refusal = format!("{error:?}");
                     self.publish(&json!({
                         "type": "clearing-attempt", "basis": basis, "taken": false,
-                        "prices": prices[..usize::from(OUTCOMES)].to_vec(),
+                        "prices": integer::u64_values(
+                            prices[..usize::from(OUTCOMES)].iter().copied()
+                        ),
                         "refusal": refusal,
                     }));
                     attempts.push(format!("{basis}: {refusal}"));
@@ -1322,17 +1350,17 @@ impl Session {
         let f = &self.friday;
         json!({
             "mode": "trade",
+            "integer_transport": integer::TRANSPORT,
             "market": clutch_sbf_harness::hex_encode(&f.market_id.bytes()),
             "market_account": f.market.address,
             "terms": clutch_sbf_harness::hex_encode(&f.terms_value.terms.bytes()),
             "basis_degree": f.terms_value.basis_degree,
             "knot_count": f.terms_value.knot_count,
             "knots_cents": crate::friday::KNOT_CENTS.iter()
-                .map(|cents| u64::try_from(*cents).unwrap_or(u64::MAX))
-                .collect::<Vec<_>>(),
+                .copied().map(integer::u128_value).collect::<Vec<_>>(),
             "outcome_count": OUTCOMES,
-            "price_scale": PRICE_SCALE,
-            "ladder_step": LADDER_STEP,
+            "price_scale": integer::u64_value(PRICE_SCALE),
+            "ladder_step": integer::u64_value(LADDER_STEP),
             "statistic_id": f.terms_value.statistic_id,
             "edge_policy_id": f.terms_value.edge_policy_id,
             "actors": f.actors.iter().map(|actor| json!({
@@ -1361,9 +1389,10 @@ impl Session {
             "label": "MODEL-ONLY",
             "note": "this session never resolves; these are the weights a terminal \
                      statistic here would carry, not a payout the bank has made",
-            "cents": cents,
-            "denominator": PAYOUT_DENOMINATOR,
-            "weights": weights,
+            "integer_transport": integer::TRANSPORT,
+            "cents": integer::u64_value(cents),
+            "denominator": integer::u64_value(PAYOUT_DENOMINATOR),
+            "weights": integer::u64_values(weights),
             "rule": "degree-1 open-clamped hats, largest-remainder quantized, \
                      lowest-index ties (EDGE-CLAMP-01, STAT-TERMINAL-01)",
         })
@@ -1391,12 +1420,18 @@ impl Session {
 }
 
 fn refused(detail: &str) -> Value {
-    json!({"ok": false, "detail": detail})
+    json!({
+        "ok": false,
+        "integer_transport": integer::TRANSPORT,
+        "detail": detail
+    })
 }
 
 fn identity(label: &str, observed: u64, expected: u64) -> Value {
     json!({
-        "label": label, "observed": observed, "expected": expected,
+        "label": label,
+        "observed": integer::u64_value(observed),
+        "expected": integer::u64_value(expected),
         "ok": observed == expected,
     })
 }

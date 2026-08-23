@@ -108,6 +108,28 @@ HttpOnly, SameSite capability cookie before either `/api` or `/api/events` is
 usable. The scripted local gate acquires that session cookie from the index in
 the same way a browser does.
 
+## Exact integer transport
+
+Watch and Trade identity events advertise `canonical-decimal-v1`. Every
+onchain `u64` quantity, slot, cursor, generation, scaled price, and balance —
+and every `u128` market knot exposed by the Operator — crosses the
+daemon/browser boundary as a canonical decimal string. The browser uses
+`BigInt` for exact formatting, subtraction, comparison, and ratios; only the
+final bounded 0–100 display percentage becomes a JavaScript `Number`.
+
+Trade intents use the same decimal strings. The daemon checks the complete
+field or vector and refuses signs, whitespace, exponents, fractions, leading
+zeroes, overflow, and malformed vector members without defaulting them to zero
+or deleting an entry. Legacy JSON-number intents are accepted only through
+`Number.MAX_SAFE_INTEGER`; a numeric literal at or above 2^53 is refused and
+must be resent as a string. The browser itself refuses to send unsafe numbers
+and stops on an SSE event containing one.
+
+This protects the presentation from silent IEEE-754 rounding. It does not make
+the static client authoritative: every screen remains an untrusted projection
+of daemon-validated or daemon-decoded state, and the onchain accounts remain
+the semantic owners of persisted facts.
+
 ## What is on screen
 
 ### Pyth local mode

@@ -12,7 +12,17 @@
  * demonstration is worthless if anyone thinks it is one. */
 
 import { act } from "./action.js";
-import { digest, el, fields, numeric, row } from "./dom.js";
+import {
+  decimalCents,
+  decimalMax,
+  decimalPercent,
+  digest,
+  el,
+  exactInteger,
+  fields,
+  numeric,
+  row,
+} from "./dom.js";
 import { chip } from "./evidence.js";
 
 const KNOT_LABEL = Object.freeze(["$100", "$120", "$140", "$160", "$180", "$200", "$220", "$240"]);
@@ -67,9 +77,9 @@ const button = (label, className, handler) => {
 const ticket = {
   knot: 3,
   side: "buy",
-  quantity: 500,
-  limit: 6000,
-  belief: [1250, 1250, 1250, 1250, 1250, 1250, 1250, 1250],
+  quantity: "500",
+  limit: "6000",
+  belief: ["1250", "1250", "1250", "1250", "1250", "1250", "1250", "1250"],
   tab: "single",
   proposal: null,
   notice: null
@@ -160,8 +170,9 @@ export const renderClutch = (state) => {
       fields("", [
         ["market", digest(market.market)],
         ["terms", digest(market.terms)],
+        ["integer transport", market.integer_transport],
         ["basis degree", numeric(market.basis_degree)],
-        ["knots", market.knots_cents.map((cents) => `$${cents / 100}`).join(" · ")],
+        ["knots", market.knots_cents.map(decimalCents).join(" · ")],
         ["outcomes", numeric(market.outcome_count)],
         ["price scale", numeric(market.price_scale)],
         ["limit ladder step", numeric(market.ladder_step)],
@@ -298,7 +309,7 @@ const singleTicket = (state) => {
   quantity.step = "1";
   quantity.value = String(ticket.quantity);
   quantity.addEventListener("change", () => {
-    ticket.quantity = Number(quantity.value) || 0;
+    ticket.quantity = quantity.value;
   });
   form.append(el("label", "ticket-label", "eggs"), quantity);
 
@@ -309,7 +320,7 @@ const singleTicket = (state) => {
   limit.step = String(step);
   limit.value = String(ticket.limit);
   limit.addEventListener("change", () => {
-    ticket.limit = Number(limit.value) || 0;
+    ticket.limit = limit.value;
   });
   form.append(el("label", "ticket-label", `limit (multiple of ${step})`), limit);
   card.append(form);
@@ -320,7 +331,7 @@ const singleTicket = (state) => {
       post(
         {
           action: "place",
-          outcome: ticket.knot,
+          outcome: String(ticket.knot),
           side: ticket.side,
           quantity: ticket.quantity,
           limit: ticket.limit
@@ -366,7 +377,7 @@ const painter = (state) => {
     input.setAttribute("aria-label", `Belief weight at ${KNOT_LABEL[index]}`);
     const valueNode = el("span", "painter-value", numeric(value));
     input.addEventListener("input", () => {
-      ticket.belief[index] = Number(input.value) || 0;
+      ticket.belief[index] = input.value;
       ticket.proposal = null;
       valueNode.textContent = numeric(ticket.belief[index]);
     });
@@ -378,13 +389,16 @@ const painter = (state) => {
   });
   card.append(sliders);
 
-  const total = ticket.belief.reduce((sum, value) => sum + value, 0);
+  const total = ticket.belief.reduce(
+    (sum, value) => sum + (exactInteger(value) || 0n),
+    0n
+  );
   card.append(modelOnly(`raw drag total ${numeric(total)}; the daemon renormalizes it onto the price scale before anything is proposed`));
 
   const controls = el("div", "controls");
   controls.append(
     button("Preview the orders this implies", "tab", async () => {
-      const reply = await act({ action: "propose", belief: ticket.belief });
+      const reply = await act({ action: "propose", belief: [...ticket.belief] });
       ticket.proposal = reply;
       repaint();
     })
@@ -392,7 +406,7 @@ const painter = (state) => {
   controls.append(
     button("Place them all", "tab tab-on", () => {
       ticket.proposal = null;
-      post({ action: "paint", belief: ticket.belief }, "place the painted belief");
+      post({ action: "paint", belief: [...ticket.belief] }, "place the painted belief");
     })
   );
   card.append(controls);
@@ -479,10 +493,10 @@ const fundingTicket = (state) => {
   const controls = el("div", "controls");
   controls.append(
     button("Endow", "tab", () => {
-      post({ action: "endow", amount: Number(amount.value) || 0 }, "endow");
+      post({ action: "endow", amount: amount.value }, "endow");
     }),
     button("Split", "tab", () => {
-      post({ action: "split", quantity: Number(sets.value) || 0 }, "split");
+      post({ action: "split", quantity: sets.value }, "split");
     })
   );
   card.append(controls);
@@ -545,10 +559,10 @@ const portfolioTicket = () => {
             action: "place-portfolio",
             coefficients: coefficients.value
               .split(",")
-              .map((part) => Number(part.trim()) || 0),
+              .map((part) => part.trim()),
             side,
-            lots: Number(lots.value) || 0,
-            limit_per_lot: Number(perLot.value) || 0
+            lots: lots.value,
+            limit_per_lot: perLot.value
           },
           "place the portfolio ticket"
         );
@@ -655,14 +669,15 @@ const overlay = (state) => {
   const theirs = state.bot ? state.bot.quoted_belief : null;
   const mine = state.belief ? state.belief.belief : null;
   const cleared = state.clearing ? state.clearing.prices : null;
-  const peak = Math.max(
-    1,
-    ...(theirs || [0]),
-    ...(mine || [0]),
-    ...(cleared || [0])
-  );
+  const peak = decimalMax([
+    ...(theirs || ["0"]),
+    ...(mine || ["0"]),
+    ...(cleared || ["0"])
+  ], "1");
   const x = (index) => pad + (index * (width - 2 * pad)) / 7;
-  const y = (value) => height - pad - ((height - 2 * pad) * value) / peak;
+  const y = (value) => (
+    height - pad - ((height - 2 * pad) * decimalPercent(value, peak)) / 100
+  );
 
   const make = (name, attributes) => {
     const node = document.createElementNS(SVG_NS, name);
@@ -819,7 +834,7 @@ const computeBar = (units) => {
   const cell = el("div", "cu");
   const track = el("div", "cu-track");
   const bar = el("div", "cu-bar");
-  const share = Math.min(1, (units || 0) / COMPUTE_UNIT_CEILING);
+  const share = decimalPercent(units || "0", COMPUTE_UNIT_CEILING) / 100;
   bar.style.width = `${(share * 100).toFixed(2)}%`;
   if (share > 0.5) bar.classList.add("cu-hot");
   track.append(bar);

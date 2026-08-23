@@ -10,9 +10,31 @@
  * A string argument is the pacing form the watch-mode screens use; an object
  * is a trade intent. Both are the same POST. */
 
+export const INTEGER_TRANSPORT = "canonical-decimal-v1";
+
+const assertSafeJsonNumbers = (value, path = "request") => {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new TypeError(`${path} is an unsafe JSON number; send a canonical decimal string`);
+  }
+  if (typeof value === "bigint") {
+    throw new TypeError(`${path} is a BigInt; send a canonical decimal string`);
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertSafeJsonNumbers(entry, `${path}[${index}]`));
+  } else if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, entry]) => assertSafeJsonNumbers(entry, `${path}.${key}`));
+  }
+};
+
+export const encodeIntent = (request) => {
+  const intent = typeof request === "string" ? { action: request } : request;
+  assertSafeJsonNumbers(intent);
+  return { ...intent, integer_transport: INTEGER_TRANSPORT };
+};
+
 export const act = async (request) => {
-  const body = typeof request === "string" ? { action: request } : request;
   try {
+    const body = encodeIntent(request);
     const reply = await fetch("/api", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

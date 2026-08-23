@@ -3,12 +3,15 @@
 //! The browser is shown decoded state so that it never needs a parser of its
 //! own.  Every field below comes out of `clutch_solana_layout`, the same
 //! codecs the program writes through — there is no second reading of the wire
-//! format anywhere in this project's frontend.
+//! format anywhere in this project's frontend. Every decoded `u64` crosses
+//! the JSON boundary as a canonical decimal string; the static client is still
+//! an untrusted projection, but it cannot silently round ledger integers.
 //!
 //! A role this daemon has no codec for is reported as `{"kind": "opaque"}`
 //! with its length and leading bytes.  That is deliberately a visible gap and
 //! not a silent one: an undecoded account must look undecoded.
 
+use crate::integer;
 use clutch_solana_layout::artifact::decode_stage;
 use clutch_solana_layout::clearing::EpochWindowAccount;
 use clutch_solana_layout::reservation::ReservationAccount;
@@ -46,18 +49,24 @@ fn position(bytes: &[u8]) -> Option<Value> {
     let value = PositionAccount::decode(bytes).ok()?;
     Some(json!({
         "kind": "position",
-        "generation": value.generation,
-        "cash_atoms": value.cash_atoms,
-        "reserved_cash_atoms": value.reserved_cash_atoms,
-        "free_cash_atoms": value.cash_atoms.saturating_sub(value.reserved_cash_atoms),
-        "internal": &value.internal[..WIDE],
+        "generation": integer::u64_value(value.generation),
+        "cash_atoms": integer::u64_value(value.cash_atoms),
+        "reserved_cash_atoms": integer::u64_value(value.reserved_cash_atoms),
+        "free_cash_atoms": integer::u64_value(
+            value.cash_atoms.saturating_sub(value.reserved_cash_atoms)
+        ),
+        "internal": integer::u64_values(value.internal[..WIDE].iter().copied()),
         "close_state": value.close_state,
     }))
 }
 
 fn hoard(bytes: &[u8]) -> Option<Value> {
     let value = HoardAccount::decode(bytes).ok()?;
-    Some(json!({"kind": "hoard", "collateral_atoms": value.collateral_atoms, "flags": value.flags}))
+    Some(json!({
+        "kind": "hoard",
+        "collateral_atoms": integer::u64_value(value.collateral_atoms),
+        "flags": value.flags
+    }))
 }
 
 fn market(bytes: &[u8]) -> Option<Value> {
@@ -66,8 +75,8 @@ fn market(bytes: &[u8]) -> Option<Value> {
         "kind": "market",
         "outcome_count": value.outcome_count,
         "lifecycle": value.lifecycle,
-        "collateral_cap": value.collateral_cap,
-        "created_slot": value.created_slot,
+        "collateral_cap": integer::u64_value(value.collateral_cap),
+        "created_slot": integer::u64_value(value.created_slot),
     }))
 }
 
@@ -75,9 +84,9 @@ fn supply(bytes: &[u8]) -> Option<Value> {
     let value = SupplyLedgerAccount::decode(bytes).ok()?;
     Some(json!({
         "kind": "supply",
-        "generation": value.generation,
-        "internal_supply": &value.internal_supply[..WIDE],
-        "external_supply": &value.external_supply[..WIDE],
+        "generation": integer::u64_value(value.generation),
+        "internal_supply": integer::u64_values(value.internal_supply[..WIDE].iter().copied()),
+        "external_supply": integer::u64_values(value.external_supply[..WIDE].iter().copied()),
     }))
 }
 
@@ -92,12 +101,12 @@ fn epoch(bytes: &[u8]) -> Option<Value> {
     let value = EpochAccount::decode(bytes).ok()?;
     Some(json!({
         "kind": "epoch",
-        "epoch_index": value.epoch_index,
+        "epoch_index": integer::u64_value(value.epoch_index),
         "phase": value.phase,
         "order_count": value.order_count,
         "owner_count": value.owner_count,
         "page_count": value.page_count,
-        "price_scale": value.price_scale,
+        "price_scale": integer::u64_value(value.price_scale),
         "outcome_count": value.outcome_count,
         "basis_degree": value.basis_degree,
         "relation_version": value.relation_version,
@@ -108,9 +117,9 @@ fn window(bytes: &[u8]) -> Option<Value> {
     let value = EpochWindowAccount::decode(bytes).ok()?;
     Some(json!({
         "kind": "window",
-        "freeze_deadline_slot": value.freeze_deadline_slot,
-        "selection_deadline_slot": value.selection_deadline_slot,
-        "selected_slot": value.selected_slot,
+        "freeze_deadline_slot": integer::u64_value(value.freeze_deadline_slot),
+        "selection_deadline_slot": integer::u64_value(value.selection_deadline_slot),
+        "selected_slot": integer::u64_value(value.selected_slot),
         "live_order_count": value.live_order_count,
         "retained_count": value.retained_count,
     }))
@@ -155,20 +164,28 @@ fn slot(index: usize, entry: OrderSlot) -> Option<Value> {
         OrderSlot::Single(order) => Some(json!({
             "slot": index, "kind": "single", "order_id": order_tag(order.order_id),
             "owner": tag(order.owner), "outcome": order.outcome, "side": side(order.side),
-            "quantity": order.quantity, "limit": order.limit,
-            "minimum_fill": order.minimum_fill, "generation": order.generation,
+            "quantity": integer::u64_value(order.quantity),
+            "limit": integer::u64_value(order.limit),
+            "minimum_fill": integer::u64_value(order.minimum_fill),
+            "generation": integer::u64_value(order.generation),
         })),
         OrderSlot::Portfolio(order) => Some(json!({
             "slot": index, "kind": "portfolio", "order_id": order_tag(order.order_id),
             "owner": tag(order.owner), "side": side(order.side),
             "active_len": order.active_len,
-            "coefficients": &order.coefficients[..usize::from(order.active_len).min(order.coefficients.len())],
-            "lots": order.lots, "limit_collateral_per_lot": order.limit_collateral_per_lot,
-            "minimum_fill_lots": order.minimum_fill_lots, "generation": order.generation,
+            "coefficients": integer::u64_values(
+                order.coefficients[..usize::from(order.active_len).min(order.coefficients.len())]
+                    .iter().copied()
+            ),
+            "lots": integer::u64_value(order.lots),
+            "limit_collateral_per_lot": integer::u64_value(order.limit_collateral_per_lot),
+            "minimum_fill_lots": integer::u64_value(order.minimum_fill_lots),
+            "generation": integer::u64_value(order.generation),
         })),
         OrderSlot::Tombstone(retired) => Some(json!({
             "slot": index, "kind": "tombstone", "order_id": order_tag(retired.order_id),
-            "owner": tag(retired.owner), "retired_generation": retired.retired_generation,
+            "owner": tag(retired.owner),
+            "retired_generation": integer::u64_value(retired.retired_generation),
         })),
     }
 }
@@ -211,12 +228,12 @@ fn reservation(bytes: &[u8]) -> Option<Value> {
         "side": side(value.side),
         "order_kind": value.order_kind,
         "outcome_count": value.outcome_count,
-        "initial_cash_atoms": value.initial_cash_atoms,
-        "remaining_cash_atoms": value.remaining_cash_atoms,
-        "initial_internal": &value.initial_internal[..width],
-        "remaining_internal": &value.remaining_internal[..width],
-        "entitled_units": value.entitled_units,
-        "consumed_units": value.consumed_units,
+        "initial_cash_atoms": integer::u64_value(value.initial_cash_atoms),
+        "remaining_cash_atoms": integer::u64_value(value.remaining_cash_atoms),
+        "initial_internal": integer::u64_values(value.initial_internal[..width].iter().copied()),
+        "remaining_internal": integer::u64_values(value.remaining_internal[..width].iter().copied()),
+        "entitled_units": integer::u64_value(value.entitled_units),
+        "consumed_units": integer::u64_value(value.consumed_units),
     }))
 }
 
@@ -225,12 +242,12 @@ fn candidate(bytes: &[u8]) -> Option<Value> {
     Some(json!({
         "kind": "candidate",
         "status": value.status,
-        "prices": &value.prices[..WIDE],
-        "virtual_split": value.virtual_split,
-        "virtual_merge": value.virtual_merge,
+        "prices": integer::u64_values(value.prices[..WIDE].iter().copied()),
+        "virtual_split": integer::u64_value(value.virtual_split),
+        "virtual_merge": integer::u64_value(value.virtual_merge),
         "distinct_owners": value.distinct_owners,
         "order_len": value.order_len,
-        "submitted_slot": value.submitted_slot,
+        "submitted_slot": integer::u64_value(value.submitted_slot),
     }))
 }
 
@@ -249,10 +266,10 @@ fn resolution(bytes: &[u8]) -> Option<Value> {
     Some(json!({
         "kind": "resolution",
         "payout_index": value.payout_index,
-        "resolved_slot": value.resolved_slot,
-        "feed_cursor": value.feed_cursor,
-        "sealed_end_bucket_exclusive": value.sealed_end_bucket_exclusive,
-        "repair_generation": value.repair_generation,
+        "resolved_slot": integer::u64_value(value.resolved_slot),
+        "feed_cursor": integer::u64_value(value.feed_cursor),
+        "sealed_end_bucket_exclusive": integer::u64_value(value.sealed_end_bucket_exclusive),
+        "repair_generation": integer::u64_value(value.repair_generation),
     }))
 }
 
@@ -263,18 +280,24 @@ fn stage(bytes: &[u8]) -> Option<Value> {
     Some(json!({
         "kind": "artifact-stage",
         "cursor": value.cursor,
-        "created_slot": value.created_slot,
-        "expires_slot": value.expires_slot,
+        "created_slot": integer::u64_value(value.created_slot),
+        "expires_slot": integer::u64_value(value.expires_slot),
         "staged_bytes": bytes.len(),
     }))
 }
 
 fn token(bytes: &[u8]) -> Option<Value> {
-    Some(json!({"kind": "token", "amount": u64_at(bytes, TOKEN_AMOUNT_OFFSET)?}))
+    Some(json!({
+        "kind": "token",
+        "amount": integer::u64_value(u64_at(bytes, TOKEN_AMOUNT_OFFSET)?)
+    }))
 }
 
 fn mint(bytes: &[u8]) -> Option<Value> {
-    Some(json!({"kind": "mint", "supply": u64_at(bytes, MINT_SUPPLY_OFFSET)?}))
+    Some(json!({
+        "kind": "mint",
+        "supply": integer::u64_value(u64_at(bytes, MINT_SUPPLY_OFFSET)?)
+    }))
 }
 
 /// Decode one reloaded account by the plan role it was compared under.
@@ -322,7 +345,20 @@ mod tests {
         bytes[TOKEN_AMOUNT_OFFSET..TOKEN_AMOUNT_OFFSET + 8].copy_from_slice(&49_u64.to_le_bytes());
         let value = by_role("general-market.hoard-token", &bytes);
         assert_eq!(value["kind"], "token");
-        assert_eq!(value["amount"], 49);
+        assert_eq!(value["amount"], "49");
+    }
+
+    #[test]
+    fn token_amounts_above_javascript_precision_remain_distinct() {
+        for amount in [1_u64 << 53, (1_u64 << 53) + 1, u64::MAX] {
+            let mut bytes = vec![0_u8; 165];
+            bytes[TOKEN_AMOUNT_OFFSET..TOKEN_AMOUNT_OFFSET + 8]
+                .copy_from_slice(&amount.to_le_bytes());
+            assert_eq!(
+                by_role("general-market.hoard-token", &bytes)["amount"],
+                amount.to_string()
+            );
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@
  * manifest; the precreated-account list is the plan's own enumeration of what
  * it could not create permissionlessly. */
 
-import { el, fields, digest, numeric, row } from "./dom.js";
+import { decimalMax, el, fields, digest, numeric, row } from "./dom.js";
 import { chip } from "./evidence.js";
 
 const STATE_LABEL = Object.freeze({
@@ -37,15 +37,16 @@ const health = (state) => {
     section.append(stages);
     return section;
   }
-  const lastSlot = [...state.steps.values()].reduce(
-    (highest, record) => (typeof record.slot === "number" && record.slot > highest ? record.slot : highest),
-    state.clock ? state.clock.slot : 0
+  const lastSlot = decimalMax(
+    [...state.steps.values()].map((record) => record.slot),
+    state.clock ? state.clock.slot : "0"
   );
   section.append(
     fields("", [
       ["Loopback RPC", identity.rpc_url],
       ["Ledger", identity.ledger],
       ["Program id", digest(identity.program_id)],
+      ["Integer transport", identity.integer_transport || "legacy safe-number compatibility"],
       ["Latest observed slot", numeric(lastSlot)],
       ["Stream", state.connected ? "attached" : "detached"],
       ["Events received", numeric(state.events)]

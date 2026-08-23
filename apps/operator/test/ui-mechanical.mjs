@@ -2,15 +2,76 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { numeric } from "../dom.js";
+import { encodeIntent, INTEGER_TRANSPORT } from "../action.js";
+import { eventHasSafeNumbers } from "../stream.js";
+import {
+  decimalCents,
+  decimalDifference,
+  decimalMax,
+  decimalPercent,
+  exactInteger,
+  numeric,
+} from "../dom.js";
 
 const here = new URL("../", import.meta.url);
 const source = async (name) => readFile(new URL(name, here), "utf8");
 
 test("exact integer strings never pass through Number", () => {
-  assert.equal(numeric("18446744073709551615"), "18,446,744,073,709,551,615");
+  for (const [raw, formatted] of [
+    ["9007199254740992", "9,007,199,254,740,992"],
+    ["9007199254740993", "9,007,199,254,740,993"],
+    ["18446744073709551615", "18,446,744,073,709,551,615"],
+  ]) {
+    assert.equal(JSON.parse(JSON.stringify({ amount: raw })).amount, raw);
+    assert.equal(numeric(raw), formatted);
+    assert.equal(exactInteger(raw), BigInt(raw));
+  }
   assert.equal(numeric(18446744073709551615n), "18,446,744,073,709,551,615");
+  assert.equal(numeric(9007199254740992), "INVALID UNSAFE NUMBER");
+  assert.equal(numeric(Number.MAX_SAFE_INTEGER), "9,007,199,254,740,991");
   assert.equal(numeric(null), "—");
+});
+
+test("wide decimal arithmetic stays exact until a bounded display coordinate", () => {
+  assert.equal(decimalDifference("18446744073709551615", "9007199254740993"), "18437736874454810622");
+  assert.equal(decimalMax(["9007199254740992", "9007199254740993"]), "9007199254740993");
+  assert.equal(decimalPercent("9007199254740993", "18446744073709551615"), 0.04);
+  assert.equal(decimalCents("24001"), "$240.01");
+  for (const invalid of ["", "00", "01", "+1", "1.0", "1e3", " 1", "١"]) {
+    assert.equal(exactInteger(invalid), null);
+  }
+});
+
+test("trade intents preserve full-width decimal strings and refuse unsafe Numbers", () => {
+  for (const amount of ["9007199254740992", "9007199254740993", "18446744073709551615"]) {
+    const body = encodeIntent({
+      action: "endow",
+      amount,
+      integer_transport: "caller-cannot-downgrade-this",
+    });
+    assert.equal(JSON.parse(JSON.stringify(body)).amount, amount);
+    assert.equal(body.integer_transport, INTEGER_TRANSPORT);
+  }
+  for (const amount of [9007199254740992, Number("9007199254740993"), Number("18446744073709551615")]) {
+    assert.throws(
+      () => encodeIntent({ action: "endow", amount }),
+      /unsafe JSON number/
+    );
+  }
+});
+
+test("the untrusted event projection refuses unsafe JSON numbers", () => {
+  for (const amount of ["9007199254740992", "9007199254740993", "18446744073709551615"]) {
+    assert.equal(eventHasSafeNumbers({ type: "state", decoded: { amount } }), true);
+  }
+  assert.equal(
+    eventHasSafeNumbers({ type: "state", decoded: { amount: 9007199254740992 } }),
+    false
+  );
+  assert.equal(
+    eventHasSafeNumbers({ type: "state", decoded: { internal: ["1", 9007199254740992, "3"] } }),
+    false
+  );
 });
 
 test("the document and generated controls expose the accessibility contract", async () => {

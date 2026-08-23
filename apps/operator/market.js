@@ -13,7 +13,14 @@
  * different fixture, so a reading surface never quietly becomes an authoring
  * one. */
 
-import { el, fields, numeric, row } from "./dom.js";
+import {
+  decimalDifference,
+  decimalPercent,
+  el,
+  fields,
+  numeric,
+  row,
+} from "./dom.js";
 
 const OWNERS = Object.freeze([
   { label: "founding actor", position: "general-market.position", token: "actor-collateral" },
@@ -39,10 +46,9 @@ const pending = (what) => row("callout", el("strong", null, "NOT YET OBSERVED"),
 
 const cashBar = (cash, reserved) => {
   const cell = el("div", "cu");
-  const total = Math.max(cash, 1);
   const track = el("div", "cu-track");
   const held = el("div", "cu-bar");
-  held.style.width = `${((Math.min(reserved, cash) / total) * 100).toFixed(2)}%`;
+  held.style.width = `${decimalPercent(reserved, cash).toFixed(2)}%`;
   held.classList.add("cu-hot");
   track.append(held);
   cell.append(track, el("span", "cu-value", `${numeric(reserved)} reserved of ${numeric(cash)} cash`));
@@ -71,7 +77,9 @@ export const renderFunding = (state) => {
         ["locked backing", numeric(hoard ? hoard.collateral_atoms : null)],
         [
           "free cash in custody",
-          numeric(custody && hoard ? custody.amount - hoard.collateral_atoms : null)
+          numeric(custody && hoard
+            ? decimalDifference(custody.amount, hoard.collateral_atoms)
+            : null)
         ],
         ["internal supply", supply ? supply.internal_supply.join(" / ") : "—"],
         ["external supply", supply ? supply.external_supply.join(" / ") : "—"]

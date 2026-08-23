@@ -22,6 +22,7 @@ mod crank;
 mod decode;
 mod friday;
 mod http;
+mod integer;
 mod plan;
 mod pyth;
 mod quantize;
@@ -179,6 +180,7 @@ fn banner(
 ) -> Value {
     json!({
         "type": "identity",
+        "integer_transport": integer::TRANSPORT,
         "source_profile": artifact.source_profile,
         "elf_path": artifact.path.display().to_string(),
         "elf_bytes": artifact.bytes,
@@ -214,16 +216,18 @@ fn plan_event(plan: &plan::Plan) -> Value {
                 "expect_code_hex": step.expect_code_hex,
                 "reference": step.reference,
                 "reloads": step.compare.len() + step.identical_to_pre.len(),
-                "wait_slot": step.wait_slot,
+                "wait_slot": step.wait_slot.map(integer::u64_value),
                 "wait_after": step.wait_after.as_ref().map(|after| json!({
-                    "step": after.step, "delta": after.delta
+                    "step": after.step, "delta": integer::u64_value(after.delta)
                 })),
             })
         })
         .collect();
     json!({
         "type": "plan",
-        "compute_unit_ceiling": clutch_sbf_harness::COMPUTE_UNIT_CEILING,
+        "compute_unit_ceiling": integer::u64_value(
+            u64::from(clutch_sbf_harness::COMPUTE_UNIT_CEILING)
+        ),
         "steps": steps,
         "conservation_offsets": {
             "position_cash": plan.conservation.offsets.position_cash,
@@ -233,8 +237,8 @@ fn plan_event(plan: &plan::Plan) -> Value {
             "hoard_collateral": plan.conservation.offsets.hoard_collateral,
             "token_amount": plan.conservation.offsets.token_amount,
         },
-        "endowed_total": plan.conservation.endowed_total,
-        "split_total": plan.conservation.split_total,
+        "endowed_total": integer::u64_value(plan.conservation.endowed_total),
+        "split_total": integer::u64_value(plan.conservation.split_total),
     })
 }
 

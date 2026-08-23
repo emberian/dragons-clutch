@@ -35,6 +35,15 @@ const EMPTY = Object.freeze({
   connected: false
 });
 
+export const eventHasSafeNumbers = (value) => {
+  if (typeof value === "number") return Number.isSafeInteger(value);
+  if (Array.isArray(value)) return value.every(eventHasSafeNumbers);
+  if (value && typeof value === "object") {
+    return Object.values(value).every(eventHasSafeNumbers);
+  }
+  return true;
+};
+
 export const createStore = () => {
   const state = {
     ...EMPTY,
@@ -141,6 +150,16 @@ export const createStore = () => {
           return;
         }
         if (!event || typeof event.type !== "string") return;
+        if (!eventHasSafeNumbers(event)) {
+          state.fault = {
+            type: "fault",
+            text: "UNTRUSTED PROJECTION REFUSED: event contained an unsafe JSON number instead of a canonical decimal string"
+          };
+          state.connected = false;
+          source.close();
+          notify();
+          return;
+        }
         apply(event);
         notify();
       });

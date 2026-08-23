@@ -17,6 +17,7 @@
 //! human belief yet, so the automaton compares itself to the flat prior — a
 //! stated, fixed reference, published beside the belief.
 
+use crate::integer;
 use crate::quantize::{belief_on_ladder, PRICE_SCALE};
 use serde_json::{json, Value};
 
@@ -125,11 +126,11 @@ impl Bot {
         json!({
             "kind": "fixed-belief automaton",
             "not": "a model, a strategy, or an AI",
-            "belief": self.belief,
-            "quoted_belief": self.quoted,
-            "ladder_step": self.ladder_step,
-            "reference": self.reference,
-            "quote_size": self.size,
+            "belief": integer::u64_values(self.belief),
+            "quoted_belief": integer::u64_values(self.quoted.iter().copied()),
+            "ladder_step": integer::u64_value(self.ladder_step),
+            "reference": integer::u64_values(self.reference),
+            "quote_size": integer::u64_value(self.size),
             "opening_rule": "one quote per knot where the belief differs from the flat prior: \
                              buy at my value where I am higher, sell at my value where I am lower",
             "response_rule": "an order that crosses my value is answered on the other side at my value",
