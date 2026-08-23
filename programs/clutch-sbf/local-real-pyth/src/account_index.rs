@@ -11,10 +11,10 @@ use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
 use clutch_dealer_runtime_contract::{
     DealerFacilityReplayV1, DealerLeaseV1, DealerPolicyV1, DealerStateV1, FeeBudgetV1,
     FixedCodec as DealerFixedCodec, LivenessBudgetV1, LpPageV1, SettlementPotV1,
-    DEALER_BUDGET_BYTES_V1, DEALER_FACILITY_REPLAY_BYTES_V1, DEALER_FACILITY_REPLAY_MAGIC_V1,
-    DEALER_LEASE_BYTES_V1, DEALER_LEASE_MAGIC_V1, DEALER_POLICY_BYTES_V1, DEALER_POLICY_MAGIC_V1,
-    DEALER_STATE_BYTES_V1, DEALER_STATE_MAGIC_V1, FEE_BUDGET_MAGIC_V1, LIVENESS_BUDGET_MAGIC_V1,
-    LP_PAGE_BYTES_V1, LP_PAGE_MAGIC_V1, SETTLEMENT_POT_BYTES_V1, SETTLEMENT_POT_MAGIC_V1,
+    DEALER_BUDGET_BYTES_V1, DEALER_FACILITY_REPLAY_BYTES_V1, DEALER_LEASE_BYTES_V1,
+    DEALER_LEASE_MAGIC_V1, DEALER_POLICY_BYTES_V1, DEALER_POLICY_MAGIC_V1, DEALER_STATE_BYTES_V1,
+    DEALER_STATE_MAGIC_V1, FEE_BUDGET_MAGIC_V1, LIVENESS_BUDGET_MAGIC_V1, LP_PAGE_BYTES_V1,
+    LP_PAGE_MAGIC_V1, SETTLEMENT_POT_BYTES_V1, SETTLEMENT_POT_MAGIC_V1,
 };
 use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeStatusV1, AdmissionNodeV3AccountV1,
@@ -46,8 +46,8 @@ use clutch_liveness::{
     RUNTIME_LIVENESS_POLICY_BYTES_V1, RUNTIME_LIVENESS_POLICY_MAGIC_V1,
 };
 use clutch_retirement::{
-    PositionAccountV3, PositionLifecycleV3, ReplayV3Envelope, ReplayV3HashBackend,
-    ReplayV3Lifecycle, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V3,
+    PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, ReplayV3Envelope,
+    ReplayV3HashBackend, ReplayV3Lifecycle, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V3,
     PURPOSE_REPLAY_ACCOUNT_TAG, PURPOSE_REPLAY_ACCOUNT_VERSION_V3,
 };
 use clutch_solana_layout::failure_recovery::{
@@ -927,6 +927,9 @@ fn decode_replay(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     let value = ReplayV3Envelope::decode(data, &ReplaySha)
         .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
     let header = value.header();
+    if header.purpose() == PositionPurposeV3::DealerFacility {
+        return Ok(None);
+    }
     let mut projection = CanonicalAccountProjection::canonical(
         CanonicalFamily::ReplayV3,
         CanonicalAccountKind::ReplayV3,
@@ -1000,12 +1003,27 @@ fn decode_dealer(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         let _ = <LivenessBudgetV1 as DealerFixedCodec>::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         CanonicalAccountKind::DealerLivenessBudget
-    } else if data.starts_with(&DEALER_FACILITY_REPLAY_MAGIC_V1)
-        && data.len() == DEALER_FACILITY_REPLAY_BYTES_V1
+    } else if tag_version(
+        data,
+        PURPOSE_REPLAY_ACCOUNT_TAG,
+        PURPOSE_REPLAY_ACCOUNT_VERSION_V3,
+    ) && data.len() == DEALER_FACILITY_REPLAY_BYTES_V1
     {
-        let _ = <DealerFacilityReplayV1 as DealerFixedCodec>::decode(data)
+        let envelope = ReplayV3Envelope::decode(data, &ReplaySha)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        CanonicalAccountKind::DealerReplay
+        if envelope.header().purpose() != PositionPurposeV3::DealerFacility {
+            return Ok(None);
+        }
+        let value = <DealerFacilityReplayV1 as DealerFixedCodec>::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Dealer,
+            CanonicalAccountKind::DealerReplay,
+        );
+        projection.generation = Some(value.position_generation());
+        projection.primary_binding = Some(value.facility_position_account_id().bytes());
+        projection.secondary_binding = Some(value.facility_position_binding_id().bytes());
+        return Ok(Some(projection));
     } else {
         return Ok(None);
     };
