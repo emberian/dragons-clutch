@@ -480,7 +480,7 @@ impl GeneralReplayTransitionPlanV1 {
         self.kind
     }
 
-    /// Exact receipt/finalized-row transition identity.
+    /// Exact action-specific transition identity.
     pub const fn transition_id(&self) -> Id32 {
         self.transition_id
     }
@@ -510,7 +510,7 @@ impl GeneralReplayTransitionPlanV1 {
 ///
 /// `transition_id` and `transition_evidence_id` are committed but not
 /// authenticated here. A live action-specific composer must obtain them from
-/// its private receipt/finalized-row plan and then rederive this whole result.
+/// its private typed action plan and then rederive this whole result.
 pub fn project_general_replay_transition_v1<B>(
     prestate: GeneralPositionReplayPrestateV1,
     position_poststate: PositionSettlementPoststateV3,

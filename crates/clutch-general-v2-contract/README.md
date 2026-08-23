@@ -1,6 +1,6 @@
 # General V2 contract
 
-This crate is the disabled, dependency-free account and identity contract for
+This crate is the disabled, SBF-neutral account and identity contract for
 the future General V2 vertical spine. It is `no_std`, uses no allocator, and
 contains no Solana SDK, account-memory, CPI, token, clock, or signature code.
 
@@ -9,11 +9,33 @@ allocating a tag does not authorize a handler. In particular, the current
 Market, CandidateLifecycle V4, RelationV2 adapter, settlement adapter, and
 counted Epoch codecs must not be described as General V2-compatible.
 
+The General-owned Position Replay extension uses schema coordinate `GEN1` and
+an exact 136-byte extension under canonical variable-width Replay V3 (344
+bytes including its 208-byte common prefix). It retains the General runtime
+Market, current Position V3 semantic ID, and the last transition/delta IDs plus
+one exhaustive family/version/action/endpoint tuple. Hostile decode admits
+only action 25 owner accounting, action 38 owner cash, action 26 buyer/seller,
+action 36 split buyer, action 37 merge seller, and action 35
+structured-General tuples.
+
+The structural transition derives Position and Replay successor semantic IDs
+internally from exact canonical bodies. It commits the consumed ordinal,
+action-specific transition and evidence IDs, Position account, pre/post
+Position IDs, and generations. Action 25 evidence is the exact receipt
+prestate data ID. Action 38 uses the finalized V2 row data ID as its transition
+ID and the authenticated deleted payer-allocation prestate data ID as evidence;
+structured exchange uses its exact dual-endpoint delta evidence. Action 25
+requires an unchanged Position. Direct/merge sellers
+and zero-price owner finalization may legitimately leave Position bytes
+unchanged because their authoritative mutations live in Reservation, receipt,
+row, or pot state; their Replay still advances. A structural plan is never an
+execution capability: the live composer must rederive the concrete typed
+action plan from authenticated prestates before atomically writing both bodies.
+
 ## Frozen account coordinates
 
 | Semantic owner | Tag/version | Exact length |
 |---|---:|---:|
-| canonical General `SettlementReceiptAccountV3` | `0x0f/3` | 217 |
 | genesis-assisted `MarketRuntimeV3AccountV1` | `3/3` | 148 |
 | counted `GeneralEpochV6AccountV1` | `11/6` | 321 |
 | `ClearWorkV2` | `17/2` | `672 + 16*O + 8*N*O`, max 9,120 |
@@ -23,7 +45,7 @@ counted Epoch codecs must not be described as General V2-compatible.
 | `AdmissionNodeV3AccountV1` | `0x77/1` | 743 |
 | `EpochBudgetV2AccountV1` | `0x78/1` | 272 |
 | immutable `MarketBindingV1` | `0x79/1` | 540 |
-| counted-retirement Replay successor | `0x7a/1` | 132, owned by retirement/reference |
+| purpose-owned Replay V3 with General `GEN1` extension | `0x7a/3` | 344 (`208 + 136`), common prefix owned by retirement |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
 | withdrawn `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
@@ -60,14 +82,7 @@ mass scale, and live slice shape.
 
 Fresh seed domains are exported for Market binding, Epoch, EconomicDomain,
 Window, admission node, feed, work, budget, selected candidate, order page,
-reservation, receipt, and final pot. The frozen receipt tuple is
-`general-receipt:v3`, Epoch PDA, final SettlementCandidateId, slice index LE.
-The V3 receipt keeps the 217-byte tag-15 footprint: V2 consumed flags retain
-delivered-buy/delivered-sell/exhausted semantics and the former reserved final
-byte becomes the independent accounted-end mask. Accounting and delivery IDs
-are distinct domain hashes of the authenticated receipt PDA and are never
-caller facts or persisted fields. Its data ID hashes the PDA and exact current
-217 bytes, including both latch families. The frozen FinalPot tuple is
+reservation, receipt, and final pot. The frozen FinalPot tuple is
 `general-final-pot:v2`, Epoch PDA, final SettlementCandidateId. PDA derivation,
 stored-bump checking,
 program ownership, and generation authentication remain adapter obligations.
@@ -85,7 +100,6 @@ The first-spine tuples are exact ordered seeds:
 | Feed/Stage | `candidate-feed:v2`, AdmissionNode PDA |
 | ClearWork | `clear-work:v2`, AdmissionNode PDA |
 | SelectedCandidate | `selected-candidate:v1`, Epoch PDA, final `SettlementCandidateId` |
-| SettlementReceipt V3 | `general-receipt:v3`, Epoch PDA, final `SettlementCandidateId`, `slice_index_le` |
 | OwnerSettlement V2 | `owner-settlement:v2`, Epoch PDA, final `SettlementCandidateId`, semantic owner |
 | selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
 | owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
@@ -96,7 +110,7 @@ The first-spine tuples are exact ordered seeds:
 
 The Window assigns the ordinal atomically before deriving a node; no
 submitter-selected commitment or address controls the final rank tie. Remaining
-order-page/reservation/pot seed suffixes stay unallocated until their
+order-page/reservation/receipt/pot seed suffixes stay unallocated until their
 complete successor handler contracts are frozen.
 This fresh General V2 node identity deliberately supersedes ADR-0008's
 submitter/commitment-derived `candidate-admission-v3` tuple; no handler may mix
