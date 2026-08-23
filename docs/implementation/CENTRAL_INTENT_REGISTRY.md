@@ -361,7 +361,8 @@ pure runtime elsewhere does not make a route executable.
 | `0x83/4` | General V2 | sole future rent-owned terminal carry receipt (548 bytes) |
 | `0x84/1` | General V2 history | withdrawn payer allocation without persisted rent ownership |
 | `0x84/2` | General V2 | sole future rent-owned payer allocation (2,732 bytes) |
-| `0x85/1` | General V2 | recipient allocation |
+| `0x85/1` | General V2 history | recipient allocation without complete fee-book or rent ownership |
+| `0x85/2` | General V2 | sole future rent-owned complete-book-certified recipient allocation (2,764 bytes) |
 | `0x86/1` | General V2 | treasury ledger |
 | `0x87/1` | General V2 | settlement cash pot |
 | `0x88/1` | StructuredClaim | descriptor |

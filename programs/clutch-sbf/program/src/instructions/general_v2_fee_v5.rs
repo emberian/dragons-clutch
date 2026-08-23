@@ -37,15 +37,18 @@ use clutch_fee_runtime_contract::terminal::{
 use clutch_general_v2_contract::{
     fee_runtime_semantic_release_id_v1, payer_allocation_account_data_id_v1,
     prepare_owner_fee_rent_transition_v3, project_general_replay_transition_v1,
+    recipient_allocation_account_data_id_v2,
     GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
     GeneralReplayTransitionPlanV1, Id32, MarketBindingV2, OwnerFeeCarryV3AccountV1,
     OwnerFeeFinalizationV4AccountV1, OwnerFeeRentTransitionAccountsV3,
     OwnerFeeRentTransitionPlanV3, DeletableRentOwnerV1, OwnerSettlementSeedTupleV5,
     OwnerSettlementV5AccountV1, PayerAllocationV2AccountV1, SelectedFeeRecordV1AccountV1,
-    SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
+    RecipientAllocationV2AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
+    SettlementRootV1AccountV1,
     Sha256BackendV1, MARKET_BINDING_ACCOUNT_BYTES_V2, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
-    PAYER_ALLOCATION_ACCOUNT_BYTES_V2, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    PAYER_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
+    SELECTED_FEE_RECORD_ACCOUNT_BYTES,
 };
 use clutch_general_v2_runtime::{
     derive_root_owner_basis_v4, derive_zero_fee_owner_finalization_evidence_v5,
@@ -134,6 +137,127 @@ pub enum OwnerFeeTerminalRentInputV5<'a, 'info> {
     },
     /// Canonical zero-fee route with no fee rent accounts.
     NoFeeRecord,
+}
+
+/// Named immutable fee accounts for the action-39 complete-book join.
+#[derive(Clone, Copy, Debug)]
+pub struct CandidateFeeCollectionAccountFrameV5<'a, 'info> {
+    /// Immutable selected composite-fee record.
+    pub selected_fee_record: &'a AccountInfo<'info>,
+    /// Immutable rent-owned certified recipient allocation.
+    pub certified_recipient_allocation: &'a AccountInfo<'info>,
+    /// Exact immutable batch-policy artifact bytes.
+    pub batch_policy: &'a AccountInfo<'info>,
+    /// Realm-owned immutable revenue-policy record.
+    pub revenue_policy_record: &'a AccountInfo<'info>,
+}
+
+/// Independently authenticated action-39 facts expected from General.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateFeeCollectionExpectationV5 {
+    realm: Id32,
+    market: Id32,
+    epoch: Id32,
+    candidate: Id32,
+    fee_record: Id32,
+    batch_policy: Id32,
+    owner_order_set_digest: Id32,
+    owner_count: u16,
+    price_scale: u64,
+    outcome_count: u8,
+}
+
+impl CandidateFeeCollectionExpectationV5 {
+    /// Construct only from the selected node and exhaustive traversal facts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        realm: Id32,
+        market: Id32,
+        epoch: Id32,
+        candidate: Id32,
+        fee_record: Id32,
+        batch_policy: Id32,
+        owner_order_set_digest: Id32,
+        owner_count: u16,
+        price_scale: u64,
+        outcome_count: u8,
+    ) -> Outcome<Self> {
+        require(
+            !realm.is_zero()
+                && !market.is_zero()
+                && !epoch.is_zero()
+                && !candidate.is_zero()
+                && !fee_record.is_zero()
+                && !batch_policy.is_zero()
+                && !owner_order_set_digest.is_zero()
+                && owner_count != 0
+                && usize::from(owner_count) <= clutch_owner_settlement::MAX_ORDERS
+                && price_scale != 0
+                && outcome_count != 0,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            realm,
+            market,
+            epoch,
+            candidate,
+            fee_record,
+            batch_policy,
+            owner_order_set_digest,
+            owner_count,
+            price_scale,
+            outcome_count,
+        })
+    }
+}
+
+/// O(1) immutable candidate-wide fee fact for General action 39.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedCandidateFeeCollectionV5 {
+    selected: SelectedCompositeFeeV1,
+    recipient_account: Id32,
+    recipient_account_data_id: Id32,
+    owner_fee_book_data_id: FeeId,
+    owner_order_set_digest: FeeId,
+    owner_count: u16,
+    selected_fee_atoms: u64,
+}
+
+impl PreparedCandidateFeeCollectionV5 {
+    /// Exact selected composite-fee record.
+    pub const fn selected(&self) -> SelectedCompositeFeeV1 {
+        self.selected
+    }
+
+    /// Canonical 0x85/v2 recipient-allocation PDA.
+    pub const fn recipient_account(&self) -> Id32 {
+        self.recipient_account
+    }
+
+    /// Full-outer content identity of the exact certified account bytes.
+    pub const fn recipient_account_data_id(&self) -> Id32 {
+        self.recipient_account_data_id
+    }
+
+    /// Complete canonical selected-owner fee-book content identity.
+    pub const fn owner_fee_book_data_id(&self) -> FeeId {
+        self.owner_fee_book_data_id
+    }
+
+    /// Exhaustive traversal owner-order-set digest.
+    pub const fn owner_order_set_digest(&self) -> FeeId {
+        self.owner_order_set_digest
+    }
+
+    /// Exact count of canonical participating owners.
+    pub const fn owner_count(&self) -> u16 {
+        self.owner_count
+    }
+
+    /// Sum of all complete-book owner fee rows.
+    pub const fn selected_fee_atoms(&self) -> u64 {
+        self.selected_fee_atoms
+    }
 }
 
 /// Presence-explicit fee account input selected only from the counted root.
@@ -661,6 +785,146 @@ fn require_fee_account_rent_v5(
             && current_lamports >= recorded_balance_floor,
         ClutchError::MismatchedState,
     )
+}
+
+/// Authenticate the immutable complete-book fee certificate for action 39.
+///
+/// This is O(1) only because 0x85/v2 is a fresh immutable program-owned
+/// version whose sole creation contract consumes the complete canonical
+/// `SelectedOwnerFeeBookV1`. Historical 0x85/v1 bytes are never admitted here.
+pub fn prepare_candidate_fee_collection_action39_v5(
+    program_id: &Pubkey,
+    expected: CandidateFeeCollectionExpectationV5,
+    frame: CandidateFeeCollectionAccountFrameV5<'_, '_>,
+    revenue_policy: &RevenuePolicyV1,
+) -> Outcome<PreparedCandidateFeeCollectionV5> {
+    for account in [
+        frame.selected_fee_record,
+        frame.certified_recipient_allocation,
+        frame.batch_policy,
+        frame.revenue_policy_record,
+    ] {
+        require(!account.executable, ClutchError::ExecutableAccount)?;
+        require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    }
+    require(
+        frame.selected_fee_record.key != frame.certified_recipient_allocation.key
+            && frame.selected_fee_record.key != frame.batch_policy.key
+            && frame.selected_fee_record.key != frame.revenue_policy_record.key
+            && frame.certified_recipient_allocation.key != frame.batch_policy.key
+            && frame.certified_recipient_allocation.key != frame.revenue_policy_record.key
+            && frame.batch_policy.key != frame.revenue_policy_record.key,
+        ClutchError::AccountAlias,
+    )?;
+    require_read_only_program_state(
+        program_id,
+        frame.selected_fee_record,
+        SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    )?;
+    require_read_only_program_state(
+        program_id,
+        frame.certified_recipient_allocation,
+        RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
+    )?;
+    require_read_only_program_state(program_id, frame.batch_policy, BATCH_POLICY_BYTES)?;
+    require_read_only_program_state(
+        program_id,
+        frame.revenue_policy_record,
+        REVENUE_POLICY_RECORD_BYTES,
+    )?;
+
+    let batch = decode_batch_policy(&borrow_data(frame.batch_policy)?)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let batch_id = batch_policy_digest(&batch)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        batch_id.0 == expected.batch_policy.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        frame.batch_policy.key,
+        seeds::batch_policy_pda(program_id, &expected.epoch.bytes(), &batch_id.0),
+        None,
+    )?;
+    let revenue_digest = revenue_policy_digest(revenue_policy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let revenue_record = RevenuePolicyRecordV1::decode(&borrow_data(frame.revenue_policy_record)?)?;
+    expect_pda(
+        frame.revenue_policy_record.key,
+        seeds::revenue_policy_pda(program_id, &revenue_record.realm.bytes()),
+        Some(revenue_record.stored_bump),
+    )?;
+    let selected = SelectedFeeRecordV1AccountV1::decode(
+        &borrow_data(frame.selected_fee_record)?,
+        &batch,
+        revenue_policy,
+    )?;
+    expect_pda(
+        frame.selected_fee_record.key,
+        seeds::general_v2_selected_fee_record_pda(program_id, &expected.candidate.bytes()),
+        Some(selected.stored_bump),
+    )?;
+    require(
+        id(frame.selected_fee_record.key) == expected.fee_record,
+        ClutchError::MismatchedState,
+    )?;
+    require_selected_fee_binding_v5(
+        &selected.semantic,
+        &revenue_record,
+        ExpectedSelectedFeeBindingV5 {
+            fee_record: expected.fee_record,
+            realm: expected.realm,
+            market: expected.market,
+            epoch: expected.epoch,
+            candidate: expected.candidate,
+            batch_policy: expected.batch_policy,
+            revenue_policy: Id32::from_bytes(revenue_digest.0),
+            price_scale: expected.price_scale,
+            outcome_count: expected.outcome_count,
+        },
+    )?;
+
+    let recipient_data = borrow_data(frame.certified_recipient_allocation)?;
+    let recipient = RecipientAllocationV2AccountV1::decode_persisted(&recipient_data)?;
+    let recipient_data_id = recipient_allocation_account_data_id_v2(
+        &recipient_data,
+        &RuntimeSha256,
+    )?;
+    drop(recipient_data);
+    expect_pda(
+        frame.certified_recipient_allocation.key,
+        seeds::general_v2_recipient_allocation_pda(
+            program_id,
+            &selected.semantic.fee_record().0,
+        ),
+        Some(recipient.stored_bump),
+    )?;
+    let allocation = recipient.semantic.allocation();
+    let recorded_balance_floor = recipient
+        .rent
+        .refundable_principal
+        .checked_add(recipient.rent.donation_floor)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    recipient.rent.validate()?;
+    require(
+        recipient.rent.payer != id(frame.certified_recipient_allocation.key)
+            && frame.certified_recipient_allocation.lamports() >= recorded_balance_floor
+            && allocation.fee_record() == selected.semantic.fee_record()
+            && recipient.semantic.owner_order_set_digest().0
+                == expected.owner_order_set_digest.bytes()
+            && recipient.semantic.owner_count() == expected.owner_count
+            && allocation.collected_fee_atoms() != 0,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(PreparedCandidateFeeCollectionV5 {
+        selected: selected.semantic,
+        recipient_account: id(frame.certified_recipient_allocation.key),
+        recipient_account_data_id: recipient_data_id,
+        owner_fee_book_data_id: recipient.semantic.owner_fee_book_data_id(),
+        owner_order_set_digest: recipient.semantic.owner_order_set_digest(),
+        owner_count: recipient.semantic.owner_count(),
+        selected_fee_atoms: allocation.collected_fee_atoms(),
+    })
 }
 
 #[inline(never)]

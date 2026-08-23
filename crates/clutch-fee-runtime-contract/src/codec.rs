@@ -12,6 +12,7 @@ use crate::allocation::{
     RecipientAllocationV1, StandingMakerRowV1,
 };
 use crate::selected::{OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1};
+use crate::projection::CertifiedRecipientAllocationV2;
 use crate::treasury::TreasuryLedgerV1;
 use crate::{Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -19,6 +20,8 @@ pub const FEE_RECORD_ACCOUNT_V1_BYTES: usize = 336;
 pub const OWNER_FEE_CARRY_ACCOUNT_V1_BYTES: usize = 128;
 pub const PAYER_ALLOCATION_ACCOUNT_V1_BYTES: usize = 2_680;
 pub const RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES: usize = 2_640;
+pub const CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES: usize =
+    RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 32 + 32 + 2 + 6;
 pub const TREASURY_LEDGER_ACCOUNT_V1_BYTES: usize = 144;
 
 pub const FEE_RECORD_MAGIC_V1: [u8; 8] = *b"DCFEESEL";
@@ -349,6 +352,106 @@ pub fn decode_recipient_allocation_v1(
         return Err(Error::MismatchedBinding);
     }
     Ok(allocation)
+}
+
+/// Structurally decode one immutable persisted recipient allocation.
+///
+/// This proves canonical rows and exact conservation only. It does not prove
+/// maker weights, revenue-policy selection, or complete owner-fee collection;
+/// those remain creation-time obligations of the certified successor outer.
+pub fn decode_persisted_recipient_allocation_v1(
+    input: &[u8],
+) -> Result<RecipientAllocationV1> {
+    exact_len(input, RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES)?;
+    let mut cursor = 0usize;
+    take_header(input, &mut cursor, RECIPIENT_ALLOCATION_MAGIC_V1)?;
+    let fee_record = read_id(input, &mut cursor)?;
+    let maker_len = read_u8(input, &mut cursor)?;
+    require_zero(take(input, &mut cursor, 3)?)?;
+    let maker_rebate_total = read_u64(input, &mut cursor)?;
+    let executor_atoms = read_u64(input, &mut cursor)?;
+    let treasury_atoms = read_u64(input, &mut cursor)?;
+    let collected_fee_atoms = read_u64(input, &mut cursor)?;
+    let mut maker_positions = [Id([0; 32]); MAX_FEE_ROWS_V1];
+    let mut maker_rebate_atoms = [0u64; MAX_FEE_ROWS_V1];
+    let mut index = 0usize;
+    while index < MAX_FEE_ROWS_V1 {
+        maker_positions[index] = read_id(input, &mut cursor)?;
+        maker_rebate_atoms[index] = read_u64(input, &mut cursor)?;
+        index += 1;
+    }
+    finish(cursor, input.len())?;
+    let allocation = RecipientAllocationV1::restore_persisted(
+        fee_record,
+        maker_len,
+        maker_positions,
+        maker_rebate_atoms,
+        maker_rebate_total,
+        executor_atoms,
+        treasury_atoms,
+        collected_fee_atoms,
+    )?;
+    if encode_recipient_allocation_v1(&allocation)?.as_slice() != input {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(allocation)
+}
+
+/// Encode the exact recipient allocation plus complete fee-book certificate.
+pub fn encode_certified_recipient_allocation_v2(
+    certified: &CertifiedRecipientAllocationV2,
+) -> Result<[u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES]> {
+    let mut output = [0u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES];
+    let semantic = encode_recipient_allocation_v1(&certified.allocation())?;
+    output[..RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES].copy_from_slice(&semantic);
+    let mut cursor = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES;
+    put(
+        &mut output,
+        &mut cursor,
+        &certified.owner_fee_book_data_id().0,
+    )?;
+    put(
+        &mut output,
+        &mut cursor,
+        &certified.owner_order_set_digest().0,
+    )?;
+    put(
+        &mut output,
+        &mut cursor,
+        &certified.owner_count().to_le_bytes(),
+    )?;
+    put(&mut output, &mut cursor, &[0; 6])?;
+    finish(cursor, output.len())?;
+    Ok(output)
+}
+
+/// Structurally decode the immutable certified recipient snapshot.
+///
+/// Program ownership, canonical PDA identity, and the creation route's full
+/// book/traversal authorization remain mandatory adapter checks.
+pub fn decode_persisted_certified_recipient_allocation_v2(
+    input: &[u8],
+) -> Result<CertifiedRecipientAllocationV2> {
+    exact_len(input, CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)?;
+    let allocation = decode_persisted_recipient_allocation_v1(
+        &input[..RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES],
+    )?;
+    let mut cursor = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES;
+    let owner_fee_book_data_id = read_id(input, &mut cursor)?;
+    let owner_order_set_digest = read_id(input, &mut cursor)?;
+    let owner_count = read_u16(input, &mut cursor)?;
+    require_zero(take(input, &mut cursor, 6)?)?;
+    finish(cursor, input.len())?;
+    let value = CertifiedRecipientAllocationV2::restore_persisted(
+        allocation,
+        owner_fee_book_data_id,
+        owner_order_set_digest,
+        owner_count,
+    )?;
+    if encode_certified_recipient_allocation_v2(&value)?.as_slice() != input {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(value)
 }
 
 pub fn encode_treasury_ledger_v1(
