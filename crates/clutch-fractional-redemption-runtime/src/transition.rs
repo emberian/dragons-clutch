@@ -9,9 +9,13 @@ use clutch_collateral_adapter_v2::{
     FractionalClaimSupplyMutationV3, FractionalPayoutDispositionV3, HoardV2, Id,
     MarketLiabilityLifecycleV1,
 };
+use clutch_general_v2_contract::{
+    project_general_replay_transition_v1, GeneralPositionReplayPrestateV1,
+    GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1, Id32,
+};
 use clutch_retirement::{
-    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
-    PositionV3Fields, PositionV3Sha256Backend, RentSplitV2, ReplayV3Envelope, ReplayV3Lifecycle,
+    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionV3Sha256Backend, RentSplitV2,
+    ReplayV3HashBackend,
 };
 use sha2::{Digest, Sha256};
 
@@ -28,6 +32,16 @@ impl PositionV3Sha256Backend for FractionalSha256V1 {
         let mut hasher = Sha256::new();
         hasher.update(domain);
         hasher.update(body);
+        hasher.finalize().into()
+    }
+}
+
+impl ReplayV3HashBackend for FractionalSha256V1 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for part in parts {
+            hasher.update(part);
+        }
         hasher.finalize().into()
     }
 }
@@ -157,6 +171,7 @@ fn validate_canonical_ledgers(
         || claim_ledger.outcome_count != policy.outcome_count
         || hoard.market_instance_id != collateral_id(policy.market_instance)
         || hoard.realm_id != collateral_id(policy.realm)
+        || hoard.profile_id != collateral.market().profile
         || hoard.collateral_policy_id != collateral_id(policy.collateral_policy)
         || hoard.collateral_release_id != collateral_id(policy.collateral_release)
         || hoard.token_account.bytes() != collateral.market().hoard_token_account.bytes()
@@ -287,45 +302,30 @@ pub fn initialize_fractional_ledger_v1(
 /// The adapter must authenticate the two account owners and PDAs before
 /// constructing this projection. The runtime independently checks the exact
 /// canonical bodies and their Market/Realm/policy/release/generation joins.
-#[derive(Clone, Copy, Debug)]
-pub struct InternalPositionV1<'a> {
-    /// Canonical Position V3 account key.
-    pub position_account: Identity32V1,
-    /// Canonical Position V3 semantic body.
-    pub position: PositionAccountV3,
-    /// Exact Replay V3 account key.
-    pub replay_account: Identity32V1,
-    /// Hash-authenticated Replay V3 envelope and General-owned extension.
-    pub replay: ReplayV3Envelope<'a>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InternalPositionV1 {
+    /// Canonical Position V3 and purpose-owned GEN1 Replay prestate.
+    pub position_replay: GeneralPositionReplayPrestateV1,
 }
 
-impl<'a> InternalPositionV1<'a> {
+impl InternalPositionV1 {
     fn validate(
         self,
         context: BoundFractionalContextV1,
         claimant: Identity32V1,
         expected_replay_sequence: u64,
     ) -> Result<()> {
-        self.position
-            .validate()
+        let position = self.position_replay.position();
+        position
+            .validate_writable()
             .map_err(|_| Error::PositionRefused)?;
-        let fields = self.position.fields();
-        let replay = self.replay.header();
-        if fields.purpose != PositionPurposeV3::General
-            || fields.lifecycle != PositionLifecycleV3::Open
-            || fields.market_instance_id != context.policy.market_instance
+        let fields = position.semantic.fields();
+        if fields.market_instance_id != context.policy.market_instance
             || fields.realm_id != context.policy.realm
             || fields.collateral_policy_id != context.policy.collateral_policy
             || fields.collateral_release_id != context.policy.collateral_release
             || fields.owner != claimant
-            || fields.replay_account != self.replay_account
-            || replay.position_account() != self.position_account
-            || replay.replay_account() != self.replay_account
-            || replay.purpose() != PositionPurposeV3::General
-            || replay.purpose_binding_id() != fields.purpose_binding_id
-            || replay.position_generation() != fields.generation
-            || replay.lifecycle() != ReplayV3Lifecycle::Live
-            || replay.next_sequence() != expected_replay_sequence
+            || self.position_replay.next_sequence() != expected_replay_sequence
         {
             return Err(Error::MismatchedBinding);
         }
@@ -378,38 +378,15 @@ impl BearerClaimSourceV1 {
     }
 }
 
-/// Exact requirement for advancing the General-owned purpose extension inside
-/// canonical Replay V3. This crate does not invent a second Replay body.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReplayAdvanceRequirementV1 {
-    /// Exact Replay V3 account to advance.
-    pub replay_account: Identity32V1,
-    /// Sequence consumed by this action.
-    pub consumed_sequence: u64,
-    /// Required next sequence after the General purpose owner advances Replay.
-    pub next_sequence: u64,
-    /// Position generation retained by an ordinary balance mutation.
-    pub position_generation: u64,
-    /// General purpose binding whose extension must be updated.
-    pub purpose_binding_id: Identity32V1,
-    /// Exact canonical Position prestate semantic identity.
-    pub position_prestate_semantic_id: Identity32V1,
-    /// Exact canonical Position successor semantic identity.
-    pub position_poststate_semantic_id: Identity32V1,
-    /// Shared fractional/ClaimLedger/Hoard transition identity that Replay
-    /// must persist for this Position mutation.
-    pub transition_id: Identity32V1,
-}
-
-/// Internal Position V3 successor plus canonical Replay requirement.
+/// Internal Position V3 successor plus canonical GEN1 Replay successor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InternalPayoutPoststateV1 {
     /// Exact Position V3 account written by the adapter.
     pub position_account: Identity32V1,
     /// Canonical Position V3 balance successor.
     pub position_after: PositionAccountV3,
-    /// Required advance of the existing General Replay V3 extension.
-    pub replay: ReplayAdvanceRequirementV1,
+    /// Exact purpose-owned GEN1 Replay V3 body and semantic successor.
+    pub replay: GeneralReplayTransitionPlanV1,
 }
 
 /// Bearer burn and collateral transfer requirement.
@@ -707,15 +684,17 @@ fn checked_redemption(
 
 fn internal_poststate(
     context: BoundFractionalContextV1,
-    source: InternalPositionV1<'_>,
+    source: InternalPositionV1,
     claimant: Identity32V1,
     expected_replay_sequence: u64,
     outcome_debit: Option<(u8, u64)>,
     paid_atoms: u64,
-    transition_id: Identity32V1,
+    replay_kind: GeneralReplayTransitionKindV1,
+    custody: FractionalClaimRedemptionPlanV3,
 ) -> Result<InternalPayoutPoststateV1> {
     source.validate(context, claimant, expected_replay_sequence)?;
-    let old = source.position.fields();
+    let position = source.position_replay.position();
+    let old = position.semantic.fields();
     let mut eggs = old.native_eggs;
     if let Some((outcome, quantity)) = outcome_debit {
         let index = usize::from(outcome);
@@ -723,40 +702,30 @@ fn internal_poststate(
             .checked_sub(quantity)
             .ok_or(Error::InsufficientClaims)?;
     }
-    let position_after = PositionAccountV3::new(PositionV3Fields {
-        cash_atoms: old
-            .cash_atoms
-            .checked_add(paid_atoms)
-            .ok_or(Error::Arithmetic)?,
-        native_eggs: eggs,
-        ..old
-    })
-    .map_err(|_| Error::PositionRefused)?;
-    let position_prestate_semantic_id = source
-        .position
-        .semantic_id(&FractionalSha256V1)
-        .map_err(|_| Error::PositionRefused)?;
-    let position_poststate_semantic_id = position_after
-        .semantic_id(&FractionalSha256V1)
-        .map_err(|_| Error::PositionRefused)?;
-    if position_prestate_semantic_id == position_poststate_semantic_id {
-        return Err(Error::PositionRefused);
-    }
-    Ok(InternalPayoutPoststateV1 {
-        position_account: source.position_account,
-        position_after,
-        replay: ReplayAdvanceRequirementV1 {
-            replay_account: source.replay_account,
-            consumed_sequence: expected_replay_sequence,
-            next_sequence: expected_replay_sequence
-                .checked_add(1)
+    let position_poststate = position
+        .settlement_poststate(
+            old.cash_atoms
+                .checked_add(paid_atoms)
                 .ok_or(Error::Arithmetic)?,
-            position_generation: old.generation,
-            purpose_binding_id: old.purpose_binding_id,
-            position_prestate_semantic_id,
-            position_poststate_semantic_id,
-            transition_id,
-        },
+            old.reserved_cash_atoms,
+            eggs,
+        )
+        .map_err(|_| Error::PositionRefused)?;
+    let replay = project_general_replay_transition_v1(
+        source.position_replay,
+        position_poststate,
+        replay_kind,
+        Id32::new(custody.fractional().transition_id().bytes())
+            .map_err(|_| Error::ReplayRefused)?,
+        Id32::new(custody.receipt_id().bytes()).map_err(|_| Error::ReplayRefused)?,
+        &FractionalSha256V1,
+    )
+    .map_err(|_| Error::ReplayRefused)?;
+    Ok(InternalPayoutPoststateV1 {
+        position_account: Identity32V1::new(position.account)
+            .map_err(|_| Error::PositionRefused)?,
+        position_after: position_poststate.semantic,
+        replay,
     })
 }
 
@@ -838,11 +807,11 @@ pub fn redeem_internal_exact_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
     expected_replay_sequence: u64,
-    source: InternalPositionV1<'_>,
+    source: InternalPositionV1,
     outcome: u8,
     quantity: u64,
 ) -> Result<RedemptionPlanV1> {
-    let claimant = source.position.owner();
+    let claimant = source.position_replay.position().semantic.owner();
     redeem_exact_common(
         context,
         expected_ledger_sequence,
@@ -861,7 +830,8 @@ pub fn redeem_internal_exact_v1(
                 expected_replay_sequence,
                 Some((outcome, quantity)),
                 paid,
-                runtime_identity(custody.receipt_id())?,
+                GeneralReplayTransitionKindV1::FractionalRedeemInternalExact,
+                custody,
             )?))
         },
     )
@@ -957,11 +927,11 @@ pub fn redeem_internal_to_credit_v1(
     expected_credit_sequence: u64,
     expected_replay_sequence: u64,
     credit_prestate: CreditPrestateV1,
-    source: InternalPositionV1<'_>,
+    source: InternalPositionV1,
     outcome: u8,
     quantity: u64,
 ) -> Result<RedemptionPlanV1> {
-    let claimant = source.position.owner();
+    let claimant = source.position_replay.position().semantic.owner();
     redeem_with_credit(
         context,
         expected_ledger_sequence,
@@ -983,7 +953,8 @@ pub fn redeem_internal_to_credit_v1(
                 expected_replay_sequence,
                 Some((outcome, quantity)),
                 paid,
-                runtime_identity(custody.receipt_id())?,
+                GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit,
+                custody,
             )?))
         },
     )
@@ -1023,11 +994,11 @@ pub fn redeem_bearer_to_credit_v1(
 
 /// Destination that receives a whole collateral atom created by credit merge.
 #[derive(Clone, Copy, Debug)]
-pub enum CreditPayoutTargetV1<'a> {
+pub enum CreditPayoutTargetV1 {
     /// Credit Position V3 cash and advance its existing General Replay V3.
     Internal {
         /// Canonical Position and Replay.
-        position: InternalPositionV1<'a>,
+        position: InternalPositionV1,
         /// Exact Replay sequence consumed by this payout.
         expected_replay_sequence: u64,
     },
@@ -1042,7 +1013,7 @@ pub enum CreditPayoutTargetV1<'a> {
     },
 }
 
-impl CreditPayoutTargetV1<'_> {
+impl CreditPayoutTargetV1 {
     fn disposition(self) -> FractionalPayoutDispositionV3 {
         match self {
             Self::Internal { .. } => FractionalPayoutDispositionV3::InternalPositionCash,
@@ -1058,10 +1029,11 @@ impl CreditPayoutTargetV1<'_> {
 
 fn credit_payout_poststate(
     context: BoundFractionalContextV1,
-    target: CreditPayoutTargetV1<'_>,
+    target: CreditPayoutTargetV1,
     claimant: Identity32V1,
     paid_atoms: u64,
     custody: FractionalClaimRedemptionPlanV3,
+    replay_kind: GeneralReplayTransitionKindV1,
 ) -> Result<CreditPayoutPoststateV1> {
     match target {
         CreditPayoutTargetV1::Internal {
@@ -1074,7 +1046,8 @@ fn credit_payout_poststate(
             expected_replay_sequence,
             None,
             paid_atoms,
-            runtime_identity(custody.receipt_id())?,
+            replay_kind,
+            custody,
         )?)),
         CreditPayoutTargetV1::External {
             claimant: target_claimant,
@@ -1161,7 +1134,34 @@ pub fn transfer_credit_v1(
     destination_claimant: Identity32V1,
     expected_destination_sequence: u64,
     numerator: u64,
-    payout_target: CreditPayoutTargetV1<'_>,
+    payout_target: CreditPayoutTargetV1,
+) -> Result<CreditTransferPlanV1> {
+    transfer_credit_with_kind_v1(
+        context,
+        expected_ledger_sequence,
+        source,
+        expected_source_sequence,
+        destination,
+        destination_claimant,
+        expected_destination_sequence,
+        numerator,
+        payout_target,
+        GeneralReplayTransitionKindV1::FractionalTransferCreditPayout,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transfer_credit_with_kind_v1(
+    context: BoundFractionalContextV1,
+    expected_ledger_sequence: u64,
+    source: FractionalCreditV1,
+    expected_source_sequence: u64,
+    destination: CreditPrestateV1,
+    destination_claimant: Identity32V1,
+    expected_destination_sequence: u64,
+    numerator: u64,
+    payout_target: CreditPayoutTargetV1,
+    replay_kind: GeneralReplayTransitionKindV1,
 ) -> Result<CreditTransferPlanV1> {
     if numerator == 0 {
         return Err(Error::ZeroQuantity);
@@ -1247,6 +1247,7 @@ pub fn transfer_credit_v1(
             destination_claimant,
             paid_atoms,
             custody_after,
+            replay_kind,
         )?,
     })
 }
@@ -1261,10 +1262,10 @@ pub fn merge_credit_v1(
     destination: CreditPrestateV1,
     destination_claimant: Identity32V1,
     expected_destination_sequence: u64,
-    payout_target: CreditPayoutTargetV1<'_>,
+    payout_target: CreditPayoutTargetV1,
 ) -> Result<CreditTransferPlanV1> {
     let numerator = source.numerator;
-    transfer_credit_v1(
+    transfer_credit_with_kind_v1(
         context,
         expected_ledger_sequence,
         source,
@@ -1274,6 +1275,7 @@ pub fn merge_credit_v1(
         expected_destination_sequence,
         numerator,
         payout_target,
+        GeneralReplayTransitionKindV1::FractionalMergeCreditPayout,
     )
 }
 

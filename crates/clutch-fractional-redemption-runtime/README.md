@@ -23,6 +23,12 @@ contracts remain the only CPI authorities. Every mutation commits exact
 `0xa5` pre/post semantic IDs into the matching ClaimLedger successor; their
 sequences cannot advance independently.
 
+Internal actions consume the canonical General `GEN1` Replay extension rather
+than a Fractional-owned replay projection. Its frozen family/action/role
+coordinates are `(4,2,1)`, `(4,4,1)`, `(4,6,1)`, and `(4,7,1)` for exact
+redemption, credited redemption, credit-transfer payout, and credit-merge
+payout respectively; every tuple uses transition version `1`.
+
 Every redemption and credit transfer checks both its prospective prestate and
 poststate against
 

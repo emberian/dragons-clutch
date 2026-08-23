@@ -5,13 +5,46 @@ use clutch_collateral_adapter_v2::{
     RealmCollateralBindingV2, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
 };
 use clutch_fractional_redemption_runtime::*;
-use clutch_retirement::{DeletableRentOwnerV1, Identity32V1, RentSplitV2};
+use clutch_general_v2_contract::{
+    project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1,
+    GeneralReplayExtensionV1, GeneralReplayTransitionKindV1, Id32, GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+    GENERAL_REPLAY_EXTENSION_SCHEMA_V1, GENERAL_REPLAY_EXTENSION_V1_BYTES,
+};
+use clutch_owner_settlement::AuthenticatedPositionV3;
+use clutch_retirement::{
+    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
+    PositionV3Fields, PositionV3Sha256Backend, RentSplitV2, ReplayV3Envelope,
+    ReplayV3EnvelopeFields, ReplayV3EnvelopeHeader, ReplayV3ExtensionSchema, ReplayV3HashBackend,
+};
+use sha2::{Digest, Sha256};
 
 const COLLATERAL_DEPLOYMENT: Id = Id::from_bytes([2; 32]);
 const COLLATERAL_CODE: Id = Id::from_bytes([3; 32]);
 const COLLATERAL_RELEASE: AdapterReleaseV2 =
     AdapterReleaseV2::legacy_spl(COLLATERAL_DEPLOYMENT, COLLATERAL_CODE);
 static COLLATERAL_RELEASES: [AdapterReleaseV2; 1] = [COLLATERAL_RELEASE];
+
+#[derive(Clone, Copy)]
+struct TestSha256;
+
+impl PositionV3Sha256Backend for TestSha256 {
+    fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(domain);
+        hasher.update(body);
+        hasher.finalize().into()
+    }
+}
+
+impl ReplayV3HashBackend for TestSha256 {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for part in parts {
+            hasher.update(part);
+        }
+        hasher.finalize().into()
+    }
+}
 
 fn rid(byte: u8) -> Identity32V1 {
     Identity32V1::new([byte; 32]).unwrap()
@@ -210,6 +243,108 @@ fn external_context(
 
 fn rid_from_collateral(value: Id) -> Identity32V1 {
     Identity32V1::new(value.bytes()).unwrap()
+}
+
+fn canonical_internal_replay_fixture(
+    context: BoundFractionalContextV1,
+    claimant: Identity32V1,
+    native_eggs: [u64; MAX_OUTCOMES],
+    next_sequence: u64,
+) -> (
+    [u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES],
+    AuthenticatedPositionV3,
+    Id32,
+    u8,
+) {
+    let position_account = rid(54);
+    let replay_account = rid(55);
+    let general_market_runtime = rid(56);
+    let replay_bump = 9;
+    let position = PositionAccountV3::new(PositionV3Fields {
+        purpose: PositionPurposeV3::General,
+        lifecycle: PositionLifecycleV3::Open,
+        outcome_count: context.policy().outcome_count,
+        stored_bump: 8,
+        generation: 1,
+        market_instance_id: context.policy().market_instance,
+        realm_id: context.policy().realm,
+        collateral_policy_id: context.policy().collateral_policy,
+        collateral_release_id: context.policy().collateral_release,
+        owner: claimant,
+        controller: claimant,
+        replay_account,
+        purpose_binding_id: general_market_runtime,
+        cash_atoms: 0,
+        reserved_cash_atoms: 0,
+        native_eggs,
+        outstanding_reservations: 0,
+        rent: split_rent(50),
+    })
+    .unwrap();
+    let position_semantic_id = position.semantic_id(&TestSha256).unwrap().bytes();
+    let extension = GeneralReplayExtensionV1::initial(
+        Id32::new(general_market_runtime.bytes()).unwrap(),
+        Id32::new(position_semantic_id).unwrap(),
+    )
+    .unwrap()
+    .encode()
+    .unwrap();
+    let header = ReplayV3EnvelopeHeader::new_live(
+        ReplayV3EnvelopeFields {
+            position_account,
+            replay_account,
+            purpose: PositionPurposeV3::General,
+            purpose_binding_id: general_market_runtime,
+            position_generation: 1,
+            next_sequence,
+            stored_bump: replay_bump,
+            rent: deletable_rent(50),
+        },
+        ReplayV3ExtensionSchema::new(GENERAL_REPLAY_EXTENSION_SCHEMA_V1).unwrap(),
+        &extension,
+        &TestSha256,
+    )
+    .unwrap();
+    let envelope = ReplayV3Envelope::from_header(header, &extension, &TestSha256).unwrap();
+    let mut body = [0; GENERAL_REPLAY_ACCOUNT_V1_BYTES];
+    envelope.encode_into(&mut body, &TestSha256).unwrap();
+    let authenticated = AuthenticatedPositionV3 {
+        account: position_account.bytes(),
+        general_market_runtime: general_market_runtime.bytes(),
+        semantic: position,
+        semantic_id: position_semantic_id,
+        account_authenticated: true,
+        semantic_id_authenticated: true,
+        market_binding_authenticated: true,
+        writable: true,
+    };
+    (
+        body,
+        authenticated,
+        Id32::new(replay_account.bytes()).unwrap(),
+        replay_bump,
+    )
+}
+
+fn canonical_internal_source(
+    context: BoundFractionalContextV1,
+    claimant: Identity32V1,
+    native_eggs: [u64; MAX_OUTCOMES],
+    next_sequence: u64,
+) -> InternalPositionV1 {
+    let (body, position, replay_account, replay_bump) =
+        canonical_internal_replay_fixture(context, claimant, native_eggs, next_sequence);
+    let position_replay: GeneralPositionReplayPrestateV1 =
+        project_general_position_replay_prestate_v1(
+            replay_account,
+            replay_bump,
+            next_sequence,
+            &body,
+            position,
+            &TestSha256,
+        )
+        .unwrap();
+    InternalPositionV1 { position_replay }
 }
 
 #[test]
@@ -560,6 +695,101 @@ fn terminal_close_admits_each_rent_owner_independently() {
         close_empty_ledger_v1(terminal_context, 2, 103, 103, rid(43)),
         Err(Error::RentRefused)
     );
+}
+
+#[test]
+fn internal_credit_redemption_advances_the_canonical_gen1_replay() {
+    let mut internal = [0; MAX_OUTCOMES];
+    internal[0] = 1;
+    internal[1] = 1;
+    let (context, _policy, _ledger) = external_context(0, 0, internal, [0; MAX_OUTCOMES], 1);
+    let mut position_eggs = [0; MAX_OUTCOMES];
+    position_eggs[0] = 1;
+    let source = canonical_internal_source(context, rid(50), position_eggs, 1);
+    let plan = redeem_internal_to_credit_v1(
+        context,
+        1,
+        1,
+        1,
+        CreditPrestateV1::Create(CreditCreationV1::Fresh {
+            claimant: rid(50),
+            stored_bump: 9,
+            rent: split_rent(50),
+        }),
+        source,
+        0,
+        1,
+    )
+    .unwrap();
+    let internal = match plan.source_after {
+        RedemptionSourcePoststateV1::Internal(value) => value,
+        RedemptionSourcePoststateV1::Bearer(_) => panic!("wrong payout source"),
+    };
+    assert_eq!(plan.paid_atoms, 0);
+    assert_eq!(plan.claimant_numerator_after, 1);
+    assert_eq!(internal.position_after.fields().native_eggs[0], 0);
+    assert_eq!(internal.position_after.fields().cash_atoms, 0);
+    assert_eq!(
+        internal.replay.kind(),
+        GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit
+    );
+    assert_eq!(internal.replay.consumed_sequence(), 1);
+    assert_eq!(internal.replay.next_sequence(), 2);
+    assert_eq!(
+        internal.replay.transition_id().bytes(),
+        plan.custody_after.fractional().transition_id().bytes()
+    );
+    assert_eq!(
+        internal.replay.transition_evidence_id().bytes(),
+        plan.custody_after.receipt_id().bytes()
+    );
+}
+
+#[test]
+fn canonical_gen1_parser_refuses_unallocated_fractional_coordinates() {
+    let general_runtime = Id32::new([1; 32]).unwrap();
+    let position_id = Id32::new([2; 32]).unwrap();
+    let base = GeneralReplayExtensionV1::initial(general_runtime, position_id)
+        .unwrap()
+        .encode()
+        .unwrap();
+    for (kind, action) in [
+        (
+            GeneralReplayTransitionKindV1::FractionalRedeemInternalExact,
+            2,
+        ),
+        (
+            GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit,
+            4,
+        ),
+        (
+            GeneralReplayTransitionKindV1::FractionalTransferCreditPayout,
+            6,
+        ),
+        (
+            GeneralReplayTransitionKindV1::FractionalMergeCreditPayout,
+            7,
+        ),
+    ] {
+        let mut extension = base;
+        extension[64..96].copy_from_slice(&[3; 32]);
+        extension[96..128].copy_from_slice(&[4; 32]);
+        extension[128] = action;
+        extension[129] = 1;
+        extension[130] = 4;
+        extension[131] = 1;
+        extension[132] = 1;
+        let decoded = GeneralReplayExtensionV1::decode(&extension).unwrap();
+        assert_eq!(decoded.last_kind(), Some(kind));
+
+        extension[130] = 5;
+        assert!(GeneralReplayExtensionV1::decode(&extension).is_err());
+    }
+
+    let mut hostile = base;
+    assert_eq!(hostile.len(), GENERAL_REPLAY_EXTENSION_V1_BYTES);
+    hostile[133] = 1;
+    assert!(GeneralReplayExtensionV1::decode(&hostile).is_err());
 }
 
 #[test]

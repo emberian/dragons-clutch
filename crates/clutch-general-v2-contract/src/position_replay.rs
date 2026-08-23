@@ -35,6 +35,7 @@ pub const GENERAL_POSITION_FOUNDING_GENERATION_V1: u64 = 1;
 const SETTLEMENT_FAMILY: u8 = 1;
 const STRUCTURED_EXCHANGE_FAMILY: u8 = 2;
 const COLLATERAL_CASH_FAMILY: u8 = 3;
+const FRACTIONAL_REDEMPTION_FAMILY: u8 = 4;
 const TRANSITION_VERSION_V1: u8 = 1;
 const OWNER_ACCOUNTING_ROLE: u8 = 1;
 const OWNER_CASH_ROLE: u8 = 2;
@@ -70,6 +71,14 @@ pub enum GeneralReplayTransitionKindV1 {
     VirtualMergeSeller,
     /// Action 35 General Position endpoint of a structured exchange.
     StructuredGeneral,
+    /// FractionalRedemption action 2 internal exact-lot endpoint.
+    FractionalRedeemInternalExact,
+    /// FractionalRedemption action 4 internal credited endpoint.
+    FractionalRedeemInternalCredit,
+    /// FractionalRedemption action 6 internal credit-payout endpoint.
+    FractionalTransferCreditPayout,
+    /// FractionalRedemption action 7 internal credit-payout endpoint.
+    FractionalMergeCreditPayout,
 }
 
 impl GeneralReplayTransitionKindV1 {
@@ -141,6 +150,30 @@ impl GeneralReplayTransitionKindV1 {
                 35,
                 STRUCTURED_GENERAL_ROLE,
             ),
+            Self::FractionalRedeemInternalExact => (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::FractionalRedeemInternalCredit => (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                4,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::FractionalTransferCreditPayout => (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                6,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::FractionalMergeCreditPayout => (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                7,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
         }
     }
 
@@ -191,6 +224,30 @@ impl GeneralReplayTransitionKindV1 {
             (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
                 Ok(Self::StructuredGeneral)
             }
+            (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::FractionalRedeemInternalExact),
+            (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                4,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::FractionalRedeemInternalCredit),
+            (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                6,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::FractionalTransferCreditPayout),
+            (
+                FRACTIONAL_REDEMPTION_FAMILY,
+                TRANSITION_VERSION_V1,
+                7,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::FractionalMergeCreditPayout),
             _ => Err(CodecError::InvalidState),
         }
     }
@@ -752,6 +809,10 @@ where
     )?;
     let position_prestate_semantic_id = Id32::new(position_prestate.semantic_id)?;
     let unchanged_required = kind == GeneralReplayTransitionKindV1::AccountReceiptEnd;
+    // Fractional credit transfer/merge can either realize a whole collateral
+    // atom into Position cash or leave the Position body unchanged when the
+    // destination residue remains below one atom. The Fractional composer owns
+    // that exact arithmetic and rederives this structural plan.
     let changed_required = matches!(
         kind,
         GeneralReplayTransitionKindV1::Endow
@@ -761,6 +822,8 @@ where
             | GeneralReplayTransitionKindV1::DirectBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
             | GeneralReplayTransitionKindV1::StructuredGeneral
+            | GeneralReplayTransitionKindV1::FractionalRedeemInternalExact
+            | GeneralReplayTransitionKindV1::FractionalRedeemInternalCredit
     );
     if (unchanged_required
         && (position_poststate.semantic != position_prestate.semantic
