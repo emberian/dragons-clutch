@@ -141,7 +141,8 @@ pub const fn extension_intent_action_allocated(
         ),
         Ok(
             clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
-                | clutch_solana_layout::registry::ExtensionAction::SourceSeries(_)
+                | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
+                | clutch_solana_layout::registry::ExtensionAction::RecurringSeries(_)
         )
     )
 }

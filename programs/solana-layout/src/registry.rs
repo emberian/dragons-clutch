@@ -103,6 +103,42 @@ pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 /// Mutable segregated Series-funding state account version.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
+/// Immutable authenticated SourcePlane V3 release account discriminator.
+pub const SOURCE_V3_RELEASE_ACCOUNT_TAG: u8 = 0x8a;
+/// SourcePlane V3 release account version.
+pub const SOURCE_V3_RELEASE_ACCOUNT_VERSION: u8 = 1;
+/// Mutable SourcePlane V3 head account discriminator.
+pub const SOURCE_V3_HEAD_ACCOUNT_TAG: u8 = 0x8b;
+/// SourcePlane V3 head account version.
+pub const SOURCE_V3_HEAD_ACCOUNT_VERSION: u8 = 1;
+/// Durable SourcePlane V3 reopen-lineage account discriminator.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_TAG: u8 = 0x8c;
+/// SourcePlane V3 reopen-lineage account version.
+pub const SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION: u8 = 1;
+/// Mutable SourcePlane V3 open-page account discriminator.
+pub const SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_TAG: u8 = 0x8d;
+/// SourcePlane V3 open-page account version.
+pub const SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_VERSION: u8 = 1;
+/// Immutable SourcePlane V3 raw-page account discriminator.
+pub const SOURCE_V3_RAW_PAGE_ACCOUNT_TAG: u8 = 0x8e;
+/// SourcePlane V3 raw-page account version.
+pub const SOURCE_V3_RAW_PAGE_ACCOUNT_VERSION: u8 = 1;
+/// Mutable SourcePlane V3 WindowWork account discriminator.
+pub const SOURCE_V3_WINDOW_WORK_ACCOUNT_TAG: u8 = 0x8f;
+/// SourcePlane V3 WindowWork account version.
+pub const SOURCE_V3_WINDOW_WORK_ACCOUNT_VERSION: u8 = 1;
+/// Immutable SourcePlane V3 WindowSeal account discriminator.
+pub const SOURCE_V3_WINDOW_SEAL_ACCOUNT_TAG: u8 = 0x90;
+/// SourcePlane V3 WindowSeal account version.
+pub const SOURCE_V3_WINDOW_SEAL_ACCOUNT_VERSION: u8 = 1;
+/// Immutable SourcePlane V3 StatisticResult account discriminator.
+pub const SOURCE_V3_STATISTIC_RESULT_ACCOUNT_TAG: u8 = 0x91;
+/// SourcePlane V3 StatisticResult account version.
+pub const SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION: u8 = 1;
+/// Immutable SourcePlane V3 liveness-work receipt account discriminator.
+pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG: u8 = 0x92;
+/// SourcePlane V3 liveness-work receipt account version.
+pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -417,6 +453,87 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         status: AllocationStatus::ReservedDisabled,
         name: "source-series-funding-v1-account",
     },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_RELEASE_ACCOUNT_TAG,
+            version: SOURCE_V3_RELEASE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-release-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_HEAD_ACCOUNT_TAG,
+            version: SOURCE_V3_HEAD_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-head-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_TAG,
+            version: SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-reopen-lineage-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_TAG,
+            version: SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-open-raw-page-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_RAW_PAGE_ACCOUNT_TAG,
+            version: SOURCE_V3_RAW_PAGE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-raw-page-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_WINDOW_WORK_ACCOUNT_TAG,
+            version: SOURCE_V3_WINDOW_WORK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-window-work-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_WINDOW_SEAL_ACCOUNT_TAG,
+            version: SOURCE_V3_WINDOW_SEAL_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-window-seal-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_STATISTIC_RESULT_ACCOUNT_TAG,
+            version: SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-statistic-result-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG,
+            version: SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-work-receipt-v1-account",
+    },
 ];
 
 /// One reserved successor intent family.
@@ -661,14 +778,10 @@ impl GeneralV2Action {
     }
 }
 
-/// Source/Series V2 family-local action allocations.
+/// SourcePlane V3 action allocations in the shared SourceSeries 77/v2 family.
 ///
-/// SourcePlane V3 exclusively owns tags 1 through 12. Recurring Series
-/// exclusively owns tags 13 through 18, with exact payload codecs in
-/// [`crate::product_series`] when the non-production laboratory is compiled.
-/// Allocation remains separate from executable capability; the SBF product
-/// keeps every tuple disabled until the authenticated joins required by that
-/// action exist together.
+/// Recurring Series uses the disjoint [`RecurringSeriesAction`] range. These
+/// Source tags reserve wire identity only; capability remains separate.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceSeriesAction {
@@ -696,40 +809,20 @@ pub enum SourceSeriesAction {
     ReopenGeneration = 11,
     /// Close one terminal Source generation.
     CloseGeneration = 12,
-    /// Register one persistent V5 Series against an authenticated registry release.
-    RegisterSeries = 13,
-    /// Capitalize the five Series funding compartments.
-    ActivateFunding = 14,
-    /// Create or converge the next eligible occurrence atomically.
-    AdvanceOccurrence = 15,
-    /// Advance one elapsed ordinal without spending its allocation.
-    LapseOccurrence = 16,
-    /// Observe balance surplus as separately owned donation residue.
-    ObserveDonation = 17,
-    /// Refund remaining payer principal and dispose donation residue.
-    CloseFunding = 18,
 }
 
 impl SourceSeriesAction {
-    /// First allocated Source/Series V2 local action tag.
+    /// First Source-owned local action tag.
     pub const FIRST_TAG: u8 = 1;
-    /// Last allocated Source/Series V2 local action tag.
-    pub const LAST_TAG: u8 = 18;
-    /// First SourcePlane V3 action in this shared family.
-    pub const SOURCE_FIRST_TAG: u8 = 1;
-    /// Last SourcePlane V3 action in this shared family.
-    pub const SOURCE_LAST_TAG: u8 = 12;
-    /// First recurring-Series action in this shared family.
-    pub const SERIES_FIRST_TAG: u8 = 13;
-    /// Last recurring-Series action in this shared family.
-    pub const SERIES_LAST_TAG: u8 = 18;
+    /// Last Source-owned local action tag.
+    pub const LAST_TAG: u8 = 12;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
         self as u8
     }
 
-    /// Decode one allocated Source/Series V2 local action tag.
+    /// Decode one Source-owned local action tag.
     pub const fn from_tag(tag: u8) -> Option<Self> {
         match tag {
             1 => Some(Self::RegisterRelease),
@@ -744,6 +837,47 @@ impl SourceSeriesAction {
             10 => Some(Self::EmitFailureHandoff),
             11 => Some(Self::ReopenGeneration),
             12 => Some(Self::CloseGeneration),
+            _ => None,
+        }
+    }
+}
+
+/// Recurring-Series action allocations in the shared SourceSeries 77/v2 family.
+///
+/// SourcePlane V3 exclusively owns the disjoint [`SourceSeriesAction`] range.
+/// These Series tags have exact payload codecs in [`crate::product_series`]
+/// when the non-production laboratory is compiled, but remain capability-disabled.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecurringSeriesAction {
+    /// Register one persistent V5 Series against an authenticated registry release.
+    RegisterSeries = 13,
+    /// Capitalize the five Series funding compartments.
+    ActivateFunding = 14,
+    /// Create or converge the next eligible occurrence atomically.
+    AdvanceOccurrence = 15,
+    /// Advance one elapsed ordinal without spending its allocation.
+    LapseOccurrence = 16,
+    /// Observe balance surplus as separately owned donation residue.
+    ObserveDonation = 17,
+    /// Refund remaining payer principal and dispose donation residue.
+    CloseFunding = 18,
+}
+
+impl RecurringSeriesAction {
+    /// First recurring-Series local action tag.
+    pub const FIRST_TAG: u8 = 13;
+    /// Last recurring-Series local action tag.
+    pub const LAST_TAG: u8 = 18;
+
+    /// Return the local action tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one recurring-Series local action tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
             13 => Some(Self::RegisterSeries),
             14 => Some(Self::ActivateFunding),
             15 => Some(Self::AdvanceOccurrence),
@@ -760,8 +894,10 @@ impl SourceSeriesAction {
 pub enum ExtensionAction {
     /// One General V2 local action.
     GeneralV2(GeneralV2Action),
-    /// One Source/Series V2 local action.
-    SourceSeries(SourceSeriesAction),
+    /// One SourcePlane V3 action in the shared SourceSeries family.
+    SourceV3(SourceSeriesAction),
+    /// One recurring-Series action in the shared SourceSeries family.
+    RecurringSeries(RecurringSeriesAction),
 }
 
 impl ExtensionAction {
@@ -769,7 +905,8 @@ impl ExtensionAction {
     pub const fn local_tag(self) -> u8 {
         match self {
             Self::GeneralV2(action) => action.tag(),
-            Self::SourceSeries(action) => action.tag(),
+            Self::SourceV3(action) => action.tag(),
+            Self::RecurringSeries(action) => action.tag(),
         }
     }
 }
@@ -801,8 +938,11 @@ pub const fn decode_extension_action(
             None => Err(RegistryError::UnknownLocalAction),
         },
         Some(ExtensionFamily::SourceSeries) => match SourceSeriesAction::from_tag(local_action) {
-            Some(action) => Ok(ExtensionAction::SourceSeries(action)),
-            None => Err(RegistryError::UnknownLocalAction),
+            Some(action) => Ok(ExtensionAction::SourceV3(action)),
+            None => match RecurringSeriesAction::from_tag(local_action) {
+                Some(action) => Ok(ExtensionAction::RecurringSeries(action)),
+                None => Err(RegistryError::UnknownLocalAction),
+            },
         },
         Some(
             ExtensionFamily::StructuredClaim | ExtensionFamily::Dealer | ExtensionFamily::Recovery,
@@ -1045,6 +1185,39 @@ mod tests {
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
                 SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
             ),
+            (
+                SOURCE_V3_RELEASE_ACCOUNT_TAG,
+                SOURCE_V3_RELEASE_ACCOUNT_VERSION,
+            ),
+            (SOURCE_V3_HEAD_ACCOUNT_TAG, SOURCE_V3_HEAD_ACCOUNT_VERSION),
+            (
+                SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_TAG,
+                SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_TAG,
+                SOURCE_V3_OPEN_RAW_PAGE_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_RAW_PAGE_ACCOUNT_TAG,
+                SOURCE_V3_RAW_PAGE_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_WINDOW_WORK_ACCOUNT_TAG,
+                SOURCE_V3_WINDOW_WORK_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_WINDOW_SEAL_ACCOUNT_TAG,
+                SOURCE_V3_WINDOW_SEAL_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_STATISTIC_RESULT_ACCOUNT_TAG,
+                SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG,
+                SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION,
+            ),
         ];
         for (tag, version) in expected {
             let mut matches = 0u8;
@@ -1083,7 +1256,9 @@ mod tests {
             assert_eq!(
                 source_series.is_ok(),
                 (SourceSeriesAction::FIRST_TAG..=SourceSeriesAction::LAST_TAG)
-                    .contains(&local_action),
+                    .contains(&local_action)
+                    || (RecurringSeriesAction::FIRST_TAG..=RecurringSeriesAction::LAST_TAG)
+                        .contains(&local_action),
                 "source-series action {local_action}"
             );
             for (tag, version) in [(75, 1), (76, 1), (78, 1)] {

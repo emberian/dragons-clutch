@@ -18,86 +18,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "clutch-bspline"
-version = "0.1.0"
-
-[[package]]
-name = "clutch-evidence-recovery"
-version = "0.1.0"
-dependencies = [
- "clutch-product-series",
-]
-
-[[package]]
-name = "clutch-failure-policy-runtime"
-version = "0.1.0"
-dependencies = [
- "clutch-evidence-recovery",
- "clutch-product-series",
- "clutch-source-plane-v3",
- "clutch-source-plane-v3-runtime",
- "sha2",
-]
-
-[[package]]
-name = "clutch-liveness"
-version = "0.1.0"
-
-[[package]]
-name = "clutch-price-measure"
-version = "0.1.0"
-dependencies = [
- "clutch-bspline",
-]
-
-[[package]]
-name = "clutch-product-series"
-version = "0.1.0"
-dependencies = [
- "clutch-bspline",
- "clutch-price-measure",
- "sha2",
-]
-
-[[package]]
-name = "clutch-source-plane-v3"
+name = "clutch-collateral-adapter-v2"
 version = "0.1.0"
 dependencies = [
  "sha2",
-]
-
-[[package]]
-name = "clutch-source-plane-v3-adapter"
-version = "0.1.0"
-dependencies = [
- "clutch-source-plane-v3",
- "clutch-source-profile-v1",
- "clutch-terminal-identity-v1",
- "sha2",
-]
-
-[[package]]
-name = "clutch-source-plane-v3-runtime"
-version = "0.1.0"
-dependencies = [
- "clutch-source-plane-v3",
- "clutch-source-plane-v3-adapter",
- "clutch-terminal-identity-v1",
- "sha2",
-]
-
-[[package]]
-name = "clutch-source-profile-v1"
-version = "0.1.0"
-dependencies = [
- "sha2",
-]
-
-[[package]]
-name = "clutch-terminal-identity-v1"
-version = "0.1.0"
-dependencies = [
- "clutch-liveness",
 ]
 
 [[package]]

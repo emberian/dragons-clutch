@@ -1,6 +1,7 @@
 # Transferable structured claim: implementation-ready adapter plan
 
-Status: **PURE STRUCTURED-CLAIM KERNEL IMPLEMENTED; SBF ADAPTER NOT IMPLEMENTED**
+Status: **PURE STRUCTURED-CLAIM KERNEL AND ADAPTER CONTRACT IMPLEMENTED; SBF/CPI
+ADAPTER NOT IMPLEMENTED**
 (2026-08-22).
 
 The production-bound, allocation-free `no_std` semantic core now
@@ -16,10 +17,14 @@ first-party `clutch-kernel`; the SBF adapter must additionally reconcile its
 authenticated internal/external SupplyLedger closure and enforce the immutable
 collateral cap.
 
-The remaining implementation work in this plan is therefore the adapter and
-bank-evidence boundary, not a redesign of wrapper economics. In particular,
-the base atomic Position transfer, donation transitions, and aggregate-vector
-redemption described below are still absent from the live SBF dispatcher.
+`crates/clutch-structured-claim-runtime-contract` now freezes the exact descriptor image,
+reconstructs native/deployment identity hashing inputs, and stages the required
+atomic Position cash/native-Egg transfer over authenticated semantic
+projections. The remaining implementation work is the Solana account/CPI
+adapter: exact PDA/owner/ProgramData/slot/Token-2022 authentication, descriptor
+construction, Position/Replay mutation, supply-sensitive wrapper routes, and
+post-CPI checks. Donation and aggregate-vector semantic transitions exist in
+the pure kernels but remain absent from the live SBF dispatcher.
 
 This plan names the smallest trustworthy runtime seam for a genuinely
 transferable shaped position without narrowing the protocol's analytic or
