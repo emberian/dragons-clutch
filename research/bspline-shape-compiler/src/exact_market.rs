@@ -808,6 +808,8 @@ impl ExactMarketBundleSidecarV1 {
         if bundle.native_claim_basis_id != compiled_payoff.native_claim_basis_id
             || bundle.native_claim_basis_id.content_id()
                 != exact_market.manifest.native_claim_basis_id
+            || bundle.market_genesis_profile_id.content_id()
+                != exact_market.manifest.product_terms_id
             || self.bundle_v5_id != expected_bundle_id
             || self.work_manifest_id != exact_market.manifest_id
             || self.certificate_output_id
@@ -843,6 +845,8 @@ pub fn bind_exact_market_bundle_v5(
     if bundle.native_claim_basis_id != compiled_payoff.native_claim_basis_id
         || bundle.native_claim_basis_id.content_id()
             != exact_market.manifest.native_claim_basis_id
+        || bundle.market_genesis_profile_id.content_id()
+            != exact_market.manifest.product_terms_id
     {
         return Err(ExactMarketCompilerErrorV1::OutputMismatch);
     }

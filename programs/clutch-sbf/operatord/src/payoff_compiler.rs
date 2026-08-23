@@ -1,7 +1,8 @@
-//! Pure offline transport for the canonical production payoff compiler.
+//! Pure offline transport for current Product and exact-market compilation.
 //!
 //! Both the CLI and HTTP adapter call the same function. The adapter decodes
-//! exact rational decimal-string JSON, calls the Rust semantic owners, and
+//! exact rational decimal-string JSON, reopens ReleaseV2/ProfileV4 and the
+//! BundleV5 graph, optionally runs the exact all-support atom solver, and
 //! returns an untrusted proposal. It has no RPC client, persistence, wallet,
 //! signer, transaction builder, or registration authority.
 
@@ -806,6 +807,15 @@ impl CompilerService {
             &request.bundle_inputs.market_genesis_profile_v2_bytes_hex,
             "bundleInputs.marketGenesisProfileV2BytesHex",
         )?;
+        let genesis_id = genesis
+            .id()
+            .map_err(|error| format!("MarketGenesisProfileV2 identity refused: {error:?}"))?;
+        if genesis_id.content_id() != product_terms_id {
+            return Err(
+                "definition.productTermsId is not the supplied MarketGenesisProfileV2 identity"
+                    .to_string(),
+            );
+        }
         let funding_quote: SeriesFundingQuoteV4 = decode_body(
             &request.bundle_inputs.series_funding_quote_v4_bytes_hex,
             "bundleInputs.seriesFundingQuoteV4BytesHex",
@@ -927,7 +937,8 @@ fn error_json(detail: String) -> Value {
     })
 }
 
-/// Read one bounded request from stdin and write one proposal to stdout.
+/// Read one bounded current Product/exact-market request from stdin and write
+/// one untrusted proposal to stdout.
 pub fn compile_cli(compiler_release_sha256: String) -> Result<()> {
     let service = CompilerService::new(compiler_release_sha256)
         .map_err(|error| format!("compiler configuration refused: {error}"))?;

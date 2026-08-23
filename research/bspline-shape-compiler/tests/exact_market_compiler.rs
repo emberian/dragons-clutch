@@ -86,7 +86,7 @@ fn bundle_v5(
         evidence_only_recovery_policy_id: EvidenceOnlyRecoveryPolicyId::from_bytes([17; 32]),
         product_template_id: ProductTemplateId::from_bytes([18; 32]),
         price_measure_policy_id: PriceMeasurePolicyV1Id::from_bytes([19; 32]),
-        market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes([20; 32]),
+        market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes(id(2).bytes()),
         funding_quote_id: SeriesFundingQuoteV4Id::from_bytes([21; 32]),
         attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([22; 32]),
         series_plan_id: SeriesPlanV5Id::from_bytes([23; 32]),

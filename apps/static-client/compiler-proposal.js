@@ -414,6 +414,7 @@
     if (identities.nativeClaimBasisId !== nativeClaimBasis.id) throw new Error("Compiled Product/Series bundle names a different nativeClaimBasisId than the compiler output.");
     const productTermsId = hash(raw.productTermsId, "productTermsId");
     if (productTermsId !== expectedDefinition.productTermsId) throw new Error("Compiler result names a different Product Terms identity than the exact definition.");
+    if (identities.marketGenesisProfileId !== productTermsId) throw new Error("BundleV5 names a different MarketGenesisProfileV2 than the payoff/exact-market Terms identity.");
     const bundleId = hash(raw.compiledProductSeriesBundleV5.id, "compiledProductSeriesBundleV5.id");
     const exactMarket = validateExactMarketProposal(raw.exactMarket, expectedRequest.exactMarketSearch, bundleId, nativeClaimBasis.id, productTermsId);
     return Object.freeze({

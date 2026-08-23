@@ -123,6 +123,7 @@ test("compiler_transport_joins_definition_class_terms_bytes_and_sixteen_bundle_i
     const identities = {};
     for (const name of GlassCompilerProposal.bundleIdentityNames) identities[name] = "04".repeat(32);
     identities.nativeClaimBasisId = "05".repeat(32);
+    identities.marketGenesisProfileId = productTermsId;
     const programId = "11111111111111111111111111111112";
     const exactMarketSearch = {
       marketId: "08".repeat(32), priceId: "09".repeat(32), prices: ["1"],
