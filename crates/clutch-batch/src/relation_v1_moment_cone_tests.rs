@@ -358,6 +358,35 @@ fn moment_cone_admits_every_exact_atom_price_vector() {
 }
 
 #[test]
+fn v1b_admits_a_named_wide_support_arbitrage_outside_the_true_cone() {
+    // This pins the exact residual that a PriceMeasureWitnessV2 successor must
+    // close. On the degree-two open-clamped grid with breakpoints [0,1,2,3],
+    // the current finite V1b family admits p/S = (1/3, 2/3, 0, 0, 0): claim
+    // one is exactly on both its 2/3 ceiling and its edge butterfly.
+    //
+    // Yet c = (1,-2,10,40,64) represents the globally nonnegative quadratic
+    // spline (3x-1)^2, while <c,p> = -S. Thus p has no representing measure.
+    // The test intentionally expects V1b acceptance: changing it to a refusal
+    // without a checked wide-support certificate would erase the distinction
+    // between the current necessary gate and the future exact witness.
+    let scale = 12_000u64;
+    let domain = domain_of(5, scale);
+    let vector = prices(&[4_000, 8_000, 0, 0, 0]);
+    let basis = BasisDescriptorV1::ClampedUniform(BasisDegreeV1::Two);
+
+    assert_eq!(validate_prices(&domain, &vector), Ok(()));
+    assert_eq!(validate_price_moment_cone(&domain, basis, &vector), Ok(()));
+
+    let coefficients = [1_i128, -2, 10, 40, 64];
+    let quoted_value = coefficients
+        .iter()
+        .zip(vector.iter())
+        .map(|(coefficient, price)| coefficient * i128::from(*price))
+        .sum::<i128>();
+    assert_eq!(quoted_value, -i128::from(scale));
+}
+
+#[test]
 fn moment_cone_refuses_one_atom_above_the_peak() {
     // The peak vectors above sit exactly on the cone boundary — both the
     // ceiling and the butterfly certificate are tight there — so moving one

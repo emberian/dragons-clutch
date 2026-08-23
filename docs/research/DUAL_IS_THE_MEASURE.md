@@ -1163,14 +1163,19 @@ window-three certificates. A price vector may therefore violate one of them —
 be outside `M_d`, and carry an executable arbitrage — while passing V1b. The
 arbitrage such a residual price admits is a *wide* position (it touches most
 claims at once), and by the tightness computation above the residual region is
-strictly inside the "obvious" violations; but nothing here bounds its size, and
-this document does not claim it is small. It is [OPEN], with the falsifier
-named in §11.
+strictly inside the "obvious" violations. A concrete residual is now pinned by
+`relation_v1_moment_cone_tests`: on the degree-two, five-claim grid with
+breakpoints `[0,1,2,3]`, `p/S = (1/3,2/3,0,0,0)` passes V1b, while the
+coefficient vector `(1,-2,10,40,64)` has the globally nonnegative payoff
+`(3x-1)^2` and price `-S`. Thus the residual is nonempty; its complete size and
+geometry remain open. `docs/design/PRICE_MEASURE_WITNESS_V2.md` specifies the
+exact per-span Hausdorff witness that can close acceptance soundly.
 
 The honest one-line status: **at degrees two and three the venue no longer
-admits the §7.4 counterexample family, every V1b refusal exhibits an executable
-arbitrage, the stage is exact at `d ≤ 1` and on the single-span grids, and the
-wide-support residual is open.**
+admits the §7.4 coordinate counterexample family, every V1b refusal exhibits an
+executable arbitrage, the stage is exact at `d ≤ 1` and on the single-span
+grids, and a named wide-support false acceptance proves that a witness is still
+required for exact multi-span membership.**
 
 ---
 
