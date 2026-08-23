@@ -31,9 +31,12 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_resolution_v5,
+    authenticate_general_market_value_authority_v2, authenticate_resolution_v5,
     validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
+
+const EXTERNAL_REDEMPTION_RUNTIME_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/external-redemption/runtime-receipt/v3\0";
 
 /// Fixed account prefix before one mint per active native outcome.
 pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize =
@@ -270,12 +273,13 @@ pub fn process_external_redemption_v3(
         ClutchError::UnauthorizedActor,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[ix::REALM],
         &accounts[ix::PROFILE],
         &accounts[ix::POLICY],
         &accounts[ix::COLLATERAL_TOKEN_PROGRAM],
+        &accounts[ix::COLLATERAL_TOKEN_PROGRAMDATA],
         &accounts[ix::MARKET_BINDING],
         &accounts[ix::MARKET_RUNTIME],
         &accounts[ix::MARKET_INSTANCE],
@@ -284,6 +288,7 @@ pub fn process_external_redemption_v3(
         true,
         true,
     )?;
+    let liabilities = value_authority.liabilities;
     require(
         request.market_instance_id.bytes()
             == liabilities.market_binding.market_instance_v2_id.bytes()
@@ -427,6 +432,17 @@ pub fn process_external_redemption_v3(
     };
     let accepted = accept_bearer_claim_redemption_v3(accepted_burn, collateral)
         .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
+    let runtime_receipt = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            EXTERNAL_REDEMPTION_RUNTIME_RECEIPT_DOMAIN_V3,
+            &accepted.receipt_id().bytes(),
+            &value_authority.receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    runtime_receipt
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     accepted
         .claim_ledger_after()
         .encode(

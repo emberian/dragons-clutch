@@ -6,7 +6,7 @@
 //! credited, or used as mint authority.
 
 use crate::accounts::{require, Outcome};
-use crate::claim_release::authenticate_claim_issuance_with_programdata_v1;
+use crate::claim_release::authenticate_claim_issuance_release_with_programdata_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
 use crate::{seeds, token};
@@ -30,6 +30,9 @@ use super::collateral_position_v3::{
     authenticate_general_market_liabilities_v1, authenticate_general_position_replay_v1,
     validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
+
+const CLAIM_REPRESENTATION_RUNTIME_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/claim-representation/runtime-receipt/v3\0";
 
 /// Fixed prefix before one mint per active outcome.
 pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize =
@@ -182,7 +185,7 @@ pub fn process_claim_representation_v3(
         request.owner.bytes(),
         request.sequence,
     )?;
-    let claim = authenticate_claim_issuance_with_programdata_v1(
+    let claim = authenticate_claim_issuance_release_with_programdata_v1(
         liabilities.bound,
         &accounts[ix::OUTCOME_TOKEN_PROGRAM],
         &accounts[ix::OUTCOME_TOKEN_PROGRAMDATA],
@@ -204,7 +207,7 @@ pub fn process_claim_representation_v3(
         }
     };
     let prepared = prepare_claim_representation_v3(
-        claim,
+        claim.bound(),
         CollateralId::from_bytes(accounts[ix::POSITION].key.to_bytes()),
         position.projection,
         liabilities.claim_ledger,
@@ -284,6 +287,20 @@ pub fn process_claim_representation_v3(
         settlement_post.semantic == position_post,
         ClutchError::MismatchedState,
     )?;
+    let runtime_receipt = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            CLAIM_REPRESENTATION_RUNTIME_RECEIPT_DOMAIN_V3,
+            &accepted.receipt_id().bytes(),
+            &claim.receipt_id().bytes(),
+            &claim.token_programdata().bytes(),
+            &claim.deployment_slot().to_le_bytes(),
+            &claim.loader_receipt_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    runtime_receipt
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let replay_kind = match request.kind {
         ClaimRepresentationKindV3::Materialize => GeneralReplayTransitionKindV1::Materialize,
         ClaimRepresentationKindV3::Dematerialize => GeneralReplayTransitionKindV1::Dematerialize,
@@ -297,7 +314,7 @@ pub fn process_claim_representation_v3(
         replay_kind,
         Id32::new(accepted.transition_id().bytes())
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        Id32::new(accepted.receipt_id().bytes())
+        Id32::new(runtime_receipt.bytes())
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         &RuntimeSha256,
     )

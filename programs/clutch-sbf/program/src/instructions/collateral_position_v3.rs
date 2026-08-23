@@ -37,6 +37,9 @@ use crate::seeds;
 
 use super::product_artifact::authenticate_product_artifact_v1;
 
+const GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/general-market/value-authority/v2\0";
+
 /// Enforce the central full-width account-role, privilege, and alias contract
 /// over live effective AccountInfo metadata without allocation.
 pub(crate) fn validate_full_width_collateral_accounts_v3(
@@ -106,6 +109,17 @@ pub(crate) struct GeneralMarketLiabilityAuthorityV1 {
     pub(crate) market_instance: MarketInstancePreimageV2,
     pub(crate) hoard: HoardV2,
     pub(crate) claim_ledger: ClaimLedgerV3,
+}
+
+/// Same-instruction current collateral deployment proof for a value-bearing
+/// Hoard CPI. Internal reclassification routes cannot construct this type
+/// without presenting the exact linked ProgramData account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralMarketValueAuthorityV2 {
+    pub(crate) liabilities: GeneralMarketLiabilityAuthorityV1,
+    pub(crate) deployment:
+        crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
+    pub(crate) receipt_id: CollateralId,
 }
 
 /// Hostile-decoded full-width Resolution bound to its exact PDA and ledgers.
@@ -408,6 +422,76 @@ pub(crate) fn authenticate_general_market_liabilities_v1(
         market_instance,
         hoard,
         claim_ledger,
+    })
+}
+
+/// Authenticate the full-width liability owners and the exact current
+/// Profile-selected collateral ProgramData before any value-bearing CPI.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_market_value_authority_v2(
+    program_id: &Pubkey,
+    realm_account: &AccountInfo<'_>,
+    profile_account: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    market_instance_account: &AccountInfo<'_>,
+    hoard_account: &AccountInfo<'_>,
+    claim_ledger_account: &AccountInfo<'_>,
+    hoard_writable: bool,
+    claim_ledger_writable: bool,
+) -> Outcome<GeneralMarketValueAuthorityV2> {
+    let liabilities = authenticate_general_market_liabilities_v1(
+        program_id,
+        realm_account,
+        profile_account,
+        policy_account,
+        token_program,
+        market_binding_account,
+        market_runtime_account,
+        market_instance_account,
+        hoard_account,
+        claim_ledger_account,
+        hoard_writable,
+        claim_ledger_writable,
+    )?;
+    let deployment = crate::collateral_release::authenticate_collateral_release_deployment_v2(
+        liabilities.bound.release(),
+        token_program,
+        token_programdata,
+    )?;
+    require(
+        deployment.release_id()
+            == liabilities
+                .bound
+                .release()
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V2,
+            &liabilities.market_binding.market_instance_v2_id.bytes(),
+            &liabilities.bound.policy_id().bytes(),
+            &deployment.release_id().bytes(),
+            &deployment.programdata_account().bytes(),
+            &deployment.deployment_slot().to_le_bytes(),
+            &deployment.receipt_id().bytes(),
+            hoard_account.key.as_ref(),
+            claim_ledger_account.key.as_ref(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(GeneralMarketValueAuthorityV2 {
+        liabilities,
+        deployment,
+        receipt_id,
     })
 }
 

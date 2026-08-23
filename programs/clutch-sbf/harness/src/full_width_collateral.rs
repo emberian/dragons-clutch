@@ -22,6 +22,7 @@ pub struct FullWidthCollateralMarketV3 {
     pub profile: [u8; 32],
     pub collateral_policy: [u8; 32],
     pub collateral_token_program: [u8; 32],
+    pub collateral_token_programdata: [u8; 32],
     pub market_binding: [u8; 32],
     pub market_runtime: [u8; 32],
     pub market_instance_artifact: [u8; 32],
@@ -221,6 +222,7 @@ pub fn endow_v3_transaction(
         market.hoard_token,
         system_program,
         rent_sysvar,
+        market.collateral_token_programdata,
     ];
     assert_eq!(roles.len(), collateral_cash_v3::ENDOW_ACCOUNT_COUNT_V3);
     let contract = contract_from_request(&data, market.outcome_mints.len());
@@ -251,6 +253,7 @@ pub fn endow_v3_transaction(
             market.hoard_authority,
             system_program,
             rent_sysvar,
+            market.collateral_token_programdata,
         ],
         contract,
         &roles,
@@ -285,6 +288,7 @@ pub fn withdraw_cash_v3_transaction(
         destination,
         market.hoard_authority,
         market.hoard_token,
+        market.collateral_token_programdata,
     ];
     assert_eq!(roles.len(), collateral_cash_v3::WITHDRAW_ACCOUNT_COUNT_V3);
     let contract = contract_from_request(&data, market.outcome_mints.len());
@@ -313,6 +317,7 @@ pub fn withdraw_cash_v3_transaction(
             market.claim_ledger,
             market.collateral_mint,
             market.hoard_authority,
+            market.collateral_token_programdata,
         ],
         contract,
         &roles,
@@ -344,6 +349,7 @@ pub fn complete_set_v3_transaction(
         owner.replay,
         market.collateral_mint,
         market.hoard_token,
+        market.collateral_token_programdata,
     ];
     assert_eq!(roles.len(), complete_set_v3::COMPLETE_SET_ACCOUNT_COUNT_V3);
     let contract = contract_from_request(&data, market.outcome_mints.len());
@@ -373,6 +379,7 @@ pub fn complete_set_v3_transaction(
             market.market_instance_artifact,
             market.collateral_mint,
             market.hoard_token,
+            market.collateral_token_programdata,
         ],
         contract,
         &roles,
@@ -495,6 +502,7 @@ pub fn redeem_external_v3_transaction(
         market.outcome_token_program,
         source,
         market.outcome_token_programdata,
+        market.collateral_token_programdata,
     ];
     roles.extend_from_slice(&market.outcome_mints);
     assert_eq!(
@@ -517,6 +525,7 @@ pub fn redeem_external_v3_transaction(
             market.hoard_authority,
             market.outcome_token_program,
             market.outcome_token_programdata,
+            market.collateral_token_programdata,
         ],
     );
     let contract = contract_from_request(&data, market.outcome_mints.len());
@@ -558,6 +567,7 @@ mod tests {
             profile: key(11),
             collateral_policy: key(12),
             collateral_token_program: key(13),
+            collateral_token_programdata: key(26),
             market_binding: key(14),
             market_runtime: key(15),
             market_instance_artifact: key(16),

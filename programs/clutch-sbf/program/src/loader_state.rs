@@ -320,6 +320,50 @@ pub fn decode_loader_pair_v1(
     })
 }
 
+/// Decode the exact synthetic ProgramData sentinel emitted by local
+/// `--bpf-program` genesis loading.
+///
+/// This deliberately does not weaken [`decode_programdata_state`]: the
+/// all-zero `Some` authority remains invalid for every observed loader state.
+/// A release adapter may select this decoder only after its immutable release
+/// row names the synthesized-genesis locus, and must still hash the complete
+/// ProgramData bytes so the deployed ELF remains part of the admitted identity.
+pub fn decode_synthesized_genesis_loader_pair_v1(
+    program: LoaderAccountViewV1<'_>,
+    programdata: LoaderAccountViewV1<'_>,
+) -> Result<LoaderStateV1, LoaderStateError> {
+    let linked_programdata = decode_program_state(program)?;
+    if linked_programdata != programdata.key {
+        return Err(LoaderStateError::ProgramDataLinkMismatch);
+    }
+    if programdata.owner != UPGRADEABLE_LOADER_ID {
+        return Err(LoaderStateError::WrongLoaderOwner);
+    }
+    if programdata.executable {
+        return Err(LoaderStateError::ProgramDataExecutable);
+    }
+    if programdata.data.len() < PROGRAMDATA_METADATA_LEN {
+        return Err(LoaderStateError::ShortAccount);
+    }
+    if variant_tag(programdata.data)? != LOADER_TAG_PROGRAMDATA {
+        return Err(LoaderStateError::NotProgramDataVariant);
+    }
+    let mut slot = [0_u8; 8];
+    slot.copy_from_slice(
+        &programdata.data[PROGRAMDATA_SLOT_OFFSET..PROGRAMDATA_SLOT_OFFSET + 8],
+    );
+    if u64::from_le_bytes(slot) != 0
+        || programdata.data[PROGRAMDATA_AUTHORITY_TAG_OFFSET] != OPTION_SOME
+        || address_at(programdata.data, PROGRAMDATA_AUTHORITY_OFFSET) != [0_u8; 32]
+    {
+        return Err(LoaderStateError::ZeroIdentity);
+    }
+    Ok(LoaderStateV1 {
+        linked_programdata,
+        deployment_slot: 0,
+    })
+}
+
 fn variant_tag(data: &[u8]) -> Result<u32, LoaderStateError> {
     let mut tag = [0_u8; LOADER_TAG_LEN];
     tag.copy_from_slice(&data[..LOADER_TAG_LEN]);
@@ -683,6 +727,44 @@ mod tests {
             decode_programdata_state(programdata_view(&programdata)),
             Err(LoaderStateError::ZeroIdentity)
         );
+    }
+
+    #[test]
+    fn synthesized_genesis_decoder_is_disjoint_from_strict_loader_decode() {
+        let program = program_bytes(PROGRAMDATA);
+        let programdata = programdata_bytes(0, Some([0_u8; 32]));
+        assert_eq!(
+            decode_loader_pair_v1(program_view(&program), programdata_view(&programdata)),
+            Err(LoaderStateError::ZeroIdentity)
+        );
+        assert_eq!(
+            decode_synthesized_genesis_loader_pair_v1(
+                program_view(&program),
+                programdata_view(&programdata),
+            ),
+            Ok(LoaderStateV1 {
+                linked_programdata: PROGRAMDATA,
+                deployment_slot: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn synthesized_genesis_decoder_refuses_every_nearby_loader_state() {
+        let program = program_bytes(PROGRAMDATA);
+        for programdata in [
+            programdata_bytes(1, Some([0_u8; 32])),
+            programdata_bytes(0, None),
+            programdata_bytes(0, Some(AUTHORITY)),
+        ] {
+            assert_eq!(
+                decode_synthesized_genesis_loader_pair_v1(
+                    program_view(&program),
+                    programdata_view(&programdata),
+                ),
+                Err(LoaderStateError::ZeroIdentity)
+            );
+        }
     }
 
     #[test]

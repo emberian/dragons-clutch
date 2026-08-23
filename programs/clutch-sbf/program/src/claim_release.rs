@@ -13,10 +13,13 @@ use solana_account_info::AccountInfo;
 
 use crate::accounts::Outcome;
 use crate::collateral_release::{
-    authenticate_immutable_collateral_release_v2, LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
+    authenticate_collateral_release_deployment_v2, LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
     LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2, LOCAL_REAL_TOKEN_2022_RELEASE_V2,
 };
 use crate::error::{ClutchError, Refusal};
+
+const AUTHENTICATED_CLAIM_RELEASE_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/claim-release/current-loader-receipt/v1\0";
 
 /// Frozen local-real claim-adapter release identity.
 pub const LOCAL_REAL_CLAIM_ADAPTER_RELEASE_ID_V1: Id = Id::from_bytes([
@@ -42,6 +45,45 @@ pub const LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1: ClaimIssuanceBindingV1 = ClaimIs
     account_extensions: 0,
 };
 
+/// Private runtime proof that the independently selected claim plane is the
+/// exact current loader deployment named by its compiled release and is
+/// distinct from the authenticated Realm collateral release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedClaimIssuanceReleaseV1 {
+    bound: BoundClaimIssuanceV1,
+    token_programdata: Id,
+    deployment_slot: u64,
+    loader_receipt_id: Id,
+    receipt_id: Id,
+}
+
+impl AuthenticatedClaimIssuanceReleaseV1 {
+    /// Pure claim authority consumed by the collateral/claim transition.
+    pub(crate) const fn bound(self) -> BoundClaimIssuanceV1 {
+        self.bound
+    }
+
+    /// Exact current ProgramData account observed at admission.
+    pub(crate) const fn token_programdata(self) -> Id {
+        self.token_programdata
+    }
+
+    /// Loader-recorded deployment slot retained for Product founding proof.
+    pub(crate) const fn deployment_slot(self) -> u64 {
+        self.deployment_slot
+    }
+
+    /// Exact current loader observation receipt.
+    pub(crate) const fn loader_receipt_id(self) -> Id {
+        self.loader_receipt_id
+    }
+
+    /// Combined collateral-separation and current claim-release receipt.
+    pub(crate) const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
+}
+
 /// Withdrawn program-account-only admission retained so older routes fail
 /// closed instead of manufacturing deployment evidence from a compiled row.
 pub fn authenticate_claim_issuance_v1(
@@ -52,7 +94,7 @@ pub fn authenticate_claim_issuance_v1(
     Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
-/// Authenticate the claim plane against exact immutable Token-2022
+/// Authenticate the claim plane against exact current Token-2022
 /// ProgramData before joining it to an independently authenticated collateral
 /// release.
 pub fn authenticate_claim_issuance_with_programdata_v1(
@@ -60,14 +102,56 @@ pub fn authenticate_claim_issuance_with_programdata_v1(
     token_program: &AccountInfo<'_>,
     token_programdata: &AccountInfo<'_>,
 ) -> Outcome<BoundClaimIssuanceV1> {
-    let bound = authenticate_claim_issuance_runtime_with_programdata_v1(
+    Ok(authenticate_claim_issuance_release_with_programdata_v1(
+        collateral,
+        token_program,
+        token_programdata,
+    )?
+    .bound())
+}
+
+/// Mint a private Product-consumable release proof while returning no
+/// caller-shaped deployment fields.
+pub(crate) fn authenticate_claim_issuance_release_with_programdata_v1(
+    collateral: BoundCollateralProfileV2,
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedClaimIssuanceReleaseV1> {
+    let (bound, deployment) = authenticate_claim_issuance_runtime_release_with_programdata_v1(
         token_program,
         token_programdata,
     )?;
     LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
         .require_separate_from_collateral(collateral.release())
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok(bound)
+    let collateral_release_id = collateral
+        .release()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let receipt_id = Id::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            AUTHENTICATED_CLAIM_RELEASE_RECEIPT_DOMAIN_V1,
+            &collateral.market().market.bytes(),
+            &collateral.realm_bound().realm().realm.bytes(),
+            &collateral.policy_id().bytes(),
+            &collateral_release_id.bytes(),
+            &bound.binding_id().bytes(),
+            &deployment.programdata_account().bytes(),
+            &deployment.deployment_slot().to_le_bytes(),
+            &deployment.receipt_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedClaimIssuanceReleaseV1 {
+        bound,
+        token_programdata: deployment.programdata_account(),
+        deployment_slot: deployment.deployment_slot(),
+        loader_receipt_id: deployment.receipt_id(),
+        receipt_id,
+    })
 }
 
 /// Withdrawn program-account-only runtime admission. Current routes must use
@@ -79,12 +163,26 @@ pub fn authenticate_claim_issuance_runtime_v1(
     Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
-/// Authenticate the independently selected claim release against immutable
+/// Authenticate the independently selected claim release against current
 /// Upgradeable Loader state and exact deployed ELF bytes.
 pub fn authenticate_claim_issuance_runtime_with_programdata_v1(
     token_program: &AccountInfo<'_>,
     token_programdata: &AccountInfo<'_>,
 ) -> Outcome<BoundClaimIssuanceV1> {
+    Ok(authenticate_claim_issuance_runtime_release_with_programdata_v1(
+        token_program,
+        token_programdata,
+    )?
+    .0)
+}
+
+fn authenticate_claim_issuance_runtime_release_with_programdata_v1(
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<(
+    BoundClaimIssuanceV1,
+    crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
+)> {
     #[cfg(not(feature = "laboratory-fixtures"))]
     {
         let _ = (token_program, token_programdata);
@@ -92,7 +190,7 @@ pub fn authenticate_claim_issuance_runtime_with_programdata_v1(
     }
     #[cfg(feature = "laboratory-fixtures")]
     {
-        let deployment = authenticate_immutable_collateral_release_v2(
+        let deployment = authenticate_collateral_release_deployment_v2(
             LOCAL_REAL_TOKEN_2022_RELEASE_V2,
             token_program,
             token_programdata,
@@ -104,7 +202,7 @@ pub fn authenticate_claim_issuance_runtime_with_programdata_v1(
         binding
             .require_separate_from_collateral(LOCAL_REAL_LEGACY_SPL_RELEASE_V2)
             .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-        bind_claim_issuance_v1(
+        let bound = bind_claim_issuance_v1(
             expected,
             binding,
             ClaimRuntimeObservationV1 {
@@ -117,6 +215,7 @@ pub fn authenticate_claim_issuance_runtime_with_programdata_v1(
             },
             LOCAL_REAL_TOKEN_2022_RELEASE_V2,
         )
-        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+        Ok((bound, deployment))
     }
 }

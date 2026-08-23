@@ -36,10 +36,13 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_general_position_replay_v1,
+    authenticate_general_market_value_authority_v2, authenticate_general_position_replay_v1,
     validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
 use super::genesis::SYSTEM_PROGRAM_ID;
+
+const COLLATERAL_CASH_RUNTIME_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/collateral-cash/runtime-receipt/v3\0";
 
 /// Exact full-width WithdrawCash account list.
 pub const WITHDRAW_ACCOUNT_COUNT_V3: usize =
@@ -410,12 +413,13 @@ pub fn process_endow_v3(
         ClutchError::UnauthorizedActor,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[ix::REALM],
         &accounts[ix::PROFILE],
         &accounts[ix::POLICY],
         &accounts[ix::TOKEN_PROGRAM],
+        &accounts[ix::ENDOW_TOKEN_PROGRAMDATA],
         &accounts[ix::MARKET_BINDING],
         &accounts[ix::MARKET_RUNTIME],
         &accounts[ix::MARKET_INSTANCE],
@@ -424,6 +428,7 @@ pub fn process_endow_v3(
         true,
         false,
     )?;
+    let liabilities = value_authority.liabilities;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()
             == request.market_instance_id.bytes(),
@@ -549,6 +554,21 @@ pub fn process_endow_v3(
         settlement_post.semantic == position_post,
         ClutchError::MismatchedState,
     )?;
+    let transfer_receipt = accepted
+        .position()
+        .receipt_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_receipt = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            COLLATERAL_CASH_RUNTIME_RECEIPT_DOMAIN_V3,
+            &transfer_receipt.bytes(),
+            &value_authority.receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    runtime_receipt
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let replay = project_general_replay_transition_v1(
         position.replay,
         PositionSettlementPoststateV3 {
@@ -558,14 +578,8 @@ pub fn process_endow_v3(
         GeneralReplayTransitionKindV1::Endow,
         Id32::new(accepted.transition_id().bytes())
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        Id32::new(
-            accepted
-                .position()
-                .receipt_id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                .bytes(),
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        Id32::new(runtime_receipt.bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         &RuntimeSha256,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
@@ -661,12 +675,13 @@ pub fn process_withdraw_cash_v3(
         ClutchError::UnauthorizedActor,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[ix::REALM],
         &accounts[ix::PROFILE],
         &accounts[ix::POLICY],
         &accounts[ix::TOKEN_PROGRAM],
+        &accounts[ix::WITHDRAW_TOKEN_PROGRAMDATA],
         &accounts[ix::MARKET_BINDING],
         &accounts[ix::MARKET_RUNTIME],
         &accounts[ix::MARKET_INSTANCE],
@@ -675,6 +690,7 @@ pub fn process_withdraw_cash_v3(
         true,
         false,
     )?;
+    let liabilities = value_authority.liabilities;
     require(
         liabilities.market_binding.market_instance_v2_id.bytes()
             == request.market_instance_id.bytes(),
@@ -789,6 +805,21 @@ pub fn process_withdraw_cash_v3(
         settlement_post.semantic == position_post,
         ClutchError::MismatchedState,
     )?;
+    let transfer_receipt = accepted
+        .position()
+        .receipt_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let runtime_receipt = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            COLLATERAL_CASH_RUNTIME_RECEIPT_DOMAIN_V3,
+            &transfer_receipt.bytes(),
+            &value_authority.receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    runtime_receipt
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let replay = project_general_replay_transition_v1(
         position.replay,
         PositionSettlementPoststateV3 {
@@ -798,14 +829,8 @@ pub fn process_withdraw_cash_v3(
         GeneralReplayTransitionKindV1::WithdrawCash,
         Id32::new(accepted.transition_id().bytes())
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        Id32::new(
-            accepted
-                .position()
-                .receipt_id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                .bytes(),
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        Id32::new(runtime_receipt.bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         &RuntimeSha256,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;

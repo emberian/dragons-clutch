@@ -18,13 +18,49 @@ use solana_pubkey::Pubkey;
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::loader_state::{
-    decode_loader_pair_v1, LoaderAccountViewV1, UpgradeAuthorityV1,
-    PROGRAMDATA_METADATA_LEN,
+    decode_loader_pair_v1, decode_synthesized_genesis_loader_pair_v1, LoaderAccountViewV1,
+    UpgradeAuthorityV1, PROGRAMDATA_METADATA_LEN,
 };
 use crate::seeds;
 
-const IMMUTABLE_COLLATERAL_RELEASE_RECEIPT_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/collateral-release/immutable-loader/v2\0";
+const COLLATERAL_RELEASE_DEPLOYMENT_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/collateral-release/deployment-locus/v2\0";
+
+/// Exact runtime locus at which a compiled release's ProgramData is admitted.
+///
+/// The local validator's genesis synthesizer writes a noncanonical-for-source
+/// `Some(Pubkey::default())` authority at slot zero. Public observed releases
+/// use a positive deployment slot and the generic canonical loader decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(crate) enum CollateralDeploymentLocusV2 {
+    /// Repository-controlled `--bpf-program` genesis deployment.
+    SynthesizedGenesisZero = 1,
+    /// Positive-slot observed ProgramData on a public or persistent cluster.
+    ObservedPositive = 2,
+}
+
+impl CollateralDeploymentLocusV2 {
+    const fn wire(self) -> u8 {
+        match self {
+            Self::SynthesizedGenesisZero => 1,
+            Self::ObservedPositive => 2,
+        }
+    }
+}
+
+/// Authority state accepted by the collateral-specific deployment proof.
+/// The synthesized default variant is never returned by the generic Source
+/// loader decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollateralUpgradeAuthorityV2 {
+    /// Local genesis `Some(Pubkey::default())` sentinel.
+    SynthesizedDefault,
+    /// Canonical absent authority on an observed positive-slot deployment.
+    Immutable,
+    /// Canonical nonzero authority on an observed positive-slot deployment.
+    Present(Id),
+}
 
 /// SHA-256 of `spl_token_2022-10.0.0.so` from
 /// `solana-program-binaries 4.2.1`, the binary installed by the local-real
@@ -88,18 +124,35 @@ pub fn compiled_collateral_catalog_v2() -> Outcome<AdapterCatalogV2> {
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
+fn compiled_collateral_deployment_locus_v2(
+    release: AdapterReleaseV2,
+) -> Outcome<CollateralDeploymentLocusV2> {
+    #[cfg(feature = "laboratory-fixtures")]
+    {
+        if release == LOCAL_REAL_TOKEN_2022_RELEASE_V2
+            || release == LOCAL_REAL_LEGACY_SPL_RELEASE_V2
+        {
+            return Ok(CollateralDeploymentLocusV2::SynthesizedGenesisZero);
+        }
+    }
+    let _ = release;
+    Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
 /// Private runtime proof that one compiled collateral release is backed by
-/// the exact immutable Upgradeable Loader deployment it names.
+/// the exact Upgradeable Loader deployment and explicit locus it names.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedImmutableCollateralReleaseV2 {
+pub(crate) struct AuthenticatedCollateralReleaseDeploymentV2 {
     release: AdapterReleaseV2,
     release_id: Id,
     programdata_account: Id,
     deployment_slot: u64,
+    locus: CollateralDeploymentLocusV2,
+    upgrade_authority: CollateralUpgradeAuthorityV2,
     receipt_id: Id,
 }
 
-impl AuthenticatedImmutableCollateralReleaseV2 {
+impl AuthenticatedCollateralReleaseDeploymentV2 {
     /// Exact compiled release whose deployment bytes were authenticated.
     pub(crate) const fn release(self) -> AdapterReleaseV2 {
         self.release
@@ -121,24 +174,47 @@ impl AuthenticatedImmutableCollateralReleaseV2 {
         self.deployment_slot
     }
 
+    /// Exact compiled admission locus.
+    pub(crate) const fn locus(self) -> CollateralDeploymentLocusV2 {
+        self.locus
+    }
+
+    /// Authority state observed at this value-bearing boundary.
+    pub(crate) const fn upgrade_authority(self) -> CollateralUpgradeAuthorityV2 {
+        self.upgrade_authority
+    }
+
     /// Private receipt suitable for Product/Profile founding joins.
     pub(crate) const fn receipt_id(self) -> Id {
         self.receipt_id
     }
 }
 
-/// Authenticate a compiled legacy SPL or Token-2022 release against the
-/// executable's exact linked ProgramData bytes.
+/// Authenticate one compiled release at its catalog-selected runtime locus.
 ///
-/// The ProgramData authority must already be revoked. This makes the Profile
-/// creation-time proof durable: later collateral routes can transitively rely
-/// on the immutable Profile policy/release identity without accepting a
-/// caller-shaped deployment digest on every transfer.
-pub(crate) fn authenticate_immutable_collateral_release_v2(
+/// This proof is intentionally re-run at every value-bearing collateral CPI;
+/// Profile creation records selection, not permanent trust in mutable loader
+/// state.
+pub(crate) fn authenticate_collateral_release_deployment_v2(
     release: AdapterReleaseV2,
     token_program: &AccountInfo<'_>,
     token_programdata: &AccountInfo<'_>,
-) -> Outcome<AuthenticatedImmutableCollateralReleaseV2> {
+) -> Outcome<AuthenticatedCollateralReleaseDeploymentV2> {
+    let locus = compiled_collateral_deployment_locus_v2(release)?;
+    authenticate_collateral_release_deployment_at_locus_v2(
+        release,
+        locus,
+        token_program,
+        token_programdata,
+    )
+}
+
+fn authenticate_collateral_release_deployment_at_locus_v2(
+    release: AdapterReleaseV2,
+    locus: CollateralDeploymentLocusV2,
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedCollateralReleaseDeploymentV2> {
     release
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
@@ -159,26 +235,49 @@ pub(crate) fn authenticate_immutable_collateral_release_v2(
     let programdata_data = token_programdata
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let loader = decode_loader_pair_v1(
-        LoaderAccountViewV1::new(
-            token_program.key.to_bytes(),
-            token_program.owner.to_bytes(),
-            token_program.executable,
-            &program_data,
-        ),
-        LoaderAccountViewV1::new(
-            token_programdata.key.to_bytes(),
-            token_programdata.owner.to_bytes(),
-            token_programdata.executable,
-            &programdata_data,
-        ),
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     require(
-        loader.upgrade_authority == UpgradeAuthorityV1::Immutable
-            && programdata_data.len() > PROGRAMDATA_METADATA_LEN,
+        programdata_data.len() > PROGRAMDATA_METADATA_LEN,
         ClutchError::AuthorizationUnavailable,
     )?;
+    let program_view = LoaderAccountViewV1::new(
+        token_program.key.to_bytes(),
+        token_program.owner.to_bytes(),
+        token_program.executable,
+        &program_data,
+    );
+    let programdata_view = LoaderAccountViewV1::new(
+        token_programdata.key.to_bytes(),
+        token_programdata.owner.to_bytes(),
+        token_programdata.executable,
+        &programdata_data,
+    );
+    let (deployment_slot, upgrade_authority) = match locus {
+        CollateralDeploymentLocusV2::SynthesizedGenesisZero => {
+            let loader = decode_synthesized_genesis_loader_pair_v1(program_view, programdata_view)
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+            require(
+                loader.linked_programdata == token_programdata.key.to_bytes()
+                    && loader.deployment_slot == 0,
+                ClutchError::AuthorizationUnavailable,
+            )?;
+            (0, CollateralUpgradeAuthorityV2::SynthesizedDefault)
+        }
+        CollateralDeploymentLocusV2::ObservedPositive => {
+            let loader = decode_loader_pair_v1(program_view, programdata_view)
+                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+            require(
+                loader.state.deployment_slot != 0,
+                ClutchError::AuthorizationUnavailable,
+            )?;
+            let authority = match loader.upgrade_authority {
+                UpgradeAuthorityV1::Immutable => CollateralUpgradeAuthorityV2::Immutable,
+                UpgradeAuthorityV1::Present(authority) => {
+                    CollateralUpgradeAuthorityV2::Present(Id::from_bytes(authority))
+                }
+            };
+            (loader.state.deployment_slot, authority)
+        }
+    };
     let deployment_digest = Id::from_bytes(
         solana_sha256_hasher::hashv(&[&programdata_data[PROGRAMDATA_METADATA_LEN..]]).to_bytes(),
     );
@@ -189,13 +288,23 @@ pub(crate) fn authenticate_immutable_collateral_release_v2(
     let release_id = release
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let (authority_tag, authority_bytes) = match upgrade_authority {
+        CollateralUpgradeAuthorityV2::SynthesizedDefault => (2u8, [0u8; 32]),
+        CollateralUpgradeAuthorityV2::Immutable => (0u8, [0u8; 32]),
+        CollateralUpgradeAuthorityV2::Present(authority) => (1u8, authority.bytes()),
+    };
+    let locus_byte = [locus.wire()];
+    let authority_tag = [authority_tag];
     let receipt_id = Id::from_bytes(
         solana_sha256_hasher::hashv(&[
-            IMMUTABLE_COLLATERAL_RELEASE_RECEIPT_DOMAIN_V2,
+            COLLATERAL_RELEASE_DEPLOYMENT_RECEIPT_DOMAIN_V2,
             &release_id.bytes(),
             &token_program.key.to_bytes(),
             &token_programdata.key.to_bytes(),
-            &loader.state.deployment_slot.to_le_bytes(),
+            &deployment_slot.to_le_bytes(),
+            &locus_byte,
+            &authority_tag,
+            &authority_bytes,
             &deployment_digest.bytes(),
         ])
         .to_bytes(),
@@ -203,11 +312,13 @@ pub(crate) fn authenticate_immutable_collateral_release_v2(
     receipt_id
         .require_live()
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok(AuthenticatedImmutableCollateralReleaseV2 {
+    Ok(AuthenticatedCollateralReleaseDeploymentV2 {
         release,
         release_id,
         programdata_account: Id::from_bytes(token_programdata.key.to_bytes()),
-        deployment_slot: loader.state.deployment_slot,
+        deployment_slot,
+        locus,
+        upgrade_authority,
         receipt_id,
     })
 }
@@ -299,6 +410,48 @@ pub(crate) fn authenticate_realm_collateral_v2(
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
+/// Reauthenticate the exact current ProgramData deployment selected by an
+/// already hostile-decoded Realm/ProfileV2 chain.
+///
+/// Value-bearing collateral routes must use this helper in the same
+/// instruction before constructing any token CPI. Pure internal accounting
+/// may use [`authenticate_realm_collateral_v2`] without claiming current code
+/// observation.
+pub(crate) fn authenticate_realm_collateral_deployment_v2(
+    program_id: &Pubkey,
+    realm_account: &AccountInfo<'_>,
+    profile_account: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<(
+    BoundRealmCollateralV2,
+    AuthenticatedCollateralReleaseDeploymentV2,
+)> {
+    let bound = authenticate_realm_collateral_v2(
+        program_id,
+        realm_account,
+        profile_account,
+        policy_account,
+        token_program,
+    )?;
+    let deployment = authenticate_collateral_release_deployment_v2(
+        bound.release(),
+        token_program,
+        token_programdata,
+    )?;
+    require(
+        deployment.release() == bound.release()
+            && deployment.release_id()
+                == bound
+                    .release()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    Ok((bound, deployment))
+}
+
 fn require_read_only_program_account(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -317,7 +470,7 @@ fn require_read_only_program_account(
 }
 
 #[cfg(test)]
-mod immutable_release_tests {
+mod deployment_release_tests {
     use super::*;
     use crate::loader_state::UPGRADEABLE_LOADER_ID;
     use solana_pubkey::Pubkey;
@@ -365,15 +518,16 @@ mod immutable_release_tests {
         bytes
     }
 
-    fn programdata_bytes(immutable: bool, elf: &[u8]) -> Vec<u8> {
+    fn programdata_bytes(slot: u64, authority: Option<[u8; 32]>, elf: &[u8]) -> Vec<u8> {
         let mut bytes = vec![0u8; PROGRAMDATA_METADATA_LEN];
         bytes[..4].copy_from_slice(&3_u32.to_le_bytes());
-        bytes[4..12].copy_from_slice(&17_u64.to_le_bytes());
-        if immutable {
-            bytes[12] = 0;
-        } else {
-            bytes[12] = 1;
-            bytes[13..45].copy_from_slice(&[73; 32]);
+        bytes[4..12].copy_from_slice(&slot.to_le_bytes());
+        match authority {
+            None => bytes[12] = 0,
+            Some(authority) => {
+                bytes[12] = 1;
+                bytes[13..45].copy_from_slice(&authority);
+            }
         }
         bytes.extend_from_slice(elf);
         bytes
@@ -381,7 +535,8 @@ mod immutable_release_tests {
 
     fn cells(
         release: AdapterReleaseV2,
-        immutable: bool,
+        slot: u64,
+        authority: Option<[u8; 32]>,
         elf: &[u8],
     ) -> (Cell, Cell) {
         let programdata_key = Pubkey::new_from_array([41; 32]);
@@ -398,62 +553,113 @@ mod immutable_release_tests {
                 key: programdata_key,
                 owner: loader,
                 lamports: 1,
-                data: programdata_bytes(immutable, elf),
+                data: programdata_bytes(slot, authority, elf),
                 executable: false,
             },
         )
     }
 
     #[test]
-    fn both_compiled_token_families_require_exact_immutable_elf_bytes() {
+    fn both_token_families_accept_only_the_exact_synthesized_genesis_locus() {
         for token_2022 in [false, true] {
             let release = release(token_2022);
-            let (mut program, mut programdata) = cells(release, true, ELF);
+            let (mut program, mut programdata) = cells(release, 0, Some([0; 32]), ELF);
             let program_info = program.info();
             let programdata_info = programdata.info();
-            let accepted = authenticate_immutable_collateral_release_v2(
+            let accepted = authenticate_collateral_release_deployment_at_locus_v2(
                 release,
+                CollateralDeploymentLocusV2::SynthesizedGenesisZero,
                 &program_info,
                 &programdata_info,
             )
             .unwrap();
             assert_eq!(accepted.release(), release);
             assert_eq!(accepted.release_id(), release.id().unwrap());
-            assert_eq!(accepted.deployment_slot(), 17);
+            assert_eq!(accepted.deployment_slot(), 0);
             assert_eq!(accepted.programdata_account(), Id::from_bytes([41; 32]));
+            assert_eq!(
+                accepted.locus(),
+                CollateralDeploymentLocusV2::SynthesizedGenesisZero
+            );
+            assert_eq!(
+                accepted.upgrade_authority(),
+                CollateralUpgradeAuthorityV2::SynthesizedDefault
+            );
         }
     }
 
     #[test]
-    fn mutable_wrong_bytes_and_substituted_programdata_refuse() {
+    fn observed_positive_accepts_canonical_present_or_absent_authority() {
+        let release = release(true);
+        for authority in [None, Some([73; 32])] {
+            let (mut program, mut programdata) = cells(release, 17, authority, ELF);
+            let program_info = program.info();
+            let programdata_info = programdata.info();
+            let accepted = authenticate_collateral_release_deployment_at_locus_v2(
+                release,
+                CollateralDeploymentLocusV2::ObservedPositive,
+                &program_info,
+                &programdata_info,
+            )
+            .unwrap();
+            assert_eq!(accepted.deployment_slot(), 17);
+            match authority {
+                None => assert_eq!(
+                    accepted.upgrade_authority(),
+                    CollateralUpgradeAuthorityV2::Immutable
+                ),
+                Some(authority) => assert_eq!(
+                    accepted.upgrade_authority(),
+                    CollateralUpgradeAuthorityV2::Present(Id::from_bytes(authority))
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn wrong_locus_bytes_and_programdata_substitution_refuse() {
         let release = release(true);
 
-        let (mut program, mut mutable) = cells(release, false, ELF);
+        let (mut program, mut wrong_synth_authority) = cells(release, 0, None, ELF);
         let program_info = program.info();
-        let mutable_info = mutable.info();
-        assert!(authenticate_immutable_collateral_release_v2(
+        let wrong_synth_authority_info = wrong_synth_authority.info();
+        assert!(authenticate_collateral_release_deployment_at_locus_v2(
             release,
+            CollateralDeploymentLocusV2::SynthesizedGenesisZero,
             &program_info,
-            &mutable_info,
+            &wrong_synth_authority_info,
         )
         .is_err());
 
-        let (mut program, mut wrong_bytes) = cells(release, true, b"different-elf");
+        let (mut program, mut zero_observed) = cells(release, 0, Some([73; 32]), ELF);
+        let program_info = program.info();
+        let zero_observed_info = zero_observed.info();
+        assert!(authenticate_collateral_release_deployment_at_locus_v2(
+            release,
+            CollateralDeploymentLocusV2::ObservedPositive,
+            &program_info,
+            &zero_observed_info,
+        )
+        .is_err());
+
+        let (mut program, mut wrong_bytes) = cells(release, 17, None, b"different-elf");
         let program_info = program.info();
         let wrong_bytes_info = wrong_bytes.info();
-        assert!(authenticate_immutable_collateral_release_v2(
+        assert!(authenticate_collateral_release_deployment_at_locus_v2(
             release,
+            CollateralDeploymentLocusV2::ObservedPositive,
             &program_info,
             &wrong_bytes_info,
         )
         .is_err());
 
-        let (mut program, mut substituted) = cells(release, true, ELF);
+        let (mut program, mut substituted) = cells(release, 17, None, ELF);
         substituted.key = Pubkey::new_from_array([42; 32]);
         let program_info = program.info();
         let substituted_info = substituted.info();
-        assert!(authenticate_immutable_collateral_release_v2(
+        assert!(authenticate_collateral_release_deployment_at_locus_v2(
             release,
+            CollateralDeploymentLocusV2::ObservedPositive,
             &program_info,
             &substituted_info,
         )

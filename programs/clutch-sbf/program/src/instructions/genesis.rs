@@ -139,7 +139,7 @@ use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
 use crate::collateral_release::{
-    authenticate_immutable_collateral_release_v2, compiled_collateral_catalog_v2,
+    authenticate_collateral_release_deployment_v2, compiled_collateral_catalog_v2,
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
 };
 use crate::error::{ClutchError, Refusal};
@@ -1041,7 +1041,7 @@ fn init_profile(
             .resolve(policy.adapter_release)
             .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
     };
-    let authenticated_release = authenticate_immutable_collateral_release_v2(
+    let authenticated_release = authenticate_collateral_release_deployment_v2(
         selected_release,
         &accounts[IX_PROFILE_TOKEN_PROGRAM],
         &accounts[IX_PROFILE_TOKEN_PROGRAMDATA],
