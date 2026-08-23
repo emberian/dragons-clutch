@@ -9,30 +9,50 @@
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_interval_v2::{
+    write_failure_market_interval_begin_plan_v2, AuthenticatedFailureMarketIntervalAccountsV2,
+    AuthenticatedFailureMarketIntervalBeginV2,
+};
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, AuthenticatedProductArtifactV1,
     AuthenticatedRegistryCapabilityV3,
 };
 use crate::instructions::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
-    AuthenticatedMarketLifecycleRootV1, AuthenticatedSeriesMarketLinkV1,
+    pin_series_market_link_failure_v1, AuthenticatedMarketLifecycleRootV1,
+    AuthenticatedSeriesFailureSessionBeginV2, AuthenticatedSeriesMarketLinkV1,
+};
+use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
+use clutch_failure_policy_runtime::market_interval_cell_v2::{
+    plan_activate_failure_market_interval_cell_v2,
+    AuthenticatedFailureMarketIntervalCellActivationV2, FailureMarketIntervalCellActivationFactsV2,
+    FailureMarketIntervalCellActivationReceiptV2,
 };
 use clutch_product_series::{
-    compile_ordinal_v5, derive_product_failure_begin_schedule_projection_v1,
-    CompiledProductSeriesBundleV5, CompiledScheduleV1, ContentId, EvidenceOnlyRecoveryPolicyV1,
-    MarketGenesisProfileV2, MarketInstancePreimageV2, MarketInstanceV2Id, MarketLifecyclePhaseV1,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductFailureBeginCompilerProvenanceV1,
-    ProductFailureBeginScheduleProjectionV1Id, ProductTemplateV4, SeriesAttachmentPlanV4,
-    SeriesMarketLinkPhaseV1, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
+    begin_quantized_interval_consensus_v1, compile_ordinal_v5,
+    derive_product_failure_begin_schedule_projection_v1, CompiledProductSeriesBundleV5,
+    CompiledScheduleV1, ContentId, EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2,
+    MarketInstancePreimageV2, MarketInstanceV2Id, MarketLifecyclePhaseV1, NativeClaimBasisV1,
+    PriceMeasurePolicyV1, ProductFailureBeginCompilerProvenanceV1,
+    ProductFailureBeginScheduleProjectionV1Id, ProductTemplateV4,
+    QuantizedIntervalConsensusContextV1, SeriesAttachmentPlanV4, SeriesMarketLinkPhaseV1,
+    SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
 };
+use clutch_source_plane_v3::ContentId as SourceContentId;
+use clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 const PRODUCT_FAILURE_BEGIN_SCHEDULE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/product-failure-begin-schedule-authentication/v1\0";
+const PRODUCT_FAILURE_BEGIN_PREAUTHORIZATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-failure-begin-preauthorization/v2\0";
+const PRODUCT_FAILURE_BEGIN_POSTWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-failure-begin-postwrite/v2\0";
 
 /// Testable exact equality partition for the current mutable/immutable graph.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,6 +203,613 @@ impl AuthenticatedProductFailureBeginScheduleV1 {
     pub(crate) const fn compiler_bundle_id(self) -> ContentId {
         self.compiler_bundle_id
     }
+}
+
+/// Exact Product/Source/Failure preauthorization computed before either write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketIntervalBeginPreauthorizationV2 {
+    id: ContentId,
+    predicted_session_transcript_id: ContentId,
+    activation_facts: FailureMarketIntervalCellActivationFactsV2,
+    schedule_projection_id: ProductFailureBeginScheduleProjectionV1Id,
+    source_join_id: SourceContentId,
+}
+
+impl AuthenticatedFailureMarketIntervalCellActivationV2
+    for FailureMarketIntervalBeginPreauthorizationV2
+{
+    fn authenticate_failure_market_interval_cell_activation(
+        &self,
+        expected: FailureMarketIntervalCellActivationFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if self.id.is_zero()
+            || expected != self.activation_facts
+            || expected.session_binding_id.bytes() != self.predicted_session_transcript_id.bytes()
+            || expected.session_schedule_id.bytes() != self.schedule_projection_id.bytes()
+            || expected.source_handoff_id.bytes() != self.source_join_id.bytes()
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Module-private authority accepted by the narrow Idle-to-Active writer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketIntervalBeginWriteV2 {
+    preauthorization_id: ContentId,
+    activation: FailureMarketIntervalCellActivationReceiptV2,
+}
+
+impl AuthenticatedFailureMarketIntervalBeginV2 for FailureMarketIntervalBeginWriteV2 {
+    fn authenticate_failure_market_interval_begin_v2(
+        &self,
+        expected: FailureMarketIntervalCellActivationReceiptV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.activation || self.preauthorization_id.is_zero() {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Private post-cell authority consumed by Product's sole guarded `0xad` pin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductFailureSessionPinPostwriteV2 {
+    root_account: Pubkey,
+    root_authentication_id: ContentId,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    begin_admission_receipt_id: ContentId,
+    predicted_session_transcript_id: ContentId,
+    cell_authentication_after: ContentId,
+    activation: FailureMarketIntervalCellActivationReceiptV2,
+}
+
+impl AuthenticatedSeriesFailureSessionBeginV2 for ProductFailureSessionPinPostwriteV2 {
+    fn authenticate_series_failure_session_begin_v2(
+        &self,
+        root_account: Pubkey,
+        root_authentication_id: ContentId,
+        link_account: Pubkey,
+        link_authentication_id: ContentId,
+        series_plan_id: SeriesPlanV5Id,
+        ordinal: u32,
+        market_instance_id: MarketInstanceV2Id,
+        generation: u64,
+        source_occurrence_id: SourceOccurrenceV1Id,
+        begin_admission_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        require(
+            root_account == self.root_account
+                && root_authentication_id == self.root_authentication_id
+                && link_account == self.link_account
+                && link_authentication_id == self.link_authentication_id
+                && series_plan_id == self.series_plan_id
+                && ordinal == self.ordinal
+                && market_instance_id == self.market_instance_id
+                && generation == self.generation
+                && source_occurrence_id == self.source_occurrence_id
+                && begin_admission_receipt_id == self.begin_admission_receipt_id
+                && self.activation.facts().session_binding_id.bytes()
+                    == self.predicted_session_transcript_id.bytes()
+                && self.cell_authentication_after != ContentId::ZERO,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
+/// Complete same-instruction Idle-to-Active cell plus `0xad` pin postwrite.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureMarketIntervalBeginPostwriteV2 {
+    id: ContentId,
+    preauthorization_id: ContentId,
+    schedule_projection_id: ProductFailureBeginScheduleProjectionV1Id,
+    activation: FailureMarketIntervalCellActivationReceiptV2,
+    predicted_session_transcript_id: ContentId,
+    cell_authentication_before: ContentId,
+    cell_authentication_after: ContentId,
+    link_authentication_before: ContentId,
+    link_authentication_after: ContentId,
+}
+
+impl AuthenticatedFailureMarketIntervalBeginPostwriteV2 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn preauthorization_id(self) -> ContentId {
+        self.preauthorization_id
+    }
+
+    pub(crate) const fn schedule_projection_id(self) -> ProductFailureBeginScheduleProjectionV1Id {
+        self.schedule_projection_id
+    }
+
+    pub(crate) const fn activation(self) -> FailureMarketIntervalCellActivationReceiptV2 {
+        self.activation
+    }
+
+    pub(crate) const fn predicted_session_transcript_id(self) -> ContentId {
+        self.predicted_session_transcript_id
+    }
+
+    pub(crate) const fn cell_authentication_before(self) -> ContentId {
+        self.cell_authentication_before
+    }
+
+    pub(crate) const fn cell_authentication_after(self) -> ContentId {
+        self.cell_authentication_after
+    }
+
+    pub(crate) const fn link_authentication_before(self) -> ContentId {
+        self.link_authentication_before
+    }
+
+    pub(crate) const fn link_authentication_after(self) -> ContentId {
+        self.link_authentication_after
+    }
+}
+
+/// Atomically activate one reusable Failure cell and pin its exact Series link.
+///
+/// The noncircular transcript chain is `P -> predict pin(P) = T -> cell(T) ->
+/// pin(P)`. The cell write deliberately precedes the Product link write; any
+/// Product refusal after it causes the SVM to roll the whole instruction back.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn begin_failure_market_interval_session_v2<'next>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    root_before: AuthenticatedMarketLifecycleRootV1<'_>,
+    link_before: AuthenticatedSeriesMarketLinkV1<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    schedule: AuthenticatedProductFailureBeginScheduleV1,
+    source_join: SourcePolicyHandoffJoinV1,
+    source_success: SuccessfulEvaluationHandoffV1,
+    context: QuantizedIntervalConsensusContextV1<'_>,
+    root_rebound_output: &mut MarketLifecycleRootAccountV1,
+    link_rebound_output: &'next mut SeriesMarketLinkAccountV1,
+) -> Outcome<(
+    AuthenticatedFailureMarketIntervalBeginPostwriteV2,
+    AuthenticatedFailureMarketIntervalAccountsV2,
+    AuthenticatedSeriesMarketLinkV1<'next>,
+)> {
+    require_distinct_product_failure_begin_transition_accounts_v2(
+        root_account,
+        link_account,
+        cell_account,
+        history_account,
+        admission,
+        source_join,
+    )?;
+    let root_binding = root_before.state().binding();
+    let link_binding = link_before.state().binding();
+    let policy = admission.state().binding().facts();
+    require_begin_receipt_prestates_v2(
+        root_account,
+        link_account,
+        cell_account,
+        history_account,
+        root_before,
+        link_before,
+        admission,
+        interval_before,
+        schedule,
+    )?;
+    require_exact_successful_source_join_v2(
+        source_join,
+        source_success,
+        link_binding,
+        root_binding,
+        policy,
+    )?;
+    let attempt_index = u8::try_from(interval_before.cell().completed_session_count())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let attempt_slot = usize::from(attempt_index);
+    require(
+        attempt_slot < usize::from(schedule.schedule().recovery_attempt_count)
+            && schedule.schedule().recovery_attempt_count
+                == interval_before.quote().schedule().attempt_count
+            && schedule.schedule().recovery_attempts[attempt_slot].repair_generation
+                == link_binding.source_repair_generation
+            && link_binding.source_repair_generation
+                == source_success.occurrence().repair_generation(),
+        ClutchError::MismatchedState,
+    )?;
+    let initial_work = *begin_quantized_interval_consensus_v1(context)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .work();
+    let initial_work_id = initial_work
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let preauthorization_id = derive_failure_market_interval_begin_preauthorization_id_v2(
+        root_before,
+        link_before,
+        admission,
+        interval_before,
+        schedule,
+        source_join,
+        source_success,
+        initial_work_id,
+        attempt_index,
+    )?;
+    let predicted_link = link_before
+        .state()
+        .pin_failure_session(preauthorization_id)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let predicted_session_transcript_id = predicted_link.failure_session_transcript_id();
+    require(
+        predicted_link.active_failure_sessions() == 1
+            && predicted_link.failure_sessions_started()
+                == link_before
+                    .state()
+                    .failure_sessions_started()
+                    .checked_add(1)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+            && predicted_session_transcript_id
+                != link_before.state().failure_session_transcript_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let activation_facts = FailureMarketIntervalCellActivationFactsV2 {
+        cell_before: interval_before.cell_state_id(),
+        history_root: interval_before.history().history_root(),
+        completed_session_count: interval_before.cell().completed_session_count(),
+        session_binding_id: SourceContentId::from_bytes(predicted_session_transcript_id.bytes()),
+        source_handoff_id: source_success.id(),
+        source_repair_generation: source_success.occurrence().repair_generation(),
+        session_schedule_id: SourceContentId::from_bytes(schedule.schedule_projection_id().bytes()),
+        attempt_index,
+        product_work_id: initial_work_id,
+    };
+    let preauthorization = FailureMarketIntervalBeginPreauthorizationV2 {
+        id: preauthorization_id,
+        predicted_session_transcript_id,
+        activation_facts,
+        schedule_projection_id: schedule.schedule_projection_id(),
+        source_join_id: source_success.id(),
+    };
+    let (cell_plan, activation) = plan_activate_failure_market_interval_cell_v2(
+        &preauthorization,
+        interval_before.cell(),
+        admission.state(),
+        interval_before.funding(),
+        interval_before.history(),
+        interval_before.quote(),
+        SourceContentId::from_bytes(predicted_session_transcript_id.bytes()),
+        SourceContentId::from_bytes(schedule.schedule_projection_id().bytes()),
+        source_success,
+        context,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        activation.facts() == activation_facts,
+        ClutchError::MismatchedState,
+    )?;
+    let cell_authentication_before = interval_before.cell_authentication_id();
+    let interval_after = write_failure_market_interval_begin_plan_v2(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        cell_plan,
+        activation,
+        &FailureMarketIntervalBeginWriteV2 {
+            preauthorization_id,
+            activation,
+        },
+    )?;
+    let cell_authentication_after = interval_after.cell_authentication_id();
+    let pin_authority = ProductFailureSessionPinPostwriteV2 {
+        root_account: *root_account.key,
+        root_authentication_id: root_before.authentication_id(),
+        link_account: *link_account.key,
+        link_authentication_id: link_before.authentication_id(),
+        series_plan_id: link_binding.series_plan_id,
+        ordinal: link_binding.ordinal,
+        market_instance_id: link_binding.market_instance_id,
+        generation: link_binding.generation,
+        source_occurrence_id: link_binding.source_occurrence_id,
+        begin_admission_receipt_id: preauthorization_id,
+        predicted_session_transcript_id,
+        cell_authentication_after,
+        activation,
+    };
+    let link_after = pin_series_market_link_failure_v1(
+        program_id,
+        root_account,
+        root_before,
+        link_account,
+        link_before,
+        preauthorization_id,
+        &pin_authority,
+        root_rebound_output,
+        link_rebound_output,
+    )?;
+    require(
+        link_after.state() == &predicted_link
+            && link_after.state().failure_session_transcript_id()
+                == predicted_session_transcript_id
+            && interval_after.cell().session_binding_id().bytes()
+                == predicted_session_transcript_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_FAILURE_BEGIN_POSTWRITE_DOMAIN_V2,
+            &preauthorization_id.bytes(),
+            &schedule.schedule_projection_id().bytes(),
+            &activation.id().bytes(),
+            &predicted_session_transcript_id.bytes(),
+            &cell_authentication_before.bytes(),
+            &cell_authentication_after.bytes(),
+            &link_before.authentication_id().bytes(),
+            &link_after.authentication_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok((
+        AuthenticatedFailureMarketIntervalBeginPostwriteV2 {
+            id,
+            preauthorization_id,
+            schedule_projection_id: schedule.schedule_projection_id(),
+            activation,
+            predicted_session_transcript_id,
+            cell_authentication_before,
+            cell_authentication_after,
+            link_authentication_before: link_before.authentication_id(),
+            link_authentication_after: link_after.authentication_id(),
+        },
+        interval_after,
+        link_after,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_begin_receipt_prestates_v2(
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    link: AuthenticatedSeriesMarketLinkV1<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    interval: AuthenticatedFailureMarketIntervalAccountsV2,
+    schedule: AuthenticatedProductFailureBeginScheduleV1,
+) -> Outcome<()> {
+    let root_binding = root.state().binding();
+    let link_binding = link.state().binding();
+    let policy = admission.state().binding().facts();
+    let admission_state_id = admission
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        *root_account.key == root.account()
+            && *link_account.key == link.account()
+            && *cell_account.key == interval.cell_account()
+            && *history_account.key == interval.history_account()
+            && !root_account.is_writable
+            && link_account.is_writable
+            && cell_account.is_writable
+            && !history_account.is_writable
+            && schedule.root_account() == root.account()
+            && schedule.root_authentication_id() == root.authentication_id()
+            && schedule.link_account() == link.account()
+            && schedule.link_authentication_id() == link.authentication_id()
+            && schedule.series_plan_id() == link_binding.series_plan_id
+            && schedule.ordinal() == link_binding.ordinal
+            && schedule.market_instance_id() == root_binding.market_instance_id
+            && schedule.market_instance_id() == link_binding.market_instance_id
+            && schedule.generation() == root_binding.generation
+            && schedule.generation() == link_binding.generation
+            && schedule.source_occurrence_id() == link_binding.source_occurrence_id
+            && schedule.registry_release_id() == root_binding.registry_release_id
+            && schedule.capability_profile_id() == root_binding.capability_profile_id
+            && schedule.compiler_bundle_id() == link_binding.compiler_output_id
+            && interval.cell_account() != interval.history_account()
+            && interval.admission_root_account() == admission.account()
+            && interval.admission_state_id() == admission_state_id
+            && interval.cell().phase()
+                == clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalCellPhaseV2::Idle
+            && interval.cell().failure_policy_binding_id().bytes()
+                == admission.state().binding().id().bytes()
+            && interval.cell().market_instance_id() == root_binding.market_instance_id
+            && interval.cell().generation() == root_binding.generation
+            && policy.market_instance_id == root_binding.market_instance_id
+            && policy.generation == root_binding.generation
+            && policy.product_template_id.content_id() == root_binding.product_template_id
+            && policy.native_claim_basis_id.content_id() == root_binding.native_claim_basis_id
+            && policy.recovery_policy_id.content_id() == root_binding.recovery_policy_id
+            && policy.price_measure_policy_id.content_id()
+                == root_binding.price_measure_policy_id
+            && policy.market_genesis_profile_id.content_id()
+                == root_binding.market_genesis_profile_id
+            && policy.registry_release_id.content_id() == root_binding.registry_release_id
+            && policy.capability_profile_id.content_id() == root_binding.capability_profile_id
+            && policy.interval_consensus_profile_id.content_id()
+                == root_binding.interval_consensus_profile_id
+            && policy.source_release_manifest_id.bytes() == root_binding.source_release_id.bytes()
+            && policy.source_plane_contract_id.bytes()
+                == root_binding.source_plane_contract_id.bytes()
+            && policy.source_spec_id.bytes() == root_binding.source_spec_id.bytes()
+            && policy.clock_policy_id.bytes() == root_binding.clock_policy_id.bytes()
+            && admission.state().binding().id().bytes()
+                == root_binding.market_failure_policy_binding_id.bytes(),
+        ClutchError::MismatchedState,
+    )
+}
+
+fn require_exact_successful_source_join_v2(
+    source_join: SourcePolicyHandoffJoinV1,
+    source_success: SuccessfulEvaluationHandoffV1,
+    link_binding: clutch_product_series::SeriesMarketLinkBindingV1,
+    root_binding: clutch_product_series::MarketLifecycleBindingV1,
+    policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
+) -> Outcome<()> {
+    let occurrence = source_success.occurrence();
+    let statistic_result_id = source_success
+        .statistic_result_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        source_join.handoff_id() == source_success.id()
+            && source_join.failure_policy_binding_id()
+                == source_success.failure_policy_binding_id()
+            && source_join.failure_policy_binding_id().bytes()
+                == root_binding.market_failure_policy_binding_id.bytes()
+            && source_join.release_authentication_id().bytes()
+                == policy.source_release_authentication_id.bytes()
+            && source_join.route_id() == occurrence.route_id()
+            && source_join.route_id().bytes() == root_binding.source_route_id.bytes()
+            && source_join.occurrence_account().bytes() == occurrence.occurrence_account().bytes()
+            && source_join.occurrence_account().bytes()
+                == link_binding.source_occurrence_account_id.bytes()
+            && source_join.source_fact_authentication_id()
+                == source_success.result_account_authentication_id()
+            && source_join.clock_policy_id() == source_success.clock_policy_id()
+            && source_join.clock_policy_id() == occurrence.clock_policy_id()
+            && source_join.clock_policy_id().bytes() == root_binding.clock_policy_id.bytes()
+            && source_join.clock() == source_success.clock()
+            && source_join.source_spec_id() == occurrence.source_spec_id()
+            && source_join.source_spec_id().bytes() == root_binding.source_spec_id.bytes()
+            && source_join.window_id() == occurrence.window_id()
+            && source_join.statistic_key_id() == occurrence.statistic_key_id()
+            && occurrence.occurrence_record_id().bytes()
+                == link_binding.source_occurrence_id.bytes()
+            && occurrence.id().bytes() == link_binding.source_occurrence_receipt_id.bytes()
+            && occurrence.occurrence_account_authentication_id().bytes()
+                == link_binding
+                    .source_occurrence_account_authentication_id
+                    .bytes()
+            && occurrence.series_plan_id().bytes() == link_binding.series_plan_id.bytes()
+            && occurrence.ordinal() == link_binding.ordinal
+            && occurrence.market_instance_id().bytes() == link_binding.market_instance_id.bytes()
+            && occurrence.attachment_plan_id().bytes() == link_binding.attachment_plan_id.bytes()
+            && occurrence.source_plane_contract_id().bytes()
+                == root_binding.source_plane_contract_id.bytes()
+            && occurrence.source_spec_id().bytes() == root_binding.source_spec_id.bytes()
+            && statistic_result_id
+                == source_success
+                    .result()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && source_join.work_receipt_account().bytes() != [0; 32]
+            && source_join.work_receipt_authentication_id() != SourceContentId::ZERO
+            && source_join.id() != SourceContentId::ZERO,
+        ClutchError::MismatchedState,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_failure_market_interval_begin_preauthorization_id_v2(
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    link: AuthenticatedSeriesMarketLinkV1<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    interval: AuthenticatedFailureMarketIntervalAccountsV2,
+    schedule: AuthenticatedProductFailureBeginScheduleV1,
+    source_join: SourcePolicyHandoffJoinV1,
+    source_success: SuccessfulEvaluationHandoffV1,
+    initial_work_id: clutch_product_series::QuantizedIntervalConsensusWorkV1Id,
+    attempt_index: u8,
+) -> Outcome<ContentId> {
+    let admission_state_id = admission
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let statistic_result_id = source_success
+        .statistic_result_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_FAILURE_BEGIN_PREAUTHORIZATION_DOMAIN_V2,
+            root.account().as_ref(),
+            &root.authentication_id().bytes(),
+            link.account().as_ref(),
+            &link.authentication_id().bytes(),
+            &link.state().failure_session_transcript_id().bytes(),
+            &link.state().transition_sequence().to_le_bytes(),
+            admission.account().as_ref(),
+            &admission_state_id.bytes(),
+            interval.cell_account().as_ref(),
+            &interval.cell_authentication_id().bytes(),
+            &interval.cell_state_id().bytes(),
+            interval.history_account().as_ref(),
+            &interval.history_authentication_id().bytes(),
+            &interval.history_state_id().bytes(),
+            &interval.history().history_root().bytes(),
+            &interval.cell().completed_session_count().to_le_bytes(),
+            &schedule.id().bytes(),
+            &schedule.schedule_projection_id().bytes(),
+            &source_join.id().bytes(),
+            &source_join.release_authentication_id().bytes(),
+            &source_join.route_id().bytes(),
+            &source_join.occurrence_account().bytes(),
+            &source_join.result_or_absence_account().bytes(),
+            &source_join.source_fact_authentication_id().bytes(),
+            &source_join.work_receipt_account().bytes(),
+            &source_join.work_receipt_authentication_id().bytes(),
+            &source_join.generation().to_le_bytes(),
+            &source_success.id().bytes(),
+            &source_success.result_account_authentication_id().bytes(),
+            &statistic_result_id.bytes(),
+            &source_success.occurrence().occurrence_record_id().bytes(),
+            &source_success
+                .occurrence()
+                .repair_generation()
+                .to_le_bytes(),
+            &initial_work_id.bytes(),
+            &[attempt_index],
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(id)
+}
+
+fn require_distinct_product_failure_begin_transition_accounts_v2(
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    source_join: SourcePolicyHandoffJoinV1,
+) -> Outcome<()> {
+    let accounts = [
+        *root_account.key,
+        *link_account.key,
+        *cell_account.key,
+        *history_account.key,
+        admission.account(),
+        Pubkey::new_from_array(source_join.occurrence_account().bytes()),
+        Pubkey::new_from_array(source_join.result_or_absence_account().bytes()),
+        Pubkey::new_from_array(source_join.work_receipt_account().bytes()),
+    ];
+    require_distinct_begin_transition_keys_v2(accounts)
+}
+
+fn require_distinct_begin_transition_keys_v2(accounts: [Pubkey; 8]) -> Outcome<()> {
+    let mut index = 0_usize;
+    while index < accounts.len() {
+        let mut other = index + 1;
+        while other < accounts.len() {
+            require(
+                accounts[index] != accounts[other],
+                ClutchError::AccountAlias,
+            )?;
+            other += 1;
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 /// Authenticate and deterministically recompile one current V5 ordinal.
@@ -760,5 +1387,53 @@ mod tests {
         let mut altered = graph();
         altered.link_clock_policy = id(20);
         assert!(altered.validate().is_err());
+    }
+
+    #[test]
+    fn every_begin_transition_account_alias_refuses() {
+        let original = [
+            Pubkey::new_from_array([1; 32]),
+            Pubkey::new_from_array([2; 32]),
+            Pubkey::new_from_array([3; 32]),
+            Pubkey::new_from_array([4; 32]),
+            Pubkey::new_from_array([5; 32]),
+            Pubkey::new_from_array([6; 32]),
+            Pubkey::new_from_array([7; 32]),
+            Pubkey::new_from_array([8; 32]),
+        ];
+        assert!(require_distinct_begin_transition_keys_v2(original).is_ok());
+        let mut left = 0_usize;
+        while left < original.len() {
+            let mut right = left + 1;
+            while right < original.len() {
+                let mut aliased = original;
+                aliased[right] = aliased[left];
+                assert!(require_distinct_begin_transition_keys_v2(aliased).is_err());
+                right += 1;
+            }
+            left += 1;
+        }
+    }
+
+    #[test]
+    fn sole_outer_begin_orders_cell_before_product_pin_for_atomic_rollback() {
+        let source = include_str!("product_failure_begin.rs");
+        let outer = source
+            .find("pub(crate) fn begin_failure_market_interval_session_v2")
+            .unwrap();
+        let cell_write = source[outer..]
+            .find("let interval_after = write_failure_market_interval_begin_plan_v2")
+            .unwrap();
+        let product_pin = source[outer..]
+            .find("let link_after = pin_series_market_link_failure_v1")
+            .unwrap();
+        assert!(cell_write < product_pin);
+        assert_eq!(
+            source
+                .matches("pub(crate) fn begin_failure_market_interval_session_v2")
+                .count(),
+            1
+        );
+        assert!(!source.contains("write_failure_market_interval_cell_plan_v2"));
     }
 }

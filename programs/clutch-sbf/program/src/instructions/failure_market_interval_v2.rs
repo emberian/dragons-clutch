@@ -25,12 +25,12 @@ use crate::instructions::product_market::{
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
-    initialize_failure_market_interval_cell_v2, FailureMarketIntervalCellDispositionV2,
-    FailureMarketIntervalCellExhaustionPlanV2, FailureMarketIntervalCellPhaseV2,
-    FailureMarketIntervalCellPlanV2, FailureMarketIntervalCellResetReceiptV2,
-    FailureMarketIntervalCellResolutionPlanV2, FailureMarketIntervalCellResolutionReceiptV2,
-    FailureMarketIntervalCellStateIdV2, FailureMarketIntervalCellV2,
-    FAILURE_MARKET_INTERVAL_CELL_BYTES_V2,
+    initialize_failure_market_interval_cell_v2, FailureMarketIntervalCellActivationReceiptV2,
+    FailureMarketIntervalCellDispositionV2, FailureMarketIntervalCellExhaustionPlanV2,
+    FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellPlanV2,
+    FailureMarketIntervalCellResetReceiptV2, FailureMarketIntervalCellResolutionPlanV2,
+    FailureMarketIntervalCellResolutionReceiptV2, FailureMarketIntervalCellStateIdV2,
+    FailureMarketIntervalCellV2, FAILURE_MARKET_INTERVAL_CELL_BYTES_V2,
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
     admit_failure_market_interval_history_v2, plan_close_failure_market_interval_accounts_v2,
@@ -318,6 +318,20 @@ pub(crate) trait AuthenticatedFailureMarketProductResolutionV2 {
     fn authenticate_failure_market_product_resolution(
         &self,
         _expected: FailureMarketIntervalCellResolutionReceiptV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        Err(clutch_failure_policy_runtime::Error::BindingMismatch)
+    }
+}
+
+/// Default-refusing authority for the sole atomic Idle-to-Active writer.
+///
+/// The implementation lives in the Product/Source/Failure Begin composer and
+/// is minted only after deriving the noncircular preauthorization and predicted
+/// post-pin Product transcript. A pure cell plan is not sufficient authority.
+pub(crate) trait AuthenticatedFailureMarketIntervalBeginV2 {
+    fn authenticate_failure_market_interval_begin_v2(
+        &self,
+        _expected: FailureMarketIntervalCellActivationReceiptV2,
     ) -> clutch_failure_policy_runtime::Result<()> {
         Err(clutch_failure_policy_runtime::Error::BindingMismatch)
     }
@@ -784,6 +798,52 @@ pub(crate) fn write_failure_market_interval_exhaustion_plan_v2(
         authenticated,
         exhaustion.cell_plan(),
         Some(FailureMarketIntervalCellDispositionV2::Exhausted),
+    )
+}
+
+/// Persist exactly one Product/Source-authorized Idle-to-Active Begin.
+///
+/// There is intentionally no generic nonterminal writer. The caller must hold
+/// the private same-instruction authority which is later consumed by Product's
+/// narrow `0xad` pin, and any refusal after this write rolls the whole SVM
+/// instruction back.
+pub(crate) fn write_failure_market_interval_begin_plan_v2<
+    A: AuthenticatedFailureMarketIntervalBeginV2 + ?Sized,
+>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'_>,
+    history_account: &AccountInfo<'_>,
+    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
+    plan: FailureMarketIntervalCellPlanV2,
+    receipt: FailureMarketIntervalCellActivationReceiptV2,
+    authority: &A,
+) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    authority
+        .authenticate_failure_market_interval_begin_v2(receipt)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facts = receipt.facts();
+    let resulting_cell = plan.resulting_cell();
+    require(
+        authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Idle
+            && authenticated.cell.disposition() == FailureMarketIntervalCellDispositionV2::None
+            && resulting_cell.phase() == FailureMarketIntervalCellPhaseV2::Active
+            && resulting_cell.disposition() == FailureMarketIntervalCellDispositionV2::None
+            && facts.cell_before == authenticated.cell_state_id
+            && facts.history_root == authenticated.history.history_root()
+            && facts.completed_session_count == authenticated.cell.completed_session_count()
+            && receipt.cell_after()
+                == resulting_cell
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?,
+        ClutchError::MismatchedState,
+    )?;
+    write_failure_market_interval_cell_plan_inner_v2(
+        program_id,
+        cell_account,
+        history_account,
+        authenticated,
+        plan,
+        None,
     )
 }
 
