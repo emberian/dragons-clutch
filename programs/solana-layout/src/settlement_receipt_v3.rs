@@ -13,6 +13,9 @@
 //! 217 bytes, including both mutable latch families.
 //! Owner/order-set membership is likewise not duplicated here: the action
 //! composer must join it from exact authenticated `0x81/2` owner-row bytes.
+//! Selected-candidate authority is never lowered through the legacy
+//! `CandidateRecord`; the General adapter must join the exact authenticated
+//! `0x7c` SelectedCandidate and retained CandidateFeedV2.
 
 use super::{
     account_len, account_version, check_hash, digest, put_header,
@@ -177,24 +180,6 @@ impl SettlementReceiptAccountV3 {
             && self.accounted_end_mask == expected;
         if !fresh_delivery && !complete_delivery {
             return Err(CodecError::InvalidEnum);
-        }
-        Ok(())
-    }
-
-    /// Check immutable candidate and selected-price bindings.
-    pub fn binds_candidate(&self, candidate: &super::CandidateRecord) -> Result<()> {
-        self.validate()?;
-        candidate.validate()?;
-        if self.candidate != candidate.candidate
-            || self.epoch != candidate.epoch
-            || self.market != candidate.market
-        {
-            return Err(CodecError::MismatchedBinding);
-        }
-        if self.outcome >= candidate.outcome_count
-            || self.price != candidate.prices[usize::from(self.outcome)]
-        {
-            return Err(CodecError::MismatchedBinding);
         }
         Ok(())
     }
