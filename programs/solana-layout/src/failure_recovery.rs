@@ -11,7 +11,7 @@ use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
 /// Main-program framing before one semantic-owner body.
 pub const FAILURE_ACCOUNT_HEADER_BYTES_V1: usize = 4;
 /// Exact failure semantic-root body owned by the failure adapter.
-pub const FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2: usize = 2_152;
+pub const FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2: usize = 2_168;
 /// Exact framed failure semantic-root account width.
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1: usize =
     FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2;

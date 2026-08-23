@@ -73,7 +73,7 @@ macro_rules! typed_external_id {
 }
 
 /// Exact canonical width of one single-custody persisted failure runtime.
-pub const FAILURE_RUNTIME_EXTERNAL_V2_BYTES: usize = 2_032;
+pub const FAILURE_RUNTIME_EXTERNAL_V2_BYTES: usize = 2_048;
 
 typed_external_id!(
     FailureExternalAdmissionReceiptIdV2,

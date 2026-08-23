@@ -46,7 +46,7 @@ const FAILURE_RUNTIME_MAGIC: [u8; 8] = *b"DCFAILR1";
 const FAILURE_RUNTIME_SCHEMA: u16 = 1;
 
 /// Exact canonical width of one persisted successor failure runtime.
-pub const FAILURE_RUNTIME_V1_BYTES: usize = 1_840;
+pub const FAILURE_RUNTIME_V1_BYTES: usize = 1_856;
 
 /// Result alias for the successor failure-policy join.
 pub type Result<T> = core::result::Result<T, Error>;

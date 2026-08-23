@@ -24,7 +24,7 @@ const VERSION: u16 = 2;
 const ROOT_DIGEST_DOMAIN: &[u8] = b"dragons-clutch/failure-external-root/v2";
 
 /// Exact width of the root-only external-custody account.
-pub const FAILURE_EXTERNAL_ROOT_V2_BYTES: usize = 2_152;
+pub const FAILURE_EXTERNAL_ROOT_V2_BYTES: usize = 2_168;
 
 /// Refusal from the single-custody account/liveness bridge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
