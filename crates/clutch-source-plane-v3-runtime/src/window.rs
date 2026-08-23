@@ -761,6 +761,22 @@ impl OccurrenceSourceReceiptV1 {
     }
 }
 
+/// Validate and identify the exact Product/Series-owned 184-byte codec.
+pub fn source_occurrence_record_id(input: &[u8]) -> Result<ContentId> {
+    if input.len() != SOURCE_OCCURRENCE_RECORD_BYTES
+        || input[..8] != OCCURRENCE_MAGIC
+        || le_u16(&input[8..10]) != 1
+        || input[10..16].iter().any(|byte| *byte != 0)
+        || input[52..56].iter().any(|byte| *byte != 0)
+    {
+        return Err(Error::InvalidCodec);
+    }
+    for at in [16_usize, 56, 88, 120, 152] {
+        live_id(id_at(input, at))?;
+    }
+    Ok(domain_id(OCCURRENCE_DOMAIN, input))
+}
+
 /// Join the exact Product/Series-owned 184-byte codec without persisting a parallel DTO.
 pub fn join_source_occurrence(
     route: AuthenticatedSourceRouteV1,
@@ -771,18 +787,7 @@ pub fn join_source_occurrence(
     key: &StatisticKeyV3,
 ) -> Result<OccurrenceSourceReceiptV1> {
     let occurrence_record_bytes = occurrence_account.data;
-    if occurrence_record_bytes.len() != SOURCE_OCCURRENCE_RECORD_BYTES
-        || occurrence_record_bytes[..8] != OCCURRENCE_MAGIC
-        || le_u16(&occurrence_record_bytes[8..10]) != 1
-        || occurrence_record_bytes[10..16]
-            .iter()
-            .any(|byte| *byte != 0)
-        || occurrence_record_bytes[52..56]
-            .iter()
-            .any(|byte| *byte != 0)
-    {
-        return Err(Error::InvalidCodec);
-    }
+    let occurrence_record_id = source_occurrence_record_id(occurrence_record_bytes)?;
     if occurrence_account.owner != route.generation_authority_program() {
         return Err(Error::WrongOwner);
     }
@@ -815,7 +820,6 @@ pub fn join_source_occurrence(
     {
         return Err(Error::MismatchedBinding);
     }
-    let occurrence_record_id = domain_id(OCCURRENCE_DOMAIN, occurrence_record_bytes);
     derived_pda.validate_for(
         route.generation_authority_program(),
         occurrence_record_id,

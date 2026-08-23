@@ -728,6 +728,11 @@ impl AuthenticatedSourceRouteV1 {
         self.manifest.parser.program
     }
 
+    /// Immutable parser configuration account selected by the release.
+    pub const fn parser_config(self) -> RuntimeKey {
+        self.manifest.parser_config
+    }
+
     /// Exact reviewed runtime adapter deployment identity.
     pub const fn adapter_deployment_id(self) -> ContentId {
         self.adapter_deployment_id
