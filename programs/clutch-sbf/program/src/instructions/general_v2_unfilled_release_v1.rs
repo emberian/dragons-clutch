@@ -30,7 +30,7 @@ use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
 use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
 use clutch_solana_layout::reservation_v9::{ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9};
 use clutch_solana_layout::registry::GeneralV2Action;
-use clutch_solana_layout::{MAX_ORDERS_PER_PAGE, MAX_ORDER_PAGES};
+use clutch_solana_layout::MAX_ORDER_PAGES;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -183,6 +183,20 @@ fn require_all_distinct(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
         left += 1;
     }
     Ok(())
+}
+
+fn action41_page_count_from_account_len(total: usize) -> Result<usize, ClutchError> {
+    let fixed = ACTION41_TRAVERSAL_PREFIX_ACCOUNTS
+        .checked_add(ACTION41_ENDPOINT_SUFFIX_ACCOUNTS)
+        .ok_or(ClutchError::Arithmetic)?;
+    let page_count = total
+        .checked_sub(fixed)
+        .ok_or(ClutchError::WrongAccountCount)?;
+    if (1..=MAX_ORDER_PAGES).contains(&page_count) {
+        Ok(page_count)
+    } else {
+        Err(ClutchError::WrongAccountCount)
+    }
 }
 
 #[inline(never)]
@@ -405,20 +419,12 @@ fn release_unfilled_reservation(
         true,
         SETTLEMENT_ROOT_ACCOUNT_BYTES,
     )?;
-    let order_count = {
-        let root = SettlementRootV1AccountV1::decode(&borrow_data(&accounts[IX_ROOT])?)?;
-        usize::from(root.order_count())
-    };
-    let page_count = order_count
-        .checked_add(MAX_ORDERS_PER_PAGE - 1)
-        .ok_or(ClutchError::Arithmetic)?
-        / MAX_ORDERS_PER_PAGE;
+    let page_count = action41_page_count_from_account_len(accounts.len())?;
     let endpoint_at = ACTION41_TRAVERSAL_PREFIX_ACCOUNTS
         .checked_add(page_count)
         .ok_or(ClutchError::Arithmetic)?;
     require(
-        (1..=MAX_ORDER_PAGES).contains(&page_count)
-            && accounts.len() == endpoint_at + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
+        accounts.len() == endpoint_at + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
         ClutchError::WrongAccountCount,
     )?;
     let endpoint_frame = ReleaseUnfilledReservationAccountFrameV1 {
@@ -608,5 +614,37 @@ mod tests {
         assert_eq!(GENERAL_REPLAY_ACCOUNT_V1_BYTES, 344);
         assert_eq!(ACTION41_TRAVERSAL_PREFIX_ACCOUNTS, 12);
         assert_eq!(ACTION41_ENDPOINT_SUFFIX_ACCOUNTS, 5);
+    }
+
+    #[test]
+    fn sparse_and_churned_page_sets_keep_the_account_delimiter() {
+        assert_eq!(
+            action41_page_count_from_account_len(
+                ACTION41_TRAVERSAL_PREFIX_ACCOUNTS + 3 + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
+            ),
+            Ok(3)
+        );
+        assert_eq!(
+            action41_page_count_from_account_len(
+                ACTION41_TRAVERSAL_PREFIX_ACCOUNTS + 4 + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
+            ),
+            Ok(4)
+        );
+    }
+
+    #[test]
+    fn action41_page_delimiter_refuses_missing_and_fifth_pages() {
+        assert_eq!(
+            action41_page_count_from_account_len(
+                ACTION41_TRAVERSAL_PREFIX_ACCOUNTS + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
+            ),
+            Err(ClutchError::WrongAccountCount)
+        );
+        assert_eq!(
+            action41_page_count_from_account_len(
+                ACTION41_TRAVERSAL_PREFIX_ACCOUNTS + 5 + ACTION41_ENDPOINT_SUFFIX_ACCOUNTS,
+            ),
+            Err(ClutchError::WrongAccountCount)
+        );
     }
 }
