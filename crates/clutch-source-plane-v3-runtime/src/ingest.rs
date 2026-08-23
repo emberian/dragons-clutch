@@ -296,7 +296,7 @@ pub fn authenticate_source_head_account(
     derived_pda: RuntimeDerivedPdaV1,
     authenticated_lineage: AuthenticatedReopenLineageV1,
 ) -> Result<AuthenticatedSourceHeadV1> {
-    require_mutable_adapter_account(route, account)?;
+    require_mutable_adapter_account(route, account, authenticated_lineage)?;
     let (header, head) =
         decode_runtime_account::<SourceHeadV3>(account.data, route.neutral_sink())?;
     head.validate()?;
@@ -346,7 +346,7 @@ pub fn authenticate_open_raw_page_account(
     derived_pda: RuntimeDerivedPdaV1,
     authenticated_lineage: AuthenticatedReopenLineageV1,
 ) -> Result<AuthenticatedOpenRawPageV1> {
-    require_mutable_adapter_account(route, account)?;
+    require_mutable_adapter_account(route, account, authenticated_lineage)?;
     if head.route_id() != route.route_id() {
         return Err(Error::MismatchedBinding);
     }
@@ -649,6 +649,7 @@ pub fn ingest_boundary_batch(
 fn require_mutable_adapter_account(
     route: AuthenticatedSourceRouteV1,
     account: RuntimeAccountViewV1<'_>,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
 ) -> Result<()> {
     if authenticated_lineage.access() != LineageAccessV1::Mutable {
         return Err(Error::WrongPrivilege);

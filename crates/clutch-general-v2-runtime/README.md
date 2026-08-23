@@ -102,6 +102,16 @@ completed-order mask and Reservation's zeroed successor make that ownership
 handoff once-only. The older compact V3 composer remains a withdrawn reference
 for the V2 row and pre-V5 page shape.
 
+The action-26 successor derives its sole delivery identity from the
+authenticated Receipt V3 PDA and stages both real endpoints as one bundle.
+Each endpoint rechecks its V5 page generation against the canonical
+Reservation and ordinary-General Position V3, requires a finalized `0x81/3`
+row, advances cumulative Reservation delivery, returns a seller portfolio
+remainder only at cumulative completion, and emits a role-distinct GEN1
+Replay V3 successor. The receipt becomes exhausted only alongside both exact
+Position and Reservation postimages; this action creates or closes no account
+and has zero rent movement.
+
 Terminal fee inputs come from the private authenticated fee-runtime projection,
 including explicit zero rows for sellers. The bridge recomputes
 `CandidateSettlementTotalsV1`, canonical owner rows, receipt accounting inputs,

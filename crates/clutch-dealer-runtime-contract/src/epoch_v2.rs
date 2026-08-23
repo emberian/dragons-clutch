@@ -14,8 +14,8 @@ use crate::{
     DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2, DELETABLE_RENT_OWNER_BYTES,
 };
 use clutch_general_v2_contract::{
-    economic_domain_digest_v2, EconomicDomainV2AccountV1, GeneralEpochPhaseV1,
-    GeneralEpochV6AccountV1, Sha256BackendV1,
+    economic_domain_digest_v2, CandidateWindowV4AccountV1, EconomicDomainV2AccountV1,
+    GeneralEpochPhaseV1, GeneralEpochV6AccountV1, Sha256BackendV1,
 };
 use clutch_retirement::PositionLifecycleV3;
 use sha2::{Digest, Sha256};
@@ -43,6 +43,7 @@ pub struct DealerGeneralEpochEvidenceV3 {
     generation: u64,
     phase: GeneralEpochPhaseV1,
     selected_candidate_count: u32,
+    verification_closes_slot: u64,
 }
 
 impl DealerGeneralEpochEvidenceV3 {
@@ -50,13 +51,17 @@ impl DealerGeneralEpochEvidenceV3 {
     pub fn new(
         epoch_account_id: Id,
         epoch: GeneralEpochV6AccountV1,
+        window_account_id: Id,
+        window: CandidateWindowV4AccountV1,
         economic_domain_account_id: Id,
         domain: EconomicDomainV2AccountV1,
         policy: &DealerPolicyV1,
     ) -> Result<Self> {
         epoch_account_id.validate_live()?;
+        window_account_id.validate_live()?;
         economic_domain_account_id.validate_live()?;
         epoch.validate().map_err(|_| Error::MismatchedBinding)?;
+        window.validate().map_err(|_| Error::MismatchedBinding)?;
         domain.validate().map_err(|_| Error::MismatchedBinding)?;
         policy.validate()?;
         let epoch_semantics = epoch
@@ -66,6 +71,13 @@ impl DealerGeneralEpochEvidenceV3 {
             .map_err(|_| Error::MismatchedBinding)?;
         if Id::from_bytes(epoch.market_instance_v2_id.bytes()) != policy.market_instance_v2_id
             || Id::from_bytes(epoch.economic_domain.bytes()) != economic_domain_account_id
+            || Id::from_bytes(epoch.window.bytes()) != window_account_id
+            || Id::from_bytes(window.epoch.bytes()) != epoch_account_id
+            || window.market != epoch.market_runtime
+            || window.epoch_generation != epoch.generation
+            || window.freeze_deadline_slot != epoch.freeze_deadline_slot
+            || window.frozen_slot == 0
+            || Id::from_bytes(window.relation_policy_id.bytes()) != policy.relation_v2_id
             || Id::from_bytes(domain.epoch.bytes()) != epoch_account_id
             || domain.transcript.market_instance_v2_id != epoch.market_instance_v2_id
             || domain.transcript.epoch_semantics_digest != epoch_semantics
@@ -87,6 +99,7 @@ impl DealerGeneralEpochEvidenceV3 {
             generation: epoch.generation,
             phase: epoch.phase,
             selected_candidate_count: epoch.selected_candidate_count,
+            verification_closes_slot: window.verification_closes_slot,
         })
     }
 
@@ -114,6 +127,11 @@ impl DealerGeneralEpochEvidenceV3 {
     /// Exact General V2 MarketRuntime account retained by the authenticated Epoch.
     pub const fn market_runtime_account_id(&self) -> Id {
         self.market_runtime_account_id
+    }
+
+    /// Hard Window verification boundary after which an unused binding may lapse.
+    pub const fn verification_closes_slot(&self) -> u64 {
+        self.verification_closes_slot
     }
 }
 
@@ -203,6 +221,73 @@ pub struct DealerEpochBindingV2 {
 }
 
 impl DealerEpochBindingV2 {
+    /// Construct the sole canonical Bound postimage from authenticated owners.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_bound(
+        policy: &DealerPolicyV1,
+        state: &DealerStateV2,
+        state_account_id: Id,
+        dependency: &DealerFundedDependenciesV2,
+        schedule: &DealerLivenessScheduleV1,
+        runtime: &DealerRuntimeLivenessBindingV1,
+        bind: &DealerActionLivenessAuthorizationV1,
+        general: &DealerGeneralEpochEvidenceV3,
+        epoch_binding_account_id: Id,
+        bound_slot: u64,
+        rent: DeletableRentOwnerV1,
+    ) -> Result<Self> {
+        policy.validate()?;
+        state.validate_against_policy(policy)?;
+        dependency.validate()?;
+        schedule.validate_for_facility_runtime()?;
+        runtime.validate()?;
+        bind.validate_against(schedule, runtime)?;
+        epoch_binding_account_id.validate_live()?;
+        rent.validate()?;
+        if bound_slot == 0
+            || bound_slot >= general.verification_closes_slot
+            || state_account_id == epoch_binding_account_id
+            || bind.action != DealerRuntimeActionV1::BindEpoch
+            || bind.facility_generation != state.generation
+            || bind.owner != state_account_id
+            || bind.lifecycle_id != state.facility_id
+            || rent.neutral_sink != policy.neutral_sink
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            policy_id: policy.policy_id()?,
+            facility_id: state.facility_id,
+            facility_position_binding_id: state.facility_position_binding_id,
+            dealer_state_account_id: state_account_id,
+            epoch_binding_account_id,
+            market_instance_v2_id: policy.market_instance_v2_id,
+            epoch_account_id: general.epoch_account_id,
+            epoch_id: general.epoch_semantics_id,
+            relation_v2_id: policy.relation_v2_id,
+            economic_domain_id: general.economic_domain_digest,
+            price_measure_policy_id: policy.price_measure_policy_id,
+            funded_dependencies_id: dependency.dependency_id()?,
+            runtime_liveness_policy_id: runtime.runtime_policy_id(),
+            runtime_liveness_binding_digest: runtime.binding_digest()?,
+            dealer_liveness_schedule_id: schedule.schedule_id()?.untyped(),
+            bind_receipt_account_id: bind.receipt_account_id,
+            bind_receipt_semantic_id: bind.receipt_semantic_id,
+            bind_receipt_program_id: bind.receipt_program_id,
+            active_lease_account_id: Id::ZERO,
+            settlement_candidate_id: Id::ZERO,
+            counted_generation: state.generation,
+            general_epoch_generation: general.generation,
+            bound_slot,
+            lapse_after_slot: general.verification_closes_slot,
+            phase: DealerEpochBindingPhaseV2::Bound,
+            rent,
+        };
+        value.validate()?;
+        general.validate_epoch(&value)?;
+        Ok(value)
+    }
+
     /// Validate exact identity, phase, schedule, and rent shape.
     pub fn validate(&self) -> Result<()> {
         for identity in [
