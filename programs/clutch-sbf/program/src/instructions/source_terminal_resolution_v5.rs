@@ -18,6 +18,7 @@ use crate::source_plane_v3_actions::{
 use clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalCellResolutionReceiptV2;
 use clutch_liveness::runtime_adapter_v1::RuntimeAtomicTransitionV1;
 use clutch_source_plane_v3::ContentId;
+use clutch_source_plane_v3_adapter::PdaRecipeV3;
 use clutch_source_plane_v3_runtime::{
     account_data_id, close_lineage_generation, AuthenticatedReopenLineageV1,
     AuthenticatedSourceRouteV1, LineageAccessV1, LineageFamilyV1,
@@ -73,10 +74,65 @@ pub(crate) struct AuthenticatedSourceResolutionTerminalPolicyV1 {
 }
 
 impl AuthenticatedSourceResolutionTerminalPolicyV1 {
-    /// Construct only inside the private final Product/Failure postwrite
-    /// implementation after deterministically reconstructing the family body.
+    /// Select the sole current successful-Resolution terminal: the exact
+    /// persisted StatisticResult generation closes permanently. EvaluationWork
+    /// and the other mutable families cannot be silently coerced into it.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    pub(crate) fn successful_resolution_no_reopen(
+        resolution_v5_terminal_postwrite_id: ContentId,
+        route: AuthenticatedSourceRouteV1,
+        source: AuthenticatedSourceResolutionInputV3,
+        failure: FailureMarketIntervalCellResolutionReceiptV2,
+        lineage: AuthenticatedReopenLineageV1,
+    ) -> Outcome<Self> {
+        let statistic_result_recipe = PdaRecipeV3::statistic_result(source.statistic_key_id())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            lineage.lineage().family == LineageFamilyV1::StatisticResult
+                && lineage.lineage().active_account == source.result_account()
+                && lineage.lineage().semantic_binding_id
+                    == statistic_result_recipe
+                        .id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            ClutchError::MismatchedState,
+        )?;
+        Self::new(
+            resolution_v5_terminal_postwrite_id,
+            route,
+            source,
+            failure,
+            lineage,
+            SourceResolutionTerminalChoiceV1::NoReopen(
+                SourceReopenFamilyV1::StatisticResult,
+            ),
+        )
+    }
+
+    /// Select the alternate terminal only after the final private policy owner
+    /// reconstructs one complete target body from persisted Source facts.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reconstructed_reopen_request(
+        resolution_v5_terminal_postwrite_id: ContentId,
+        route: AuthenticatedSourceRouteV1,
+        source: AuthenticatedSourceResolutionInputV3,
+        failure: FailureMarketIntervalCellResolutionReceiptV2,
+        lineage: AuthenticatedReopenLineageV1,
+        target: SourceReopenTargetV1,
+    ) -> Outcome<Self> {
+        Self::new(
+            resolution_v5_terminal_postwrite_id,
+            route,
+            source,
+            failure,
+            lineage,
+            SourceResolutionTerminalChoiceV1::ReopenRequest(target),
+        )
+    }
+
+    /// Shared private constructor after the exhaustive terminal choice has
+    /// already been made by one of the semantic-owner entry points above.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
         resolution_v5_terminal_postwrite_id: ContentId,
         route: AuthenticatedSourceRouteV1,
         source: AuthenticatedSourceResolutionInputV3,
