@@ -497,15 +497,15 @@ impl ClaimSolverPayloadV1 {
 
 /// Action-24 `FreezeEntitlement` identity selector.
 ///
-/// This payload selects only the counted candidate. The strict next-slice
+/// This payload selects only the counted SettlementRoot. The strict next-slice
 /// materializer derives every owner, order, Reservation, row, and receipt fact
-/// from the authenticated selected Feed and frozen settlement projection.
+/// from the authenticated retained Feed and frozen settlement projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FreezeEntitlementPayloadV1 {
     /// Finalized parent Epoch PDA.
     pub epoch: Id32,
-    /// Counted SelectedCandidate PDA.
-    pub selected_candidate: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
 }
 
 impl FreezeEntitlementPayloadV1 {
@@ -514,10 +514,10 @@ impl FreezeEntitlementPayloadV1 {
         let mut reader = Reader::exact(input, FREEZE_ENTITLEMENT_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
-            selected_candidate: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
         };
         reader.finish()?;
-        if value.epoch == value.selected_candidate {
+        if value.epoch == value.settlement_root {
             return Err(CodecError::MismatchedBinding);
         }
         Ok(value)
@@ -534,8 +534,8 @@ impl FreezeEntitlementPayloadV1 {
 pub struct AccountReceiptEndPayloadV1 {
     /// Finalized parent Epoch PDA.
     pub epoch: Id32,
-    /// Counted SelectedCandidate PDA.
-    pub selected_candidate: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
     /// OwnerSettlement envelope PDA.
     pub owner_settlement: Id32,
     /// Receipt PDA whose authenticated body must reproduce every claim below.
@@ -548,14 +548,14 @@ impl AccountReceiptEndPayloadV1 {
         let mut reader = Reader::exact(input, ACCOUNT_RECEIPT_END_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
-            selected_candidate: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
             owner_settlement: live_id(&mut reader)?,
             receipt: live_id(&mut reader)?,
         };
         reader.finish()?;
         let identities = [
             value.epoch,
-            value.selected_candidate,
+            value.settlement_root,
             value.owner_settlement,
             value.receipt,
         ];
@@ -662,15 +662,15 @@ impl ConsumeVirtualMergeReceiptEggsPayloadV1 {
 
 /// Action-38 `FinalizeOwnerSettlement` immutable selector.
 ///
-/// The live composer derives the SHA-256 data ID of the exact finalized V2
+/// The live composer derives the SHA-256 data ID of the exact finalized V5
 /// owner row together with Position, Replay, and cash-pot successors. No
 /// caller-carried finalization identity is accepted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeOwnerSettlementPayloadV1 {
     /// Counted parent Epoch PDA.
     pub epoch: Id32,
-    /// Counted SelectedCandidate PDA.
-    pub selected_candidate: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
     /// Accounting-complete OwnerSettlement PDA.
     pub owner_settlement: Id32,
     /// Canonical owner/Market/generation Position PDA.
@@ -685,7 +685,7 @@ impl FinalizeOwnerSettlementPayloadV1 {
         let mut reader = Reader::exact(input, FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
-            selected_candidate: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
             owner_settlement: live_id(&mut reader)?,
             position: live_id(&mut reader)?,
             settlement_cash_pot: live_id(&mut reader)?,
@@ -693,7 +693,7 @@ impl FinalizeOwnerSettlementPayloadV1 {
         reader.finish()?;
         let identities = [
             value.epoch,
-            value.selected_candidate,
+            value.settlement_root,
             value.owner_settlement,
             value.position,
             value.settlement_cash_pot,
@@ -745,12 +745,12 @@ impl InitializeSettlementRootPayloadV1 {
 /// Action-40 `FinalizeMergeReceiptPayment` immutable selector.
 ///
 /// The payment transition identity is derived from the authenticated Receipt
-/// V4 PDA and exact payment-pending prestate; no replay ID is caller-owned.
+/// V5 PDA and exact payment-pending prestate; no replay ID is caller-owned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalizeMergeReceiptPaymentPayloadV1 {
     /// Counted parent Epoch PDA.
     pub epoch: Id32,
-    /// Exact payment-pending merge Receipt V4 PDA.
+    /// Exact payment-pending merge Receipt V5 PDA.
     pub receipt: Id32,
 }
 
