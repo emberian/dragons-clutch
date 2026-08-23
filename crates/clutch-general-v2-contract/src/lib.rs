@@ -986,7 +986,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 35] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 36] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1161,6 +1161,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 35] = [
         tag: SETTLEMENT_ROOT_ACCOUNT_TAG,
         version: SETTLEMENT_ROOT_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/SettlementRootV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
+        version: INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/IndexedSettlementRootV1AccountV1",
     },
 ];
 
