@@ -399,9 +399,12 @@ pub fn project_external_root_close_v2(
     join: FailureExternalTerminalJoinV2,
 ) -> ExternalResultV2<ExternalRootCloseV2> {
     let runtime = root.runtime;
+    let recovery_terminal = runtime.recovery_terminal_receipt()?;
     if join.binding_id() != runtime.binding_id()
         || join.market_instance_id() != runtime.binding().market_instance_id()
         || join.generation() != runtime.binding().generation()
+        || join.recovery_terminal_receipt_id() != recovery_terminal.id()
+        || join.transition_nonce() != runtime.transition_nonce()
         || runtime.phase() != clutch_evidence_recovery::RecoveryPhase::Resolved
     {
         return Err(ExternalAdapterErrorV2::ReceiptMismatch);

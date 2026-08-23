@@ -1215,8 +1215,14 @@ pub fn apply_failure_root_close_v1<'a>(
     let tombstone_account = &accounts[5];
     let source_release_account = &accounts[6];
     let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
+    let current_recovery_terminal = root
+        .runtime()
+        .recovery_terminal_receipt()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         join.id().bytes() == payload.failure_terminal_join_id
+            && join.recovery_terminal_receipt_id() == current_recovery_terminal.id()
+            && join.transition_nonce() == payload.common.expected_transition_nonce
             && join.retirement_root_id() == payload.retirement_root_id
             && join.replay_tombstone_id() == payload.replay_tombstone_id
             && join.source_release_receipt_id() == payload.source_release_receipt_id

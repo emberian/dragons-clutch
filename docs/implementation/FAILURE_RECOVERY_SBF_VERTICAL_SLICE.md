@@ -161,6 +161,14 @@ MarketInstanceV2, and generation. It refunds only the root's recorded rent
 principal to its immutable payer and sends root-only surplus to its immutable
 neutral sink. It never moves liveness or collateral funds.
 
+The Recovery-terminal receipt commits a domain-separated hash of all 2,032
+canonical failure-runtime bytes, not merely the stable state-account identity
+and nonce. The full terminal join then commits that exact resolved receipt and
+the current root transition nonce. The pure close projector and SBF handler
+independently recompute both from the authenticated root, so an older or sibling
+terminal join cannot authorize a different resolved poststate in the same
+binding and generation.
+
 The replay tombstone stores nonzero present permanent rent, the exact funder and
 typed funding-admission receipt, any pre-existing lamports as a distinct locked
 donation, binding, market, generation, full terminal join, retirement root, and

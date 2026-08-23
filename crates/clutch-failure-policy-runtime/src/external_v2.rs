@@ -44,6 +44,8 @@ use crate::{
 const ADMISSION_DOMAIN: &[u8] = b"dragons-clutch/failure-external-admission/v2";
 const WORK_RECEIPT_DOMAIN: &[u8] = b"dragons-clutch/failure-recovery-work-receipt/v2";
 const ACCEPTED_RESOLUTION_DOMAIN: &[u8] = b"dragons-clutch/failure-accepted-resolution/v2";
+const RUNTIME_STATE_COMMITMENT_DOMAIN: &[u8] =
+    b"dragons-clutch/failure-runtime-state-commitment/v2";
 const RECOVERY_TERMINAL_DOMAIN: &[u8] = b"dragons-clutch/failure-recovery-terminal/v2";
 const FULL_TERMINAL_DOMAIN: &[u8] = b"dragons-clutch/failure-full-terminal/v2";
 const MAGIC: [u8; 8] = *b"DCFAILE2";
@@ -84,6 +86,10 @@ typed_external_id!(
 typed_external_id!(
     FailureRecoveryTerminalReceiptIdV2,
     "Typed identity closing the external liveness Recovery compartment."
+);
+typed_external_id!(
+    FailureRuntimeStateCommitmentV2,
+    "Typed commitment to the complete canonical failure-runtime bytes."
 );
 typed_external_id!(
     FailureExternalTerminalJoinIdV2,
@@ -1264,6 +1270,20 @@ impl FailureRuntimeExternalV2 {
         Ok(())
     }
 
+    /// Commit every canonical semantic byte of the current runtime. This is
+    /// distinct from the stable recovery-state account identity and prevents
+    /// same-nonce sibling poststates from sharing a terminal receipt.
+    pub fn state_commitment(&self) -> Result<FailureRuntimeStateCommitmentV2> {
+        let mut bytes = [0u8; FAILURE_RUNTIME_EXTERNAL_V2_BYTES];
+        self.encode_into(&mut bytes)?;
+        let mut hasher = Sha256::new();
+        hasher.update(RUNTIME_STATE_COMMITMENT_DOMAIN);
+        hasher.update(bytes);
+        Ok(FailureRuntimeStateCommitmentV2::from_bytes(
+            hasher.finalize().into(),
+        ))
+    }
+
     /// Emit an authenticated terminal receipt for exactly the Recovery
     /// compartment. Resolution is success; exhausted recovery is failure.
     pub fn recovery_terminal_receipt(&self) -> Result<FailureRecoveryTerminalReceiptV2> {
@@ -1276,6 +1296,7 @@ impl FailureRuntimeExternalV2 {
             }
         };
         let funding = self.recovery.funding();
+        let runtime_state_commitment = self.state_commitment()?;
         let mut hasher = Sha256::new();
         hasher.update(RECOVERY_TERMINAL_DOMAIN);
         hasher.update(self.binding_id.bytes());
@@ -1288,6 +1309,7 @@ impl FailureRuntimeExternalV2 {
         hasher.update(funding.quote_schedule_id.bytes());
         hasher.update(self.binding.generation.to_le_bytes());
         hasher.update(self.transition_nonce().to_le_bytes());
+        hasher.update(runtime_state_commitment.bytes());
         hasher.update([disposition as u8]);
         Ok(FailureRecoveryTerminalReceiptV2 {
             id: FailureRecoveryTerminalReceiptIdV2::from_bytes(hasher.finalize().into()),
@@ -1301,6 +1323,7 @@ impl FailureRuntimeExternalV2 {
             quote_schedule_id: LivenessId::from_bytes(funding.quote_schedule_id.bytes()),
             generation: self.binding.generation,
             transition_nonce: self.transition_nonce(),
+            runtime_state_commitment,
             disposition,
         })
     }
@@ -1328,6 +1351,7 @@ pub struct FailureRecoveryTerminalReceiptV2 {
     quote_schedule_id: LivenessId,
     generation: u64,
     transition_nonce: u64,
+    runtime_state_commitment: FailureRuntimeStateCommitmentV2,
     disposition: FailureRecoveryTerminalDispositionV2,
 }
 
@@ -1342,6 +1366,8 @@ pub struct FailureExternalTerminalJoinV2 {
     binding_id: FailurePolicyBindingId,
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
+    recovery_terminal_receipt_id: FailureRecoveryTerminalReceiptIdV2,
+    transition_nonce: u64,
     retirement_root_id: [u8; 32],
     replay_tombstone_id: [u8; 32],
     source_release_receipt_id: [u8; 32],
@@ -1367,11 +1393,14 @@ impl FailureExternalTerminalJoinV2 {
         {
             return Err(Error::BindingMismatch);
         }
+        let recovery_terminal = runtime.recovery_terminal_receipt()?;
         let mut hasher = Sha256::new();
         hasher.update(FULL_TERMINAL_DOMAIN);
         hasher.update(runtime.binding_id.bytes());
         hasher.update(runtime.binding.market_instance_id.bytes());
         hasher.update(generation.to_le_bytes());
+        hasher.update(recovery_terminal.id().bytes());
+        hasher.update(runtime.transition_nonce().to_le_bytes());
         hasher.update(retirement_root_id);
         hasher.update(replay_tombstone_id);
         hasher.update(source_release_receipt_id);
@@ -1380,6 +1409,8 @@ impl FailureExternalTerminalJoinV2 {
             binding_id: runtime.binding_id,
             market_instance_id: runtime.binding.market_instance_id,
             generation,
+            recovery_terminal_receipt_id: recovery_terminal.id(),
+            transition_nonce: runtime.transition_nonce(),
             retirement_root_id,
             replay_tombstone_id,
             source_release_receipt_id,
@@ -1404,6 +1435,16 @@ impl FailureExternalTerminalJoinV2 {
     /// Exact terminal generation.
     pub const fn generation(self) -> u64 {
         self.generation
+    }
+
+    /// Exact resolved Recovery terminal receipt for the current root state.
+    pub const fn recovery_terminal_receipt_id(self) -> FailureRecoveryTerminalReceiptIdV2 {
+        self.recovery_terminal_receipt_id
+    }
+
+    /// Exact resolved semantic transition nonce committed by this join.
+    pub const fn transition_nonce(self) -> u64 {
+        self.transition_nonce
     }
 
     /// Separately authenticated retirement root.
@@ -1431,6 +1472,11 @@ impl FailureRecoveryTerminalReceiptV2 {
     /// Exact semantic transition nonce at terminal classification.
     pub const fn transition_nonce(self) -> u64 {
         self.transition_nonce
+    }
+
+    /// Commitment to the complete canonical resolved or dormant runtime.
+    pub const fn runtime_state_commitment(self) -> FailureRuntimeStateCommitmentV2 {
+        self.runtime_state_commitment
     }
 
     /// Recovery-only terminal classification.
