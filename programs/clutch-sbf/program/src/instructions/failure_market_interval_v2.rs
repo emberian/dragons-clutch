@@ -5,31 +5,35 @@
 //! `clutch-solana-layout` owns only their four-byte physical frames. This
 //! module authenticates owner, fresh successor PDA, exact frame/body, present
 //! principal, and stale preimages before writing a pure private-field plan.
-//! It deliberately exposes no instruction route and no account initializer:
-//! initialization remains unavailable until Product supplies its private
-//! accepted foundation-step receipt for slots 8 and 9.
+//! It deliberately exposes no instruction route. Initialization is available
+//! only through a crate-private Product adapter that joins the two accepted
+//! retained-slot preallocation receipts for slots 8 and 9.
 
-use crate::accounts::{expect_pda, require, Outcome};
+use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
     authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
 };
-use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
+use crate::instructions::genesis::{
+    allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
+};
 use crate::instructions::product_market::{
     authenticate_market_instance_terminal_v1, AuthenticatedMarketInstanceTerminalV1,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
-    FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellPlanV2,
-    FailureMarketIntervalCellResetReceiptV2, FailureMarketIntervalCellStateIdV2,
-    FailureMarketIntervalCellV2, FAILURE_MARKET_INTERVAL_CELL_BYTES_V2,
+    initialize_failure_market_interval_cell_v2, FailureMarketIntervalCellPhaseV2,
+    FailureMarketIntervalCellPlanV2, FailureMarketIntervalCellResetReceiptV2,
+    FailureMarketIntervalCellStateIdV2, FailureMarketIntervalCellV2,
+    FAILURE_MARKET_INTERVAL_CELL_BYTES_V2,
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
-    plan_close_failure_market_interval_accounts_v2, FailureMarketIntervalCloseAuthorizationIdV2,
-    FailureMarketIntervalFamilySealReceiptV2, FailureMarketIntervalFundingReceiptV2,
-    FailureMarketIntervalHistoryAppendReceiptV2, FailureMarketIntervalHistoryPlanV2,
-    FailureMarketIntervalHistoryStateIdV2, FailureMarketIntervalHistoryV2,
-    FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2,
+    admit_failure_market_interval_history_v2, plan_close_failure_market_interval_accounts_v2,
+    AuthenticatedFailureMarketIntervalFundingV2, FailureMarketIntervalCloseAuthorizationIdV2,
+    FailureMarketIntervalFamilySealReceiptV2, FailureMarketIntervalFundingFactsV2,
+    FailureMarketIntervalFundingReceiptV2, FailureMarketIntervalHistoryAppendReceiptV2,
+    FailureMarketIntervalHistoryPlanV2, FailureMarketIntervalHistoryStateIdV2,
+    FailureMarketIntervalHistoryV2, FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2,
 };
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateIdV1;
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
@@ -42,6 +46,8 @@ use clutch_solana_layout::registry::{
     FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES, FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES,
 };
 use solana_account_info::AccountInfo;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 const CELL_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -146,6 +152,25 @@ impl AuthenticatedFailureMarketIntervalAccountsV2 {
     }
 }
 
+/// Atomic postimage of Product-authorized slot-8/slot-9 allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketIntervalPostimageV2 {
+    accounts: AuthenticatedFailureMarketIntervalAccountsV2,
+    funding: FailureMarketIntervalFundingReceiptV2,
+}
+
+impl FailureMarketIntervalPostimageV2 {
+    /// Newly persisted canonical Idle cell and empty append-only history.
+    pub(crate) const fn accounts(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {
+        self.accounts
+    }
+
+    /// Exact paired Product-preallocation funding receipt.
+    pub(crate) const fn funding(self) -> FailureMarketIntervalFundingReceiptV2 {
+        self.funding
+    }
+}
+
 /// Exact authenticated physical close of the sealed reusable interval pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedFailureMarketIntervalCloseV2 {
@@ -207,6 +232,160 @@ impl AuthenticatedFailureMarketIntervalCloseV2 {
     pub(crate) const fn neutralized_donation_lamports(self) -> u64 {
         self.neutralized_donation_lamports
     }
+}
+
+/// Allocate and write exact Product-prepaid slot-8/slot-9 successors.
+///
+/// This helper is crate-private and non-routable. The authority must be a
+/// private adapter joining both Product preallocation receipts, their common
+/// root/schedule/graph/transcript, live Rent, and the exact current zero-data
+/// balances. No caller-built amount or generic funding ID is sufficient.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn initialize_failure_market_interval_accounts_v2<'a, A>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    admission: AuthenticatedFailureMarketRootV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    product_preallocation_authority: &A,
+    funding_facts: FailureMarketIntervalFundingFactsV2,
+) -> Outcome<FailureMarketIntervalPostimageV2>
+where
+    A: AuthenticatedFailureMarketIntervalFundingV2 + ?Sized,
+{
+    require_system_program(system_program)?;
+    require_distinct(&[
+        cell_account.clone(),
+        history_account.clone(),
+        rent_sysvar.clone(),
+        system_program.clone(),
+    ])?;
+    let admission_state = admission.state();
+    let policy = admission_state.binding().facts();
+    let work_balance = funding_facts
+        .work_rent_principal_lamports
+        .checked_add(funding_facts.work_donation_floor_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let history_balance = funding_facts
+        .history_rent_principal_lamports
+        .checked_add(funding_facts.history_donation_floor_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let rent = read_rent(rent_sysvar)?;
+    require(
+        funding_facts.work_account.bytes() == cell_account.key.to_bytes()
+            && funding_facts.history_account.bytes() == history_account.key.to_bytes()
+            && funding_facts.failure_policy_binding_id == admission_state.binding().id()
+            && funding_facts.market_instance_id == policy.market_instance_id
+            && funding_facts.generation == policy.generation
+            && funding_facts.work_observed_balance_lamports == work_balance
+            && funding_facts.history_observed_balance_lamports == history_balance
+            && funding_facts.work_rent_principal_lamports
+                == rent.minimum_balance(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES)?
+            && funding_facts.history_rent_principal_lamports
+                == rent.minimum_balance(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES)?,
+        ClutchError::MismatchedState,
+    )?;
+    for (account, expected_balance) in [
+        (cell_account, work_balance),
+        (history_account, history_balance),
+    ] {
+        require(
+            account.owner.to_bytes() == SYSTEM_PROGRAM_ID
+                && account.is_writable
+                && !account.is_signer
+                && !account.executable
+                && account.data_len() == 0
+                && account.lamports() == expected_balance,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let (expected_cell, cell_bump) = seeds::failure_market_interval_cell_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    );
+    let (expected_history, history_bump) = seeds::failure_market_interval_history_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    );
+    expect_pda(cell_account.key, (expected_cell, cell_bump), None)?;
+    expect_pda(history_account.key, (expected_history, history_bump), None)?;
+    let (history, funding) = admit_failure_market_interval_history_v2(
+        product_preallocation_authority,
+        admission_state,
+        quote,
+        funding_facts,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let cell = initialize_failure_market_interval_cell_v2(admission_state, funding, history, quote)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    allocate_assign_interval_account_v2(
+        program_id,
+        cell_account,
+        system_program,
+        seeds::SEED_FAILURE_MARKET_INTERVAL_CELL_V2,
+        policy.market_instance_id.bytes(),
+        policy.generation,
+        cell_bump,
+        FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES,
+    )?;
+    allocate_assign_interval_account_v2(
+        program_id,
+        history_account,
+        system_program,
+        seeds::SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2,
+        policy.market_instance_id.bytes(),
+        policy.generation,
+        history_bump,
+        FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES,
+    )?;
+    let cell_output = encode_cell(cell_bump, cell)?;
+    let history_output = encode_history(history_bump, history)?;
+    {
+        let mut cell_data = cell_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut history_data = history_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(
+            cell_data.iter().all(|byte| *byte == 0) && history_data.iter().all(|byte| *byte == 0),
+            ClutchError::AlreadyInitialized,
+        )?;
+        let cell_destination: &mut [u8; FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES] = cell_data
+            .as_mut()
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        let history_destination: &mut [u8; FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES] =
+            history_data
+                .as_mut()
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        cell_destination.copy_from_slice(&cell_output);
+        history_destination.copy_from_slice(&history_output);
+    }
+    require(
+        cell_account.lamports() == work_balance && history_account.lamports() == history_balance,
+        ClutchError::MismatchedState,
+    )?;
+    let accounts = authenticate_failure_market_interval_accounts_v2(
+        program_id,
+        cell_account,
+        history_account,
+        admission,
+        funding,
+        quote,
+        true,
+        true,
+    )?;
+    require(
+        accounts.cell == cell && accounts.history == history,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(FailureMarketIntervalPostimageV2 { accounts, funding })
 }
 
 /// Authenticate exact existing `0xab/v2` and `0xac/v2` accounts.
@@ -802,6 +981,56 @@ fn authenticate_account_metadata(
     require(
         account.data_len() == expected_len,
         ClutchError::WrongDataLength,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn allocate_assign_interval_account_v2<'a>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    seed_domain: &[u8],
+    market_instance_id: [u8; 32],
+    generation: u64,
+    bump: u8,
+    account_len: usize,
+) -> Outcome<()> {
+    let generation_bytes = generation.to_le_bytes();
+    let bump_seed = [bump];
+    let signer_seeds: [&[u8]; 4] = [
+        seed_domain,
+        &market_instance_id,
+        &generation_bytes,
+        &bump_seed,
+    ];
+    let observed_lamports = account.lamports();
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(account_len),
+        vec![AccountMeta::new(*account.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[account.clone(), system_program.clone()],
+        &[&signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*account.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[account.clone(), system_program.clone()],
+        &[&signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        account.owner == program_id
+            && account.data_len() == account_len
+            && account.lamports() == observed_lamports,
+        ClutchError::AccountCreationFailed,
     )
 }
 
