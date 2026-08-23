@@ -188,12 +188,15 @@ impl PortfolioBookPageSetRecordV2 {
         {
             return Err(PortfolioBookAuthorityErrorV2::InvalidPageGeometry);
         }
-        let expected_page_count = order_count
-            .checked_sub(1)
-            .ok_or(PortfolioBookAuthorityErrorV2::InvalidPageGeometry)?
-            / PORTFOLIO_BOOK_ORDERS_PER_PAGE_V2
-            + 1;
-        if page_count != expected_page_count || self.settlement_root_epoch_generation == 0 {
+        let allocated_capacity = page_count
+            .checked_mul(PORTFOLIO_BOOK_ORDERS_PER_PAGE_V2)
+            .ok_or(PortfolioBookAuthorityErrorV2::ArithmeticOverflow)?;
+        // Page count is frozen allocation geometry, not a projection of the
+        // current live-order count. Churn can leave one live order spread
+        // across all four authenticated V5 pages. The account adapter must
+        // authenticate every active page identity; this codec only proves the
+        // live prefix fits within the declared allocation.
+        if order_count > allocated_capacity || self.settlement_root_epoch_generation == 0 {
             return Err(PortfolioBookAuthorityErrorV2::InvalidPageGeometry);
         }
         let base_identities = [

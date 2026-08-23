@@ -967,14 +967,8 @@ fn with_authenticated_complete_dealer_book_v2<R>(
             && root.candidate_bundle_digest() == feed_data_id,
         ClutchError::MismatchedState,
     )?;
-    let expected_page_count = usize::from(root.order_count())
-        .checked_sub(1)
-        .ok_or(ClutchError::Arithmetic)?
-        / 16
-        + 1;
     require(
-        expected_page_count == page_accounts.len()
-            && expected_page_count <= PORTFOLIO_BOOK_MAX_PAGES_V2,
+        !page_accounts.is_empty() && page_accounts.len() <= PORTFOLIO_BOOK_MAX_PAGES_V2,
         ClutchError::AccountCount,
     )?;
 
@@ -1007,6 +1001,7 @@ fn with_authenticated_complete_dealer_book_v2<R>(
 
     let mut page_account_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
     let mut page_data_ids = [[0u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2];
+    let mut authenticated_live_orders = 0u16;
     page = 0;
     while page < page_accounts.len() {
         let account = &page_accounts[page];
@@ -1027,16 +1022,22 @@ fn with_authenticated_complete_dealer_book_v2<R>(
         require(
             header.page_index == page_index
                 && usize::from(header.page_count) == page_accounts.len()
-                && header.set_order_count == u16::from(root.order_count())
                 && header.epoch.bytes() == root.epoch().bytes()
                 && header.order_set.bytes() == root.order_set().bytes()
                 && header.frozen != 0,
             ClutchError::MismatchedState,
         )?;
+        authenticated_live_orders = authenticated_live_orders
+            .checked_add(u16::from(header.live_count()))
+            .ok_or(ClutchError::Arithmetic)?;
         page_account_ids[page] = account.key.to_bytes();
         page_data_ids[page] = header.page_digest.bytes();
         page += 1;
     }
+    require(
+        authenticated_live_orders == u16::from(root.order_count()),
+        ClutchError::MismatchedState,
+    )?;
 
     let transcript = domain.transcript;
     let relation_domain = EconomicDomainV2 {
