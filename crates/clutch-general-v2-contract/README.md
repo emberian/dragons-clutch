@@ -42,10 +42,13 @@ action plan from authenticated prestates before atomically writing both bodies.
 | `ClearWorkV2` | `17/2` | `672 + 16*O + 8*N*O`, max 9,120 |
 | sealed `CandidateFeedV2` | `18/2` | `538 + 8*O + 8*N + 24*A + 13*S`, max 6,970 |
 | `CandidateWindowV4` | `24/4` | 565 |
+| cost-aware `CandidateWindowV5AccountV1` | `24/5` | 565 |
 | `CandidateFeedStageV2` | `25/2` | same active length as sealed feed |
 | `AdmissionNodeV3AccountV1` | `0x77/1` | 743 |
+| cost-certificate `AdmissionNodeV4AccountV1` | `0x77/2` | 775 |
 | `EpochBudgetV2AccountV1` | `0x78/1` | 272 |
 | immutable `MarketBindingV1` | `0x79/1` | 540 |
+| immutable cost-aware `MarketBindingV2` | `0x79/2` | 572 |
 | purpose-owned Replay V3 with General `GEN1` extension | `0x7a/3` | 344 (`208 + 136`), common prefix owned by retirement |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
@@ -341,6 +344,17 @@ requirements, alias rules, exact prefund/rent arithmetic, generation/counter
 transitions, refusal rollback tests, and a capability-specific evidence gate.
 
 ## Remaining activation blockers
+
+The candidate-cost successors remain capability-disabled. `MarketBindingV2`
+uses the existing `0x79` semantic tag/version 2 and appends only the immutable
+batch-policy content ID. Window version 5 activates all 96 rank bytes;
+AdmissionNode `0x77`/version 2 appends only the checked candidate-cost
+certificate ID. The pure action-14 rank transition accepts a forgeable DTO only
+as a cross-crate projection; the runtime exposes the usable plan solely from
+its private checked `CandidateCostCertificateV1`. Action 15 can authenticate
+the winning Node certificate and Market policy chain, but deliberately cannot
+mint legacy SelectedCandidate V1: a separately reviewed counted settlement
+root must own that successor output.
 
 The next runnable vertical slice still needs a streaming RelationV2 accumulator
 contract in addition to the raw SHA checkpoint, Product-successor authentication,

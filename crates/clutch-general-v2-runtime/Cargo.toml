@@ -16,6 +16,7 @@ layout-profile-general = ["clutch-solana-layout/profile-general-source-v2-point"
 
 [dependencies]
 clutch-batch = { path = "../clutch-batch" }
+clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
 clutch-collateral-adapter-v2 = { path = "../clutch-collateral-adapter-v2" }
 clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
 clutch-fee-runtime-contract = { path = "../clutch-fee-runtime-contract" }

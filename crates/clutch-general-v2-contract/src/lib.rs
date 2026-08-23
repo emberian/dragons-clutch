@@ -11,9 +11,11 @@
 //! lamport movement remain adapter obligations.
 
 mod codec;
+mod candidate_rank_v2;
 mod fee_accounts;
 mod fee_terminal;
 mod final_pot;
+mod market_binding_v2;
 mod owner_settlement;
 mod payload;
 mod position_replay;
@@ -22,15 +24,19 @@ mod state;
 mod transition;
 
 pub use codec::{CodecError, Reader, Writer};
+pub use candidate_rank_v2::*;
 pub use fee_accounts::*;
 pub use fee_terminal::*;
 pub use final_pot::*;
+pub use market_binding_v2::*;
 pub use owner_settlement::*;
 pub use payload::*;
 pub use position_replay::*;
 pub use rank::{
-    encode_score_v2_q_first_admitted_tie_v1, FirstAdmittedTieV1, ScoreV2QComponentsV1,
-    SCORE_V2_Q_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
+    encode_score_v2_q_cost_first_admitted_tie_v1,
+    encode_score_v2_q_first_admitted_tie_v1, FirstAdmittedTieV1,
+    ScoreV2QComponentsV1, ScoreV2QCostComponentsV1, SCORE_V2_Q_ACTIVE_RANK_BYTES,
+    SCORE_V2_Q_COST_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
 pub use state::*;
 pub use transition::*;
@@ -569,6 +575,8 @@ impl OwnerSettlementSeedTupleV3 {
 pub const WINDOW_ACCOUNT_TAG: u8 = 24;
 /// Codec version matching the disabled central Window reservation.
 pub const WINDOW_ACCOUNT_VERSION: u8 = 4;
+/// Full 96-byte cost-aware Window successor version.
+pub const WINDOW_ACCOUNT_VERSION_V2: u8 = 5;
 /// Existing Market semantic tag, fresh General V2 runtime version.
 pub const MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
 /// First RelationV2-native General Market-runtime schema.
@@ -651,6 +659,10 @@ pub const CLEAR_WORK_ACCOUNT_VERSION: u8 = 2;
 pub const ADMISSION_NODE_ACCOUNT_TAG: u8 = 0x77;
 /// First funded admission-node account version.
 pub const ADMISSION_NODE_ACCOUNT_VERSION: u8 = 1;
+/// Cost-certificate-bearing AdmissionNode successor version.
+pub const ADMISSION_NODE_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact cost-certificate-bearing AdmissionNode bytes.
+pub const ADMISSION_NODE_ACCOUNT_BYTES_V2: usize = 775;
 /// Codec tag matching the disabled central epoch-budget reservation.
 pub const EPOCH_BUDGET_ACCOUNT_TAG: u8 = 0x78;
 /// First epoch-budget account version.
@@ -659,6 +671,10 @@ pub const EPOCH_BUDGET_ACCOUNT_VERSION: u8 = 1;
 pub const MARKET_BINDING_ACCOUNT_TAG: u8 = 0x79;
 /// First immutable Market-binding account version.
 pub const MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
+/// Owner-net candidate-cost Market-binding successor version.
+pub const MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact candidate-cost Market-binding successor bytes.
+pub const MARKET_BINDING_ACCOUNT_BYTES_V2: usize = 572;
 /// Codec projection of the centrally owned Replay-successor account tag.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// First Replay-successor account version.
@@ -690,7 +706,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 23] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 26] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -762,6 +778,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 23] = [
         owner: "clutch-general-v2-contract/WindowV4",
     },
     AccountAllocationV1 {
+        tag: WINDOW_ACCOUNT_TAG,
+        version: WINDOW_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/CandidateWindowV5AccountV1",
+    },
+    AccountAllocationV1 {
         tag: CANDIDATE_FEED_ACCOUNT_TAG,
         version: CANDIDATE_FEED_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/CandidateFeedV2",
@@ -782,6 +803,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 23] = [
         owner: "clutch-general-v2-contract/AdmissionNodeV3AccountV1",
     },
     AccountAllocationV1 {
+        tag: ADMISSION_NODE_ACCOUNT_TAG,
+        version: ADMISSION_NODE_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/AdmissionNodeV4AccountV1",
+    },
+    AccountAllocationV1 {
         tag: EPOCH_BUDGET_ACCOUNT_TAG,
         version: EPOCH_BUDGET_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/EpochBudgetV2AccountV1",
@@ -790,6 +816,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 23] = [
         tag: MARKET_BINDING_ACCOUNT_TAG,
         version: MARKET_BINDING_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/MarketBindingV1",
+    },
+    AccountAllocationV1 {
+        tag: MARKET_BINDING_ACCOUNT_TAG,
+        version: MARKET_BINDING_ACCOUNT_VERSION_V2,
+        owner: "clutch-general-v2-contract/MarketBindingV2",
     },
     AccountAllocationV1 {
         tag: REPLAY_SUCCESSOR_ACCOUNT_TAG,
