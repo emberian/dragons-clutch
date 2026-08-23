@@ -103,6 +103,18 @@ allocation evidence only. Action 25 accumulates actual buy Reservation cash
 handoffs in the V3 owner row; action 38 alone checks that cash covers exact
 consideration plus the selected fee.
 
+The delivery-complete V4 successor never lowers through V3.
+`project_pre_row_owner_fee_v4` consumes the exact verifier-derived
+`OwnerSettlementExpectationBasisV4`, the fresh V4 row PDA, and the same
+authenticated persisted payer snapshot. It seals and returns the complete
+`OwnerSettlementExpectationV4`; `expected_merge_delivery_count` remains
+identity-bound in that expectation but is not a fee input. The projection still
+proves allocation only—no Reservation cash, Hoard principal, future revenue, or
+liveness funding. General independently authenticates the counted
+SettlementRoot and derives the row PDA before consuming the private V4
+projection. V4 book assembly uses `Option` rows so every participant is
+explicit and inactive padding has no fabricated empty expectation.
+
 ## Typed identity joins
 
 The generic `AccountIdV1<Kind>` has distinct marker types for fee record,
