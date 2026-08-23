@@ -41,6 +41,68 @@ pub struct PayerAllocationV1 {
 }
 
 impl PayerAllocationV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_persisted(
+        fee_record: Id,
+        owner: Id,
+        len: u8,
+        intents: [Id; MAX_FEE_ROWS_V1],
+        debit_atoms: [u64; MAX_FEE_ROWS_V1],
+        total_debit_atoms: u64,
+        next_carry: u128,
+        carry_denominator: u128,
+        boundary: AssessmentBoundaryV1,
+    ) -> Result<Self> {
+        live(fee_record)?;
+        live(owner)?;
+        if len == 0
+            || usize::from(len) > MAX_FEE_ROWS_V1
+            || carry_denominator == 0
+            || next_carry >= carry_denominator
+            || (boundary == AssessmentBoundaryV1::TerminalCeil && next_carry != 0)
+        {
+            return Err(Error::InvalidAccountData);
+        }
+        let mut total = 0u64;
+        let mut prior = None;
+        let mut index = 0usize;
+        while index < usize::from(len) {
+            live(intents[index])?;
+            if let Some(previous) = prior {
+                if intents[index] <= previous {
+                    return Err(if intents[index] == previous {
+                        Error::DuplicateIdentity
+                    } else {
+                        Error::NonCanonicalOrder
+                    });
+                }
+            }
+            total = add(total, debit_atoms[index])?;
+            prior = Some(intents[index]);
+            index += 1;
+        }
+        while index < MAX_FEE_ROWS_V1 {
+            if intents[index] != Id([0; 32]) || debit_atoms[index] != 0 {
+                return Err(Error::NonCanonicalPadding);
+            }
+            index += 1;
+        }
+        if total != total_debit_atoms {
+            return Err(Error::ConservationFailure);
+        }
+        Ok(Self {
+            fee_record,
+            owner,
+            len,
+            intents,
+            debit_atoms,
+            total_debit_atoms,
+            next_carry,
+            carry_denominator,
+            boundary,
+        })
+    }
+
     pub const fn fee_record(&self) -> Id {
         self.fee_record
     }
