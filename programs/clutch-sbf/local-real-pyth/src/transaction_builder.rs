@@ -97,6 +97,9 @@ pub enum ProtocolFlow {
     Liveness,
     ProductSeries,
     StructuredClaim,
+    DealerLiquidity,
+    FractionalRedemption,
+    DirectMarket,
     KeeperSettlement,
     RecoveryRetirement,
 }
@@ -607,12 +610,17 @@ impl OwnedInstructionDraft {
                     | ProtocolFlow::GeneralV2Fees
                     | ProtocolFlow::DirectEggSettlement
                     | ProtocolFlow::MarketEpochCreation
-                    | ProtocolFlow::KeeperSettlement
-                    | ProtocolFlow::RecoveryRetirement => family == ExtensionFamily::GeneralV2,
+                    | ProtocolFlow::KeeperSettlement => family == ExtensionFamily::GeneralV2,
                     ProtocolFlow::ProductSeries | ProtocolFlow::SourcePlaneV3 => {
                         family == ExtensionFamily::SourceSeries
                     }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
+                    ProtocolFlow::DealerLiquidity => family == ExtensionFamily::Dealer,
+                    ProtocolFlow::FractionalRedemption => {
+                        family == ExtensionFamily::FractionalRedemption
+                    }
+                    ProtocolFlow::DirectMarket => family == ExtensionFamily::DirectMarket,
+                    ProtocolFlow::RecoveryRetirement => family == ExtensionFamily::Recovery,
                     ProtocolFlow::CollateralCustodyV3 | ProtocolFlow::Liveness => false,
                 };
                 if !family_matches {
@@ -1057,7 +1065,10 @@ mod tests {
     use clutch_solana_layout::collateral_v3_accounts::{
         account_contract_v3, CollateralAccountRoleV3, CollateralActionV3,
     };
-    use clutch_solana_layout::registry::{GeneralV2Action, SourceSeriesAction};
+    use clutch_solana_layout::registry::{
+        DealerPolicyAction, DirectMarketAction, FractionalRedemptionAction, GeneralV2Action,
+        RecoveryAction, SourceSeriesAction,
+    };
     use clutch_solana_layout::source_series::account_contract_v2;
     use clutch_solana_layout::{Hash32, Intent};
 
@@ -1421,6 +1432,55 @@ mod tests {
         assert!(!plan.has_recent_blockhash);
         assert!(!plan.signed);
         assert!(!plan.submitted);
+    }
+
+    #[test]
+    fn allocated_successor_families_construct_only_as_reserved_disabled() {
+        let payer = Address::new_from_array([1; 32]);
+        let program = Address::new_from_array([2; 32]);
+        for (flow, action, family) in [
+            (
+                ProtocolFlow::DealerLiquidity,
+                ExtensionAction::DealerPolicy(DealerPolicyAction::BeginPolicy),
+                ExtensionFamily::Dealer,
+            ),
+            (
+                ProtocolFlow::FractionalRedemption,
+                ExtensionAction::FractionalRedemption(FractionalRedemptionAction::Initialize),
+                ExtensionFamily::FractionalRedemption,
+            ),
+            (
+                ProtocolFlow::RecoveryRetirement,
+                ExtensionAction::Recovery(RecoveryAction::InitializeFailureRoot),
+                ExtensionFamily::Recovery,
+            ),
+            (
+                ProtocolFlow::DirectMarket,
+                ExtensionAction::DirectMarket(DirectMarketAction::InitializeMarket),
+                ExtensionFamily::DirectMarket,
+            ),
+        ] {
+            let draft = OwnedInstructionDraft::allocated_successor(
+                flow,
+                "allocated-successor",
+                owner(),
+                program,
+                vec![AccountMeta::new_readonly(payer, true)],
+                vec![payer],
+                vec![ExactEquation {
+                    name: "construction-only exact equation".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 1,
+                    right: 1,
+                }],
+                action,
+                &[8; 32],
+            )
+            .unwrap();
+            assert_eq!(draft.flow, flow);
+            assert_eq!(draft.runtime_admission, RuntimeAdmission::ReservedDisabled);
+            assert_eq!(draft.registry_binding.unwrap().family, family);
+        }
     }
 
     #[test]
