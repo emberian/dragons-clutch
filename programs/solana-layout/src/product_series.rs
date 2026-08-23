@@ -19,8 +19,8 @@ use clutch_product_series::{
     SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTermsV2Id, SeriesMarketLinkV1,
     SeriesPlanV5Id, SourceOccurrenceV1Id,
     MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
-    SERIES_FUNDING_COMPONENT_COUNT, SERIES_FUNDING_STATE_BYTES, SERIES_MARKET_LINK_BYTES_V1,
-    SERIES_FUNDING_STATE_BYTES_V2,
+    SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
+    SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2, SERIES_MARKET_LINK_BYTES_V1,
 };
 
 use crate::{digest, is_zero, registry, CodecError, Hash32, Result, HASH_BYTES};
@@ -48,7 +48,7 @@ pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize =
 /// so the five release-selected collateral-vault rent principals remain
 /// separate from the six-component semantic state.
 pub const SERIES_FUNDING_ACCOUNT_BYTES_V2: usize =
-    4 + 8 + (8 * SERIES_FUNDING_COMPONENT_COUNT) + SERIES_FUNDING_STATE_BYTES_V2;
+    4 + 8 + (8 * SERIES_COLLATERAL_VAULT_COUNT_V2) + SERIES_FUNDING_STATE_BYTES_V2;
 /// Exact common header before one Product market/link semantic body.
 pub const PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1: usize = 16;
 /// Exact framed shared MarketLifecycleRoot account width.
@@ -503,7 +503,7 @@ pub struct SeriesFundingAccountV2 {
     /// Refundable payer-owned funding-account rent principal.
     pub rent_principal_lamports: u64,
     /// Refundable payer-owned rent for the five collateral-capable vaults.
-    pub collateral_vault_rent_principal_lamports: [u64; SERIES_FUNDING_COMPONENT_COUNT],
+    pub collateral_vault_rent_principal_lamports: [u64; SERIES_COLLATERAL_VAULT_COUNT_V2],
     /// Canonical account PDA bump.
     pub stored_bump: u8,
 }
@@ -557,7 +557,8 @@ impl SeriesFundingAccountV2 {
         require_reserved(&input[3..4])?;
         let mut at = 4;
         let rent_principal_lamports = take_u64(input, &mut at);
-        let mut collateral_vault_rent_principal_lamports = [0; SERIES_FUNDING_COMPONENT_COUNT];
+        let mut collateral_vault_rent_principal_lamports =
+            [0; SERIES_COLLATERAL_VAULT_COUNT_V2];
         for principal in &mut collateral_vault_rent_principal_lamports {
             *principal = take_u64(input, &mut at);
         }
@@ -1217,7 +1218,7 @@ mod tests {
                     clutch_product_series::SERIES_FUNDING_COMPONENT_COUNT_V2],
             },
             rent_principal_lamports: 7,
-            collateral_vault_rent_principal_lamports: [8; SERIES_FUNDING_COMPONENT_COUNT],
+            collateral_vault_rent_principal_lamports: [8; SERIES_COLLATERAL_VAULT_COUNT_V2],
             stored_bump: 9,
         }
     }

@@ -58,6 +58,8 @@ pub const MARKET_FOUNDATION_SLOT_COUNT_V2: usize =
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 2 * MARKET_FOUNDATION_MAX_OUTCOMES_V2;
 /// Six disjoint Series funding compartments.
 pub const SERIES_FUNDING_COMPONENT_COUNT_V2: usize = 6;
+/// Five collateral-capable custody vaults; SeriesAdmission is lamport-only.
+pub const SERIES_COLLATERAL_VAULT_COUNT_V2: usize = 5;
 /// Exact historical hostile-codec width of [`SeriesFundingQuoteV2`].
 pub const SERIES_FUNDING_QUOTE_BYTES_V2: usize = 648;
 /// Exact hostile-codec width of [`SeriesAttachmentPlanV2`].
@@ -115,6 +117,18 @@ impl SeriesFundingComponentV2 {
             Self::SourceWork => 3,
             Self::LiquidityFacility => 4,
             Self::WrapperSet => 5,
+        }
+    }
+
+    /// Stable current collateral-vault index, excluding lamport-only admission.
+    pub const fn collateral_vault_index(self) -> Option<usize> {
+        match self {
+            Self::MarketCore => Some(0),
+            Self::SeriesAdmission => None,
+            Self::RecoveryReserve => Some(1),
+            Self::SourceWork => Some(2),
+            Self::LiquidityFacility => Some(3),
+            Self::WrapperSet => Some(4),
         }
     }
 }
@@ -1066,6 +1080,17 @@ mod tests {
         let mut shifted = quote_v4();
         shifted.foundation.slot_principal_lamports[14 + 4] = 1;
         assert_eq!(shifted.validate(), Err(Error::NonCanonicalPadding));
+    }
+
+    #[test]
+    fn current_collateral_vault_order_excludes_series_admission() {
+        assert_eq!(SERIES_COLLATERAL_VAULT_COUNT_V2, 5);
+        assert_eq!(SeriesFundingComponentV2::MarketCore.collateral_vault_index(), Some(0));
+        assert_eq!(SeriesFundingComponentV2::SeriesAdmission.collateral_vault_index(), None);
+        assert_eq!(SeriesFundingComponentV2::RecoveryReserve.collateral_vault_index(), Some(1));
+        assert_eq!(SeriesFundingComponentV2::SourceWork.collateral_vault_index(), Some(2));
+        assert_eq!(SeriesFundingComponentV2::LiquidityFacility.collateral_vault_index(), Some(3));
+        assert_eq!(SeriesFundingComponentV2::WrapperSet.collateral_vault_index(), Some(4));
     }
 
     #[test]
