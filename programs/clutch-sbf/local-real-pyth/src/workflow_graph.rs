@@ -129,6 +129,8 @@ impl ReleasedProgram {
 pub struct ExplicitOperatorReleaseManifest {
     pub manifest_sha256: [u8; 32],
     pub clutch: ReleasedProgram,
+    /// Exact first-party read-only Pyth parser release selected by Source.
+    pub pyth_parser: ReleasedProgram,
     /// Exact captured Pyth receiver release admitted by the Source release.
     pub pyth_receiver: ReleasedProgram,
     /// Exact captured Pyth router release used to authenticate VAA transport.
@@ -142,13 +144,30 @@ impl ExplicitOperatorReleaseManifest {
             return Err(WorkflowGraphError::ZeroIdentity);
         }
         self.clutch.validate()?;
+        self.pyth_parser.validate()?;
         self.pyth_receiver.validate()?;
         self.pyth_router.validate()?;
-        if self.pyth_receiver.program_id == self.pyth_router.program_id
-            || self.pyth_receiver.program_data == self.pyth_router.program_data
-            || self.pyth_receiver.program_id == self.clutch.program_id
-            || self.pyth_router.program_id == self.clutch.program_id
-            || self.semantic_releases.is_empty()
+        let programs = [
+            self.clutch.program_id,
+            self.pyth_parser.program_id,
+            self.pyth_receiver.program_id,
+            self.pyth_router.program_id,
+        ];
+        let programdata = [
+            self.clutch.program_data,
+            self.pyth_parser.program_data,
+            self.pyth_receiver.program_data,
+            self.pyth_router.program_data,
+        ];
+        if programs.iter().enumerate().any(|(index, identity)| {
+            programs[..index]
+                .iter()
+                .any(|previous| previous == identity)
+        }) || programdata.iter().enumerate().any(|(index, identity)| {
+            programdata[..index]
+                .iter()
+                .any(|previous| previous == identity)
+        }) || self.semantic_releases.is_empty()
         {
             return Err(WorkflowGraphError::WrongProgramRelease);
         }
@@ -966,10 +985,10 @@ impl SourceCrankObservation<'_> {
         if self.release.adapter.program.bytes() != manifest.clutch.program_id.to_bytes()
             || self.release.adapter.programdata.bytes() != manifest.clutch.program_data.to_bytes()
             || self.release.adapter.deployment_slot != manifest.clutch.deployment_slot
-            || self.release.parser.program.bytes() != manifest.pyth_receiver.program_id.to_bytes()
+            || self.release.parser.program.bytes() != manifest.pyth_parser.program_id.to_bytes()
             || self.release.parser.programdata.bytes()
-                != manifest.pyth_receiver.program_data.to_bytes()
-            || self.release.parser.deployment_slot != manifest.pyth_receiver.deployment_slot
+                != manifest.pyth_parser.program_data.to_bytes()
+            || self.release.parser.deployment_slot != manifest.pyth_parser.deployment_slot
         {
             return Err(WorkflowGraphError::WrongProgramRelease);
         }
