@@ -11,8 +11,10 @@
 //! funding, and transfers remain in default-deny adapter boundaries.
 
 use clutch_product_series::{
-    AuthenticatedMarketFamilyAuthorityV1, ContentId, Error as ProductError,
-    MarketFamilyAggregatorV1, MarketFamilyV1, MarketLifecyclePhaseV1, MarketLifecycleRootV1,
+    AuthenticatedMarketFamilyAuthorityV1, CompiledProductSeriesBundleV5, ContentId,
+    Error as ProductError, MarketFamilyAggregatorV1, MarketFamilyV1, MarketLifecyclePhaseV1,
+    MarketLifecycleRootV1, SeriesMarketDispositionV1, SeriesMarketLinkPhaseV1,
+    SeriesMarketLinkV1,
 };
 
 /// Maximum funded Reservations ever admitted by one minimal Direct root.
@@ -290,6 +292,16 @@ pub struct DirectMarketBindingV1 {
     pub resolution_data_id: [u8; 32],
     /// Product MarketLifecycleRoot account.
     pub product_root_account: [u8; 32],
+    /// Exact founder SeriesMarketLink account.
+    pub founder_series_link_account: [u8; 32],
+    /// Immutable founder SeriesMarketLink binding identity.
+    pub founder_series_link_binding_id: [u8; 32],
+    /// Exact current CompiledProductSeriesBundleV5 identity.
+    pub compiler_bundle_v5_id: [u8; 32],
+    /// Exact founder SeriesPlanV5 identity.
+    pub founder_series_plan_id: [u8; 32],
+    /// Finite founder Series ordinal.
+    pub founder_series_ordinal: u32,
     /// Product-assigned canonical Direct family-root account.
     pub direct_root_account: [u8; 32],
     /// Permanent Direct action replay/receipt account.
@@ -319,10 +331,100 @@ impl DirectMarketBindingV1 {
             self.market_instance_id, self.realm_id, self.collateral_profile_id,
             self.collateral_policy_id, self.collateral_release_id, self.resolution_account,
             self.resolution_semantic_id, self.resolution_data_id, self.product_root_account,
+            self.founder_series_link_account, self.founder_series_link_binding_id,
+            self.compiler_bundle_v5_id, self.founder_series_plan_id,
             self.direct_root_account, self.action_replay_account, self.general_market_runtime,
             self.neutral_lamport_sink, self.relation_policy_id, self.price_policy_id,
         ])
     }
+}
+
+fn validate_product_join_v1(
+    product_root: MarketLifecycleRootV1,
+    founder_link: SeriesMarketLinkV1,
+    compiler_bundle: &CompiledProductSeriesBundleV5,
+    direct: DirectMarketBindingV1,
+    terminal_join: bool,
+) -> Result<[u8; 32], DirectMarketErrorV1> {
+    let product = product_root.binding();
+    let link = founder_link.binding();
+    let link_semantic_id = founder_link
+        .semantic_id()
+        .map_err(|_| DirectMarketErrorV1::Product)?
+        .bytes();
+    let link_binding_id = link
+        .id()
+        .map_err(|_| DirectMarketErrorV1::Product)?
+        .bytes();
+    let bundle_id = compiler_bundle
+        .id()
+        .map_err(|_| DirectMarketErrorV1::Product)?
+        .bytes();
+    let phase_matches = if terminal_join {
+        matches!(
+            founder_link.phase(),
+            SeriesMarketLinkPhaseV1::Active | SeriesMarketLinkPhaseV1::Retiring
+        )
+    } else {
+        match product_root.phase() {
+            MarketLifecyclePhaseV1::Founding => {
+                founder_link.phase() == SeriesMarketLinkPhaseV1::PendingMarket
+                    && product_root.capital().founder_link_id.bytes() == link_semantic_id
+            }
+            MarketLifecyclePhaseV1::Active => {
+                founder_link.phase() == SeriesMarketLinkPhaseV1::Active
+            }
+            _ => false,
+        }
+    };
+    if !phase_matches
+        || link.disposition != SeriesMarketDispositionV1::Founder
+        || link.market_instance_id.bytes() != direct.market_instance_id
+        || link.market_root_account_id.bytes() != direct.product_root_account
+        || link.market_binding_id
+            != product
+                .id()
+                .map_err(|_| DirectMarketErrorV1::Product)?
+        || link.generation != direct.generation
+        || link.capability_profile_id.bytes() != product.capability_profile_id.bytes()
+        || link.neutral_lamport_sink.bytes() != direct.neutral_lamport_sink
+        || link_binding_id != direct.founder_series_link_binding_id
+        || link.compiler_output_id.bytes() != direct.compiler_bundle_v5_id
+        || link.series_plan_id.bytes() != direct.founder_series_plan_id
+        || link.ordinal != direct.founder_series_ordinal
+        || bundle_id != direct.compiler_bundle_v5_id
+        || compiler_bundle.registry_release_id != product.registry_release_id
+        || compiler_bundle.capability_profile_id.content_id() != product.capability_profile_id
+        || compiler_bundle.source_release_manifest_id != product.source_release_id
+        || compiler_bundle.source_plane_contract_id != product.source_plane_contract_id
+        || compiler_bundle.source_spec_id != product.source_spec_id
+        || compiler_bundle.native_claim_basis_id.content_id() != product.native_claim_basis_id
+        || compiler_bundle.evidence_only_recovery_policy_id.content_id()
+            != product.recovery_policy_id
+        || compiler_bundle.product_template_id.content_id() != product.product_template_id
+        || compiler_bundle.price_measure_policy_id.content_id()
+            != product.price_measure_policy_id
+        || compiler_bundle.market_genesis_profile_id.content_id()
+            != product.market_genesis_profile_id
+        || compiler_bundle.series_plan_id != link.series_plan_id
+        || compiler_bundle.funding_terms_id != link.funding_terms_id
+        || compiler_bundle.funding_quote_id != link.funding_quote_id
+        || compiler_bundle.attachment_plan_id.content_id() != link.attachment_plan_id
+        || link.source_release_id != product.source_release_id
+        || link.source_plane_contract_id != product.source_plane_contract_id
+        || link.source_spec_id != product.source_spec_id
+        || link.source_route_id != product.source_route_id
+        || link.clock_policy_id != product.clock_policy_id
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    if terminal_join
+        && (product_root.resolution_semantic_id().bytes() != direct.resolution_semantic_id
+            || product_root.resolution_data_id().bytes() != direct.resolution_data_id)
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    Ok(link_semantic_id)
 }
 
 /// Immutable half-open Direct schedule.
@@ -495,7 +597,11 @@ impl DirectMarketRootV1 {
             &self.binding.collateral_profile_id, &self.binding.collateral_policy_id,
             &self.binding.collateral_release_id, &self.binding.resolution_account,
             &self.binding.resolution_semantic_id, &self.binding.resolution_data_id,
-            &self.binding.product_root_account, &self.binding.direct_root_account,
+            &self.binding.product_root_account, &self.binding.founder_series_link_account,
+            &self.binding.founder_series_link_binding_id, &self.binding.compiler_bundle_v5_id,
+            &self.binding.founder_series_plan_id,
+            &self.binding.founder_series_ordinal.to_le_bytes(),
+            &self.binding.direct_root_account,
             &self.binding.action_replay_account, &self.binding.general_market_runtime,
             &self.binding.neutral_lamport_sink, &self.binding.relation_policy_id,
             &self.binding.price_policy_id, &self.binding.price_scale.to_le_bytes(),
@@ -963,7 +1069,10 @@ pub trait AuthenticatedDirectFoundationV1 {
     /// Authenticate Product root, absent root/replay PDAs, funding, Realm
     /// collateral, and exact Resolution V5 hostile bytes.
     fn authenticate_foundation(
-        &self, _product_root: &MarketLifecycleRootV1, _binding: DirectMarketBindingV1,
+        &self, _product_root: &MarketLifecycleRootV1,
+        _founder_link: &SeriesMarketLinkV1,
+        _compiler_bundle: &CompiledProductSeriesBundleV5,
+        _binding: DirectMarketBindingV1,
         _schedule: DirectScheduleV1, _root_rent: DirectRentOwnerV1,
         _action_replay_rent: DirectRentOwnerV1, _family_admission_sequence: u32,
     ) -> Result<(), DirectMarketErrorV1> {
@@ -1018,7 +1127,10 @@ pub fn prepare_direct_foundation_v1<
     A: AuthenticatedDirectFoundationV1 + ?Sized,
     B: DirectHashBackendV1,
 >(
-    authority: &A, product_root: MarketLifecycleRootV1, binding: DirectMarketBindingV1,
+    authority: &A, product_root: MarketLifecycleRootV1,
+    founder_link: SeriesMarketLinkV1,
+    compiler_bundle: &CompiledProductSeriesBundleV5,
+    binding: DirectMarketBindingV1,
     schedule: DirectScheduleV1, root_rent: DirectRentOwnerV1,
     action_replay_rent: DirectRentOwnerV1, family_admission_sequence: u32, backend: &B,
 ) -> Result<DirectFoundationPlanV1, DirectMarketErrorV1> {
@@ -1029,6 +1141,13 @@ pub fn prepare_direct_foundation_v1<
     if !matches!(product_root.phase(), MarketLifecyclePhaseV1::Founding | MarketLifecyclePhaseV1::Active) {
         return Err(DirectMarketErrorV1::WrongPhase);
     }
+    let founder_link_semantic_id = validate_product_join_v1(
+        product_root,
+        founder_link,
+        compiler_bundle,
+        binding,
+        false,
+    )?;
     let product_binding = product_root.binding();
     let families = product_root.product_families();
     let direct = families.family(MarketFamilyV1::Direct);
@@ -1048,8 +1167,16 @@ pub fn prepare_direct_foundation_v1<
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
-    authority.authenticate_foundation(&product_root, binding, schedule, root_rent,
-        action_replay_rent, family_admission_sequence)?;
+    authority.authenticate_foundation(
+        &product_root,
+        &founder_link,
+        compiler_bundle,
+        binding,
+        schedule,
+        root_rent,
+        action_replay_rent,
+        family_admission_sequence,
+    )?;
     let aggregator_prestate_id = families.semantic_id()
         .map_err(|_| DirectMarketErrorV1::Product)?.content_id();
     let receipt_bytes = backend.sha256_parts(&[
@@ -1058,7 +1185,10 @@ pub fn prepare_direct_foundation_v1<
         &binding.realm_id, &binding.collateral_profile_id, &binding.collateral_policy_id,
         &binding.collateral_release_id, &binding.resolution_account,
         &binding.resolution_semantic_id, &binding.resolution_data_id,
-        &binding.product_root_account, &binding.direct_root_account,
+        &binding.product_root_account, &binding.founder_series_link_account,
+        &binding.founder_series_link_binding_id, &founder_link_semantic_id,
+        &binding.compiler_bundle_v5_id, &binding.founder_series_plan_id,
+        &binding.founder_series_ordinal.to_le_bytes(), &binding.direct_root_account,
         &binding.action_replay_account, &binding.general_market_runtime,
         &binding.neutral_lamport_sink, &binding.relation_policy_id,
         &binding.price_policy_id, &binding.price_scale.to_le_bytes(),
@@ -1110,7 +1240,10 @@ pub fn prepare_direct_foundation_v1<
 pub trait AuthenticatedDirectTerminalV1 {
     /// Authenticate the complete still-live deletion set and Product prestate.
     fn authenticate_terminal(
-        &self, _product_root: &MarketLifecycleRootV1, _root: DirectMarketRootV1,
+        &self, _product_root: &MarketLifecycleRootV1,
+        _founder_link: &SeriesMarketLinkV1,
+        _compiler_bundle: &CompiledProductSeriesBundleV5,
+        _root: DirectMarketRootV1,
         _root_semantic_id: [u8; 32], _replay: DirectActionReplayV1,
         _replay_semantic_id: [u8; 32], _retirement: DirectRetirementTransferV1,
         _retirement_transfer_id: [u8; 32], _consumed_sequence: u64,
@@ -1179,7 +1312,10 @@ pub fn prepare_direct_family_terminal_v1<
     A: AuthenticatedDirectTerminalV1 + ?Sized,
     B: DirectHashBackendV1,
 >(
-    authority: &A, product_root: MarketLifecycleRootV1, state: DirectRootReplayPostV1,
+    authority: &A, product_root: MarketLifecycleRootV1,
+    founder_link: SeriesMarketLinkV1,
+    compiler_bundle: &CompiledProductSeriesBundleV5,
+    state: DirectRootReplayPostV1,
     retirement: DirectRetirementTransferV1, consumed_sequence: u64,
     observed_slot: u64, family_terminal_sequence: u32, backend: &B,
 ) -> Result<DirectFamilyTerminalPlanV1, DirectMarketErrorV1> {
@@ -1191,6 +1327,13 @@ pub fn prepare_direct_family_terminal_v1<
         return Err(DirectMarketErrorV1::WrongPhase);
     }
     let binding = state.root.binding;
+    let founder_link_semantic_id = validate_product_join_v1(
+        product_root,
+        founder_link,
+        compiler_bundle,
+        binding,
+        true,
+    )?;
     let product_binding = product_root.binding();
     let families = product_root.product_families();
     let direct = families.family(MarketFamilyV1::Direct);
@@ -1227,9 +1370,20 @@ pub fn prepare_direct_family_terminal_v1<
     let root_semantic_id = state.root.semantic_id(backend)?;
     let replay_pre_semantic_id = state.replay.semantic_id(state.root, backend)?;
     let retirement_transfer_id = retirement.semantic_id(backend)?;
-    authority.authenticate_terminal(&product_root, state.root, root_semantic_id, state.replay,
-        replay_pre_semantic_id, retirement, retirement_transfer_id, consumed_sequence,
-        observed_slot, family_terminal_sequence)?;
+    authority.authenticate_terminal(
+        &product_root,
+        &founder_link,
+        compiler_bundle,
+        state.root,
+        root_semantic_id,
+        state.replay,
+        replay_pre_semantic_id,
+        retirement,
+        retirement_transfer_id,
+        consumed_sequence,
+        observed_slot,
+        family_terminal_sequence,
+    )?;
     let replay_with_action = state.replay.advance(root_semantic_id, root_semantic_id,
         DirectMarketActionV1::RetireTerminal, observed_slot, retirement_transfer_id, backend)?;
     let aggregator_prestate_id = families.semantic_id()
@@ -1238,6 +1392,8 @@ pub fn prepare_direct_family_terminal_v1<
         TERMINAL_RECEIPT_DOMAIN_V1, &aggregator_prestate_id.bytes(),
         &binding.market_instance_id, &binding.generation.to_le_bytes(),
         &binding.direct_root_account, &binding.action_replay_account, &root_semantic_id,
+        &binding.founder_series_link_account, &binding.founder_series_link_binding_id,
+        &founder_link_semantic_id, &binding.compiler_bundle_v5_id,
         &replay_pre_semantic_id, &replay_with_action.action_transcript_id,
         &state.replay.economic_terminal_receipt_id, &retirement_transfer_id,
         &consumed_sequence.to_le_bytes(), &observed_slot.to_le_bytes(),
