@@ -11,7 +11,7 @@
 use clutch_batch::Side;
 use clutch_general_v2_contract::{
     candidate_bundle_digest_v1, complete_candidate_feed_v2, DeletableRentOwnerV1,
-    ExactIndexChildrenStateV1, Id32, IndexedSettlementRootRentPreparationV1,
+    AuthenticatedIndexedSettlementRootRentV1, ExactIndexChildrenStateV1, Id32,
     IndexedSettlementRootV1AccountV1, MarketBindingV2, SettlementRootV1AccountV1,
     SettlementSliceLegKindV1, SettlementSliceV1, INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
     INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1, MAX_ORDERS,
@@ -308,7 +308,7 @@ pub fn adjacency_data_len_v1(order_count: u8, references: u16) -> Result<usize, 
 }
 
 pub fn stream_counted_exact_index_root_v1(
-    root_rent: &IndexedSettlementRootRentPreparationV1,
+    root_rent: AuthenticatedIndexedSettlementRootRentV1<'_>,
     input: &ConstructExactIndexStreamingInputV1<'_>,
     root_output: &mut [u8], locator_output: &mut [u8], adjacency_output: &mut [u8],
 ) -> Result<CountedExactIndexRootStreamResultV1, ExactIndexPlaneErrorV1> {
@@ -467,8 +467,7 @@ pub fn stream_counted_exact_index_root_v1(
             rent: adjacency_rent, stored_bump: input.adjacency_create.stored_bump, ..common })?;
     let locator_data_id = sealed_locator_data_id_from_raw_v1(locator_output)?;
     let adjacency_data_id = sealed_adjacency_data_id_from_raw_v1(adjacency_output)?;
-    let indexed_root_data_id = IndexedSettlementRootV1AccountV1::encode_new_live_and_data_id(
-        root_rent.base_after(),
+    let indexed_root_data_id = root_rent.encode_new_live_and_data_id(
         input.locator_create.account,
         input.adjacency_create.account,
         plane_id,
@@ -476,7 +475,6 @@ pub fn stream_counted_exact_index_root_v1(
         adjacency_data_id,
         input.capability_profile_id,
         &CanonicalSha256,
-        input.settlement_root_account,
         root_output,
     )
     .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;

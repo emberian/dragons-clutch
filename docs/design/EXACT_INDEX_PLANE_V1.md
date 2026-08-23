@@ -44,12 +44,17 @@ The current upstream traversal implementation still materializes large
 fixed-capacity settlement facts before boxing them. Promotion therefore
 requires the pending streaming or heap-initialized traversal authority; merely
 keeping the compact index itself below the SBF frame limit is insufficient.
-The compact pure builder borrows the rent preparation and construction input,
-streams the 1,196-byte indexed root directly into caller-owned account memory,
-and hashes that encoded buffer without constructing an indexed-root value or a
-980-byte base scratch array. Its compiled frame must still be measured with the
-compact traversal and final action-specific SBF adapter before promotion; source
-account widths are not frame measurements.
+The compact rent preparation persists only source/poststate IDs, the updated
+rent compartment, balances, and its exact projector transcript; it does not
+carry two 980-byte Root values. It authenticates one borrowed source Root and
+mints a noncopyable authority consumed by the pure builder. The builder borrows
+its construction input, streams the 1,196-byte indexed root directly into
+caller-owned account memory, and hashes that encoded buffer without constructing
+an indexed-root value or a second base scratch array. Upgrade preparation and
+authority consumption may each transiently construct one post-rent base value,
+so the compiled frame must still be measured with the compact traversal and
+final action-specific SBF adapter before promotion. Source account widths are
+not frame measurements.
 
 ## Compact active geometry
 

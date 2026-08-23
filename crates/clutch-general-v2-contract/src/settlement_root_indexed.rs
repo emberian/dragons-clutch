@@ -159,8 +159,9 @@ impl IndexedSettlementRootRentModeV1 {
 pub struct IndexedSettlementRootRentPreparationV1 {
     mode: IndexedSettlementRootRentModeV1,
     root_account: Id32,
-    base_before: SettlementRootV1AccountV1,
-    base_after: SettlementRootV1AccountV1,
+    base_before_data_id: Id32,
+    base_after_data_id: Id32,
+    rent_after: DeletableRentOwnerV1,
     data_len_before: usize,
     root_balance_before_lamports: u64,
     root_balance_after_lamports: u64,
@@ -181,14 +182,14 @@ impl IndexedSettlementRootRentPreparationV1 {
         self.root_account
     }
 
-    /// Exact source Root semantics authenticated before the transition.
-    pub const fn base_before(&self) -> &SettlementRootV1AccountV1 {
-        &self.base_before
+    /// Account-key-bound identity of the exact source Root body.
+    pub const fn base_before_data_id(&self) -> Id32 {
+        self.base_before_data_id
     }
 
-    /// Exact embedded Root semantics with current rent ownership.
-    pub const fn base_after(&self) -> &SettlementRootV1AccountV1 {
-        &self.base_after
+    /// Account-key-bound identity of the embedded Root after the rent change.
+    pub const fn base_after_data_id(&self) -> Id32 {
+        self.base_after_data_id
     }
 
     /// Zero for direct allocation or 980 for an in-place upgrade.
@@ -223,7 +224,7 @@ impl IndexedSettlementRootRentPreparationV1 {
 
     /// Updated full principal and observed hostile-donation floor.
     pub const fn rent_after(&self) -> DeletableRentOwnerV1 {
-        self.base_after.root_rent()
+        self.rent_after
     }
 
     /// Immutable neutral sink which eventually receives every nonprincipal lamport.
@@ -235,7 +236,129 @@ impl IndexedSettlementRootRentPreparationV1 {
     pub const fn projector_id(&self) -> Id32 {
         self.projector_id
     }
+
+    /// Authenticate the exact borrowed source Root and mint one noncopyable
+    /// authority for compact indexed-root construction.
+    pub fn authenticate_source<'a, B: Sha256BackendV1>(
+        &'a self,
+        base_before: &'a SettlementRootV1AccountV1,
+        backend: &B,
+    ) -> Result<AuthenticatedIndexedSettlementRootRentV1<'a>, CodecError> {
+        base_before.validate()?;
+        if base_before.data_id(backend, self.root_account)? != self.base_before_data_id {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(AuthenticatedIndexedSettlementRootRentV1 {
+            preparation: self,
+            base_before,
+            _private: (),
+        })
+    }
 }
+
+/// Private-field, noncopyable authority joining one compact rent receipt to
+/// the exact borrowed source Root used by index construction.
+#[derive(Debug)]
+pub struct AuthenticatedIndexedSettlementRootRentV1<'a> {
+    preparation: &'a IndexedSettlementRootRentPreparationV1,
+    base_before: &'a SettlementRootV1AccountV1,
+    _private: (),
+}
+
+impl AuthenticatedIndexedSettlementRootRentV1<'_> {
+    /// Exact borrowed source Root authenticated by the preparation transcript.
+    pub const fn base_before(&self) -> &SettlementRootV1AccountV1 {
+        self.base_before
+    }
+
+    /// Fresh allocation or in-place upgrade.
+    pub const fn mode(&self) -> IndexedSettlementRootRentModeV1 {
+        self.preparation.mode()
+    }
+
+    /// Canonical Root PDA whose version/length changes atomically.
+    pub const fn root_account(&self) -> Id32 {
+        self.preparation.root_account()
+    }
+
+    /// Zero for direct allocation or 980 for an in-place upgrade.
+    pub const fn data_len_before(&self) -> usize {
+        self.preparation.data_len_before()
+    }
+
+    /// Complete observed pre-transition root balance.
+    pub const fn root_balance_before_lamports(&self) -> u64 {
+        self.preparation.root_balance_before_lamports()
+    }
+
+    /// Exact post-transition balance after the payer funds full principal.
+    pub const fn root_balance_after_lamports(&self) -> u64 {
+        self.preparation.root_balance_after_lamports()
+    }
+
+    /// Exact debit from the persisted root rent payer.
+    pub const fn payer_debit_lamports(&self) -> u64 {
+        self.preparation.payer_debit_lamports()
+    }
+
+    /// Authenticated payer balance shared with sibling creation.
+    pub const fn payer_balance_before_lamports(&self) -> u64 {
+        self.preparation.payer_balance_before_lamports()
+    }
+
+    /// Updated full principal and observed hostile-donation floor.
+    pub const fn rent_after(&self) -> DeletableRentOwnerV1 {
+        self.preparation.rent_after()
+    }
+
+    /// Immutable sink for every nonprincipal lamport.
+    pub const fn neutral_sink(&self) -> Id32 {
+        self.preparation.neutral_sink()
+    }
+
+    /// Consume the authenticated rent/source join and stream the exact live
+    /// indexed successor without retaining either Root inside the receipt.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_new_live_and_data_id<B: Sha256BackendV1>(
+        self,
+        locator_account: Id32,
+        adjacency_account: Id32,
+        plane_id: Id32,
+        locator_data_id: Id32,
+        adjacency_data_id: Id32,
+        capability_profile_id: Id32,
+        backend: &B,
+        output: &mut [u8],
+    ) -> Result<Id32, CodecError> {
+        let base_after = self
+            .base_before
+            .with_indexed_root_rent(self.preparation.rent_after)?;
+        if base_after.data_id(backend, self.preparation.root_account)?
+            != self.preparation.base_after_data_id
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        IndexedSettlementRootV1AccountV1::encode_new_live_and_data_id(
+            &base_after,
+            locator_account,
+            adjacency_account,
+            plane_id,
+            locator_data_id,
+            adjacency_data_id,
+            capability_profile_id,
+            backend,
+            self.preparation.root_account,
+            output,
+        )
+    }
+}
+
+const _: () = assert!(
+    core::mem::size_of::<IndexedSettlementRootRentPreparationV1>() <= 320
+);
+const _: () = assert!(
+    core::mem::size_of::<AuthenticatedIndexedSettlementRootRentV1<'static>>() <= 24
+);
 
 /// Prepare a direct 1,196-byte allocation without a prefund discount.
 #[allow(clippy::too_many_arguments)]
@@ -270,8 +393,8 @@ pub fn prepare_fresh_indexed_settlement_root_rent_v1<B: Sha256BackendV1>(
     prepare_indexed_root_rent_projection_v1(
         IndexedSettlementRootRentModeV1::Fresh,
         root_account,
-        *base,
-        *base,
+        base,
+        base,
         0,
         root_balance_before_lamports,
         root_balance_after_lamports,
@@ -334,8 +457,8 @@ pub fn prepare_indexed_settlement_root_upgrade_rent_v1<B: Sha256BackendV1>(
     prepare_indexed_root_rent_projection_v1(
         IndexedSettlementRootRentModeV1::Upgrade,
         root_account,
-        *base,
-        base_after,
+        base,
+        &base_after,
         SETTLEMENT_ROOT_ACCOUNT_BYTES,
         root_balance_before_lamports,
         root_balance_after_lamports,
@@ -350,8 +473,8 @@ pub fn prepare_indexed_settlement_root_upgrade_rent_v1<B: Sha256BackendV1>(
 fn prepare_indexed_root_rent_projection_v1<B: Sha256BackendV1>(
     mode: IndexedSettlementRootRentModeV1,
     root_account: Id32,
-    base_before: SettlementRootV1AccountV1,
-    base_after: SettlementRootV1AccountV1,
+    base_before: &SettlementRootV1AccountV1,
+    base_after: &SettlementRootV1AccountV1,
     data_len_before: usize,
     root_balance_before_lamports: u64,
     root_balance_after_lamports: u64,
@@ -365,7 +488,7 @@ fn prepare_indexed_root_rent_projection_v1<B: Sha256BackendV1>(
     let before_len = u64::try_from(data_len_before).map_err(|_| CodecError::InvalidCount)?;
     let after_len = u64::try_from(INDEXED_SETTLEMENT_ROOT_BYTES_V1)
         .map_err(|_| CodecError::InvalidCount)?;
-    let rent = base_after.root_rent();
+    let rent_after = base_after.root_rent();
     let projector_id = Id32::new(backend.sha256(&[
         INDEXED_SETTLEMENT_ROOT_RENT_PROJECTOR_DOMAIN_V1,
         &[INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG, INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION],
@@ -379,16 +502,17 @@ fn prepare_indexed_root_rent_projection_v1<B: Sha256BackendV1>(
         &root_balance_after_lamports.to_le_bytes(),
         &payer_debit_lamports.to_le_bytes(),
         &payer_balance_before_lamports.to_le_bytes(),
-        &rent.payer.bytes(),
-        &rent.refundable_principal.to_le_bytes(),
-        &rent.donation_floor.to_le_bytes(),
+        &rent_after.payer.bytes(),
+        &rent_after.refundable_principal.to_le_bytes(),
+        &rent_after.donation_floor.to_le_bytes(),
         &neutral_sink.bytes(),
     ]))?;
     Ok(IndexedSettlementRootRentPreparationV1 {
         mode,
         root_account,
-        base_before,
-        base_after,
+        base_before_data_id: before_id,
+        base_after_data_id: after_id,
+        rent_after,
         data_len_before,
         root_balance_before_lamports,
         root_balance_after_lamports,
@@ -1354,6 +1478,73 @@ mod tests {
             Err(CodecError::ZeroIdentity),
         );
         assert_eq!(streamed, before_zero_root);
+    }
+
+    #[test]
+    fn compact_rent_receipt_authenticates_source_and_streams_exact_postrent_root() {
+        let base_before = crate::settlement_root::tests::materializing_root();
+        let root_account = id(20);
+        let preparation = prepare_indexed_settlement_root_upgrade_rent_v1(
+            &base_before,
+            root_account,
+            110,
+            150,
+            50,
+            id(27),
+            &Sha2Backend,
+        )
+        .unwrap();
+        assert!(core::mem::size_of_val(&preparation) <= 320);
+        assert_eq!(
+            preparation.base_before_data_id(),
+            base_before.data_id(&Sha2Backend, root_account).unwrap(),
+        );
+        let base_after = base_before
+            .with_indexed_root_rent(preparation.rent_after())
+            .unwrap();
+        assert_eq!(
+            preparation.base_after_data_id(),
+            base_after.data_id(&Sha2Backend, root_account).unwrap(),
+        );
+        let expected = IndexedSettlementRootV1AccountV1::new_live(
+            base_after,
+            id(21),
+            id(22),
+            id(23),
+            id(24),
+            id(25),
+            id(26),
+        )
+        .unwrap();
+        let authority = preparation
+            .authenticate_source(&base_before, &Sha2Backend)
+            .unwrap();
+        assert_eq!(authority.base_before(), &base_before);
+        let mut streamed = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        let streamed_id = authority
+            .encode_new_live_and_data_id(
+                id(21),
+                id(22),
+                id(23),
+                id(24),
+                id(25),
+                id(26),
+                &Sha2Backend,
+                &mut streamed,
+            )
+            .unwrap();
+        let mut expected_bytes = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        expected.encode(&mut expected_bytes).unwrap();
+        assert_eq!(streamed, expected_bytes);
+        assert_eq!(
+            streamed_id,
+            expected.data_id(&Sha2Backend, root_account).unwrap(),
+        );
+
+        assert!(matches!(
+            preparation.authenticate_source(&base_after, &Sha2Backend),
+            Err(CodecError::MismatchedBinding),
+        ));
     }
 
     #[test]
