@@ -48,7 +48,7 @@ pub const COLLATERAL_LEGACY_SPL_PARSER_CPI_CODE_ID_V2: Id = Id::from_bytes([
     0xe6, 0xd6, 0x07, 0xce, 0xd5, 0x16, 0x21, 0x77, 0x76, 0x22, 0x81, 0x30, 0xef, 0x6b, 0x27, 0x77,
 ]);
 
-/// Sole collateral release compiled into the current local-real ELF.
+/// Token-2022 collateral release compiled into the current local-real ELF.
 pub const LOCAL_REAL_TOKEN_2022_RELEASE_V2: AdapterReleaseV2 = AdapterReleaseV2::token_2022_base(
     LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2,
     COLLATERAL_PARSER_CPI_CODE_ID_V2,

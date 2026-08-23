@@ -36,7 +36,9 @@ use clutch_collateral_adapter_v2::{
     CollateralPolicyV2, Id as CollateralId, EXTENSION_IMMUTABLE_OWNER,
 };
 use clutch_kernel::{BasisMode, PayoutSet, PayoutVector};
-use clutch_sbf::collateral_release::LOCAL_REAL_TOKEN_2022_RELEASE_V2;
+use clutch_sbf::collateral_release::{
+    LOCAL_REAL_LEGACY_SPL_RELEASE_V2, LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+};
 use clutch_sbf::instructions::observe_resolve::{
     BUFFER_VERSION, EVIDENCE_BUFFER_HEADER_BYTES, EVIDENCE_BUFFER_TAG,
 };
@@ -367,6 +369,27 @@ pub fn fixture_policy(collateral_mint: [u8; 32]) -> CollateralPolicyV2 {
     .expect("the fixture collateral policy must bind the compiled release")
 }
 
+/// A canonical local-real legacy SPL policy using the separately pinned
+/// `spl_p_token-1.0.0.so` release and the narrower PDA-sole-signer guard.
+///
+/// This does not change the default Token-2022 fixture plane. It lets a
+/// dedicated bank scenario select legacy collateral without changing Egg
+/// issuance, which remains Token-2022 under either collateral family.
+pub fn fixture_legacy_spl_policy(collateral_mint: [u8; 32]) -> CollateralPolicyV2 {
+    CollateralPolicyV2::for_release(
+        LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
+        CollateralId::from_bytes(collateral_mint),
+        6,
+        1_000_000_000_000_000,
+        1_000_000_000_000_000,
+        0,
+        0,
+        0,
+        0,
+    )
+    .expect("the legacy fixture policy must bind the compiled release")
+}
+
 /// Return the canonical `(policy, release, ProfileV2)` identity join for one
 /// fixture policy.
 pub fn fixture_policy_identity(policy: CollateralPolicyV2) -> (Hash32, Hash32, Hash32) {
@@ -587,7 +610,10 @@ pub fn build_plane(actor: Address, collateral_mint: Address, nonce: u64, mode: M
         GenesisAccount {
             address: policy_artifact.address,
             owner: PROGRAM_ID,
-            data: policy.encode().expect("the fixture policy must encode").to_vec(),
+            data: policy
+                .encode()
+                .expect("the fixture policy must encode")
+                .to_vec(),
         },
         GenesisAccount {
             address: terms.address,
