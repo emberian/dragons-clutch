@@ -98,6 +98,7 @@ fn require_program_account(
 ) -> Outcome<()> {
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
     require(
         account.is_writable == writable,
         if writable { ClutchError::NotWritable } else { ClutchError::UnexpectedWritable },
@@ -110,6 +111,7 @@ fn require_program_account(
 
 fn require_credit_account(account: &AccountInfo<'_>) -> Outcome<()> {
     require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
     require(account.is_writable, ClutchError::NotWritable)
 }
 
@@ -490,6 +492,17 @@ fn apply_plan(
     refund_owner_count: usize,
     plan: &clutch_general_v2_runtime::RetirePortfolioPairArchivesPlanV2,
 ) -> Outcome<()> {
+    let receipt_count_u8 = u8::try_from(receipt_count)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let refund_owner_count_u8 = u8::try_from(refund_owner_count)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        plan.terminal_receipt().receipt_count() == receipt_count_u8
+            && plan.terminal_receipt().refund_owner_count() == refund_owner_count_u8
+            && plan.terminal_receipt().neutral_sink()
+                == id(accounts[IX_NEUTRAL_SINK].key),
+        ClutchError::MismatchedState,
+    )?;
     let mut root_body = std::vec![0u8; contract::SETTLEMENT_ROOT_ACCOUNT_BYTES];
     plan.settlement_root_poststate().encode(&mut root_body)?;
     let buyer_position_body = plan.buyer_position_poststate()
