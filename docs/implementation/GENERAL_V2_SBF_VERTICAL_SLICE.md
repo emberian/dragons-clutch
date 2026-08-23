@@ -720,9 +720,12 @@ Position, the selected owner fee, and the directional candidate cash pot.
 Owner net debits are source-before-sink progress and always enter the pot;
 owner credits refuse without mutation when buyer or completed-merge liquidity
 is not yet present, and may be retried later without consuming replay or
-liveness funding. The owner row reaches state one and persists the distinct
-`owner_finalization_id` only after the exact Position-to-pot or pot-to-Position
-transfer succeeds. No Reservation DTO is copied into this transition: its
+liveness funding. The owner row reaches state one only after the exact
+Position-to-pot or pot-to-Position transfer succeeds. The request-scoped
+`owner_finalization_id` must equal the adapter-authenticated data ID of that
+canonical finalized 288-byte row; it is not copied into every row. The in-place
+fee finalization receipt and row state own persistent replay safety. No
+Reservation DTO is copied into this transition: its
 terminal accounting is joined through the canonical row and Position facts.
 The 292-byte row outer stores no duplicate rent DTO. Its pre-fund-safe creation
 plan must atomically update the separate authenticated rent ledger that owns
@@ -754,8 +757,8 @@ Action 26 `ConsumeDirectReceiptEggs` is capability-disabled even though its
 96-byte selector and complete pure direct planner are frozen. The planner
 requires both real receipt ends already accounting-latched by action 25, then
 atomically stages the distinct delivery latch, two Position poststates, and
-two Reservation poststates while treating the owner rows as authenticated
-read-only accounting evidence. It moves only internal native Eggs and does not
+two Reservation poststates while treating state-one owner rows as authenticated
+read-only finalization evidence. It moves only internal native Eggs and does not
 convert cash. An SBF meta contract cannot freeze until the
 receipt also authenticates the exact Settlement-compartment liveness receipt,
 call ordinal, quote ceiling, keeper payment, and payer refund; virtual
@@ -766,20 +769,23 @@ Actions 36 and 37 reserve those distinct virtual contracts. Both use a strict
 through action 26 or through one another. Action 36 must atomically join the
 selected virtual-split authority, its complete-set split inventory mutation,
 and the associated real buy receipt/Position/Reservation delivery while
-authenticating the already-accounted owner row without rewriting it.
+authenticating the finalized buyer row without rewriting it.
 Action 37 must atomically join the selected virtual-merge authority, its real
 sell receipt/Position/Reservation delivery, and the complete-set merge while
-authenticating the already-accounted owner row without rewriting it. Every
+authenticating the AccountingComplete state-zero seller row without rewriting
+it, because the resulting merge proceeds precede seller finalization. Every
 layer must name the same Epoch, selected candidate, checked
 relation witness, receipt, and settlement transition ID. The FinalPot, Hoard,
-aggregate claim ledger, inventory budget, receipt, Position, Reservation,
+aggregate claim ledger, embedded FinalPot inventory-budget cursors, receipt, Position, Reservation,
 delivery latch, and Settlement liveness compartment form one rollback
 boundary; the owner row/accounting latch is an immutable authorization join.
 The split route additionally requires every owner row finalized and the
 all-owner cash pot terminal with its exact split principal present. The merge
 route contributes its opening proceeds before credit-bearing owner
 finalizations may consume them.
-No separately callable inventory action is allocated. Exact ordered SBF metas
+No separately addressed budget account or callable inventory action is
+allocated; the selected budget and its cursors share the canonical 328-byte
+FinalPot body, lifetime, rent owner, and close authority. Exact ordered SBF metas
 remain an activation blocker until the receipt codec projects the complete
 selected witness and the liveness owner freezes the call ordinal, quote
 ceiling, keeper payment, payer refund, and unique receipt join.

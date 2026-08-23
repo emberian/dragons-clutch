@@ -305,9 +305,8 @@ pub fn prepare_create_owner_settlement_account_v1(
 pub struct AuthenticatedSettlementReceiptEndV1 {
     /// Canonical receipt account PDA.
     pub receipt: [u8; 32],
-    /// Complete Egg/reservation transition this accounting end must join in
-    /// the same atomic SBF instruction.
-    pub settlement_transition_id: [u8; 32],
+    /// Independent action-25 accounting replay identity.
+    pub receipt_accounting_id: [u8; 32],
     /// Market identity.
     pub market: [u8; 32],
     /// Epoch PDA.
@@ -330,8 +329,8 @@ pub struct AuthenticatedSettlementReceiptEndV1 {
     pub slice_index: u16,
     /// Must equal `slice_index + 1`.
     pub sequence: u64,
-    /// Already consumed real-end bitmap: bit zero buy, bit one sell.
-    pub consumed_end_mask: u8,
+    /// Already accounted real-end bitmap: bit zero buy, bit one sell.
+    pub accounted_end_mask: u8,
     /// Real ends present on the receipt; virtual ends have no bit.
     pub expected_end_mask: u8,
 }
@@ -346,7 +345,7 @@ impl AuthenticatedSettlementReceiptEndV1 {
 
     fn validate(self) -> Result<()> {
         if self.receipt == [0; 32]
-            || self.settlement_transition_id == [0; 32]
+            || self.receipt_accounting_id == [0; 32]
             || self.market == [0; 32]
             || self.epoch == [0; 32]
             || self.candidate == [0; 32]
@@ -355,13 +354,13 @@ impl AuthenticatedSettlementReceiptEndV1 {
             || self.consideration_price_units == 0
             || self.expected_end_mask == 0
             || self.expected_end_mask & !(BUY_END_MASK | SELL_END_MASK) != 0
-            || self.consumed_end_mask & !self.expected_end_mask != 0
+            || self.accounted_end_mask & !self.expected_end_mask != 0
             || self.sequence != u64::from(self.slice_index) + 1
         {
             return Err(Error::InvalidOrder);
         }
         let side = self.side_mask();
-        if self.expected_end_mask & side == 0 || self.consumed_end_mask & side != 0 {
+        if self.expected_end_mask & side == 0 || self.accounted_end_mask & side != 0 {
             return Err(Error::DuplicateCompletion);
         }
         Ok(())
@@ -378,18 +377,17 @@ pub struct OwnerSettlementReceiptAccountingPlanV1 {
     pub owner_settlement_body: [u8; OWNER_SETTLEMENT_BODY_V1_BYTES],
     /// Receipt to write.
     pub receipt: [u8; 32],
-    /// Required complete Egg/reservation transition identity.
-    pub settlement_transition_id: [u8; 32],
-    /// Next independent end-consumption bitmap.
-    pub receipt_consumed_end_mask: u8,
+    /// Exact action-25 accounting replay identity.
+    pub receipt_accounting_id: [u8; 32],
+    /// Next independent end-accounting bitmap.
+    pub receipt_accounted_end_mask: u8,
 }
 
-/// Account for one receipt end inside a larger atomic settlement transition.
+/// Account for one receipt end without moving cash or Eggs.
 ///
-/// This plan is deliberately not an executable value-movement plan. A live
-/// SBF action must join `settlement_transition_id` to the complete paired or
-/// virtual Egg/reservation poststate and write that state, this row, and the
-/// receipt latch atomically.
+/// A live action 25 writes this row, the Reservation accounting cursor, and
+/// the receipt accounting latch atomically. Later delivery uses a disjoint ID
+/// and latch.
 pub fn prepare_account_receipt_end_v1(
     account: AuthenticatedOwnerSettlementAccountV1,
     receipt: AuthenticatedSettlementReceiptEndV1,
@@ -415,8 +413,8 @@ pub fn prepare_account_receipt_end_v1(
         owner_settlement_account: account.address,
         owner_settlement_body: next.encode_body()?,
         receipt: receipt.receipt,
-        settlement_transition_id: receipt.settlement_transition_id,
-        receipt_consumed_end_mask: receipt.consumed_end_mask | receipt.side_mask(),
+        receipt_accounting_id: receipt.receipt_accounting_id,
+        receipt_accounted_end_mask: receipt.accounted_end_mask | receipt.side_mask(),
     })
 }
 
@@ -773,12 +771,38 @@ pub struct AuthenticatedOwnerFeeDebitV1 {
     pub payer_allocation_authorized: bool,
 }
 
+/// Adapter-authenticated identity of the canonical finalized owner-row bytes.
+///
+/// The digest is request-scoped and intentionally not copied into every owner
+/// row. Persistent replay safety belongs to the row's one-way state and to the
+/// in-place fee/finalization receipt owned by the outer runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct AuthenticatedOwnerFinalizationIdV1 {
+    /// Action-38 identity supplied by the immutable selector.
+    pub owner_finalization_id: [u8; 32],
+    /// `SHA-256(OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V1 || finalized_body)`.
+    pub finalized_row_data_id: [u8; 32],
+    /// OwnerSettlement account whose poststate was digested.
+    pub owner_settlement_account: [u8; 32],
+    /// Position atomically realized with that row.
+    pub position: [u8; 32],
+    /// Market identity.
+    pub market: [u8; 32],
+    /// Counted Epoch identity.
+    pub epoch: [u8; 32],
+    /// Final selected candidate identity.
+    pub candidate: [u8; 32],
+    /// Semantic owner.
+    pub owner: [u8; 32],
+    /// True only after the outer adapter derived the canonical row data ID.
+    pub derivation_authenticated: bool,
+}
+
 /// Atomic row, Position, and candidate-pot cash realization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct OwnerCashRealizationPlanV1 {
-    /// Exact once-only action-38 identity persisted in the owner row.
-    pub owner_finalization_id: [u8; 32],
     /// Owner row to write.
     pub owner_settlement_account: [u8; 32],
     /// Finalized owner-row body.
@@ -795,6 +819,16 @@ pub struct OwnerCashRealizationPlanV1 {
     pub disposition: OwnerSettlementDispositionV1,
 }
 
+/// Realization plan bound to the adapter-derived action-38 row-data identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct BoundOwnerCashRealizationPlanV1 {
+    /// Request-scoped identity equal to the canonical finalized-row data ID.
+    pub owner_finalization_id: [u8; 32],
+    /// Complete row, Position, and cash-pot poststate.
+    pub realization: OwnerCashRealizationPlanV1,
+}
+
 /// Realize one fully accumulated row into a buyer-first candidate pot.
 ///
 /// A sell-heavy row may temporarily refuse until earlier buyer rows have put
@@ -806,7 +840,6 @@ pub fn prepare_realize_owner_cash_v1(
     position: AuthenticatedPositionCashV1,
     fee: AuthenticatedOwnerFeeDebitV1,
     pot: SettlementCashPotV1,
-    owner_finalization_id: [u8; 32],
 ) -> Result<OwnerCashRealizationPlanV1> {
     pot.validate()?;
     let expected = account.accumulator.expectation;
@@ -831,11 +864,7 @@ pub fn prepare_realize_owner_cash_v1(
         return Err(Error::AuthorityUnavailable);
     }
     let mut next_row = account.accumulator;
-    let disposition = next_row.finalize(
-        position.cash_atoms,
-        position.reserved_cash_atoms,
-        owner_finalization_id,
-    )?;
+    let disposition = next_row.finalize(position.cash_atoms, position.reserved_cash_atoms)?;
     let consideration_debit = disposition
         .debit_atoms
         .checked_sub(disposition.selected_fee_atoms)
@@ -865,7 +894,6 @@ pub fn prepare_realize_owner_cash_v1(
     }
     next_pot.validate()?;
     Ok(OwnerCashRealizationPlanV1 {
-        owner_finalization_id,
         owner_settlement_account: account.address,
         owner_settlement_body: next_row.encode_body()?,
         position: position.position,
@@ -873,6 +901,40 @@ pub fn prepare_realize_owner_cash_v1(
         position_reserved_cash_atoms: disposition.position_reserved_cash_atoms,
         settlement_cash_pot: next_pot,
         disposition,
+    })
+}
+
+/// Bind a staged realization to the canonical finalized-row data identity.
+///
+/// The adapter computes the data ID from `owner_settlement_body`, authenticates
+/// that derivation, and then calls this function. This ordering avoids a hash
+/// circularity while keeping the unbound plan non-authorizing.
+pub fn bind_owner_cash_realization_id_v1(
+    realization: OwnerCashRealizationPlanV1,
+    finalization: AuthenticatedOwnerFinalizationIdV1,
+) -> Result<BoundOwnerCashRealizationPlanV1> {
+    realization.settlement_cash_pot.validate()?;
+    let row = OwnerSettlementAccumulatorV1::decode_body(&realization.owner_settlement_body)?;
+    let expected = row.expectation;
+    if row.state != 1
+        || !finalization.derivation_authenticated
+        || finalization.owner_finalization_id == [0; 32]
+        || finalization.owner_finalization_id != finalization.finalized_row_data_id
+        || finalization.owner_settlement_account != realization.owner_settlement_account
+        || finalization.position != realization.position
+        || finalization.market != expected.market
+        || finalization.epoch != expected.epoch
+        || finalization.candidate != expected.candidate
+        || finalization.owner != expected.owner
+        || realization.settlement_cash_pot.expectation.market != expected.market
+        || realization.settlement_cash_pot.expectation.epoch != expected.epoch
+        || realization.settlement_cash_pot.expectation.candidate != expected.candidate
+    {
+        return Err(Error::AuthorityUnavailable);
+    }
+    Ok(BoundOwnerCashRealizationPlanV1 {
+        owner_finalization_id: finalization.owner_finalization_id,
+        realization,
     })
 }
 
@@ -1012,6 +1074,20 @@ mod tests {
         }
     }
 
+    fn finalization(owner: u8, identity: u8) -> AuthenticatedOwnerFinalizationIdV1 {
+        AuthenticatedOwnerFinalizationIdV1 {
+            owner_finalization_id: key(identity),
+            finalized_row_data_id: key(identity),
+            owner_settlement_account: key(owner + 16),
+            position: key(owner + 32),
+            market: key(1),
+            epoch: key(2),
+            candidate: key(3),
+            owner: key(owner),
+            derivation_authenticated: true,
+        }
+    }
+
     #[test]
     fn buyer_first_funds_seller_and_closes_exact_rounding() {
         let first = prepare_realize_owner_cash_v1(
@@ -1019,9 +1095,10 @@ mod tests {
             position(4, 2, 2),
             zero_fee(4),
             pot(),
-            key(40),
         )
         .unwrap();
+        let bound = bind_owner_cash_realization_id_v1(first, finalization(4, 40)).unwrap();
+        assert_eq!(bound.owner_finalization_id, key(40));
         assert_eq!(first.settlement_cash_pot.available_consideration_atoms, 2);
         assert_eq!(first.settlement_cash_pot.realized_rounding_price_units, 5);
 
@@ -1030,7 +1107,6 @@ mod tests {
             position(5, 0, 0),
             zero_fee(5),
             first.settlement_cash_pot,
-            key(41),
         )
         .unwrap();
         assert_eq!(second.settlement_cash_pot.available_consideration_atoms, 1);
@@ -1046,7 +1122,6 @@ mod tests {
                 position(5, 0, 0),
                 zero_fee(5),
                 pot(),
-                key(41),
             ),
             Err(Error::SettlementLiquidityUnavailable)
         );
