@@ -9,13 +9,14 @@
 //! action remains refused before reading accounts.
 
 use clutch_dealer_runtime_contract::{
-    CoveredDealerTerminalV2, DealerSeriesObligationBindingV1, FixedCodec, Id,
+    CoveredDealerTerminalV2, DealerSeriesObligationBindingV1, DealerStateV3, FixedCodec, Id,
 };
 use clutch_solana_layout::registry::{
     DealerFacilityAction, DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
     DEALER_COVERED_SELECTION_ACCOUNT_TAG, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
     DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
     DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+    DEALER_STATE_V3_ACCOUNT_BYTES, DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -135,6 +136,93 @@ pub(crate) struct AuthenticatedDealerSeriesObligationV1 {
     account_id: Id,
     bump: u8,
     binding: DealerSeriesObligationBindingV1,
+}
+
+/// Private exact account capability for Product-obligation-counting State V3.
+pub(crate) struct AuthenticatedDealerStateV3 {
+    account_id: Id,
+    bump: u8,
+    state: DealerStateV3,
+}
+
+impl AuthenticatedDealerStateV3 {
+    /// Exact physical State account.
+    pub(crate) const fn account_id(&self) -> Id {
+        self.account_id
+    }
+
+    /// Canonical State PDA bump.
+    pub(crate) const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    /// Borrow the complete authoritative State body.
+    pub(crate) const fn state(&self) -> &DealerStateV3 {
+        &self.state
+    }
+}
+
+/// Authenticate an exact `0x94/v2` Dealer State account and both independently
+/// owned rent-principal compartments.
+pub(crate) fn authenticate_dealer_state_v3(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<AuthenticatedDealerStateV3> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(
+        account.is_writable == writable,
+        if writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
+    require(
+        account.data_len() == DEALER_STATE_V3_ACCOUNT_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let (envelope, state) = decode_dealer_account_body_v1::<DealerStateV3>(
+        &data,
+        DEALER_STATE_V3_ACCOUNT_TAG,
+        DEALER_STATE_V3_ACCOUNT_VERSION,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(data);
+    expect_pda(
+        account.key,
+        seeds::dealer_state_v2_pda(program_id, &state.base.facility_id.bytes()),
+        Some(envelope.bump),
+    )?;
+    let root_floor = state
+        .base
+        .rent
+        .refundable_live_principal
+        .checked_add(state.base.rent.permanent_tombstone_principal)
+        .and_then(|value| value.checked_add(state.base.rent.donation_floor))
+        .ok_or(ClutchError::Arithmetic)?;
+    let upgrade_floor = state
+        .product_upgrade_rent
+        .refundable_principal
+        .checked_add(state.product_upgrade_rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        account.lamports()
+            >= root_floor
+                .checked_add(upgrade_floor)
+                .ok_or(ClutchError::Arithmetic)?,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedDealerStateV3 {
+        account_id: Id::from_bytes(account.key.to_bytes()),
+        bump: envelope.bump,
+        state,
+    })
 }
 
 impl AuthenticatedDealerSeriesObligationV1 {
