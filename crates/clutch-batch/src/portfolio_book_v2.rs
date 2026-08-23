@@ -451,6 +451,39 @@ pub fn authenticate_complete_portfolio_book_ref_v2<'a, A: PortfolioBookAdapterV2
     })
 }
 
+/// Authenticate a read-only-root complete book directly into caller-owned
+/// storage and return only a borrowed private capability.
+///
+/// This is the frame-bounded counterpart of
+/// [`authenticate_complete_portfolio_book_v2`]. It is used by settlement
+/// consumers which must authenticate the counted root but do not mutate it.
+pub fn authenticate_complete_portfolio_book_into_v2<
+    'a,
+    A: PortfolioBookInPlaceAdapterV2,
+>(
+    adapter: &A,
+    owner_program_id: PortfolioBookIdentityV2,
+    domain: &EconomicDomainV2,
+    page_set: PortfolioBookPageSetRecordV2,
+    output: &'a mut EconomicBookV2,
+) -> Result<AuthenticatedCompletePortfolioBookRefV2<'a>, PortfolioBookAuthorityErrorV2> {
+    let projection = authenticate_complete_portfolio_book_accounts_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        page_set,
+        false,
+    )?;
+    if !adapter.project_complete_economic_book_into(&projection, output) {
+        return Err(PortfolioBookAuthorityErrorV2::ProjectionAuthenticationFailed);
+    }
+    validate_projected_complete_book_v2(output, domain, projection.page_set.order_count)?;
+    Ok(AuthenticatedCompletePortfolioBookRefV2 {
+        page_set: projection.page_set,
+        economic_book: output,
+    })
+}
+
 /// Authenticate the same complete owner-blind book while requiring the exact
 /// counted SettlementRoot to be writable in the caller's atomic transition.
 ///

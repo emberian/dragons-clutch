@@ -12,6 +12,7 @@ use crate::accounts::{expect_pda, require, require_count, require_signer, Outcom
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 use clutch_dealer_runtime_contract::{
+    advance_collect_v2, advance_deliver_v2, prepare_covered_dealer_row_progress_v1,
     dealer_runtime_liveness_policy_id_v1,
     prepare_begin_covered_lease_pot_v4, prepare_bind_epoch_v3,
     prepare_dealer_sponsor_funding_transfer_v1,
@@ -21,7 +22,8 @@ use clutch_dealer_runtime_contract::{
     prepare_lapse_epoch_v3, project_covered_dealer_position_v1,
     prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
     prepare_refund_cancelled_sponsor_v3, CoveredDealerSelectionContextV1,
-    CoveredDealerSelectionV1, DealerActionReceiptV1, DealerChildCountsV2,
+    CoveredDealerRowAssetTransitionV1, CoveredDealerSelectionV1, DealerActionReceiptV1,
+    DealerChildCountsV2,
     DealerEpochCloseCreditsV2, DealerEpochCloseRentV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
@@ -33,20 +35,33 @@ use clutch_dealer_runtime_contract::{
     SettlementPotPhaseV1, SettlementPotV2, SponsorCapitalDispositionV1,
 };
 use clutch_general_v2_contract::{
+    project_general_position_replay_prestate_v1, project_general_replay_transition_v1,
     CandidateWindowV4AccountV1, EconomicDomainV2AccountV1, GeneralEpochV6AccountV1,
-    MarketBindingV2, SelectedFeeRecordV1AccountV1, SettlementRootV1AccountV1,
+    GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1, MarketBindingV2,
+    SelectedFeeRecordV1AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
+    SettlementRootV1AccountV1,
     ECONOMIC_DOMAIN_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
     SELECTED_FEE_RECORD_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_BYTES, WINDOW_ACCOUNT_BYTES,
 };
 use clutch_batch::portfolio_book_v2::{
+    authenticate_complete_portfolio_book_into_v2,
     authenticate_complete_portfolio_book_for_root_transition_into_v2,
     AuthenticatedCompletePortfolioBookRefV2, PortfolioBookAccountExpectationV2,
     PortfolioBookAccountRoleV2, PortfolioBookAdapterV2, PortfolioBookInPlaceAdapterV2,
     PortfolioBookPageSetRecordV2, PortfolioCompleteBookProjectionExpectationV2,
     PORTFOLIO_BOOK_AUTHORITY_VERSION_V2, PORTFOLIO_BOOK_MAX_PAGES_V2,
 };
+use clutch_batch::portfolio_execution_v2::{
+    authenticate_selected_portfolio_order_v2, PortfolioAccountExpectationV2,
+    PortfolioAccountRoleV2, PortfolioAdapterV2, PortfolioIdentityV2,
+    PortfolioSelectionMembershipExpectationV2, PortfolioTransitionExpectationV2,
+    PortfolioSettlementReceiptV5TransitionExpectationV2, SelectedPortfolioOrderRecordV2,
+    PortfolioSourceOrderKindV2, PORTFOLIO_EXECUTION_VERSION_V2,
+    PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
+};
 use clutch_batch::dealer_leg_v2::DealerLegVerdictV2;
-use clutch_batch::relation_v2::{EconomicBookV2, EconomicDomainV2};
+use clutch_batch::relation_v2::{EconomicBookV2, EconomicCandidateV2, EconomicDomainV2};
+use clutch_batch::Side;
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, revenue_policy_digest, REVENUE_POLICY_BYTES,
 };
@@ -78,7 +93,9 @@ use clutch_retirement::{
     AdapterPositionPurposeBindingV3, DeletableRentOwnerV1 as ReplayRentOwnerV1, Identity32V1,
     PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, PositionV3Fields,
     PositionV3Sha256Backend, RentSplitV2, POSITION_TOMBSTONE_V3_BYTES, POSITION_V3_BYTES,
+    ReplayV3Envelope,
 };
+use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 use clutch_solana_layout::registry::{
     DealerFacilityAction, DEALER_ACTION_RECEIPT_ACCOUNT_BYTES, DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
     DEALER_ACTION_RECEIPT_ACCOUNT_VERSION, DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES,
@@ -99,6 +116,14 @@ use clutch_solana_layout::registry::{
 use clutch_solana_layout::order_page_v5::{
     verify_page_set_v5_streaming, OrderPageHeaderV5, OrderSlotCursorV5, ORDER_PAGE_V5_BYTES,
 };
+use clutch_solana_layout::reservation::{
+    ReservationPlan, ORDER_KIND_PORTFOLIO, RESERVATION_STATE_CONSUMED,
+    RESERVATION_STATE_ENTITLED,
+};
+use clutch_solana_layout::reservation_v9::{
+    ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9,
+};
+use clutch_solana_layout::OrderSlot;
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use clutch_solana_layout::{account_len, PriceGridAccount};
 use solana_account_info::AccountInfo;
@@ -131,6 +156,7 @@ const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize = 20;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
 const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 40;
+const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 33;
 
 /// Static source for the adapter's heap-resident complete RelationV2 book.
 ///
@@ -297,11 +323,15 @@ fn dealer_body<T: FixedCodec>(
     Ok((envelope.bump, body))
 }
 
-fn authenticate_state(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<DealerStateV2> {
+fn authenticate_state_with_access(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<DealerStateV2> {
     let (bump, state) = dealer_body::<DealerStateV2>(
         program_id,
         account,
-        true,
+        writable,
         DEALER_STATE_V2_ACCOUNT_TAG,
         DEALER_STATE_V2_ACCOUNT_VERSION,
         DEALER_STATE_V2_ACCOUNT_BYTES,
@@ -322,6 +352,10 @@ fn authenticate_state(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome
         ClutchError::DealerPolicyRentMismatch,
     )?;
     Ok(state)
+}
+
+fn authenticate_state(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<DealerStateV2> {
+    authenticate_state_with_access(program_id, account, true)
 }
 
 fn authenticate_dependency(
@@ -404,15 +438,16 @@ fn authenticate_lp_page(
     Ok(page)
 }
 
-fn authenticate_epoch_binding(
+fn authenticate_epoch_binding_with_access(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     facility_id: Id,
+    writable: bool,
 ) -> Outcome<(u8, DealerEpochBindingV2)> {
     let (bump, epoch) = dealer_body::<DealerEpochBindingV2>(
         program_id,
         account,
-        true,
+        writable,
         DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG,
         DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION,
         DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES,
@@ -432,6 +467,14 @@ fn authenticate_epoch_binding(
         ClutchError::DealerPolicyRentMismatch,
     )?;
     Ok((bump, epoch))
+}
+
+fn authenticate_epoch_binding(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    facility_id: Id,
+) -> Outcome<(u8, DealerEpochBindingV2)> {
+    authenticate_epoch_binding_with_access(program_id, account, facility_id, true)
 }
 
 fn authenticate_action_receipt(
@@ -497,7 +540,10 @@ fn authenticate_position_and_replay(
     )?;
     require(replay_account.is_writable, ClutchError::NotWritable)?;
     require(
-        !position_account.executable && !replay_account.executable,
+        !position_account.executable
+            && !replay_account.executable
+            && !position_account.is_signer
+            && !replay_account.is_signer,
         ClutchError::ExecutableAccount,
     )?;
     require(
@@ -508,6 +554,16 @@ fn authenticate_position_and_replay(
     )?;
     let position = PositionAccountV3::decode(&position_account.data.borrow())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let position_rent = position.rent();
+    let position_floor = position_rent
+        .refundable_live_principal
+        .checked_add(position_rent.permanent_tombstone_principal)
+        .and_then(|value| value.checked_add(position_rent.donation_floor))
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        position_account.lamports() >= position_floor,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
     let binding = FacilityPositionBindingV2 {
         facility_id: state.facility_id,
         policy_id: state.policy_id,
@@ -536,6 +592,15 @@ fn authenticate_position_and_replay(
     )?;
     let replay =
         DealerFacilityReplayV1::decode(&replay_account.data.borrow()).map_err(dealer_fault)?;
+    let replay_rent = replay.rent();
+    let replay_floor = replay_rent
+        .refundable_principal()
+        .checked_add(replay_rent.donation_floor())
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        replay_account.lamports() >= replay_floor,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
     let replay_seeds = replay.pda_seeds();
     expect_pda(
         replay_account.key,
@@ -802,6 +867,7 @@ struct DealerCompleteBookAdapterV2<'a> {
     root_account_id: [u8; 32],
     root_data_id: [u8; 32],
     root_generation: u64,
+    root_writable: bool,
     feed_account_id: [u8; 32],
     feed_data_id: [u8; 32],
     page_account_ids: [[u8; 32]; PORTFOLIO_BOOK_MAX_PAGES_V2],
@@ -822,7 +888,7 @@ impl PortfolioBookAdapterV2 for DealerCompleteBookAdapterV2<'_> {
                     && expected.data_semantic_id == self.root_data_id
                     && expected.generation == Some(self.root_generation)
                     && expected.page_index.is_none()
-                    && expected.writable
+                    && expected.writable == self.root_writable
             }
             PortfolioBookAccountRoleV2::RetainedFeed => {
                 expected.account_id == self.feed_account_id
@@ -912,6 +978,93 @@ impl PortfolioBookInPlaceAdapterV2 for DealerCompleteBookAdapterV2<'_> {
     }
 }
 
+struct DealerSelectedRowAdapterV1 {
+    record: SelectedPortfolioOrderRecordV2,
+    accounts: [PortfolioAccountExpectationV2; 4],
+}
+
+impl PortfolioAdapterV2 for DealerSelectedRowAdapterV1 {
+    fn authenticate_account(&self, expected: &PortfolioAccountExpectationV2) -> bool {
+        self.accounts.iter().any(|account| account == expected)
+    }
+
+    fn authenticate_selection_membership(
+        &self,
+        expected: &PortfolioSelectionMembershipExpectationV2,
+        relation_order: &clutch_batch::relation_v2::EconomicOrderV2,
+        candidate: &EconomicCandidateV2,
+    ) -> bool {
+        let at = usize::from(self.record.order_index);
+        expected.record == self.record
+            && relation_order.order_id == self.record.order_id
+            && relation_order.side == self.record.side
+            && candidate.fills.get(at).copied() == Some(self.record.selected_fill_units)
+    }
+
+    fn authenticate_transition(&self, _expected: &PortfolioTransitionExpectationV2) -> bool {
+        false
+    }
+
+    fn derive_settlement_receipt_v5_post_data_ids(
+        &self,
+        _expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
+    ) -> Option<[PortfolioIdentityV2; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]> {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DealerPageRowMembershipV1 {
+    page_index: u16,
+    slot_index: u8,
+    page_semantic_id: [u8; 32],
+    owner_id: [u8; 32],
+    order_generation: u64,
+    position_generation: u64,
+    slot: OrderSlot,
+}
+
+fn find_dealer_page_membership_v1(
+    pages: &[AccountInfo<'_>],
+    order_id: [u8; 32],
+) -> Outcome<DealerPageRowMembershipV1> {
+    let mut found = None;
+    let mut page = 0usize;
+    while page < pages.len() {
+        let data = pages[page]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let header = OrderPageHeaderV5::decode(&data)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let mut cursor = OrderSlotCursorV5::new(&data)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let mut slot = 0usize;
+        while slot < usize::from(header.order_count) {
+            let verified = cursor
+                .next_slot()
+                .ok_or(ClutchError::MismatchedState)?
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            if let OrderSlot::Portfolio(order) = verified.slot {
+                if order.order_id.bytes() == order_id {
+                    require(found.is_none(), ClutchError::MismatchedState)?;
+                    found = Some(DealerPageRowMembershipV1 {
+                        page_index: header.page_index,
+                        slot_index: verified.slot_index,
+                        page_semantic_id: header.page_digest.bytes(),
+                        owner_id: order.owner.bytes(),
+                        order_generation: order.generation,
+                        position_generation: verified.position_generation,
+                        slot: verified.slot,
+                    });
+                }
+            }
+            slot += 1;
+        }
+        page += 1;
+    }
+    found.ok_or(ClutchError::MismatchedState.into())
+}
+
 #[inline(never)]
 fn with_authenticated_complete_dealer_book_v2<R>(
     program_id: &Pubkey,
@@ -920,10 +1073,18 @@ fn with_authenticated_complete_dealer_book_v2<R>(
     feed_account: &AccountInfo<'_>,
     domain: &EconomicDomainV2AccountV1,
     page_accounts: &[AccountInfo<'_>],
+    root_writable: bool,
     consume: impl FnOnce(&AuthenticatedCompletePortfolioBookRefV2<'_>, &[u8]) -> Outcome<R>,
 ) -> Outcome<R> {
     require(root_account.owner == program_id, ClutchError::WrongProgramOwner)?;
-    require(root_account.is_writable, ClutchError::NotWritable)?;
+    require(
+        root_account.is_writable == root_writable,
+        if root_writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
     require(
         !root_account.is_signer && !root_account.executable,
         ClutchError::MismatchedState,
@@ -952,6 +1113,11 @@ fn with_authenticated_complete_dealer_book_v2<R>(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let (feed_header, _) = decode_sealed_candidate_feed_v1(&feed_data)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let feed_floor = feed_header
+        .rent
+        .refundable_principal
+        .checked_add(feed_header.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
     expect_pda(
         feed_account.key,
         seeds::general_v2_feed_pda(program_id, &feed_header.node.bytes()),
@@ -963,8 +1129,29 @@ fn with_authenticated_complete_dealer_book_v2<R>(
         true,
     )?;
     require(
-        root.retained_feed().bytes() == feed_account.key.to_bytes()
-            && root.candidate_bundle_digest() == feed_data_id,
+        feed_account.lamports() >= feed_floor
+            && root.retained_feed().bytes() == feed_account.key.to_bytes()
+            && root.candidate_bundle_digest() == feed_data_id
+            && feed_header.epoch == root.epoch()
+            && feed_header.market == root.market()
+            && feed_header.order_set == root.order_set()
+            && feed_header.relation_policy_id == domain.transcript.relation_policy_id
+            && feed_header.economic_domain_digest
+                == clutch_general_v2_contract::economic_domain_digest_v2(
+                    &RuntimeSha256,
+                    domain.transcript,
+                )?
+            && feed_header.native_claim_basis_id == domain.transcript.native_claim_basis_id
+            && feed_header.price_measure_policy_v1_id
+                == domain.transcript.price_measure_policy_v1_id
+            && feed_header.settlement_candidate_id == root.settlement_candidate_id()
+            && feed_header.settlement_witness_digest == root.settlement_witness_digest()
+            && feed_header.epoch_generation == root.epoch_generation()
+            && feed_header.outcome_count == root.outcome_count()
+            && feed_header.order_count == root.order_count()
+            && feed_header.price_scale == domain.transcript.price_scale
+            && feed_header.candidate_kind
+                == clutch_general_v2_contract::SettlementCandidateKindV1::CoveredDealer,
         ClutchError::MismatchedState,
     )?;
     require(
@@ -1077,6 +1264,7 @@ fn with_authenticated_complete_dealer_book_v2<R>(
         root_account_id: root_account.key.to_bytes(),
         root_data_id: root_data_id.bytes(),
         root_generation: root.epoch_generation(),
+        root_writable,
         feed_account_id: feed_account.key.to_bytes(),
         feed_data_id: feed_data_id.bytes(),
         page_account_ids,
@@ -1087,13 +1275,23 @@ fn with_authenticated_complete_dealer_book_v2<R>(
     };
     let mut authenticated_book =
         super::orders_batch::boxed_copy_of(&EMPTY_DEALER_ECONOMIC_BOOK_V2)?;
-    let authenticated = authenticate_complete_portfolio_book_for_root_transition_into_v2(
-        &adapter,
-        program_id.to_bytes(),
-        &relation_domain,
-        page_set,
-        &mut authenticated_book,
-    )
+    let authenticated = if root_writable {
+        authenticate_complete_portfolio_book_for_root_transition_into_v2(
+            &adapter,
+            program_id.to_bytes(),
+            &relation_domain,
+            page_set,
+            &mut authenticated_book,
+        )
+    } else {
+        authenticate_complete_portfolio_book_into_v2(
+            &adapter,
+            program_id.to_bytes(),
+            &relation_domain,
+            page_set,
+            &mut authenticated_book,
+        )
+    }
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     // The borrowed capability retains only `authenticated_book`; the adapter
     // owns no second complete-book allocation.
@@ -1168,9 +1366,10 @@ fn authenticate_covered_root_inputs_v1(
     binding_account: &AccountInfo<'_>,
     grid_account: &AccountInfo<'_>,
     policy: &clutch_dealer_runtime_contract::DealerPolicyV1,
+    root_writable: bool,
 ) -> Outcome<AuthenticatedCoveredRootInputsV1> {
     for (account, writable, length) in [
-        (root_account, true, SETTLEMENT_ROOT_ACCOUNT_BYTES),
+        (root_account, root_writable, SETTLEMENT_ROOT_ACCOUNT_BYTES),
         (domain_account, false, ECONOMIC_DOMAIN_ACCOUNT_BYTES),
         (binding_account, false, MARKET_BINDING_ACCOUNT_BYTES_V2),
         (grid_account, false, account_len::PRICE_GRID),
@@ -1225,8 +1424,14 @@ fn authenticate_covered_root_inputs_v1(
         .refundable_principal
         .checked_add(root.root_rent().donation_floor)
         .ok_or(ClutchError::Arithmetic)?;
+    let domain_floor = domain
+        .rent
+        .refundable_principal
+        .checked_add(domain.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
     require(
         root_account.lamports() >= root_floor
+            && domain_account.lamports() >= domain_floor
             && root.market_binding().bytes() == binding_account.key.to_bytes()
             && root.market().bytes() == binding.base().market.bytes()
             && root.market_instance_v2_id().bytes() == policy.market_instance_v2_id.bytes()
@@ -1237,9 +1442,17 @@ fn authenticate_covered_root_inputs_v1(
                 == policy.price_measure_policy_id.bytes()
             && binding.base().native_claim_basis_id.bytes() == policy.claim_basis_id.bytes()
             && binding.base().outcome_count == policy.outcome_count
+            && binding.base().neutral_sink.bytes() == policy.neutral_sink.bytes()
+            && binding.base().price_scale == grid.price_scale
             && domain.epoch.bytes() == root.epoch().bytes()
             && domain.transcript.market_instance_v2_id.bytes()
                 == policy.market_instance_v2_id.bytes()
+            && domain.transcript.relation_policy_id == binding.base().relation_policy_id
+            && domain.transcript.price_measure_policy_v1_id
+                == binding.base().price_measure_policy_v1_id
+            && domain.transcript.native_claim_basis_id == binding.base().native_claim_basis_id
+            && domain.transcript.outcome_count == binding.base().outcome_count
+            && domain.transcript.price_scale == binding.base().price_scale
             && grid.realm.bytes() == policy.realm_id.bytes(),
         ClutchError::MismatchedState,
     )?;
@@ -1537,6 +1750,241 @@ fn authenticate_general_position(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     Ok((position, projection))
+}
+
+fn authenticate_general_position_replay_for_dealer(
+    program_id: &Pubkey,
+    root: &SettlementRootV1AccountV1,
+    market: DealerPositionMarketJoinV1,
+    owner: Id,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+) -> Outcome<(AuthenticatedPositionV3, GeneralPositionReplayPrestateV1)> {
+    require(
+        position_account.owner == program_id && replay_account.owner == program_id,
+        ClutchError::WrongProgramOwner,
+    )?;
+    require(
+        position_account.is_writable && replay_account.is_writable,
+        ClutchError::NotWritable,
+    )?;
+    require(
+        !position_account.is_signer
+            && !position_account.executable
+            && !replay_account.is_signer
+            && !replay_account.executable
+            && position_account.data_len() == POSITION_V3_BYTES
+            && replay_account.data_len()
+                == clutch_general_v2_contract::GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+        ClutchError::MismatchedState,
+    )?;
+    let position = PositionAccountV3::decode(&position_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let position_rent = position.rent();
+    let position_floor = position_rent
+        .refundable_live_principal
+        .checked_add(position_rent.permanent_tombstone_principal)
+        .and_then(|value| value.checked_add(position_rent.donation_floor))
+        .ok_or(ClutchError::Arithmetic)?;
+    let purpose_binding = Identity32V1::new(root.market().bytes())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let position_pda = seeds::position_v3_pda(
+        program_id,
+        &root.market_instance_v2_id().bytes(),
+        &owner.bytes(),
+        PositionPurposeV3::General,
+        &purpose_binding.bytes(),
+    );
+    let replay_pda = seeds::purpose_replay_v3_pda(
+        program_id,
+        &position_account.key.to_bytes(),
+        PositionPurposeV3::General,
+        &purpose_binding.bytes(),
+    );
+    let fields = position.fields();
+    require(
+        *position_account.key == position_pda.0
+            && position.stored_bump() == position_pda.1
+            && *replay_account.key == replay_pda.0
+            && fields.purpose == PositionPurposeV3::General
+            && fields.lifecycle == PositionLifecycleV3::Open
+            && fields.market_instance_id.bytes() == root.market_instance_v2_id().bytes()
+            && fields.owner.bytes() == owner.bytes()
+            && fields.controller.bytes() == owner.bytes()
+            && fields.purpose_binding_id == purpose_binding
+            && fields.replay_account.bytes() == replay_account.key.to_bytes()
+            && fields.outcome_count == root.outcome_count(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        fields.market_instance_id.bytes() == market.market_instance_v2_id.bytes()
+            && fields.realm_id.bytes() == market.realm_id.bytes()
+            && fields.collateral_policy_id.bytes() == market.collateral_policy_id.bytes()
+            && fields.collateral_release_id.bytes() == market.collateral_release_id.bytes()
+            && fields.outcome_count == market.outcome_count
+            && position_account.lamports() >= position_floor,
+        ClutchError::MismatchedState,
+    )?;
+    let semantic_id = position
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .bytes();
+    let authenticated = AuthenticatedPositionV3 {
+        account: position_account.key.to_bytes(),
+        general_market_runtime: root.market().bytes(),
+        semantic: position,
+        semantic_id,
+        account_authenticated: true,
+        semantic_id_authenticated: true,
+        market_binding_authenticated: true,
+        writable: true,
+    };
+    authenticated
+        .validate_writable()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let replay_data = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let envelope = ReplayV3Envelope::decode(&replay_data, &RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+    let replay_rent = envelope.header().rent();
+    let replay_floor = replay_rent
+        .refundable_principal()
+        .checked_add(replay_rent.donation_floor())
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        replay_account.lamports() >= replay_floor,
+        ClutchError::MismatchedState,
+    )?;
+    let replay = project_general_position_replay_prestate_v1(
+        clutch_general_v2_contract::Id32::new(replay_account.key.to_bytes())?,
+        replay_pda.1,
+        envelope.header().next_sequence(),
+        &replay_data,
+        authenticated,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+    Ok((authenticated, replay))
+}
+
+fn prepare_dealer_row_collect_post(
+    reservation: ReservationAccountV9,
+    position: AuthenticatedPositionV3,
+    row: clutch_dealer_runtime_contract::CoveredDealerSettlementRowV1,
+) -> Outcome<(ReservationAccountV9, PositionSettlementPoststateV3)> {
+    let mut body = reservation.body();
+    let fields = position.semantic.fields();
+    require(
+        body.order_id.bytes() == row.order_id().bytes()
+            && body.owner.bytes() == row.owner_id().bytes()
+            && body.position_generation == row.position_generation()
+            && body.order_kind == ORDER_KIND_PORTFOLIO
+            && body.state == RESERVATION_STATE_ENTITLED
+            && body.entitled_units == row.fill_units()
+            && body.consumed_units == 0
+            && body.paid_units == 0
+            && fields.generation == row.position_generation(),
+        ClutchError::MismatchedState,
+    )?;
+    let mut next_fields = fields;
+    match row.side() {
+        Side::Buy => {
+            require(body.side == 0, ClutchError::MismatchedState)?;
+            next_fields.cash_atoms = next_fields
+                .cash_atoms
+                .checked_sub(row.collect_slice().cash_atoms)
+                .ok_or(ClutchError::Arithmetic)?;
+            next_fields.reserved_cash_atoms = next_fields
+                .reserved_cash_atoms
+                .checked_sub(body.remaining_cash_atoms)
+                .ok_or(ClutchError::Arithmetic)?;
+            body.remaining_cash_atoms = 0;
+        }
+        Side::Sell => {
+            require(body.side == 1, ClutchError::MismatchedState)?;
+            let eggs = row.collect_slice().eggs;
+            let mut outcome = 0usize;
+            while outcome < MAX_OUTCOMES {
+                let remainder = body.remaining_internal[outcome]
+                    .checked_sub(eggs[outcome])
+                    .ok_or(ClutchError::Arithmetic)?;
+                next_fields.native_eggs[outcome] = next_fields.native_eggs[outcome]
+                    .checked_add(remainder)
+                    .ok_or(ClutchError::Arithmetic)?;
+                body.remaining_internal[outcome] = 0;
+                outcome += 1;
+            }
+        }
+    }
+    body.remaining_cash_atoms = 0;
+    body.remaining_internal = [0; MAX_OUTCOMES];
+    let reservation_post = ReservationAccountV9::new(body, reservation.rent())?;
+    let semantic = PositionAccountV3::new(next_fields)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok((
+        reservation_post,
+        PositionSettlementPoststateV3 {
+            account: position.account,
+            general_market_runtime: position.general_market_runtime,
+            prestate_semantic_id: position.semantic_id,
+            semantic,
+        },
+    ))
+}
+
+fn prepare_dealer_row_deliver_post(
+    reservation: ReservationAccountV9,
+    position: AuthenticatedPositionV3,
+    row: clutch_dealer_runtime_contract::CoveredDealerSettlementRowV1,
+) -> Outcome<(ReservationAccountV9, PositionSettlementPoststateV3)> {
+    let mut body = reservation.body();
+    let mut fields = position.semantic.fields();
+    require(
+        body.order_id.bytes() == row.order_id().bytes()
+            && body.owner.bytes() == row.owner_id().bytes()
+            && body.position_generation == row.position_generation()
+            && body.order_kind == ORDER_KIND_PORTFOLIO
+            && body.state == RESERVATION_STATE_ENTITLED
+            && body.entitled_units == row.fill_units()
+            && body.remaining_cash_atoms == 0
+            && body.remaining_internal == [0; MAX_OUTCOMES]
+            && body.consumed_units == 0
+            && body.paid_units == 0
+            && fields.generation == row.position_generation(),
+        ClutchError::MismatchedState,
+    )?;
+    let delivered = row.deliver_slice();
+    fields.cash_atoms = fields
+        .cash_atoms
+        .checked_add(delivered.cash_atoms)
+        .ok_or(ClutchError::Arithmetic)?;
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        fields.native_eggs[outcome] = fields.native_eggs[outcome]
+            .checked_add(delivered.eggs[outcome])
+            .ok_or(ClutchError::Arithmetic)?;
+        outcome += 1;
+    }
+    fields.outstanding_reservations = fields
+        .outstanding_reservations
+        .checked_sub(1)
+        .ok_or(ClutchError::Arithmetic)?;
+    body.consumed_units = body.entitled_units;
+    body.paid_units = body.entitled_units;
+    body.state = RESERVATION_STATE_CONSUMED;
+    let reservation_post = ReservationAccountV9::new(body, reservation.rent())?;
+    let semantic = PositionAccountV3::new(fields)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok((
+        reservation_post,
+        PositionSettlementPoststateV3 {
+            account: position.account,
+            general_market_runtime: position.general_market_runtime,
+            prestate_semantic_id: position.semantic_id,
+            semantic,
+        },
+    ))
 }
 
 fn authenticate_controlled_general_position(
@@ -3184,6 +3632,7 @@ fn select_lease_and_begin(
         &accounts[21],
         &accounts[24],
         &policy,
+        true,
     )?;
     let root = root_inputs.root.as_ref();
     require(
@@ -3253,6 +3702,7 @@ fn select_lease_and_begin(
         &accounts[19],
         root_inputs.domain.as_ref(),
         &accounts[SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT..],
+        true,
         |book, feed_data| {
             let (feed_header, _) = decode_sealed_candidate_feed_v1(feed_data)
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -4608,6 +5058,638 @@ fn refund_cancelled_sponsor(
         .map_err(dealer_fault)
 }
 
+#[inline(never)]
+fn collect_or_deliver_row(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: DealerFacilityAction,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    require(
+        matches!(action, DealerFacilityAction::Collect | DealerFacilityAction::Deliver),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    let payload = DealerRuntimePayloadV1::decode(action, payload_bytes).map_err(dealer_fault)?;
+    let expected_count = COLLECT_DELIVER_FIXED_ACCOUNT_COUNT
+        .checked_add(usize::from(payload.book_page_count))
+        .ok_or(ClutchError::Arithmetic)?;
+    require_count(accounts, expected_count)?;
+    require(
+        sequence == payload.expected_replay_ordinal && payload.row_count == 1,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    require_aliases(accounts, (0, 17))?;
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let state = authenticate_state_with_access(program_id, &accounts[2], false)?;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let (position_binding, _facility_position, facility_replay, replay_binding) =
+        authenticate_position_and_replay(
+            program_id,
+            &accounts[2],
+            &accounts[3],
+            &accounts[4],
+            &policy,
+            &state,
+            false,
+        )?;
+    require(
+        facility_replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let (_epoch_bump, epoch) =
+        authenticate_epoch_binding_with_access(program_id, &accounts[6], state.facility_id, false)?;
+    let schedule = authenticate_schedule(program_id, &accounts[7])?;
+    let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+        program_id,
+        &dependency,
+        &accounts[8],
+        &accounts[9..16],
+        DealerLivenessCompartmentV1::Settlement.index(),
+    )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &position_binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let settlement_runtime =
+        runtime_states[DealerLivenessCompartmentV1::Settlement.index()];
+    require(
+        settlement_runtime.identity.payer.bytes() == accounts[17].key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let (_selection_bump, selection) = dealer_body::<CoveredDealerSelectionV1>(
+        program_id,
+        &accounts[18],
+        false,
+        DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+        DEALER_COVERED_SELECTION_ACCOUNT_VERSION,
+        DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+    )?;
+    let (lease_bump, lease) = dealer_body::<DealerLeaseV2>(
+        program_id,
+        &accounts[19],
+        false,
+        DEALER_LEASE_V2_ACCOUNT_TAG,
+        DEALER_LEASE_V2_ACCOUNT_VERSION,
+        DEALER_LEASE_V2_ACCOUNT_BYTES,
+    )?;
+    let (pot_bump, pot) = dealer_body::<SettlementPotV2>(
+        program_id,
+        &accounts[20],
+        true,
+        DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG,
+        DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
+        DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES,
+    )?;
+    expect_pda(
+        accounts[19].key,
+        seeds::dealer_lease_v2_pda(program_id, &state.facility_id.bytes(), state.generation),
+        Some(lease_bump),
+    )?;
+    expect_pda(
+        accounts[20].key,
+        seeds::dealer_pot_v2_pda(program_id, &state.facility_id.bytes(), state.generation),
+        Some(pot_bump),
+    )?;
+    selection
+        .validate_lease_pot(&lease, &pot, &epoch, &policy)
+        .map_err(dealer_fault)?;
+
+    let root_inputs = authenticate_covered_root_inputs_v1(
+        program_id,
+        &accounts[21],
+        &accounts[23],
+        &accounts[30],
+        &accounts[31],
+        &policy,
+        false,
+    )?;
+    let root = root_inputs.root.as_ref();
+    let domain = root_inputs.domain.as_ref();
+    let binding = root_inputs.binding.as_ref();
+    let grid = root_inputs.grid.as_ref();
+    let counts = root.counts();
+    require(
+        selection.settlement_root_account_id == id(accounts[21].key)
+            && selection.retained_feed_account_id == id(accounts[22].key)
+            && selection.economic_domain_id == id(accounts[23].key)
+            && selection.settlement_candidate_id
+                == Id::from_bytes(root.settlement_candidate_id().bytes())
+            && selection.selection_account_id == id(accounts[18].key)
+            && selection.lease_account_id == id(accounts[19].key)
+            && selection.settlement_pot_account_id == id(accounts[20].key)
+            && lease.lease_account_id == id(accounts[19].key)
+            && lease.settlement_pot_id == id(accounts[20].key)
+            && epoch.epoch_account_id == Id::from_bytes(root.epoch().bytes())
+            && epoch.general_epoch_generation == root.epoch_generation()
+            && matches!(
+                root.phase(),
+                SettlementRootPhaseV1::Materializing | SettlementRootPhaseV1::Settling
+            )
+            && root.retained_feed_state() == SettlementRootChildStateV1::Live
+            && counts.expected_dealer_children == 1
+            && counts.admitted_dealer_children == 1
+            && counts.live_dealer_children == 1,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        accounts[18].key,
+        seeds::dealer_covered_selection_pda(
+            program_id,
+            &root.epoch().bytes(),
+            &root.settlement_candidate_id().bytes(),
+        ),
+        Some(selection.stored_bump),
+    )?;
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        &accounts[32],
+        ContentId::from_bytes(binding.base().market_genesis_profile_v2_id.bytes()),
+    )?;
+    require(
+        genesis.value().realm_id.bytes() == policy.realm_id.bytes()
+            && genesis.value().profile_id.bytes() == policy.profile_id.bytes()
+            && genesis.value().price_grid_id.bytes() == grid.grid.bytes()
+            && genesis.value().relation_policy_id.bytes() == policy.relation_v2_id.bytes()
+            && genesis.value().fee_policy_id.bytes() == policy.fee_policy_id.bytes()
+            && genesis.value().price_measure_policy_id.bytes()
+                == policy.price_measure_policy_id.bytes()
+            && genesis.value().score_policy_id.bytes() == root.score_policy_id().bytes()
+            && genesis.value().coordinate_domain_min
+                == domain.transcript.coordinate_domain_min
+            && genesis.value().coordinate_domain_max
+                == domain.transcript.coordinate_domain_max,
+        ClutchError::MismatchedState,
+    )?;
+
+    for (account, rent_owner) in [
+        (&accounts[18], selection.rent),
+        (&accounts[19], lease.rent),
+        (&accounts[20], pot.rent),
+    ] {
+        let floor = rent_owner
+            .refundable_principal
+            .checked_add(rent_owner.donation_floor)
+            .ok_or(ClutchError::Arithmetic)?;
+        require(
+            account.lamports() >= floor && rent_owner.neutral_sink == policy.neutral_sink,
+            ClutchError::DealerPolicyRentMismatch,
+        )?;
+    }
+
+    require(
+        accounts[24].owner == program_id
+            && accounts[24].is_writable
+            && accounts[24].data_len() == RESERVATION_ACCOUNT_BYTES_V9,
+        ClutchError::MismatchedState,
+    )?;
+    let reservation = ReservationAccountV9::decode(&accounts[24].data.borrow())?;
+    let reservation_body = reservation.body();
+    let reservation_rent = reservation.rent();
+    let reservation_floor = reservation_rent
+        .refundable_principal
+        .checked_add(reservation_rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        accounts[24].lamports() >= reservation_floor,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        accounts[24].key,
+        seeds::general_v2_reservation_v9_pda(
+            program_id,
+            &reservation_body.reservation.bytes(),
+        ),
+        Some(reservation_body.stored_bump),
+    )?;
+    let owner = Id::from_bytes(reservation_body.owner.bytes());
+    let market = DealerPositionMarketJoinV1 {
+        market_instance_v2_id: policy.market_instance_v2_id,
+        realm_id: policy.realm_id,
+        collateral_policy_id: position_binding.collateral_policy_id,
+        collateral_release_id: position_binding.collateral_release_id,
+        outcome_count: policy.outcome_count,
+    };
+    let (user_position, user_replay) = authenticate_general_position_replay_for_dealer(
+        program_id,
+        root,
+        market,
+        owner,
+        &accounts[25],
+        &accounts[26],
+    )?;
+    let rent = read_rent(&accounts[28])?;
+    require_system_program(&accounts[29])?;
+    let receipt_principal = rent.minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+    require(
+        payload.keeper_payment_lamports >= receipt_principal,
+        ClutchError::MismatchedState,
+    )?;
+    require_creatable(&accounts[16])?;
+    let runtime_action = match action {
+        DealerFacilityAction::Collect => DealerRuntimeActionV1::Collect,
+        DealerFacilityAction::Deliver => DealerRuntimeActionV1::Deliver,
+        _ => return Err(ClutchError::UnsupportedInstruction.into()),
+    };
+    let action_index = DealerLivenessScheduleV1::action_index(runtime_action);
+    let receipt = DealerActionReceiptV1 {
+        policy_id: state.policy_id,
+        facility_id: state.facility_id,
+        dealer_state_account_id: id(accounts[2].key),
+        liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+        runtime_policy_id: runtime_binding.runtime_policy_id(),
+        runtime_account_id: runtime_binding.account_id(DealerLivenessCompartmentV1::Settlement),
+        runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Settlement),
+        quote_schedule_id: runtime_binding
+            .quote_schedule_id(DealerLivenessCompartmentV1::Settlement),
+        receipt_account_id: id(accounts[16].key),
+        receipt_program_id: id(program_id),
+        keeper: id(accounts[0].key),
+        replay_account_id: id(accounts[4].key),
+        action: runtime_action,
+        compartment: DealerLivenessCompartmentV1::Settlement,
+        runtime_generation: runtime_binding.generation(DealerLivenessCompartmentV1::Settlement),
+        facility_generation: state.generation,
+        call_ordinal: payload.liveness_call_ordinal,
+        call_ceiling_lamports: schedule.reward_lamports[action_index],
+        keeper_payment_lamports: payload.keeper_payment_lamports,
+        expected_replay_ordinal: payload.expected_replay_ordinal,
+        rent: DeletableRentOwnerV1 {
+            payer: id(accounts[17].key),
+            neutral_sink: policy.neutral_sink,
+            refundable_principal: receipt_principal,
+            donation_floor: accounts[16].lamports(),
+        },
+    };
+    let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+    let (receipt_address, receipt_bump) =
+        seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+    expect_pda(accounts[16].key, (receipt_address, receipt_bump), None)?;
+    receipt
+        .validate_against(&schedule, &runtime_binding)
+        .map_err(dealer_fault)?;
+    let authorization = receipt
+        .authorization(&schedule, &runtime_binding, &settlement_runtime)
+        .map_err(dealer_fault)?;
+    let liveness_transition = plan_liveness_spend_absorbing_donation(
+        program_id,
+        &accounts[8],
+        &accounts[12],
+        settlement_runtime,
+        receipt.runtime_transition_intent().map_err(dealer_fault)?,
+        receipt.runtime_receipt_observation().map_err(dealer_fault)?,
+    )?;
+    let current_slot = read_clock_slot(&accounts[27])?;
+
+    with_authenticated_complete_dealer_book_v2(
+        program_id,
+        &accounts[21],
+        &root,
+        &accounts[22],
+        domain,
+        &accounts[COLLECT_DELIVER_FIXED_ACCOUNT_COUNT..],
+        false,
+        |book, feed_data| {
+            let (feed_header, feed_economics) = decode_sealed_candidate_feed_v1(feed_data)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            let row_index = payload.row_start;
+            require(
+                row_index < u16::from(selection.allocation_count),
+                ClutchError::MismatchedState,
+            )?;
+            let allocation = selection.allocations[usize::from(row_index)];
+            let membership = find_dealer_page_membership_v1(
+                &accounts[COLLECT_DELIVER_FIXED_ACCOUNT_COUNT..],
+                allocation.order_id,
+            )?;
+            let mut dense = None;
+            let mut index = 0usize;
+            while index < usize::from(book.economic_book().len) {
+                if book.economic_book().orders[index].order_id == allocation.order_id {
+                    dense = Some(u8::try_from(index).map_err(|_| ClutchError::Arithmetic)?);
+                    break;
+                }
+                index += 1;
+            }
+            let order_index = dense.ok_or(ClutchError::MismatchedState)?;
+            let position_semantic_id = user_position.semantic_id;
+            let root_data_id = root.data_id(
+                &RuntimeSha256,
+                clutch_general_v2_contract::Id32::new(accounts[21].key.to_bytes())?,
+            )?;
+            let feed_data_id = clutch_general_v2_contract::candidate_bundle_digest_v1(
+                &RuntimeSha256,
+                feed_data,
+                true,
+            )?;
+            let page_account = &accounts[COLLECT_DELIVER_FIXED_ACCOUNT_COUNT
+                + usize::from(membership.page_index)];
+            let relation_domain = EconomicDomainV2 {
+                relation_version: domain.transcript.relation_version,
+                market_semantics_digest: domain.transcript.market_instance_v2_id.bytes(),
+                epoch_semantics_digest: domain.transcript.epoch_semantics_digest.bytes(),
+                relation_policy_digest: domain.transcript.relation_policy_id.bytes(),
+                price_policy_digest: domain.transcript.price_measure_policy_v1_id.bytes(),
+                epoch_index: domain.transcript.epoch_index,
+                outcome_count: domain.transcript.outcome_count,
+                price_scale: domain.transcript.price_scale,
+            };
+            let candidate = EconomicCandidateV2 {
+                fills: feed_economics.fills,
+                honored_aon_mask: feed_header.honored_aon_mask,
+                virtual_split: feed_header.virtual_split,
+                virtual_merge: feed_header.virtual_merge,
+            };
+            let relation_order = book.economic_book().orders[usize::from(order_index)];
+            let record = SelectedPortfolioOrderRecordV2 {
+                version: PORTFOLIO_EXECUTION_VERSION_V2,
+                outcome_count: selection.outcome_count,
+                source_kind: PortfolioSourceOrderKindV2::Portfolio,
+                side: relation_order.side,
+                order_index,
+                page_slot: membership.slot_index,
+                traversal_index: row_index,
+                page_index: membership.page_index,
+                settlement_root_epoch_generation: root.epoch_generation(),
+                position_generation: membership.position_generation,
+                selected_fill_units: allocation.dealer_fill_units,
+                market_semantics_digest: relation_domain.market_semantics_digest,
+                epoch_semantics_digest: relation_domain.epoch_semantics_digest,
+                economic_candidate_digest: feed_header.base_relation_candidate_id.bytes(),
+                order_set_digest: root.order_set().bytes(),
+                settlement_root_account_id: accounts[21].key.to_bytes(),
+                settlement_root_pre_semantic_id: root_data_id.bytes(),
+                settlement_candidate_id: root.settlement_candidate_id().bytes(),
+                retained_feed_account_id: accounts[22].key.to_bytes(),
+                retained_feed_semantic_id: feed_data_id.bytes(),
+                settlement_witness_id: root.settlement_witness_digest().bytes(),
+                order_page_account_id: page_account.key.to_bytes(),
+                order_page_semantic_id: membership.page_semantic_id,
+                position_account_id: accounts[25].key.to_bytes(),
+                position_pre_semantic_id: position_semantic_id,
+                order_id: allocation.order_id,
+                owner_id: membership.owner_id,
+            };
+            let owner_program = program_id.to_bytes();
+            let adapter = DealerSelectedRowAdapterV1 {
+                record,
+                accounts: [
+                    PortfolioAccountExpectationV2 {
+                        role: PortfolioAccountRoleV2::SettlementRoot,
+                        account_id: accounts[21].key.to_bytes(),
+                        owner_program_id: owner_program,
+                        data_semantic_id: root_data_id.bytes(),
+                        generation: Some(root.epoch_generation()),
+                        writable: false,
+                        must_exist: true,
+                    },
+                    PortfolioAccountExpectationV2 {
+                        role: PortfolioAccountRoleV2::RetainedFeed,
+                        account_id: accounts[22].key.to_bytes(),
+                        owner_program_id: owner_program,
+                        data_semantic_id: feed_data_id.bytes(),
+                        generation: None,
+                        writable: false,
+                        must_exist: true,
+                    },
+                    PortfolioAccountExpectationV2 {
+                        role: PortfolioAccountRoleV2::OrderPage,
+                        account_id: page_account.key.to_bytes(),
+                        owner_program_id: owner_program,
+                        data_semantic_id: membership.page_semantic_id,
+                        generation: None,
+                        writable: false,
+                        must_exist: true,
+                    },
+                    PortfolioAccountExpectationV2 {
+                        role: PortfolioAccountRoleV2::Position,
+                        account_id: accounts[25].key.to_bytes(),
+                        owner_program_id: owner_program,
+                        data_semantic_id: position_semantic_id,
+                        generation: Some(membership.position_generation),
+                        writable: true,
+                        must_exist: true,
+                    },
+                ],
+            };
+            let authenticated_order = authenticate_selected_portfolio_order_v2(
+                &adapter,
+                owner_program,
+                &relation_domain,
+                book.economic_book(),
+                &candidate,
+                feed_header.base_relation_candidate_id.bytes(),
+                record,
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            let row = selection
+                .authenticate_settlement_row(&authenticated_order, row_index)
+                .map_err(dealer_fault)?;
+            require(
+                row.owner_id() == owner
+                    && row.position_account_id() == id(accounts[25].key)
+                    && reservation_body.order_generation == membership.order_generation
+                    && reservation_body.page_index == membership.page_index
+                    && reservation_body.market.bytes() == root.market().bytes()
+                    && reservation_body.epoch.bytes() == root.epoch().bytes(),
+                ClutchError::MismatchedState,
+            )?;
+            let expected_plan = ReservationPlan::for_order(
+                &membership.slot,
+                root.outcome_count(),
+                grid.price_scale,
+                reservation_body.max_fee_atoms,
+            )?;
+            require(
+                reservation_body.price_grid.bytes() == grid.grid.bytes()
+                    && reservation_body.terms.bytes()
+                        == binding.base().series_funding_terms_v2_id.bytes()
+                    && reservation_body.policy.bytes()
+                        == binding.base().settlement_policy_id.bytes()
+                    && reservation_body.outcome_count == root.outcome_count()
+                    && reservation_body.initial_cash_atoms == expected_plan.cash_atoms
+                    && reservation_body.max_fee_atoms == expected_plan.max_fee_atoms
+                    && reservation_body.initial_internal == expected_plan.internal
+                    && reservation_body.order_kind == expected_plan.order_kind
+                    && reservation_body.side == expected_plan.side,
+                ClutchError::MismatchedState,
+            )?;
+
+            let (reservation_post, position_post) = match runtime_action {
+                DealerRuntimeActionV1::Collect => {
+                    prepare_dealer_row_collect_post(reservation, user_position, row)?
+                }
+                DealerRuntimeActionV1::Deliver => {
+                    prepare_dealer_row_deliver_post(reservation, user_position, row)?
+                }
+                _ => return Err(ClutchError::UnsupportedInstruction.into()),
+            };
+            let reservation_pre_id = reservation.data_id()?;
+            let reservation_post_id = reservation_post.data_id()?;
+            let replay_kind = match (runtime_action, row.side()) {
+                (DealerRuntimeActionV1::Collect, Side::Buy) => {
+                    GeneralReplayTransitionKindV1::DealerCollectBuyer
+                }
+                (DealerRuntimeActionV1::Collect, Side::Sell) => {
+                    GeneralReplayTransitionKindV1::DealerCollectSeller
+                }
+                (DealerRuntimeActionV1::Deliver, Side::Buy) => {
+                    GeneralReplayTransitionKindV1::DealerDeliverBuyer
+                }
+                (DealerRuntimeActionV1::Deliver, Side::Sell) => {
+                    GeneralReplayTransitionKindV1::DealerDeliverSeller
+                }
+                _ => return Err(ClutchError::UnsupportedInstruction.into()),
+            };
+            let general_replay_post = project_general_replay_transition_v1(
+                user_replay,
+                position_post,
+                replay_kind,
+                clutch_general_v2_contract::Id32::new(reservation_post_id.bytes())?,
+                clutch_general_v2_contract::Id32::new(
+                    authorization.receipt_semantic_id.bytes(),
+                )?,
+                &RuntimeSha256,
+            )?;
+            let pot_after = match runtime_action {
+                DealerRuntimeActionV1::Collect => advance_collect_v2(
+                    &pot,
+                    &lease,
+                    &schedule,
+                    &runtime_binding,
+                    row.collect_slice(),
+                    current_slot,
+                    Some(&authorization),
+                ),
+                DealerRuntimeActionV1::Deliver => advance_deliver_v2(
+                    &pot,
+                    &lease,
+                    &schedule,
+                    &runtime_binding,
+                    row.deliver_slice(),
+                    current_slot,
+                    Some(&authorization),
+                ),
+                _ => return Err(ClutchError::UnsupportedInstruction.into()),
+            }
+            .map_err(dealer_fault)?;
+            let position_post_id = position_post
+                .semantic
+                .semantic_id(&RuntimeSha256)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+            let row_transition = CoveredDealerRowAssetTransitionV1::new(
+                runtime_action,
+                row,
+                id(accounts[24].key),
+                Id::from_bytes(reservation_pre_id.bytes()),
+                Id::from_bytes(reservation_post_id.bytes()),
+                Id::from_bytes(user_position.semantic_id),
+                Id::from_bytes(position_post_id.bytes()),
+                Id::from_bytes(user_replay.replay_semantic_id().bytes()),
+                Id::from_bytes(general_replay_post.replay_poststate_semantic_id().bytes()),
+                pot.pot_content_id().map_err(dealer_fault)?,
+                pot_after.pot_content_id().map_err(dealer_fault)?,
+            )
+            .map_err(dealer_fault)?;
+            let prepared = prepare_covered_dealer_row_progress_v1(
+                &policy,
+                &state,
+                id(accounts[2].key),
+                &epoch,
+                &selection,
+                row,
+                &lease,
+                &pot,
+                &schedule,
+                &runtime_binding,
+                &authorization,
+                row_transition,
+                &facility_replay,
+                replay_binding,
+                current_slot,
+            )
+            .map_err(dealer_fault)?;
+            require(
+                prepared.pot_after == pot_after,
+                ClutchError::MismatchedState,
+            )?;
+
+            create_full_principal_pda(
+                program_id,
+                &accounts[0],
+                &accounts[16],
+                &accounts[29],
+                &rent,
+                DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+                &[
+                    seeds::SEED_DEALER_ACTION_RECEIPT,
+                    &receipt_slot.bytes(),
+                    &[receipt_bump],
+                ],
+            )?;
+            apply_liveness_transition(
+                &accounts[12],
+                &accounts[0],
+                &accounts[17],
+                &liveness_transition,
+            )?;
+            write_dealer_body(
+                &accounts[16],
+                DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+                DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+                receipt_bump,
+                &receipt,
+            )?;
+            let mut reservation_bytes = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
+            reservation_post.encode(&mut reservation_bytes)?;
+            accounts[24]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+                .copy_from_slice(&reservation_bytes);
+            accounts[25]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+                .copy_from_slice(
+                    &position_post
+                        .semantic
+                        .encode()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+                );
+            accounts[26]
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+                .copy_from_slice(general_replay_post.replay_poststate_body());
+            write_dealer_body(
+                &accounts[20],
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG,
+                DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
+                pot_bump,
+                &prepared.pot_after,
+            )?;
+            prepared
+                .facility_replay
+                .replay_post()
+                .encode_into(&mut accounts[4].data.borrow_mut())
+                .map_err(dealer_fault)
+        },
+    )
+}
+
 /// Execute one facility action admitted by the non-production profile.
 pub fn process(
     program_id: &Pubkey,
@@ -4639,6 +5721,9 @@ pub fn process(
         DealerFacilityAction::LapseEpoch => lapse_epoch(program_id, accounts, sequence, payload),
         DealerFacilityAction::SelectLeaseAndBegin => {
             select_lease_and_begin(program_id, accounts, sequence, payload)
+        }
+        DealerFacilityAction::Collect | DealerFacilityAction::Deliver => {
+            collect_or_deliver_row(program_id, accounts, sequence, action, payload)
         }
         _ => super::dealer_runtime::process_reserved_disabled(action),
     }
@@ -4676,5 +5761,58 @@ mod select_begin_adversarial_tests {
             DEALER_FAMILY_VERSION,
             DealerFacilityAction::SelectLeaseAndBegin.tag(),
         ));
+    }
+}
+
+#[cfg(test)]
+mod collect_deliver_adversarial_tests {
+    use super::DealerRuntimePayloadV1;
+    use clutch_solana_layout::registry::{
+        DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
+    };
+
+    fn payload() -> [u8; 40] {
+        let mut value = [0u8; 40];
+        value[0..8].copy_from_slice(&7u64.to_le_bytes());
+        value[8..16].copy_from_slice(&9u64.to_le_bytes());
+        value[16..18].copy_from_slice(&3u16.to_le_bytes());
+        value[18..20].copy_from_slice(&1u16.to_le_bytes());
+        value[20] = 4;
+        value[24..28].copy_from_slice(&11u32.to_le_bytes());
+        value[32..40].copy_from_slice(&13u64.to_le_bytes());
+        value
+    }
+
+    #[test]
+    fn row_frame_requires_one_row_authenticated_page_count_and_liveness() {
+        let exact = payload();
+        for action in [DealerFacilityAction::Collect, DealerFacilityAction::Deliver] {
+            let decoded = DealerRuntimePayloadV1::decode(action, &exact).unwrap();
+            assert_eq!(decoded.row_start, 3);
+            assert_eq!(decoded.row_count, 1);
+            assert_eq!(decoded.book_page_count, 4);
+            assert_eq!(decoded.liveness_call_ordinal, 11);
+            assert_eq!(decoded.keeper_payment_lamports, 13);
+        }
+        let mut two_rows = exact;
+        two_rows[18..20].copy_from_slice(&2u16.to_le_bytes());
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Collect, &two_rows).is_err());
+        let mut no_pages = exact;
+        no_pages[20] = 0;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Collect, &no_pages).is_err());
+        let mut padding = exact;
+        padding[21] = 1;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Deliver, &padding).is_err());
+    }
+
+    #[test]
+    fn complete_handlers_remain_outside_every_current_capability_profile() {
+        for action in [DealerFacilityAction::Collect, DealerFacilityAction::Deliver] {
+            assert!(!crate::capabilities::extension_intent_action_enabled(
+                DEALER_FAMILY_TAG,
+                DEALER_FAMILY_VERSION,
+                action.tag(),
+            ));
+        }
     }
 }

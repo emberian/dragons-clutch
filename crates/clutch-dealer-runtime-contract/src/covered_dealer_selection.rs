@@ -16,6 +16,8 @@ use clutch_batch::dealer_leg_v2::{
     VerifiedDealerLegRefV2, VerifiedDealerLegV2, EMPTY_DEALER_CASH_ALLOCATION_V2,
     EMPTY_DEALER_FILL_ROW_V2, EMPTY_DEALER_QUOTE_ROW_V2, MAX_DEALER_ROWS_V2,
 };
+use clutch_batch::portfolio_execution_v2::AuthenticatedSelectedPortfolioOrderV2;
+use clutch_batch::Side;
 use clutch_general_v2_contract::{
     SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
 };
@@ -24,11 +26,235 @@ use sha2::{Digest, Sha256};
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerEpochBindingPhaseV2, DealerEpochBindingV2, DealerPolicyV1,
+    DealerEpochBindingPhaseV2, DealerEpochBindingV2, DealerPolicyV1, DealerRuntimeActionV1,
     DealerLeaseV2, DealerSelectedFeeRecordBindingV1, DealerStateV2, DeletableRentOwnerV1, Error,
-    FixedCodec, Id, Result, SettlementPotV2, DEALER_COVERED_SELECTION_CONTENT_DOMAIN_V1,
+    DealerSettlementSliceV2, FixedCodec, Id, Result, SettlementPotV2,
+    DEALER_COVERED_SELECTION_CONTENT_DOMAIN_V1,
     DEALER_QUOTE_ADMISSION_CONTENT_DOMAIN_V1, DELETABLE_RENT_OWNER_BYTES, MAX_OUTCOMES,
 };
+
+/// Private authority for one current CoveredDealer settlement row.
+///
+/// The selected RelationV2 membership capability remains the only path to
+/// coefficients, owner, Position incarnation, and dense order index.  The
+/// immutable Dealer selection remains the only path to the verified fill and
+/// cash allocation.  This value joins those owners; it does not persist a
+/// second coefficient or allocation DTO.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoveredDealerSettlementRowV1 {
+    selection_id: Id,
+    selected_fee_binding_digest: Id,
+    row_index: u16,
+    order_index: u8,
+    order_id: Id,
+    owner_id: Id,
+    position_account_id: Id,
+    position_generation: u64,
+    side: Side,
+    fill_units: u64,
+    cash_in_atoms: u64,
+    cash_out_atoms: u64,
+    native_eggs: [u64; MAX_OUTCOMES],
+}
+
+impl CoveredDealerSettlementRowV1 {
+    /// Immutable CoveredDealer certificate identity.
+    pub const fn selection_id(&self) -> Id {
+        self.selection_id
+    }
+
+    /// Immutable selected owner-netted fee binding used as Replay evidence.
+    pub const fn selected_fee_binding_digest(&self) -> Id {
+        self.selected_fee_binding_digest
+    }
+    /// Canonical Dealer allocation cursor.
+    pub const fn row_index(&self) -> u16 {
+        self.row_index
+    }
+
+    /// Dense RelationV2 order index authenticated through the page set.
+    pub const fn order_index(&self) -> u8 {
+        self.order_index
+    }
+
+    /// Exact immutable order identity.
+    pub const fn order_id(&self) -> Id {
+        self.order_id
+    }
+
+    /// Exact page-authenticated owner.
+    pub const fn owner_id(&self) -> Id {
+        self.owner_id
+    }
+
+    /// Exact current General Position account.
+    pub const fn position_account_id(&self) -> Id {
+        self.position_account_id
+    }
+
+    /// Stable Position incarnation committed by Reservation and page.
+    pub const fn position_generation(&self) -> u64 {
+        self.position_generation
+    }
+
+    /// Exact RelationV2 side.
+    pub const fn side(&self) -> Side {
+        self.side
+    }
+
+    /// Verified Dealer fill units.
+    pub const fn fill_units(&self) -> u64 {
+        self.fill_units
+    }
+
+    /// Position/Reservation assets entering the Pot during Collect.
+    pub const fn collect_slice(&self) -> DealerSettlementSliceV2 {
+        DealerSettlementSliceV2 {
+            start: self.row_index,
+            end: self.row_index + 1,
+            cash_atoms: match self.side {
+                Side::Buy => self.cash_in_atoms,
+                Side::Sell => 0,
+            },
+            eggs: match self.side {
+                Side::Buy => [0; MAX_OUTCOMES],
+                Side::Sell => self.native_eggs,
+            },
+        }
+    }
+
+    /// Pot assets entering the Position during Deliver.
+    pub const fn deliver_slice(&self) -> DealerSettlementSliceV2 {
+        DealerSettlementSliceV2 {
+            start: self.row_index,
+            end: self.row_index + 1,
+            cash_atoms: match self.side {
+                Side::Buy => 0,
+                Side::Sell => self.cash_out_atoms,
+            },
+            eggs: match self.side {
+                Side::Buy => self.native_eggs,
+                Side::Sell => [0; MAX_OUTCOMES],
+            },
+        }
+    }
+}
+
+/// Indivisible authenticated row asset transition committed by facility Replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoveredDealerRowAssetTransitionV1 {
+    action: DealerRuntimeActionV1,
+    row: CoveredDealerSettlementRowV1,
+    bundle_id: Id,
+}
+
+impl CoveredDealerRowAssetTransitionV1 {
+    /// Construct only from the joined private row authority and adapter-
+    /// rederived exact account postimages.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        action: DealerRuntimeActionV1,
+        row: CoveredDealerSettlementRowV1,
+        reservation_account_id: Id,
+        reservation_pre_data_id: Id,
+        reservation_post_data_id: Id,
+        position_pre_semantic_id: Id,
+        position_post_semantic_id: Id,
+        general_replay_pre_semantic_id: Id,
+        general_replay_post_semantic_id: Id,
+        pot_pre_content_id: Id,
+        pot_post_content_id: Id,
+    ) -> Result<Self> {
+        let action_byte = match action {
+            DealerRuntimeActionV1::Collect => 15u8,
+            DealerRuntimeActionV1::Deliver => 16u8,
+            _ => return Err(Error::InvalidParameter),
+        };
+        for identity in [
+            row.selection_id,
+            row.selected_fee_binding_digest,
+            row.order_id,
+            row.owner_id,
+            row.position_account_id,
+            reservation_account_id,
+            reservation_pre_data_id,
+            reservation_post_data_id,
+            position_pre_semantic_id,
+            position_post_semantic_id,
+            general_replay_pre_semantic_id,
+            general_replay_post_semantic_id,
+            pot_pre_content_id,
+            pot_post_content_id,
+        ] {
+            identity.validate_live()?;
+        }
+        if reservation_pre_data_id == reservation_post_data_id
+            || general_replay_pre_semantic_id == general_replay_post_semantic_id
+            || pot_pre_content_id == pot_post_content_id
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let side_byte = match row.side {
+            Side::Buy => 0u8,
+            Side::Sell => 1u8,
+        };
+        let slice = match action {
+            DealerRuntimeActionV1::Collect => row.collect_slice(),
+            DealerRuntimeActionV1::Deliver => row.deliver_slice(),
+            _ => return Err(Error::InvalidParameter),
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(b"dragons-clutch/dealer-covered-row-asset-transition/v1\0");
+        hasher.update([action_byte, side_byte]);
+        hasher.update(row.row_index.to_le_bytes());
+        hasher.update([row.order_index]);
+        hasher.update(row.fill_units.to_le_bytes());
+        for identity in [
+            row.selection_id,
+            row.selected_fee_binding_digest,
+            row.order_id,
+            row.owner_id,
+            row.position_account_id,
+            reservation_account_id,
+            reservation_pre_data_id,
+            reservation_post_data_id,
+            position_pre_semantic_id,
+            position_post_semantic_id,
+            general_replay_pre_semantic_id,
+            general_replay_post_semantic_id,
+            pot_pre_content_id,
+            pot_post_content_id,
+        ] {
+            hasher.update(identity.bytes());
+        }
+        hasher.update(slice.cash_atoms.to_le_bytes());
+        for amount in slice.eggs {
+            hasher.update(amount.to_le_bytes());
+        }
+        let bundle_id = Id::from_bytes(hasher.finalize().into());
+        bundle_id.validate_live()?;
+        Ok(Self {
+            action,
+            row,
+            bundle_id,
+        })
+    }
+
+    /// Exact asset transition commitment consumed by facility Replay.
+    pub const fn bundle_id(&self) -> Id {
+        self.bundle_id
+    }
+
+    /// Authenticated row authority.
+    pub const fn row(&self) -> CoveredDealerSettlementRowV1 {
+        self.row
+    }
+
+    /// Exact Dealer action.
+    pub const fn action(&self) -> DealerRuntimeActionV1 {
+        self.action
+    }
+}
 
 /// Local semantic-body magic for a relayed signed quote admission.
 pub const DEALER_QUOTE_ADMISSION_MAGIC_V1: [u8; 8] = *b"DCQADMV1";
@@ -775,6 +1001,77 @@ impl CoveredDealerSelectionV1 {
         Ok(value)
     }
 
+    /// Join one canonical Dealer allocation to its authenticated current
+    /// RelationV2 page membership.
+    ///
+    /// `row_index` is the immutable, order-id-sorted Dealer allocation cursor;
+    /// it is deliberately not inferred from the dense book index.  Churned V5
+    /// pages may leave sparse physical slots, while the complete-book adapter
+    /// owns the exact dense RelationV2 projection.
+    pub fn authenticate_settlement_row(
+        &self,
+        membership: &AuthenticatedSelectedPortfolioOrderV2,
+        row_index: u16,
+    ) -> Result<CoveredDealerSettlementRowV1> {
+        self.validate()?;
+        let at = usize::from(row_index);
+        if at >= usize::from(self.allocation_count) {
+            return Err(Error::InvalidParameter);
+        }
+        let record = membership.record();
+        let order = membership.economic_order();
+        let allocation = self.allocations[at];
+        if record.outcome_count != self.outcome_count
+            || record.settlement_root_account_id != self.settlement_root_account_id.bytes()
+            || record.retained_feed_account_id != self.retained_feed_account_id.bytes()
+            || record.retained_feed_semantic_id != self.candidate_bundle_digest.bytes()
+            || record.order_set_digest != self.order_set_id.bytes()
+            || record.settlement_candidate_id != self.settlement_candidate_id.bytes()
+            || record.settlement_witness_id != self.settlement_witness_digest.bytes()
+            || record.economic_candidate_digest != self.upstream_economic_candidate_id.bytes()
+            || record.settlement_root_epoch_generation != self.general_epoch_generation
+            || record.order_id != allocation.order_id
+            || record.selected_fill_units != allocation.dealer_fill_units
+            || order.order_id != allocation.order_id
+            || order.side != record.side
+            || order.quantity < allocation.dealer_fill_units
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        match order.side {
+            Side::Buy if allocation.user_cash_out_atoms != 0 => {
+                return Err(Error::ConservationFailure);
+            }
+            Side::Sell if allocation.user_cash_in_atoms != 0 => {
+                return Err(Error::ConservationFailure);
+            }
+            Side::Buy | Side::Sell => {}
+        }
+        let mut native_eggs = [0u64; MAX_OUTCOMES];
+        let mut outcome = 0usize;
+        while outcome < usize::from(self.outcome_count) {
+            native_eggs[outcome] = order.coefficients[outcome]
+                .checked_mul(allocation.dealer_fill_units)
+                .ok_or(Error::ArithmeticOverflow)?;
+            outcome += 1;
+        }
+        Ok(CoveredDealerSettlementRowV1 {
+            selection_id: self.selection_id()?,
+            selected_fee_binding_digest: self.selected_fee_binding_digest,
+            row_index,
+            order_index: record.order_index,
+            order_id: Id::from_bytes(record.order_id),
+            owner_id: Id::from_bytes(record.owner_id),
+            position_account_id: Id::from_bytes(record.position_account_id),
+            position_generation: record.position_generation,
+            side: record.side,
+            fill_units: allocation.dealer_fill_units,
+            cash_in_atoms: allocation.user_cash_in_atoms,
+            cash_out_atoms: allocation.user_cash_out_atoms,
+            native_eggs,
+        })
+    }
+
     /// Require one Lease/Pot pair to be the exact executable projection of
     /// this authenticated, persisted selection owner.
     pub fn validate_lease_pot(
@@ -1325,6 +1622,114 @@ fn hash_covered_selection(value: &CoveredDealerSelectionV1, hasher: &mut Sha256)
     hasher.update(value.rent.neutral_sink.bytes());
     hasher.update(value.rent.refundable_principal.to_le_bytes());
     hasher.update(value.rent.donation_floor.to_le_bytes());
+}
+
+#[cfg(test)]
+mod covered_row_adversarial_tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id {
+        Id::from_bytes([byte; 32])
+    }
+
+    fn row(side: Side) -> CoveredDealerSettlementRowV1 {
+        let mut native_eggs = [0u64; MAX_OUTCOMES];
+        native_eggs[0] = 6;
+        native_eggs[1] = 9;
+        CoveredDealerSettlementRowV1 {
+            selection_id: id(1),
+            selected_fee_binding_digest: id(2),
+            row_index: 3,
+            order_index: 5,
+            order_id: id(3),
+            owner_id: id(4),
+            position_account_id: id(5),
+            position_generation: 7,
+            side,
+            fill_units: 3,
+            cash_in_atoms: if side == Side::Buy { 11 } else { 0 },
+            cash_out_atoms: if side == Side::Sell { 13 } else { 0 },
+            native_eggs,
+        }
+    }
+
+    fn transition(action: DealerRuntimeActionV1, row: CoveredDealerSettlementRowV1) -> Id {
+        CoveredDealerRowAssetTransitionV1::new(
+            action,
+            row,
+            id(10),
+            id(11),
+            id(12),
+            id(13),
+            id(14),
+            id(15),
+            id(16),
+            id(17),
+            id(18),
+        )
+        .unwrap()
+        .bundle_id()
+    }
+
+    #[test]
+    fn buy_and_sell_slices_have_exact_opposite_asset_boundaries() {
+        let buy = row(Side::Buy);
+        assert_eq!(buy.collect_slice().cash_atoms, 11);
+        assert_eq!(buy.collect_slice().eggs, [0; MAX_OUTCOMES]);
+        assert_eq!(buy.deliver_slice().cash_atoms, 0);
+        assert_eq!(buy.deliver_slice().eggs[0..2], [6, 9]);
+
+        let sell = row(Side::Sell);
+        assert_eq!(sell.collect_slice().cash_atoms, 0);
+        assert_eq!(sell.collect_slice().eggs[0..2], [6, 9]);
+        assert_eq!(sell.deliver_slice().cash_atoms, 13);
+        assert_eq!(sell.deliver_slice().eggs, [0; MAX_OUTCOMES]);
+    }
+
+    #[test]
+    fn action_side_and_every_postimage_identity_change_the_bundle() {
+        let buy = row(Side::Buy);
+        let collect = transition(DealerRuntimeActionV1::Collect, buy);
+        let deliver = transition(DealerRuntimeActionV1::Deliver, buy);
+        let sell = transition(DealerRuntimeActionV1::Collect, row(Side::Sell));
+        assert_ne!(collect, deliver);
+        assert_ne!(collect, sell);
+        let changed = CoveredDealerRowAssetTransitionV1::new(
+            DealerRuntimeActionV1::Collect,
+            buy,
+            id(10),
+            id(11),
+            id(12),
+            id(13),
+            id(14),
+            id(15),
+            id(16),
+            id(17),
+            id(19),
+        )
+        .unwrap()
+        .bundle_id();
+        assert_ne!(collect, changed);
+    }
+
+    #[test]
+    fn unchanged_reservation_replay_or_pot_postimage_refuses() {
+        let buy = row(Side::Buy);
+        assert!(CoveredDealerRowAssetTransitionV1::new(
+            DealerRuntimeActionV1::Collect,
+            buy,
+            id(10),
+            id(11),
+            id(11),
+            id(13),
+            id(14),
+            id(15),
+            id(16),
+            id(17),
+            id(18),
+        )
+        .is_err());
+    }
 }
 
 const _: () = assert!(DEALER_QUOTE_ADMISSION_BYTES_V1 == 6_948);
