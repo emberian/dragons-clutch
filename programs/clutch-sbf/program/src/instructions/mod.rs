@@ -78,6 +78,9 @@ pub mod failure_market_admission;
 pub mod failure_market_runtime;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
+/// Capability-disabled current Product compiler authority for Failure Begin.
+#[cfg(feature = "non-production-failure-recovery-lab")]
+pub(crate) mod product_failure_begin;
 pub mod fractional_redemption;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
 #[cfg(any(
