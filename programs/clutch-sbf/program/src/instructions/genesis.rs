@@ -9,7 +9,7 @@
 //! | intent | creates | accounts |
 //! | --- | --- | ---: |
 //! | [`Intent::InitRealm`] | [`RealmAccount`] | 5 |
-//! | [`Intent::InitProfileV2`] | [`ProfileAccount`], policy/release frozen | 6 |
+//! | [`Intent::InitProfileV2`] | [`ProfileAccount`], policy/release frozen | 8 |
 //! | [`Intent::InitPriceGrid`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitTerms`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitOrderPage`] | one order page | 6 |
@@ -138,7 +138,10 @@
 use crate::accounts::{
     self, expect_pda, require, require_count, require_distinct, require_signer, Outcome, StateRole,
 };
-use crate::collateral_release::{compiled_collateral_catalog_v2, LOCAL_REAL_TOKEN_2022_RELEASE_V2};
+use crate::collateral_release::{
+    authenticate_collateral_release_deployment_v2, compiled_collateral_catalog_v2,
+    LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+};
 use crate::error::{ClutchError, Refusal};
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
@@ -473,7 +476,7 @@ pub const IX_REALM_REVENUE_LEDGER: usize = 6;
 pub const CLOSE_REVENUE_RECORD_ACCOUNT_COUNT: usize = 5;
 
 /// Accounts in an `InitProfileV2` instruction, exactly.
-pub const INIT_PROFILE_ACCOUNT_COUNT: usize = 6;
+pub const INIT_PROFILE_ACCOUNT_COUNT: usize = 8;
 /// The Realm this Profile belongs to (read-only, program-owned).
 pub const IX_PROFILE_REALM: usize = 2;
 /// Canonical sealed collateral-policy PDA (read-only, program-owned).
@@ -482,6 +485,10 @@ pub const IX_PROFILE_POLICY: usize = 3;
 pub const IX_PROFILE_SYSTEM: usize = 4;
 /// The rent sysvar.  `InitProfileV2`.
 pub const IX_PROFILE_RENT: usize = 5;
+/// Exact collateral token program selected by the sealed policy release.
+pub const IX_PROFILE_TOKEN_PROGRAM: usize = 6;
+/// Immutable Upgradeable Loader ProgramData linked by that token program.
+pub const IX_PROFILE_TOKEN_PROGRAMDATA: usize = 7;
 
 /// Accounts in an `InitOrderPage` instruction without funding registration.
 pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
@@ -1021,6 +1028,27 @@ fn init_profile(
         realm.realm == intent.realm
             && realm.profile == profile
             && realm.profile_version == PROFILE_SCHEMA_V2,
+        ClutchError::MismatchedState,
+    )?;
+
+    let selected_release = {
+        let policy_bytes = accounts[IX_PROFILE_POLICY]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let policy = CollateralPolicyV2::decode(&policy_bytes)
+            .map_err(|_| Refusal::Adapter(ClutchError::EvidenceBufferMismatch))?;
+        compiled_collateral_catalog_v2()?
+            .resolve(policy.adapter_release)
+            .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
+    };
+    let authenticated_release = authenticate_collateral_release_deployment_v2(
+        selected_release,
+        &accounts[IX_PROFILE_TOKEN_PROGRAM],
+        &accounts[IX_PROFILE_TOKEN_PROGRAMDATA],
+    )?;
+    require(
+        authenticated_release.release() == selected_release
+            && authenticated_release.release_id().bytes() == release_id.bytes(),
         ClutchError::MismatchedState,
     )?;
 

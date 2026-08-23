@@ -359,8 +359,13 @@ pub const fn fractional_account_contract_v1(
             external_writable_mask: 0b111_0011_0000_0000,
         },
         FractionalRedemptionActionV1::RedeemBearerExact => FractionalAccountContractV1 {
-            account_count: 19,
-            writable_mask: 0b101_0101_0011_0000_0000,
+            account_count: 21,
+            writable_mask: (1 << 8)
+                | (1 << 9)
+                | (1 << 12)
+                | (1 << 14)
+                | (1 << 16)
+                | (1 << 19),
             signer_mask: 0b000_0000_0000_0000_0001,
             outcome_mint_suffix: true,
             post_mint_accounts: 0,
@@ -384,8 +389,13 @@ pub const fn fractional_account_contract_v1(
                 | (1 << 15),
         },
         FractionalRedemptionActionV1::RedeemBearerCredit => FractionalAccountContractV1 {
-            account_count: 19,
-            writable_mask: (1 << 8) | (1 << 9) | (1 << 12) | (1 << 14) | (1 << 16) | (1 << 18),
+            account_count: 21,
+            writable_mask: (1 << 8)
+                | (1 << 9)
+                | (1 << 12)
+                | (1 << 14)
+                | (1 << 16)
+                | (1 << 19),
             signer_mask: 1,
             outcome_mint_suffix: true,
             post_mint_accounts: 4,
@@ -396,7 +406,7 @@ pub const fn fractional_account_contract_v1(
                 | (1 << 12)
                 | (1 << 14)
                 | (1 << 16)
-                | (1 << 18),
+                | (1 << 19),
         },
         FractionalRedemptionActionV1::TransferCredit
         | FractionalRedemptionActionV1::MergeCredit => FractionalAccountContractV1 {
@@ -412,7 +422,7 @@ pub const fn fractional_account_contract_v1(
             outcome_mint_suffix: false,
             post_mint_accounts: 0,
             credit_creation_suffix: true,
-            external_payout_extra_accounts: 2,
+            external_payout_extra_accounts: 3,
             external_writable_mask: (1 << 9)
                 | (1 << 10)
                 | (1 << 13)

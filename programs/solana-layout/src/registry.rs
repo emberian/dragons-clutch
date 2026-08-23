@@ -227,7 +227,13 @@ pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 =
 /// Source/Series present-funding account discriminator.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 /// Source/Series present-funding account version.
-pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current BundleV5/QuoteV4 Series funding account version.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical decoder coordinate retained for untrusted index clients only.
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2")]
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 =
+    SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1;
 /// General V2 owner-aggregated settlement account discriminator.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
 /// Withdrawn non-aliasing General V2 owner-settlement V1 version.
@@ -473,6 +479,10 @@ pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG: u8 = 0xa9;
 pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact fixed width of the counted General V2 settlement root.
 pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
+/// Counted exact-index General V2 settlement-root successor version.
+pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 2;
+/// Exact fixed width of the counted exact-index settlement-root successor.
+pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_196;
 /// Product shared Market lifecycle root discriminator.
 pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
 /// First Product shared Market lifecycle-root version.
@@ -579,6 +589,8 @@ const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
 const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
+const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION == 2);
+const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES == 1_196);
 const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
@@ -1124,10 +1136,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
-            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-funding-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-funding-v1-account",
+        name: "source-series-funding-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1587,6 +1608,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-settlement-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
+            version: GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-indexed-settlement-root-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2913,6 +2943,10 @@ mod tests {
                 GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
                 GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION,
             ),
+            (
+                GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
+                GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+            ),
         ];
         for (tag, version) in expected {
             let mut matches = 0u8;
@@ -3033,7 +3067,7 @@ mod tests {
             ),
             (
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
-                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2,
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,

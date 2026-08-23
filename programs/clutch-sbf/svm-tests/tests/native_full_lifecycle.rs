@@ -22,6 +22,7 @@ use {
         instructions::{
             cash_exit, external_exit, genesis, market_init, observe_resolve, split as seam,
         },
+        loader_state::UPGRADEABLE_LOADER_ID,
         seeds,
     },
     clutch_solana_layout::{
@@ -108,6 +109,14 @@ fn bearer_outcome_keypair() -> Keypair {
 
 fn derive(parts: &[&[u8]]) -> (Address, u8) {
     Address::find_program_address(parts, &PROGRAM_ID)
+}
+
+fn token_2022_programdata() -> Address {
+    Address::find_program_address(
+        &[TOKEN_2022.as_ref()],
+        &Address::new_from_array(UPGRADEABLE_LOADER_ID),
+    )
+    .0
 }
 
 fn encode<F, E>(len: usize, encoder: F) -> Vec<u8>
@@ -1096,6 +1105,8 @@ async fn prepare_founding(
                     AccountMeta::new_readonly(policy, false),
                     AccountMeta::new_readonly(SYSTEM_PROGRAM, false),
                     AccountMeta::new_readonly(RENT_SYSVAR, false),
+                    AccountMeta::new_readonly(TOKEN_2022, false),
+                    AccountMeta::new_readonly(token_2022_programdata(), false),
                 ],
             ),
         ],

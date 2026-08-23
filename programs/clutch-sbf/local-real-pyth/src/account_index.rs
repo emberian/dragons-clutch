@@ -534,7 +534,6 @@ fn decode_fractional(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> 
         Ok(None)
     }
 }
-
 fn tag_version(data: &[u8], tag: u8, version: u8) -> bool {
     data.first() == Some(&tag) && data.get(1) == Some(&version)
 }

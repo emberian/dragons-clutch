@@ -176,7 +176,9 @@ Dealer owns `0x7d/1` for its staged policy and `0x7e/1` for its immutable
 policy. The Source/Series account namespace withdraws `0x7f/1` and reserves
 the disjoint `0x7f/2` for the current 172-byte BundleV5-retaining Series
 registration/replay anchor. The QuoteV1-shaped `0x80/1` funding wrapper is
-historical and has no current mutation route. Its 376-byte codec adds tag/version/bump/flags, exact
+historical and has no current mutation route. Current `0x80/2` is a 716-byte
+BundleV5/QuoteV4 six-compartment owner with an explicit pending ordinal. The
+historical 376-byte codec adds tag/version/bump/flags, exact
 refundable account-rent principal, and five release-selected collateral-vault
 rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
 copy its cursor or component-balance facts.
@@ -359,6 +361,7 @@ pure runtime elsewhere does not make a route executable.
 | `0x7f/1` | Recurring Series | withdrawn registry without compiler provenance |
 | `0x7f/2` | Recurring Series | BundleV5-retaining registry |
 | `0x80/1` | Recurring Series | withdrawn QuoteV1-shaped present funding |
+| `0x80/2` | Recurring Series | current BundleV5/QuoteV4 present funding |
 | `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
 | `0x81/2` | General V2 | withdrawn presence-explicit owner settlement V2; never a live alias |
 | `0x81/3` | General V2 | historical Reservation-handoff owner settlement V3; withdrawn |
@@ -411,6 +414,7 @@ pure runtime elsewhere does not make a route executable.
 | `0xa7/2` | FractionalRedemption/replay | Resolution-V5-data-bound zero-credit tombstone (232 bytes) |
 | `0xa8/1` | Dealer | immutable deletable action-work receipt (540 bytes) |
 | `0xa9/1` | General V2 | counted candidate-scoped SettlementRoot V1 (980 bytes) |
+| `0xa9/2` | General V2 | reserved-disabled counted exact-index SettlementRoot successor (1,196 bytes; canonical in-place Root PDA) |
 | `0xaa/1` | Product | shared MarketLifecycleRoot V1; phased prepaid founding and whole-Market terminal owner |
 | `0xab/1` | Failure | withdrawn one-shot interval-session cell |
 | `0xab/2` | Failure | reusable exclusive interval-session cell retained through Market terminality |
