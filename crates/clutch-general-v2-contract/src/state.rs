@@ -3160,6 +3160,50 @@ pub struct EpochBudgetV2AccountV1 {
     pub flags: u8,
 }
 
+/// Semantic-owner proof that an Epoch Budget has no unpaid obligation except
+/// the root-close reward consumed by the same atomic retirement transaction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochBudgetRetirementDispositionV1 {
+    market: Id32,
+    epoch: Id32,
+    epoch_generation: u64,
+    funding_payer: Id32,
+    root_close_reward: u64,
+    rent: DeletableRentOwnerV1,
+}
+
+impl EpochBudgetRetirementDispositionV1 {
+    /// Parent Market authenticated by the Budget codec.
+    pub const fn market(self) -> Id32 {
+        self.market
+    }
+
+    /// Parent Epoch authenticated by the Budget codec.
+    pub const fn epoch(self) -> Id32 {
+        self.epoch
+    }
+
+    /// Exact parent generation authenticated by the Budget codec.
+    pub const fn epoch_generation(self) -> u64 {
+        self.epoch_generation
+    }
+
+    /// Original root-funding payer.
+    pub const fn funding_payer(self) -> Id32 {
+        self.funding_payer
+    }
+
+    /// Permissionless root-close reward that must be paid before deletion.
+    pub const fn root_close_reward(self) -> u64 {
+        self.root_close_reward
+    }
+
+    /// Independently owned Budget rent principal and donation floor.
+    pub const fn rent(self) -> DeletableRentOwnerV1 {
+        self.rent
+    }
+}
+
 impl EpochBudgetV2AccountV1 {
     /// Validate exact reward and rent state.
     pub fn validate(self) -> Result<(), CodecError> {
@@ -3206,6 +3250,38 @@ impl EpochBudgetV2AccountV1 {
             .and_then(|value| value.checked_add(self.selected_rent_initial))
             .ok_or(CodecError::ArithmeticOverflow)?;
         Ok(())
+    }
+
+    /// Consume the semantic Budget terminality check for atomic root close.
+    ///
+    /// Freeze/finalize rewards must be paid, solver liability must be paid or
+    /// explicitly neutralized, and selected-artifact rent must be materialized
+    /// or reclaimed. The root-close reward deliberately remains present: the
+    /// root-close transaction pays it once and deletes the Budget atomically.
+    pub fn retirement_disposition(
+        self,
+    ) -> Result<EpochBudgetRetirementDispositionV1, CodecError> {
+        self.validate()?;
+        if self.freeze_paid != 1
+            || self.freeze_remaining != 0
+            || self.finalize_paid != 1
+            || self.finalize_remaining != 0
+            || !(1..=2).contains(&self.solver_state)
+            || self.solver_remaining != 0
+            || !(1..=2).contains(&self.selected_rent_state)
+            || self.selected_rent_remaining != 0
+            || self.root_close_remaining != self.root_close_initial
+        {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(EpochBudgetRetirementDispositionV1 {
+            market: self.market,
+            epoch: self.epoch,
+            epoch_generation: self.epoch_generation,
+            funding_payer: self.funding_payer,
+            root_close_reward: self.root_close_remaining,
+            rent: self.rent,
+        })
     }
 
     /// Encode exactly [`EPOCH_BUDGET_ACCOUNT_BYTES`] bytes.
@@ -4483,6 +4559,24 @@ mod tests {
         let mut budget_bytes = [0u8; EPOCH_BUDGET_ACCOUNT_BYTES];
         budget.encode(&mut budget_bytes).unwrap();
         assert_eq!(EpochBudgetV2AccountV1::decode(&budget_bytes), Ok(budget));
+        let terminal_budget = EpochBudgetV2AccountV1 {
+            freeze_remaining: 0,
+            finalize_remaining: 0,
+            solver_remaining: 0,
+            selected_rent_remaining: 0,
+            freeze_paid: 1,
+            finalize_paid: 1,
+            solver_state: 1,
+            selected_rent_state: 1,
+            ..budget
+        };
+        let terminal = terminal_budget.retirement_disposition().unwrap();
+        assert_eq!(terminal.market(), terminal_budget.market);
+        assert_eq!(terminal.epoch(), terminal_budget.epoch);
+        assert_eq!(terminal.epoch_generation(), terminal_budget.epoch_generation);
+        assert_eq!(terminal.funding_payer(), terminal_budget.funding_payer);
+        assert_eq!(terminal.root_close_reward(), terminal_budget.root_close_initial);
+        assert_eq!(terminal.rent(), terminal_budget.rent);
         budget_bytes[EPOCH_BUDGET_ACCOUNT_BYTES - 1] = 1;
         assert_eq!(
             EpochBudgetV2AccountV1::decode(&budget_bytes),
@@ -4494,6 +4588,33 @@ mod tests {
             depleted_root_close.validate(),
             Err(CodecError::InvalidState)
         );
+        for hostile in [
+            EpochBudgetV2AccountV1 {
+                freeze_paid: 0,
+                freeze_remaining: budget.freeze_initial,
+                ..terminal_budget
+            },
+            EpochBudgetV2AccountV1 {
+                finalize_paid: 0,
+                finalize_remaining: budget.finalize_initial,
+                ..terminal_budget
+            },
+            EpochBudgetV2AccountV1 {
+                solver_state: 0,
+                solver_remaining: budget.solver_initial,
+                ..terminal_budget
+            },
+            EpochBudgetV2AccountV1 {
+                selected_rent_state: 0,
+                selected_rent_remaining: budget.selected_rent_initial,
+                ..terminal_budget
+            },
+        ] {
+            assert_eq!(
+                hostile.retirement_disposition(),
+                Err(CodecError::InvalidState)
+            );
+        }
 
         let selected = selected_candidate();
         let mut selected_bytes = [0u8; SELECTED_CANDIDATE_ACCOUNT_BYTES];

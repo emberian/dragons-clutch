@@ -56,7 +56,7 @@ pub mod stream;
 /// next version and refuses every earlier one explicitly with
 /// [`CodecError::WrongVersion`], so the pair `(tag, version)` never names two
 /// shapes.
-pub const LAYOUT_VERSION: u8 = 4;
+pub const LAYOUT_VERSION: u8 = 5;
 /// The initial prototype schema version.
 pub const LAYOUT_VERSION_V1: u8 = 1;
 /// The schema version of the first persisted-state revision.
@@ -8059,7 +8059,7 @@ mod tests {
         let page = build_page(0, 1, &[1], Hash32::ZERO);
         let mut b = [0; account_len::ORDER_PAGE];
         page.encode(&mut b).unwrap();
-        assert_eq!(b[1], LAYOUT_VERSION);
+        assert_eq!(b[1], account_version::ORDER_PAGE);
         assert_eq!(account_version::ORDER_PAGE, 4);
         for superseded in [LAYOUT_VERSION_V1, LAYOUT_VERSION_V2, LAYOUT_VERSION_V3] {
             b[1] = superseded;

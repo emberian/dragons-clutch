@@ -87,6 +87,18 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
 pub const REPLAY_SUCCESSOR_ACCOUNT_VERSION: u8 = 1;
+/// Counted-retirement Market wrapper discriminator.
+pub const RETIREMENT_V2_MARKET_ACCOUNT_TAG: u8 = 3;
+/// Counted-retirement Market wrapper version.
+pub const RETIREMENT_V2_MARKET_ACCOUNT_VERSION: u8 = 2;
+/// Counted-retirement Position wrapper discriminator.
+pub const RETIREMENT_V2_POSITION_ACCOUNT_TAG: u8 = 6;
+/// Counted-retirement Position wrapper version.
+pub const RETIREMENT_V2_POSITION_ACCOUNT_VERSION: u8 = 2;
+/// Counted-retirement general-Epoch wrapper discriminator.
+pub const RETIREMENT_V2_EPOCH_ACCOUNT_TAG: u8 = 11;
+/// Counted-retirement general-Epoch wrapper version.
+pub const RETIREMENT_V2_EPOCH_ACCOUNT_VERSION: u8 = 5;
 /// General V2 canonical EconomicDomain artifact account discriminator.
 pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_TAG: u8 = 0x7b;
 /// General V2 canonical EconomicDomain artifact account version.
@@ -274,6 +286,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "retirement-provisional-general-epoch-tombstone-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_V2_MARKET_ACCOUNT_TAG,
+            version: RETIREMENT_V2_MARKET_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-v2-market-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_V2_POSITION_ACCOUNT_TAG,
+            version: RETIREMENT_V2_POSITION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-v2-position-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_V2_EPOCH_ACCOUNT_TAG,
+            version: RETIREMENT_V2_EPOCH_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-v2-general-epoch-v5-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -881,6 +920,35 @@ mod tests {
             }
             assert_eq!(matches, 1, "account {tag}/{version}");
             assert_eq!(status, Some(AllocationStatus::ReservedDisabled));
+        }
+    }
+
+    #[test]
+    fn counted_retirement_wrapper_coordinates_are_reserved_but_disabled() {
+        let expected = [
+            (
+                RETIREMENT_V2_MARKET_ACCOUNT_TAG,
+                RETIREMENT_V2_MARKET_ACCOUNT_VERSION,
+            ),
+            (
+                RETIREMENT_V2_POSITION_ACCOUNT_TAG,
+                RETIREMENT_V2_POSITION_ACCOUNT_VERSION,
+            ),
+            (
+                RETIREMENT_V2_EPOCH_ACCOUNT_TAG,
+                RETIREMENT_V2_EPOCH_ACCOUNT_VERSION,
+            ),
+        ];
+        for (tag, version) in expected {
+            let mut matches = 0u8;
+            for entry in CENTRAL_COLLISION_LEDGER {
+                if coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+                {
+                    matches += 1;
+                    assert_eq!(entry.status, AllocationStatus::ReservedDisabled);
+                }
+            }
+            assert_eq!(matches, 1, "account {tag}/{version}");
         }
     }
 

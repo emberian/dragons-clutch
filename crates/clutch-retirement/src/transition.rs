@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::{
-    canonical_epoch_generation, CandidateStatusWitnessV1, DeletableRentOwnerV1, EpochChildKindV1,
-    EpochRetirementTailV1, GeneralEpochPhaseV2, GeneralEpochTombstoneV1, Identity32V1,
-    MarketEpochCursorV1, PositionRetirementTailV1, PositionTombstoneV1, RentSplitV2,
-    ReservationCountTailV1, ReservationStateV1, RetirementErrorV1, RetirementErrorV2, MAX_OUTCOMES,
+    canonical_epoch_generation, AuthenticatedEpochBudgetDispositionV1, CandidateStatusWitnessV1,
+    DeletableRentOwnerV1, EpochChildKindV1, EpochRetirementTailV1, GeneralEpochPhaseV2,
+    GeneralEpochTombstoneV1, Identity32V1, MarketEpochCursorV1, PositionRetirementTailV1,
+    PositionTombstoneV1, RentSplitV2, ReservationCountTailV1, ReservationStateV1,
+    RetirementErrorV1, RetirementErrorV2, MAX_OUTCOMES,
 };
 use clutch_candidate_lifecycle::CandidateWindowV4;
 
 /// Maximum number of distinct recipients in one modeled retirement bundle.
 pub const MAX_RETIREMENT_RECIPIENTS: usize = 4;
+/// Maximum distinct recipients when an Epoch root also pays its closer.
+pub const MAX_EPOCH_ROOT_RECIPIENTS_V2: usize = 5;
 
 /// One forgeable adapter-projected recipient balance supplied before planning.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +111,95 @@ impl CoalescedRecipientCreditsV1 {
         let balance_before = book.entries[index]
             .ok_or(RetirementErrorV2::MissingRecipient)?
             .balance_before;
+        entry.balance_after = balance_before
+            .checked_add(entry.credit_lamports)
+            .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
+        self.entries[index] = Some(entry);
+        Ok(())
+    }
+
+    /// Look up one recipient's coalesced checked plan.
+    pub fn get(self, recipient: Identity32V1) -> Option<RecipientCreditV1> {
+        let mut index = 0usize;
+        while index < self.entries.len() {
+            if self.entries[index].map(|entry| entry.recipient) == Some(recipient) {
+                return self.entries[index];
+            }
+            index += 1;
+        }
+        None
+    }
+}
+
+/// Five-recipient balance book for Epoch+Window+Budget close with a distinct closer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochRootRecipientBalanceBookV2 {
+    /// Epoch payer, Window payer, Budget payer, closer, and neutral sink may all differ.
+    pub entries: [Option<RecipientBalanceV1>; MAX_EPOCH_ROOT_RECIPIENTS_V2],
+}
+
+impl EpochRootRecipientBalanceBookV2 {
+    fn locate(self, recipient: Identity32V1) -> Result<usize, RetirementErrorV2> {
+        let mut left = 0usize;
+        while left < self.entries.len() {
+            if let Some(entry) = self.entries[left] {
+                let mut right = left + 1;
+                while right < self.entries.len() {
+                    if self.entries[right].map(|other| other.recipient) == Some(entry.recipient) {
+                        return Err(RetirementErrorV2::AccountAlias);
+                    }
+                    right += 1;
+                }
+                if entry.recipient == recipient {
+                    return Ok(left);
+                }
+            }
+            left += 1;
+        }
+        Err(RetirementErrorV2::MissingRecipient)
+    }
+}
+
+/// Coalesced five-recipient credits for an atomic Epoch-root retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochRootRecipientCreditsV2 {
+    /// Present entries preserve the authenticated balance-book order.
+    pub entries: [Option<RecipientCreditV1>; MAX_EPOCH_ROOT_RECIPIENTS_V2],
+}
+
+impl EpochRootRecipientCreditsV2 {
+    fn begin(book: EpochRootRecipientBalanceBookV2) -> Result<Self, RetirementErrorV2> {
+        let mut entries = [None; MAX_EPOCH_ROOT_RECIPIENTS_V2];
+        let mut index = 0usize;
+        while index < entries.len() {
+            if let Some(entry) = book.entries[index] {
+                book.locate(entry.recipient)?;
+                entries[index] = Some(RecipientCreditV1 {
+                    recipient: entry.recipient,
+                    credit_lamports: 0,
+                    balance_after: entry.balance_before,
+                });
+            }
+            index += 1;
+        }
+        Ok(Self { entries })
+    }
+
+    fn credit(
+        &mut self,
+        book: EpochRootRecipientBalanceBookV2,
+        recipient: Identity32V1,
+        amount: u64,
+    ) -> Result<(), RetirementErrorV2> {
+        let index = book.locate(recipient)?;
+        let balance_before = book.entries[index]
+            .ok_or(RetirementErrorV2::MissingRecipient)?
+            .balance_before;
+        let mut entry = self.entries[index].ok_or(RetirementErrorV2::MissingRecipient)?;
+        entry.credit_lamports = entry
+            .credit_lamports
+            .checked_add(amount)
+            .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
         entry.balance_after = balance_before
             .checked_add(entry.credit_lamports)
             .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
@@ -1053,6 +1145,32 @@ pub fn plan_position_replay_retirement(
     })
 }
 
+/// Signed-sequence-bound inputs for a production Position/Replay close path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PositionReplayRetirementRequestV2 {
+    /// Complete V1 economic and account graph.
+    pub retirement: PositionReplayRetirementRequestV1,
+    /// Sequence authenticated from the signed instruction envelope.
+    pub signed_sequence: u64,
+}
+
+/// Plan Position/Replay retirement only after binding the signed sequence to
+/// the exact authenticated generation-scoped Replay account.
+///
+/// The V1 planner remains available as a pure compatibility surface, but a
+/// live mutation route must use this entry point so changing Replay sequence
+/// bytes cannot preserve close success.
+pub fn plan_position_replay_retirement_v2(
+    request: PositionReplayRetirementRequestV2,
+) -> Result<PositionReplayRetirementPlanV1, RetirementErrorV2> {
+    match request.retirement.replay {
+        ReplayLifecycleStateV1::Live(replay) if replay.sequence == request.signed_sequence => {}
+        ReplayLifecycleStateV1::Live(_) => return Err(RetirementErrorV2::ReplayMismatch),
+        ReplayLifecycleStateV1::Absent => return Err(RetirementErrorV2::ReplayMismatch),
+    }
+    plan_position_replay_retirement(request.retirement)
+}
+
 /// Complete atomic reopen plan for the next Position and Replay generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PositionReplayReopenPlanV1 {
@@ -1917,6 +2035,186 @@ pub fn plan_epoch_root_retirement(
         budget_balance_after: 0,
     };
     Err(RetirementErrorV2::BudgetRetirementUnauthenticated)
+}
+
+/// Complete atomic root-retirement inputs after the authoritative Budget
+/// semantic owner has supplied its terminal disposition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochRootRetirementRequestV2 {
+    /// Live Epoch; tombstones replay-refuse.
+    pub epoch: GeneralEpochLifecycleProjectionV2,
+    /// Mandatory generation-matched Window sibling.
+    pub window: EpochWindowRootSiblingV1,
+    /// Opaque checked CandidateWindow terminal-ledger capability.
+    pub admission_ledger: ValidatedAdmissionLedgerRetiredV1,
+    /// Owner-qualified terminal Budget disposition.
+    pub budget: AuthenticatedEpochBudgetDispositionV1,
+    /// Successful signer receiving the still-present root-close reward.
+    pub reward_recipient: Identity32V1,
+    /// Actual source balances before any mutation.
+    pub epoch_balance: u64,
+    /// Actual Window balance before any mutation.
+    pub window_balance: u64,
+    /// Actual Budget balance before any mutation.
+    pub budget_balance: u64,
+    /// Frozen neutral sink.
+    pub neutral_sink: Identity32V1,
+    /// Immutable Market/Realm neutral-sink binding.
+    pub neutral_sink_binding: AdapterNeutralSinkBindingProjectionV1,
+    /// Canonical source account identities.
+    pub accounts: EpochRootAccountsV1,
+    /// Authenticated starting balances for up to five distinct recipients.
+    pub recipient_balances: EpochRootRecipientBalanceBookV2,
+}
+
+/// Success-capable pure plan for Epoch tombstoning plus Window/Budget deletion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochRootRetirementPlanV2 {
+    /// Epoch tombstone post-state.
+    pub epoch_post_state: GeneralEpochLifecycleProjectionV2,
+    /// Alias-coalesced payer, closer, and sink credits.
+    pub recipient_credits: EpochRootRecipientCreditsV2,
+    /// Root-close reward kept distinct from rent and surplus.
+    pub root_close_reward_lamports: u64,
+    /// Exact retained Epoch tombstone balance.
+    pub epoch_balance_after: u64,
+    /// Deleted Window post-balance.
+    pub window_balance_after: u64,
+    /// Deleted Budget post-balance.
+    pub budget_balance_after: u64,
+}
+
+/// Plan the complete terminal root transition without mutating any state.
+///
+/// This succeeds only with an owner-qualified Budget disposition. The frozen
+/// V1 entry point remains an unconditional Budget refusal, preventing old
+/// callers from inheriting this capability accidentally.
+pub fn plan_epoch_root_retirement_v2(
+    request: EpochRootRetirementRequestV2,
+) -> Result<EpochRootRetirementPlanV2, RetirementErrorV2> {
+    let live_epoch = match request.epoch {
+        GeneralEpochLifecycleProjectionV2::Live(live) => live,
+        GeneralEpochLifecycleProjectionV2::Tombstone(_) => {
+            return Err(RetirementErrorV2::AlreadyTerminal)
+        }
+    };
+    request
+        .neutral_sink_binding
+        .require(live_epoch.market, request.neutral_sink)?;
+    if request.accounts.epoch.market != live_epoch.market
+        || request.accounts.epoch.epoch != live_epoch.epoch
+        || request.accounts.epoch.epoch_index != live_epoch.epoch_index
+        || request.window.market != live_epoch.market
+        || request.window.epoch != live_epoch.epoch
+        || request.budget.market() != live_epoch.market
+        || request.budget.epoch() != live_epoch.epoch
+    {
+        return Err(RetirementErrorV2::WrongParent);
+    }
+    request.window.validate()?;
+    let generation = live_epoch.retirement.epoch_generation;
+    if request.window.epoch_generation != generation
+        || request.budget.epoch_generation() != generation
+    {
+        return Err(RetirementErrorV2::WrongGeneration);
+    }
+    if request.budget.budget_account() != request.accounts.budget {
+        return Err(RetirementErrorV2::WrongFundingTarget);
+    }
+    if request.budget.neutral_sink() != request.neutral_sink {
+        return Err(RetirementErrorV2::WrongNeutralSink);
+    }
+    if !request.admission_ledger.binds(live_epoch)
+        || request.admission_ledger.market != request.window.market
+        || request.admission_ledger.epoch != request.window.epoch
+        || request.admission_ledger.epoch_generation != request.window.epoch_generation
+    {
+        return Err(RetirementErrorV2::AdmissionLedgerOutstanding);
+    }
+    if request.reward_recipient == request.neutral_sink {
+        return Err(RetirementErrorV2::AccountAlias);
+    }
+    let sources = [
+        request.accounts.epoch.account,
+        request.accounts.window,
+        request.accounts.budget,
+    ];
+    let mut left = 0usize;
+    while left < sources.len() {
+        let mut right = left + 1;
+        while right < sources.len() {
+            if sources[left] == sources[right] {
+                return Err(RetirementErrorV2::AccountAlias);
+            }
+            right += 1;
+        }
+        let mut recipient = 0usize;
+        while recipient < request.recipient_balances.entries.len() {
+            if request.recipient_balances.entries[recipient]
+                .map(|entry| entry.recipient)
+                == Some(sources[left])
+            {
+                return Err(RetirementErrorV2::AccountAlias);
+            }
+            recipient += 1;
+        }
+        left += 1;
+    }
+
+    let epoch_plan = plan_epoch_root_only_retirement(
+        request.epoch,
+        request.epoch_balance,
+        request.neutral_sink,
+        0,
+        0,
+    )?;
+    let window = deletable_rent_disposition(
+        request.window.rent,
+        request.window_balance,
+        request.neutral_sink,
+    )?;
+    let budget_rent = request.budget.rent();
+    let budget_principal = budget_rent.refundable_principal();
+    let reward = request.budget.root_close_reward();
+    let budget_required = budget_principal
+        .checked_add(reward)
+        .and_then(|value| value.checked_add(budget_rent.donation_floor()))
+        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
+    if request.budget_balance < budget_required {
+        return Err(RetirementErrorV2::AccountBalanceShortfall);
+    }
+    let budget_neutral = request
+        .budget_balance
+        .checked_sub(budget_principal)
+        .and_then(|value| value.checked_sub(reward))
+        .ok_or(RetirementErrorV2::AccountBalanceShortfall)?;
+
+    let book = request.recipient_balances;
+    let mut credits = EpochRootRecipientCreditsV2::begin(book)?;
+    credits.credit(
+        book,
+        epoch_plan.payer,
+        live_epoch.retirement.rent.refundable_live_principal,
+    )?;
+    credits.credit(book, window.payer, window.payer_refund_lamports)?;
+    credits.credit(book, budget_rent.payer(), budget_principal)?;
+    credits.credit(book, request.reward_recipient, reward)?;
+    credits.credit(
+        book,
+        request.neutral_sink,
+        epoch_plan.neutral_balance_after,
+    )?;
+    credits.credit(book, request.neutral_sink, window.neutral_lamports)?;
+    credits.credit(book, request.neutral_sink, budget_neutral)?;
+
+    Ok(EpochRootRetirementPlanV2 {
+        epoch_post_state: epoch_plan.post_state,
+        recipient_credits: credits,
+        root_close_reward_lamports: reward,
+        epoch_balance_after: epoch_plan.tombstone_balance_after,
+        window_balance_after: 0,
+        budget_balance_after: 0,
+    })
 }
 
 /// Frozen count-only Reservation projection used by V5/V6 envelopes.
