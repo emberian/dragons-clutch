@@ -37,7 +37,7 @@ const PROPOSAL_SCHEMA: &str = "dragons-clutch/compiler/production-payoff-proposa
 
 type CompileResult<T> = std::result::Result<T, String>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CompileRequest {
     schema: String,
@@ -55,7 +55,7 @@ struct DefinitionWire {
     definition: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct BundleInputsWire {
     registry_capability_profile_v2_bytes_hex: String,
@@ -554,6 +554,11 @@ impl CompilerService {
         if request.expected_compiler_release_sha256 != self.compiler_release_sha256 {
             return Err("expectedCompilerReleaseSha256 differs from the configured compiler service release".to_string());
         }
+        let request_value = serde_json::to_value(&request)
+            .map_err(|error| format!("cannot encode validated compiler request: {error}"))?;
+        let mut canonical_request = String::new();
+        canonical_json(&request_value, &mut canonical_request)?;
+        let request_sha256 = solana_sha256_hasher::hash(canonical_request.as_bytes()).to_bytes();
         let product_terms_id = parse_id(&request.definition.product_terms_id, "productTermsId")?;
         let definition = parse_definition(&request.definition)?;
         let definition_value = serde_json::to_value(&request.definition)
@@ -685,6 +690,7 @@ impl CompilerService {
             "authority": "untrusted-compiler-proposal",
             "registrationAuthority": false,
             "compilerReleaseSha256": self.compiler_release_sha256.as_str(),
+            "requestCanonicalSha256": id_hex(request_sha256),
             "inputCanonicalSha256": id_hex(input_sha256),
             "productTermsId": request.definition.product_terms_id,
             "classification": request.definition.kind,

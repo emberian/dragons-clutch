@@ -205,14 +205,15 @@
     return Object.freeze(output);
   };
 
-  const compileRemote = async (operatorUrl, compilerReleaseSha256, definition, bundleInputs, maximumResponseBytes, timeoutMilliseconds) => {
-    const expectedCompilerReleaseSha256 = hash(compilerReleaseSha256, "compiler release SHA-256");
-    const request = Object.freeze({
-      schema: "dragons-clutch/compiler/production-payoff-request/v1",
-      expectedCompilerReleaseSha256,
-      definition: definition.value,
-      bundleInputs: validateBundleInputs(bundleInputs)
-    });
+  const buildRequest = (compilerReleaseSha256, definition, bundleInputs) => Object.freeze({
+    schema: "dragons-clutch/compiler/production-payoff-request/v1",
+    expectedCompilerReleaseSha256: hash(compilerReleaseSha256, "compiler release SHA-256"),
+    definition: definition.value,
+    bundleInputs: validateBundleInputs(bundleInputs)
+  });
+
+  const compileRemote = async (operatorUrl, request, maximumResponseBytes, timeoutMilliseconds) => {
+    exactKeys(request, ["schema", "expectedCompilerReleaseSha256", "definition", "bundleInputs"], "compiler request");
     const encoded = new TextEncoder().encode(JSON.stringify(request));
     if (encoded.byteLength > 327_680) throw new Error("Compiler request exceeds the operatord 327680-byte request bound.");
     const maximum = BigInt(maximumResponseBytes);
@@ -269,13 +270,15 @@
     }
   };
 
-  const validateProposal = (raw, expectedInputSha256, expectedCompilerReleaseSha256, expectedDefinition) => {
-    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundle"], "compiler proposal");
+  const validateProposal = (raw, expectedRequestSha256, expectedInputSha256, expectedCompilerReleaseSha256, expectedDefinition) => {
+    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "requestCanonicalSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundle"], "compiler proposal");
     if (!plain(raw) || raw.schema !== "dragons-clutch/compiler/production-payoff-proposal/v1" || raw.authority !== "untrusted-compiler-proposal" || raw.registrationAuthority !== false) {
       throw new Error("Compiler result is not an untrusted production-payoff proposal v1.");
     }
     const compilerReleaseSha256 = hash(raw.compilerReleaseSha256, "compilerReleaseSha256");
     if (compilerReleaseSha256 !== expectedCompilerReleaseSha256) throw new Error("Compiler result names a different explicit compiler release.");
+    const requestCanonicalSha256 = hash(raw.requestCanonicalSha256, "requestCanonicalSha256");
+    if (requestCanonicalSha256 !== expectedRequestSha256) throw new Error("Compiler result is not bound to the exact definition and Product/Series bundle inputs shown in this page.");
     const inputCanonicalSha256 = hash(raw.inputCanonicalSha256, "inputCanonicalSha256");
     if (inputCanonicalSha256 !== expectedInputSha256) throw new Error("Compiler result is not bound to the exact rational definition shown in this page.");
     if (!CLASSES.has(raw.classification) || !STATUSES.has(raw.spanStatus)) throw new Error("Compiler classification or span status is unknown.");
@@ -330,6 +333,7 @@
       authority: raw.authority,
       registrationAuthority: false,
       compilerReleaseSha256,
+      requestCanonicalSha256,
       inputCanonicalSha256,
       productTermsId,
       classification: raw.classification,
@@ -351,6 +355,7 @@
   root.GlassCompilerProposal = Object.freeze({
     validateDefinition,
     validateBundleInputs,
+    buildRequest,
     validateProposal,
     compileRemote,
     canonicalJson,

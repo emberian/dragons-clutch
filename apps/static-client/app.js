@@ -7,6 +7,7 @@
   const REGISTRY = root.GlassSuccessorRegistry;
   const COMPILER = root.GlassCompilerProposal;
   const state = { configuration: null, snapshot: null, compilerProposal: null, construction: null };
+  let compilerRevision = 0;
   const $ = (id) => document.getElementById(id);
   const create = (tag, className, value) => {
     const node = document.createElement(tag);
@@ -245,7 +246,9 @@
     $("snapshot-json").textContent = JSON.stringify(serializable, null, 2);
     $("copy-snapshot").disabled = false;
     const snapshotDigest = await digest(new TextEncoder().encode(canonicalJson(serializable)));
-    $("snapshot-digest").textContent = snapshotDigest ? `Local canonical projection SHA-256: ${snapshotDigest}` : "Web Crypto unavailable; no local projection digest was computed.";
+    if (state.snapshot === snapshot) {
+      $("snapshot-digest").textContent = snapshotDigest ? `Local canonical projection SHA-256: ${snapshotDigest}` : "Web Crypto unavailable; no local projection digest was computed.";
+    }
   };
 
   const keeperForSelection = () => {
@@ -273,29 +276,42 @@
     try { return JSON.parse($(id).value); } catch (_) { throw new Error(`${label} is not valid JSON.`); }
   };
 
-  const prepareCompilerDefinition = async () => {
-    if (!state.configuration) throw new Error("Apply an explicit release configuration before binding compiler output.");
+  const prepareCompilerRequest = async () => {
+    const configuration = state.configuration;
+    const revision = compilerRevision;
+    if (!configuration) throw new Error("Apply an explicit release configuration before binding compiler output.");
     const definitionValue = COMPILER.validateDefinition(parseJsonField("compiler-definition", "Exact rational payoff definition"));
+    const compilerReleaseSha256 = $("compiler-release-sha256").value.trim();
+    const request = COMPILER.buildRequest(
+      compilerReleaseSha256,
+      definitionValue,
+      parseJsonField("compiler-bundle-inputs", "Canonical Product/Series bundle inputs")
+    );
     const inputCanonicalSha256 = await digest(new TextEncoder().encode(definitionValue.canonicalJson));
-    if (inputCanonicalSha256 === null) throw new Error("Web Crypto SHA-256 is unavailable; the page refuses to bind compiler output without a cryptographic input join.");
-    return Object.freeze({ definitionValue, inputCanonicalSha256 });
+    const requestCanonicalSha256 = await digest(new TextEncoder().encode(COMPILER.canonicalJson(request)));
+    if (inputCanonicalSha256 === null || requestCanonicalSha256 === null) throw new Error("Web Crypto SHA-256 is unavailable; the page refuses to bind compiler output without cryptographic input joins.");
+    if (state.configuration !== configuration || compilerRevision !== revision) throw new Error("Compiler target or inputs changed while their exact request identity was being prepared.");
+    return Object.freeze({ configuration, revision, definitionValue, compilerReleaseSha256, request, inputCanonicalSha256, requestCanonicalSha256 });
   };
 
   const bindCompilerProposal = async (rawProposal = null, prepared = null) => {
-    const { definitionValue, inputCanonicalSha256 } = prepared || await prepareCompilerDefinition();
+    const context = prepared || await prepareCompilerRequest();
+    if (state.configuration !== context.configuration || compilerRevision !== context.revision) throw new Error("Compiler target or inputs changed while the proposal was in flight.");
     const proposal = COMPILER.validateProposal(
       rawProposal || parseJsonField("compiler-proposal", "operatord/CLI compiler proposal"),
-      inputCanonicalSha256,
-      $("compiler-release-sha256").value.trim(),
-      definitionValue
+      context.requestCanonicalSha256,
+      context.inputCanonicalSha256,
+      context.compilerReleaseSha256,
+      context.definitionValue
     );
     const profileId = proposal.compiledProductSeriesBundle.identities.capabilityProfileId;
-    if (profileId !== state.configuration.release.capabilityProfileId) {
+    if (profileId !== context.configuration.release.capabilityProfileId) {
       throw new Error("Compiler output capabilityProfileId differs from the explicitly selected release profile.");
     }
 
     state.compilerProposal = Object.freeze({
-      definition: Object.freeze({ canonicalJson: definitionValue.canonicalJson, canonicalSha256: inputCanonicalSha256 }),
+      definition: Object.freeze({ canonicalJson: context.definitionValue.canonicalJson, canonicalSha256: context.inputCanonicalSha256 }),
+      requestCanonicalSha256: context.requestCanonicalSha256,
       proposal,
       authority: "untrusted-proposal; onchain registration remains authority"
     });
@@ -305,7 +321,8 @@
       definition("Payoff classification", proposal.classification),
       definition("Span status", proposal.spanStatus),
       definition("Input canonical SHA-256", proposal.inputCanonicalSha256),
-      definition("Compiler release SHA-256", proposal.compilerReleaseSha256),
+      definition("Whole request canonical SHA-256", proposal.requestCanonicalSha256),
+      definition("Configured compiler release SHA-256", proposal.compilerReleaseSha256),
       definition("Product Terms ID", proposal.productTermsId),
       definition("Native basis ID / bytes", `${proposal.nativeClaimBasis.id} / ${proposal.nativeClaimBasis.byteLength}`),
       definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
@@ -331,20 +348,19 @@
   };
 
   const compilePayoff = async () => {
-    const prepared = await prepareCompilerDefinition();
+    const prepared = await prepareCompilerRequest();
     const proposal = await COMPILER.compileRemote(
-      state.configuration.operatorUrl,
-      $("compiler-release-sha256").value.trim(),
-      prepared.definitionValue,
-      parseJsonField("compiler-bundle-inputs", "Canonical Product/Series bundle inputs"),
-      state.configuration.bounds.maximumResponseBytes,
-      state.configuration.bounds.timeoutMilliseconds
+      prepared.configuration.operatorUrl,
+      prepared.request,
+      prepared.configuration.bounds.maximumResponseBytes,
+      prepared.configuration.bounds.timeoutMilliseconds
     );
     await bindCompilerProposal(proposal, prepared);
   };
 
   const buildWorkflow = async () => {
     if (!state.configuration || !state.snapshot) throw new Error("Acquire a chain projection before constructing a workflow node.");
+    if (state.snapshot.configuration !== state.configuration) throw new Error("The acquired projection belongs to a different explicit configuration; acquire again before constructing.");
     let draft;
     try { draft = JSON.parse($("draft-json").value); } catch (_) { throw new Error("Semantic-owner draft is not valid JSON."); }
     const keeper = keeperForSelection();
@@ -399,11 +415,19 @@
       const button = $("read-chain");
       button.disabled = true;
       button.textContent = "Reading bounded endpoints…";
-      try { await renderSnapshot(await CHAIN.acquire(state.configuration)); } catch (error) { resetProjection(`Acquisition refused: ${error.message}`); setError("configuration-error", error.message); }
+      const configuration = state.configuration;
+      try {
+        const snapshot = await CHAIN.acquire(configuration);
+        if (state.configuration !== configuration) throw new Error("The explicit configuration changed while acquisition was in flight.");
+        await renderSnapshot(snapshot);
+      } catch (error) { resetProjection(`Acquisition refused: ${error.message}`); setError("configuration-error", error.message); }
       finally { button.disabled = false; button.textContent = "Read bounded operatord state"; }
     });
     $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(state.configuration, null, 2), $("export-configuration")); });
     $("copy-snapshot").addEventListener("click", () => { if (state.snapshot) copy($("snapshot-json").textContent, $("copy-snapshot")); });
+    for (const id of ["compiler-release-sha256", "compiler-definition", "compiler-bundle-inputs"]) {
+      $(id).addEventListener("input", () => { compilerRevision += 1; });
+    }
     $("compiler-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       clearError("compiler-error");

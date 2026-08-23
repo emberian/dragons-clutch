@@ -1,7 +1,8 @@
 //! Explicit, bounded, read-only RPC acquisition for the Glass chain console.
 //!
-//! This mode verifies the selected genesis and every Program/ProgramData/slot/
-//! ELF tuple before exposing a release, then repeatedly admits finalized
+//! This mode checks the selected genesis and every Program/ProgramData/slot/
+//! ELF tuple through the configured untrusted RPC before exposing a release,
+//! then repeatedly admits finalized
 //! `getProgramAccounts` scans through `RpcIndexEngine`. It deliberately does
 //! not claim a processed projection: no WebSocket transport is hidden here.
 
@@ -496,7 +497,11 @@ fn spawn_finalized_poller(
                 &plan.cluster.rpc_http_url,
                 plan.bounds.maximum_total_response_bytes,
                 timeout_seconds,
-            )
+            )?;
+            // Keep the projection withdrawn unless one complete scan is
+            // bracketed by the configured release observations. An upgrade
+            // between the first observation and the scan must fail closed.
+            verify_chain_bindings(&plan, timeout_seconds)
         });
         if let Err(error) = outcome {
             eprintln!("operatord chain poller: {error}");
@@ -522,6 +527,7 @@ pub fn serve(port: u16, statics: PathBuf, config_path: &Path) -> Result<()> {
         config.capacity,
     )?));
     admit_scans(&engine, &rpc_url, maximum_bytes, config.rpc_timeout_seconds)?;
+    verify_chain_bindings(&polling_plan, config.rpc_timeout_seconds)?;
     let base_read_api =
         SharedIndexApi::finalized_only(Arc::clone(&engine), config.selector).read_api();
     let ready = Arc::new(RwLock::new(true));
@@ -548,7 +554,7 @@ pub fn serve(port: u16, statics: PathBuf, config_path: &Path) -> Result<()> {
     let server =
         crate::http::Server::bind_pure(port, Bus::new(), statics, Some(read_api), Some(post_api))?;
     println!(
-        "Glass chain reader listening on http://127.0.0.1:{} (verified release, finalized polling, untrusted projection, no wallet/sign/submit/persist)",
+        "Glass chain reader listening on http://127.0.0.1:{} (configured release coordinates checked through an untrusted RPC, finalized polling, untrusted projection, no wallet/sign/submit/persist)",
         server.port()?
     );
     server.serve_forever();

@@ -98,8 +98,10 @@ The same implementation is available through `operatord compile-payoff` for
 stdin/stdout proposal import. Both call Rust `compile_production_payoff_v1` and
 `assemble_compiled_product_series_bundle_v1`.
 
-The page computes the SHA-256 of canonical sorted-key UTF-8 definition JSON and
-requires the proposal to bind it and an explicit compiler-release SHA-256. It
+The page computes SHA-256 over both canonical sorted-key UTF-8 definition JSON
+and the complete validated request, and requires the proposal to bind both plus
+the configured expected compiler-release SHA-256. That release hash is a
+configuration join, not a measurement of the running binary. It
 then displays exact-in-span versus certified-approximation status, all exact
 rational error bounds, the canonical 2,352-byte native-basis proposal, its
   certificate, and the 528-byte bundle plus all sixteen typed identities. The

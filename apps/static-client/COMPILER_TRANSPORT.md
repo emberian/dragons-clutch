@@ -80,6 +80,8 @@ The bounded analytic shape kinds and exact fields are:
 The adapter canonicalizes the validated definition exactly as Glass does:
 object keys sorted recursively, array order retained, compact JSON, UTF-8. It
 places SHA-256 of those bytes in `inputCanonicalSha256`.
+It also canonicalizes the complete validated request—including every hostile-
+decoded bundle input—and places that SHA-256 in `requestCanonicalSha256`.
 
 ```json
 {
@@ -87,6 +89,7 @@ places SHA-256 of those bytes in `inputCanonicalSha256`.
   "authority": "untrusted-compiler-proposal",
   "registrationAuthority": false,
   "compilerReleaseSha256": "<32-byte lowercase hex>",
+  "requestCanonicalSha256": "<32-byte lowercase hex>",
   "inputCanonicalSha256": "<32-byte lowercase hex>",
   "productTermsId": "<same ID as definition>",
   "classification": "exact-categorical | exact-smooth | analytic-smooth",
@@ -158,7 +161,8 @@ and the bundle and recompute every ID and binding.
 Both transports accept one request no larger than 327,680 bytes. All fields are
 closed: unknown fields are refused. The compiler release is configured on the
 process command line; `expectedCompilerReleaseSha256` is only a fail-closed
-join to that configuration, never a caller-selected assertion.
+join to that configuration, never a caller-selected assertion. The configured
+hash is not a measurement of the running binary or a checked release manifest.
 
 ```json
 {
@@ -182,7 +186,9 @@ join to that configuration, never a caller-selected assertion.
 
 `definition` is the complete definition envelope documented above. Only its
 recursively key-sorted, compact, normalized UTF-8 JSON is hashed into
-`inputCanonicalSha256`; outer request fields do not affect that digest. Every
+`inputCanonicalSha256`. The same canonicalization over the whole validated
+request produces `requestCanonicalSha256`, preventing definition-equivalent
+requests with different bundle inputs from sharing a proposal binding. Every
 fixed body is hostile-decoded by its one Rust codec. The basis is deliberately
 absent from `bundleInputs`: it comes only from the payoff compiler, and the
 canonical assembler refuses supplied artifacts that name a different basis.

@@ -15,6 +15,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fs, thread};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -36,6 +37,7 @@ const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_HEADER_COUNT: usize = 64;
+const CONNECTION_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What a POST to `/api` is answered by.
 pub type Action = Arc<dyn Fn(&Value) -> Value + Send + Sync>;
@@ -133,6 +135,13 @@ impl Server {
             let post_api = self.post_api.clone();
             let capability = self.capability.clone();
             thread::spawn(move || {
+                if stream
+                    .set_read_timeout(Some(CONNECTION_IO_TIMEOUT))
+                    .and_then(|()| stream.set_write_timeout(Some(CONNECTION_IO_TIMEOUT)))
+                    .is_err()
+                {
+                    return;
+                }
                 let _ignored = handle(
                     stream,
                     &bus,

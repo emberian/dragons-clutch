@@ -51,12 +51,14 @@ named. No field has an inferred network or release default.
 
 The values above illustrate widths and shape, not a shipped network, program,
 release, wallet, or source fixture. Replace every placeholder and review every
-bound. Decoder family names are capability claims about the selected release;
+bound. Decoder family names are explicit operator configuration assertions about
+the selected release;
 the hostile decoder refuses unknown and ambiguous account bodies.
 
-## What is authenticated before serving
+## What is checked before serving
 
-The process makes bounded read-only RPC calls and refuses to bind Glass unless:
+The process makes bounded read-only calls to the explicitly configured,
+untrusted RPC and refuses to bind Glass unless that one endpoint reports:
 
 1. `getGenesisHash` equals `cluster.genesisHash`;
 2. each Program and ProgramData account exists at finalized commitment;
@@ -65,8 +67,12 @@ The process makes bounded read-only RPC calls and refuses to bind Glass unless:
 4. ProgramData decodes canonically and names the configured deployment slot;
 5. SHA-256 of the exact ELF suffix equals `elfSha256`.
 
-Only then does it execute the canonical finalized scan plans and expose
-`SharedIndexApi`. Every account response is still an untrusted projection:
+It checks the same coordinates again after each complete scan and only then
+exposes `SharedIndexApi`, so an observation that changes across the scan keeps
+the projection withdrawn. These checks are consistency observations, not
+cryptographic chain authentication or an RPC quorum. The configured decoder-family
+list is not derived from the ELF and must not be treated as release-manifest
+proof. Every account response is still an untrusted projection:
 onchain execution must reload complete authoritative accounts.
 
 ## Current finality boundary
