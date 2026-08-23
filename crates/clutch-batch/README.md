@@ -134,6 +134,23 @@ derived allocation bytes.
 This module still contains no accounts, custody, token logic, registry lookup,
 authorization, lifecycle transition, or SBF dispatch.
 
+## Complete portfolio book authority (`portfolio_book_v2`)
+
+`src/portfolio_book_v2.rs` freezes the nonpersisted Dealer consumption seam.
+Its canonical 600-byte identity record binds one read-only counted
+SettlementRoot, retained Feed/traversal, order set, selection witness, and the
+active prefix of at most four OrderPage V5 accounts. Page geometry is exactly
+16 slots per page and 64 RelationV2 rows total; inactive page identities and
+generations must be zero.
+
+The constructor accepts no `EconomicBookV2` from the caller. A private adapter
+must authenticate the exact Root/Feed/page accounts, decode every active slot,
+and return the complete owner-blind RelationV2 projection. The capability is
+minted only after the projected book validates at the exact domain and order
+count. It is not a second persisted coefficient owner; Dealer may consume the
+private capability to derive its allocation order set, but it may not accept
+caller-shaped rows or coefficients.
+
 ## Account-ready exact portfolio pair (`portfolio_execution_v2`)
 
 `src/portfolio_execution_v2.rs` replaces the old content-only atomic portfolio

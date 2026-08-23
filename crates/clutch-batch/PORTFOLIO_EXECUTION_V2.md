@@ -38,6 +38,13 @@ complete hostile body decode, semantic body identity, generation, privileges,
 and exact canonical postimage derivation. A mock implementation is test
 scaffolding, not runtime evidence.
 
+The adjacent `portfolio_book_v2` module owns the complete-book consumption
+boundary requested by Dealer. Its 600-byte fixed record binds the same
+read-only SettlementRoot and retained Feed traversal to an active prefix of at
+most four authenticated OrderPage V5 accounts (16 slots each, 64 rows total).
+The caller supplies no `EconomicBookV2`; only the authenticated page adapter
+may construct the owner-blind book carried by the private capability.
+
 ## Admitted pair
 
 V2 admits exactly one shape:
@@ -125,9 +132,10 @@ authoring this slice.
    postimages, two Position V3 postimages, two Replay V3 successors, the
    SettlementReceipt V5 successor, and the collateral/native-Egg transfers. No
    partial write may be observable.
-4. Dealer settlement must join its private verified allocation row to the
-   private selected-order capability. Caller-authored cash, Egg arrays, or
-   coefficients remain forbidden.
+4. Dealer settlement must consume `AuthenticatedCompletePortfolioBookV2` to
+   derive its full allocation order set, then join each verified allocation row
+   to the private selected-order capability. Caller-authored books, cash, Egg
+   arrays, or coefficients remain forbidden.
 5. Nonzero portfolio fees remain refused until the owner-scoped fee/carry
    semantic owner can produce authenticated exact atom effects at this boundary.
 6. Partial, nonexclusive, mixed single/portfolio, virtual split/merge, and
