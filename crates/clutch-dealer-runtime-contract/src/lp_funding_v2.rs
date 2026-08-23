@@ -719,7 +719,7 @@ pub(crate) fn prepare_funding_replay_v2(
             position_pre_semantic_id,
             position_post_semantic_id,
             liveness_receipt_semantic_id,
-            fee_receipt_semantic_id: Id::ZERO,
+            fee_evidence_id: Id::ZERO,
             asset_transfer_bundle_id,
             position_generation_before: replay.position_generation(),
             position_generation_after: replay.position_generation(),

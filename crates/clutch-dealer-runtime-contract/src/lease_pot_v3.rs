@@ -208,7 +208,7 @@ pub fn prepare_begin_lease_pot_v3(
             position_pre_semantic_id: bundle.source_pre_semantic_id,
             position_post_semantic_id: bundle.source_post_semantic_id,
             liveness_receipt_semantic_id: select_begin.receipt_semantic_id,
-            fee_receipt_semantic_id: selected_fee_digest,
+            fee_evidence_id: selected_fee_digest,
             asset_transfer_bundle_id: bundle.bundle_id()?,
             position_generation_before: state.generation,
             position_generation_after: state.generation,

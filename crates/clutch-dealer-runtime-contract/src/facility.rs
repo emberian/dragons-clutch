@@ -761,7 +761,7 @@ pub fn prepare_facility_initialization_v3(
             position_pre_semantic_id: bundle.destination_pre_semantic_id,
             position_post_semantic_id: bundle.destination_post_semantic_id,
             liveness_receipt_semantic_id: authorization.receipt_semantic_id,
-            fee_receipt_semantic_id: Id::ZERO,
+            fee_evidence_id: Id::ZERO,
             asset_transfer_bundle_id: bundle.bundle_id()?,
             position_generation_before: state.generation,
             position_generation_after: state.generation,

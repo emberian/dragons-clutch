@@ -242,7 +242,7 @@ pub fn prepare_dealer_terminal_replay_v2(
         || intent.action != DealerRuntimeActionV1::Retire
         || intent.liveness_mode != DealerTransitionLivenessModeV1::ExternalReceipt
         || intent.liveness_receipt_semantic_id != authorization.receipt_semantic_id
-        || !intent.fee_receipt_semantic_id.is_zero()
+        || !intent.fee_evidence_id.is_zero()
         || intent.asset_transfer_bundle_id
             != (DealerEmptyAssetTransferBundleV1 {
                 action: DealerRuntimeActionV1::Retire,

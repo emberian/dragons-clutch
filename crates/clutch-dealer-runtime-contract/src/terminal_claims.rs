@@ -1027,7 +1027,7 @@ pub fn prepare_dealer_terminal_claim_replay_v2(
             position_pre_semantic_id: bundle.source_pre_semantic_id,
             position_post_semantic_id: bundle.source_post_semantic_id,
             liveness_receipt_semantic_id: authorization.receipt_semantic_id,
-            fee_receipt_semantic_id: Id::ZERO,
+            fee_evidence_id: Id::ZERO,
             asset_transfer_bundle_id: bundle.bundle_id()?,
             position_generation_before: state.generation,
             position_generation_after: state.generation,

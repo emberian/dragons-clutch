@@ -447,8 +447,11 @@ pub struct DealerTransitionIntentV1 {
     pub position_post_semantic_id: Id,
     /// Exact external liveness receipt, or zero only for caller-funded actions.
     pub liveness_receipt_semantic_id: Id,
-    /// Exact canonical fee settlement/abort receipt, or zero when inapplicable.
-    pub fee_receipt_semantic_id: Id,
+    /// Exact canonical fee evidence, or zero when inapplicable.
+    ///
+    /// Begin/Collect/Deliver bind the immutable selected-record projection;
+    /// Finalize and Abort bind their terminal settlement/abort projections.
+    pub fee_evidence_id: Id,
     /// Content identity of the complete exact asset-transfer bundle.
     pub asset_transfer_bundle_id: Id,
     /// Position generation authenticated before the transition.
@@ -510,9 +513,9 @@ impl DealerTransitionIntentV1 {
             }
             DealerActionLivenessPolicyV1::Either => {}
         }
-        if action_requires_fee_receipt(self.action) {
-            self.fee_receipt_semantic_id.validate_live()?;
-        } else if !self.fee_receipt_semantic_id.is_zero() {
+        if action_requires_fee_evidence(self.action) {
+            self.fee_evidence_id.validate_live()?;
+        } else if !self.fee_evidence_id.is_zero() {
             return Err(Error::MismatchedBinding);
         }
         if self.position_generation_before == 0
@@ -562,7 +565,7 @@ impl FixedCodec for DealerTransitionIntentV1 {
             self.position_pre_semantic_id,
             self.position_post_semantic_id,
             self.liveness_receipt_semantic_id,
-            self.fee_receipt_semantic_id,
+            self.fee_evidence_id,
             self.asset_transfer_bundle_id,
         ] {
             writer.id(identity);
@@ -589,7 +592,7 @@ impl FixedCodec for DealerTransitionIntentV1 {
         let position_pre_semantic_id = reader.id();
         let position_post_semantic_id = reader.id();
         let liveness_receipt_semantic_id = reader.id();
-        let fee_receipt_semantic_id = reader.id();
+        let fee_evidence_id = reader.id();
         let asset_transfer_bundle_id = reader.id();
         let position_generation_before = reader.u64();
         let position_generation_after = reader.u64();
@@ -606,7 +609,7 @@ impl FixedCodec for DealerTransitionIntentV1 {
             position_pre_semantic_id,
             position_post_semantic_id,
             liveness_receipt_semantic_id,
-            fee_receipt_semantic_id,
+            fee_evidence_id,
             asset_transfer_bundle_id,
             position_generation_before,
             position_generation_after,
@@ -658,8 +661,8 @@ pub struct DealerTransitionCommitObservationV1 {
     pub asset_transfer_receipt_id: Id,
     /// Exact consumed liveness receipt, or zero for caller-funded execution.
     pub liveness_receipt_semantic_id: Id,
-    /// Exact consumed fee receipt, or zero when inapplicable.
-    pub fee_receipt_semantic_id: Id,
+    /// Exact fee evidence observed after the atomic action.
+    pub fee_evidence_id: Id,
 }
 
 /// Accept a replay advance only after every State, Position, asset, fee, and
@@ -677,7 +680,7 @@ pub fn accept_dealer_replay_transition_v1(
         || observed.position_post_semantic_id != prepared.intent.position_post_semantic_id
         || observed.asset_transfer_receipt_id != prepared.intent.asset_transfer_bundle_id
         || observed.liveness_receipt_semantic_id != prepared.intent.liveness_receipt_semantic_id
-        || observed.fee_receipt_semantic_id != prepared.intent.fee_receipt_semantic_id
+        || observed.fee_evidence_id != prepared.intent.fee_evidence_id
     {
         return Err(Error::MismatchedBinding);
     }
@@ -886,7 +889,7 @@ fn liveness_policy(action: DealerRuntimeActionV1) -> Result<DealerActionLiveness
     }
 }
 
-const fn action_requires_fee_receipt(action: DealerRuntimeActionV1) -> bool {
+const fn action_requires_fee_evidence(action: DealerRuntimeActionV1) -> bool {
     matches!(
         action,
         DealerRuntimeActionV1::SelectLeaseAndBegin
