@@ -23,7 +23,8 @@ use crate::integer;
 use crate::quantize::{belief_on_ladder, resolution_weights, PAYOUT_DENOMINATOR};
 use crate::rpc;
 use clutch_batch::relation_v1::{
-    canonical_candidate, canonical_pairing, BookV1, LegRefV1, PairingWitnessV1, RelationDomainV1,
+    canonical_candidate, canonical_pairing, BookV1, CandidateV1, LegRefV1, OrderV1,
+    PairingWitnessV1, RelationDomainV1,
 };
 use clutch_batch_policy_identity::general_clearing_v1::GENERAL_CLEARING_POLICY_V1;
 use clutch_solana_layout::clearing::{
@@ -934,8 +935,10 @@ impl Session {
             .ok_or("the frozen page was never reloaded")?;
         let epoch = EpochAccount::decode(&epoch_bytes)
             .map_err(|error| format!("the frozen epoch does not decode: {error:?}"))?;
-        let (book, identities) = project(&page_bytes)?;
-        let reservations: Vec<[u8; 32]> = identities
+        let projection = project(&page_bytes)?;
+        let book = &projection.book;
+        let reservations: Vec<[u8; 32]> = projection
+            .identities
             .iter()
             .map(|id| {
                 live.orders
@@ -961,14 +964,23 @@ impl Session {
             policy: GENERAL_CLEARING_POLICY_V1,
         };
 
-        let (prices, basis) = self.clearing_prices(&live, &domain, &book)?;
+        let (prices, basis) = self.clearing_prices(&live, &domain, book)?;
         self.stage(&format!(
             "the cleared vector is {prices:?}, taken as {basis}"
         ));
-        let candidate = canonical_candidate(&domain, &book, &prices, 0, 0)
+        let candidate = canonical_candidate(&domain, book, &prices, 0, 0)
             .map_err(|error| format!("no canonical candidate at the cleared vector: {error:?}"))?;
-        let witness = canonical_pairing(&domain, &book, &candidate)
+        let witness = canonical_pairing(&domain, book, &candidate)
             .map_err(|error| format!("the candidate has no canonical pairing: {error:?}"))?;
+        let groups = classify_settlement_groups(&SettlementShape {
+            epoch_page_count: epoch.page_count,
+            epoch_order_count: epoch.order_count,
+            outcome_count: epoch.outcome_count,
+            price_scale: epoch.price_scale,
+            projection: &projection,
+            candidate: &candidate,
+            witness: &witness,
+        })?;
         let fills = candidate.fills[..book.len as usize].to_vec();
         self.publish(&json!({
             "type": "clearing",
@@ -1150,7 +1162,6 @@ impl Session {
          * first, then every settlement.  Entitlement moves an order's claim
          * on the selected witness; settlement moves the value.  Interleaving
          * them would be a third ordering nobody has evidence for. */
-        let groups = group_slices(&witness, &book);
         self.stage(&format!(
             "entitling {} pairing group(s) of the selected candidate",
             groups.len()
@@ -1158,48 +1169,38 @@ impl Session {
         let mut legs = Vec::new();
         for group in &groups {
             let buy = reservations
-                .get(usize::from(group.buy_index))
+                .get(usize::from(group.buy))
                 .copied()
                 .ok_or("a slice names an order outside the frozen book")?;
             let sell_side = reservations
-                .get(usize::from(group.sell_index))
+                .get(usize::from(group.sell))
                 .copied()
                 .ok_or("a slice names an order outside the frozen book")?;
-            let pair = if group.portfolio {
-                Some(group.slices.as_slice())
-            } else {
-                None
-            };
             self.expect(
                 &mut live,
-                &format!("friday-entitle-slice-{}", group.slices[0]),
+                &format!("friday-entitle-slice-{}", group.slice),
                 "Entitlement",
                 &builders::entitle_slice(
                     f,
                     &builders::Entitle {
                         candidate: id,
-                        slice_index: group.slices[0],
+                        slice_index: group.slice,
                         buy_reservation: buy,
                         sell_reservation: sell_side,
-                        pair_receipts: pair,
+                        pair_receipts: None,
                     },
                 ),
             )?;
-            let buyer = self.position_of(&live, group.buy_index, &reservations)?;
-            let seller = self.position_of(&live, group.sell_index, &reservations)?;
+            let buyer = self.position_of(&live, group.buy, &reservations)?;
+            let seller = self.position_of(&live, group.sell, &reservations)?;
             legs.push((buy, sell_side, buyer, seller));
         }
 
         self.stage("settling every entitled group");
         for (group, (buy, sell_side, buyer, seller)) in groups.iter().zip(&legs) {
-            let pair = if group.portfolio {
-                Some(group.slices.as_slice())
-            } else {
-                None
-            };
             self.expect(
                 &mut live,
-                &format!("friday-settle-slice-{}", group.slices[0]),
+                &format!("friday-settle-slice-{}", group.slice),
                 "Settlement",
                 &builders::settle_page(
                     f,
@@ -1208,13 +1209,13 @@ impl Session {
                         /* One-based, as the exhibit's settle loop numbers
                          * them: the request sequence is the settlement's own
                          * ordinal, not the slice index. */
-                        sequence: 1 + u64::from(group.slices[0]),
+                        sequence: 1 + u64::from(group.slice),
                         buyer_position: *buyer,
                         seller_position: *seller,
                         buy_reservation: *buy,
                         sell_reservation: *sell_side,
-                        slice_index: group.slices[0],
-                        pair_receipts: pair,
+                        slice_index: group.slice,
+                        pair_receipts: None,
                     },
                 ),
             )?;
@@ -1442,7 +1443,13 @@ fn identity(label: &str, observed: u64, expected: u64) -> Value {
 /// the order every clear-walk account list is indexed by: the caller resolves
 /// each to the reservation address it already holds, rather than re-deriving
 /// a program address it has derived once already.
-fn project(page: &[u8]) -> Result<(BookV1, Vec<Hash32>)> {
+struct PageProjection {
+    header: stream::OrderPageHeader,
+    book: BookV1,
+    identities: Vec<Hash32>,
+}
+
+fn project(page: &[u8]) -> Result<PageProjection> {
     let header = stream::OrderPageHeader::decode(page)
         .map_err(|error| format!("the frozen page header does not decode: {error:?}"))?;
     let mut cursor = stream::OrderSlotCursor::new(page)
@@ -1465,50 +1472,175 @@ fn project(page: &[u8]) -> Result<(BookV1, Vec<Hash32>)> {
         }
     }
     book.len = u8::try_from(live)?;
-    Ok((book, identities))
+    Ok(PageProjection {
+        header,
+        book,
+        identities,
+    })
 }
 
-/// One entitlement/settlement unit: every witness slice that shares a
-/// buy/sell pair, and whether either leg is a portfolio order.
+/// The exact settlement profile this daemon can currently build.
+///
+/// This is intentionally smaller than the program's General settlement
+/// surface.  Classification happens before candidate submission so a shape
+/// whose complete account projection is not implemented here can never be
+/// silently shortened and later advertised as `SETTLED`.
+struct SettlementShape<'a> {
+    epoch_page_count: u16,
+    epoch_order_count: u16,
+    outcome_count: u8,
+    price_scale: u64,
+    projection: &'a PageProjection,
+    candidate: &'a CandidateV1,
+    witness: &'a PairingWitnessV1,
+}
+
+/// One admitted direct entitlement/settlement instruction.
+#[derive(Debug)]
 struct Group {
-    buy_index: u8,
-    sell_index: u8,
-    portfolio: bool,
-    slices: Vec<u16>,
+    buy: u8,
+    sell: u8,
+    slice: u16,
 }
 
-fn group_slices(witness: &PairingWitnessV1, book: &BookV1) -> Vec<Group> {
-    let mut groups: Vec<Group> = Vec::new();
-    for index in 0..usize::from(witness.len) {
-        let slice = witness.slices[index];
-        let (LegRefV1::Order(buy), LegRefV1::Order(sell)) = (slice.buy_ref, slice.sell_ref) else {
-            continue;
-        };
-        let portfolio = is_portfolio(book, buy) || is_portfolio(book, sell);
-        let cursor = u16::try_from(index).unwrap_or(u16::MAX);
-        if let Some(group) = groups
-            .iter_mut()
-            .find(|group| group.buy_index == buy && group.sell_index == sell)
-        {
-            group.slices.push(cursor);
-        } else {
-            groups.push(Group {
-                buy_index: buy,
-                sell_index: sell,
-                portfolio,
-                slices: vec![cursor],
-            });
+fn require_supported_page(shape: &SettlementShape<'_>) -> Result<()> {
+    let page = &shape.projection.header;
+    let book = &shape.projection.book;
+    if shape.epoch_page_count != 1 || page.page_index != 0 || page.page_count != 1 {
+        return Err("Operator trade settlement supports exactly frozen page zero of a one-page epoch; additional pages are not projected".into());
+    }
+    if page.frozen != 1
+        || page.set_order_count != shape.epoch_order_count
+        || u16::from(page.order_count) != shape.epoch_order_count
+    {
+        return Err("the projected page does not exactly bind the frozen epoch order set".into());
+    }
+    if page.tombstone_count != 0 {
+        return Err("Operator trade settlement does not yet carry the physical-slot/order-id/live-rank mapping required by a churned page".into());
+    }
+    if usize::from(book.len) != shape.projection.identities.len()
+        || u16::from(book.len) != shape.epoch_order_count
+        || shape.candidate.order_len != book.len
+    {
+        return Err(
+            "the projected live book, identities, candidate, and frozen order count disagree"
+                .into(),
+        );
+    }
+    for (index, identity) in shape.projection.identities.iter().enumerate() {
+        let rank = u64::try_from(index)? + 1;
+        if *identity != canonical_order_id(rank) || book.orders[index].id() != rank {
+            return Err("Operator trade settlement cannot prove the live relation rank is the frozen physical order identity".into());
         }
     }
-    groups
+    if shape.price_scale == 0 {
+        return Err("the frozen settlement price scale is zero".into());
+    }
+    if shape.candidate.virtual_split != 0 || shape.candidate.virtual_merge != 0 {
+        return Err("Operator trade settlement does not yet build the potted two-phase virtual-leg account shape".into());
+    }
+    if shape.witness.len == 0 {
+        return Err("Operator trade settlement has no receipt to consume and cannot claim a terminal settlement".into());
+    }
+    Ok(())
 }
 
-fn is_portfolio(book: &BookV1, index: u8) -> bool {
-    usize::from(index) < usize::from(book.len)
-        && matches!(
-            book.orders[usize::from(index)],
-            clutch_batch::relation_v1::OrderV1::Portfolio(_)
-        )
+fn classify_settlement_groups(shape: &SettlementShape<'_>) -> Result<Vec<Group>> {
+    require_supported_page(shape)?;
+    let book = &shape.projection.book;
+    let mut groups: Vec<Group> = Vec::new();
+    let mut covered = vec![0_u64; usize::from(book.len)];
+    for index in 0..usize::from(shape.witness.len) {
+        let slice = shape.witness.slices[index];
+        let (LegRefV1::Order(buy), LegRefV1::Order(sell)) = (slice.buy_ref, slice.sell_ref) else {
+            return Err("Operator trade settlement does not yet build virtual-leg entitlement and settlement accounts".into());
+        };
+        let buy_index = usize::from(buy);
+        let sell_index = usize::from(sell);
+        let Some((buy_order, sell_order)) = book
+            .orders
+            .get(buy_index)
+            .zip(book.orders.get(sell_index))
+            .filter(|_| buy_index < usize::from(book.len) && sell_index < usize::from(book.len))
+        else {
+            return Err("a witness slice names an order outside the frozen live book".into());
+        };
+        match (buy_order, sell_order) {
+            (OrderV1::SingleEgg(_), OrderV1::SingleEgg(_)) => {}
+            (OrderV1::Portfolio(_), OrderV1::Portfolio(_)) => {
+                if !pair_is_exclusive(shape.witness, buy, sell) {
+                    return Err("Operator trade settlement does not yet build per-slice accounts for a nonexclusive portfolio pair".into());
+                }
+                return Err("Operator trade settlement does not yet build the atomic exclusive-portfolio account shape".into());
+            }
+            _ => {
+                return Err("Operator trade settlement does not yet build the per-slice mixed single/portfolio account shape".into());
+            }
+        }
+        if buy == sell || slice.quantity == 0 || slice.outcome >= shape.outcome_count {
+            return Err("a witness slice is not an executable direct settlement leg".into());
+        }
+        if groups
+            .iter()
+            .any(|group| group.buy == buy && group.sell == sell)
+        {
+            return Err("Operator trade settlement does not yet track more than one receipt for a direct order pair".into());
+        }
+        covered[buy_index] = covered[buy_index]
+            .checked_add(slice.quantity)
+            .ok_or("buy-side witness coverage overflow")?;
+        covered[sell_index] = covered[sell_index]
+            .checked_add(slice.quantity)
+            .ok_or("sell-side witness coverage overflow")?;
+        groups.push(Group {
+            buy,
+            sell,
+            slice: u16::try_from(index)?,
+        });
+    }
+
+    let scale = u128::from(shape.price_scale);
+    for (index, order) in book.orders.iter().enumerate().take(usize::from(book.len)) {
+        if covered[index] != shape.candidate.fills[index] {
+            return Err(
+                "the direct settlement groups do not exhaust the selected candidate's fills".into(),
+            );
+        }
+        let OrderV1::SingleEgg(single) = order else {
+            if covered[index] != 0 {
+                return Err(
+                    "a filled portfolio order escaped settlement-shape classification".into(),
+                );
+            }
+            continue;
+        };
+        let price = shape
+            .candidate
+            .prices
+            .get(usize::from(single.outcome))
+            .ok_or("a filled single order names a price outside the candidate")?;
+        let value = u128::from(shape.candidate.fills[index])
+            .checked_mul(u128::from(*price))
+            .ok_or("whole-order settlement value overflow")?;
+        if !value.is_multiple_of(scale) {
+            return Err("Operator trade settlement omits the pot account required by an inexact whole-order collateral conversion".into());
+        }
+    }
+    Ok(groups)
+}
+
+fn pair_is_exclusive(witness: &PairingWitnessV1, buy: u8, sell: u8) -> bool {
+    witness.slices[..usize::from(witness.len)]
+        .iter()
+        .all(|slice| {
+            let exact_pair =
+                slice.buy_ref == LegRefV1::Order(buy) && slice.sell_ref == LegRefV1::Order(sell);
+            let touches_buy =
+                slice.buy_ref == LegRefV1::Order(buy) || slice.sell_ref == LegRefV1::Order(buy);
+            let touches_sell =
+                slice.buy_ref == LegRefV1::Order(sell) || slice.sell_ref == LegRefV1::Order(sell);
+            exact_pair || (!touches_buy && !touches_sell)
+        })
 }
 
 fn slices_of(witness: &PairingWitnessV1) -> Vec<PairingSlice> {
@@ -1533,7 +1665,10 @@ fn slices_of(witness: &PairingWitnessV1) -> Vec<PairingSlice> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clutch_solana_layout::{canonical_order_id, OrderRecord, OrderSlot, RELATION_VERSION};
+    use clutch_batch::relation_v1::PairingSliceV1;
+    use clutch_solana_layout::{
+        canonical_order_id, OrderRecord, OrderSlot, PortfolioRecord, RELATION_VERSION,
+    };
 
     fn domain(owner_count: u16) -> RelationDomainV1 {
         RelationDomainV1 {
@@ -1576,6 +1711,94 @@ mod tests {
         }
         book.len = u8::try_from(slots.len()).expect("a page holds at most sixteen");
         book
+    }
+
+    fn portfolio(owner: u8, rank: u64, side: u8, outcome: usize) -> OrderSlot {
+        let mut coefficients = [0_u64; MAX_OUTCOMES];
+        coefficients[outcome] = 1;
+        OrderSlot::Portfolio(PortfolioRecord {
+            owner: Hash32::from_bytes([owner; 32]),
+            order_id: canonical_order_id(rank),
+            side,
+            active_len: OUTCOMES,
+            flags: 0,
+            coefficients,
+            lots: 500,
+            limit_collateral_per_lot: PRICE_SCALE,
+            minimum_fill_lots: 0,
+            generation: 1,
+            expiry_epoch: EPOCH_INDEX,
+        })
+    }
+
+    fn projection_of(slots: &[OrderSlot]) -> PageProjection {
+        let order_count = u8::try_from(slots.len()).expect("a fixture fits one page");
+        PageProjection {
+            header: stream::OrderPageHeader {
+                market: Hash32::ZERO,
+                epoch: Hash32::ZERO,
+                order_set: Hash32::ZERO,
+                page_digest: Hash32::ZERO,
+                first_order_id: slots.first().map_or(Hash32::ZERO, OrderSlot::order_id),
+                last_order_id: slots.last().map_or(Hash32::ZERO, OrderSlot::order_id),
+                prev_page_last_order_id: Hash32::ZERO,
+                page_index: 0,
+                page_count: 1,
+                set_order_count: u16::from(order_count),
+                order_count,
+                tombstone_count: 0,
+                frozen: 1,
+                stored_bump: 0,
+            },
+            book: book_of(slots),
+            identities: slots.iter().map(OrderSlot::order_id).collect(),
+        }
+    }
+
+    fn candidate_of(order_len: u8, price: u64, fills: &[u64]) -> CandidateV1 {
+        let mut prices = [0_u64; MAX_OUTCOMES];
+        prices[0] = price;
+        let mut candidate = CandidateV1::empty(order_len, prices);
+        candidate.fills[..fills.len()].copy_from_slice(fills);
+        candidate
+    }
+
+    fn witness_of(slices: &[PairingSliceV1]) -> PairingWitnessV1 {
+        let mut witness = PairingWitnessV1::empty();
+        witness.slices[..slices.len()].copy_from_slice(slices);
+        witness.len = u16::try_from(slices.len()).expect("a fixture witness fits");
+        witness
+    }
+
+    fn classify_fixture(
+        projection: &PageProjection,
+        candidate: &CandidateV1,
+        witness: &PairingWitnessV1,
+    ) -> Result<Vec<Group>> {
+        classify_settlement_groups(&SettlementShape {
+            epoch_page_count: projection.header.page_count,
+            epoch_order_count: projection.header.set_order_count,
+            outcome_count: OUTCOMES,
+            price_scale: PRICE_SCALE,
+            projection,
+            candidate,
+            witness,
+        })
+    }
+
+    fn direct_slice(buy: u8, sell: u8, quantity: u64) -> PairingSliceV1 {
+        PairingSliceV1 {
+            buy_ref: LegRefV1::Order(buy),
+            sell_ref: LegRefV1::Order(sell),
+            outcome: 0,
+            quantity,
+        }
+    }
+
+    fn refusal_text(result: Result<Vec<Group>>) -> String {
+        result
+            .expect_err("the unsupported settlement shape must fail closed")
+            .to_string()
     }
 
     fn prices_of(values: [u64; 8]) -> [u64; MAX_OUTCOMES] {
@@ -1668,5 +1891,116 @@ mod tests {
         let refusal = canonical_candidate(&domain(2), &book, &prices, 0, 0)
             .expect_err("a doubled-up knot has no canonical candidate");
         assert!(format!("{refusal:?}").contains("StrictUnderfill"));
+    }
+
+    #[test]
+    fn settlement_classifier_admits_only_the_exact_direct_fixture() {
+        let projection =
+            projection_of(&[single(1, 1, 0, 0, 500, 400), single(2, 2, 0, 1, 500, 200)]);
+        let candidate = candidate_of(2, 200, &[500, 500]);
+        let witness = witness_of(&[direct_slice(0, 1, 500)]);
+
+        let groups = classify_fixture(&projection, &candidate, &witness)
+            .expect("the one-page exact single pair is the admitted profile");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].buy, 0);
+        assert_eq!(groups[0].sell, 1);
+        assert_eq!(groups[0].slice, 0);
+    }
+
+    #[test]
+    fn settlement_classifier_rejects_extra_pages_and_churned_identity_maps() {
+        let mut projection =
+            projection_of(&[single(1, 1, 0, 0, 500, 400), single(2, 2, 0, 1, 500, 200)]);
+        let candidate = candidate_of(2, 200, &[500, 500]);
+        let witness = witness_of(&[direct_slice(0, 1, 500)]);
+
+        projection.header.page_count = 2;
+        assert!(
+            refusal_text(classify_fixture(&projection, &candidate, &witness))
+                .contains("exactly frozen page zero")
+        );
+        projection.header.page_count = 1;
+        projection.header.tombstone_count = 1;
+        assert!(
+            refusal_text(classify_fixture(&projection, &candidate, &witness))
+                .contains("physical-slot/order-id/live-rank")
+        );
+        projection.header.tombstone_count = 0;
+        projection.identities[1] = canonical_order_id(9);
+        assert!(
+            refusal_text(classify_fixture(&projection, &candidate, &witness))
+                .contains("live relation rank")
+        );
+    }
+
+    #[test]
+    fn settlement_classifier_rejects_virtual_legs_and_candidate_churn() {
+        let projection = projection_of(&[single(1, 1, 0, 0, 500, 400)]);
+        let mut candidate = candidate_of(1, 200, &[500]);
+        let witness = witness_of(&[PairingSliceV1 {
+            buy_ref: LegRefV1::Order(0),
+            sell_ref: LegRefV1::Split,
+            outcome: 0,
+            quantity: 500,
+        }]);
+
+        assert!(
+            refusal_text(classify_fixture(&projection, &candidate, &witness))
+                .contains("virtual-leg entitlement")
+        );
+        candidate.virtual_split = 500;
+        assert!(
+            refusal_text(classify_fixture(&projection, &candidate, &witness))
+                .contains("potted two-phase virtual-leg")
+        );
+    }
+
+    #[test]
+    fn settlement_classifier_rejects_mixed_and_exclusive_portfolio_pairs() {
+        let mixed = projection_of(&[single(1, 1, 0, 0, 500, 400), portfolio(2, 2, 1, 0)]);
+        let candidate = candidate_of(2, 200, &[500, 500]);
+        let witness = witness_of(&[direct_slice(0, 1, 500)]);
+        assert!(refusal_text(classify_fixture(&mixed, &candidate, &witness))
+            .contains("mixed single/portfolio"));
+
+        let portfolio_pair = projection_of(&[portfolio(1, 1, 0, 0), portfolio(2, 2, 1, 0)]);
+        assert!(
+            refusal_text(classify_fixture(&portfolio_pair, &candidate, &witness))
+                .contains("atomic exclusive-portfolio")
+        );
+    }
+
+    #[test]
+    fn settlement_classifier_rejects_nonexclusive_portfolio_pairs() {
+        let projection = projection_of(&[
+            portfolio(1, 1, 0, 0),
+            portfolio(2, 2, 1, 0),
+            portfolio(3, 3, 1, 0),
+        ]);
+        let candidate = candidate_of(3, 200, &[500, 250, 250]);
+        let witness = witness_of(&[direct_slice(0, 1, 250), direct_slice(0, 2, 250)]);
+
+        assert!(
+            refusal_text(classify_fixture(&projection, &candidate, &witness))
+                .contains("nonexclusive portfolio pair")
+        );
+    }
+
+    #[test]
+    fn settlement_classifier_rejects_a_missing_pot_and_duplicate_pair_receipt() {
+        let projection =
+            projection_of(&[single(1, 1, 0, 0, 1, 2_000), single(2, 2, 0, 1, 1, 1_000)]);
+        let inexact = candidate_of(2, 1_250, &[1, 1]);
+        let one = witness_of(&[direct_slice(0, 1, 1)]);
+        assert!(refusal_text(classify_fixture(&projection, &inexact, &one))
+            .contains("omits the pot account"));
+
+        let exact = candidate_of(2, PRICE_SCALE, &[2, 2]);
+        let duplicate = witness_of(&[direct_slice(0, 1, 1), direct_slice(0, 1, 1)]);
+        assert!(
+            refusal_text(classify_fixture(&projection, &exact, &duplicate))
+                .contains("more than one receipt")
+        );
     }
 }
