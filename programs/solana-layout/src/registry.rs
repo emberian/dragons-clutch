@@ -1877,8 +1877,9 @@ impl RecoveryAction {
 /// Exact fractional-redemption family-local actions inside 79/v1.
 ///
 /// Coordinates freeze the runtime contract while every tuple remains
-/// capability-disabled. Activation must join Resolution, SupplyLedger,
-/// Position/Replay V3, Realm collateral, Token-2022 claims, and rent atomically.
+/// capability-disabled. Activation must join Resolution, ClaimLedger V3,
+/// Hoard V2, Position/Replay V3, Realm collateral, Token-2022 claims, and rent
+/// atomically.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FractionalRedemptionAction {
@@ -1900,7 +1901,7 @@ pub enum FractionalRedemptionAction {
     CloseZeroCredit = 8,
     /// Seal canonical native supply exhausted without sweeping backing.
     SealClaimsExhausted = 9,
-    /// Delete only a claims/credit/backing-empty aggregate ledger.
+    /// Close a claims/credit/backing-empty fractional domain under Product root.
     CloseEmptyLedger = 10,
 }
 
@@ -1912,7 +1913,18 @@ impl FractionalRedemptionAction {
 
     /// Return the family-local tag.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::Initialize => 1,
+            Self::RedeemInternalExact => 2,
+            Self::RedeemBearerExact => 3,
+            Self::RedeemInternalCredit => 4,
+            Self::RedeemBearerCredit => 5,
+            Self::TransferCredit => 6,
+            Self::MergeCredit => 7,
+            Self::CloseZeroCredit => 8,
+            Self::SealClaimsExhausted => 9,
+            Self::CloseEmptyLedger => 10,
+        }
     }
 
     /// Decode one exact family-local action.

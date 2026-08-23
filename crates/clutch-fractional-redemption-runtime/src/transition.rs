@@ -10,8 +10,8 @@ use clutch_collateral_adapter_v2::{
     MarketLiabilityLifecycleV1,
 };
 use clutch_retirement::{
-    Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, PositionV3Fields,
-    PositionV3Sha256Backend, RentSplitV2, ReplayV3Envelope, ReplayV3Lifecycle,
+    DeletableRentOwnerV1, Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
+    PositionV3Fields, PositionV3Sha256Backend, RentSplitV2, ReplayV3Envelope, ReplayV3Lifecycle,
 };
 use sha2::{Digest, Sha256};
 
@@ -1453,29 +1453,185 @@ pub fn seal_claims_exhausted_v1(
     })
 }
 
-/// Exact deletable-ledger rent disposition after all economic state is zero.
+/// Exact rent-only close disposition for one deletable fractional account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalAccountCloseFundingV1 {
+    account: Identity32V1,
+    payer: Identity32V1,
+    payer_refund_lamports: u64,
+    neutral_sink: Identity32V1,
+    neutral_lamports: u64,
+}
+
+impl FractionalAccountCloseFundingV1 {
+    /// Exact account whose lamports are split by this disposition.
+    pub const fn account(self) -> Identity32V1 {
+        self.account
+    }
+
+    /// Stored payer receiving only refundable rent principal.
+    pub const fn payer(self) -> Identity32V1 {
+        self.payer
+    }
+
+    /// Exact stored principal refunded to the payer.
+    pub const fn payer_refund_lamports(self) -> u64 {
+        self.payer_refund_lamports
+    }
+
+    /// Frozen neutral sink receiving hostile or unsolicited lamports only.
+    pub const fn neutral_sink(self) -> Identity32V1 {
+        self.neutral_sink
+    }
+
+    /// Exact non-principal lamports routed to the neutral sink.
+    pub const fn neutral_lamports(self) -> u64 {
+        self.neutral_lamports
+    }
+}
+
+fn prepare_fractional_account_close_funding(
+    account: Identity32V1,
+    rent: DeletableRentOwnerV1,
+    actual_lamports: u64,
+    neutral_sink: Identity32V1,
+) -> Result<FractionalAccountCloseFundingV1> {
+    rent.validate().map_err(crate::map_retirement)?;
+    if rent.payer() == neutral_sink {
+        return Err(Error::RentRefused);
+    }
+    let floor = rent
+        .refundable_principal()
+        .checked_add(rent.donation_floor())
+        .ok_or(Error::Arithmetic)?;
+    if actual_lamports < floor {
+        return Err(Error::RentRefused);
+    }
+    Ok(FractionalAccountCloseFundingV1 {
+        account,
+        payer: rent.payer(),
+        payer_refund_lamports: rent.refundable_principal(),
+        neutral_sink,
+        neutral_lamports: actual_lamports
+            .checked_sub(rent.refundable_principal())
+            .ok_or(Error::RentRefused)?,
+    })
+}
+
+/// Exact terminal facts a ProductOccurrenceRoot authorization must bind before
+/// either fractional-family account may be deleted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalDomainTerminalRequirementV1 {
+    market_instance_id: Identity32V1,
+    domain_generation: u64,
+    policy_account: Identity32V1,
+    policy_terminal_state_id: Identity32V1,
+    ledger_account: Identity32V1,
+    ledger_before_state_id: Identity32V1,
+    ledger_terminal_state_id: Identity32V1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger_post_state_id: Identity32V1,
+    claim_ledger_transition_id: Identity32V1,
+}
+
+impl FractionalDomainTerminalRequirementV1 {
+    /// Exact MarketInstanceV2 identity whose Product root must authorize close.
+    pub const fn market_instance_id(self) -> Identity32V1 {
+        self.market_instance_id
+    }
+
+    /// Exact nonzero fractional/Resolution generation being retired.
+    pub const fn domain_generation(self) -> u64 {
+        self.domain_generation
+    }
+
+    /// Physical immutable `0xa4/v1` account to delete.
+    pub const fn policy_account(self) -> Identity32V1 {
+        self.policy_account
+    }
+
+    /// Exact terminal immutable-policy state identity.
+    pub const fn policy_terminal_state_id(self) -> Identity32V1 {
+        self.policy_terminal_state_id
+    }
+
+    /// Physical aggregate `0xa5/v1` account to delete.
+    pub const fn ledger_account(self) -> Identity32V1 {
+        self.ledger_account
+    }
+
+    /// Exact last persisted aggregate-ledger state identity.
+    pub const fn ledger_before_state_id(self) -> Identity32V1 {
+        self.ledger_before_state_id
+    }
+
+    /// Exact transient terminal aggregate-ledger successor identity committed
+    /// by ClaimLedger before deletion.
+    pub const fn ledger_terminal_state_id(self) -> Identity32V1 {
+        self.ledger_terminal_state_id
+    }
+
+    /// Physical canonical ClaimLedger V3 account advanced to Retiring.
+    pub const fn claim_ledger_account(self) -> Identity32V1 {
+        self.claim_ledger_account
+    }
+
+    /// Exact Retiring ClaimLedger semantic identity.
+    pub const fn claim_ledger_post_state_id(self) -> Identity32V1 {
+        self.claim_ledger_post_state_id
+    }
+
+    /// Shared terminal ClaimLedger/aggregate-ledger transition identity.
+    pub const fn claim_ledger_transition_id(self) -> Identity32V1 {
+        self.claim_ledger_transition_id
+    }
+}
+
+/// Prepared terminal fractional-family close after all economic state is zero.
+///
+/// This pure value is not Product authorization. The disabled SBF adapter must
+/// consume the matching private ProductOccurrenceRoot close authorization
+/// before applying either deletion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EmptyLedgerClosePlanV1 {
     /// Canonical exhausted ClaimLedger successor committing the transient
     /// retirement-state `0xa5` ID before that account is deleted.
-    pub claim_ledger_after: FractionalClaimLedgerRetirementPlanV3,
-    /// Stored payer receiving ledger rent principal.
-    pub payer: Identity32V1,
-    /// Exact payer refund.
-    pub payer_refund_lamports: u64,
-    /// Frozen neutral sink receiving unsolicited lamports only.
-    pub neutral_sink: Identity32V1,
-    /// Hostile prefund plus later unsolicited lamports.
-    pub neutral_lamports: u64,
+    claim_ledger_after: FractionalClaimLedgerRetirementPlanV3,
+    terminal_requirement: FractionalDomainTerminalRequirementV1,
+    policy_funding: FractionalAccountCloseFundingV1,
+    ledger_funding: FractionalAccountCloseFundingV1,
 }
 
-/// Close the aggregate ledger only when no claims, credits, or claim backing
-/// remain. In particular, donation surplus and the final backing atom cannot
-/// be swept through this action.
+impl EmptyLedgerClosePlanV1 {
+    /// Canonical ClaimLedger retirement half of the atomic terminal transition.
+    pub const fn claim_ledger_after(self) -> FractionalClaimLedgerRetirementPlanV3 {
+        self.claim_ledger_after
+    }
+
+    /// Exact facts the private ProductOccurrenceRoot authorization must match.
+    pub const fn terminal_requirement(self) -> FractionalDomainTerminalRequirementV1 {
+        self.terminal_requirement
+    }
+
+    /// Independent rent-only disposition for immutable `0xa4/v1`.
+    pub const fn policy_funding(self) -> FractionalAccountCloseFundingV1 {
+        self.policy_funding
+    }
+
+    /// Independent rent-only disposition for aggregate `0xa5/v1`.
+    pub const fn ledger_funding(self) -> FractionalAccountCloseFundingV1 {
+        self.ledger_funding
+    }
+}
+
+/// Prepare the atomic policy-and-ledger close only when no claims, credits, or
+/// claim backing remain. In particular, donation surplus and the final backing
+/// atom cannot be swept through this action.
 pub fn close_empty_ledger_v1(
     context: BoundFractionalContextV1,
     expected_ledger_sequence: u64,
-    actual_lamports: u64,
+    actual_policy_lamports: u64,
+    actual_ledger_lamports: u64,
     neutral_sink: Identity32V1,
 ) -> Result<EmptyLedgerClosePlanV1> {
     if context.ledger.phase != FractionalLedgerPhaseV1::ClaimsExhausted {
@@ -1489,32 +1645,41 @@ pub fn close_empty_ledger_v1(
     if advanced.aggregate_credit_numerator != 0 || advanced.active_credit_accounts != 0 {
         return Err(Error::AggregateMismatch);
     }
-    let rent = advanced.rent;
-    rent.validate().map_err(crate::map_retirement)?;
-    if rent.payer() == neutral_sink {
-        return Err(Error::RentRefused);
-    }
-    let floor = rent
-        .refundable_principal()
-        .checked_add(rent.donation_floor())
-        .ok_or(Error::Arithmetic)?;
-    if actual_lamports < floor {
-        return Err(Error::RentRefused);
-    }
+    let ledger_before_state_id = context.ledger.state_id()?;
+    let ledger_terminal_state_id = advanced.state_id()?;
     let claim_ledger_after = map_collateral(prepare_fractional_claim_ledger_retirement_v3(
         context.claim_ledger,
-        collateral_id(context.ledger.state_id()?),
-        collateral_id(advanced.state_id()?),
+        collateral_id(ledger_before_state_id),
+        collateral_id(ledger_terminal_state_id),
         expected_ledger_sequence,
         &FractionalSha256V1,
     ))?;
+    let terminal_requirement = FractionalDomainTerminalRequirementV1 {
+        market_instance_id: context.policy.market_instance,
+        domain_generation: context.policy.domain_generation,
+        policy_account: context.policy_account,
+        policy_terminal_state_id: context.policy.state_id()?,
+        ledger_account: context.ledger_account,
+        ledger_before_state_id,
+        ledger_terminal_state_id,
+        claim_ledger_account: context.claim_ledger_account,
+        claim_ledger_post_state_id: runtime_identity(claim_ledger_after.claim_ledger_after_id())?,
+        claim_ledger_transition_id: runtime_identity(claim_ledger_after.transition_id())?,
+    };
     Ok(EmptyLedgerClosePlanV1 {
         claim_ledger_after,
-        payer: rent.payer(),
-        payer_refund_lamports: rent.refundable_principal(),
-        neutral_sink,
-        neutral_lamports: actual_lamports
-            .checked_sub(rent.refundable_principal())
-            .ok_or(Error::RentRefused)?,
+        terminal_requirement,
+        policy_funding: prepare_fractional_account_close_funding(
+            context.policy_account,
+            context.policy.rent,
+            actual_policy_lamports,
+            neutral_sink,
+        )?,
+        ledger_funding: prepare_fractional_account_close_funding(
+            context.ledger_account,
+            advanced.rent,
+            actual_ledger_lamports,
+            neutral_sink,
+        )?,
     })
 }

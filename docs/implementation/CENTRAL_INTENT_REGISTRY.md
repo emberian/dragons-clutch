@@ -209,8 +209,12 @@ sequence and exact cross-account semantic-ID receipt atomically.
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
 backing live. `CloseEmptyLedger` requires claims, aggregate credit, live credit
-accounts, and claim backing all to be zero, so it cannot sweep Hoard principal,
-reinterpret donation surplus as revenue, or silently forfeit claimant value.
+accounts, and claim backing all to be zero. It then closes both `0xa4` and
+`0xa5` under one private ProductOccurrenceRoot terminal authorization, refunds
+each account's stored rent payer independently, and routes only hostile or
+unsolicited lamports to the neutral sink. It therefore cannot sweep Hoard
+principal, reinterpret donation surplus as revenue, strand policy rent, permit
+reinitialization, or silently forfeit claimant value.
 
 Dealer facility actions `5..=25` are allocated in runtime order
 `Initialize..=Retire`, while only policy transport `1..=4` is executable in the

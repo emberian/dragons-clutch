@@ -46,9 +46,12 @@ The only terminal policy is `RetainUntilExactAggregation`. If all native claims
 are gone but aggregate credit is `D*A+r`, voluntary aggregation can pay `A`
 whole atoms. When `r != 0`, the remaining credits and claim backing stay live.
 The close route requires claims, aggregate credit, live credit accounts, and
-claim backing all to be zero. It therefore cannot sweep a final Hoard atom,
-reinterpret donation surplus as revenue, invent a reserve, or silently forfeit
-a claimant numerator.
+claim backing all to be zero. It closes the policy and aggregate ledger only
+under the matching private ProductOccurrenceRoot terminal authorization,
+refunds their stored rent payers independently, and sends only excess lamports
+to the neutral sink. It therefore cannot sweep a final Hoard atom, reinterpret
+donation surplus as revenue, strand policy rent, permit reinitialization,
+invent a reserve, or silently forfeit a claimant numerator.
 
 ## Disabled Solana account contract
 
@@ -71,8 +74,12 @@ The frozen future account order is:
   tombstone metas; capability manifest.
 - Close credit: claimant; policy; ledger; ClaimLedger V3; live credit; stored
   rent payer; neutral sink; System Program; capability manifest; Resolution.
-- Terminal seal/close: policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
-  capability manifest, followed by stored rent destinations on close.
+- Terminal seal: policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
+  capability manifest.
+- Terminal close: policy; ledger; Resolution; ClaimLedger V3; Hoard V2;
+  writable ProductOccurrenceRoot authorization; capability manifest; policy
+  rent payer; ledger rent payer; neutral sink. It deletes `0xa4` and `0xa5`
+  atomically and advances ClaimLedger to Retiring.
 
 `refuse_disabled_fractional_redemption_v1` returns `CapabilityDisabled` before
 parsing the payload or inspecting these accounts. Activation must atomically

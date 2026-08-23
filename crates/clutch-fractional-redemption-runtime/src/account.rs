@@ -55,6 +55,9 @@ pub const FRACTIONAL_CREDIT_PDA_PREFIX: &[u8] = b"fractional-redemption-credit:v
 /// Domain for the complete canonical `0xa5/v1` state identity.
 pub const FRACTIONAL_LEDGER_STATE_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fractional-redemption/ledger-state/v1\0";
+/// Domain for the complete canonical immutable `0xa4/v1` state identity.
+pub const FRACTIONAL_POLICY_STATE_ID_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional-redemption/policy-state/v1\0";
 
 /// Honest no-subsidy terminal rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +69,12 @@ pub enum TerminalRemainderPolicyV1 {
 }
 
 impl TerminalRemainderPolicyV1 {
+    const fn wire_value(self) -> u8 {
+        match self {
+            Self::RetainUntilExactAggregation => 1,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::RetainUntilExactAggregation),
@@ -85,6 +94,13 @@ pub enum FractionalLedgerPhaseV1 {
 }
 
 impl FractionalLedgerPhaseV1 {
+    const fn wire_value(self) -> u8 {
+        match self {
+            Self::Live => 1,
+            Self::ClaimsExhausted => 2,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::Live),
@@ -175,7 +191,7 @@ impl FractionalPolicyV1 {
         let mut output = [0u8; FRACTIONAL_POLICY_ACCOUNT_BYTES];
         output[0] = FRACTIONAL_POLICY_ACCOUNT_TAG;
         output[1] = FRACTIONAL_POLICY_ACCOUNT_VERSION;
-        output[2] = self.terminal_policy as u8;
+        output[2] = self.terminal_policy.wire_value();
         output[3] = self.outcome_count;
         output[4] = self.stored_bump;
         put_u64(&mut output, 8, self.domain_generation)?;
@@ -222,6 +238,16 @@ impl FractionalPolicyV1 {
         };
         value.validate()?;
         Ok(value)
+    }
+
+    /// Hash the complete canonical immutable body for Product-root terminal
+    /// authorization and anti-reinitialization.
+    pub fn state_id(self) -> Result<Identity32V1> {
+        let encoded = self.encode()?;
+        let mut hasher = Sha256::new();
+        hasher.update(FRACTIONAL_POLICY_STATE_ID_DOMAIN_V1);
+        hasher.update(encoded);
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
     }
 
     /// Canonical PDA seed facts.
@@ -304,7 +330,7 @@ impl FractionalLedgerV1 {
         let mut output = [0u8; FRACTIONAL_LEDGER_ACCOUNT_BYTES];
         output[0] = FRACTIONAL_LEDGER_ACCOUNT_TAG;
         output[1] = FRACTIONAL_LEDGER_ACCOUNT_VERSION;
-        output[2] = self.phase as u8;
+        output[2] = self.phase.wire_value();
         output[3] = self.stored_bump;
         put_u64(&mut output, 8, self.domain_generation)?;
         put_u64(&mut output, 16, self.next_sequence)?;

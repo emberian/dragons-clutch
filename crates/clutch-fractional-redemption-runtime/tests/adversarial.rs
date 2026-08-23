@@ -367,7 +367,7 @@ fn irreducible_terminal_credit_blocks_every_close_and_names_no_sweep_recipient()
     assert_eq!(facts.irreducible_credit_numerator, 1);
     assert!(!facts.exactly_closable);
     assert_eq!(
-        close_empty_ledger_v1(terminal_context, 2, 103, rid(60)),
+        close_empty_ledger_v1(terminal_context, 2, 103, 103, rid(60)),
         Err(Error::LiabilityOutstanding)
     );
 }
@@ -417,7 +417,7 @@ fn claim_ledger_and_fractional_sequences_cannot_advance_independently() {
 }
 
 #[test]
-fn exact_terminal_retirement_deletes_only_ledger_rent_and_latches_claim_ledger() {
+fn exact_terminal_retirement_splits_only_policy_and_ledger_rent() {
     let (context, _policy, _ledger) =
         external_context(0, 0, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 0);
     let sealed = seal_claims_exhausted_v1(context, 1).unwrap();
@@ -428,18 +428,58 @@ fn exact_terminal_retirement_deletes_only_ledger_rent_and_latches_claim_ledger()
             context.hoard(),
         )
         .unwrap();
-    let close = close_empty_ledger_v1(terminal_context, 2, 103, rid(60)).unwrap();
+    let close = close_empty_ledger_v1(terminal_context, 2, 103, 103, rid(60)).unwrap();
     assert_eq!(
-        close.claim_ledger_after.claim_ledger_after().lifecycle,
+        close.claim_ledger_after().claim_ledger_after().lifecycle,
         MarketLiabilityLifecycleV1::Retiring
     );
-    assert_eq!(close.payer, rid(43));
-    assert_eq!(close.payer_refund_lamports, 100);
-    assert_eq!(close.neutral_sink, rid(60));
-    assert_eq!(close.neutral_lamports, 3);
+    assert_eq!(close.policy_funding().account(), rid(41));
+    assert_eq!(close.policy_funding().payer(), rid(40));
+    assert_eq!(close.policy_funding().payer_refund_lamports(), 100);
+    assert_eq!(close.policy_funding().neutral_sink(), rid(60));
+    assert_eq!(close.policy_funding().neutral_lamports(), 3);
+    assert_eq!(close.ledger_funding().account(), rid(42));
+    assert_eq!(close.ledger_funding().payer(), rid(43));
+    assert_eq!(close.ledger_funding().payer_refund_lamports(), 100);
+    assert_eq!(close.ledger_funding().neutral_sink(), rid(60));
+    assert_eq!(close.ledger_funding().neutral_lamports(), 3);
+    assert_eq!(close.terminal_requirement().market_instance_id(), rid(20));
+    assert_eq!(close.terminal_requirement().domain_generation(), 7);
+    assert_eq!(close.terminal_requirement().policy_account(), rid(41));
+    assert_eq!(close.terminal_requirement().ledger_account(), rid(42));
     assert_ne!(
-        close.claim_ledger_after.fractional_ledger_before_id(),
-        close.claim_ledger_after.fractional_ledger_retirement_id()
+        close.claim_ledger_after().fractional_ledger_before_id(),
+        close.claim_ledger_after().fractional_ledger_retirement_id()
+    );
+}
+
+#[test]
+fn terminal_close_admits_each_rent_owner_independently() {
+    let (context, _policy, _ledger) =
+        external_context(0, 0, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 0);
+    let sealed = seal_claims_exhausted_v1(context, 1).unwrap();
+    let terminal_context = context
+        .with_ledgers(
+            sealed.ledger_after,
+            sealed.claim_ledger_after.claim_ledger_after(),
+            context.hoard(),
+        )
+        .unwrap();
+    assert_eq!(
+        close_empty_ledger_v1(terminal_context, 2, 102, 103, rid(60)),
+        Err(Error::RentRefused)
+    );
+    assert_eq!(
+        close_empty_ledger_v1(terminal_context, 2, 103, 102, rid(60)),
+        Err(Error::RentRefused)
+    );
+    assert_eq!(
+        close_empty_ledger_v1(terminal_context, 2, 103, 103, rid(40)),
+        Err(Error::RentRefused)
+    );
+    assert_eq!(
+        close_empty_ledger_v1(terminal_context, 2, 103, 103, rid(43)),
+        Err(Error::RentRefused)
     );
 }
 

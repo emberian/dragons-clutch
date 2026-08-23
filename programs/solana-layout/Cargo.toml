@@ -17,7 +17,7 @@ default = ["profile-full"]
 # host/default surface.
 profile-full = []
 profile-direct-v3-source-v2-point = []
-profile-general-source-v2-point = []
+profile-general-source-v2-point = ["clutch-batch/profile-general-source-v2-point"]
 # Makes the successor Product/Series-only artifact kinds decodable for the
 # explicit local-bank vertical slice. RegistryRelease and CapabilityProfile
 # remain central immutable artifact kinds in every build.

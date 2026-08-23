@@ -1090,6 +1090,7 @@ pub fn accept_position_hoard_cash_transition_v3<B: PositionV3Sha256Backend>(
         transition_id,
     })
 }
+
 /// Split locks a complete set; Merge unlocks one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompleteSetReclassificationKindV3 {

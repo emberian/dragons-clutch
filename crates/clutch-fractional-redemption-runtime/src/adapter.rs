@@ -369,8 +369,8 @@ pub const fn fractional_account_contract_v1(
             signer_mask: 0,
         },
         FractionalRedemptionActionV1::CloseEmptyLedger => FractionalAccountContractV1 {
-            account_count: 8,
-            writable_mask: 0b1100_1010,
+            account_count: 10,
+            writable_mask: 0b11_1010_1011,
             signer_mask: 0,
         },
     }
