@@ -18,6 +18,7 @@ use clutch_source_plane_v3::{
     StatisticResultV3, WindowSpecV3, WindowWorkV3,
 };
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
+pub use clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1;
 use clutch_source_plane_v3_runtime::{
     account_data_id, advance_lineage_state, authenticate_source_work_receipt_account,
     authorize_reopen, close_lineage_generation, decode_runtime_account, encode_runtime_account,
@@ -30,11 +31,10 @@ use clutch_source_plane_v3_runtime::{
     AuthenticatedWindowEvidenceV1, AuthenticatedWindowWorkV1, BoundaryBatchV1, ClockPolicyV1,
     ClockSnapshotV1, FailurePolicySourceHandoffV1, IngestBatchOutputV1, LineageFamilyV1,
     RentExemptionQuoteV1, ReopenLineageV1, RuntimeAccountBodyV1, RuntimeAccountHeaderV1,
-    RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1, SourceReceiptDispositionV1,
-    SourceReleaseManifestV1, SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
-    SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccessV1,
-    SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
-    RUNTIME_ACCOUNT_HEADER_BYTES,
+    RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1, SourceReleaseManifestV1,
+    SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1, SourceWorkAuthorizationV1,
+    SourceWorkKindV1, SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1,
+    SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1, RUNTIME_ACCOUNT_HEADER_BYTES,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -151,118 +151,6 @@ pub struct SealWindowExecutionV1 {
     pub seal_funding: ImmutableAccountFundingV1,
     /// WindowWork close/refund/sink postimage.
     pub work_close: CloseRuntimeAccountResultV1,
-}
-
-/// Physical-account join delivered with one persisted policy handoff receipt.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SourcePolicyHandoffJoinV1 {
-    /// Exact source-only handoff identity used as receipt semantics.
-    handoff_id: ContentId,
-    /// Release owner/PDA/body/deployment authentication identity.
-    release_authentication_id: ContentId,
-    /// Exact authenticated route owning every joined account.
-    route_id: ContentId,
-    /// Physical Product/Series occurrence account.
-    occurrence_account: RuntimeKey,
-    /// Physical StatisticResult or absent-result slot.
-    result_or_absence_account: RuntimeKey,
-    /// Exact result-account or absence authentication identity.
-    source_fact_authentication_id: ContentId,
-    /// Physical persisted 0x92 work receipt.
-    work_receipt_account: RuntimeKey,
-    /// Exact 0x92 owner/PDA/body/schedule authentication identity.
-    work_receipt_authentication_id: ContentId,
-    /// Frozen Clock policy identity.
-    clock_policy_id: ContentId,
-    /// Adapter-authenticated maturity Clock snapshot.
-    clock: ClockSnapshotV1,
-    /// Exact Source liveness generation.
-    generation: u64,
-    /// Failure binding selected by the Product occurrence.
-    failure_policy_binding_id: ContentId,
-    /// Existing SourceSpec fixed by the occurrence and release.
-    source_spec_id: ContentId,
-    /// Primary or repair Window fixed by the occurrence.
-    window_id: ContentId,
-    /// Exact StatisticKey fixed before evaluation.
-    statistic_key_id: ContentId,
-}
-
-impl SourcePolicyHandoffJoinV1 {
-    /// Exact source-only handoff identity persisted by the 0x92 receipt.
-    pub const fn handoff_id(self) -> ContentId {
-        self.handoff_id
-    }
-
-    /// Release owner/PDA/body/deployment authentication identity.
-    pub const fn release_authentication_id(self) -> ContentId {
-        self.release_authentication_id
-    }
-
-    /// Exact authenticated Source route.
-    pub const fn route_id(self) -> ContentId {
-        self.route_id
-    }
-
-    /// Physical Product/Series occurrence account.
-    pub const fn occurrence_account(self) -> RuntimeKey {
-        self.occurrence_account
-    }
-
-    /// Physical StatisticResult or absent-result slot.
-    pub const fn result_or_absence_account(self) -> RuntimeKey {
-        self.result_or_absence_account
-    }
-
-    /// Exact result-account or absence authentication identity.
-    pub const fn source_fact_authentication_id(self) -> ContentId {
-        self.source_fact_authentication_id
-    }
-
-    /// Physical immutable 0x92 receipt account.
-    pub const fn work_receipt_account(self) -> RuntimeKey {
-        self.work_receipt_account
-    }
-
-    /// Exact 0x92 owner/PDA/body/schedule authentication identity.
-    pub const fn work_receipt_authentication_id(self) -> ContentId {
-        self.work_receipt_authentication_id
-    }
-
-    /// Frozen Clock policy identity.
-    pub const fn clock_policy_id(self) -> ContentId {
-        self.clock_policy_id
-    }
-
-    /// Adapter-authenticated maturity Clock snapshot.
-    pub const fn clock(self) -> ClockSnapshotV1 {
-        self.clock
-    }
-
-    /// Exact Source liveness generation.
-    pub const fn generation(self) -> u64 {
-        self.generation
-    }
-
-    /// Frozen downstream FailurePolicy binding.
-    pub const fn failure_policy_binding_id(self) -> ContentId {
-        self.failure_policy_binding_id
-    }
-
-    /// Existing SourceSpec identity.
-    pub const fn source_spec_id(self) -> ContentId {
-        self.source_spec_id
-    }
-
-    /// Exact primary or repair Window identity.
-    pub const fn window_id(self) -> ContentId {
-        self.window_id
-    }
-
-    /// Exact StatisticKey fixed before evaluation.
-    pub const fn statistic_key_id(self) -> ContentId {
-        self.statistic_key_id
-    }
 }
 
 /// Bind one semantic transition to a predictable persisted work receipt and
@@ -929,20 +817,8 @@ pub fn join_failure_absence_handoff(
     absence: AuthenticatedStatisticResultAbsenceV1,
     work_receipt: AuthenticatedSourceWorkReceiptV1,
 ) -> Outcome<SourcePolicyHandoffJoinV1> {
-    require(
-        handoff.source_fact_receipt_id() == absence.id(),
-        ClutchError::MismatchedState,
-    )?;
-    join_policy_handoff(
-        route,
-        handoff.id(),
-        handoff.failure_policy_binding_id(),
-        handoff.occurrence(),
-        absence.result_account(),
-        absence.id(),
-        handoff.clock(),
-        work_receipt,
-    )
+    SourcePolicyHandoffJoinV1::failure_absence(route, handoff, absence, work_receipt)
+        .map_err(source_runtime)
 }
 
 /// Emit action 10 refusal path: bind the durable refused result account and
@@ -953,20 +829,8 @@ pub fn join_failure_result_handoff(
     result: AuthenticatedStatisticResultAccountV1,
     work_receipt: AuthenticatedSourceWorkReceiptV1,
 ) -> Outcome<SourcePolicyHandoffJoinV1> {
-    require(
-        handoff.source_fact_receipt_id() == result.id(),
-        ClutchError::MismatchedState,
-    )?;
-    join_policy_handoff(
-        route,
-        handoff.id(),
-        handoff.failure_policy_binding_id(),
-        handoff.occurrence(),
-        result.account(),
-        result.id(),
-        handoff.clock(),
-        work_receipt,
-    )
+    SourcePolicyHandoffJoinV1::failure_result(route, handoff, result, work_receipt)
+        .map_err(source_runtime)
 }
 
 /// Emit action 10 success path: bind successful source evidence for downstream
@@ -977,62 +841,8 @@ pub fn join_successful_evaluation_handoff(
     result: AuthenticatedStatisticResultAccountV1,
     work_receipt: AuthenticatedSourceWorkReceiptV1,
 ) -> Outcome<SourcePolicyHandoffJoinV1> {
-    require(
-        handoff.result_account_authentication_id() == result.id(),
-        ClutchError::MismatchedState,
-    )?;
-    join_policy_handoff(
-        route,
-        handoff.id(),
-        handoff.failure_policy_binding_id(),
-        handoff.occurrence(),
-        result.account(),
-        result.id(),
-        handoff.clock(),
-        work_receipt,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn join_policy_handoff(
-    route: AuthenticatedSourceRouteV1,
-    handoff_id: ContentId,
-    failure_policy_binding_id: ContentId,
-    occurrence: clutch_source_plane_v3_runtime::OccurrenceSourceReceiptV1,
-    result_or_absence_account: RuntimeKey,
-    source_fact_authentication_id: ContentId,
-    clock: ClockSnapshotV1,
-    work_receipt: AuthenticatedSourceWorkReceiptV1,
-) -> Outcome<SourcePolicyHandoffJoinV1> {
-    let receipt = work_receipt.receipt();
-    require(
-        occurrence.route_id() == route.route_id()
-            && occurrence.source_spec_id() == route.source_spec_id()
-            && occurrence.source_plane_contract_id() == route.source_plane_contract_id()
-            && occurrence.clock_policy_id() == route.clock_policy_id()
-            && receipt.route_id() == route.route_id()
-            && receipt.disposition() == SourceReceiptDispositionV1::Work
-            && receipt.work_kind() == Some(SourceWorkKindV1::FailureHandoff)
-            && receipt.semantic_receipt_id() == handoff_id,
-        ClutchError::MismatchedState,
-    )?;
-    Ok(SourcePolicyHandoffJoinV1 {
-        handoff_id,
-        release_authentication_id: route.release_authentication_id(),
-        route_id: route.route_id(),
-        occurrence_account: occurrence.occurrence_account(),
-        result_or_absence_account,
-        source_fact_authentication_id,
-        work_receipt_account: work_receipt.account(),
-        work_receipt_authentication_id: work_receipt.id(),
-        clock_policy_id: occurrence.clock_policy_id(),
-        clock,
-        generation: receipt.generation(),
-        failure_policy_binding_id,
-        source_spec_id: occurrence.source_spec_id(),
-        window_id: occurrence.window_id(),
-        statistic_key_id: occurrence.statistic_key_id(),
-    })
+    SourcePolicyHandoffJoinV1::successful_evaluation(route, handoff, result, work_receipt)
+        .map_err(source_runtime)
 }
 
 /// Generic action 11 engine: open the exact next generation and persist body

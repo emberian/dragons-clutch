@@ -18,6 +18,11 @@
 use crate::accounts::{expect_pda, require, require_count, require_signer, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+#[cfg(target_os = "solana")]
+use clutch_product_series::{
+    FixedCodec as RegistryFixedCodec, RegistryCapabilityProfileV2, RegistryProgramReleaseV1,
+    REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
+};
 use clutch_solana_layout::artifact::{
     self, ArtifactBinding, ArtifactKind, ArtifactStageHeader, ARTIFACT_CHUNK_BYTES,
 };
@@ -33,12 +38,12 @@ use solana_pubkey::Pubkey;
 #[cfg(all(target_os = "solana", feature = "non-production-product-series-lab"))]
 use clutch_product_series::{
     CompiledProductSeriesBundleV1, EvidenceOnlyRecoveryPolicyV1, FixedCodec,
-    MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductCapabilityRegistryV2,
-    ProductTemplateV4, SeriesAttachmentPlanV1, SeriesFundingQuoteV1, SeriesFundingTermsV2,
-    SeriesPlanV5, COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN, MARKET_GENESIS_PROFILE_V2_DOMAIN,
-    NATIVE_CLAIM_BASIS_DOMAIN, PRICE_MEASURE_POLICY_DOMAIN, PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN,
-    PRODUCT_TEMPLATE_DOMAIN, RECOVERY_POLICY_DOMAIN, SERIES_ATTACHMENT_PLAN_DOMAIN,
-    SERIES_FUNDING_QUOTE_DOMAIN, SERIES_FUNDING_TERMS_V2_DOMAIN, SERIES_PLAN_V5_DOMAIN,
+    MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
+    SeriesAttachmentPlanV1, SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesPlanV5,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN, MARKET_GENESIS_PROFILE_V2_DOMAIN,
+    NATIVE_CLAIM_BASIS_DOMAIN, PRICE_MEASURE_POLICY_DOMAIN, PRODUCT_TEMPLATE_DOMAIN,
+    RECOVERY_POLICY_DOMAIN, SERIES_ATTACHMENT_PLAN_DOMAIN, SERIES_FUNDING_QUOTE_DOMAIN,
+    SERIES_FUNDING_TERMS_V2_DOMAIN, SERIES_PLAN_V5_DOMAIN,
 };
 
 use super::genesis::{
@@ -416,8 +421,9 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
         | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::ProductCapabilityRegistryV2
-        | ArtifactKind::CompiledProductSeriesBundleV1) => {
+        | ArtifactKind::RegistryProgramReleaseV1
+        | ArtifactKind::CompiledProductSeriesBundleV1
+        | ArtifactKind::RegistryCapabilityProfileV2) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -438,6 +444,37 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
 /// the owning core codec has accepted every byte.
 #[inline(never)]
 fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
+    #[cfg(target_os = "solana")]
+    if matches!(
+        binding.kind,
+        ArtifactKind::RegistryProgramReleaseV1 | ArtifactKind::RegistryCapabilityProfileV2
+    ) {
+        binding.validate()?;
+        require(
+            binding.context == Hash32::ZERO && body.len() == usize::from(binding.exact_len),
+            ClutchError::EvidenceBufferMismatch,
+        )?;
+        let domain = match binding.kind {
+            ArtifactKind::RegistryProgramReleaseV1 => {
+                RegistryProgramReleaseV1::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                REGISTRY_PROGRAM_RELEASE_V1_DOMAIN
+            }
+            ArtifactKind::RegistryCapabilityProfileV2 => {
+                RegistryCapabilityProfileV2::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN
+            }
+            _ => return Err(ClutchError::MismatchedState.into()),
+        };
+        let observed = solana_sha256_hasher::hashv(&[domain, body]);
+        require(
+            observed.to_bytes() == binding.digest.bytes(),
+            ClutchError::EvidenceBufferMismatch,
+        )?;
+        return Ok(0);
+    }
+
     #[cfg(all(target_os = "solana", feature = "non-production-product-series-lab"))]
     {
         if binding.kind == ArtifactKind::NativeClaimBasisV1 {
@@ -531,13 +568,6 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
                     binding,
                     body,
                     SERIES_FUNDING_TERMS_V2_DOMAIN,
-                );
-            }
-            ArtifactKind::ProductCapabilityRegistryV2 => {
-                return validate_product::<ProductCapabilityRegistryV2>(
-                    binding,
-                    body,
-                    PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN,
                 );
             }
             ArtifactKind::CompiledProductSeriesBundleV1 => {
@@ -658,8 +688,9 @@ fn create_final<'a>(
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
         | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::ProductCapabilityRegistryV2
-        | ArtifactKind::CompiledProductSeriesBundleV1) => {
+        | ArtifactKind::RegistryProgramReleaseV1
+        | ArtifactKind::CompiledProductSeriesBundleV1
+        | ArtifactKind::RegistryCapabilityProfileV2) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,
@@ -746,7 +777,7 @@ fn seal(
     let encoded_bump = validate_for_runtime(binding, body)?;
     let (final_address, final_bump) = expected_final_pda(program_id, binding);
     expect_pda(accounts[IX_FINAL].key, (final_address, final_bump), None)?;
-    if !binding.kind.is_product_series()
+    if !binding.kind.is_globally_content_addressed()
         && !matches!(
             binding.kind,
             ArtifactKind::CollateralPolicy

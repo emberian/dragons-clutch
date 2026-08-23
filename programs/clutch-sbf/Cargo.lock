@@ -80,6 +80,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-dealer-runtime-contract"
 version = "0.1.0"
 dependencies = [
@@ -98,8 +102,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "clutch-candidate-lifecycle"
+name = "clutch-evidence-recovery"
 version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
+]
+
+[[package]]
+name = "clutch-failure-policy-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-evidence-recovery",
+ "clutch-failure-policy-runtime",
+ "clutch-liveness",
+ "clutch-product-series",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-runtime",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "clutch-failure-policy-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-evidence-recovery",
+ "clutch-liveness",
+ "clutch-product-series",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-runtime",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "clutch-fee-runtime-contract"
@@ -125,9 +157,13 @@ name = "clutch-general-v2-runtime"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
+ "clutch-collateral-adapter-v2",
+ "clutch-fee-runtime-contract",
  "clutch-general-v2-contract",
+ "clutch-owner-settlement",
  "clutch-price-measure",
  "clutch-product-series",
+ "clutch-retirement",
  "clutch-solana-layout",
  "sha2 0.10.9",
 ]
@@ -194,6 +230,9 @@ dependencies = [
  "clutch-bspline-accumulator",
  "clutch-dealer-runtime-contract",
  "clutch-collateral-adapter-v2",
+ "clutch-evidence-recovery",
+ "clutch-failure-policy-adapter",
+ "clutch-failure-policy-runtime",
  "clutch-general-v2-contract",
  "clutch-general-v2-runtime",
  "clutch-kernel",

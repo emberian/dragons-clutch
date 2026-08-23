@@ -16,7 +16,7 @@ The boundary has four persisted families and no parallel economic ledger:
 | `0xa0/1` | external failure root | `clutch-failure-policy-runtime` through `clutch-failure-policy-adapter` | 2,156 |
 | `0xa1/1` | immutable liveness policy | `clutch-liveness` | 1,136 |
 | `0xa2/1` | external Recovery compartment | `clutch-liveness` | 468 |
-| `0xa3/1` | permanent replay tombstone | terminal/replay adapter | 192 |
+| `0xa3/1` | permanent replay tombstone | terminal/replay adapter | 256 |
 
 The first three accounts have a four-byte main-program frame `(tag, version,
 bump, zero flags)` followed by the complete semantic-owner body. The adapter
@@ -95,7 +95,8 @@ The exact ordered role arrays live beside the payload codec. Important joins
 are summarized here.
 
 Initialization consumes the root-rent payer and fresh root, the immutable
-liveness policy and already funded read-only Recovery compartment, authenticated
+liveness policy, already funded read-only Recovery compartment, immutable
+neutral sink, authenticated
 Series registry/funding state, central registry release/profile, all nine
 immutable Product/Series artifacts, complete Source release/deployment/config
 chain, the exact occurrence/window/statistic identities, the Clock and Rent
@@ -109,10 +110,15 @@ Recovery account, payer, sink, and generation.
 Source-trigger, relation-trigger, work, and resolution instructions consume an
 authenticated Source release, occurrence, result/absence, and Source work
 receipt. The Source owner reconstructs `FailurePolicySourceHandoffV1` or
-`SuccessfulEvaluationHandoffV1`; the failure adapter compares its typed ID to
-the payload. A relation result is separately authenticated under the immutable
-relation policy committed by the root. It may classify only accepted versus one
-of five refusals and never chooses a payout.
+`SuccessfulEvaluationHandoffV1` from an
+`AuthenticatedStatisticResultAccountV1` or exact authenticated absence. The
+failure adapter consumes those private-field facts and an
+`AuthenticatedSourceWorkReceiptV1`, obtains the physical result and receipt
+accounts only from their typed getters, and requires the persisted work
+receipt's semantic receipt to be the exact handoff ID named by the payload. A
+relation result is separately authenticated under the immutable relation policy
+committed by the root. It may classify only accepted versus one of five
+refusals and never chooses a payout.
 
 Every time-sensitive action reads the canonical Clock sysvar directly. The
 adapter checks its exact address, sysvar owner, read-only/non-signer/non-
@@ -155,12 +161,22 @@ MarketInstanceV2, and generation. It refunds only the root's recorded rent
 principal to its immutable payer and sends root-only surplus to its immutable
 neutral sink. It never moves liveness or collateral funds.
 
-The replay tombstone stores nonzero present permanent rent, binding, market,
-generation, full terminal join, retirement root, and final Source release
-receipt. This Recovery action does not create or fund it; its semantic owner
-must do so from a separately admitted present terminal-rent source before root
-closure. That source cannot be Recovery work principal, Hoard principal, or
-future fees.
+The Recovery-terminal receipt commits a domain-separated hash of all 2,032
+canonical failure-runtime bytes, not merely the stable state-account identity
+and nonce. The full terminal join then commits that exact resolved receipt and
+the current root transition nonce. The pure close projector and SBF handler
+independently recompute both from the authenticated root, so an older or sibling
+terminal join cannot authorize a different resolved poststate in the same
+binding and generation.
+
+The replay tombstone stores nonzero present permanent rent, the exact funder and
+typed funding-admission receipt, any pre-existing lamports as a distinct locked
+donation, binding, market, generation, full terminal join, retirement root, and
+final Source release receipt. Its semantic owner funds and persists it before
+root closure. The admitted debit must equal the recorded rent principal, and
+the observed post-balance must equal prior donation plus that debit. The typed
+funding owner must exclude Recovery work principal, Hoard principal, collateral,
+and future fees.
 
 ## Capability state
 

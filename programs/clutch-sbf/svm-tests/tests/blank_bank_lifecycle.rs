@@ -82,7 +82,8 @@ fn final_address(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Addres
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
         | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::ProductCapabilityRegistryV2
+        | ArtifactKind::RegistryProgramReleaseV1
+        | ArtifactKind::RegistryCapabilityProfileV2
         | ArtifactKind::CompiledProductSeriesBundleV1) => {
             return derive(&[
                 seeds::SEED_PRODUCT_ARTIFACT_V1,

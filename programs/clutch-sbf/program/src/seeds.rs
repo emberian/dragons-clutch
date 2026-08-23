@@ -135,6 +135,9 @@ pub const SEED_DEALER_ROOT_V2: &[u8] =
 /// Dealer owner-scoped exit ticket.
 pub const SEED_DEALER_EXIT_TICKET: &[u8] =
     clutch_dealer_runtime_contract::DEALER_EXIT_TICKET_PDA_DOMAIN_V1;
+/// Content-addressed Dealer action-work receipt.
+pub const SEED_DEALER_ACTION_RECEIPT: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
@@ -813,6 +816,11 @@ pub fn dealer_exit_ticket_pda(
     owner: &[u8; 32],
 ) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_EXIT_TICKET, facility_id, owner])
+}
+
+/// Canonical content-addressed Dealer action-work receipt address.
+pub fn dealer_action_receipt_pda(program_id: &Pubkey, slot_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_ACTION_RECEIPT, slot_id])
 }
 
 /// Canonical full-width batch-policy artifact address.
