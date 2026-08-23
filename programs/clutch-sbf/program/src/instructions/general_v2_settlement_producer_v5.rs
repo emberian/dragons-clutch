@@ -12,25 +12,19 @@ use core::cell::Ref;
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, RevenuePolicyV1, REVENUE_POLICY_BYTES,
 };
-use clutch_collateral_adapter_v2::{
-    refine_market_collateral_v2, Id as CollateralId, MarketCollateralBindingV2,
-};
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_settlement_root_payload_v1, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, DeletableRentOwnerV1, GeneralEpochV6AccountV1, Id32,
-    InitializeSettlementRootV1, MarketBindingV2, OptionalSettlementRentV1,
-    SettlementCashPotV1AccountV1, SettlementRootPayloadV1,
+    InitializeSettlementRootV1, OptionalSettlementRentV1, SettlementCashPotV1AccountV1,
+    SettlementRootPayloadV1,
 };
 use clutch_general_v2_runtime::{
-    derive_settlement_root_expectation_v1, derive_settlement_traversal_projection_v4,
-    project_owner_blind_book_costed_v1, CandidateFeeAggregateProjectionV1,
-    GeneralOrderPageInputV5, SettlementRootExpectationProjectionV1,
+    derive_settlement_root_expectation_v1, CandidateFeeAggregateProjectionV1,
+    SettlementRootExpectationProjectionV1,
 };
-use clutch_product_series::{ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2};
-use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
 use clutch_solana_layout::registry::GeneralV2Action;
-use clutch_solana_layout::{account_len, PriceGridAccount, MAX_ORDER_PAGES};
+use clutch_solana_layout::MAX_ORDER_PAGES;
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
@@ -46,12 +40,13 @@ use crate::instructions::genesis::{
 };
 use crate::seeds;
 
-use super::collateral_position_v3::authenticate_general_market_v2;
 use super::general_v2_fee_v5::{
     compose_candidate_fee_collection_action39_v5, CandidateFeeCollectionAccountFrameV5,
     CandidateFeeCollectionExpectationV5,
 };
-use super::product_artifact::authenticate_product_artifact_v1;
+use super::general_v2_settlement_traversal_v5::{
+    authenticate_settlement_traversal_v5, SettlementTraversalAccountFrameV5,
+};
 
 /// Fixed action-39 roles before the optional fee suffix.
 pub const ACTION39_COMMON_PREFIX_ACCOUNTS: usize = 15;
@@ -80,7 +75,7 @@ fn id(key: &Pubkey) -> Id32 {
     Id32::from_bytes(key.to_bytes())
 }
 
-fn borrow_data<'a, 'b>(account: &'a AccountInfo<'b>) -> Outcome<Ref<'a, [u8]>> {
+fn borrow_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<Ref<'a, [u8]>> {
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
@@ -227,119 +222,6 @@ fn create_from_payer<'a>(
     )
 }
 
-fn authenticate_market_context(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-) -> Outcome<(
-    MarketBindingV2,
-    clutch_collateral_adapter_v2::BoundCollateralProfileV2,
-    MarketGenesisProfileV2,
-)> {
-    let realm = crate::collateral_release::authenticate_realm_collateral_v2(
-        program_id,
-        &accounts[IX_REALM],
-        &accounts[IX_PROFILE],
-        &accounts[IX_COLLATERAL_POLICY],
-        &accounts[IX_TOKEN_PROGRAM],
-    )?;
-    let (market, runtime) = authenticate_general_market_v2(
-        program_id,
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-    )?;
-    let base = market.base();
-    let instance = *authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
-        program_id,
-        &accounts[IX_MARKET_INSTANCE],
-        ContentId::from_bytes(base.market_instance_v2_id.bytes()),
-    )?
-    .value();
-    let genesis = *authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
-        program_id,
-        &accounts[IX_MARKET_GENESIS],
-        ContentId::from_bytes(base.market_genesis_profile_v2_id.bytes()),
-    )?
-    .value();
-    require(
-        instance
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .bytes()
-            == base.market_instance_v2_id.bytes()
-            && runtime.market_instance_v2_id == base.market_instance_v2_id
-            && instance.market_genesis_profile_id.content_id().bytes()
-                == base.market_genesis_profile_v2_id.bytes()
-            && genesis.realm_id.bytes() == realm.realm().realm.bytes()
-            && genesis.profile_id.bytes() == realm.realm().profile.bytes()
-            && genesis.price_measure_policy_id.content_id().bytes()
-                == base.price_measure_policy_v1_id.bytes()
-            && genesis.relation_policy_id.bytes() == base.relation_policy_id.bytes()
-            && genesis.score_policy_id.bytes() == base.score_policy_id.bytes()
-            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID,
-        ClutchError::MismatchedState,
-    )?;
-    let market_bytes = base.market_instance_v2_id.bytes();
-    let bound = refine_market_collateral_v2(
-        realm,
-        MarketCollateralBindingV2 {
-            market: CollateralId::from_bytes(market_bytes),
-            realm: CollateralId::from_bytes(realm.realm().realm.bytes()),
-            profile: CollateralId::from_bytes(realm.realm().profile.bytes()),
-            collateral_cap_atoms: instance.collateral_cap,
-            hoard_authority: CollateralId::from_bytes(
-                seeds::hoard_authority_v2_pda(program_id, &market_bytes)
-                    .0
-                    .to_bytes(),
-            ),
-            hoard_token_account: CollateralId::from_bytes(
-                seeds::hoard_token_v2_pda(program_id, &market_bytes)
-                    .0
-                    .to_bytes(),
-            ),
-        },
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok((market, bound, genesis))
-}
-
-fn authenticate_pages<'a, 'info>(
-    program_id: &Pubkey,
-    epoch: Id32,
-    market: Id32,
-    accounts: &'a [AccountInfo<'info>],
-    first_page: usize,
-) -> Outcome<([Option<Ref<'a, [u8]>>; MAX_ORDER_PAGES], usize)> {
-    let page_count = accounts
-        .len()
-        .checked_sub(first_page)
-        .ok_or(Refusal::Adapter(ClutchError::WrongAccountCount))?;
-    require(
-        (1..=MAX_ORDER_PAGES).contains(&page_count),
-        ClutchError::WrongAccountCount,
-    )?;
-    let mut refs: [Option<Ref<'a, [u8]>>; MAX_ORDER_PAGES] = [None, None, None, None];
-    let mut index = 0usize;
-    while index < page_count {
-        let account = &accounts[first_page + index];
-        require_program_state(program_id, account, false, Some(ORDER_PAGE_V5_BYTES))?;
-        let page_index = u16::try_from(index).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
-        let expected = seeds::general_v2_order_page_v5_pda(program_id, &epoch.bytes(), page_index);
-        require(*account.key == expected.0, ClutchError::WrongPda)?;
-        let data = borrow_data(account)?;
-        let page = verify_page_v5(&data)?;
-        require(
-            page.page.page_index == page_index
-                && page.page.epoch.bytes() == epoch.bytes()
-                && page.page.market.bytes() == market.bytes()
-                && page.page.stored_bump == expected.1,
-            ClutchError::MismatchedState,
-        )?;
-        refs[index] = Some(data);
-        index += 1;
-    }
-    Ok((refs, page_count))
-}
-
 /// Enter the exact action-39 producer route.
 pub fn process(
     program_id: &Pubkey,
@@ -394,73 +276,10 @@ fn initialize_settlement_root(
         false,
         Some(contract::ADMISSION_NODE_ACCOUNT_BYTES_V2),
     )?;
-    require_program_state(program_id, &accounts[IX_FEED], false, None)?;
-    require_program_state(
-        program_id,
-        &accounts[IX_ECONOMIC_DOMAIN],
-        false,
-        Some(contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES),
-    )?;
-    require_program_state(
-        program_id,
-        &accounts[IX_PRICE_GRID],
-        false,
-        Some(account_len::PRICE_GRID),
-    )?;
 
     let epoch = GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[IX_EPOCH])?)?;
     let window = CandidateWindowV5AccountV1::decode(&borrow_data(&accounts[IX_WINDOW])?)?;
     let node = AdmissionNodeV4AccountV1::decode(&borrow_data(&accounts[IX_NODE])?)?;
-    let feed_data = borrow_data(&accounts[IX_FEED])?;
-    let (feed, _) = contract::complete_candidate_feed_v2(&feed_data, true)?;
-    let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(
-        &accounts[IX_ECONOMIC_DOMAIN],
-    )?)?;
-    let grid = PriceGridAccount::decode(&borrow_data(&accounts[IX_PRICE_GRID])?)?;
-    let (market, collateral, genesis) = authenticate_market_context(program_id, accounts)?;
-    let base = market.base();
-
-    let epoch_pda = seeds::general_v2_epoch_pda(
-        program_id,
-        &accounts[IX_MARKET_BINDING].key.to_bytes(),
-        epoch.epoch_index,
-    );
-    expect_pda(accounts[IX_EPOCH].key, epoch_pda, Some(epoch.stored_bump))?;
-    expect_pda(
-        accounts[IX_WINDOW].key,
-        seeds::general_v2_window_pda(program_id, &request.epoch.bytes()),
-        None,
-    )?;
-    expect_pda(
-        accounts[IX_ECONOMIC_DOMAIN].key,
-        seeds::general_v2_economic_domain_pda(program_id, &request.epoch.bytes()),
-        Some(domain.stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_NODE].key,
-        seeds::general_v2_node_pda(program_id, &request.epoch.bytes(), node.base().ordinal),
-        Some(node.base().stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_FEED].key,
-        seeds::general_v2_feed_pda(program_id, &accounts[IX_NODE].key.to_bytes()),
-        Some(feed.stored_bump),
-    )?;
-    let grid_pda = seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes());
-    expect_pda(accounts[IX_PRICE_GRID].key, grid_pda, Some(grid.stored_bump))?;
-    require(
-        request.selected_node == id(accounts[IX_NODE].key)
-            && epoch.window == id(accounts[IX_WINDOW].key)
-            && epoch.economic_domain == id(accounts[IX_ECONOMIC_DOMAIN].key)
-            && epoch.market_binding == id(accounts[IX_MARKET_BINDING].key)
-            && epoch.market_runtime == id(accounts[IX_MARKET_RUNTIME].key)
-            && domain.epoch == request.epoch
-            && feed.node == id(accounts[IX_NODE].key)
-            && feed.order_set == epoch.order_set
-            && grid.realm.bytes() == genesis.realm_id.bytes()
-            && grid.grid.bytes() == genesis.price_grid_id.bytes(),
-        ClutchError::MismatchedState,
-    )?;
 
     let selected_fee_pda = seeds::general_v2_selected_fee_record_pda(
         program_id,
@@ -502,43 +321,55 @@ fn initialize_settlement_root(
     require_system_program(&accounts[ix_system])?;
     let rent = read_rent(&accounts[ix_rent])?;
     let current_slot = read_clock_slot(&accounts[ix_clock])?;
-
-    let (page_refs, page_count) = authenticate_pages(
+    let authenticated = authenticate_settlement_traversal_v5(
         program_id,
-        request.epoch,
-        base.market,
-        accounts,
-        first_page,
+        SettlementTraversalAccountFrameV5 {
+            retained_feed: &accounts[IX_FEED],
+            market_binding: &accounts[IX_MARKET_BINDING],
+            market_runtime: &accounts[IX_MARKET_RUNTIME],
+            economic_domain: &accounts[IX_ECONOMIC_DOMAIN],
+            price_grid: &accounts[IX_PRICE_GRID],
+            realm: &accounts[IX_REALM],
+            profile: &accounts[IX_PROFILE],
+            collateral_policy: &accounts[IX_COLLATERAL_POLICY],
+            token_program: &accounts[IX_TOKEN_PROGRAM],
+            market_instance: &accounts[IX_MARKET_INSTANCE],
+            market_genesis: &accounts[IX_MARKET_GENESIS],
+            pages: &accounts[first_page..],
+        },
     )?;
-    let mut page_inputs = [GeneralOrderPageInputV5 {
-        account: Id32::ZERO,
-        body: &[],
-    }; MAX_ORDER_PAGES];
-    let mut page_index = 0usize;
-    while page_index < page_count {
-        page_inputs[page_index] = GeneralOrderPageInputV5 {
-            account: id(accounts[first_page + page_index].key),
-            body: page_refs[page_index]
-                .as_ref()
-                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?,
-        };
-        page_index += 1;
-    }
-    let order_projection = std::boxed::Box::new(project_owner_blind_book_costed_v1(
-        &page_inputs[..page_count],
-        epoch.order_set,
-        &domain,
-        &market,
-        &grid,
-    )?);
-    let traversal = std::boxed::Box::new(derive_settlement_traversal_projection_v4(
-        id(accounts[IX_FEED].key),
-        &feed_data,
-        &order_projection,
-        base.series_funding_terms_v2_id,
-        base.settlement_policy_id,
-        collateral,
-    )?);
+    let feed = authenticated.feed();
+    let market = *authenticated.market();
+    let genesis = *authenticated.genesis();
+    let traversal = authenticated.traversal();
+    let base = market.base();
+
+    let epoch_pda = seeds::general_v2_epoch_pda(
+        program_id,
+        &accounts[IX_MARKET_BINDING].key.to_bytes(),
+        epoch.epoch_index,
+    );
+    expect_pda(accounts[IX_EPOCH].key, epoch_pda, Some(epoch.stored_bump))?;
+    expect_pda(
+        accounts[IX_WINDOW].key,
+        seeds::general_v2_window_pda(program_id, &request.epoch.bytes()),
+        Some(window.base().stored_bump),
+    )?;
+    expect_pda(
+        accounts[IX_NODE].key,
+        seeds::general_v2_node_pda(program_id, &request.epoch.bytes(), node.base().ordinal),
+        Some(node.base().stored_bump),
+    )?;
+    require(
+        request.selected_node == id(accounts[IX_NODE].key)
+            && epoch.window == id(accounts[IX_WINDOW].key)
+            && epoch.economic_domain == id(accounts[IX_ECONOMIC_DOMAIN].key)
+            && epoch.market_binding == id(accounts[IX_MARKET_BINDING].key)
+            && epoch.market_runtime == id(accounts[IX_MARKET_RUNTIME].key)
+            && feed.node == id(accounts[IX_NODE].key)
+            && feed.order_set == epoch.order_set,
+        ClutchError::MismatchedState,
+    )?;
 
     let expectation: SettlementRootExpectationProjectionV1 = if fee_present {
         let revenue_preimage = &accounts[ACTION39_COMMON_PREFIX_ACCOUNTS + 2];
@@ -573,12 +404,12 @@ fn initialize_settlement_root(
                 revenue_policy_record: &accounts[ACTION39_COMMON_PREFIX_ACCOUNTS + 3],
             },
             &revenue,
-            &traversal,
+            traversal,
         )?
         .root_expectation()
     } else {
         derive_settlement_root_expectation_v1(
-            &traversal,
+            traversal,
             CandidateFeeAggregateProjectionV1::NoFeeRecord,
         )?
     };

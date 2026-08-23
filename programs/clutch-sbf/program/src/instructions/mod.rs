@@ -131,6 +131,15 @@ pub mod general_v2_settlement_root;
 /// action-24 materialization is reachable under the same profile.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_producer_v5;
+/// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;

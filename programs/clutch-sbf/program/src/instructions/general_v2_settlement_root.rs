@@ -29,6 +29,12 @@ pub struct AuthenticatedGeneralSettlementRootV1 {
     root: SettlementRootV1AccountV1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RootAccessV1 {
+    ReadOnly,
+    Writable,
+}
+
 impl AuthenticatedGeneralSettlementRootV1 {
     /// Canonical writable `0xa9/1` account.
     pub const fn account(&self) -> Id32 {
@@ -63,11 +69,54 @@ pub fn authenticate_writable_general_settlement_root_v1(
     expected_epoch: Id32,
     expected_candidate: Id32,
 ) -> Outcome<AuthenticatedGeneralSettlementRootV1> {
+    authenticate_general_settlement_root_v1(
+        program_id,
+        accounts,
+        expected_epoch,
+        expected_candidate,
+        RootAccessV1::Writable,
+    )
+}
+
+/// Authenticate one existing immutable settlement root.
+///
+/// This is the disjoint read-only sibling of
+/// [`authenticate_writable_general_settlement_root_v1`]; callers cannot pass a
+/// boolean or promote an arbitrary decoded body into account authority.
+pub fn authenticate_readonly_general_settlement_root_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    expected_epoch: Id32,
+    expected_candidate: Id32,
+) -> Outcome<AuthenticatedGeneralSettlementRootV1> {
+    authenticate_general_settlement_root_v1(
+        program_id,
+        accounts,
+        expected_epoch,
+        expected_candidate,
+        RootAccessV1::ReadOnly,
+    )
+}
+
+fn authenticate_general_settlement_root_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    expected_epoch: Id32,
+    expected_candidate: Id32,
+    access: RootAccessV1,
+) -> Outcome<AuthenticatedGeneralSettlementRootV1> {
     require_count(accounts, SETTLEMENT_ROOT_AUTH_ACCOUNT_COUNT_V1)?;
     let account = &accounts[IX_SETTLEMENT_ROOT];
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
-    require(account.is_writable, ClutchError::NotWritable)?;
+    match access {
+        RootAccessV1::ReadOnly => {
+            require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+        }
+        RootAccessV1::Writable => {
+            require(account.is_writable, ClutchError::NotWritable)?;
+        }
+    }
     require(
         account.data_len() == SETTLEMENT_ROOT_ACCOUNT_BYTES,
         ClutchError::WrongDataLength,
