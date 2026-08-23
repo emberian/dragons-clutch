@@ -121,10 +121,12 @@ Solana transaction boundary used by Rust `ProtocolTransactionBuilder`:
 - refuses output above an explicit packet byte limit.
 
 The output schema is
-`dragons-clutch/operator/unsigned-protocol-transaction/v4`, wrapped by a
+`dragons-clutch/operator/unsigned-protocol-transaction/v5`, wrapped by a
 resumable workflow node that preserves selected release and observation
-coordinates. Exact family tag/version/action bytes must come from the semantic
-owner and are labeled construction material, not a browser capability verdict.
+coordinates. The transaction release projection also binds the checked
+manifest wire-surface identity. Exact family tag/version/action bytes must come
+from the semantic owner and are labeled construction material, not a browser
+capability verdict.
 Projected keeper rows remain non-selectable until operatord exposes an
 authenticated coordinate.
 

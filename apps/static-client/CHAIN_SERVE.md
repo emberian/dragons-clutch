@@ -36,22 +36,24 @@ policy, and derives the workflow identity. Missing, planning, historical,
 unsealed, stale-decoder, or mismatched inputs fail closed.
 
 The central registry's exact enabled intent triples—not a second operatord or
-browser allocation table—select action 26 and current General, Source/Series,
-Dealer, Recovery, and Fractional surfaces. Current decoder families may still
-be projected without an enabled coordinate, but that state is explicitly
-non-actionable. Every output integer is a canonical decimal string. The
-composer reads no wallet or browser session and has no RPC, signing, submission,
-deployment, or persistence path.
+browser allocation table—select current extension actions. The checked
+manifest separately owns the exhaustive `dragons-clutch/wire-surface/v1`
+legacy intent pairs, dedicated-Direct pairs, outer Request actions, and Source
+generation discriminants. Its domain-separated identity and exact lists are
+projected into the chain config, release index, acquisition response, and
+browser equality join; none of those projections can manufacture runtime
+admission. Current decoder families may still be projected without an enabled
+coordinate, but that state is explicitly non-actionable. Every output integer
+is a canonical decimal string. The composer reads no wallet or browser session
+and has no RPC, signing, submission, deployment, or persistence path.
 
 Chain-attached composition additionally requires the manifest-owned Cargo
 profile feature to be `profile-successor-chain-attached-v1`. That reserved
-identity is intentionally not yet measurable: every profile currently accepted
-by the capability checker retains at least one withdrawn legacy Source,
-General, Dealer-laboratory, or artifact action across its layout/reference/SBF
-closure. Operatord refuses those ELFs as a whole; it does not hide their old
-actions in the browser while presenting the remainder as a current release.
-The blocker is removed only by cutting and measuring the full M7 profile—not by
-adding historical account DTOs to this index.
+identity is intentionally not yet measured. The manifest/checker wire-surface
+contract exists, but an ELF cannot be served under an older profile merely by
+hiding its withdrawn actions in the browser. The blocker is removed only when
+the full layout/reference/SBF closure is cut under that exact feature and then
+measured—not by adding historical account DTOs to this index.
 
 The hostile decoder admits Source V3 runtime accounts and only the current
 Collateral Hoard V2, ClaimLedger V3, Resolution V5, and the current General
@@ -87,15 +89,14 @@ Rust-emitted family/kind catalog; unknown, historical, cross-family, or
 placeholder labels fail closed.
 
 The checked release also publishes the exact `source_identity` compiled into
-that ELF. The ordinary `production-inert` build reports zero registered Source
-releases. Glass labels that state explicitly and refuses Source actions 1–12;
-it never substitutes the mock or real-Pyth laboratory identity. Those two lab
-profiles are distinct release identities and each reports exactly one compiled
-registration. This count is derived from the checked identity class rather
-than accepted from an operator or browser. The mock laboratory may be viewed as
-an explicitly fabricated untrusted projection, but Glass refuses to construct
-Source actions from it. The distinct real-Pyth lab remains non-production and
-can reach only the unsigned construction boundary.
+that ELF. `production-inert` reports zero registered Source releases and Glass
+refuses Source actions. `runtime-real-pyth-release` also compiles zero provider
+identities: it permits only checked Source 77/v2 actions 1–4, beginning with an
+exact onchain `SourceReleaseManifestV2`; actions 5–12 and every legacy Source
+generation remain absent. The mock and real-Pyth laboratory identities are
+distinct non-deployable releases and are never fallbacks. The mock laboratory
+may be viewed as a fabricated untrusted projection, but Glass refuses to
+construct Source actions from it.
 
 Current General fee discovery distinguishes the rent-owned carry V3,
 finalization V4, payer allocation V2, and certified recipient allocation V2

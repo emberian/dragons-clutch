@@ -27,7 +27,8 @@ The form requires and embeds no more than:
 Cluster/genesis identity, credential-redacted endpoint bindings, the current
 decoder set, Program/ProgramData/slot/ELF tuple, canonical capability-manifest
 digest, measured source commit, capability-profile identity, decoder families,
-centrally enabled intent triples, and the exact compiled Source identity class
+centrally enabled intent triples, the manifest-owned exhaustive wire surface
+and its domain-separated identity, and the exact compiled Source identity class
 arrive only in `/v1/acquisition`. Glass
 requires exactly one release and rechecks it against `/v1/releases`.
 
@@ -67,7 +68,8 @@ coordinates plus the checked release. The browser never receives the raw RPC
 URLs and refuses an inconsistent or changing daemon projection. See
 [`CHAIN_SERVE.md`](CHAIN_SERVE.md).
 
-The config must name the current `v3-product-v5-current` canonical decoder set.
+The config must name the current
+`v4-product-v5-general-successor-current` canonical decoder set.
 Raw immutable Product artifacts are accepted only at the exact kind-scoped PDA
 named by an authenticated `SeriesRegistryV2 -> BundleV5` graph. Bytes that look
 like an artifact without that owning graph are not classified by type.
@@ -86,23 +88,21 @@ V2, and Tombstone V2 layouts. Withdrawn fractional V1 layouts are not fallback
 DTOs, and their presence does not create redemption capability.
 
 The current `product` decoder owns the exact Product MarketLifecycleRoot V1.
-The `series` decoder owns the per-Series MarketLink V1, SeriesRegistry V1, and
-SeriesFunding V1. Dealer
+The `series` decoder owns the per-Series MarketLink V1, SeriesRegistry V2, and
+SeriesFunding V2. Dealer
 coverage includes CoveredDealerSelection V1. These rows are hostile-decoded
 through the canonical Rust codecs and remain untrusted projections. The client
 has no placeholder Product artifact kinds and refuses any daemon row whose
 kind/family pair is outside the exact current decoder catalog.
 
-The release projection names one of three checked compile-time Source profiles:
-`production-inert`, `non-production-mock-source-lab`, or
-`non-production-real-pyth-lab`. The default inert ELF has zero registered
-Source releases, which is displayed as an unavailable Source-value surface and
-causes unsigned construction of Source actions 1–12 to fail. Glass never
-promotes a fixture, mock source, or operator-selected feed to release identity.
-The explicitly compiled mock laboratory may be inspected, but Glass also
-refuses to construct Source actions from it. Only the distinct real-Pyth lab
-profile can reach the still-unsigned construction boundary, and it remains
-prominently non-production and non-authoritative.
+The release projection names one of four checked compile-time Source profiles:
+`production-inert`, `runtime-real-pyth-release`,
+`non-production-mock-source-lab`, or `non-production-real-pyth-lab`. The inert
+ELF refuses Source actions. The runtime profile compiles no provider identity;
+it requires an exact onchain real-provider release and exposes only checked
+Source successor actions 1–4. Glass never promotes a fixture, mock source, or
+operator-selected feed to release identity. Both laboratories remain distinct,
+non-production identities, and Glass refuses Source construction for the mock.
 
 Current General fee rows include the rent-owned carry V3/finalization V4 and
 the payer/recipient V2 snapshots. V4 and V2 bodies are decoded by their shared
