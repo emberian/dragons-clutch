@@ -336,6 +336,36 @@ pub fn decode_canonical_wrapper_mint_v1(
         .map_err(|_| Error::Token2022Boundary)
 }
 
+/// Decode the sole terminal wrapper-mint image after exact mint-authority
+/// revocation. This is deliberately disjoint from the active-mint decoder:
+/// the authority COption must be canonical None and supply must be exactly
+/// zero, while decimals, initialization, extension width, and freeze authority
+/// remain frozen to the original wrapper policy.
+pub fn decode_retired_canonical_wrapper_mint_v1(
+    token_program: Key,
+    mint: Key,
+    data: &[u8],
+) -> Result<WrapperMintProjectionV1> {
+    if is_zero(&token_program) || is_zero(&mint) || data.len() != TOKEN_2022_MINT_BYTES {
+        return Err(Error::Token2022Boundary);
+    }
+    require_absent_coption_key(data, 0).map_err(|_| Error::Token2022Boundary)?;
+    let supply = read_u64(data, 36).map_err(|_| Error::Token2022Boundary)?;
+    if supply != 0 || data.get(44) != Some(&0) || data.get(45) != Some(&1) {
+        return Err(Error::Token2022Boundary);
+    }
+    require_absent_coption_key(data, 46).map_err(|_| Error::Token2022Boundary)?;
+    Ok(WrapperMintProjectionV1 {
+        address: mint,
+        mint_authority: [0; 32],
+        supply,
+        decimals: 0,
+        freeze_authority: [0; 32],
+        extension_mask: 0,
+        initialized: true,
+    })
+}
+
 /// Decode one exact initialized wrapper holder account. Only the
 /// zero-extension base layout or sole ImmutableOwner extension is admitted.
 pub fn decode_canonical_wrapper_token_v1(
@@ -674,5 +704,31 @@ mod tests {
         let mut noncanonical_none = mint_bytes();
         noncanonical_none[50] = 1;
         assert!(decoder.decode_mint([1; 32], &noncanonical_none).is_err());
+    }
+
+    #[test]
+    fn terminal_mint_decoder_is_disjoint_and_fail_closed() {
+        let mut retired = mint_bytes();
+        retired[..36].fill(0);
+        retired[36..44].copy_from_slice(&0_u64.to_le_bytes());
+        let observed = decode_retired_canonical_wrapper_mint_v1([4; 32], [1; 32], &retired)
+            .expect("canonical revoked zero-supply mint");
+        assert_eq!(observed.mint_authority, [0; 32]);
+        assert_eq!(observed.supply, 0);
+        assert!(decode_canonical_wrapper_mint_v1([4; 32], [1; 32], [2; 32], &retired).is_err());
+
+        let mut live_supply = retired;
+        live_supply[36..44].copy_from_slice(&1_u64.to_le_bytes());
+        assert!(decode_retired_canonical_wrapper_mint_v1([4; 32], [1; 32], &live_supply).is_err());
+
+        let mut hidden_authority = retired;
+        hidden_authority[..4].copy_from_slice(&[1, 0, 0, 0]);
+        hidden_authority[4..36].copy_from_slice(&[2; 32]);
+        assert!(decode_retired_canonical_wrapper_mint_v1(
+            [4; 32],
+            [1; 32],
+            &hidden_authority,
+        )
+        .is_err());
     }
 }
