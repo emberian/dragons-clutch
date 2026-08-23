@@ -45,19 +45,21 @@ The global account ledger reserves:
 
 | tag/version | bytes | semantic owner |
 | --- | ---: | --- |
-| `0x7f/1` | 168 | persistent Series registration/replay anchor |
-| `0x80/1` | 376 | mutable Series funding/lifecycle wrapper |
+| `0x7f/1` | 168 | withdrawn historical Series registration anchor |
+| `0x7f/2` | 172 | current BundleV5-retaining Series registration/replay anchor |
+| `0x80/1` | 376 | withdrawn QuoteV1-shaped funding/lifecycle wrapper |
 
-The 168-byte registration stores only SeriesPlanV5Id, FundingTermsV2Id,
+The current 172-byte registration stores SeriesPlanV5Id, FundingTermsV2Id,
 RegistryReleaseId, CapabilityProfileId, its exact payer-owned rent principal,
-PDA bump, the canonical one-shot `activation_consumed` bit, and zero reserved
-bytes. Activation changes only that bit from false to true, atomically with
+PDA bump, the canonical one-shot `activation_consumed` bit, and the exact
+CompiledProductSeriesBundleV5Id. It has no reserved bytes. Activation changes
+only that bit from false to true, atomically with
 funding/custody creation. It never changes back.
 It does not persist `RegistryCapabilityProjectionV2`: the central release stays
 the single owner of selector mappings and every value-bearing consumer must
 reauthenticate and reconstruct the projection.
 
-The 376-byte funding account is exactly:
+The historical 376-byte funding account is exactly:
 
 ```text
 tag 0x80 | version 1 | bump | zero flags | rent principal LE u64

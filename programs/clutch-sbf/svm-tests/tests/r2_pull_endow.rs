@@ -1,13 +1,10 @@
-//! The default ELF takes custody against a registered pull release.
+//! The explicit mock-source ELF takes custody against a registered pull release.
 //!
-//! Until now the default artifact could not accept collateral at all. Its
-//! source registry was empty by construction — `release_registered` returned
-//! `false` unconditionally — so `Endow` refused `SourceReleaseUnavailable`
-//! (`0x79`) for every market, and the only lifecycle evidence that existed came
-//! from a *different* ELF built with `non-production-mock-source`. "The default
-//! artifact's value boundary works" had therefore never been observed once.
+//! The production-default registry remains empty and refuses every fabricated
+//! identity. This file exercises the same custody boundary in the distinct ELF
+//! built with `non-production-mock-source`.
 //!
-//! This file is that observation, on the artifact that actually ships:
+//! This file is laboratory evidence for the shared runtime path:
 //!
 //! 1. a market whose immutable Terms bind a **SourceSpec v2** feed identity,
 //!    with the 404-byte spec account installed at genesis, is endowed
@@ -488,9 +485,9 @@ fn source_release_unavailable() -> TransactionError {
 /* The evidence                                                              */
 /* ------------------------------------------------------------------------ */
 
-#[cfg(not(feature = "non-production-mock-source"))]
+#[cfg(feature = "non-production-mock-source")]
 #[tokio::test]
-async fn the_default_elf_takes_custody_against_a_registered_pull_release() {
+async fn the_mock_elf_takes_custody_against_its_registered_pull_release() {
     let mut world = World::start(Source::RegisteredPullV2).await;
     let payer = world.payer.insecure_clone();
     let owner = world.owner.insecure_clone();
@@ -524,8 +521,8 @@ async fn the_default_elf_takes_custody_against_a_registered_pull_release() {
     )
     .await;
 
-    /* Real Token-2022 collateral moved, and the owner plane was constructed.
-     * This is the first time the default artifact has taken custody. */
+    /* Real Token-2022 collateral moved, and the owner plane was constructed
+     * inside the explicitly non-production mock-source ELF. */
     assert_eq!(
         token_amount(&mut world.banks, world.owner_token).await,
         owner_before - DEPOSIT
@@ -542,6 +539,37 @@ async fn the_default_elf_takes_custody_against_a_registered_pull_release() {
         .expect("the owner plane was constructed");
     assert_eq!(position.owner, PROGRAM_ID);
     assert_eq!(position.data.len(), account_len::POSITION);
+}
+
+#[cfg(not(any(
+    feature = "non-production-mock-source",
+    feature = "non-production-real-pyth-lab"
+)))]
+#[tokio::test]
+async fn the_default_elf_refuses_the_fixture_release_and_writes_nothing() {
+    let mut world = World::start(Source::RegisteredPullV2).await;
+    let payer = world.payer.insecure_clone();
+    let owner = world.owner.insecure_clone();
+    let owner_before = token_amount(&mut world.banks, world.owner_token).await;
+    let hoard_before = token_amount(&mut world.banks, world.plane.hoard_token.address).await;
+    let instruction = world.endow(DEPOSIT);
+
+    assert_eq!(
+        try_send(
+            &mut world.banks,
+            &payer,
+            &[budget(), instruction],
+            &[&owner]
+        )
+        .await,
+        Err(source_release_unavailable())
+    );
+    assert_eq!(token_amount(&mut world.banks, world.owner_token).await, owner_before);
+    assert_eq!(
+        token_amount(&mut world.banks, world.plane.hoard_token.address).await,
+        hoard_before
+    );
+    assert!(world.banks.get_account(world.position).await.unwrap().is_none());
 }
 
 #[cfg(not(feature = "non-production-mock-source"))]

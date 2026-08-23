@@ -11,10 +11,9 @@
 use clutch_product_series::{ContentId as ProductContentId, MarketInstanceV2Id};
 use sha2::{Digest, Sha256};
 
-use crate::market_policy_v1::{
-    FailureMarketAccountIdV1, FailureMarketAdmissionStateV1, FailureMarketFamilyTerminalReceiptIdV1,
-};
+use crate::market_policy_v1::{FailureMarketAccountIdV1, FailureMarketAdmissionStateV1};
 use crate::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use crate::market_runtime_v1::FailureMarketFamilyTerminalReceiptIdV2;
 use crate::{Error, FailurePolicyBindingId, Result};
 
 const FUNDING_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-interval-funding/v2";
@@ -91,8 +90,16 @@ pub struct FailureMarketIntervalFundingFactsV2 {
     pub market_instance_id: MarketInstanceV2Id,
     /// Shared Failure/liveness generation.
     pub generation: u64,
-    /// Product private foundation-step receipt.
-    pub prepaid_funding_receipt_id: ProductContentId,
+    /// Product-private retained slot-8 preallocation receipt.
+    pub work_preallocation_receipt_id: ProductContentId,
+    /// Product-private retained slot-9 preallocation receipt.
+    pub history_preallocation_receipt_id: ProductContentId,
+    /// Exact quote-owned Product foundation schedule shared by both slots.
+    pub foundation_schedule_id: ProductContentId,
+    /// Exact canonical Product foundation account graph shared by both slots.
+    pub foundation_account_graph_id: ProductContentId,
+    /// Exact accepted Product foundation transcript shared by both slots.
+    pub foundation_transcript_id: ProductContentId,
     /// Reusable Market-scoped `0xab` cell.
     pub work_account: FailureMarketAccountIdV1,
     /// Permanent append-only Market-scoped `0xac` history.
@@ -225,7 +232,7 @@ pub struct FailureMarketIntervalHistoryV2 {
     latest_session_binding_id: ProductContentId,
     latest_terminal_receipt_id: ProductContentId,
     latest_terminal_state_commitment: ProductContentId,
-    family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1,
+    family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV2,
 }
 
 impl FailureMarketIntervalHistoryV2 {
@@ -307,7 +314,7 @@ impl FailureMarketIntervalHistoryV2 {
     }
 
     /// Exhaustive Failure-family receipt, if history has been sealed.
-    pub const fn family_terminal_receipt_id(self) -> FailureMarketFamilyTerminalReceiptIdV1 {
+    pub const fn family_terminal_receipt_id(self) -> FailureMarketFamilyTerminalReceiptIdV2 {
         self.family_terminal_receipt_id
     }
 
@@ -422,7 +429,7 @@ impl FailureMarketIntervalHistoryV2 {
                 input,
                 &mut cursor,
             )?),
-            family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1::from_bytes(
+            family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV2::from_bytes(
                 take_id(input, &mut cursor)?,
             ),
         };
@@ -490,7 +497,7 @@ impl FailureMarketIntervalHistoryV2 {
         self.validate()
     }
 
-    fn validate_against(
+    pub(crate) fn validate_against(
         self,
         admission: FailureMarketAdmissionStateV1,
         quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
@@ -674,7 +681,7 @@ pub fn admit_failure_market_interval_history_v2<
         latest_session_binding_id: ProductContentId::ZERO,
         latest_terminal_receipt_id: ProductContentId::ZERO,
         latest_terminal_state_commitment: ProductContentId::ZERO,
-        family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1::from_bytes([0; 32]),
+        family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV2::from_bytes([0; 32]),
     };
     if quote_facts.failure_policy_binding_id != history.failure_policy_binding_id {
         return Err(Error::BindingMismatch);
@@ -799,7 +806,7 @@ pub struct FailureMarketIntervalFamilySealFactsV2 {
     /// Exact aggregate keeper rewards.
     pub exact_reward_lamports: u64,
     /// Exhaustive external Failure-family terminal receipt.
-    pub family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1,
+    pub family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV2,
 }
 
 /// Private authority proving exhaustive Failure-family terminality.
@@ -846,7 +853,7 @@ pub fn plan_seal_failure_market_interval_history_v2<
     history: FailureMarketIntervalHistoryV2,
     admission: FailureMarketAdmissionStateV1,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
-    family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1,
+    family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV2,
 ) -> Result<(
     FailureMarketIntervalHistoryPlanV2,
     FailureMarketIntervalFamilySealReceiptV2,
@@ -974,7 +981,15 @@ fn validate_funding_facts(
     facts: FailureMarketIntervalFundingFactsV2,
 ) -> Result<()> {
     let policy = admission.binding().facts();
-    require_live(facts.prepaid_funding_receipt_id.bytes())?;
+    for id in [
+        facts.work_preallocation_receipt_id.bytes(),
+        facts.history_preallocation_receipt_id.bytes(),
+        facts.foundation_schedule_id.bytes(),
+        facts.foundation_account_graph_id.bytes(),
+        facts.foundation_transcript_id.bytes(),
+    ] {
+        require_live(id)?;
+    }
     for account in [
         facts.work_account,
         facts.history_account,
@@ -1011,6 +1026,7 @@ fn validate_funding_facts(
         || facts.history_account.bytes() == policy.recovery_state_id.bytes()
         || facts.work_account.bytes() == policy.recovery_compartment_account_id.bytes()
         || facts.history_account.bytes() == policy.recovery_compartment_account_id.bytes()
+        || facts.work_preallocation_receipt_id == facts.history_preallocation_receipt_id
     {
         return Err(Error::BindingMismatch);
     }
@@ -1051,7 +1067,11 @@ fn hash_funding_facts(hasher: &mut Sha256, facts: FailureMarketIntervalFundingFa
     hasher.update(facts.failure_policy_binding_id.bytes());
     hasher.update(facts.market_instance_id.bytes());
     hasher.update(facts.generation.to_le_bytes());
-    hasher.update(facts.prepaid_funding_receipt_id.bytes());
+    hasher.update(facts.work_preallocation_receipt_id.bytes());
+    hasher.update(facts.history_preallocation_receipt_id.bytes());
+    hasher.update(facts.foundation_schedule_id.bytes());
+    hasher.update(facts.foundation_account_graph_id.bytes());
+    hasher.update(facts.foundation_transcript_id.bytes());
     hasher.update(facts.work_account.bytes());
     hasher.update(facts.history_account.bytes());
     hasher.update(facts.rent_refund_owner.bytes());
@@ -1160,7 +1180,11 @@ pub(crate) fn runtime_test_fixture(
         failure_policy_binding_id: admission.binding().id(),
         market_instance_id: policy.market_instance_id,
         generation: policy.generation,
-        prepaid_funding_receipt_id: ProductContentId::from_bytes([201; 32]),
+        work_preallocation_receipt_id: ProductContentId::from_bytes([196; 32]),
+        history_preallocation_receipt_id: ProductContentId::from_bytes([197; 32]),
+        foundation_schedule_id: ProductContentId::from_bytes([198; 32]),
+        foundation_account_graph_id: ProductContentId::from_bytes([199; 32]),
+        foundation_transcript_id: ProductContentId::from_bytes([201; 32]),
         work_account: FailureMarketAccountIdV1::from_bytes([202; 32]),
         history_account: FailureMarketAccountIdV1::from_bytes([203; 32]),
         rent_refund_owner: FailureMarketAccountIdV1::from_bytes([204; 32]),
@@ -1195,7 +1219,7 @@ pub(crate) fn runtime_test_fixture(
         latest_session_binding_id: ProductContentId::ZERO,
         latest_terminal_receipt_id: ProductContentId::ZERO,
         latest_terminal_state_commitment: ProductContentId::ZERO,
-        family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1::from_bytes([0; 32]),
+        family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV2::from_bytes([0; 32]),
     };
     (funding, history)
 }
@@ -1266,7 +1290,7 @@ mod tests {
             latest_session_binding_id: ProductContentId::ZERO,
             latest_terminal_receipt_id: ProductContentId::ZERO,
             latest_terminal_state_commitment: ProductContentId::ZERO,
-            family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1::from_bytes([0; 32]),
+            family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV2::from_bytes([0; 32]),
         }
     }
 
@@ -1323,7 +1347,7 @@ mod tests {
 
         let mut sealed = history;
         sealed.family_terminal_receipt_id =
-            FailureMarketFamilyTerminalReceiptIdV1::from_bytes([25; 32]);
+            FailureMarketFamilyTerminalReceiptIdV2::from_bytes([25; 32]);
         let seal = FailureMarketIntervalFamilySealReceiptV2 {
             id: FailureMarketIntervalFamilySealReceiptIdV2::from_bytes([26; 32]),
             facts: FailureMarketIntervalFamilySealFactsV2 {

@@ -515,7 +515,7 @@ impl FailureMarketIntervalCellV2 {
         Ok(())
     }
 
-    fn validate_against(
+    pub(crate) fn validate_against(
         self,
         admission: FailureMarketAdmissionStateV1,
         funding: FailureMarketIntervalFundingReceiptV2,
@@ -1740,7 +1740,6 @@ mod tests {
             Err(Error::InvalidEnum)
         );
     }
-
     #[test]
     fn exhaustion_trigger_is_exact_ordered_and_refuses_near_misses() {
         assert_eq!(

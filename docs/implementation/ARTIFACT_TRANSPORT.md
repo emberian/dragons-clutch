@@ -36,6 +36,29 @@ kind remains nonzero and its historical PDA is unchanged. Publication does
 not register or activate a Series, authenticate a registry selector, capitalize
 funding, compile an occurrence, or create a Market.
 
+## Versioned registry-release successor ledger
+
+The current disabled Product compiler graph uses fresh content-addressed
+coordinates rather than reinterpreting an historical body:
+
+| kind | body | registration status |
+| ---: | --- | --- |
+| 41 | `RegistryProgramReleaseV1` | withdrawn; decode only |
+| 51 | `RegistryCapabilityProfileV3` | withdrawn; decode only |
+| 56 | `CompiledProductSeriesBundleV4` | withdrawn; decode only |
+| 58 | `RegistryProgramReleaseV2` | current; routes still disabled |
+| 59 | `RegistryCapabilityProfileV4` | current; routes still disabled |
+| 60 | `CompiledProductSeriesBundleV5` | current; routes still disabled |
+
+`RegistryProgramReleaseV2` owns only facts that the program can authenticate:
+the executable Program, linked ProgramData, SHA-256 of the complete ProgramData
+account data, decoded loader slot, compiled capability-manifest identity, and a
+disjoint locus. `SynthesizedGenesisZero` requires slot zero; `ObservedPositive`
+requires a positive slot. Cluster genesis, network name, deployment workflow,
+and operator manifest identity are deliberately not caller assertions in the
+onchain artifact. The operator release manifest owns those facts separately
+and binds them to the exact ReleaseV2 digest.
+
 1. `BeginArtifact` creates an exact-size uploader-keyed stage PDA.  Its header
    freezes the artifact kind, context, digest, exact length, funder, creation
    slot, expiry slot, cursor, and canonical bump.
