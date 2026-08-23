@@ -13,6 +13,7 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
+clutch-product-series = { path = "../clutch-product-series" }
 clutch-source-plane-v3 = { path = "../clutch-source-plane-v3" }
 clutch-source-plane-v3-adapter = { path = "../clutch-source-plane-v3-adapter" }
 clutch-terminal-identity-v1 = { path = "../../research/terminal-identity-v1" }
