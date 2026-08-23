@@ -62,6 +62,8 @@ const HISTORY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-history-account-authentication/v2";
 const CLOSE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-physical-close/v2";
+const ARCHIVE_POSTWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/failure-market-interval-archive-postwrite/v2";
 
 const _: () =
     assert!(FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2 == FAILURE_MARKET_INTERVAL_CELL_BYTES_V2);
@@ -163,6 +165,41 @@ impl AuthenticatedFailureMarketIntervalAccountsV2 {
 pub(crate) struct FailureMarketIntervalPostimageV2 {
     accounts: AuthenticatedFailureMarketIntervalAccountsV2,
     funding: FailureMarketIntervalFundingReceiptV2,
+}
+
+/// Exact paired `0xac` append and `0xab` Idle-reset postwrite.
+///
+/// This receipt remains private to the Failure owner. Product's narrow link
+/// release must consume it in the same outer instruction before the archive
+/// operation can return to a routed caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketIntervalArchivePostwriteV2 {
+    id: ProductContentId,
+    accounts: AuthenticatedFailureMarketIntervalAccountsV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+}
+
+impl FailureMarketIntervalArchivePostwriteV2 {
+    /// Exact paired physical/semantic postwrite identity.
+    pub(crate) const fn id(self) -> ProductContentId {
+        self.id
+    }
+
+    /// Reauthenticated canonical Idle cell and appended history.
+    pub(crate) const fn accounts(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {
+        self.accounts
+    }
+
+    /// Exact terminal session folded into append-only history.
+    pub(crate) const fn append(self) -> FailureMarketIntervalHistoryAppendReceiptV2 {
+        self.append
+    }
+
+    /// Exact reset receipt paired to the append.
+    pub(crate) const fn reset(self) -> FailureMarketIntervalCellResetReceiptV2 {
+        self.reset
+    }
 }
 
 impl FailureMarketIntervalPostimageV2 {
@@ -812,7 +849,7 @@ fn write_failure_market_interval_cell_plan_inner_v2(
 /// canonical Idle. Both complete postimages are derived before either borrow
 /// is mutated, and the append/reset receipts are cross-checked explicitly.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn write_failure_market_interval_archive_v2<'a>(
+fn write_failure_market_interval_archive_v2<'a>(
     program_id: &Pubkey,
     cell_account: &AccountInfo<'a>,
     history_account: &AccountInfo<'a>,
@@ -821,7 +858,7 @@ pub(crate) fn write_failure_market_interval_archive_v2<'a>(
     append: FailureMarketIntervalHistoryAppendReceiptV2,
     cell_plan: FailureMarketIntervalCellPlanV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
-) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+) -> Outcome<FailureMarketIntervalArchivePostwriteV2> {
     let mut next_history = authenticated.history;
     next_history
         .commit_plan(history_plan)
@@ -890,7 +927,7 @@ pub(crate) fn write_failure_market_interval_archive_v2<'a>(
     );
     require_live_data_id(cell_authentication_id)?;
     require_live_data_id(history_authentication_id)?;
-    Ok(AuthenticatedFailureMarketIntervalAccountsV2 {
+    let accounts = AuthenticatedFailureMarketIntervalAccountsV2 {
         cell: next_cell,
         cell_state_id: next_cell_id,
         cell_data_id,
@@ -900,6 +937,36 @@ pub(crate) fn write_failure_market_interval_archive_v2<'a>(
         history_data_id,
         history_authentication_id,
         ..authenticated
+    };
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            ARCHIVE_POSTWRITE_DOMAIN_V2,
+            cell_account.key.as_ref(),
+            history_account.key.as_ref(),
+            &authenticated.cell_authentication_id.bytes(),
+            &accounts.cell_authentication_id.bytes(),
+            &authenticated.history_authentication_id.bytes(),
+            &accounts.history_authentication_id.bytes(),
+            &append.id().bytes(),
+            &reset.id().bytes(),
+            &append.session_binding_id().bytes(),
+            &append.session_terminal_receipt_id().bytes(),
+            &append.terminal_state_commitment().bytes(),
+            &append.idle_state_commitment().bytes(),
+            &append.previous_root().bytes(),
+            &append.resulting_root().bytes(),
+            &append.completed_session_count().to_le_bytes(),
+            &append.market_instance_id().bytes(),
+            &append.generation().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_data_id(id)?;
+    Ok(FailureMarketIntervalArchivePostwriteV2 {
+        id,
+        accounts,
+        append,
+        reset,
     })
 }
 
