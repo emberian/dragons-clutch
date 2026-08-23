@@ -138,10 +138,11 @@ authorization, lifecycle transition, or SBF dispatch.
 
 `src/portfolio_execution_v2.rs` replaces the old content-only atomic portfolio
 seam with a narrow execution authority contract. `EconomicOrderV2` remains the
-only coefficient owner. A canonical 536-byte selected-order record binds an
-adapter-authenticated SelectedCandidate, OrderPage, page slot, dense RelationV2
-index, owner, Position incarnation, selected fill, and settlement witness; it
-does not carry a second coefficient, quantity, limit, or policy DTO.
+only coefficient owner. A canonical 568-byte selected-order record binds an
+adapter-authenticated counted SettlementRoot, retained Feed/traversal,
+OrderPage, page slot, dense RelationV2 index, owner, Position incarnation,
+selected fill, and settlement witness; it does not carry a second coefficient,
+quantity, limit, or policy DTO.
 
 The private pair capability admits only one exclusive full pair with opposite
 sides, distinct owners and Positions, no virtual conversion, and exact equality
@@ -151,15 +152,18 @@ one named `ExactReceiptDivisionV1` conversion by the integer price scale. A
 remainder refuses instead of selecting an unnamed beneficiary.
 
 The prepared account transition is indivisible. It authenticates the exact
-selected Receipt, both ENTITLED Reservations, both Position V3 prestates, both
-purpose Replay V3 prestates, and the existing counted/rent-owned SettlementReceipt
-V5 through a private adapter capability seam. It derives exact cash
+counted SettlementRoot/retained-Feed traversal, both ENTITLED Reservations,
+both Position V3 prestates, both purpose Replay V3 prestates, and the
+counted/rent-owned 298-byte SettlementReceipt V5 through a private adapter
+capability seam. It derives exact cash
 debit/refund/credit and the
 16-wide native-Egg debit/credit, requires both Reservations' canonical CONSUMED
 postimages, keeps Position incarnation generations stable, advances each Replay
 ordinal once, and commits all pre/post semantic identities into a canonical
-680-byte replay-sensitive transition-receipt preimage. Only its semantic hash
-is retained in the SettlementReceipt V5 postimage, so this slice creates no
+680-byte replay-sensitive vector-transition preimage. The receipt must enter
+delivery as `PortfolioPairPending` (kind `1`, zero commitment); its exact
+V5-domain hash is set once as `PortfolioPairCommitted` in the SettlementReceipt
+V5 postimage, so this slice creates no
 uncounted account or liability. Persisted records and decoded receipt preimages
 are untrusted projections; only the private prepared capability authorizes an
 adapter to compose writes and CPIs.
