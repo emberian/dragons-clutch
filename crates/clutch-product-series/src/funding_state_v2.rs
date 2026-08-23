@@ -443,6 +443,9 @@ impl SeriesFundingStateV2 {
         amount: ComponentDebitV1,
     ) -> Result<()> {
         self.validate_against(series, quote, attachment)?;
+        if self.phase == SeriesFundingPhaseV2::Pending {
+            return Err(Error::WorkStateMismatch);
+        }
         if amount == ComponentDebitV1::ZERO {
             return Err(Error::InvalidParameter);
         }
@@ -505,16 +508,53 @@ impl SeriesFundingStateV2 {
             || series.instance_count != self.instance_count
             || quote.id()? != self.funding_quote_id
             || attachment.id()? != self.attachment_plan_id
+            || series.attachment_plan_id.content_id() != attachment.id()?.content_id()
             || attachment.funding_quote_id != self.funding_quote_id
         {
             return Err(Error::MismatchedArtifact);
         }
         let admitted = self.admitted_created_count()?;
+        let minimum_sequence = u64::from(self.next_ordinal)
+            .checked_add(u64::from(admitted))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if self.transition_sequence < minimum_sequence {
+            return Err(Error::InvalidSchedule);
+        }
+        if self.phase == SeriesFundingPhaseV2::Pending {
+            validate_reservation_debits(
+                quote,
+                self.pending_disposition.ok_or(Error::InvalidComponentStatus)?,
+                &self.pending_debits,
+            )?;
+        }
+        let completed_created = self
+            .next_ordinal
+            .checked_sub(self.lapsed_count)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if self.components[SeriesFundingComponentV2::MarketCore.index()].consumed_allocations
+            != self.components[SeriesFundingComponentV2::RecoveryReserve.index()]
+                .consumed_allocations
+        {
+            return Err(Error::InvalidComponentStatus);
+        }
         let mut index = 0usize;
         while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
             let unit = quote.components[index];
             let consumed = self.components[index].consumed_allocations;
             if consumed > admitted {
+                return Err(Error::InvalidComponentStatus);
+            }
+            let pending_delta = if self.phase == SeriesFundingPhaseV2::Pending
+                && self.pending_debits[index] != ComponentDebitV1::ZERO
+            {
+                1
+            } else {
+                0
+            };
+            let prior_consumed = consumed
+                .checked_sub(pending_delta)
+                .ok_or(Error::InvalidComponentStatus)?;
+            if prior_consumed > completed_created {
                 return Err(Error::InvalidComponentStatus);
             }
             if index == SeriesFundingComponentV2::SeriesAdmission.index()
@@ -833,6 +873,74 @@ fn increment(value: u64) -> Result<u64> {
 mod tests {
     use super::*;
 
+    struct DonationOnlyAuthority;
+
+    impl AuthenticatedSeriesFundingAuthorityV2 for DonationOnlyAuthority {
+        fn authenticate_activation(
+            &self,
+            _series: &SeriesPlanV5,
+            _funding_terms_id: SeriesFundingTermsV2Id,
+            _compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+            _quote: &SeriesFundingQuoteV4,
+            _attachment: &SeriesAttachmentPlanV4,
+            _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+            _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        ) -> Result<()> {
+            Err(Error::UnauthenticatedAuthority)
+        }
+
+        fn current_bucket(&self, _series: &SeriesPlanV5) -> Result<u64> {
+            Err(Error::UnauthenticatedAuthority)
+        }
+
+        fn authenticate_reservation(
+            &self,
+            _state: &SeriesFundingStateV2,
+            _ordinal: u32,
+            _market_instance_id: MarketInstanceV2Id,
+            _source_occurrence_id: SourceOccurrenceV1Id,
+            _series_market_link_id: ContentId,
+            _disposition: SeriesMarketDispositionV1,
+            _debits: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+            _reservation_receipt_id: ContentId,
+        ) -> Result<()> {
+            Err(Error::UnauthenticatedAuthority)
+        }
+
+        fn authenticate_pending_completion(
+            &self,
+            _state: &SeriesFundingStateV2,
+            _completion_receipt_id: ContentId,
+        ) -> Result<()> {
+            Err(Error::UnauthenticatedAuthority)
+        }
+
+        fn authenticate_pending_abort(
+            &self,
+            _state: &SeriesFundingStateV2,
+            _abort_receipt_id: ContentId,
+        ) -> Result<()> {
+            Err(Error::UnauthenticatedAuthority)
+        }
+
+        fn authenticate_donation(
+            &self,
+            _state: &SeriesFundingStateV2,
+            _component: SeriesFundingComponentV2,
+            _amount: ComponentDebitV1,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn authenticate_close(
+            &self,
+            _state: &SeriesFundingStateV2,
+            _terminal_receipt_id: ContentId,
+        ) -> Result<()> {
+            Err(Error::UnauthenticatedAuthority)
+        }
+    }
+
     fn active_state() -> SeriesFundingStateV2 {
         SeriesFundingStateV2 {
             series_plan_id: SeriesPlanV5Id::from_bytes([1; 32]),
@@ -856,6 +964,103 @@ mod tests {
         }
     }
 
+    fn joined_fixtures() -> (SeriesPlanV5, SeriesFundingQuoteV4, SeriesAttachmentPlanV4) {
+        let mut slot_principal_lamports = [0u64; crate::MARKET_FOUNDATION_SLOT_COUNT_V2];
+        for principal in &mut slot_principal_lamports
+            [..crate::MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 2]
+        {
+            *principal = 10;
+        }
+        let custody_start = crate::MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+            + crate::MARKET_FOUNDATION_MAX_OUTCOMES_V2;
+        for principal in &mut slot_principal_lamports[custody_start..custody_start + 2] {
+            *principal = 10;
+        }
+        let foundation = crate::MarketFoundationScheduleV2 {
+            outcome_count: 2,
+            slot_principal_lamports,
+            founding_timeout_buckets: 40,
+        };
+        let mut components = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        components[SeriesFundingComponentV2::MarketCore.index()].lamports =
+            foundation.total_principal_lamports().unwrap();
+        components[SeriesFundingComponentV2::SeriesAdmission.index()].lamports = 20;
+        components[SeriesFundingComponentV2::RecoveryReserve.index()].lamports = 31;
+        components[SeriesFundingComponentV2::SourceWork.index()].lamports = 7;
+        let quote = SeriesFundingQuoteV4 {
+            evidence_only_recovery_policy_id: ContentId::from_bytes([11; 32]),
+            failure_liveness_policy_id: ContentId::from_bytes([12; 32]),
+            failure_recovery_quote_schedule_id: ContentId::from_bytes([13; 32]),
+            components,
+            foundation,
+            recovery_rent_principal_lamports: 10,
+        };
+        let attachment = SeriesAttachmentPlanV4 {
+            funding_quote_id: quote.id().unwrap(),
+            liquidity_facility_plan_id: ContentId::from_bytes([14; 32]),
+            wrapper_recipe_set_id: ContentId::from_bytes([15; 32]),
+        };
+        let series = SeriesPlanV5 {
+            product_template_id: crate::ProductTemplateId::from_bytes([16; 32]),
+            market_genesis_profile_id: crate::MarketGenesisProfileV2Id::from_bytes([17; 32]),
+            attachment_plan_id: crate::SeriesAttachmentPlanId::from_bytes(
+                attachment.id().unwrap().bytes(),
+            ),
+            first_start_bucket: 10,
+            stride_buckets: 5,
+            instance_count: 2,
+            creation_lead_buckets: 1,
+            market_collateral_cap: 1,
+        };
+        (series, quote, attachment)
+    }
+
+    fn pending_state() -> (SeriesFundingStateV2, SeriesPlanV5, SeriesFundingQuoteV4, SeriesAttachmentPlanV4) {
+        let (series, quote, attachment) = joined_fixtures();
+        let mut components = [SeriesComponentCapitalV2::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        let mut index = 0usize;
+        while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+            components[index].remaining_principal = multiply_debit(quote.components[index], 2).unwrap();
+            index += 1;
+        }
+        let mut pending_debits = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        for component in [
+            SeriesFundingComponentV2::MarketCore,
+            SeriesFundingComponentV2::SeriesAdmission,
+            SeriesFundingComponentV2::RecoveryReserve,
+        ] {
+            let index = component.index();
+            pending_debits[index] = quote.components[index];
+            components[index].remaining_principal = subtract_debit(
+                components[index].remaining_principal,
+                pending_debits[index],
+            )
+            .unwrap();
+            components[index].consumed_allocations = 1;
+        }
+        let state = SeriesFundingStateV2 {
+            series_plan_id: series.id().unwrap(),
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes([18; 32]),
+            funding_quote_id: quote.id().unwrap(),
+            attachment_plan_id: attachment.id().unwrap(),
+            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([19; 32]),
+            instance_count: 2,
+            next_ordinal: 0,
+            lapsed_count: 0,
+            transition_sequence: 1,
+            phase: SeriesFundingPhaseV2::Pending,
+            pending_disposition: Some(SeriesMarketDispositionV1::Founder),
+            pending_market_instance_id: ContentId::from_bytes([20; 32]),
+            pending_source_occurrence_id: ContentId::from_bytes([21; 32]),
+            pending_series_market_link_id: ContentId::from_bytes([22; 32]),
+            pending_ordinal: 0,
+            pending_reservation_receipt_id: ContentId::from_bytes([23; 32]),
+            pending_debits,
+            components,
+        };
+        (state, series, quote, attachment)
+    }
+
     #[test]
     fn current_width_is_exact_and_not_the_historical_state_width() {
         assert_eq!(SERIES_FUNDING_STATE_BYTES_V2, 664);
@@ -877,5 +1082,140 @@ mod tests {
             SeriesFundingStateV2::decode(&body),
             Err(Error::ZeroIdentity)
         );
+    }
+
+    #[test]
+    fn pending_debits_refuse_wrong_disposition_geometry() {
+        let mut components = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        components[SeriesFundingComponentV2::MarketCore.index()].lamports = 20;
+        components[SeriesFundingComponentV2::SeriesAdmission.index()].lamports = 10;
+        components[SeriesFundingComponentV2::RecoveryReserve.index()].lamports = 30;
+        components[SeriesFundingComponentV2::SourceWork.index()].lamports = 7;
+        let quote = SeriesFundingQuoteV4 {
+            evidence_only_recovery_policy_id: ContentId::from_bytes([11; 32]),
+            failure_liveness_policy_id: ContentId::from_bytes([12; 32]),
+            failure_recovery_quote_schedule_id: ContentId::from_bytes([13; 32]),
+            components,
+            foundation: crate::MarketFoundationScheduleV2 {
+                outcome_count: 2,
+                slot_principal_lamports: [0; crate::MARKET_FOUNDATION_SLOT_COUNT_V2],
+                founding_timeout_buckets: 1,
+            },
+            recovery_rent_principal_lamports: 1,
+        };
+        let mut pending = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        assert_eq!(
+            validate_reservation_debits(&quote, SeriesMarketDispositionV1::Founder, &pending),
+            Err(Error::InvalidComponentStatus)
+        );
+        pending[SeriesFundingComponentV2::SeriesAdmission.index()] =
+            components[SeriesFundingComponentV2::SeriesAdmission.index()];
+        pending[SeriesFundingComponentV2::MarketCore.index()] =
+            components[SeriesFundingComponentV2::MarketCore.index()];
+        pending[SeriesFundingComponentV2::RecoveryReserve.index()] =
+            components[SeriesFundingComponentV2::RecoveryReserve.index()];
+        pending[SeriesFundingComponentV2::SourceWork.index()].lamports = 6;
+        assert_eq!(
+            validate_reservation_debits(&quote, SeriesMarketDispositionV1::Founder, &pending),
+            Err(Error::InvalidComponentStatus)
+        );
+        pending[SeriesFundingComponentV2::SourceWork.index()] = ComponentDebitV1::ZERO;
+        assert_eq!(
+            validate_reservation_debits(&quote, SeriesMarketDispositionV1::Founder, &pending),
+            Ok(())
+        );
+        pending[SeriesFundingComponentV2::MarketCore.index()] = ComponentDebitV1::ZERO;
+        pending[SeriesFundingComponentV2::RecoveryReserve.index()] = ComponentDebitV1::ZERO;
+        assert_eq!(
+            validate_reservation_debits(&quote, SeriesMarketDispositionV1::Converger, &pending),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn hostile_pending_vectors_rewinds_and_balance_rewrites_refuse() {
+        let (state, series, quote, attachment) = pending_state();
+        assert_eq!(state.validate_against(&series, &quote, &attachment), Ok(()));
+
+        let mut wrong_vector = state;
+        wrong_vector.pending_debits[SeriesFundingComponentV2::SeriesAdmission.index()] =
+            ComponentDebitV1::ZERO;
+        assert_eq!(
+            wrong_vector.validate_against(&series, &quote, &attachment),
+            Err(Error::InvalidComponentStatus)
+        );
+
+        let mut rewind = state;
+        rewind.transition_sequence = 0;
+        assert_eq!(
+            rewind.validate_against(&series, &quote, &attachment),
+            Err(Error::InvalidSchedule)
+        );
+
+        let mut balance_rewrite = state;
+        balance_rewrite.components[SeriesFundingComponentV2::MarketCore.index()]
+            .remaining_principal
+            .lamports += 1;
+        assert_eq!(
+            balance_rewrite.validate_against(&series, &quote, &attachment),
+            Err(Error::InvalidComponentStatus)
+        );
+
+        let mut missing_pending_count = state;
+        missing_pending_count.components[SeriesFundingComponentV2::MarketCore.index()]
+            .consumed_allocations = 0;
+        missing_pending_count.components[SeriesFundingComponentV2::MarketCore.index()]
+            .remaining_principal = multiply_debit(
+            quote.components[SeriesFundingComponentV2::MarketCore.index()],
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            missing_pending_count.validate_against(&series, &quote, &attachment),
+            Err(Error::InvalidComponentStatus)
+        );
+
+        let mut prior_count_from_no_pending_debit = state;
+        prior_count_from_no_pending_debit.components
+            [SeriesFundingComponentV2::SourceWork.index()]
+            .consumed_allocations = 1;
+        prior_count_from_no_pending_debit.components
+            [SeriesFundingComponentV2::SourceWork.index()]
+            .remaining_principal = quote.components[SeriesFundingComponentV2::SourceWork.index()];
+        assert_eq!(
+            prior_count_from_no_pending_debit.validate_against(&series, &quote, &attachment),
+            Err(Error::InvalidComponentStatus)
+        );
+    }
+
+    #[test]
+    fn mismatched_series_attachment_refuses_even_when_quote_pair_is_valid() {
+        let (state, mut series, quote, attachment) = pending_state();
+        series.attachment_plan_id = crate::SeriesAttachmentPlanId::from_bytes([99; 32]);
+        assert_eq!(
+            state.validate_against(&series, &quote, &attachment),
+            Err(Error::MismatchedArtifact)
+        );
+    }
+
+    #[test]
+    fn pending_donation_refuses_before_receipt_authority_is_consulted() {
+        let (mut state, series, quote, attachment) = pending_state();
+        let before = state;
+        assert_eq!(
+            state.add_donation(
+                &DonationOnlyAuthority,
+                &series,
+                &quote,
+                &attachment,
+                SeriesFundingComponentV2::MarketCore,
+                ComponentDebitV1 {
+                    lamports: 1,
+                    collateral_atoms: 0,
+                },
+            ),
+            Err(Error::WorkStateMismatch)
+        );
+        assert_eq!(state, before);
     }
 }

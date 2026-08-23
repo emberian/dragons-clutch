@@ -23,8 +23,7 @@ use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_for_registration_v3,
     authenticate_registry_capability_v3, authenticate_series_registry_capability_refs_v2,
     authenticate_series_registry_capability_refs_v2_for_mutation,
-    AuthenticatedProductArtifactV1, AuthenticatedRegistryCapabilityReleaseV3,
-    AuthenticatedRegistryCapabilityV3,
+    AuthenticatedRegistryCapabilityReleaseV3, AuthenticatedRegistryCapabilityV3,
 };
 use crate::instructions::series_failure_funding::{
     mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
@@ -58,7 +57,8 @@ use clutch_product_series::{
     SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTerminalProjectionV1,
     SeriesFundingTerminalProjectionV2,
     SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
-    SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT, SERIES_FUNDING_COMPONENT_COUNT_V2,
+    SourceOccurrenceV1Id, SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
+    SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     ActivateSeriesFundingIntentV1, AdvanceSeriesOccurrenceIntentV1, CloseSeriesFundingIntentV1,
@@ -71,9 +71,8 @@ use clutch_solana_layout::product_series::{
 use clutch_solana_layout::registry::RecurringSeriesAction;
 use clutch_source_plane_v3::{SourcePlaneProgramV3, StatisticKindV3, SummaryProgramV3};
 use clutch_source_plane_v3_runtime::{
-    AuthenticatedClockBucketV1, AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1,
-    AuthenticatedSourceRouteV1, ClockSnapshotV1, OccurrenceSourceReceiptV1,
-    SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1,
+    AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, ClockSnapshotV1,
+    OccurrenceSourceReceiptV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -82,8 +81,6 @@ use solana_pubkey::Pubkey;
 
 /// Closed number of physical Series funding compartments.
 pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
-const SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V3: &[u8] =
-    b"dragons-clutch/source-product-route-authentication/v3";
 /// Canonical generation of the sole funding activation permitted by V1.
 pub const SERIES_ACTIVATION_GENERATION_V1: u64 = 1;
 
@@ -429,10 +426,12 @@ fn process_lapse_occurrence(
         &accounts[IX_LAPSE_CLOCK],
     )?;
     let (_, ordinal) = lapse_series_occurrence_v2(
+        program_id,
         &accounts[IX_LAPSE_FUNDING],
         funding,
         &artifacts,
         &clock,
+        &rent,
     )?;
     require(ordinal == request.ordinal, ClutchError::Replay)?;
     Ok(())
@@ -540,12 +539,14 @@ fn process_observe_donation(
         amount,
     };
     observe_series_donation_v2(
+        program_id,
         &accounts[IX_OBSERVE_FUNDING],
         funding,
         &artifacts,
         &authority,
         request.component,
         amount,
+        &rent,
     )?;
     Ok(())
 }
@@ -598,23 +599,23 @@ pub struct AuthenticatedSeriesArtifactsV1 {
 #[derive(Debug)]
 pub struct AuthenticatedSeriesArtifactsV4 {
     /// Finite recurring Series plan.
-    pub series: Box<SeriesPlanV5>,
+    series: Box<SeriesPlanV5>,
     /// Immutable principal/refund/sink/mint/program ownership.
-    pub funding_terms: Box<SeriesFundingTermsV2>,
+    funding_terms: Box<SeriesFundingTermsV2>,
     /// Reusable relative Product semantics.
-    pub template: Box<ProductTemplateV4>,
+    template: Box<ProductTemplateV4>,
     /// Exact canonical payout partition.
-    pub basis: Box<NativeClaimBasisV1>,
+    basis: Box<NativeClaimBasisV1>,
     /// Exact evidence-only recovery schedule.
-    pub recovery: Box<EvidenceOnlyRecoveryPolicyV1>,
+    recovery: Box<EvidenceOnlyRecoveryPolicyV1>,
     /// Exact quantized price-measure semantics.
-    pub price_policy: Box<PriceMeasurePolicyV1>,
+    price_policy: Box<PriceMeasurePolicyV1>,
     /// Immutable Realm/Profile and venue semantics.
-    pub genesis: Box<MarketGenesisProfileV2>,
+    genesis: Box<MarketGenesisProfileV2>,
     /// Current per-occurrence and 46-slot foundation funding quote.
-    pub quote: Box<SeriesFundingQuoteV4>,
+    quote: Box<SeriesFundingQuoteV4>,
     /// Current QuoteV4-bound operational attachment.
-    pub attachment: Box<SeriesAttachmentPlanV4>,
+    attachment: Box<SeriesAttachmentPlanV4>,
 }
 
 /// Authenticated typed compiler output for one exact Product/Series artifact graph.
@@ -653,260 +654,6 @@ impl AuthenticatedCompiledProductSeriesBundleV5 {
     pub const fn bundle_id(self) -> CompiledProductSeriesBundleV5Id {
         self.bundle_id
     }
-}
-
-/// Private current Source/ProfileV4/BundleV5 route authority.
-///
-/// The Source route receipts prove the exact adapter/parser/receiver
-/// Program/ProgramData, deployment-slot and Config bodies selected by
-/// `SourceReleaseManifestV2`. The Product receipts prove hostile decoding,
-/// content-addressed accounts, current ProfileV4 registry authority, BundleV5,
-/// and the Realm/Profile collateral selection. There is no byte decoder or
-/// public constructor for this capability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedSourceProductRouteV3 {
-    id: ContentId,
-    source_route_id: ContentId,
-    receiver_route_id: ContentId,
-    source_release_manifest_id: ContentId,
-    source_release_authentication_id: ContentId,
-    source_plane_contract_id: ContentId,
-    source_spec_id: ContentId,
-    registry_release_id: ContentId,
-    capability_profile_id: ContentId,
-    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
-    market_genesis_profile_id: clutch_product_series::MarketGenesisProfileV2Id,
-    realm_id: ContentId,
-    profile_id: ContentId,
-    collateral_mint: ContentId,
-    collateral_token_program: ContentId,
-}
-
-impl AuthenticatedSourceProductRouteV3 {
-    /// Authentication identity of the complete current route.
-    pub const fn id(self) -> ContentId {
-        self.id
-    }
-
-    /// Exact Source release selected by current BundleV5.
-    pub const fn source_release_manifest_id(self) -> ContentId {
-        self.source_release_manifest_id
-    }
-
-    /// Exact owner/PDA/body authentication of the Source release account.
-    pub const fn source_release_authentication_id(self) -> ContentId {
-        self.source_release_authentication_id
-    }
-
-    /// Exact current compiler graph.
-    pub const fn compiler_bundle_id(self) -> CompiledProductSeriesBundleV5Id {
-        self.compiler_bundle_id
-    }
-
-    /// Immutable Realm selected by ProfileV4 and GenesisV2.
-    pub const fn realm_id(self) -> ContentId {
-        self.realm_id
-    }
-
-    /// Immutable collateral Profile selected by ProfileV4 and GenesisV2.
-    pub const fn profile_id(self) -> ContentId {
-        self.profile_id
-    }
-}
-
-/// Mint the sole private current Source/Product route from authenticated SBF
-/// receipts. Caller-shaped IDs or decoded-but-unauthenticated bodies cannot
-/// enter this join.
-pub fn authenticate_source_product_route_v3(
-    route: AuthenticatedSourceRouteV1,
-    receiver: AuthenticatedReceiverRouteV2,
-    registry: AuthenticatedRegistryCapabilityV3,
-    bundle: &AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
-    genesis: &AuthenticatedProductArtifactV1<MarketGenesisProfileV2>,
-) -> Outcome<AuthenticatedSourceProductRouteV3> {
-    let bundle_value = bundle.value();
-    let genesis_value = genesis.value();
-    let bundle_id = bundle_value
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let genesis_id = genesis_value
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let projection = registry.projection();
-    let owners = registry.semantic_owners();
-    let collateral = registry.realm_collateral();
-    require(
-        receiver.route_id() == route.route_id()
-            && bundle.semantic_id() == bundle_id.content_id()
-            && genesis.semantic_id() == genesis_id.content_id()
-            && bundle_value.source_release_manifest_id.bytes()
-                == route.release_manifest_id().bytes()
-            && bundle_value.source_plane_contract_id.bytes()
-                == route.source_plane_contract_id().bytes()
-            && bundle_value.source_spec_id.bytes() == route.source_spec_id().bytes()
-            && bundle_value.registry_release_id == registry.registry_release_id()
-            && bundle_value.capability_profile_id.content_id()
-                == registry.capability_profile_id()
-            && bundle_value.source_plane_contract_id == owners.source_plane_contract_id
-            && bundle_value.source_spec_id == owners.source_spec_id
-            && bundle_value.market_genesis_profile_id == genesis_id
-            && genesis_value.capability_profile_id == registry.capability_profile_id()
-            && genesis_value.realm_id == collateral.realm_id
-            && genesis_value.profile_id == collateral.profile_id
-            && projection.realm_collateral == collateral,
-        ClutchError::MismatchedState,
-    )?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V3,
-            &route.route_id().bytes(),
-            &receiver.id().bytes(),
-            &route.release_manifest_id().bytes(),
-            &route.release_authentication_id().bytes(),
-            &route.source_plane_contract_id().bytes(),
-            &route.source_spec_id().bytes(),
-            &registry.registry_release_id().bytes(),
-            &registry.capability_profile_id().bytes(),
-            &bundle_id.bytes(),
-            &genesis_id.bytes(),
-            &collateral.realm_id.bytes(),
-            &collateral.profile_id.bytes(),
-            &collateral.collateral_mint.bytes(),
-            &collateral.token_program.bytes(),
-        ])
-        .to_bytes(),
-    );
-    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
-    Ok(AuthenticatedSourceProductRouteV3 {
-        id,
-        source_route_id: route.route_id(),
-        receiver_route_id: receiver.id(),
-        source_release_manifest_id: route.release_manifest_id(),
-        source_release_authentication_id: route.release_authentication_id(),
-        source_plane_contract_id: route.source_plane_contract_id(),
-        source_spec_id: route.source_spec_id(),
-        registry_release_id: registry.registry_release_id(),
-        capability_profile_id: registry.capability_profile_id(),
-        compiler_bundle_id: bundle_id,
-        market_genesis_profile_id: genesis_id,
-        realm_id: collateral.realm_id,
-        profile_id: collateral.profile_id,
-        collateral_mint: collateral.collateral_mint,
-        collateral_token_program: collateral.token_program,
-    })
-}
-
-/// Private successful Source handoff selected by the current Product route.
-///
-/// This contains no payout or relation DTO. It only makes Source's exact
-/// release/deployment/result/work-receipt authority available to the future
-/// shared Product ResolutionV5 writer, which must separately consume
-/// Failure's private resolved-cell receipt.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedSourceResolutionInputV3 {
-    id: ContentId,
-    route: AuthenticatedSourceProductRouteV3,
-    source_handoff_authentication_id: ContentId,
-    successful_evaluation_handoff_id: ContentId,
-    occurrence_account: clutch_source_plane_v3_runtime::RuntimeKey,
-    result_account_authentication_id: ContentId,
-    work_receipt_authentication_id: ContentId,
-    failure_policy_binding_id: ContentId,
-}
-
-impl AuthenticatedSourceResolutionInputV3 {
-    /// Authentication identity of the exact current Source resolution input.
-    pub const fn id(self) -> ContentId {
-        self.id
-    }
-
-    /// Current Source/ProfileV4/BundleV5 route selected by this handoff.
-    pub const fn route(self) -> AuthenticatedSourceProductRouteV3 {
-        self.route
-    }
-
-    /// Exact semantic successful-evaluation handoff.
-    pub const fn successful_evaluation_handoff_id(self) -> ContentId {
-        self.successful_evaluation_handoff_id
-    }
-
-    /// Exact Source-owned physical handoff authentication.
-    pub const fn source_handoff_authentication_id(self) -> ContentId {
-        self.source_handoff_authentication_id
-    }
-
-    /// Exact Product/Series occurrence account selected before evaluation.
-    pub const fn occurrence_account(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
-        self.occurrence_account
-    }
-
-    /// Exact owner/PDA/body authentication of the successful result account.
-    pub const fn result_account_authentication_id(self) -> ContentId {
-        self.result_account_authentication_id
-    }
-
-    /// Exact immutable Source work-receipt authentication.
-    pub const fn work_receipt_authentication_id(self) -> ContentId {
-        self.work_receipt_authentication_id
-    }
-
-    /// Exact downstream Failure policy selected before Source evaluation.
-    pub const fn failure_policy_binding_id(self) -> ContentId {
-        self.failure_policy_binding_id
-    }
-}
-
-/// Bind Source's successful action-10 handoff to the current authenticated
-/// Product route without classifying a relation or constructing a payout.
-pub fn authenticate_source_resolution_input_v3(
-    route: AuthenticatedSourceProductRouteV3,
-    handoff: SuccessfulEvaluationHandoffV1,
-    source: SourcePolicyHandoffJoinV1,
-) -> Outcome<AuthenticatedSourceResolutionInputV3> {
-    let occurrence = handoff.occurrence();
-    require(
-        source.handoff_id() == handoff.id()
-            && source.release_authentication_id() == route.source_release_authentication_id
-            && source.route_id() == route.source_route_id
-            && source.source_spec_id() == route.source_spec_id
-            && occurrence.route_id() == route.source_route_id
-            && occurrence.source_plane_contract_id() == route.source_plane_contract_id
-            && occurrence.source_spec_id() == route.source_spec_id
-            && source.occurrence_account() == occurrence.occurrence_account()
-            && source.source_fact_authentication_id()
-                == handoff.result_account_authentication_id()
-            && source.failure_policy_binding_id() == handoff.failure_policy_binding_id()
-            && source.window_id() == occurrence.window_id()
-            && source.statistic_key_id() == occurrence.statistic_key_id()
-            && source.clock_policy_id() == handoff.clock_policy_id()
-            && source.clock() == handoff.clock(),
-        ClutchError::MismatchedState,
-    )?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            b"dragons-clutch/source-resolution-input/v3",
-            &route.id.bytes(),
-            &source.id().bytes(),
-            &handoff.id().bytes(),
-            &occurrence.id().bytes(),
-            &source.occurrence_account().bytes(),
-            &handoff.result_account_authentication_id().bytes(),
-            &source.work_receipt_authentication_id().bytes(),
-            &handoff.failure_policy_binding_id().bytes(),
-        ])
-        .to_bytes(),
-    );
-    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
-    Ok(AuthenticatedSourceResolutionInputV3 {
-        id,
-        route,
-        source_handoff_authentication_id: source.id(),
-        successful_evaluation_handoff_id: handoff.id(),
-        occurrence_account: source.occurrence_account(),
-        result_account_authentication_id: handoff.result_account_authentication_id(),
-        work_receipt_authentication_id: source.work_receipt_authentication_id(),
-        failure_policy_binding_id: handoff.failure_policy_binding_id(),
-    })
 }
 
 #[cfg(test)]
@@ -1308,6 +1055,20 @@ pub struct AuthenticatedSeriesFundingAccountV1 {
 pub struct AuthenticatedSeriesFundingAccountV2 {
     account: Pubkey,
     value: SeriesFundingAccountV2,
+}
+
+/// Private physical authority for the five release-selected collateral-vault
+/// rent principals persisted by FundingV2.
+///
+/// There is intentionally no public constructor. The future activation
+/// composer must mint this only after exact vault creation/postwrite and live
+/// Rent authentication; an instruction array can never become refundable
+/// principal merely by reaching the generic state constructor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSeriesCollateralVaultRentV2 {
+    series_plan_id: SeriesPlanV5Id,
+    principal_lamports: [u64; SERIES_COLLATERAL_VAULT_COUNT_V2],
+    authentication_id: ContentId,
 }
 
 impl AuthenticatedSeriesFundingAccountV2 {
@@ -3726,7 +3487,7 @@ pub fn create_series_registry_account_v2<'a>(
 /// Create the exact current funding account after a private activation
 /// authority has authenticated all six physical principal/donation deposits.
 #[allow(clippy::too_many_arguments)]
-pub fn create_series_funding_account_v2<'a>(
+fn create_series_funding_account_v2<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
     target: &AccountInfo<'a>,
@@ -3778,17 +3539,31 @@ pub fn activate_series_funding_account_v2<
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
     principal: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     donations: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
-    collateral_vault_rent_principal_lamports: [u64; SERIES_FUNDING_COMPONENT_COUNT],
+    collateral_vault_rent: AuthenticatedSeriesCollateralVaultRentV2,
 ) -> Outcome<(
     AuthenticatedSeriesRegistryAccountV2,
     AuthenticatedSeriesFundingAccountV2,
 )> {
+    let live_registry = read_series_registry_account_v2_with_role(
+        program_id,
+        registry_account,
+        registry.value().series_plan_id,
+        rent,
+        true,
+    )?;
     require(
-        registry.account() == *registry_account.key
+        live_registry == registry
+            && registry.account() == *registry_account.key
             && !registry.activation_consumed()
             && registry.value().compiler_bundle_id == compiler_bundle.bundle_id()
             && compiler_bundle.bundle().series_plan_id == registry.value().series_plan_id
-            && compiler_bundle.bundle().funding_terms_id == registry.value().funding_terms_id,
+            && compiler_bundle.bundle().funding_terms_id == registry.value().funding_terms_id
+            && collateral_vault_rent.series_plan_id == registry.value().series_plan_id
+            && !collateral_vault_rent.authentication_id.is_zero()
+            && collateral_vault_rent
+                .principal_lamports
+                .iter()
+                .all(|principal| *principal != 0),
         ClutchError::MismatchedState,
     )?;
     require_system_lamport_destination(
@@ -3810,7 +3585,7 @@ pub fn activate_series_funding_account_v2<
     let value = SeriesFundingAccountV2 {
         state,
         rent_principal_lamports: rent.minimum_balance(SERIES_FUNDING_ACCOUNT_BYTES_V2)?,
-        collateral_vault_rent_principal_lamports,
+        collateral_vault_rent_principal_lamports: collateral_vault_rent.principal_lamports,
         stored_bump,
     };
     create_series_funding_account_v2(
@@ -3822,6 +3597,13 @@ pub fn activate_series_funding_account_v2<
         rent,
         value,
     )?;
+    let funding = authenticate_live_series_funding_value_v2(
+        program_id,
+        funding_account,
+        value,
+        artifacts,
+        rent,
+    )?;
     let consumed = consume_series_activation_v2(
         program_id,
         registry_account,
@@ -3830,10 +3612,7 @@ pub fn activate_series_funding_account_v2<
     )?;
     Ok((
         consumed,
-        AuthenticatedSeriesFundingAccountV2 {
-            account: *funding_account.key,
-            value,
-        },
+        funding,
     ))
 }
 
@@ -4090,10 +3869,16 @@ pub fn consume_series_activation_v2(
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     next.encode(&mut data)?;
-    Ok(AuthenticatedSeriesRegistryAccountV2 {
-        account: *account.key,
-        value: next,
-    })
+    drop(data);
+    let rebound = read_series_registry_account_v2_with_role(
+        program_id,
+        account,
+        expected_series,
+        rent,
+        true,
+    )?;
+    require(rebound.value() == next, ClutchError::MismatchedState)?;
+    Ok(rebound)
 }
 
 /// Authenticate a mutable current funding account against RegistryV2 and the
@@ -4135,14 +3920,24 @@ pub fn read_series_funding_account_v2(
 }
 
 /// Write one validated current successor without changing framing/rent facts.
-pub fn write_series_funding_state_v2(
+fn write_series_funding_state_v2(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     next: SeriesFundingStateV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
+    rent: &RentParameters,
 ) -> Outcome<AuthenticatedSeriesFundingAccountV2> {
+    let live = authenticate_live_series_funding_value_v2(
+        program_id,
+        account,
+        current.value(),
+        artifacts,
+        rent,
+    )?;
     require(
-        current.account() == *account.key
+        live == current
+            && current.account() == *account.key
             && current.value().state.series_plan_id == next.series_plan_id
             && current.value().state.funding_terms_id == next.funding_terms_id
             && current.value().state.funding_quote_id == next.funding_quote_id
@@ -4161,15 +3956,49 @@ pub fn write_series_funding_state_v2(
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     updated.encode(&mut data)?;
+    drop(data);
+    authenticate_live_series_funding_value_v2(
+        program_id,
+        account,
+        updated,
+        artifacts,
+        rent,
+    )
+}
+
+fn authenticate_live_series_funding_value_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected: SeriesFundingAccountV2,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    rent: &RentParameters,
+) -> Outcome<AuthenticatedSeriesFundingAccountV2> {
+    require_program_account(program_id, account, SERIES_FUNDING_ACCOUNT_BYTES_V2, true)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesFundingAccountV2::decode(&data)?;
+    require(value == expected, ClutchError::MismatchedState)?;
+    value
+        .state
+        .validate_against(&artifacts.series, &artifacts.quote, &artifacts.attachment)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expect_pda(
+        account.key,
+        seeds::series_funding_pda(program_id, &value.state.series_plan_id.bytes()),
+        Some(value.stored_bump),
+    )?;
+    require_rent_coverage(account, value.rent_principal_lamports, rent)?;
     Ok(AuthenticatedSeriesFundingAccountV2 {
         account: *account.key,
-        value: updated,
+        value,
     })
 }
 
 /// Reserve the next current ordinal without advancing its cursor.
 #[allow(clippy::too_many_arguments)]
 pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
@@ -4180,6 +4009,7 @@ pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?
     disposition: clutch_product_series::SeriesMarketDispositionV1,
     debits: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     reservation_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -4196,17 +4026,21 @@ pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?
             reservation_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Commit the exact pending ordinal after its link/Market transition succeeds.
 pub fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     completion_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -4218,17 +4052,21 @@ pub fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + 
             completion_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Restore exact pending principal only after authenticated inert reverse-close.
 pub fn abort_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     abort_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -4240,16 +4078,20 @@ pub fn abort_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
             abort_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Apply a free lapse from the authenticated Clock owner.
 pub fn lapse_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
+    rent: &RentParameters,
 ) -> Outcome<(AuthenticatedSeriesFundingAccountV2, u32)> {
     let mut next = current.value().state;
     let ordinal = next
@@ -4260,18 +4102,22 @@ pub fn lapse_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
             &artifacts.attachment,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    let written = write_series_funding_state_v2(account, current, next, artifacts)?;
+    let written = write_series_funding_state_v2(
+        program_id, account, current, next, artifacts, rent,
+    )?;
     Ok((written, ordinal))
 }
 
 /// Fold physical surplus into exactly one current donation compartment.
 pub fn observe_series_donation_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     component: SeriesFundingComponentV2,
     amount: ComponentDebitV1,
+    rent: &RentParameters,
 ) -> Outcome<AuthenticatedSeriesFundingAccountV2> {
     let mut next = current.value().state;
     next.add_donation(
@@ -4283,17 +4129,28 @@ pub fn observe_series_donation_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
         amount,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    write_series_funding_state_v2(account, current, next, artifacts)
+    write_series_funding_state_v2(program_id, account, current, next, artifacts, rent)
 }
 
 /// Derive the exact current terminal principal/donation projection.
-pub fn close_series_funding_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+pub(crate) fn close_series_funding_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
     artifacts: &AuthenticatedSeriesArtifactsV4,
     authority: &A,
     terminal_receipt_id: ContentId,
+    rent: &RentParameters,
 ) -> Outcome<SeriesFundingTerminalProjectionV2> {
-    current
+    let live = authenticate_live_series_funding_value_v2(
+        program_id,
+        account,
+        current.value(),
+        artifacts,
+        rent,
+    )?;
+    require(live == current, ClutchError::MismatchedState)?;
+    live
         .value()
         .state
         .close(
