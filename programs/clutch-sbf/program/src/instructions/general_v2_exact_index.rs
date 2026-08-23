@@ -9,16 +9,13 @@ use core::cell::Ref;
 
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
-    DeletableRentOwnerV1, Id32, IndexedSettlementBaseTransitionV1,
-    IndexedSettlementRootV1AccountV1, MarketBindingV2, SettlementRootV1AccountV1,
-    SettlementCashPotV1AccountV1, Sha256BackendV1, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
-    MARKET_BINDING_ACCOUNT_BYTES_V2, SETTLEMENT_CASH_POT_ACCOUNT_BYTES,
-    SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    DeletableRentOwnerV1, Id32, IndexedSettlementRootV1AccountV1, MarketBindingV2,
+    SettlementRootV1AccountV1, Sha256BackendV1, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+    MARKET_BINDING_ACCOUNT_BYTES_V2,
 };
 use clutch_general_v2_runtime::exact_index_plane::{
     authenticate_counted_exact_index_read_v1,
     authenticate_counted_exact_index_retirement_v1,
-    authenticate_counted_exact_index_root_mutation_v1,
     construct_counted_exact_index_root_v1, indexed_pair_coverage_from_sealed_accounts_v1,
     retire_counted_exact_index_root_v1, AuthenticateCountedExactIndexReadInputV1,
     CloseExactIndexPlaneInputV1, ConstructExactIndexPlaneInputV1,
@@ -27,15 +24,12 @@ use clutch_general_v2_runtime::exact_index_plane::{
     IndexedPairCoverageV1,
 };
 use solana_account_info::AccountInfo;
-use solana_cpi::invoke;
-use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{expect_pda, require, require_signer, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
-    read_rent, require_creatable, require_system_program, transfer_data, RentParameters,
-    SYSTEM_PROGRAM_ID,
+    require_creatable, require_system_program, RentParameters,
 };
 use crate::seeds;
 
@@ -202,127 +196,6 @@ pub fn read_pair_coverage_v1(
     exact(indexed_pair_coverage_from_sealed_accounts_v1(
         sealed, buy_order, sell_order,
     ))
-}
-
-/// Apply one checked base-root transition only after authenticating both full
-/// sealed child bodies and their root-held data IDs.
-pub(crate) fn apply_base_transition_v1(
-    program_id: &Pubkey,
-    root: &AccountInfo<'_>,
-    locator: &AccountInfo<'_>,
-    adjacency: &AccountInfo<'_>,
-    transition: IndexedSettlementBaseTransitionV1,
-) -> Outcome<()> {
-    let root_body = borrow_data(root)?;
-    let locator_body = borrow_data(locator)?;
-    let adjacency_body = borrow_data(adjacency)?;
-    let joined = authenticated_join(
-        program_id,
-        root,
-        &root_body,
-        locator,
-        &locator_body,
-        adjacency,
-        &adjacency_body,
-        true,
-        false,
-    )?;
-    let mutation = exact(authenticate_counted_exact_index_root_mutation_v1(joined))?;
-    let post = exact(mutation.apply_base_transition(transition))?;
-    drop(adjacency_body);
-    drop(locator_body);
-    drop(root_body);
-    encode_account(root, |out| post.encode(out))
-}
-
-/// Create and latch the canonical merge cash pot through the indexed root's
-/// typed atomic plan. This path is intentionally separate from the generic
-/// base-transition enum, which cannot express a root-only cash-pot mutation.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn activate_merge_cash_pot_v1<'info>(
-    program_id: &Pubkey,
-    root: &AccountInfo<'info>,
-    locator: &AccountInfo<'info>,
-    adjacency: &AccountInfo<'info>,
-    cash_pot: &AccountInfo<'info>,
-    payer: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    rent: &RentParameters,
-) -> Outcome<()> {
-    require_signer(payer)?;
-    require(payer.is_writable, ClutchError::NotWritable)?;
-    require_system_program(system_program)?;
-    require_creatable(cash_pot)?;
-    require(
-        cash_pot.is_writable && !cash_pot.is_signer && !cash_pot.executable,
-        ClutchError::MismatchedState,
-    )?;
-    let root_body = borrow_data(root)?;
-    let locator_body = borrow_data(locator)?;
-    let adjacency_body = borrow_data(adjacency)?;
-    let joined = authenticated_join(
-        program_id,
-        root,
-        &root_body,
-        locator,
-        &locator_body,
-        adjacency,
-        &adjacency_body,
-        true,
-        false,
-    )?;
-    let mutation = exact(authenticate_counted_exact_index_root_mutation_v1(joined))?;
-    let plan = mutation
-        .indexed_root()
-        .prepare_activate_merge_cash_pot()?;
-    let base = mutation.indexed_root().base();
-    let cash_pda = seeds::general_v2_settlement_cash_pot_pda(
-        program_id,
-        &base.epoch().bytes(),
-        &base.settlement_candidate_id().bytes(),
-    );
-    let rent_owner = plan.rent();
-    require(
-        *cash_pot.key == cash_pda.0
-            && plan.cash_pot_account() == id(cash_pot.key)
-            && plan.stored_bump() == cash_pda.1
-            && rent_owner.payer == id(payer.key)
-            && rent_owner.refundable_principal
-                == rent.minimum_balance(SETTLEMENT_CASH_POT_ACCOUNT_BYTES)?
-            && rent_owner.donation_floor == cash_pot.lamports()
-            && payer.lamports() >= rent_owner.refundable_principal,
-        ClutchError::MismatchedState,
-    )?;
-    drop(adjacency_body);
-    drop(locator_body);
-    drop(root_body);
-    let epoch = base.epoch().bytes();
-    let candidate = base.settlement_candidate_id().bytes();
-    let bump = [cash_pda.1];
-    create_from_payer(
-        program_id,
-        payer,
-        cash_pot,
-        system_program,
-        rent,
-        SETTLEMENT_CASH_POT_ACCOUNT_BYTES,
-        rent_owner,
-        &[
-            seeds::SEED_GENERAL_V2_SETTLEMENT_CASH_POT,
-            &epoch,
-            &candidate,
-            &bump,
-        ],
-    )?;
-    encode_account(cash_pot, |out| {
-        SettlementCashPotV1AccountV1 {
-            semantic: plan.cash_pot(),
-            stored_bump: plan.stored_bump(),
-            flags: 0,
-        }
-        .encode(out)
-    })?;
-    encode_account(root, |out| plan.root().encode(out))
 }
 
 fn require_fresh_child(
@@ -527,176 +400,6 @@ pub(crate) fn create_fresh_counted_root_v1<'info>(
         exact(plan.index_postwrites().encode_adjacency(&mut data))?;
     }
     Ok(plan)
-}
-
-/// In-place V1-to-V2 root upgrade plus exact child creation in one rollback domain.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn upgrade_counted_root_v1<'info>(
-    program_id: &Pubkey,
-    root: &AccountInfo<'info>,
-    locator: &AccountInfo<'info>,
-    adjacency: &AccountInfo<'info>,
-    payer: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    rent_sysvar: &AccountInfo<'info>,
-    neutral_sink: Id32,
-    input: ConstructExactIndexPlaneInputV1<'_>,
-) -> Outcome<()> {
-    require_program_account(program_id, root, true, SETTLEMENT_ROOT_ACCOUNT_BYTES)?;
-    require_signer(payer)?;
-    require(payer.is_writable, ClutchError::NotWritable)?;
-    require_system_program(system_program)?;
-    let rent = read_rent(rent_sysvar)?;
-    let base = SettlementRootV1AccountV1::decode(&borrow_data(root)?)?;
-    require(
-        base.root_rent().payer == id(payer.key)
-            && input.settlement_root == &base
-            && input.settlement_root_account == id(root.key),
-        ClutchError::MismatchedState,
-    )?;
-    let root_pda = seeds::general_v2_settlement_root_pda(
-        program_id,
-        &base.epoch().bytes(),
-        &base.settlement_candidate_id().bytes(),
-    );
-    expect_pda(root.key, root_pda, Some(base.stored_bump()))?;
-    let locator_pda = require_fresh_child(program_id, root, locator, false)?;
-    let adjacency_pda = require_fresh_child(program_id, root, adjacency, true)?;
-    require_create_input_matches(
-        input.locator_create,
-        create_input(
-            program_id,
-            system_program,
-            payer,
-            locator,
-            input.locator_create.rent_exempt_minimum,
-            locator_pda.1,
-        ),
-    )?;
-    require_create_input_matches(
-        input.adjacency_create,
-        create_input(
-            program_id,
-            system_program,
-            payer,
-            adjacency,
-            input.adjacency_create.rent_exempt_minimum,
-            adjacency_pda.1,
-        ),
-    )?;
-    let root_minimum = rent.minimum_balance(INDEXED_SETTLEMENT_ROOT_BYTES_V1)?;
-    let root_rent = contract::prepare_indexed_settlement_root_upgrade_rent_v1(
-        &base,
-        id(root.key),
-        root.lamports(),
-        root_minimum,
-        payer.lamports(),
-        neutral_sink,
-        &RuntimeSha256,
-    )?;
-    let plan = exact(construct_counted_exact_index_root_v1(root_rent, input))?;
-    require(
-        rent.minimum_balance(
-            plan.index_postwrites()
-                .locator_data_len()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        )? == input.locator_create.rent_exempt_minimum
-            && rent.minimum_balance(
-                plan.index_postwrites()
-                    .adjacency_data_len()
-                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-            )? == input.adjacency_create.rent_exempt_minimum,
-        ClutchError::MismatchedState,
-    )?;
-    transfer_from_payer(
-        payer,
-        root,
-        system_program,
-        root_rent.payer_debit_lamports(),
-        root_rent.root_balance_after_lamports(),
-    )?;
-    root.resize(INDEXED_SETTLEMENT_ROOT_BYTES_V1)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    let root_bytes = root.key.to_bytes();
-    let locator_bump = [locator_pda.1];
-    create_from_payer(
-        program_id,
-        payer,
-        locator,
-        system_program,
-        &rent,
-        plan.index_postwrites()
-            .locator_data_len()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        DeletableRentOwnerV1 {
-            payer: id(payer.key),
-            refundable_principal: input.locator_create.rent_exempt_minimum,
-            donation_floor: input.locator_create.target_lamports,
-        },
-        &[
-            seeds::SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR,
-            &root_bytes,
-            &locator_bump,
-        ],
-    )?;
-    let adjacency_bump = [adjacency_pda.1];
-    create_from_payer(
-        program_id,
-        payer,
-        adjacency,
-        system_program,
-        &rent,
-        plan.index_postwrites()
-            .adjacency_data_len()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        DeletableRentOwnerV1 {
-            payer: id(payer.key),
-            refundable_principal: input.adjacency_create.rent_exempt_minimum,
-            donation_floor: input.adjacency_create.target_lamports,
-        },
-        &[
-            seeds::SEED_GENERAL_V2_CANDIDATE_ADJACENCY,
-            &root_bytes,
-            &adjacency_bump,
-        ],
-    )?;
-    encode_account(root, |out| plan.indexed_root().encode(out))?;
-    {
-        let mut data = locator
-            .try_borrow_mut_data()
-            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        exact(plan.index_postwrites().encode_locator(&mut data))?;
-    }
-    let mut data = adjacency
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    exact(plan.index_postwrites().encode_adjacency(&mut data))
-}
-
-fn transfer_from_payer<'info>(
-    payer: &AccountInfo<'info>,
-    target: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    amount: u64,
-    expected_target_balance: u64,
-) -> Outcome<()> {
-    let transfer = Instruction::new_with_bytes(
-        SYSTEM_PROGRAM_ID,
-        &transfer_data(amount),
-        vec![
-            AccountMeta::new(*payer.key, true),
-            AccountMeta::new(*target.key, false),
-        ],
-    );
-    invoke(
-        &transfer,
-        &[payer.clone(), target.clone(), system_program.clone()],
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    require(
-        target.lamports() == expected_target_balance,
-        ClutchError::AccountCreationFailed,
-    )
 }
 
 fn authenticate_market_binding_v2(

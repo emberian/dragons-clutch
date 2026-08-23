@@ -286,6 +286,9 @@ pub const SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR: &[u8] =
 pub const SEED_GENERAL_V2_CANDIDATE_ADJACENCY: &[u8] =
     clutch_general_v2_contract::CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1;
 
+const _: () = assert!(SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR.len() <= 32);
+const _: () = assert!(SEED_GENERAL_V2_CANDIDATE_ADJACENCY.len() <= 32);
+
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
 /// Shared-Market Failure admission root successor, disjoint from legacy V1.
