@@ -13,9 +13,11 @@ use clutch_sbf::{
 };
 use clutch_solana_layout::clearing::{EpochWindowAccount, CANDIDATE_WINDOW_SLOTS};
 use clutch_solana_layout::{
-    CandidateRecord, EpochAccount, Hash32, PriceGridAccount, CANDIDATE_STATUS_SELECTED,
-    CANDIDATE_STATUS_VERIFIED, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
+    account_len, reservation::RESERVATION_ACCOUNT_BYTES, CandidateRecord, EpochAccount, Hash32,
+    PriceGridAccount, CANDIDATE_STATUS_SELECTED, CANDIDATE_STATUS_VERIFIED, EPOCH_PHASE_CLEARED,
+    EPOCH_PHASE_FROZEN,
 };
+use clutch_solana_reference::REPLAY_ACCOUNT_LEN;
 use clutch_svm_fixture::{
     compute_unit_limit_data, outcome_mint_bytes, token_account_bytes, COMPUTE_BUDGET, PROGRAM_ID,
     RENT_SYSVAR, SYSTEM_PROGRAM,
@@ -1537,6 +1539,32 @@ fn run(
         if campaign_mode != JOINED_LIFECYCLE_MODE {
             return Ok(Value::Null);
         }
+        let seller_position_rent = rpc.minimum_rent(account_len::POSITION)?;
+        let seller_replay_rent = rpc.minimum_rent(REPLAY_ACCOUNT_LEN)?;
+        let seller_reservation_rent = rpc.minimum_rent(RESERVATION_ACCOUNT_BYTES)?;
+        let seller_account_creation_lamports = seller_position_rent
+            .checked_add(seller_replay_rent)
+            .and_then(|amount| amount.checked_add(seller_reservation_rent))
+            .ok_or("second-owner account-creation funding overflow")?;
+        let seller_funding_signature = accepted_step(
+            &rpc,
+            &payer,
+            &[],
+            steps,
+            "joined-fund-second-owner-account-creation",
+            &[system_instruction::transfer(
+                &payer.pubkey(),
+                &second_owner.pubkey(),
+                seller_account_creation_lamports,
+            )],
+        )?;
+        let seller_wallet = account(&rpc, "funded second-owner wallet", second_owner.pubkey())?;
+        require(
+            seller_wallet.owner == SYSTEM_PROGRAM.to_string()
+                && seller_wallet.data.is_empty()
+                && seller_wallet.lamports == seller_account_creation_lamports,
+            "second owner did not receive the exact rent budget for Position, Replay, and Reservation",
+        )?;
         let grid_upload = plane::price_grid_upload(payer.pubkey(), &correct);
         let grid_signatures = upload_artifact(&rpc, &payer, steps, "price-grid", &grid_upload)?;
         let grid = PriceGridAccount::decode(
@@ -2020,6 +2048,11 @@ fn run(
             "price_grid_digest": correct.grid_value.grid.bytes(),
             "grid_upload_signatures": grid_signatures,
             "policy_upload_signatures": policy_signatures,
+            "second_owner_account_creation_funding": {
+                "lamports": seller_account_creation_lamports.to_string(),
+                "signature": seller_funding_signature,
+                "genesis_assisted": false,
+            },
             "epoch": general.epoch.address.to_string(),
             "epoch_id": general.epoch_id.bytes(),
             "init_epoch_signature": init_epoch_signature,

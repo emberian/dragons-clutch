@@ -322,6 +322,17 @@ validator_pid=$!
 
 wait_ready "$work/validator.log"
 
+# Health can turn green at the warp target before the validator has produced
+# enough descendant banks for the warped Clock timestamp to settle.  The
+# driver's bounded clock command waits through CLOCK_SETTLED_SLOT on this exact
+# campaign validator; without it, a correct fresh observation can be compared
+# against the pre-warp timestamp from the first healthy bank.
+campaign_clock_time="$("$driver" clock --work "$work" --url "$url")"
+case "$campaign_clock_time" in
+  ''|*[!0-9]*) echo "FAIL: campaign Clock did not settle to a positive decimal timestamp" >&2; exit 1 ;;
+esac
+echo "campaign_clock_settled=$campaign_clock_time"
+
 # Stock Agave 4.0.2 hard-codes wildcard listeners for these services. Merely
 # passing --bind-address is insufficient. The pinned validator lane owns this
 # stronger audit: exact child executable, exact RPC/WS/faucet listeners, every
