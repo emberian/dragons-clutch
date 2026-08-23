@@ -2,12 +2,14 @@
 
 Status: **EXECUTABLE PURE-CORE GENERAL V2 PATH / NOT SELECTED BY AN SBF
 PROFILE** (2026-08-23). The safe, `no_std`, allocation-free arithmetic lives
-in `crates/clutch-batch/src/score_v2.rs`; the owner-blind coefficient relation
-lives in `relation_v2.rs`; and `crates/clutch-general-v2-runtime` composes both
-with the sealed General feed and exact quantized degree-two/three price
-certificate. This does not activate a dispatcher, persisted verdict, deployed
-program, fee, bond, or solver payment. ScoreV1 remains selected until an
-explicitly versioned SBF integration completes the gates below.
+in the `clutch-batch::score_v2` production kernel. The owner-blind coefficient
+relation and its fixed-domain best-valid-submitted fold live in
+`relation_v2.rs` and `relation_v2_ranking.rs`; and
+`crates/clutch-general-v2-runtime` compares the resulting checked certificates
+while composing the sealed General feed and exact quantized degree-two/three
+price certificate. This does not activate a dispatcher, persisted verdict,
+deployed program, fee, bond, or solver payment. ScoreV1 remains selected until
+an explicitly versioned SBF integration completes the gates below.
 
 ## 1. Question answered
 
@@ -129,6 +131,13 @@ Padding is excluded from `min` and `max`. This is consensus-critical: including
 the inactive zeros of a `[u64; 16]` array would turn a constant active complete
 set into fake risk.
 
+`CheckedCandidateScoreV2` has private fields and retains the validated domain,
+the exact canonical `CandidateDeltaV2`, the independently derived direct flow,
+and the total score key. Cross-domain comparison refuses. The bounded fold
+starts from a real checked submission, retains the earlier submission on exact
+equality, and counts checked score submissions. The RelationV2 ranking wrapper
+admits to that fold only after full candidate reverification.
+
 ## 6. State-contingent Gini, price quality, and solver payment
 
 The existing state-contingent Gini
@@ -175,8 +184,9 @@ Frozen vectors are in
 `crates/clutch-batch/fixtures/score_v2_q_vectors.txt`. The Rust tests cover
 quotient shifts, complements, relabeling, exact scaling, payoff-preserving
 refinement, inactive padding, virtual translations, complete-set wash, u64
-bounds, overflow refusals, normalization policies, score lies, and every total
-order direction.
+bounds, overflow refusals, normalization policies, score lies, every total
+order direction, all sixteen active outcomes, cross-domain refusal, and
+state-preserving selection failures.
 
 ```sh
 cargo +1.93.1 test --manifest-path crates/clutch-batch/Cargo.toml --locked

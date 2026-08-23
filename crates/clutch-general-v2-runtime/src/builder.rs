@@ -1989,10 +1989,18 @@ fn consider_fill_witness(
         .valid_submitted_candidates
         .checked_add(1)
         .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
-    let replace = best
-        .as_ref()
-        .map(|current| economics.score.is_better_than(&current.economics.score))
-        .unwrap_or(true);
+    let replace = match best.as_ref() {
+        Some(current) => {
+            economics
+                .score
+                .total_order_same_domain(&current.economics.score)
+                .map_err(|error| {
+                    CandidateBuilderErrorV1::Relation(EconomicErrorV2::Score(error))
+                })?
+                == core::cmp::Ordering::Greater
+        }
+        None => true,
+    };
     if replace {
         *best = Some(BuiltDirectCandidateV1 {
             price,
