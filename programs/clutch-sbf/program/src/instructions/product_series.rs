@@ -1,0 +1,620 @@
+//! Concrete SBF account and lamport-custody boundary for recurring Series.
+//!
+//! This module is compiled only by the non-production Product/Series
+//! laboratory. It authenticates the account forms that already have frozen
+//! semantics: registered-Series and funding-state PDAs, exact stored/current
+//! rent coverage, and five physically distinct zero-data System-owned lamport
+//! vaults. It also supplies exact-delta System transfers into and out of those
+//! vaults.
+//!
+//! It intentionally does not implement a dispatch entry point yet. A complete
+//! action still needs typed central-registry, SourcePlane V3, collateral V2,
+//! failure-admission, and runtime-liveness receipt adapters. Consequently all
+//! Source/Series capability tuples remain disabled and none of these mutation
+//! helpers is reachable from instruction data.
+
+use crate::accounts::{expect_pda, require, require_signer, Outcome};
+use crate::error::{ClutchError, Refusal};
+use crate::instructions::genesis::{
+    create_pda_account, require_system_program, transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
+};
+use crate::seeds;
+use clutch_product_series::{
+    AuthenticatedSeriesFundingAuthorityV1, ComponentDebitV1, SeriesFundingComponentV1,
+    SeriesFundingQuoteV1, SeriesFundingStateV1, SeriesPlanV5Id, SERIES_FUNDING_COMPONENT_COUNT,
+};
+use clutch_solana_layout::product_series::{
+    SeriesFundingAccountV1, SeriesRegistryAccountV1, SERIES_FUNDING_ACCOUNT_BYTES_V1,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V1,
+};
+use solana_account_info::AccountInfo;
+use solana_cpi::{invoke, invoke_signed};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_pubkey::Pubkey;
+
+/// Closed number of physical Series funding compartments.
+pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
+
+/// Exact accounted balances for all five physical custody pairs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesCustodyBalancesV1 {
+    /// Native balance in each zero-data System-owned PDA.
+    pub lamports: [u64; SERIES_CUSTODY_COUNT_V1],
+    /// Collateral atoms in each Token-2022 segregated vault.
+    pub collateral_atoms: [u64; SERIES_CUSTODY_COUNT_V1],
+}
+
+fn add(left: u64, right: u64) -> Outcome<u64> {
+    left.checked_add(right)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+}
+
+fn sub(left: u64, right: u64) -> Outcome<u64> {
+    left.checked_sub(right)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+}
+
+fn component_from_index(index: usize) -> Outcome<SeriesFundingComponentV1> {
+    match index {
+        0 => Ok(SeriesFundingComponentV1::MarketCore),
+        1 => Ok(SeriesFundingComponentV1::RecoveryReserve),
+        2 => Ok(SeriesFundingComponentV1::SourceWork),
+        3 => Ok(SeriesFundingComponentV1::LiquidityFacility),
+        4 => Ok(SeriesFundingComponentV1::WrapperSet),
+        _ => Err(ClutchError::NonCanonical.into()),
+    }
+}
+
+/// Derive exact physical balances from the state-owned principal/donation
+/// facts. Consumed allocation is already absent from `remaining_principal`.
+pub fn accounted_custody_balances(
+    state: &SeriesFundingStateV1,
+) -> Outcome<SeriesCustodyBalancesV1> {
+    state
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut value = SeriesCustodyBalancesV1 {
+        lamports: [0; SERIES_CUSTODY_COUNT_V1],
+        collateral_atoms: [0; SERIES_CUSTODY_COUNT_V1],
+    };
+    let mut index = 0usize;
+    while index < SERIES_CUSTODY_COUNT_V1 {
+        let component = state.components[index];
+        value.lamports[index] = add(
+            component.remaining_principal.lamports,
+            component.donations.lamports,
+        )?;
+        value.collateral_atoms[index] = add(
+            component.remaining_principal.collateral_atoms,
+            component.donations.collateral_atoms,
+        )?;
+        index += 1;
+    }
+    Ok(value)
+}
+
+fn require_program_account(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    exact_len: usize,
+    writable: bool,
+) -> Outcome<()> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    if writable {
+        require(account.is_writable, ClutchError::NotWritable)?;
+    } else {
+        require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    }
+    require(
+        account.data_len() == exact_len,
+        ClutchError::WrongDataLength,
+    )
+}
+
+fn require_rent_coverage(
+    account: &AccountInfo<'_>,
+    stored_principal: u64,
+    rent: &RentParameters,
+) -> Outcome<()> {
+    let current_minimum = rent.minimum_balance(account.data_len())?;
+    require(stored_principal != 0, ClutchError::MismatchedState)?;
+    require(
+        account.lamports() >= stored_principal && account.lamports() >= current_minimum,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn credit_lamports(account: &AccountInfo<'_>, amount: u64) -> Outcome<()> {
+    let next = add(account.lamports(), amount)?;
+    let mut lamports = account
+        .try_borrow_mut_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    **lamports = next;
+    Ok(())
+}
+
+fn debit_lamports(account: &AccountInfo<'_>, amount: u64) -> Outcome<()> {
+    let next = sub(account.lamports(), amount)?;
+    let mut lamports = account
+        .try_borrow_mut_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    **lamports = next;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_series_program_account<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    neutral_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    exact_len: usize,
+    rent_principal_lamports: u64,
+    signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    require_signer(payer)?;
+    require(payer.is_writable, ClutchError::NotWritable)?;
+    require(neutral_sink.is_writable, ClutchError::NotWritable)?;
+    require(!neutral_sink.executable, ClutchError::ExecutableAccount)?;
+    require(
+        payer.key != target.key && payer.key != neutral_sink.key && target.key != neutral_sink.key,
+        ClutchError::AccountAlias,
+    )?;
+    require_system_program(system_program)?;
+    let minimum = rent.minimum_balance(exact_len)?;
+    require(
+        rent_principal_lamports == minimum,
+        ClutchError::MismatchedState,
+    )?;
+    create_pda_account(
+        program_id,
+        payer,
+        target,
+        system_program,
+        rent,
+        exact_len,
+        signer_seeds,
+    )?;
+    let surplus = sub(target.lamports(), rent_principal_lamports)?;
+    let sink_before = neutral_sink.lamports();
+    if surplus != 0 {
+        debit_lamports(target, surplus)?;
+        credit_lamports(neutral_sink, surplus)?;
+    }
+    require(
+        target.lamports() == rent_principal_lamports
+            && neutral_sink.lamports() == add(sink_before, surplus)?,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )
+}
+
+/// Create and encode one immutable registered-Series PDA after a higher typed
+/// adapter has authenticated its full registry/artifact join.
+///
+/// Predictable-address prefunding is donation, not a rent discount. The payer
+/// still supplies the exact rent shortfall; any preexisting surplus is moved
+/// atomically to the already-authenticated FundingTerms V2 neutral sink.
+#[allow(clippy::too_many_arguments)]
+pub fn create_series_registry_account<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    neutral_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    value: SeriesRegistryAccountV1,
+) -> Outcome<()> {
+    value.validate()?;
+    let (address, bump) = seeds::series_registry_pda(program_id, &value.series_plan_id.bytes());
+    expect_pda(target.key, (address, bump), Some(value.stored_bump))?;
+    let bump_seed = [bump];
+    let series_seed = value.series_plan_id.bytes();
+    create_series_program_account(
+        program_id,
+        payer,
+        target,
+        neutral_sink,
+        system_program,
+        rent,
+        SERIES_REGISTRY_ACCOUNT_BYTES_V1,
+        value.rent_principal_lamports,
+        &[seeds::SEED_SERIES_REGISTRY_V1, &series_seed, &bump_seed],
+    )?;
+    let mut data = target
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    value.encode(&mut data)?;
+    Ok(())
+}
+
+/// Create and encode one mutable funding PDA after exact activation principal,
+/// collateral-vault, liveness, and registry joins have produced its pure state.
+#[allow(clippy::too_many_arguments)]
+pub fn create_series_funding_account<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    neutral_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    value: SeriesFundingAccountV1,
+) -> Outcome<()> {
+    value.validate()?;
+    let (address, bump) =
+        seeds::series_funding_pda(program_id, &value.state.series_plan_id.bytes());
+    expect_pda(target.key, (address, bump), Some(value.stored_bump))?;
+    let bump_seed = [bump];
+    let series_seed = value.state.series_plan_id.bytes();
+    create_series_program_account(
+        program_id,
+        payer,
+        target,
+        neutral_sink,
+        system_program,
+        rent,
+        SERIES_FUNDING_ACCOUNT_BYTES_V1,
+        value.rent_principal_lamports,
+        &[seeds::SEED_SERIES_FUNDING_V1, &series_seed, &bump_seed],
+    )?;
+    let mut data = target
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    value.encode(&mut data)?;
+    Ok(())
+}
+
+/// Authenticate an immutable registered-Series account, including its exact
+/// PDA, program owner, codec, and stored/current rent coverage.
+pub fn read_series_registry_account(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series: SeriesPlanV5Id,
+    rent: &RentParameters,
+) -> Outcome<SeriesRegistryAccountV1> {
+    require_program_account(program_id, account, SERIES_REGISTRY_ACCOUNT_BYTES_V1, false)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesRegistryAccountV1::decode(&data)?;
+    require(
+        value.series_plan_id == expected_series,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::series_registry_pda(program_id, &expected_series.bytes()),
+        Some(value.stored_bump),
+    )?;
+    require_rent_coverage(account, value.rent_principal_lamports, rent)?;
+    Ok(value)
+}
+
+/// Authenticate a mutable Series-funding account and join it to its exact
+/// quote before returning the decoded state.
+pub fn read_series_funding_account(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series: SeriesPlanV5Id,
+    quote: &clutch_product_series::SeriesFundingQuoteV1,
+    rent: &RentParameters,
+) -> Outcome<SeriesFundingAccountV1> {
+    require_program_account(program_id, account, SERIES_FUNDING_ACCOUNT_BYTES_V1, true)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesFundingAccountV1::decode(&data)?;
+    require(
+        value.state.series_plan_id == expected_series,
+        ClutchError::MismatchedState,
+    )?;
+    value
+        .state
+        .validate_against_quote(quote)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expect_pda(
+        account.key,
+        seeds::series_funding_pda(program_id, &expected_series.bytes()),
+        Some(value.stored_bump),
+    )?;
+    require_rent_coverage(account, value.rent_principal_lamports, rent)?;
+    Ok(value)
+}
+
+/// Write one already-validated atomic successor state back to its authenticated
+/// account wrapper without changing rent ownership or framing.
+pub fn write_series_funding_state(
+    account: &AccountInfo<'_>,
+    current: SeriesFundingAccountV1,
+    next: SeriesFundingStateV1,
+) -> Outcome<()> {
+    require(
+        current.state.series_plan_id == next.series_plan_id
+            && current.state.funding_terms_id == next.funding_terms_id
+            && current.state.funding_quote_id == next.funding_quote_id
+            && current.state.instance_count == next.instance_count,
+        ClutchError::MismatchedState,
+    )?;
+    next.validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let updated = SeriesFundingAccountV1 {
+        state: next,
+        ..current
+    };
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    updated.encode(&mut data)?;
+    Ok(())
+}
+
+fn require_lamport_vault_metadata(
+    program_id: &Pubkey,
+    series: SeriesPlanV5Id,
+    index: usize,
+    account: &AccountInfo<'_>,
+) -> Outcome<()> {
+    let component = component_from_index(index)?;
+    require(account.is_writable, ClutchError::NotWritable)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(
+        *account.owner == SYSTEM_PROGRAM_ID && account.data_is_empty(),
+        ClutchError::WrongProgramOwner,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::series_lamport_vault_pda(program_id, &series.bytes(), component as u8),
+        None,
+    )?;
+    Ok(())
+}
+
+/// Authenticate all five lamport custody PDAs and exact equality with the
+/// state-owned balance. A surplus must first be observed as donation; a
+/// shortfall always refuses.
+pub fn authenticate_lamport_custody(
+    program_id: &Pubkey,
+    series: SeriesPlanV5Id,
+    vaults: &[AccountInfo<'_>],
+    expected: &SeriesCustodyBalancesV1,
+) -> Outcome<()> {
+    require(
+        vaults.len() == SERIES_CUSTODY_COUNT_V1,
+        ClutchError::AccountCount,
+    )?;
+    let mut index = 0usize;
+    while index < SERIES_CUSTODY_COUNT_V1 {
+        require_lamport_vault_metadata(program_id, series, index, &vaults[index])?;
+        require(
+            vaults[index].lamports() == expected.lamports[index],
+            ClutchError::MismatchedState,
+        )?;
+        index += 1;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AuthenticatedLamportDonationV1 {
+    series_plan_id: SeriesPlanV5Id,
+    funding_quote_id: clutch_product_series::SeriesFundingQuoteId,
+    component: SeriesFundingComponentV1,
+    amount: ComponentDebitV1,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV1 for AuthenticatedLamportDonationV1 {
+    fn authenticate_donation(
+        &self,
+        state: &SeriesFundingStateV1,
+        quote: &SeriesFundingQuoteV1,
+        component: SeriesFundingComponentV1,
+        amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        if state.series_plan_id != self.series_plan_id
+            || quote.id()? != self.funding_quote_id
+            || component != self.component
+            || amount != self.amount
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Observe one positive lamport-vault surplus and apply exactly that donation
+/// to a copy of the pure funding state.
+///
+/// The private authority value is constructible only after exact PDA/owner/data
+/// authentication and an actual-balance delta. It cannot authorize activation,
+/// Clock, or occurrence fulfillment through the trait's default-deny methods.
+pub fn observe_lamport_donation(
+    program_id: &Pubkey,
+    state: SeriesFundingStateV1,
+    quote: &SeriesFundingQuoteV1,
+    component: SeriesFundingComponentV1,
+    vault: &AccountInfo<'_>,
+) -> Outcome<SeriesFundingStateV1> {
+    state
+        .validate_against_quote(quote)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_lamport_vault_metadata(program_id, state.series_plan_id, component.index(), vault)?;
+    let accounted = accounted_custody_balances(&state)?.lamports[component.index()];
+    let actual = vault.lamports();
+    let delta = sub(actual, accounted)?;
+    require(delta != 0, ClutchError::MismatchedState)?;
+    let amount = ComponentDebitV1 {
+        lamports: delta,
+        collateral_atoms: 0,
+    };
+    let authority = AuthenticatedLamportDonationV1 {
+        series_plan_id: state.series_plan_id,
+        funding_quote_id: state.funding_quote_id,
+        component,
+        amount,
+    };
+    let mut next = state;
+    next.add_donation(&authority, quote, component, amount)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        accounted_custody_balances(&next)?.lamports[component.index()] == actual,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    Ok(next)
+}
+
+/// Fund all five lamport custody PDAs from one authenticated payer with exact
+/// component post-deltas. Existing balances are preserved as separately
+/// observed activation donations; they never reduce the payer debit.
+pub fn fund_lamport_custody<'a>(
+    program_id: &Pubkey,
+    series: SeriesPlanV5Id,
+    payer: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    vaults: &[AccountInfo<'a>],
+    principal: [ComponentDebitV1; SERIES_CUSTODY_COUNT_V1],
+) -> Outcome<()> {
+    require_signer(payer)?;
+    require(payer.is_writable, ClutchError::NotWritable)?;
+    require_system_program(system_program)?;
+    require(
+        vaults.len() == SERIES_CUSTODY_COUNT_V1,
+        ClutchError::AccountCount,
+    )?;
+    let mut index = 0usize;
+    while index < SERIES_CUSTODY_COUNT_V1 {
+        require_lamport_vault_metadata(program_id, series, index, &vaults[index])?;
+        require(payer.key != vaults[index].key, ClutchError::AccountAlias)?;
+        index += 1;
+    }
+    index = 0;
+    while index < SERIES_CUSTODY_COUNT_V1 {
+        let amount = principal[index].lamports;
+        let before = vaults[index].lamports();
+        let expected_after = add(before, amount)?;
+        if amount != 0 {
+            let transfer = Instruction::new_with_bytes(
+                SYSTEM_PROGRAM_ID,
+                &transfer_data(amount),
+                vec![
+                    AccountMeta::new(*payer.key, true),
+                    AccountMeta::new(*vaults[index].key, false),
+                ],
+            );
+            invoke(
+                &transfer,
+                &[payer.clone(), vaults[index].clone(), system_program.clone()],
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+        }
+        require(
+            vaults[index].lamports() == expected_after,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        index += 1;
+    }
+    Ok(())
+}
+
+/// Transfer an exact amount out of one zero-data component vault, signed only
+/// by its canonical PDA, and verify both source and destination deltas.
+#[allow(clippy::too_many_arguments)]
+pub fn transfer_from_lamport_custody<'a>(
+    program_id: &Pubkey,
+    series: SeriesPlanV5Id,
+    component: SeriesFundingComponentV1,
+    vault: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    amount: u64,
+) -> Outcome<()> {
+    let index = component.index();
+    require_lamport_vault_metadata(program_id, series, index, vault)?;
+    require(destination.is_writable, ClutchError::NotWritable)?;
+    require(!destination.executable, ClutchError::ExecutableAccount)?;
+    require(vault.key != destination.key, ClutchError::AccountAlias)?;
+    require_system_program(system_program)?;
+    let source_before = vault.lamports();
+    let destination_before = destination.lamports();
+    let source_after = sub(source_before, amount)?;
+    let destination_after = add(destination_before, amount)?;
+    if amount != 0 {
+        let transfer = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &transfer_data(amount),
+            vec![
+                AccountMeta::new(*vault.key, true),
+                AccountMeta::new(*destination.key, false),
+            ],
+        );
+        let component_seed = [component as u8];
+        let (_, bump) =
+            seeds::series_lamport_vault_pda(program_id, &series.bytes(), component as u8);
+        let series_seed = series.bytes();
+        let bump_seed = [bump];
+        invoke_signed(
+            &transfer,
+            &[vault.clone(), destination.clone(), system_program.clone()],
+            &[&[
+                seeds::SEED_SERIES_LAMPORT_VAULT_V1,
+                &series_seed,
+                &component_seed,
+                &bump_seed,
+            ]],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    }
+    require(
+        vault.lamports() == source_after && destination.lamports() == destination_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )
+}
+
+/// Close one program-owned Series account with payer rent and donation surplus
+/// kept separate. The exact stored principal goes to the FundingTerms V2
+/// lamport refund account; every other lamport goes to its distinct neutral
+/// sink. Callers must authenticate the account codec/PDA and closed lifecycle
+/// before entering this mechanical primitive.
+pub fn close_series_program_account(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    principal_refund: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+    rent_principal_lamports: u64,
+) -> Outcome<()> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(account.is_writable, ClutchError::NotWritable)?;
+    require(principal_refund.is_writable, ClutchError::NotWritable)?;
+    require(neutral_sink.is_writable, ClutchError::NotWritable)?;
+    require(
+        !account.executable && !principal_refund.executable && !neutral_sink.executable,
+        ClutchError::ExecutableAccount,
+    )?;
+    require(
+        account.key != principal_refund.key
+            && account.key != neutral_sink.key
+            && principal_refund.key != neutral_sink.key,
+        ClutchError::AccountAlias,
+    )?;
+    let held = account.lamports();
+    let donation = sub(held, rent_principal_lamports)?;
+    let refund_before = principal_refund.lamports();
+    let sink_before = neutral_sink.lamports();
+    let refund_after = add(refund_before, rent_principal_lamports)?;
+    let sink_after = add(sink_before, donation)?;
+    credit_lamports(principal_refund, rent_principal_lamports)?;
+    credit_lamports(neutral_sink, donation)?;
+    debit_lamports(account, held)?;
+    require(
+        account.lamports() == 0
+            && principal_refund.lamports() == refund_after
+            && neutral_sink.lamports() == sink_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    data.fill(0);
+    Ok(())
+}

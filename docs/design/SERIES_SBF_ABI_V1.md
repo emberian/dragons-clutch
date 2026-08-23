@@ -124,3 +124,26 @@ No action may be enabled from the codecs alone. At minimum:
 Until these joins are simultaneously implemented, the central allocation is
 visible but `ENABLED_EXTENSION_ACTIONS` stays empty and the dispatcher refuses
 before reading any account.
+
+## Implemented disabled account boundary
+
+The laboratory SBF module now implements the mechanical subset that does not
+need any missing semantic receipt:
+
+- program-owner, exact-length, hostile-codec, PDA/bump, stored-rent-principal,
+  and current-rent-coverage authentication for registry and funding accounts;
+- prefund-safe creation of both accounts, with exact payer rent rather than a
+  prefund discount and immediate neutral-sink disposition of account surplus;
+- derivation of the five expected lamport/collateral custody balances from the
+  state-owned principal/donation fields;
+- exact authentication of five distinct zero-data System-owned lamport PDAs;
+- exact-delta payer funding and PDA-signed component disbursement/refund;
+- a private typed donation authority minted only from an observed positive
+  lamport-vault surplus, which can authorize no other pure transition; and
+- account close that returns only stored rent principal to its owner and sends
+  account surplus to the distinct neutral sink.
+
+These helpers are deliberately not dispatched. Collateral-vault post-deltas,
+complete activation, Clock-to-bucket authentication, occurrence fulfillment,
+and terminal multi-asset ordering still depend on typed runtime joins under
+active development.
