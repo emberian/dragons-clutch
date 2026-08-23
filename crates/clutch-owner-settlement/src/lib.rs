@@ -11,6 +11,13 @@
 //! expected order and slice has completed. This makes the runtime boundary
 //! identical to the relation's owner-level `TerminalOwnerFloor` arithmetic.
 
+mod builder;
+
+pub use builder::{
+    build_owner_settlement_book_v1, CandidateSettlementTotalsV1, OwnerSettlementBookV1,
+    SelectedOwnerFeeV1, VerifiedSettlementOrderV1,
+};
+
 /// Maximum orders in one frozen General book.
 pub const MAX_ORDERS: usize = 64;
 /// Exact persisted owner-settlement semantic body width.
@@ -98,6 +105,23 @@ pub struct OwnerSettlementExpectationV1 {
 }
 
 impl OwnerSettlementExpectationV1 {
+    /// Canonical unused row for fixed-capacity books.
+    pub const EMPTY: Self = Self {
+        market: [0; 32],
+        epoch: [0; 32],
+        candidate: [0; 32],
+        owner: [0; 32],
+        owner_order_set_digest: [0; 32],
+        price_scale: 0,
+        expected_buy_order_mask: 0,
+        expected_sell_order_mask: 0,
+        expected_slice_count: 0,
+        expected_buy_price_units: 0,
+        expected_sell_price_units: 0,
+        selected_fee_atoms: 0,
+        reserved_cash_atoms: 0,
+    };
+
     /// Validate identity, disjoint masks, funding shape, and nonempty work.
     pub fn validate(&self) -> Result<()> {
         let keys = [self.market, self.epoch, self.candidate, self.owner];
