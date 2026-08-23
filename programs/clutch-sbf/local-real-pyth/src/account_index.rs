@@ -34,7 +34,7 @@ use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeStatusV1, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
     EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketRuntimeV3AccountV1,
-    OwnerSettlementV5AccountV1, SelectedCandidateV1AccountV1, SettlementCashPotV1AccountV1,
+    OwnerSettlementV5AccountV1, SettlementCashPotV1AccountV1,
     SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG, ADMISSION_NODE_ACCOUNT_VERSION_V2,
     CANDIDATE_FEED_ACCOUNT_TAG, CANDIDATE_FEED_ACCOUNT_VERSION, CANDIDATE_FEED_STAGE_ACCOUNT_TAG,
     CANDIDATE_FEED_STAGE_ACCOUNT_VERSION, CLEAR_WORK_ACCOUNT_TAG, CLEAR_WORK_ACCOUNT_VERSION_V3,
@@ -48,8 +48,7 @@ use clutch_general_v2_contract::{
     OWNER_SETTLEMENT_ACCOUNT_VERSION_V5, PAYER_ALLOCATION_ACCOUNT_BYTES,
     PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION,
     RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-    RECIPIENT_ALLOCATION_ACCOUNT_VERSION, SELECTED_CANDIDATE_ACCOUNT_TAG,
-    SELECTED_CANDIDATE_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    RECIPIENT_ALLOCATION_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
     SETTLEMENT_CASH_POT_ACCOUNT_TAG, SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
     SETTLEMENT_ROOT_ACCOUNT_TAG, SETTLEMENT_ROOT_ACCOUNT_VERSION, TREASURY_LEDGER_ACCOUNT_BYTES,
@@ -107,7 +106,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v1-source-v3-current";
+    "dragons-clutch/canonical-account-decoders/v2-general-successor-current";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -168,7 +167,6 @@ pub enum CanonicalAccountKind {
     GeneralCandidateFeedStage,
     GeneralCandidateFeed,
     GeneralClearWork,
-    GeneralSelectedCandidate,
     GeneralEpochBudget,
     GeneralOwnerSettlement,
     GeneralSettlementReceipt,
@@ -242,7 +240,6 @@ impl CanonicalAccountKind {
             Self::GeneralCandidateFeedStage => "general-candidate-feed-stage",
             Self::GeneralCandidateFeed => "general-candidate-feed",
             Self::GeneralClearWork => "general-clear-work",
-            Self::GeneralSelectedCandidate => "general-selected-candidate",
             Self::GeneralEpochBudget => "general-epoch-budget",
             Self::GeneralOwnerSettlement => "general-owner-settlement-v5",
             Self::GeneralSettlementReceipt => "general-settlement-receipt-v5",
@@ -757,28 +754,6 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
             action,
         });
         projection
-    } else if tag_version(
-        data,
-        SELECTED_CANDIDATE_ACCOUNT_TAG,
-        SELECTED_CANDIDATE_ACCOUNT_VERSION,
-    ) {
-        let value = SelectedCandidateV1AccountV1::decode(data)
-            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let mut projection = CanonicalAccountProjection::canonical(
-            CanonicalFamily::General,
-            CanonicalAccountKind::GeneralSelectedCandidate,
-        );
-        projection.generation = Some(value.epoch_generation);
-        projection.primary_binding = Some(value.epoch.bytes());
-        projection.keeper_hint = (value.entitlement_state < 2).then_some(KeeperHint {
-            lane: Some(WorkflowLane::Candidate),
-            position: WorkflowPosition {
-                phase: 10,
-                item: u64::from(value.next_slice_index),
-            },
-            action: "freeze-entitlement",
-        });
-        projection
     } else if tag_version(data, EPOCH_BUDGET_ACCOUNT_TAG, EPOCH_BUDGET_ACCOUNT_VERSION) {
         let value = EpochBudgetV2AccountV1::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
@@ -856,7 +831,7 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         CanonicalAccountProjection::contextual(
             CanonicalFamily::General,
             CanonicalAccountKind::GeneralFinalPot,
-            "authenticated SelectedCandidate and PDA binding",
+            "authenticated SettlementRoot and PDA binding",
         )
     } else {
         return Ok(None);
