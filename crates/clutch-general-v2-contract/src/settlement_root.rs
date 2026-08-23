@@ -1017,6 +1017,57 @@ impl SettlementRootV1AccountV1 {
         Ok(next)
     }
 
+    /// Retire one exact coefficient-portfolio pair's complete archive set.
+    ///
+    /// This is the sole aggregate count transition for action 44. The caller
+    /// cannot choose a subset: `receipt_count` must equal the root's entire
+    /// admitted/live Receipt set, and the root must own exactly two filled,
+    /// live Reservations. The live composer must additionally authenticate
+    /// every committed Receipt V5 sibling, both consumed Reservation V9
+    /// accounts, both Position/GEN1 child decrements, and every exact rent
+    /// transfer before writing this successor.
+    pub fn retire_portfolio_pair_archives(
+        &self,
+        receipt_count: u8,
+    ) -> Result<Self, CodecError> {
+        self.validate()?;
+        let receipts = u16::from(receipt_count);
+        if self.phase != SettlementRootPhaseV1::Settling
+            || receipt_count == 0
+            || self.virtual_cash_direction != VirtualCashDirectionV1::None
+            || self.counts.expected_receipts != receipts
+            || self.counts.admitted_receipts != receipts
+            || self.counts.live_receipts != receipts
+            || self.counts.expected_filled_reservations != 2
+            || self.counts.admitted_reservations != 2
+            || self.counts.live_reservations != 2
+            || self.counts.completed_owner_finalizations != self.counts.expected_owner_rows
+            || self.counts.live_fee_finalizations != 0
+            || self.counts.expected_dealer_children != 0
+            || self.counts.admitted_dealer_children != 0
+            || self.counts.live_dealer_children != 0
+            || self.counts.expected_merge_payments != 0
+            || self.counts.admitted_merge_payments != 0
+            || self.counts.completed_merge_payments != 0
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.live_receipts = next
+            .counts
+            .live_receipts
+            .checked_sub(receipts)
+            .ok_or(CodecError::InvalidCount)?;
+        next.counts.live_reservations = next
+            .counts
+            .live_reservations
+            .checked_sub(2)
+            .ok_or(CodecError::InvalidCount)?;
+        next.phase = SettlementRootPhaseV1::Retiring;
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Derive a structural full-account terminal receipt only after every
     /// expected child is observed and retired. This is not a capability: the
     /// retirement adapter must reauthenticate the exact root PDA, program
@@ -1833,6 +1884,95 @@ mod tests {
         }
     }
 
+    fn portfolio_settling_root() -> SettlementRootV1AccountV1 {
+        let candidate = id(9);
+        let ordinal = 1u64;
+        let mut rank_key = [0u8; SCORE_V2_Q_RANK_CAPACITY];
+        let candidate_bytes = candidate.bytes();
+        let ordinal_bytes = FirstAdmittedTieV1 { ordinal }.coordinate().unwrap();
+        let mut index = 0usize;
+        while index < ID_BYTES {
+            rank_key[32 + index] = !candidate_bytes[index];
+            rank_key[64 + index] = !ordinal_bytes[index];
+            index += 1;
+        }
+        SettlementRootV1AccountV1 {
+            epoch: id(1),
+            market: id(2),
+            market_instance_v2_id: id(3),
+            market_binding: id(4),
+            window: id(5),
+            source_admission_node: id(6),
+            retained_feed: id(7),
+            order_set: id(8),
+            settlement_candidate_id: candidate,
+            candidate_bundle_digest: id(10),
+            settlement_witness_digest: id(11),
+            owner_order_set_digest: id(12),
+            cost_certificate_id: id(13),
+            batch_policy_id: id(14),
+            score_policy_id: id(15),
+            fee_record: Id32::ZERO,
+            settlement_cash_pot: id(16),
+            final_pot: Id32::ZERO,
+            solver_reward_destination: id(17),
+            rank_key,
+            root_rent: DeletableRentOwnerV1 {
+                payer: id(18),
+                refundable_principal: 100,
+                donation_floor: 0,
+            },
+            cash_pot_rent: DeletableRentOwnerV1 {
+                payer: id(19),
+                refundable_principal: 100,
+                donation_floor: 0,
+            },
+            final_pot_rent: OptionalSettlementRentV1::ABSENT,
+            price_scale: 10_000,
+            consideration_debit_atoms: 10,
+            seller_credit_atoms: 10,
+            selected_fee_atoms: 0,
+            virtual_cash_atoms: 0,
+            rounding_pot_price_units: 0,
+            epoch_generation: 1,
+            selected_ordinal: ordinal,
+            selected_slot: 1,
+            counts: SettlementRootChildCountsV1 {
+                expected_receipts: 2,
+                admitted_receipts: 2,
+                live_receipts: 2,
+                expected_owner_rows: 2,
+                admitted_owner_rows: 2,
+                live_owner_rows: 2,
+                expected_reservations: 2,
+                expected_filled_reservations: 2,
+                admitted_reservations: 2,
+                live_reservations: 2,
+                released_unfilled_reservations: 0,
+                completed_owner_finalizations: 2,
+                live_fee_finalizations: 0,
+                expected_dealer_children: 0,
+                admitted_dealer_children: 0,
+                live_dealer_children: 0,
+                expected_merge_payments: 0,
+                admitted_merge_payments: 0,
+                completed_merge_payments: 0,
+            },
+            outcome_count: 2,
+            order_count: 2,
+            virtual_cash_direction: VirtualCashDirectionV1::None,
+            phase: SettlementRootPhaseV1::Settling,
+            cash_pot_state: SettlementRootChildStateV1::Live,
+            final_pot_state: SettlementRootChildStateV1::Absent,
+            retained_feed_state: SettlementRootChildStateV1::Live,
+            fee_record_state: SettlementRootChildStateV1::Absent,
+            stored_bump: 1,
+            cash_pot_bump: 2,
+            final_pot_bump: 0,
+            flags: 0,
+        }
+    }
+
     #[test]
     fn root_creation_owns_the_only_frozen_to_finalized_epoch_transition() {
         let epoch = frozen_epoch();
@@ -1883,5 +2023,23 @@ mod tests {
             ..initialization
         };
         assert!(hostile.encode(&mut bytes).is_err());
+    }
+
+    #[test]
+    fn portfolio_archive_counts_retire_exhaustively_once() {
+        let root = portfolio_settling_root();
+        root.validate().unwrap();
+        assert_eq!(
+            root.retire_portfolio_pair_archives(1),
+            Err(CodecError::InvalidState)
+        );
+        let post = root.retire_portfolio_pair_archives(2).unwrap();
+        assert_eq!(post.phase(), SettlementRootPhaseV1::Retiring);
+        assert_eq!(post.counts().live_receipts, 0);
+        assert_eq!(post.counts().live_reservations, 0);
+        assert_eq!(
+            post.retire_portfolio_pair_archives(2),
+            Err(CodecError::InvalidState)
+        );
     }
 }

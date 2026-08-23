@@ -47,6 +47,8 @@ pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 96;
 pub const RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES: usize = 64;
 /// Exact action-42 coefficient-portfolio pair selector bytes.
 pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
+/// Exact action-44 portfolio archive-retirement selector width.
+pub const RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES: usize = 104;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -867,6 +869,55 @@ impl ConsumePortfolioPairEggsPayloadV1 {
         Ok(value)
     }
 }
+
+/// Action-44 `RetirePortfolioPairArchives` immutable selector.
+///
+/// The two counts delimit the bounded account suffix only. The live composer
+/// must derive the complete committed Receipt V5 set from the counted root and
+/// retained Feed, and must derive the sorted unique refund-owner set from the
+/// rent owners persisted by those receipts and the two consumed Reservation
+/// V9 accounts. Neither count is economic authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetirePortfolioPairArchivesPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Candidate-scoped counted SettlementRoot PDA.
+    pub settlement_root: Id32,
+    /// First committed Receipt V5 in canonical Feed slice order.
+    pub entry_receipt: Id32,
+    /// Complete committed Receipt V5 sibling count, exactly `1..=16`.
+    pub receipt_count: u8,
+    /// Sorted unique persisted refund-owner count, exactly `1..=18`.
+    pub refund_owner_count: u8,
+}
+
+impl RetirePortfolioPairArchivesPayloadV1 {
+    /// Decode exactly 104 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            settlement_root: live_id(&mut reader)?,
+            entry_receipt: live_id(&mut reader)?,
+            receipt_count: reader.u8()?,
+            refund_owner_count: reader.u8()?,
+        };
+        let reserved: [u8; 6] = reader.array()?;
+        reader.finish()?;
+        if value.epoch == value.settlement_root
+            || value.epoch == value.entry_receipt
+            || value.settlement_root == value.entry_receipt
+            || !(1..=16).contains(&value.receipt_count)
+            || !(1..=18).contains(&value.refund_owner_count)
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if reserved.iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(value)
+    }
+}
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -922,6 +973,8 @@ pub enum SettlementRootPayloadV1 {
 pub enum PortfolioSettlementPayloadV1 {
     /// Action 42 selector; every economic and mutable fact is adapter-derived.
     ConsumePortfolioPairEggs(ConsumePortfolioPairEggsPayloadV1),
+    /// Action 44 selector; all archive and refund facts are adapter-derived.
+    RetirePortfolioPairArchives(RetirePortfolioPairArchivesPayloadV1),
 }
 
 /// Decode action 26 without adding it to the live-lab union.
@@ -972,7 +1025,10 @@ pub fn decode_settlement_root_payload_v1(
     }
 }
 
-/// Decode only fresh action 42 without widening the direct action-26 route.
+/// Decode only fresh portfolio actions without widening action 26.
+///
+/// Action 43 is deliberately absent until its separately frozen lifecycle is
+/// registered. Accepting action 44 here does not allocate or dispatch it.
 pub fn decode_portfolio_settlement_payload_v1(
     local_action: u8,
     payload: &[u8],
@@ -980,6 +1036,9 @@ pub fn decode_portfolio_settlement_payload_v1(
     match local_action {
         42 => Ok(PortfolioSettlementPayloadV1::ConsumePortfolioPairEggs(
             ConsumePortfolioPairEggsPayloadV1::decode(payload)?,
+        )),
+        44 => Ok(PortfolioSettlementPayloadV1::RetirePortfolioPairArchives(
+            RetirePortfolioPairArchivesPayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }
@@ -1243,6 +1302,45 @@ mod tests {
         selector[2 * ID_BYTES..3 * ID_BYTES].copy_from_slice(&live(2));
         assert_eq!(
             decode_portfolio_settlement_payload_v1(42, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn action44_selector_is_structural_only_and_action43_stays_absent() {
+        let mut selector = [0u8; RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES];
+        selector[..ID_BYTES].copy_from_slice(&live(1));
+        selector[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
+        selector[2 * ID_BYTES..3 * ID_BYTES].copy_from_slice(&live(3));
+        selector[3 * ID_BYTES] = 16;
+        selector[3 * ID_BYTES + 1] = 18;
+        assert!(matches!(
+            decode_portfolio_settlement_payload_v1(44, &selector),
+            Ok(PortfolioSettlementPayloadV1::RetirePortfolioPairArchives(_))
+        ));
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(43, &selector),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(44, &selector[..103]),
+            Err(CodecError::WrongLength)
+        );
+        selector[3 * ID_BYTES + 2] = 1;
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(44, &selector),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        selector[3 * ID_BYTES + 2] = 0;
+        selector[3 * ID_BYTES] = 0;
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(44, &selector),
+            Err(CodecError::MismatchedBinding)
+        );
+        selector[3 * ID_BYTES] = 16;
+        selector[3 * ID_BYTES + 1] = 19;
+        assert_eq!(
+            decode_portfolio_settlement_payload_v1(44, &selector),
             Err(CodecError::MismatchedBinding)
         );
     }
