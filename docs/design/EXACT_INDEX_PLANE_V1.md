@@ -1,133 +1,122 @@
-# Exact frozen-order and candidate-adjacency index plane V1
+# Compact exact settlement index plane V1
 
-Status: source-complete format, structurally disabled, not an instruction or
-capability in any deployable profile.
+Status: source implementation in progress, structurally disabled, and absent
+from every deployable capability profile.
 
-## Purpose
+## Purpose and semantic ownership
 
-`EntitleSlice` currently pays for two unrelated complete scans: locating dense
-order ranks in the frozen page set and finding every selected slice involving a
-pair. V1 moves those facts into an immutable, candidate-bound account pair:
+The compact plane accelerates two exact lookups without creating a second
+owner of settlement facts:
 
-- `FrozenOrderLocatorV1` maps each dense live-order rank to its canonical V5
-  `(page_index, physical_page_slot)`; and
-- `CandidateOrderSliceIndexV1` maps every dense order to a grouped active edge
-  interval, candidate-wide entitled quantity, side, real-counterparty count,
-  and virtual-edge count. Each edge retains the exact slice, counterparty class,
-  counterparty rank, outcome, side, and positive Egg quantity.
+- `FrozenOrderLocatorV1` maps every dense live order rank to its authenticated
+  V5 `(page_index, physical_page_slot)`; and
+- `CandidateOrderSliceIndexV1` stores a per-order directory followed only by
+  grouped, unique `u16` indices into the retained CandidateFeed slice tail.
 
-The index does not contain owners, balances, mutable Reservation or Position
-state, fees, price rounding, or a second clearing verdict. It accelerates lookup
-of the best valid submitted candidate already selected by the counted root.
+CandidateFeed remains the sole persisted owner of slice legs, counterparty,
+outcome, quantity, and route. The compact adjacency does not repeat those
+facts, entitlement totals, owners, balances, mutable Reservation/Position
+state, fees, price rounding, or a clearing verdict. It indexes the best valid
+submitted candidate already selected by the counted root.
 
-## One construction authority
+## Construction authority
 
-The first construction recomputes, in order:
+Action 39 must authenticate the complete hostile OrderPage V5 set, the sealed
+CandidateFeed V2 body, the owner-blind order projection, and the immutable
+Market/Realm/collateral/Genesis joins exactly once. The compact constructor
+accepts only that private authenticated traversal authority. No payload or
+public raw writer supplies a locator row, directory, slice reference, count,
+digest, or candidate identity.
 
-1. the complete hostile-decoded canonical OrderPage V5 set and its RelationV2
-   projection;
-2. the complete hostile-decoded sealed CandidateFeed V2 traversal;
-3. the exact selected-feed/candidate/count/generation equality join to the
-   counted `SettlementRootV1AccountV1`; and
-4. the MarketBinding V2, EconomicDomain V2, PriceGrid, Genesis V2
-   Realm/Profile/capability-profile, and collateral-profile joins.
+Construction writes directly into caller-owned account buffers. For every
+dense live order it derives one unique physical page location. Tombstones are
+not dense orders: each page's physical populated width is retained only to
+bound the local slot and is never equated to the live Feed order count. For
+each order, the referenced Feed quantities must sum exactly to its authenticated
+entitlement. Each group is emitted in strictly increasing Feed-slice order.
 
-Only after those checks does it derive locations, aggregate rows, and every real
-slice end. A caller cannot provide any row, aggregate, semantic count, digest,
-generation, or candidate identity. Page account IDs and V5 page-body digests
-enter a fresh ordered page-set digest. The exact MarketBinding account ID and
-canonical V2 body enter a separate digest.
+The plane ID commits the root/candidate coordinates, retained Feed account and
+full body ID, traversal binding, both child accounts and rent owners, every
+locator row, directory, and slice reference. Each child also has a
+domain-separated full-body ID held by the indexed root.
 
-The shared plane identity commits all semantic coordinates, both future account
-IDs, both rent owners, every locator, every aggregate, and every active edge.
-Each sibling also has a domain-separated exact active-body digest.
+The current upstream traversal implementation still materializes large
+fixed-capacity settlement facts before boxing them. Promotion therefore
+requires the pending streaming or heap-initialized traversal authority; merely
+keeping the compact index itself below the SBF frame limit is insufficient.
 
-## Active geometry
+## Compact active geometry
 
-Both bodies use a 664-byte V1-only sealed header. The header binds the Market,
-Epoch, V5 order set, settlement candidate, selected feed account and bundle,
-Realm, Profile, capability profile, Genesis profile, MarketBinding account and
-body digest, EconomicDomain digest, exact page-set digest, plane identity,
-sibling account, SettlementRoot account, owner/order-set digest, epoch
-generation, all active counts, per-page populated-slot widths, stored bump, and
-the exact deletable-rent owner.
-
-The active lengths are:
+Both bodies have a 272-byte sealed common header. It contains only the indexed
+root account, sibling account, shared plane ID, retained Feed account, full Feed
+body ID, traversal binding ID, active counts, per-page physical populated
+widths, stored bump, and exact deletable-rent owner.
 
 ```text
-locator   = 664 + order_count * 4
-adjacency = 664 + order_count * 32 + real_slice_end_count * 16
+locator   = 272 + live_order_count * 4
+adjacency = 272 + live_order_count * 8 + slice_reference_count * 2
 ```
 
-`real_slice_end_count` is one for a split or merge slice and two for a direct
-slice, so it lies in `slice_count..=2*slice_count` and is at most 832. Inactive
-fixed-capacity rows are never persisted. Decoders accept only V1, one exact
-active width, zero reserved bytes, and canonical row ordering.
+`slice_reference_count` is one for a split or merge slice and two for a direct
+slice. It lies in `slice_count..=2*slice_count` and is at most 832. At the
+protocol maxima, the locator is 528 bytes and adjacency is 2,448 bytes. Both
+fit below 4 KiB and the Solana 10,240-byte per-instruction allocation-increase
+limit; no staged partial account or partial root liability is needed.
 
-## Query and hostile-read invariants
+## Authenticated bounded reads
 
-A pair query reads two locator rows and only the two grouped adjacency ranges.
-It returns the exact pair slice prefix, candidate-wide buy/sell entitled totals,
-and whether either order trades with another real counterparty or a virtual
-split/merge. It does not scan unrelated pages or unrelated witness slices.
-The bounded sealed-account reader rechecks both constant headers, both local
-locations and aggregates, every selected local edge, and direct-edge symmetry.
-It requires an unforgeable root/account read authority. The pure authentication
-projection hostile-decodes the complete `0xa9/2` root and both child bodies,
-checks adapter-derived canonical PDAs/bumps and read-only program ownership, and
-recomputes both root-held full child data IDs before minting that authority.
+A pair query first hostile-decodes the complete `0xa9/2` root, checks the exact
+root/child/Feed PDAs, bumps, program ownership, mutability, and pairwise account
+nonaliasing, and recomputes both child full-body IDs and the retained Feed full
+body ID. Only then does it mint a private read authority.
 
-Standalone decoding rechecks:
+The query reads two locator rows, two directory rows, and exactly their
+referenced 13-byte CandidateFeed slice records. It verifies local directory
+ordering, side-correct legs, the requested counterparty join, and pair symmetry.
+It returns the exact shared slice prefix, buy/sell totals derived from the Feed,
+and whether either order also touches another real counterparty or virtual
+split/merge. Static clients and index bytes remain untrusted projections.
 
-- strictly increasing in-range physical page locations;
-- contiguous aggregate edge directories and exact account-wide closure;
-- strictly increasing slice indices within each order;
-- side-correct split/merge use and zero virtual counterparty rank;
-- reciprocal direct edges with identical slice, outcome, and quantity;
-- exactly two opposite-side real ends for direct slices or one virtual edge for
-  split/merge slices;
-- distinct-real and virtual-edge counts; and
-- equality of edge quantity totals and the selected entitlement aggregate.
+## Rent and terminal order
 
-## Rent, retirement, and the deliberate promotion refusal
+Each child persists its payer, the full rent-exempt principal paid without a
+prefund discount, and the observed hostile-prefund donation floor. Atomic close
+returns only that principal to its payer and routes every remaining lamport to
+the root-bound MarketBinding neutral sink.
 
-Each body persists the exact payer, full rent-exempt principal paid without a
-prefund discount, and hostile prefund donation floor. Terminal close returns
-only principal to that payer and routes every other lamport to the immutable
-MarketBinding neutral sink. Both siblings close atomically.
+The compact adjacency depends on the retained Feed, so terminal order is
+strict:
 
-The historical `SettlementRootV1AccountV1` does not count these two accounts.
-It is therefore not lawful to create them merely because Root V1 later becomes
-terminal. The source now defines the reserved-disabled breaking
-`IndexedSettlementRootV1AccountV1` `0xa9/2` successor. It retains the canonical
-in-place `general-settlement-root:v1` PDA and embeds the exact Root V1 body,
-owns both child accounts, both exact body IDs, the shared plane and capability
-profile IDs, and an exhaustive expected/admitted/live/retired partition. Only
-the atomic two-live and atomic two-retired states are representable; partial
-create and partial close are refused.
+1. the base root reaches `Retiring` with every non-Feed child liability
+   discharged while the retained Feed is still `Live`;
+2. the adapter full-body-authenticates that Feed and atomically retires both
+   compact children;
+3. a separately authenticated transition retires the Feed and promotes the
+   base root to `Terminal`; and
+4. the 1,196-byte indexed root returns its exact principal and sends all
+   nonprincipal lamports to the neutral sink.
 
-The Root may be allocated directly at 1,196 bytes or atomically reallocated
-from the 980-byte `0xa9/1` body. Both paths preserve one persisted payer, require
-the full 1,196-byte rent principal without a hostile-prefund discount, preserve
-all observed nonprincipal lamports as donation, and expose one exact
-source/poststate/rent/width projector ID. Construction aggregates this root
-debit with both child debits when any payer aliases across the three creates.
+Closing the Feed first, presenting a replacement Feed body, partially closing
+the index pair, or stranding the indexed-root principal is not representable by
+the promoted path.
 
-Raw construction still requires an unforgeable `CountedExactIndexAdmissionV1`
-and raw closure requires an unforgeable `CountedExactIndexRetirementV1`. The
-only constructors are higher-level pure plans that return the matching indexed
-root write and its rent preparation in the same rollback domain as both child
-writes. Merge cash-pot activation has a separate typed plan that never exposes
-the indexed root successor without the canonical pot body, account, bump, and
-rent owner. The bounded read authority is minted only by the complete
-owner/PDA/body-ID authentication projection.
+The historical 980-byte root cannot count the two children. The reserved
+`IndexedSettlementRootV1AccountV1` successor uses `0xa9/2` at the unchanged
+canonical Root PDA and owns both child accounts, both full body IDs, the plane
+and capability-profile identities, and an exhaustive two-live/two-retired
+partition. The fresh path funds the full 1,196-byte root principal plus both
+compact child principals in the same rollback domain. The pure contract also
+defines exact in-place-upgrade rent equations, but no generic caller-shaped SBF
+upgrade writer is exposed.
 
-`EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. The indexed-root envelope
-uses the centrally reserved `0xa9/2` coordinate and canonical Root PDA. Each
-child has a fresh one-per-Root canonical PDA domain, while both child codecs
-still have review-only magic and no global account discriminator.
-There is no action, dispatch entry, or profile capability. Promotion must wire
-every existing root transition through its checked indexed-root transition,
-allocate the two child coordinates/PDAs, and wire atomic child create, read, and
-retire routes. It must not reuse receipt or Dealer counters. Until those joins
-exist, the private typed postwrites remain unreachable from SBF.
+## Reserved coordinates and refusal
+
+The indexed root is reserved at `0xa9/2`, the locator at `0xb5/1`, and the
+adjacency at `0xb6/1`. The child PDA seed domains are unique, one-per-root, and
+at most Solana's 32-byte seed limit.
+
+`EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. No deployable capability
+profile admits action 39 through this implementation. Promotion additionally
+requires the compact upstream traversal, action-specific migration of every
+root reader/writer, the authenticated Feed-retirement successor, and an
+independent review of the complete capability unit.

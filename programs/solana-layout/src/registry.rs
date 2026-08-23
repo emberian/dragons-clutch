@@ -509,6 +509,18 @@ pub const DIRECT_ACTION_REPLAY_ACCOUNT_VERSION: u8 = 1;
 pub const DIRECT_RESERVATION_ACCOUNT_TAG: u8 = 0xb4;
 /// Current Direct funded Reservation account version.
 pub const DIRECT_RESERVATION_ACCOUNT_VERSION: u8 = 1;
+/// Immutable General V2 frozen-order locator discriminator.
+pub const GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG: u8 = 0xb5;
+/// First frozen-order locator account version.
+pub const GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_VERSION: u8 = 1;
+/// Largest exact active frozen-order locator account body.
+pub const GENERAL_V2_FROZEN_ORDER_LOCATOR_MAX_ACCOUNT_BYTES: usize = 528;
+/// Immutable General V2 selected-candidate adjacency discriminator.
+pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG: u8 = 0xb6;
+/// First selected-candidate adjacency account version.
+pub const GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION: u8 = 1;
+/// Largest exact active selected-candidate adjacency account body.
+pub const GENERAL_V2_CANDIDATE_ADJACENCY_MAX_ACCOUNT_BYTES: usize = 2_448;
 /// First Dealer CoveredDealer selection attachment version.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// Exact attachment bytes including the Dealer global envelope.
