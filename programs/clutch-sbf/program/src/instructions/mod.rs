@@ -70,13 +70,34 @@ pub mod failure_market_admission;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 pub mod fractional_redemption;
+/// Deployable current direct-only rent-owned V5 Egg delivery.
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+pub mod general_v2_direct_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_identity;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
 pub(crate) mod general_v2_position_replay;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
 pub mod general_v2_receipt_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_settlement_root;

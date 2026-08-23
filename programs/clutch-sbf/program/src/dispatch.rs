@@ -52,6 +52,14 @@ use crate::instructions::dealer_policy;
     feature = "profile-direct-v3-source-v2-point"
 ))]
 use crate::instructions::direct_selection_v3;
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
+use crate::instructions::general_v2_direct_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
@@ -107,7 +115,13 @@ enum Route {
     ResolutionWork,
     #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
     DealerPolicy,
-    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+    #[cfg(any(
+        all(
+            feature = "profile-full",
+            not(feature = "profile-non-production-dealer-policy-catalog-lab")
+        ),
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ))]
     GeneralV2,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
@@ -220,7 +234,13 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::FractionalRedemption
             }
-            #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+            #[cfg(any(
+                all(
+                    feature = "profile-full",
+                    not(feature = "profile-non-production-dealer-policy-catalog-lab")
+                ),
+                feature = "profile-non-production-general-v2-empty-book-identity-lab"
+            ))]
             Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG)
                 if instruction_data.get(14).copied()
                     == Some(clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION)
@@ -412,7 +432,13 @@ pub fn process(
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
         #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
-        #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+        #[cfg(any(
+            all(
+                feature = "profile-full",
+                not(feature = "profile-non-production-dealer-policy-catalog-lab")
+            ),
+            feature = "profile-non-production-general-v2-empty-book-identity-lab"
+        ))]
         Route::GeneralV2 => process_general_v2(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
@@ -570,9 +596,17 @@ fn disabled_dealer_facility_action(
     }
 }
 
-/// Decode the strict successor envelope and enter only the General V2 lab.
+/// Decode the strict successor envelope and enter one capability-admitted
+/// General V2 action. Current direct V5 delivery is deployable in `profile-full`;
+/// the historical identity actions remain confined to their laboratory.
 #[inline(never)]
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    all(
+        feature = "profile-full",
+        not(feature = "profile-non-production-dealer-policy-catalog-lab")
+    ),
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+))]
 fn process_general_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -581,6 +615,16 @@ fn process_general_v2(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
+        ExtensionAction::GeneralV2(
+            action @ clutch_solana_layout::registry::GeneralV2Action::ConsumeDirectReceiptEggs,
+        ) => general_v2_direct_v5::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
         ExtensionAction::GeneralV2(action) => general_v2_identity::process(
             program_id,
             accounts,
@@ -588,6 +632,8 @@ fn process_general_v2(
             action,
             request.envelope.payload,
         ),
+        #[cfg(not(feature = "profile-non-production-general-v2-empty-book-identity-lab"))]
+        ExtensionAction::GeneralV2(_) => Err(ClutchError::UnsupportedInstruction.into()),
         ExtensionAction::DealerPolicy(_)
         | ExtensionAction::DealerFacility(_)
         | ExtensionAction::StructuredClaim(_)

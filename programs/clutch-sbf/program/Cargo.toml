@@ -56,6 +56,8 @@ non-production-failure-recovery-lab = [
 # both hostile wire crates so a narrow SBF cannot accidentally link the full
 # Intent decoder through a dependency's default features.
 profile-full = [
+    "dep:clutch-general-v2-runtime",
+    "clutch-general-v2-runtime/layout-profile-full",
     "clutch-solana-layout/profile-full",
     "clutch-solana-reference/profile-full",
 ]
