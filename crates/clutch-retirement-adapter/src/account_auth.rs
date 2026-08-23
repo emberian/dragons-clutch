@@ -10,7 +10,8 @@ use clutch_retirement::{
     POSITION_ACCOUNT_VERSION_V3, POSITION_TOMBSTONE_TAG, POSITION_TOMBSTONE_V1_BYTES,
     POSITION_TOMBSTONE_V2_BYTES, POSITION_TOMBSTONE_V3_BYTES, POSITION_TOMBSTONE_VERSION_V1,
     POSITION_TOMBSTONE_VERSION_V2, POSITION_TOMBSTONE_VERSION_V3, POSITION_V2_BYTES,
-    POSITION_V3_BYTES, RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5,
+    POSITION_V3_BYTES, PURPOSE_REPLAY_ACCOUNT_TAG, PURPOSE_REPLAY_ACCOUNT_VERSION_V3,
+    PURPOSE_REPLAY_V3_PREFIX_BYTES, RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5,
     RESERVATION_ACCOUNT_VERSION_V7, RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
 };
 use clutch_solana_layout::direct_selection_v3::{DIRECT_EPOCH_V4_BYTES, DIRECT_EPOCH_V4_VERSION};
@@ -30,6 +31,7 @@ const POSITION_TOMBSTONE_STORED_BUMP_OFFSET: usize = 75;
 const POSITION_TOMBSTONE_V3_STORED_BUMP_OFFSET: usize = 4;
 const EPOCH_TOMBSTONE_STORED_BUMP_OFFSET: usize = 83;
 const REPLAY_SUCCESSOR_STORED_BUMP_OFFSET: usize = 82;
+const PURPOSE_REPLAY_V3_STORED_BUMP_OFFSET: usize = 4;
 const EPOCH_BUDGET_STORED_BUMP_OFFSET: usize = 270;
 
 /// Runtime facts read from one Solana account before any state mutation.
@@ -316,6 +318,54 @@ pub fn authenticate_runtime_executable_v2(
         return Err(RetirementAdapterErrorV2::NotExecutable);
     }
     Ok(())
+}
+
+/// Authenticate a variable-width purpose-owned Replay V3 envelope.
+///
+/// This performs only runtime identity, owner, access, common-header,
+/// minimum-length, and stored-bump checks. The caller must next invoke
+/// `ReplayV3Envelope::decode` with its concrete hash backend; that decoder
+/// enforces the extension's exact committed length and full hash.
+pub fn authenticate_purpose_replay_v3_exact<'a>(
+    view: AccountViewV2<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+    access: AccountAccessV2,
+) -> Result<AuthenticatedAccountV2<'a>, RetirementAdapterErrorV2> {
+    if view.address != canonical_pda.address {
+        return Err(RetirementAdapterErrorV2::WrongPda);
+    }
+    if view.owner != program_id {
+        return Err(RetirementAdapterErrorV2::WrongOwner);
+    }
+    if view.is_executable {
+        return Err(RetirementAdapterErrorV2::ExecutableAccount);
+    }
+    match access {
+        AccountAccessV2::ReadOnly if view.is_writable => {
+            return Err(RetirementAdapterErrorV2::UnexpectedWritable)
+        }
+        AccountAccessV2::Writable if !view.is_writable => {
+            return Err(RetirementAdapterErrorV2::NotWritable)
+        }
+        AccountAccessV2::ReadOnly | AccountAccessV2::Writable => {}
+    }
+    if view.data.len() < PURPOSE_REPLAY_V3_PREFIX_BYTES + 1 {
+        return Err(RetirementErrorV2::Truncated.into());
+    }
+    if view.data[0] != PURPOSE_REPLAY_ACCOUNT_TAG {
+        return Err(RetirementErrorV2::WrongTag.into());
+    }
+    if view.data[1] != PURPOSE_REPLAY_ACCOUNT_VERSION_V3 {
+        return Err(RetirementErrorV2::WrongVersion.into());
+    }
+    if view.data[PURPOSE_REPLAY_V3_STORED_BUMP_OFFSET] != canonical_pda.bump {
+        return Err(RetirementAdapterErrorV2::WrongBump);
+    }
+    Ok(AuthenticatedAccountV2 {
+        view,
+        canonical_bump: canonical_pda.bump,
+    })
 }
 
 /// Authenticate Position V2 under an exact read-only or writable role.
