@@ -7,10 +7,13 @@ deployment integration remain separate work.
 
 ## Ownership boundary
 
-The intended runtime path is a borrowed `ClearWorkViewV2` or
-`ClearWorkViewMutV2` over exact-width account bytes. It performs no allocation
-and never constructs `ClearWorkV1`. Active matrices use authenticated frozen
-widths on every index calculation.
+The intended runtime path is `ClearWorkFeedV2` over borrowed exact-width
+account bytes. It performs no allocation and never constructs `ClearWorkV1`.
+Its scalar execution state is 1,776 bytes on the host 64-bit ABI; active
+matrices, allocation rows, settlement ledgers, pairing accumulators, and the
+canonical summary remain directly byte-backed. `ClearWorkViewV2` and
+`ClearWorkViewMutV2` remain the smaller typed region APIs. All active indexing
+uses authenticated frozen widths.
 
 The V1 bridge is deliberately different. Migration and differential testing
 may call `project_clear_work_v1_wire_into_v2` or
@@ -46,7 +49,7 @@ distinct owners. Representative body sizes are:
 The eight canonical regions are contiguous and exhaustive. Tests pin every
 boundary and the maximum-width identity with V1.
 
-## Host release stack and text probe
+## Host release stack and text probes
 
 The probe used detached source commit `1f8f521`, rustc
 `1.98.0-nightly (91fe22da8 2026-06-21)`, target
@@ -81,6 +84,33 @@ These measurements establish the absence of a fixed 48 KiB native view or a
 4,096-byte-class host frame. They do not predict SBF frames or CU. The V2 route
 must be measured again with the pinned SBF toolchain after adapter integration.
 
+The complete engine probe used the same compiler and target against the
+cycle-three source, release optimization, and `-Zemit-stack-sizes`. Its rlib
+SHA-256 was:
+
+```text
+fea88867791d8e6967238a2171458415b8cb0af89d3107b1c735e17848de9066
+```
+
+Representative engine frames were:
+
+| Function | Host frame bytes |
+|---|---:|
+| `begin_with_basis` | 3,624 |
+| state decode / `open` / `initialize` | 3,080 / 1,800 / 1,800 |
+| order transition worker | 616 |
+| `end_pass` | 504 |
+| composite-fee numerator worker | 392 |
+| scalar persistence | 184 |
+| slice transition | 104 |
+
+Direct symbols attributed to the engine total 64,956 bytes of release x86-64
+text; codec plus engine symbols total 77,508 bytes. These are conservative
+archive-symbol sums, not an ELF delta, and include compiler outlining. The
+3,624-byte host begin frame is below but close to Solana's 4 KiB frame limit;
+it is a promotion warning, not SBF evidence. The SBF adapter must measure and,
+if necessary, split that frame before enabling a dispatcher route.
+
 ## Test evidence
 
 The focused corpus covers 37 exact V1 lifecycle snapshots: idle, begin, every
@@ -97,8 +127,20 @@ Additional gates:
   booleans/selectors/slots/masks, and representative omitted V1 padding;
 - compare direct native idle initialization byte-for-byte with projected V1
   idle;
+- execute 384 bounded deterministic books through batch, V1 stream, and V2
+  stream oracles, comparing the exact compact checkpoint after every call;
+- execute the minimum and maximum active widths, including all 64 orders, 64
+  owner identities, and 16 outcomes at the maximum;
+- compare every explicit-slice cursor boundary and both two-pass and three-pass
+  policy topologies after reopen;
+- preserve exact poison transitions for changed-fill resumptions and byte
+  atomicity for wrong-phase/not-in-progress feed errors;
+- continue 23,339 structurally accepted single-byte checkpoint mutations
+  without a V2 panic and compare exact V1 results/images wherever V1 itself has
+  a defined debug transition (23,337 cases); the two excluded V1 transitions
+  hit its known unchecked score multiplication, while V2 uses checked math;
 - bounds-check first/last and one-past-end matrix and ledger accesses;
-- run all 119 `clutch-batch` tests and Clippy with warnings denied.
+- run all 126 `clutch-batch` tests and Clippy with warnings denied.
 
 Commands:
 
@@ -112,9 +154,11 @@ RUSTFLAGS='-Zemit-stack-sizes' cargo build \
 
 ## Remaining promotion boundary
 
-This lane lands the codec, total hostile-input validator, canonical idle
-writer, migration bridge, resume-seal primitive, and direct active
-matrix/ledger storage. It does not yet port the complete relation feed engine
-onto the byte view. That port should keep structural selectors and lifecycle
-mutation private, use the typed numeric accessors, and prove verdict identity
-against the same 37-state corpus before any V2 SBF route is enabled.
+The complete Relation V1 feed engine now executes against V2 active-width
+bytes, including admission, all allocation folds, explicit pairing slices,
+settlement, composite fee hooks, score reconstruction, resumability, poisoning,
+and canonical verdict persistence. V1 remains the migration/differential
+oracle only. The remaining boundary is adapter promotion: authenticate widths
+from frozen state, bind the outer codec version, measure SBF frames and compute
+units, and enable a separately reviewed route. No V2 dispatcher or account
+migration has been enabled by this lane.

@@ -361,7 +361,7 @@ pub fn validate_clear_work_v2(
     let o = widths.outcomes as usize;
 
     let phase = ClearWorkPhaseV2::decode(input[0])?;
-    require_bool(input[4])?;
+    let slices_expected = require_bool(input[4])?;
     require_bool(input[5])?;
     let cursor = read_u16(input, 6);
     let slice_cursor = read_u16(input, 8);
@@ -369,6 +369,15 @@ pub fn validate_clear_work_v2(
     require_bool(input[12])?;
     if cursor as usize > n || slice_cursor as usize > MAX_SLICES || order_count as usize > n {
         return Err(ClearWorkFaultV2::InvalidCount);
+    }
+    if phase.active()
+        && (!matches!(input[2], 2 | 3)
+            || input[3].checked_add(1) != Some(input[2])
+            || input[1] == 0
+            || input[1] > input[2]
+            || (phase == ClearWorkPhaseV2::Slices && input[1] != input[3]))
+    {
+        return Err(ClearWorkFaultV2::InvalidPhase);
     }
     validate_error(&input[21..25])?;
     if input[81] as usize > MAX_PORTFOLIO_ORDERS {
@@ -378,10 +387,7 @@ pub fn validate_clear_work_v2(
     let domain_outcomes = input[126];
     let domain_owners = read_u16(input, 127);
     if phase.active() {
-        if domain_outcomes != widths.outcomes
-            || domain_owners != widths.owners as u16
-            || input[160] != widths.orders
-        {
+        if domain_outcomes != widths.outcomes || domain_owners != widths.owners as u16 {
             return Err(ClearWorkFaultV2::WidthBindingMismatch);
         }
         if read_u64(input, 129) == 0 {
@@ -398,6 +404,12 @@ pub fn validate_clear_work_v2(
         0 if declared == 0 => {}
         1 => {}
         _ => return Err(ClearWorkFaultV2::InvalidSliceDeclaration),
+    }
+    if slices_expected != (declared_flag == 1)
+        || slice_cursor > declared
+        || (phase == ClearWorkPhaseV2::Slices && declared as usize > MAX_SLICES)
+    {
+        return Err(ClearWorkFaultV2::InvalidSliceDeclaration);
     }
     let owners_at = candidate_tail + V1_CAND_TAIL_BYTES;
     let owner_slots_at = owners_at + 2 * u;
@@ -416,7 +428,22 @@ pub fn validate_clear_work_v2(
             return Err(ClearWorkFaultV2::InvalidCount);
         }
     }
-    let mut i = owner_slots as usize;
+    let mut i = 0usize;
+    while i < owner_slots as usize {
+        let owner = read_u16(input, owners_at + 2 * i);
+        if owner >= domain_owners {
+            return Err(ClearWorkFaultV2::InvalidSlot);
+        }
+        let mut prior = 0usize;
+        while prior < i {
+            if read_u16(input, owners_at + 2 * prior) == owner {
+                return Err(ClearWorkFaultV2::InvalidSlot);
+            }
+            prior += 1;
+        }
+        i += 1;
+    }
+    i = owner_slots as usize;
     while i < u {
         if read_u16(input, owners_at + 2 * i) != 0 {
             return Err(ClearWorkFaultV2::NonCanonicalPadding);
@@ -1156,3 +1183,8 @@ fn expand_payload_into_v1(
     }
     Ok(())
 }
+
+#[path = "relation_v1_stream_v2_engine.rs"]
+mod engine;
+
+pub use engine::ClearWorkFeedV2;

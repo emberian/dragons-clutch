@@ -9,6 +9,7 @@ use super::relation_v1_stream_v2::*;
 use super::{DustPolicy, PartialPolicy, Side};
 
 extern crate std;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::vec;
 use std::vec::Vec;
 
@@ -234,6 +235,435 @@ fn fingerprint(bytes: &[u8]) -> u64 {
     hash
 }
 
+fn v2_verdict(
+    body: &mut [u8],
+    widths: ClearWorkWidthsV2,
+) -> Option<Result<super::relation_v1::SummaryV1, super::relation_v1::ErrorV1>> {
+    let work = ClearWorkFeedV2::open(body, widths).unwrap();
+    work.verdict().map(|result| result.copied())
+}
+
+fn v1_verdict(
+    work: &ClearWorkV1,
+) -> Option<Result<super::relation_v1::SummaryV1, super::relation_v1::ErrorV1>> {
+    work.verdict().map(|result| result.copied())
+}
+
+fn assert_lockstep_checkpoint(v1: &ClearWorkV1, v2: &mut [u8], widths: ClearWorkWidthsV2) {
+    assert_eq!(v2, compact(&encoded(v1), widths));
+    let reopened = ClearWorkFeedV2::open(v2, widths).unwrap();
+    assert_eq!(reopened.status(), v1.status());
+    assert_eq!(reopened.orders_consumed(), v1.orders_consumed());
+    assert_eq!(reopened.slices_consumed(), v1.slices_consumed());
+    assert_eq!(reopened.consumed_fold(), v1.consumed_fold());
+    assert_eq!(reopened.is_idle(), v1.is_idle());
+    assert_eq!(reopened.is_poisoned(), v1.is_poisoned());
+    assert_eq!(
+        reopened.verdict().map(|result| result.copied()),
+        v1_verdict(v1)
+    );
+}
+
+fn lockstep_orders(self_cross: SelfCrossPolicyV1) {
+    let (domain, book, prices) = fixture(self_cross);
+    let candidate_full = canonical_candidate(&domain, &book, &prices, 0, 0).unwrap();
+    let candidate = header(&candidate_full);
+    let widths = ClearWorkWidthsV2::new(2, 4, 3);
+    let mut v1 = ClearWorkV1::new();
+    let mut v2 = vec![0u8; clear_work_v2_body_len(widths)];
+    initialize_clear_work_v2_idle(&mut v2, widths).unwrap();
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+
+    let expected = v1.begin(&domain, &candidate, true);
+    let actual = ClearWorkFeedV2::open(&mut v2, widths)
+        .unwrap()
+        .begin(&domain, &candidate, true);
+    assert_eq!(actual, expected);
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+
+    let passes = if self_cross == SelfCrossPolicyV1::NetAtAdmission {
+        3
+    } else {
+        2
+    };
+    let mut pass = 0usize;
+    while pass < passes {
+        let mut index = 0usize;
+        while index < book.len as usize {
+            let fill = candidate_full.fills[index];
+            let expected = v1.push_order(&book.orders[index], fill);
+            let actual = ClearWorkFeedV2::open(&mut v2, widths)
+                .unwrap()
+                .push_order(&book.orders[index], fill);
+            assert_eq!(actual, expected, "pass {pass} order {index}");
+            assert_lockstep_checkpoint(&v1, &mut v2, widths);
+            index += 1;
+        }
+        let expected = v1.end_pass();
+        let actual = ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass();
+        assert_eq!(actual, expected, "pass {pass} end");
+        assert_lockstep_checkpoint(&v1, &mut v2, widths);
+        pass += 1;
+    }
+    assert_eq!(v2_verdict(&mut v2, widths), v1_verdict(&v1));
+}
+
+fn drive_lockstep_book(domain: &RelationDomainV1, book: &BookV1, candidate_full: &CandidateV1) {
+    let candidate = header(candidate_full);
+    let widths = ClearWorkWidthsV2::new(domain.outcome_count, book.len, domain.owner_count as u8);
+    let mut v1 = ClearWorkV1::new();
+    let mut v2 = vec![0u8; clear_work_v2_body_len(widths)];
+    initialize_clear_work_v2_idle(&mut v2, widths).unwrap();
+    assert_eq!(
+        ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .begin(domain, &candidate, true),
+        v1.begin(domain, &candidate, true)
+    );
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+
+    let mut transitions = 0usize;
+    while v1.status() != super::relation_v1_stream::FeedStatusV1::Complete {
+        for index in 0..book.len as usize {
+            let expected = v1.push_order(&book.orders[index], candidate_full.fills[index]);
+            let actual = ClearWorkFeedV2::open(&mut v2, widths)
+                .unwrap()
+                .push_order(&book.orders[index], candidate_full.fills[index]);
+            assert_eq!(actual, expected);
+            assert_lockstep_checkpoint(&v1, &mut v2, widths);
+            transitions += 1;
+        }
+        let expected = v1.end_pass();
+        let actual = ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass();
+        assert_eq!(actual, expected);
+        assert_lockstep_checkpoint(&v1, &mut v2, widths);
+        transitions += 1;
+        assert!(
+            transitions <= 4 + 3 * (book.len as usize + 1),
+            "unexpected feed cycle"
+        );
+    }
+    let batch = super::relation_v1::verify(domain, book, candidate_full, None);
+    assert_eq!(v1_verdict(&v1), Some(batch));
+    assert_eq!(v2_verdict(&mut v2, widths), v1_verdict(&v1));
+}
+
+#[test]
+fn native_engine_matches_v1_after_every_order_transition() {
+    lockstep_orders(SelfCrossPolicyV1::AllowGateAtPairing);
+    lockstep_orders(SelfCrossPolicyV1::NetAtAdmission);
+}
+
+#[test]
+fn bounded_books_match_batch_v1_and_v2_at_every_transition() {
+    let mut cases = 0usize;
+    for self_cross in [
+        SelfCrossPolicyV1::AllowGateAtPairing,
+        SelfCrossPolicyV1::NetAtAdmission,
+    ] {
+        for len in [2usize, 4, 6] {
+            for bits in 0..64u64 {
+                let mut domain = domain(self_cross);
+                domain.owner_count = 2;
+                domain.remainder_seed = bits.wrapping_mul(0x9e37_79b9);
+                let mut book = BookV1::empty();
+                book.len = len as u8;
+                for index in 0..len {
+                    let pair = index / 2;
+                    let side = if index & 1 == 0 {
+                        Side::Buy
+                    } else {
+                        Side::Sell
+                    };
+                    let outcome = ((bits >> pair) & 1) as u8;
+                    let owner = if side == Side::Buy { 0 } else { 1 };
+                    let mut order = single(index as u64 + 1, owner, outcome, side);
+                    let OrderV1::SingleEgg(ref mut single) = order else {
+                        unreachable!();
+                    };
+                    single.quantity = 1 + ((bits >> (pair + 3)) % 3);
+                    book.orders[index] = order;
+                }
+                let mut prices = [0u64; MAX_OUTCOMES];
+                prices[0] = PRICE_SCALE / 2;
+                prices[1] = PRICE_SCALE / 2;
+                let Ok(candidate) = canonical_candidate(&domain, &book, &prices, 0, 0) else {
+                    continue;
+                };
+                drive_lockstep_book(&domain, &book, &candidate);
+                cases += 1;
+            }
+        }
+    }
+    assert_eq!(cases, 384);
+}
+
+#[test]
+fn minimum_and_maximum_active_widths_execute_without_v1_expansion() {
+    let mut empty_domain = domain(SelfCrossPolicyV1::AllowGateAtPairing);
+    empty_domain.owner_count = 0;
+    let empty_book = BookV1::empty();
+    let mut two_prices = [0u64; MAX_OUTCOMES];
+    two_prices[0] = PRICE_SCALE / 2;
+    two_prices[1] = PRICE_SCALE / 2;
+    let empty_candidate = CandidateV1::empty(0, two_prices);
+    drive_lockstep_book(&empty_domain, &empty_book, &empty_candidate);
+
+    let mut maximum_domain = domain(SelfCrossPolicyV1::AllowGateAtPairing);
+    maximum_domain.outcome_count = MAX_OUTCOMES as u8;
+    maximum_domain.owner_count = 64;
+    let mut maximum_book = BookV1::empty();
+    maximum_book.len = 64;
+    for index in 0..64usize {
+        let side = if index & 1 == 0 {
+            Side::Buy
+        } else {
+            Side::Sell
+        };
+        maximum_book.orders[index] =
+            single(index as u64 + 1, index as u16, (index / 4) as u8, side);
+    }
+    let mut maximum_prices = [PRICE_SCALE / MAX_OUTCOMES as u64; MAX_OUTCOMES];
+    maximum_prices[MAX_OUTCOMES - 1] += PRICE_SCALE - maximum_prices[0] * MAX_OUTCOMES as u64;
+    let maximum_candidate =
+        canonical_candidate(&maximum_domain, &maximum_book, &maximum_prices, 0, 0)
+            .expect("maximum active dimensions have a canonical candidate");
+    drive_lockstep_book(&maximum_domain, &maximum_book, &maximum_candidate);
+}
+
+#[test]
+fn native_engine_matches_v1_after_every_explicit_slice_transition() {
+    let (mut domain, _, prices) = fixture(SelfCrossPolicyV1::AllowGateAtPairing);
+    domain.owner_count = 2;
+    domain.policy.pairing_witness = PairingWitnessPolicyV1::ExplicitSlices;
+    domain.policy.residual_settlement = ResidualSettlementV1::UniqueSliceReceipts;
+    let mut book = BookV1::empty();
+    book.len = 2;
+    book.orders[0] = single(1, 0, 0, Side::Buy);
+    book.orders[1] = single(2, 1, 0, Side::Sell);
+    let candidate_full = canonical_candidate(&domain, &book, &prices, 0, 0).unwrap();
+    let witness = canonical_pairing(&domain, &book, &candidate_full).unwrap();
+    let candidate = StreamCandidateV1 {
+        declared_slices: Some(witness.len),
+        ..header(&candidate_full)
+    };
+    let widths = ClearWorkWidthsV2::new(2, 2, 2);
+    let mut v1 = ClearWorkV1::new();
+    let mut v2 = vec![0u8; clear_work_v2_body_len(widths)];
+    initialize_clear_work_v2_idle(&mut v2, widths).unwrap();
+
+    let expected = v1.begin(&domain, &candidate, true);
+    let actual = ClearWorkFeedV2::open(&mut v2, widths)
+        .unwrap()
+        .begin(&domain, &candidate, true);
+    assert_eq!(actual, expected);
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+
+    for index in 0..book.len as usize {
+        let expected = v1.push_order(&book.orders[index], candidate_full.fills[index]);
+        let actual = ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .push_order(&book.orders[index], candidate_full.fills[index]);
+        assert_eq!(actual, expected);
+        assert_lockstep_checkpoint(&v1, &mut v2, widths);
+    }
+    let expected = v1.end_pass();
+    let actual = ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass();
+    assert_eq!(actual, expected);
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+
+    for index in 0..witness.len as usize {
+        let expected = v1.push_slice(&witness.slices[index]);
+        let actual = ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .push_slice(&witness.slices[index]);
+        assert_eq!(actual, expected);
+        assert_lockstep_checkpoint(&v1, &mut v2, widths);
+    }
+    let expected = v1.end_pass();
+    let actual = ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass();
+    assert_eq!(actual, expected);
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+
+    for index in 0..book.len as usize {
+        let expected = v1.push_order(&book.orders[index], candidate_full.fills[index]);
+        let actual = ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .push_order(&book.orders[index], candidate_full.fills[index]);
+        assert_eq!(actual, expected);
+        assert_lockstep_checkpoint(&v1, &mut v2, widths);
+    }
+    let expected = v1.end_pass();
+    let actual = ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass();
+    assert_eq!(actual, expected);
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+    assert!(v1_verdict(&v1).unwrap().is_ok());
+}
+
+#[test]
+fn native_engine_poison_and_protocol_errors_are_v1_exact_and_atomic() {
+    let (domain, book, prices) = fixture(SelfCrossPolicyV1::AllowGateAtPairing);
+    let candidate_full = canonical_candidate(&domain, &book, &prices, 0, 0).unwrap();
+    let candidate = header(&candidate_full);
+    let widths = ClearWorkWidthsV2::new(2, 4, 3);
+    let mut v1 = ClearWorkV1::new();
+    let mut v2 = vec![0u8; clear_work_v2_body_len(widths)];
+    initialize_clear_work_v2_idle(&mut v2, widths).unwrap();
+
+    let idle_before = v2.clone();
+    assert_eq!(v1.end_pass(), Err(FeedErrorV1::NotInProgress));
+    assert_eq!(
+        ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass(),
+        Err(FeedErrorV1::NotInProgress)
+    );
+    assert_eq!(v2, idle_before);
+
+    v1.begin(&domain, &candidate, true).unwrap();
+    ClearWorkFeedV2::open(&mut v2, widths)
+        .unwrap()
+        .begin(&domain, &candidate, true)
+        .unwrap();
+    let wrong_phase_before = v2.clone();
+    let slice = super::relation_v1::PairingSliceV1 {
+        buy_ref: super::relation_v1::LegRefV1::Order(0),
+        sell_ref: super::relation_v1::LegRefV1::Order(1),
+        outcome: 0,
+        quantity: 1,
+    };
+    assert_eq!(v1.push_slice(&slice), Err(FeedErrorV1::WrongPhase));
+    assert_eq!(
+        ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .push_slice(&slice),
+        Err(FeedErrorV1::WrongPhase)
+    );
+    assert_eq!(v2, wrong_phase_before);
+
+    for index in 0..book.len as usize {
+        v1.push_order(&book.orders[index], candidate_full.fills[index])
+            .unwrap();
+        ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .push_order(&book.orders[index], candidate_full.fills[index])
+            .unwrap();
+    }
+    v1.end_pass().unwrap();
+    ClearWorkFeedV2::open(&mut v2, widths)
+        .unwrap()
+        .end_pass()
+        .unwrap();
+    for index in 0..book.len as usize {
+        let fill = if index == 0 {
+            candidate_full.fills[index].wrapping_add(1)
+        } else {
+            candidate_full.fills[index]
+        };
+        v1.push_order(&book.orders[index], fill).unwrap();
+        ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .push_order(&book.orders[index], fill)
+            .unwrap();
+    }
+    let before_poison = v2.clone();
+    assert_eq!(v1.end_pass(), Err(FeedErrorV1::ResumeFoldMismatch));
+    assert_eq!(
+        ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass(),
+        Err(FeedErrorV1::ResumeFoldMismatch)
+    );
+    assert_ne!(v2, before_poison);
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
+
+    let poisoned_before = v2.clone();
+    assert_eq!(
+        v1.push_order(&book.orders[0], 0),
+        Err(FeedErrorV1::NotInProgress)
+    );
+    assert_eq!(
+        ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .push_order(&book.orders[0], 0),
+        Err(FeedErrorV1::NotInProgress)
+    );
+    assert_eq!(v2, poisoned_before);
+}
+
+#[test]
+fn native_engine_preserves_candidate_length_and_padding_refusals() {
+    let (domain, book, prices) = fixture(SelfCrossPolicyV1::AllowGateAtPairing);
+    let candidate_full = canonical_candidate(&domain, &book, &prices, 0, 0).unwrap();
+    let widths = ClearWorkWidthsV2::new(2, 4, 3);
+
+    for forged_len in [3u8, 5] {
+        let mut candidate = header(&candidate_full);
+        candidate.order_len = forged_len;
+        let mut v1 = ClearWorkV1::new();
+        let mut v2 = vec![0u8; clear_work_v2_body_len(widths)];
+        initialize_clear_work_v2_idle(&mut v2, widths).unwrap();
+        assert_eq!(
+            ClearWorkFeedV2::open(&mut v2, widths)
+                .unwrap()
+                .begin(&domain, &candidate, true),
+            v1.begin(&domain, &candidate, true)
+        );
+        assert_lockstep_checkpoint(&v1, &mut v2, widths);
+        for pass in 0..2 {
+            for index in 0..book.len as usize {
+                let expected = v1.push_order(&book.orders[index], candidate_full.fills[index]);
+                let actual = ClearWorkFeedV2::open(&mut v2, widths)
+                    .unwrap()
+                    .push_order(&book.orders[index], candidate_full.fills[index]);
+                assert_eq!(
+                    actual, expected,
+                    "len {forged_len} pass {pass} order {index}"
+                );
+            }
+            let expected = v1.end_pass();
+            let actual = ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass();
+            assert_eq!(actual, expected, "len {forged_len} pass {pass} end");
+            assert_lockstep_checkpoint(&v1, &mut v2, widths);
+            if v1.status() == super::relation_v1_stream::FeedStatusV1::Complete {
+                break;
+            }
+        }
+        assert_eq!(
+            v1_verdict(&v1),
+            Some(Err(super::relation_v1::ErrorV1::CandidateMismatch))
+        );
+    }
+
+    // Inactive candidate prices are intentionally absent from compact
+    // storage, but their begin-time refusal and digest contribution must
+    // survive every reopen and produce the same semantic verdict.
+    let mut candidate = header(&candidate_full);
+    candidate.prices[2] = 1;
+    let mut v1 = ClearWorkV1::new();
+    let mut v2 = vec![0u8; clear_work_v2_body_len(widths)];
+    initialize_clear_work_v2_idle(&mut v2, widths).unwrap();
+    assert_eq!(
+        ClearWorkFeedV2::open(&mut v2, widths)
+            .unwrap()
+            .begin(&domain, &candidate, true),
+        v1.begin(&domain, &candidate, true)
+    );
+    while v1.status() != super::relation_v1_stream::FeedStatusV1::Complete {
+        for index in 0..book.len as usize {
+            let expected = v1.push_order(&book.orders[index], candidate_full.fills[index]);
+            let actual = ClearWorkFeedV2::open(&mut v2, widths)
+                .unwrap()
+                .push_order(&book.orders[index], candidate_full.fills[index]);
+            assert_eq!(actual, expected);
+        }
+        let expected = v1.end_pass();
+        let actual = ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass();
+        assert_eq!(actual, expected);
+    }
+    assert_eq!(v2_verdict(&mut v2, widths), v1_verdict(&v1));
+    assert_eq!(
+        v1_verdict(&v1),
+        Some(Err(super::relation_v1::ErrorV1::NonCanonicalPadding))
+    );
+}
+
 #[test]
 fn exact_geometry_and_native_idle_are_pinned() {
     let rows = [
@@ -335,6 +765,67 @@ fn hostile_bytes_are_total_and_accepted_images_are_closed() {
 }
 
 #[test]
+fn every_accepted_single_byte_mutation_has_v1_exact_continuation() {
+    let widths = ClearWorkWidthsV2::new(2, 4, 3);
+    let (domain, book, prices) = fixture(SelfCrossPolicyV1::AllowGateAtPairing);
+    let candidate = canonical_candidate(&domain, &book, &prices, 0, 0).unwrap();
+    let snapshots = reachable_snapshots(SelfCrossPolicyV1::AllowGateAtPairing);
+
+    let mut accepted = 0usize;
+    let mut v1_undefined = 0usize;
+    for source in snapshots {
+        let base = compact(&source, widths);
+        for at in 0..base.len() {
+            let mut v2 = base.clone();
+            v2[at] ^= 0xff;
+            if validate_clear_work_v2(&v2, widths).is_err() {
+                continue;
+            }
+            accepted += 1;
+
+            let mut v1_wire = vec![0u8; CLEAR_WORK_V1_BODY_BYTES];
+            expand_clear_work_v2_into_v1_wire(&v2, widths, &mut v1_wire).unwrap();
+            let mut v1 = ClearWorkV1::new();
+            v1.decode_into(&v1_wire).unwrap();
+
+            let actual = catch_unwind(AssertUnwindSafe(|| {
+                let mut work = ClearWorkFeedV2::open(&mut v2, widths).unwrap();
+                match work.status() {
+                    super::relation_v1_stream::FeedStatusV1::NeedOrders { .. }
+                        if (work.orders_consumed() as usize) < book.len as usize =>
+                    {
+                        let index = work.orders_consumed() as usize;
+                        work.push_order(&book.orders[index], candidate.fills[index])
+                    }
+                    _ => work.end_pass(),
+                }
+            }))
+            .unwrap_or_else(|_| panic!("V2 panicked after snapshot mutation at byte {at}"));
+            let expected = catch_unwind(AssertUnwindSafe(|| match v1.status() {
+                super::relation_v1_stream::FeedStatusV1::NeedOrders { .. }
+                    if (v1.orders_consumed() as usize) < book.len as usize =>
+                {
+                    let index = v1.orders_consumed() as usize;
+                    v1.push_order(&book.orders[index], candidate.fills[index])
+                }
+                _ => v1.end_pass(),
+            }));
+            let Ok(expected) = expected else {
+                // V1 has unchecked debug arithmetic on structurally valid but
+                // semantically impossible checkpoints. V2 must remain total;
+                // there is no V1 transition result to compare in this case.
+                v1_undefined += 1;
+                continue;
+            };
+            assert_eq!(actual, expected, "snapshot mutation at byte {at}");
+            assert_lockstep_checkpoint(&v1, &mut v2, widths);
+        }
+    }
+    assert_eq!(accepted, 23_339, "accepted corpus moved; re-audit it");
+    assert_eq!(v1_undefined, 2, "V1 undefined-transition set moved");
+}
+
+#[test]
 fn omitted_v1_padding_and_active_width_forgery_are_refused() {
     let widths = ClearWorkWidthsV2::new(2, 4, 3);
     let idle = encoded(&ClearWorkV1::new());
@@ -362,7 +853,7 @@ fn omitted_v1_padding_and_active_width_forgery_are_refused() {
     let mut work = ClearWorkV1::new();
     work.begin(&domain, &header(&candidate), true).unwrap();
     let active = compact(&encoded(&work), widths);
-    for at in [126usize, 127, 160] {
+    for at in [126usize, 127] {
         let mut forged = active.clone();
         forged[at] = forged[at].wrapping_add(1);
         assert_eq!(
@@ -370,6 +861,9 @@ fn omitted_v1_padding_and_active_width_forgery_are_refused() {
             Err(ClearWorkFaultV2::WidthBindingMismatch)
         );
     }
+    let mut mismatched_candidate_len = active.clone();
+    mismatched_candidate_len[160] = mismatched_candidate_len[160].wrapping_add(1);
+    assert!(validate_clear_work_v2(&mismatched_candidate_len, widths).is_ok());
 }
 
 #[test]
@@ -411,5 +905,6 @@ fn native_region_primitives_are_bounded_and_do_not_expand() {
 
     assert_eq!(core::mem::size_of::<ClearWorkViewV2<'_>>(), 32);
     assert_eq!(core::mem::size_of::<ClearWorkViewMutV2<'_>>(), 32);
+    assert_eq!(core::mem::size_of::<ClearWorkFeedV2<'_>>(), 1_776);
     assert!(core::mem::size_of::<ClearWorkViewV2<'_>>() * 20 < body.len());
 }
