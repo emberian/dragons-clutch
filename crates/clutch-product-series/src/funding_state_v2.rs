@@ -1003,7 +1003,9 @@ mod tests {
         let series = SeriesPlanV5 {
             product_template_id: crate::ProductTemplateId::from_bytes([16; 32]),
             market_genesis_profile_id: crate::MarketGenesisProfileV2Id::from_bytes([17; 32]),
-            attachment_plan_id: attachment.id().unwrap(),
+            attachment_plan_id: crate::SeriesAttachmentPlanId::from_bytes(
+                attachment.id().unwrap().bytes(),
+            ),
             first_start_bucket: 10,
             stride_buckets: 5,
             instance_count: 2,
