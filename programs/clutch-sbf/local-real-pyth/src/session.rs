@@ -959,6 +959,28 @@ fn validate_root(root: &Path) -> Result<()> {
             "local session root resembles a wallet path",
         ));
     }
+    let mut prefix = PathBuf::from("/");
+    for component in root.components() {
+        let Component::Normal(value) = component else {
+            continue;
+        };
+        prefix.push(value);
+        match fs::symlink_metadata(&prefix) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(SessionError::InvalidRoot(
+                    "local session root has a symlink ancestor",
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(SessionError::InvalidRoot(
+                    "local session root ancestor is not a directory",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(SessionError::Io(error)),
+        }
+    }
     Ok(())
 }
 
@@ -1045,12 +1067,35 @@ mod tests {
 
     #[test]
     fn session_root_refuses_non_normal_and_key_material_paths() {
-        assert!(validate_root(Path::new("/tmp/dragons-clutch/session")).is_ok());
-        assert!(validate_root(Path::new("/tmp/dragons-clutch/../session")).is_err());
-        assert!(validate_root(Path::new("/tmp/dragons-clutch/./session")).is_err());
-        assert!(validate_root(Path::new("/tmp/dragons-clutch//session")).is_err());
-        assert!(validate_root(Path::new("/tmp/wallet/session")).is_err());
-        assert!(validate_root(Path::new("/tmp/session/seed.json")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/session")).is_ok());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/../session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch/./session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/dragons-clutch//session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/wallet/session")).is_err());
+        assert!(validate_root(Path::new("/private/tmp/session/seed.json")).is_err());
+    }
+
+    #[test]
+    fn session_root_refuses_a_symlink_ancestor() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_nanos();
+        let temporary = fs::canonicalize(std::env::temp_dir())
+            .expect("temporary directory has a canonical path");
+        let base = temporary.join(format!(
+            "dragons-clutch-root-alias-{}-{nonce}",
+            std::process::id()
+        ));
+        let actual = base.join("actual");
+        let alias = base.join("alias");
+        fs::create_dir(&base).expect("test base is fresh");
+        fs::create_dir(&actual).expect("test target is fresh");
+        std::os::unix::fs::symlink(&actual, &alias).expect("test alias is created");
+        assert!(validate_root(&alias.join("session")).is_err());
+        fs::remove_file(alias).expect("test alias is removed");
+        fs::remove_dir(actual).expect("test target is removed");
+        fs::remove_dir(base).expect("test base is removed");
     }
 
     #[test]
@@ -1063,7 +1108,7 @@ mod tests {
             elf_path: PathBuf::from(format!("/tmp/{name}.so")),
         };
         let mut config = LocalSessionConfig {
-            root: PathBuf::from("/tmp/dragons-clutch-session-test"),
+            root: PathBuf::from("/private/tmp/dragons-clutch-session-test"),
             ports: LocalValidatorPorts {
                 rpc: 9137,
                 rpc_websocket: 9138,

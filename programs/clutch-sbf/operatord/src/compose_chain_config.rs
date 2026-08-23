@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,7 +52,59 @@ pub struct ComposeOptions {
     pub rpc_websocket_url: String,
 }
 
-fn bounded_read(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+fn refuse_key_like_path(path: &Path, name: &str) -> Result<()> {
+    if !path.is_absolute() || path == Path::new("/") {
+        return Err(format!("{name} path must be narrow and absolute").into());
+    }
+    for component in path.components() {
+        let value = match component {
+            Component::RootDir => continue,
+            Component::Normal(value) => value,
+            _ => return Err(format!("{name} path contains a non-normal component").into()),
+        };
+        let value = value.to_string_lossy().to_ascii_lowercase();
+        if value == ".solana"
+            || value == "ephemeral-keys"
+            || value == "id.json"
+            || [
+                "wallet",
+                "keypair",
+                "private-key",
+                "private_key",
+                "mnemonic",
+                "seed",
+                "secret",
+                "keystore",
+                "recovery-phrase",
+                "recovery_phrase",
+            ]
+            .iter()
+            .any(|marker| value.contains(*marker))
+        {
+            return Err(format!("{name} path is key-like and refused").into());
+        }
+    }
+    Ok(())
+}
+
+fn resolve_existing_input(path: &Path, name: &str) -> Result<PathBuf> {
+    refuse_key_like_path(path, name)?;
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(format!("{name} path has a symlink file leaf").into());
+    }
+    let resolved = std::fs::canonicalize(path)?;
+    refuse_key_like_path(&resolved, name)?;
+    if std::fs::symlink_metadata(&resolved)?.file_type().is_symlink() {
+        return Err(format!("{name} resolved to a symlink file leaf").into());
+    }
+    Ok(resolved)
+}
+
+fn bounded_read_resolved(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+    refuse_key_like_path(path, name)?;
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(format!("{name} resolved path became a symlink file leaf").into());
+    }
     let bytes = std::fs::read(path)?;
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(format!("{name} must contain 1..={maximum} bytes").into());
@@ -60,8 +112,18 @@ fn bounded_read(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn bounded_read(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+    let resolved = resolve_existing_input(path, name)?;
+    bounded_read_resolved(&resolved, maximum, name)
+}
+
 fn parse_local_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
-    let bytes = bounded_read(path, MAX_LOCAL_MANIFEST_BYTES, "local release manifest")?;
+    let resolved = resolve_existing_input(path, "local release manifest")?;
+    let bytes = bounded_read_resolved(
+        &resolved,
+        MAX_LOCAL_MANIFEST_BYTES,
+        "local release manifest",
+    )?;
     let text = std::str::from_utf8(&bytes)?;
     let mut fields = BTreeMap::new();
     for (line_index, line) in text.lines().enumerate() {
@@ -105,11 +167,13 @@ fn parse_local_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
     ] {
         field(&fields, name)?;
     }
-    let marker = path
+    let marker = resolved
         .parent()
         .ok_or("local release manifest has no session directory")?
         .join("SESSION_OWNER");
-    if std::fs::read_to_string(marker)? != clutch_local_real_pyth::session::SESSION_MARKER {
+    if bounded_read(&marker, 128, "local session owner marker")?.as_slice()
+        != clutch_local_real_pyth::session::SESSION_MARKER.as_bytes()
+    {
         return Err("local release manifest session owner marker mismatches".into());
     }
     Ok(fields)
@@ -170,10 +234,14 @@ impl ExactManifestCopy {
                 .open(&path)
             {
                 Ok(mut file) => {
-                    let exact_copy = Self { path };
+                    let mut exact_copy = Self { path };
                     file.write_all(bytes)?;
                     file.sync_all()?;
                     file.set_permissions(std::fs::Permissions::from_mode(0o400))?;
+                    exact_copy.path = resolve_existing_input(
+                        &exact_copy.path,
+                        "capability manifest checker handoff",
+                    )?;
                     return Ok(exact_copy);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,

@@ -113,6 +113,14 @@ External ELF bytes are capped at 80 MiB in aggregate, genesis JSON bytes at
 64 MiB in aggregate, and all staged inputs at 384 MiB in aggregate, in addition
 to the per-file limits. It refuses wallet-, keypair-, seed-, mnemonic-,
 secret-, and recovery-material-like paths and non-normal path components.
+Every existing input is resolved before any content read and the same refusal
+is reapplied to the resolved path, so a benign alias cannot conceal a key-like
+target. Symlink file leaves are refused. Resolved validator, ELF, and genesis
+paths remain the exact staging/provenance sources; a later resolution change
+refuses instead of silently selecting another file. The fresh session root is
+lexically normal and every existing ancestor must be a real directory rather
+than a symlink, so use its canonical parent path (for example `/private/tmp`
+rather than `/tmp` on systems where the latter is an alias).
 
 Preparation starts no validator and performs no RPC operation; it does invoke
 the repository's offline capability-profile checker:

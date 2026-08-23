@@ -192,8 +192,24 @@ impl Drop for ValidatorGuard {
     }
 }
 
-fn bounded_read(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+fn resolve_existing_input(path: &Path, name: &str) -> Result<PathBuf> {
     refuse_key_like_path(path, name)?;
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(format!("{name} path has a symlink file leaf").into());
+    }
+    let resolved = std::fs::canonicalize(path)?;
+    refuse_key_like_path(&resolved, name)?;
+    if std::fs::symlink_metadata(&resolved)?.file_type().is_symlink() {
+        return Err(format!("{name} resolved to a symlink file leaf").into());
+    }
+    Ok(resolved)
+}
+
+fn bounded_read_resolved(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+    refuse_key_like_path(path, name)?;
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(format!("{name} resolved path became a symlink file leaf").into());
+    }
     let bytes = std::fs::read(path)?;
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(format!("{name} must contain 1..={maximum} bytes").into());
@@ -299,7 +315,11 @@ fn verify_file_digest(
     maximum: usize,
     name: &str,
 ) -> Result<usize> {
-    let bytes = bounded_read(path, maximum, name)?;
+    let resolved = resolve_existing_input(path, name)?;
+    if resolved.as_path() != path {
+        return Err(format!("{name} resolved path changed").into());
+    }
+    let bytes = bounded_read_resolved(&resolved, maximum, name)?;
     if solana_sha256_hasher::hash(&bytes).to_bytes() != expected {
         return Err(format!("{name} bytes disagree with their exact digest").into());
     }
@@ -324,7 +344,7 @@ fn require_bounded_count(count: usize, maximum: usize, name: &str) -> Result<()>
 }
 
 fn validate_genesis_account_json(path: &Path, allowed_owners: &BTreeSet<Address>) -> Result<()> {
-    let bytes = bounded_read(path, MAX_GENESIS_ACCOUNT_BYTES, "genesis account JSON")?;
+    let bytes = bounded_read_resolved(path, MAX_GENESIS_ACCOUNT_BYTES, "genesis account JSON")?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)?;
     let owner = value
         .get("owner")
@@ -378,12 +398,13 @@ fn release(
     index: usize,
     sealed_inputs: &Path,
 ) -> Result<(LocalProgramRelease, StagedInput, usize)> {
-    if wire.elf_path.extension().and_then(|value| value.to_str()) != Some("so") {
+    let elf_source = resolve_existing_input(&wire.elf_path, "external program ELF")?;
+    if elf_source.extension().and_then(|value| value.to_str()) != Some("so") {
         return Err("external program ELF input must be an absolute .so path".into());
     }
     let elf_sha256 = digest(&wire.elf_sha256, "external elf_sha256")?;
     let elf_bytes = verify_file_digest(
-        &wire.elf_path,
+        &elf_source,
         elf_sha256,
         MAX_ELF_BYTES,
         "external program ELF",
@@ -405,7 +426,7 @@ fn release(
     Ok((
         release,
         StagedInput {
-            source: wire.elf_path,
+            source: elf_source,
             destination,
             expected_sha256: elf_sha256,
             maximum_bytes: MAX_ELF_BYTES,
@@ -443,7 +464,11 @@ fn utf8_argument(value: &OsStr) -> Result<String> {
 }
 
 fn stage_input(input: StagedInput) -> Result<()> {
-    let bytes = bounded_read(&input.source, input.maximum_bytes, input.name)?;
+    let resolved = resolve_existing_input(&input.source, input.name)?;
+    if resolved.as_path() != input.source.as_path() {
+        return Err(format!("{} resolved path changed before sealed staging", input.name).into());
+    }
+    let bytes = bounded_read_resolved(&resolved, input.maximum_bytes, input.name)?;
     if solana_sha256_hasher::hash(&bytes).to_bytes() != input.expected_sha256 {
         return Err(format!("{} changed before sealed staging", input.name).into());
     }
@@ -467,7 +492,12 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     {
         return Err("local launch and capability inputs must be explicit .json files".into());
     }
-    let config_bytes = bounded_read(&options.config, MAX_CONFIG_BYTES, "local launch config")?;
+    let config_path = resolve_existing_input(&options.config, "local launch config")?;
+    let config_bytes = bounded_read_resolved(
+        &config_path,
+        MAX_CONFIG_BYTES,
+        "local launch config",
+    )?;
     let wire: LocalLaunchWire = serde_json::from_slice(&config_bytes)?;
     if wire.schema != LOCAL_LAUNCH_CONFIG_SCHEMA || wire.cluster.name != "local-validator" {
         return Err("local launch config has an unsupported schema or network".into());
@@ -485,13 +515,14 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     if let Some(expected) = wire.cluster.expected_genesis_hash.as_deref() {
         address(expected, "expected_genesis_hash")?;
     }
-    refuse_key_like_path(&options.capability_manifest, "capability manifest")?;
-    let capability_bytes = bounded_read(
-        &options.capability_manifest,
+    let capability_manifest =
+        resolve_existing_input(&options.capability_manifest, "capability manifest")?;
+    let capability_bytes = bounded_read_resolved(
+        &capability_manifest,
         MAX_CAPABILITY_MANIFEST_BYTES,
         "capability manifest",
     )?;
-    let checked = checked_capability_release(&options.capability_manifest)?;
+    let checked = checked_capability_release(&capability_manifest)?;
     let mut staged_input_bytes = 0;
     add_bounded_size(
         &mut staged_input_bytes,
@@ -501,7 +532,8 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     )?;
     let session_root = wire.session_root.clone();
     let sealed_inputs = session_root.join("sealed-inputs");
-    let clutch_elf_source = wire.release.elf_path.clone();
+    let clutch_elf_source =
+        resolve_existing_input(&wire.release.elf_path, "Clutch release ELF")?;
     if clutch_elf_source.extension().and_then(|value| value.to_str()) != Some("so") {
         return Err("Clutch release ELF input must be an absolute .so path".into());
     }
@@ -518,7 +550,8 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         MAX_STAGED_INPUT_BYTES,
         "staged input",
     )?;
-    let validator_source = wire.validator.binary.clone();
+    let validator_source =
+        resolve_existing_input(&wire.validator.binary, "local validator binary")?;
     let validator_binary = sealed_inputs.join("solana-test-validator");
     let validator_sha256 = digest(&wire.validator.sha256, "validator sha256")?;
     let validator_bytes = verify_file_digest(
@@ -686,8 +719,9 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     let mut genesis_account_bytes = 0;
     let mut genesis_accounts = Vec::with_capacity(wire.genesis_accounts.len());
     for (index, account) in wire.genesis_accounts.into_iter().enumerate() {
-        if account
-            .account_json
+        let account_json =
+            resolve_existing_input(&account.account_json, "genesis account JSON")?;
+        if account_json
             .extension()
             .and_then(|value| value.to_str())
             != Some("json")
@@ -695,9 +729,9 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
             return Err("genesis account input must be an explicit .json file".into());
         }
         let body_sha256 = digest(&account.body_sha256, "genesis body_sha256")?;
-        validate_genesis_account_json(&account.account_json, &allowed_genesis_owners)?;
+        validate_genesis_account_json(&account_json, &allowed_genesis_owners)?;
         let byte_count = verify_file_digest(
-            &account.account_json,
+            &account_json,
             body_sha256,
             MAX_GENESIS_ACCOUNT_BYTES,
             "genesis account JSON",
@@ -716,7 +750,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         )?;
         let destination = sealed_inputs.join(format!("genesis-account-{index}.json"));
         staged_inputs.push(StagedInput {
-            source: account.account_json,
+            source: account_json,
             destination: destination.clone(),
             expected_sha256: body_sha256,
             maximum_bytes: MAX_GENESIS_ACCOUNT_BYTES,
@@ -822,11 +856,18 @@ pub fn prepare_only(options: &LocalLaunchOptions) -> Result<String> {
 }
 
 fn verify_pinned_validator(prepared: &PreparedLocalChain) -> Result<()> {
+    let provenance_validator = resolve_existing_input(
+        &prepared.provenance_validator,
+        "provenance validator binary",
+    )?;
+    if provenance_validator.as_path() != prepared.provenance_validator.as_path() {
+        return Err("provenance validator resolved path changed after preparation".into());
+    }
     let verifier = crate::repo_path("tools/agave-loopback-validator/verify-runtime.py");
     let output = Command::new("python3")
         .arg(verifier)
         .arg("--binary")
-        .arg(&prepared.provenance_validator)
+        .arg(&provenance_validator)
         .output()?;
     if output.stdout.len().saturating_add(output.stderr.len()) > 65_536 {
         return Err("validator provenance verifier output exceeded 65536 bytes".into());
@@ -838,8 +879,8 @@ fn verify_pinned_validator(prepared: &PreparedLocalChain) -> Result<()> {
             .collect::<String>();
         return Err(format!("pinned loopback validator verification failed: {detail}").into());
     }
-    if solana_sha256_hasher::hash(&bounded_read(
-        &prepared.provenance_validator,
+    if solana_sha256_hasher::hash(&bounded_read_resolved(
+        &provenance_validator,
         MAX_VALIDATOR_BYTES,
         "provenance validator binary",
     )?)
@@ -1028,6 +1069,46 @@ mod tests {
             "genesis_accounts"
         )
         .is_err());
+    }
+
+    #[test]
+    fn resolved_key_paths_and_symlink_file_leaves_are_refused() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_nanos();
+        let temporary = std::fs::canonicalize(std::env::temp_dir())
+            .expect("temporary directory has a canonical path");
+        let base = temporary.join(format!(
+            "dragons-clutch-input-alias-{}-{nonce}",
+            std::process::id()
+        ));
+        let wallet_directory = base.join("wallet-vault");
+        let directory_alias = base.join("ordinary-inputs");
+        std::fs::create_dir(&base).expect("test base is fresh");
+        std::fs::create_dir(&wallet_directory).expect("test target is fresh");
+        let hidden_target = wallet_directory.join("release.json");
+        std::fs::write(&hidden_target, b"not-wallet-material")
+            .expect("test target is written");
+        std::os::unix::fs::symlink(&wallet_directory, &directory_alias)
+            .expect("test directory alias is created");
+        assert!(
+            resolve_existing_input(&directory_alias.join("release.json"), "input").is_err()
+        );
+
+        let ordinary_target = base.join("ordinary.json");
+        let file_alias = base.join("input.json");
+        std::fs::write(&ordinary_target, b"ordinary").expect("test file is written");
+        std::os::unix::fs::symlink(&ordinary_target, &file_alias)
+            .expect("test file alias is created");
+        assert!(resolve_existing_input(&file_alias, "input").is_err());
+
+        std::fs::remove_file(file_alias).expect("test file alias is removed");
+        std::fs::remove_file(ordinary_target).expect("test file is removed");
+        std::fs::remove_file(directory_alias).expect("test directory alias is removed");
+        std::fs::remove_file(hidden_target).expect("test target is removed");
+        std::fs::remove_dir(wallet_directory).expect("test target directory is removed");
+        std::fs::remove_dir(base).expect("test base is removed");
     }
 
     #[test]

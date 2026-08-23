@@ -55,13 +55,34 @@ struct DevnetDeploymentManifestV1 {
     deployment: String,
 }
 
-fn bounded_read(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+fn resolve_existing_input(path: &Path, name: &str) -> Result<PathBuf> {
     refuse_key_like_path(path, name)?;
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(format!("{name} path has a symlink file leaf").into());
+    }
+    let resolved = std::fs::canonicalize(path)?;
+    refuse_key_like_path(&resolved, name)?;
+    if std::fs::symlink_metadata(&resolved)?.file_type().is_symlink() {
+        return Err(format!("{name} resolved to a symlink file leaf").into());
+    }
+    Ok(resolved)
+}
+
+fn bounded_read_resolved(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+    refuse_key_like_path(path, name)?;
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(format!("{name} resolved path became a symlink file leaf").into());
+    }
     let bytes = std::fs::read(path)?;
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(format!("{name} must contain 1..={maximum} bytes").into());
     }
     Ok(bytes)
+}
+
+fn bounded_read(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
+    let resolved = resolve_existing_input(path, name)?;
+    bounded_read_resolved(&resolved, maximum, name)
 }
 
 fn refuse_key_like_path(path: &Path, name: &str) -> Result<()> {
@@ -182,13 +203,17 @@ pub fn compose(options: &ComposeDevnetOptions) -> Result<String> {
     {
         return Err("devnet deployment and capability inputs must be explicit .json files".into());
     }
-    refuse_key_like_path(&options.capability_manifest, "capability manifest")?;
-    if options.built_elf.extension().and_then(|value| value.to_str()) != Some("so") {
+    let deployment_manifest =
+        resolve_existing_input(&options.deployment_manifest, "devnet deployment manifest")?;
+    let capability_manifest =
+        resolve_existing_input(&options.capability_manifest, "capability manifest")?;
+    let built_elf_path = resolve_existing_input(&options.built_elf, "built release ELF")?;
+    if built_elf_path.extension().and_then(|value| value.to_str()) != Some("so") {
         return Err("built release ELF must be an absolute .so path".into());
     }
     let (manifest, deployment_manifest_sha256) =
-        parse_manifest(&options.deployment_manifest)?;
-    let checked = checked_capability_release(&options.capability_manifest)?;
+        parse_manifest(&deployment_manifest)?;
+    let checked = checked_capability_release(&capability_manifest)?;
     if hash32(
         &manifest.capability_manifest_sha256,
         "capability_manifest_sha256",
@@ -206,7 +231,7 @@ pub fn compose(options: &ComposeDevnetOptions) -> Result<String> {
         &manifest.compiler_release_sha256,
         "compiler_release_sha256",
     )?;
-    let built_elf = bounded_read(&options.built_elf, MAX_ELF_BYTES, "built release ELF")?;
+    let built_elf = bounded_read_resolved(&built_elf_path, MAX_ELF_BYTES, "built release ELF")?;
     if solana_sha256_hasher::hash(&built_elf).to_bytes() != checked.elf_sha256 {
         return Err("built release ELF differs from the checked devnet deployment".into());
     }
@@ -286,5 +311,44 @@ mod tests {
         assert!(refuse_key_like_path(Path::new("/tmp/seed.json"), "manifest").is_err());
         assert!(refuse_key_like_path(Path::new("/tmp/mnemonic.json"), "manifest").is_err());
         assert!(refuse_key_like_path(Path::new("/tmp/secret.json"), "manifest").is_err());
+    }
+
+    #[test]
+    fn devnet_inputs_refuse_resolved_secret_paths_and_symlink_leaves() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is after the Unix epoch")
+            .as_nanos();
+        let temporary = std::fs::canonicalize(std::env::temp_dir())
+            .expect("temporary directory has a canonical path");
+        let base = temporary.join(format!(
+            "dragons-clutch-devnet-alias-{}-{nonce}",
+            std::process::id()
+        ));
+        let secret_directory = base.join("secret-store");
+        let directory_alias = base.join("ordinary-inputs");
+        std::fs::create_dir(&base).expect("test base is fresh");
+        std::fs::create_dir(&secret_directory).expect("test target is fresh");
+        let hidden_target = secret_directory.join("manifest.json");
+        std::fs::write(&hidden_target, b"not-secret-material").expect("test target is written");
+        std::os::unix::fs::symlink(&secret_directory, &directory_alias)
+            .expect("test directory alias is created");
+        assert!(
+            resolve_existing_input(&directory_alias.join("manifest.json"), "input").is_err()
+        );
+
+        let ordinary_target = base.join("ordinary.json");
+        let file_alias = base.join("input.json");
+        std::fs::write(&ordinary_target, b"ordinary").expect("test file is written");
+        std::os::unix::fs::symlink(&ordinary_target, &file_alias)
+            .expect("test file alias is created");
+        assert!(resolve_existing_input(&file_alias, "input").is_err());
+
+        std::fs::remove_file(file_alias).expect("test file alias is removed");
+        std::fs::remove_file(ordinary_target).expect("test file is removed");
+        std::fs::remove_file(directory_alias).expect("test directory alias is removed");
+        std::fs::remove_file(hidden_target).expect("test target is removed");
+        std::fs::remove_dir(secret_directory).expect("test target directory is removed");
+        std::fs::remove_dir(base).expect("test base is removed");
     }
 }

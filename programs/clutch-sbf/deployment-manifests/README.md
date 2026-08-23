@@ -25,6 +25,11 @@ the finalized ProgramData account. Local `--bpf-program` releases instead use
 the synthesized slot zero and are owned only by the v6 local session seal; the
 two coordinate types are deliberately not interchangeable.
 
+Deployment-manifest, capability-manifest, and built-ELF inputs are
+canonicalized before content reads and checked again at their resolved paths.
+Key-like resolved targets and symlink file leaves are refused; no wallet or
+private-key alias is an accepted deployment input.
+
 A devnet record must never be copied from or encoded as the
 `dragons-clutch/local-validator-public-manifest/v6` session seal. The composer
 performs no RPC call, wallet read, signing, submission, faucet request, or
