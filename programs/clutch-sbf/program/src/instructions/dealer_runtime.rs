@@ -8,10 +8,17 @@
 //! adapter consumes only actions with complete account contracts; every other
 //! action remains refused before reading accounts.
 
-use clutch_dealer_runtime_contract::FixedCodec;
-use clutch_solana_layout::registry::DealerFacilityAction;
+use clutch_dealer_runtime_contract::{CoveredDealerTerminalV2, FixedCodec, Id};
+use clutch_solana_layout::registry::{
+    DealerFacilityAction, DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+    DEALER_COVERED_SELECTION_ACCOUNT_TAG, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+};
+use solana_account_info::AccountInfo;
+use solana_pubkey::Pubkey;
 
-use crate::error::{ClutchError, Refusal};
+use crate::accounts::{expect_pda, require};
+use crate::error::{ClutchError, Outcome, Refusal};
+use crate::seeds;
 
 /// Exact global Dealer account-envelope bytes.
 pub const DEALER_ACCOUNT_ENVELOPE_BYTES_V1: usize = 8;
@@ -106,6 +113,114 @@ pub fn decode_dealer_account_body_v1<T: FixedCodec>(
     let body = T::decode(&input[DEALER_ACCOUNT_ENVELOPE_BYTES_V1..])
         .map_err(|_| DealerRuntimeContractErrorV1::InvalidBody)?;
     Ok((envelope, body))
+}
+
+/// Program-local authority that one exact counted `0xae/v2` postwrite was
+/// decoded from its program-owned PDA. Private fields prevent General from
+/// substituting a caller-shaped terminal DTO.
+pub(crate) struct AuthenticatedCoveredDealerTerminalPostwriteV2 {
+    account_id: Id,
+    owner_program_id: Id,
+    bump: u8,
+    terminal: CoveredDealerTerminalV2,
+}
+
+impl AuthenticatedCoveredDealerTerminalPostwriteV2 {
+    /// Exact authenticated physical attachment account.
+    pub(crate) const fn account_id(&self) -> Id {
+        self.account_id
+    }
+
+    /// Program which owns the authenticated postwrite bytes.
+    pub(crate) const fn owner_program_id(&self) -> Id {
+        self.owner_program_id
+    }
+
+    /// Exact PDA bump authenticated from the envelope and seed tuple.
+    pub(crate) const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    /// Borrow the exact decoded terminal body; no detached field DTO exists.
+    pub(crate) const fn terminal(&self) -> &CoveredDealerTerminalV2 {
+        &self.terminal
+    }
+}
+
+fn authenticate_covered_dealer_terminal_postwrite_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<AuthenticatedCoveredDealerTerminalPostwriteV2> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(
+        account.is_writable == writable,
+        if writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
+    require(
+        account.data_len() == DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let (envelope, terminal) = decode_dealer_account_body_v1::<CoveredDealerTerminalV2>(
+        &data,
+        DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+        DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(data);
+    expect_pda(
+        account.key,
+        seeds::dealer_covered_selection_pda(
+            program_id,
+            &terminal.general_epoch_account_id().bytes(),
+            &terminal.settlement_candidate_id().bytes(),
+        ),
+        Some(envelope.bump),
+    )?;
+    let rent = terminal.rent();
+    let floor = rent
+        .refundable_principal
+        .checked_add(rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        terminal.selection_account_id().bytes() == account.key.to_bytes()
+            && terminal.stored_bump() == envelope.bump
+            && account.lamports() >= floor,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedCoveredDealerTerminalPostwriteV2 {
+        account_id: Id::from_bytes(account.key.to_bytes()),
+        owner_program_id: Id::from_bytes(program_id.to_bytes()),
+        bump: envelope.bump,
+        terminal,
+    })
+}
+
+/// Authenticate the read-only terminal authority used to enter General
+/// retirement without writable privilege theater.
+pub(crate) fn authenticate_covered_dealer_terminal_postwrite_readonly_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedCoveredDealerTerminalPostwriteV2> {
+    authenticate_covered_dealer_terminal_postwrite_v2(program_id, account, false)
+}
+
+/// Authenticate the writable terminal authority used only by General's later
+/// counted attachment close.
+pub(crate) fn authenticate_covered_dealer_terminal_postwrite_writable_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedCoveredDealerTerminalPostwriteV2> {
+    authenticate_covered_dealer_terminal_postwrite_v2(program_id, account, true)
 }
 
 /// Encode one exact pure Dealer body behind its strict global envelope.
