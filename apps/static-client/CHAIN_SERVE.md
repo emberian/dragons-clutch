@@ -6,63 +6,41 @@ signer, blockhash, transaction submission, faucet, deployment, account
 creation, or persistence path.
 
 ```text
+operatord compose-chain-config \
+  --local-release-manifest /absolute/session/public-session.txt \
+  --capability-manifest /absolute/checked-profile.json \
+  --cluster-name localnet \
+  --expected-genesis HASH \
+  --rpc-http-url http://127.0.0.1:8899 \
+  --rpc-websocket-url ws://127.0.0.1:8900 > chain.json
+
 operatord chain-serve --config chain.json [--port 9130] [--static apps/static-client]
 ```
 
-The config is explicit and closed. Every integer is a canonical decimal string;
-identities are either Solana base58 addresses/hashes or lowercase 32-byte hex as
-named. No field has an inferred network or release default.
+`chain.json` is output, not caller-authored input. The offline composer invokes
+the existing capability-profile v2 checker with deployability required and
+cross-checks its checker-emitted SHA-256 of sorted-key compact ASCII JSON,
+profile identity, measured source
+commit, and measured ELF digest against the v6 local-session seal. It hashes the
+actual ELF file, requires the session ownership marker and exact HTTP/WebSocket
+pair, validates Program/ProgramData/slot coordinates, fixes bounded runtime
+policy, and derives the workflow identity. Missing, planning, historical,
+unsealed, stale-decoder, or mismatched inputs fail closed.
 
-```json
-{
-  "schema": "dragons-clutch/operatord-chain-config/v2",
-  "decoderSet": "dragons-clutch/canonical-account-decoders/v1-source-v3-current",
-  "cluster": {
-    "name": "localnet-or-devnet-label",
-    "genesisHash": "<exact Solana genesis hash>",
-    "rpcHttpUrl": "http://127.0.0.1:8899",
-    "rpcWebsocketUrl": "ws://127.0.0.1:8900"
-  },
-  "releases": [
-    {
-      "programId": "<program address>",
-      "programData": "<linked ProgramData address>",
-      "elfSha256": "<lowercase SHA-256 of ProgramData bytes after the 45-byte loader metadata>",
-      "deploymentSlot": "1",
-      "families": ["collateral", "fractional", "general", "source", "series", "fees", "liveness", "position-v3", "replay-v3", "structured-claim", "dealer", "failure"]
-    }
-  ],
-  "sourceNeutralSink": "<explicit Source runtime neutral-sink address>",
-  "workflowId": "<nonzero lowercase 32-byte workflow identity>",
-  "maximumKeeperActions": "256",
-  "bounds": {
-    "maximumAccountsPerScan": "4096",
-    "maximumAccountDataBytes": "1048576",
-    "maximumTotalResponseBytes": "16777216",
-    "maximumSubscriptions": "64",
-    "maximumAddresses": "4096",
-    "maximumVersionsPerAddress": "8",
-    "maximumForkNodes": "4096"
-  },
-  "pollingIntervalMilliseconds": "5000",
-  "rpcTimeoutSeconds": "30",
-  "websocketReconnectInitialMilliseconds": "250",
-  "websocketReconnectMaximumMilliseconds": "30000",
-  "compilerReleaseSha256": "<configured pure compiler build/release SHA-256>"
-}
-```
+The central registry's exact enabled intent triples—not a second operatord or
+browser allocation table—select action 26 and current General, Source/Series,
+Dealer, Recovery, and Fractional surfaces. Current decoder families may still
+be projected without an enabled coordinate, but that state is explicitly
+non-actionable. Every output integer is a canonical decimal string. The
+composer reads no wallet or browser session and has no RPC, signing, submission,
+deployment, or persistence path.
 
-The values above illustrate widths and shape, not a shipped network, program,
-release, wallet, or source fixture. Replace every placeholder and review every
-bound. Decoder family names are explicit operator configuration assertions about
-the selected release;
-the hostile decoder refuses unknown and ambiguous account bodies. The decoder
-set is mandatory: it admits Source V3 runtime accounts and only the current
+The hostile decoder admits Source V3 runtime accounts and only the current
 Collateral Hoard V2, ClaimLedger V3, Resolution V5, and the current General
 successor versions (including Window V5, AdmissionNode V4/outer-v2,
 MarketBinding V2, ClearWork V3, rent-owned OwnerSettlement V5,
 SettlementReceipt V5, SettlementRoot V1, Reservation V9, and OrderPage V5).
-The separately selected `fractional` family admits only Policy V2, Ledger V1,
+The checked `fractional` family admits only Policy V2, Ledger V1,
 Credit V2, and Tombstone V2. The reinterpreted policy/credit/tombstone V1 bytes
 are withdrawn and invisible to live discovery.
 It also admits only the current globally enveloped Dealer state graph (State,
@@ -89,9 +67,10 @@ untrusted RPC and refuses to bind Glass unless that one endpoint reports:
 It checks the same coordinates again after each complete scan and only then
 exposes `SharedIndexApi`, so an observation that changes across the scan keeps
 the projection withdrawn. These checks are consistency observations, not
-cryptographic chain authentication or an RPC quorum. The configured decoder-family
-list is not derived from the ELF and must not be treated as release-manifest
-proof. Every account response is still an untrusted projection:
+cryptographic chain authentication or an RPC quorum. The decoder families and
+enabled intent coordinates are derived from the checked manifest/registry join,
+but their daemon projection is not a current-account runtime capability verdict.
+Every account response is still an untrusted projection:
 onchain execution must reload complete authoritative accounts.
 
 ## Processed finality and rollback boundary
@@ -137,10 +116,10 @@ available while processed transport is in backoff, registration, or replay.
 HTTP and WebSocket URL plus a display coordinate containing only
 scheme/authority and redacted path/query markers. It never returns raw URL
 userinfo, path tokens, or query credentials. Userinfo is rejected at config
-admission. Glass hashes its exact immutable URL selections locally and requires
-both hashes, the genesis binding, and every configured
-Program/ProgramData/deployment-slot/ELF coordinate to match before accepting an
-account response. Its displayed/copied configuration is redacted too. For
+admission. Glass accepts only the daemon's redacted/hash endpoint bindings and
+exact composed manifest/profile/source/Program/ProgramData/slot/ELF projection;
+it has no caller-shaped RPC or release fields to compare or override. Its
+displayed/copied configuration is redacted too. For
 processed reads it brackets its bounded GET sequence with acquisition-state
 reads and rejects a changed connection generation or rollback epoch. The
 echoed verification disposition means only that the read gate follows the last
