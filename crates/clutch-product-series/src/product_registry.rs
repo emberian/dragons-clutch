@@ -1,9 +1,9 @@
-//! Immutable Product capability registry selected by the shared artifact graph.
+//! Immutable central-registry capability profile selected by the shared artifact graph.
 //!
 //! This body is the single semantic owner of the otherwise-ephemeral
 //! [`RegistryCapabilityProjectionV2`]. Its content identity is the registry
-//! release identity projected into compilation. The enclosing artifact
-//! account supplies program ownership and content-addressed PDA
+//! capability-profile identity projected into compilation. The enclosing
+//! artifact account supplies program ownership and content-addressed PDA
 //! authentication; the SBF adapter additionally authenticates the exact
 //! executable/ProgramData release frozen here.
 
@@ -16,21 +16,29 @@ use crate::codec::{Reader, Writer};
 use crate::{
     content_id, CapabilitySemanticOwnersV2, ContentId, Error, EvidenceOnlyRecoveryPolicyId,
     FixedCodec, NativeClaimBasisId, PriceMeasurePolicyV1Id, RealmCollateralProjectionV1,
-    RegistryCapabilityProjectionV2, Result,
+    RegistryCapabilityProfileV2Id, RegistryCapabilityProjectionV2, RegistryProgramReleaseV1Id,
+    Result,
 };
 
-const MAGIC: [u8; 8] = *b"DCPREGV2";
-const VERSION: u16 = 2;
+const PROFILE_MAGIC: [u8; 8] = *b"DCRCAPV2";
+const PROFILE_VERSION: u16 = 2;
+const RELEASE_MAGIC: [u8; 8] = *b"DCRRELV1";
+const RELEASE_VERSION: u16 = 1;
 
-/// SHA-256 domain for [`ProductCapabilityRegistryV2`].
-pub const PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN: &[u8] =
-    b"dragons-clutch/product-capability-registry/v2";
-/// Exact canonical width of [`ProductCapabilityRegistryV2`].
-pub const PRODUCT_CAPABILITY_REGISTRY_V2_BYTES: usize = 936;
+/// SHA-256 domain for [`RegistryCapabilityProfileV2`].
+pub const REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN: &[u8] =
+    b"dragons-clutch/registry-capability-profile/v2";
+/// Exact canonical width of [`RegistryCapabilityProfileV2`].
+pub const REGISTRY_CAPABILITY_PROFILE_V2_BYTES: usize = 800;
 
-/// Exact executable release permitted to consume one Product registry.
+/// SHA-256 domain for [`RegistryProgramReleaseV1`].
+pub const REGISTRY_PROGRAM_RELEASE_V1_DOMAIN: &[u8] = b"dragons-clutch/registry-program-release/v1";
+/// Exact canonical width of [`RegistryProgramReleaseV1`].
+pub const REGISTRY_PROGRAM_RELEASE_V1_BYTES: usize = 160;
+
+/// Exact executable release associated with one central-registry profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProductProgramReleaseV1 {
+pub struct RegistryProgramReleaseV1 {
     /// Executing SBF program address.
     pub program: ContentId,
     /// Upgradeable-loader ProgramData address linked from the program account.
@@ -43,7 +51,16 @@ pub struct ProductProgramReleaseV1 {
     pub capability_manifest_id: ContentId,
 }
 
-impl ProductProgramReleaseV1 {
+impl RegistryProgramReleaseV1 {
+    /// Exact release identity derived from the complete executable binding.
+    pub fn id(self) -> Result<RegistryProgramReleaseV1Id> {
+        let mut body = [0; REGISTRY_PROGRAM_RELEASE_V1_BYTES];
+        self.encode_into(&mut body)?;
+        Ok(RegistryProgramReleaseV1Id::from_bytes(
+            content_id(REGISTRY_PROGRAM_RELEASE_V1_DOMAIN, &body).bytes(),
+        ))
+    }
+
     fn validate(self) -> Result<()> {
         self.program.validate()?;
         self.programdata.validate()?;
@@ -56,18 +73,56 @@ impl ProductProgramReleaseV1 {
     }
 }
 
-/// Content-addressed immutable Product capability registry V2.
+impl FixedCodec for RegistryProgramReleaseV1 {
+    const ENCODED_LEN: usize = REGISTRY_PROGRAM_RELEASE_V1_BYTES;
+
+    fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
+        writer.bytes(&RELEASE_MAGIC);
+        writer.u16(RELEASE_VERSION);
+        writer.reserved(6);
+        writer.id(self.program);
+        writer.id(self.programdata);
+        writer.id(self.programdata_sha256);
+        writer.u64(self.deployment_slot);
+        writer.id(self.capability_manifest_id);
+        writer.reserved(8);
+        writer.finish()
+    }
+
+    fn decode(input: &[u8]) -> Result<Self> {
+        let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
+        reader.magic(&RELEASE_MAGIC)?;
+        if reader.u16() != RELEASE_VERSION {
+            return Err(Error::BadVersion);
+        }
+        reader.reserved(6)?;
+        let value = Self {
+            program: reader.id(),
+            programdata: reader.id(),
+            programdata_sha256: reader.id(),
+            deployment_slot: reader.u64(),
+            capability_manifest_id: reader.id(),
+        };
+        reader.reserved(8)?;
+        reader.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Content-addressed immutable central-registry capability profile V2.
 ///
-/// The body deliberately omits a stored `registry_release_id`: that value is
+/// The body deliberately omits a stored `capability_profile_id`: that value is
 /// its own domain-separated content identity and is inserted only by
-/// [`Self::projection`]. This avoids a self-referential or caller-shaped
-/// registry claim.
+/// [`Self::projection`]. The stored registry-release ID is authenticated from
+/// its separate immutable [`RegistryProgramReleaseV1`] artifact, so neither
+/// identity is caller-shaped or self-referential.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProductCapabilityRegistryV2 {
-    /// Exact capability profile selected by Product genesis artifacts.
-    pub capability_profile_id: ContentId,
-    /// Exact executable/ProgramData/capability-manifest release.
-    pub program_release: ProductProgramReleaseV1,
+pub struct RegistryCapabilityProfileV2 {
+    /// Exact executable central-registry release selected by this profile.
+    pub registry_release_id: ContentId,
     /// Exact admitted statistic registry value.
     pub statistic_registry_value: u16,
     /// Registry-resolved Source statistic semantics.
@@ -108,24 +163,29 @@ pub struct ProductCapabilityRegistryV2 {
     pub realm_collateral: RealmCollateralProjectionV1,
 }
 
-impl ProductCapabilityRegistryV2 {
-    /// Domain-separated semantic registry release identity.
-    pub fn id(&self) -> Result<ContentId> {
-        let mut body = [0; PRODUCT_CAPABILITY_REGISTRY_V2_BYTES];
+impl RegistryCapabilityProfileV2 {
+    /// Domain-separated semantic capability-profile identity.
+    pub fn id(&self) -> Result<RegistryCapabilityProfileV2Id> {
+        let mut body = [0; REGISTRY_CAPABILITY_PROFILE_V2_BYTES];
         self.encode_into(&mut body)?;
-        Ok(content_id(PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN, &body))
+        Ok(RegistryCapabilityProfileV2Id::from_bytes(
+            content_id(REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, &body).bytes(),
+        ))
     }
 
     /// Reconstruct the sole compiler projection owned by this artifact.
     pub fn projection(&self) -> Result<RegistryCapabilityProjectionV2> {
         self.validate()?;
-        Ok(self.projection_with_id(self.id()?))
+        Ok(self.projection_with_id(self.id()?.content_id()))
     }
 
-    fn projection_with_id(&self, registry_release_id: ContentId) -> RegistryCapabilityProjectionV2 {
+    fn projection_with_id(
+        &self,
+        capability_profile_id: ContentId,
+    ) -> RegistryCapabilityProjectionV2 {
         RegistryCapabilityProjectionV2 {
-            registry_release_id,
-            capability_profile_id: self.capability_profile_id,
+            registry_release_id: self.registry_release_id,
+            capability_profile_id,
             statistic_registry_value: self.statistic_registry_value,
             coverage_policy_registry_value: self.coverage_policy_registry_value,
             ambiguity_policy_registry_value: self.ambiguity_policy_registry_value,
@@ -146,8 +206,7 @@ impl ProductCapabilityRegistryV2 {
     }
 
     fn validate(&self) -> Result<()> {
-        self.capability_profile_id.validate()?;
-        self.program_release.validate()?;
+        self.registry_release_id.validate()?;
         self.summary_program
             .validate()
             .map_err(|_| Error::MismatchedArtifact)?;
@@ -169,21 +228,16 @@ impl ProductCapabilityRegistryV2 {
     }
 }
 
-impl FixedCodec for ProductCapabilityRegistryV2 {
-    const ENCODED_LEN: usize = PRODUCT_CAPABILITY_REGISTRY_V2_BYTES;
+impl FixedCodec for RegistryCapabilityProfileV2 {
+    const ENCODED_LEN: usize = REGISTRY_CAPABILITY_PROFILE_V2_BYTES;
 
     fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.validate()?;
         let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
-        writer.bytes(&MAGIC);
-        writer.u16(VERSION);
+        writer.bytes(&PROFILE_MAGIC);
+        writer.u16(PROFILE_VERSION);
         writer.reserved(6);
-        writer.id(self.capability_profile_id);
-        writer.id(self.program_release.capability_manifest_id);
-        writer.id(self.program_release.program);
-        writer.id(self.program_release.programdata);
-        writer.id(self.program_release.programdata_sha256);
-        writer.u64(self.program_release.deployment_slot);
+        writer.id(self.registry_release_id);
         writer.u16(self.statistic_registry_value);
         writer.u16(self.coverage_policy_registry_value);
         writer.u8(self.ambiguity_policy_registry_value);
@@ -226,17 +280,12 @@ impl FixedCodec for ProductCapabilityRegistryV2 {
 
     fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.magic(&MAGIC)?;
-        if reader.u16() != VERSION {
+        reader.magic(&PROFILE_MAGIC)?;
+        if reader.u16() != PROFILE_VERSION {
             return Err(Error::BadVersion);
         }
         reader.reserved(6)?;
-        let capability_profile_id = reader.id();
-        let capability_manifest_id = reader.id();
-        let program = reader.id();
-        let programdata = reader.id();
-        let programdata_sha256 = reader.id();
-        let deployment_slot = reader.u64();
+        let registry_release_id = reader.id();
         let statistic_registry_value = reader.u16();
         let coverage_policy_registry_value = reader.u16();
         let ambiguity_policy_registry_value = reader.u8();
@@ -277,14 +326,7 @@ impl FixedCodec for ProductCapabilityRegistryV2 {
             .map_err(|_| Error::MismatchedArtifact)?;
         reader.finish()?;
         let value = Self {
-            capability_profile_id,
-            program_release: ProductProgramReleaseV1 {
-                program,
-                programdata,
-                programdata_sha256,
-                deployment_slot,
-                capability_manifest_id,
-            },
+            registry_release_id,
             statistic_registry_value,
             resolved_statistic,
             coverage_policy_registry_value,
