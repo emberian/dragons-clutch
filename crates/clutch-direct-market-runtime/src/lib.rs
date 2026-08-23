@@ -327,14 +327,33 @@ impl DirectMarketBindingV1 {
         {
             return Err(DirectMarketErrorV1::InvalidCount);
         }
+        let semantic_ids = [
+            self.market_instance_id,
+            self.realm_id,
+            self.collateral_profile_id,
+            self.collateral_policy_id,
+            self.collateral_release_id,
+            self.resolution_semantic_id,
+            self.resolution_data_id,
+            self.founder_series_link_binding_id,
+            self.compiler_bundle_v5_id,
+            self.founder_series_plan_id,
+            self.relation_policy_id,
+            self.price_policy_id,
+        ];
+        let mut index = 0usize;
+        while index < semantic_ids.len() {
+            require_live(semantic_ids[index])?;
+            index += 1;
+        }
         require_distinct(&[
-            self.market_instance_id, self.realm_id, self.collateral_profile_id,
-            self.collateral_policy_id, self.collateral_release_id, self.resolution_account,
-            self.resolution_semantic_id, self.resolution_data_id, self.product_root_account,
-            self.founder_series_link_account, self.founder_series_link_binding_id,
-            self.compiler_bundle_v5_id, self.founder_series_plan_id,
-            self.direct_root_account, self.action_replay_account, self.general_market_runtime,
-            self.neutral_lamport_sink, self.relation_policy_id, self.price_policy_id,
+            self.resolution_account,
+            self.product_root_account,
+            self.founder_series_link_account,
+            self.direct_root_account,
+            self.action_replay_account,
+            self.general_market_runtime,
+            self.neutral_lamport_sink,
         ])
     }
 }
@@ -835,13 +854,13 @@ impl DirectRootReplayPostV1 {
         backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
         self.replay.require_action(self.root, consumed_sequence)?;
-        require_distinct(&[reservation_account, reservation_poststate_id])?;
+        require_live(reservation_account)?;
+        require_live(reservation_poststate_id)?;
+        require_fresh_child_account(self.root.binding, reservation_account)?;
         if self.root.phase != DirectRootPhaseV1::Open
             || observed_slot < self.root.schedule.admission_opens_slot
             || observed_slot >= self.root.schedule.admission_closes_slot
             || self.root.admitted_reservations >= MAX_DIRECT_RESERVATIONS_V1
-            || reservation_account == self.root.binding.direct_root_account
-            || reservation_account == self.root.binding.action_replay_account
         {
             return Err(DirectMarketErrorV1::WrongPhase);
         }
@@ -901,12 +920,12 @@ impl DirectRootReplayPostV1 {
         backend: &B,
     ) -> Result<Self, DirectMarketErrorV1> {
         self.replay.require_action(self.root, consumed_sequence)?;
-        require_distinct(&[selection_account, selection_poststate_id])?;
+        require_live(selection_account)?;
+        require_live(selection_poststate_id)?;
+        require_fresh_child_account(self.root.binding, selection_account)?;
         if self.root.phase != DirectRootPhaseV1::Open
             || observed_slot < self.root.schedule.admission_closes_slot
             || observed_slot >= self.root.schedule.submission_closes_slot
-            || selection_account == self.root.binding.direct_root_account
-            || selection_account == self.root.binding.action_replay_account
         {
             return Err(DirectMarketErrorV1::WrongPhase);
         }
@@ -1418,6 +1437,27 @@ pub fn prepare_direct_family_terminal_v1<
 
 fn require_live(value: [u8; 32]) -> Result<(), DirectMarketErrorV1> {
     if value == [0; 32] { Err(DirectMarketErrorV1::ZeroIdentity) } else { Ok(()) }
+}
+
+fn require_fresh_child_account(
+    binding: DirectMarketBindingV1,
+    child: [u8; 32],
+) -> Result<(), DirectMarketErrorV1> {
+    require_live(child)?;
+    for account in [
+        binding.resolution_account,
+        binding.product_root_account,
+        binding.founder_series_link_account,
+        binding.direct_root_account,
+        binding.action_replay_account,
+        binding.general_market_runtime,
+        binding.neutral_lamport_sink,
+    ] {
+        if child == account {
+            return Err(DirectMarketErrorV1::IdentityAlias);
+        }
+    }
+    Ok(())
 }
 
 fn require_distinct(values: &[[u8; 32]]) -> Result<(), DirectMarketErrorV1> {

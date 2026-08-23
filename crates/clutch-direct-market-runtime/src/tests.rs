@@ -124,6 +124,23 @@ fn schedule_boundaries_are_owned_by_pure_transitions() {
 }
 
 #[test]
+fn cross_namespace_equal_bytes_are_not_account_aliases() {
+    let mut binding = state().root.binding();
+    binding.relation_policy_id = binding.resolution_account;
+    binding.compiler_bundle_v5_id = binding.product_root_account;
+    assert_eq!(binding.validate(), Ok(()));
+
+    let frozen = state()
+        .admit_reservation(1, 10, id(20), id(20), &Sha)
+        .unwrap()
+        .admit_reservation(2, 11, id(22), id(22), &Sha)
+        .unwrap()
+        .freeze(3, 20, id(24), id(24), &Sha)
+        .unwrap();
+    assert_eq!(frozen.root.phase(), DirectRootPhaseV1::SubmissionOpen);
+}
+
+#[test]
 fn cancellation_retires_only_the_named_archive_class() {
     let admitted = state()
         .admit_reservation(1, 10, id(20), id(21), &Sha)
