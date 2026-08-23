@@ -3,21 +3,49 @@
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 
-//! Exact fixed-capacity certificates that a degree-two or degree-three
-//! open-clamped uniform B-spline price vector comes from a nonnegative measure.
+//! Exact fixed-capacity certificates that an admitted B-spline price vector
+//! comes from a nonnegative measure.
 //!
 //! The continuous checker consumes per-span Bernstein moments. The quantized
 //! checker consumes a bounded mixture of integer resolved coordinates and
-//! recomputes their production payout vectors. Both reconstruct every
-//! simplex-price coordinate with exact integer arithmetic. This crate does not
+//! recomputes their production payout vectors. The frozen V2 quantized checker
+//! admits smooth degrees two and three. Additive V3 checks mapped exact finite
+//! rows at degree zero or smooth `BasisSpec` evaluation at degrees one through
+//! three through separate entry points. Both reconstruct every simplex-price
+//! coordinate with exact integer arithmetic. This crate does not
 //! parse Solana accounts, compute cryptographic digests, select candidates,
 //! judge price quality beyond measure coherence, or determine fees, bonds, and
 //! solver compensation.
 
 use clutch_bspline::{BasisSpec, ValidatedBasisSpec};
 
+mod quantized_v3;
+
+pub use quantized_v3::{
+    verify_quantized_price_measure_v3_degree_zero, verify_quantized_price_measure_v3_smooth,
+    AdapterBindingsV3, BindingFieldV3, DegreeZeroPayoutTableV3, DegreeZeroPayoutVectorV3, ErrorV3,
+    PriceVectorV3, QuantizedAtomWitnessV3, QuantizedPriceMeasureAccumulatorV3, ResultV3,
+    VerifiedPriceMeasureV3, PAYOUT_MAP_UNUSED_V3,
+};
+
 /// Semantic version of the certificate and checker interface.
 pub const PRICE_MEASURE_WITNESS_VERSION_V2: u8 = 2;
+/// Semantic version of the additive degree-zero-through-three quantized interface.
+pub const PRICE_MEASURE_WITNESS_VERSION_V3: u8 = 3;
+/// Frozen quantized evaluator, atom ordering, mass, and reconstruction semantics.
+///
+/// V2 and V3 share atom ordering, primitive mass, exact upstream price, and
+/// reduced-rational reconstruction rules. V3 additionally freezes mapped exact
+/// rows for degree zero and admits smooth degrees one through three.
+pub const QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1: u8 = 1;
+/// Smallest degree admitted by the frozen V2 quantized checker.
+pub const QUANTIZED_PRICE_MEASURE_MIN_DEGREE_V2: u8 = 2;
+/// Largest degree admitted by the frozen V2 quantized checker.
+pub const QUANTIZED_PRICE_MEASURE_MAX_DEGREE_V2: u8 = 3;
+/// Smallest degree admitted by the additive V3 quantized checker.
+pub const QUANTIZED_PRICE_MEASURE_MIN_DEGREE_V3: u8 = 0;
+/// Largest degree admitted by the additive V3 quantized checker.
+pub const QUANTIZED_PRICE_MEASURE_MAX_DEGREE_V3: u8 = 3;
 /// Version of the generated open-clamped uniform transfer tables.
 pub const TRANSFER_TABLE_VERSION_V1: u8 = 1;
 /// Largest admitted outcome width.
@@ -41,6 +69,13 @@ pub const MAX_COMMON_DENOMINATOR: u64 = u64::MAX;
 
 const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_MOMENTS == 56);
+const _: () = assert!(PRICE_MEASURE_WITNESS_VERSION_V2 == 2);
+const _: () = assert!(PRICE_MEASURE_WITNESS_VERSION_V3 == 3);
+const _: () = assert!(QUANTIZED_PRICE_MEASURE_SEMANTICS_VERSION_V1 == 1);
+const _: () = assert!(QUANTIZED_PRICE_MEASURE_MIN_DEGREE_V2 == 2);
+const _: () = assert!(QUANTIZED_PRICE_MEASURE_MAX_DEGREE_V2 == 3);
+const _: () = assert!(QUANTIZED_PRICE_MEASURE_MIN_DEGREE_V3 == 0);
+const _: () = assert!(QUANTIZED_PRICE_MEASURE_MAX_DEGREE_V3 == 3);
 const MAX_U64_AS_U128: u128 = (1_u128 << 64) - 1;
 const _: () = assert!(12_u128 * MAX_U64_AS_U128 < u128::MAX);
 
@@ -378,6 +413,55 @@ pub enum ErrorV2 {
 /// Result alias for certificate operations.
 pub type Result<T> = core::result::Result<T, ErrorV2>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QuantizedCoreError {
+    InvalidBasis,
+    InvalidPriceScale,
+    PriceExceedsScale { outcome: u8 },
+    PriceSimplexMismatch,
+    NonCanonicalPricePadding { outcome: u8 },
+    InvalidCommonDenominator,
+    InvalidAtomCount,
+    AtomCoordinateOutOfRange { atom: u8 },
+    NonCanonicalAtomOrder { atom: u8 },
+    ZeroAtomMass { atom: u8 },
+    NonCanonicalAtomPadding { atom: u8 },
+    AtomMassMismatch,
+    NonPrimitiveAtomScale,
+    PriceReconstructionMismatch { outcome: u8 },
+    ArithmeticOverflow,
+}
+
+const fn quantized_core_error_v2(error: QuantizedCoreError) -> ErrorV2 {
+    match error {
+        QuantizedCoreError::InvalidBasis => ErrorV2::InvalidBasis,
+        QuantizedCoreError::InvalidPriceScale => ErrorV2::InvalidPriceScale,
+        QuantizedCoreError::PriceExceedsScale { outcome } => ErrorV2::PriceExceedsScale { outcome },
+        QuantizedCoreError::PriceSimplexMismatch => ErrorV2::PriceSimplexMismatch,
+        QuantizedCoreError::NonCanonicalPricePadding { outcome } => {
+            ErrorV2::NonCanonicalPricePadding { outcome }
+        }
+        QuantizedCoreError::InvalidCommonDenominator => ErrorV2::InvalidCommonDenominator,
+        QuantizedCoreError::InvalidAtomCount => ErrorV2::InvalidAtomCount,
+        QuantizedCoreError::AtomCoordinateOutOfRange { atom } => {
+            ErrorV2::AtomCoordinateOutOfRange { atom }
+        }
+        QuantizedCoreError::NonCanonicalAtomOrder { atom } => {
+            ErrorV2::NonCanonicalAtomOrder { atom }
+        }
+        QuantizedCoreError::ZeroAtomMass { atom } => ErrorV2::ZeroAtomMass { atom },
+        QuantizedCoreError::NonCanonicalAtomPadding { atom } => {
+            ErrorV2::NonCanonicalAtomPadding { atom }
+        }
+        QuantizedCoreError::AtomMassMismatch => ErrorV2::AtomMassMismatch,
+        QuantizedCoreError::NonPrimitiveAtomScale => ErrorV2::NonPrimitiveAtomScale,
+        QuantizedCoreError::PriceReconstructionMismatch { outcome } => {
+            ErrorV2::PriceReconstructionMismatch { outcome }
+        }
+        QuantizedCoreError::ArithmeticOverflow => ErrorV2::ArithmeticOverflow,
+    }
+}
+
 impl QuantizedPriceMeasureAccumulatorV2 {
     /// Validate one complete quantized certificate and open its empty staged sum.
     ///
@@ -430,22 +514,14 @@ impl QuantizedPriceMeasureAccumulatorV2 {
             return Err(ErrorV2::AtomCursorExhausted);
         }
         let index = usize::from(atom);
-        let weights = self
-            .basis
-            .evaluate_point(self.witness.atom_coordinates[index])
-            .map_err(|_| ErrorV2::InvalidBasis)?;
-        let mass = u128::from(self.witness.atom_masses[index]);
-        let mut accumulators = self.accumulators;
-        let mut outcome = 0_usize;
-        while outcome < usize::from(self.prices.outcome_count) {
-            let term = mass
-                .checked_mul(u128::from(weights.weights[outcome]))
-                .ok_or(ErrorV2::ArithmeticOverflow)?;
-            accumulators[outcome] = accumulators[outcome]
-                .checked_add(term)
-                .ok_or(ErrorV2::ArithmeticOverflow)?;
-            outcome += 1;
-        }
+        let accumulators = accumulate_quantized_atom(
+            &self.basis,
+            self.prices.outcome_count,
+            self.witness.atom_coordinates[index],
+            self.witness.atom_masses[index],
+            self.accumulators,
+        )
+        .map_err(quantized_core_error_v2)?;
         let next = atom.checked_add(1).ok_or(ErrorV2::ArithmeticOverflow)?;
         self.accumulators = accumulators;
         self.atom_cursor = next;
@@ -464,23 +540,15 @@ impl QuantizedPriceMeasureAccumulatorV2 {
                 atom_count: self.witness.atom_count,
             });
         }
-        let spec = self.basis.spec();
-        let witness_scale = u128::from(spec.denominator)
-            .checked_mul(u128::from(self.witness.common_denominator))
-            .ok_or(ErrorV2::ArithmeticOverflow)?;
-        let mut outcome = 0_u8;
-        while outcome < self.prices.outcome_count {
-            let index = usize::from(outcome);
-            if !ratios_equal(
-                u128::from(self.prices.prices[index]),
-                u128::from(self.prices.price_scale),
-                self.accumulators[index],
-                witness_scale,
-            ) {
-                return Err(ErrorV2::PriceReconstructionMismatch { outcome });
-            }
-            outcome += 1;
-        }
+        finish_quantized_reconstruction(
+            self.prices.outcome_count,
+            self.prices.price_scale,
+            &self.prices.prices,
+            self.basis.spec().denominator,
+            self.witness.common_denominator,
+            &self.accumulators,
+        )
+        .map_err(quantized_core_error_v2)?;
         Ok(VerifiedPriceMeasureV2 {
             basis_degree: self.prices.basis_degree,
             outcome_count: self.prices.outcome_count,
@@ -683,27 +751,36 @@ fn validate_shape(degree: u8, outcome_count: u8) -> Result<()> {
 }
 
 fn validate_prices(prices: &PriceVectorV2, outcomes: usize) -> Result<()> {
-    if prices.price_scale == 0 {
-        return Err(ErrorV2::InvalidPriceScale);
+    validate_price_components(prices.price_scale, &prices.prices, outcomes)
+        .map_err(quantized_core_error_v2)
+}
+
+fn validate_price_components(
+    price_scale: u64,
+    prices: &[u64; MAX_OUTCOMES],
+    outcomes: usize,
+) -> core::result::Result<(), QuantizedCoreError> {
+    if price_scale == 0 {
+        return Err(QuantizedCoreError::InvalidPriceScale);
     }
     let mut sum = 0_u128;
     let mut outcome = 0_u8;
     while usize::from(outcome) < MAX_OUTCOMES {
-        let price = prices.prices[usize::from(outcome)];
+        let price = prices[usize::from(outcome)];
         if usize::from(outcome) < outcomes {
-            if price > prices.price_scale {
-                return Err(ErrorV2::PriceExceedsScale { outcome });
+            if price > price_scale {
+                return Err(QuantizedCoreError::PriceExceedsScale { outcome });
             }
             sum = sum
                 .checked_add(u128::from(price))
-                .ok_or(ErrorV2::ArithmeticOverflow)?;
+                .ok_or(QuantizedCoreError::ArithmeticOverflow)?;
         } else if price != 0 {
-            return Err(ErrorV2::NonCanonicalPricePadding { outcome });
+            return Err(QuantizedCoreError::NonCanonicalPricePadding { outcome });
         }
         outcome += 1;
     }
-    if sum != u128::from(prices.price_scale) {
-        return Err(ErrorV2::PriceSimplexMismatch);
+    if sum != u128::from(price_scale) {
+        return Err(QuantizedCoreError::PriceSimplexMismatch);
     }
     Ok(())
 }
@@ -748,46 +825,128 @@ fn validate_atoms(
     outcome_count: u8,
     witness: &QuantizedAtomWitnessV2,
 ) -> Result<()> {
-    let atoms = usize::from(witness.atom_count);
-    if atoms == 0 || atoms > usize::from(outcome_count) || atoms > MAX_QUANTIZED_ATOMS {
-        return Err(ErrorV2::InvalidAtomCount);
-    }
-    if witness.common_denominator == 0 {
-        return Err(ErrorV2::InvalidCommonDenominator);
-    }
     let first = basis.knots[0];
     let last = basis.knots[usize::from(basis.knot_count) - 1];
+    validate_atom_components(
+        first,
+        last,
+        outcome_count,
+        witness.atom_count,
+        witness.common_denominator,
+        &witness.atom_coordinates,
+        &witness.atom_masses,
+    )
+    .map_err(quantized_core_error_v2)
+}
+
+fn validate_atom_components(
+    first: u128,
+    last: u128,
+    outcome_count: u8,
+    atom_count: u8,
+    common_denominator: u64,
+    atom_coordinates: &[u128; MAX_QUANTIZED_ATOMS],
+    atom_masses: &[u64; MAX_QUANTIZED_ATOMS],
+) -> core::result::Result<(), QuantizedCoreError> {
+    let atoms = usize::from(atom_count);
+    if atoms == 0 || atoms > usize::from(outcome_count) || atoms > MAX_QUANTIZED_ATOMS {
+        return Err(QuantizedCoreError::InvalidAtomCount);
+    }
+    if common_denominator == 0 {
+        return Err(QuantizedCoreError::InvalidCommonDenominator);
+    }
     let mut total = 0_u128;
-    let mut divisor = witness.common_denominator;
+    let mut divisor = common_denominator;
     let mut atom = 0_u8;
     while usize::from(atom) < MAX_QUANTIZED_ATOMS {
         let index = usize::from(atom);
-        let coordinate = witness.atom_coordinates[index];
-        let mass = witness.atom_masses[index];
+        let coordinate = atom_coordinates[index];
+        let mass = atom_masses[index];
         if index < atoms {
             if coordinate < first || coordinate > last {
-                return Err(ErrorV2::AtomCoordinateOutOfRange { atom });
+                return Err(QuantizedCoreError::AtomCoordinateOutOfRange { atom });
             }
-            if index != 0 && coordinate <= witness.atom_coordinates[index - 1] {
-                return Err(ErrorV2::NonCanonicalAtomOrder { atom });
+            if index != 0 && coordinate <= atom_coordinates[index - 1] {
+                return Err(QuantizedCoreError::NonCanonicalAtomOrder { atom });
             }
             if mass == 0 {
-                return Err(ErrorV2::ZeroAtomMass { atom });
+                return Err(QuantizedCoreError::ZeroAtomMass { atom });
             }
             total = total
                 .checked_add(u128::from(mass))
-                .ok_or(ErrorV2::ArithmeticOverflow)?;
+                .ok_or(QuantizedCoreError::ArithmeticOverflow)?;
             divisor = gcd(divisor, mass);
         } else if coordinate != 0 || mass != 0 {
-            return Err(ErrorV2::NonCanonicalAtomPadding { atom });
+            return Err(QuantizedCoreError::NonCanonicalAtomPadding { atom });
         }
         atom += 1;
     }
-    if total != u128::from(witness.common_denominator) {
-        return Err(ErrorV2::AtomMassMismatch);
+    if total != u128::from(common_denominator) {
+        return Err(QuantizedCoreError::AtomMassMismatch);
     }
     if divisor != 1 {
-        return Err(ErrorV2::NonPrimitiveAtomScale);
+        return Err(QuantizedCoreError::NonPrimitiveAtomScale);
+    }
+    Ok(())
+}
+
+fn accumulate_quantized_atom(
+    basis: &ValidatedBasisSpec,
+    outcome_count: u8,
+    coordinate: u128,
+    atom_mass: u64,
+    current: [u128; MAX_OUTCOMES],
+) -> core::result::Result<[u128; MAX_OUTCOMES], QuantizedCoreError> {
+    let weights = basis
+        .evaluate_point(coordinate)
+        .map_err(|_| QuantizedCoreError::InvalidBasis)?;
+    accumulate_quantized_weights(&weights.weights, outcome_count, atom_mass, current)
+}
+
+fn accumulate_quantized_weights(
+    weights: &[u64; MAX_OUTCOMES],
+    outcome_count: u8,
+    atom_mass: u64,
+    current: [u128; MAX_OUTCOMES],
+) -> core::result::Result<[u128; MAX_OUTCOMES], QuantizedCoreError> {
+    let mass = u128::from(atom_mass);
+    let mut accumulators = current;
+    let mut outcome = 0_usize;
+    while outcome < usize::from(outcome_count) {
+        let term = mass
+            .checked_mul(u128::from(weights[outcome]))
+            .ok_or(QuantizedCoreError::ArithmeticOverflow)?;
+        accumulators[outcome] = accumulators[outcome]
+            .checked_add(term)
+            .ok_or(QuantizedCoreError::ArithmeticOverflow)?;
+        outcome += 1;
+    }
+    Ok(accumulators)
+}
+
+fn finish_quantized_reconstruction(
+    outcome_count: u8,
+    price_scale: u64,
+    prices: &[u64; MAX_OUTCOMES],
+    payout_denominator: u64,
+    witness_denominator: u64,
+    accumulators: &[u128; MAX_OUTCOMES],
+) -> core::result::Result<(), QuantizedCoreError> {
+    let witness_scale = u128::from(payout_denominator)
+        .checked_mul(u128::from(witness_denominator))
+        .ok_or(QuantizedCoreError::ArithmeticOverflow)?;
+    let mut outcome = 0_u8;
+    while outcome < outcome_count {
+        let index = usize::from(outcome);
+        if !ratios_equal(
+            u128::from(prices[index]),
+            u128::from(price_scale),
+            accumulators[index],
+            witness_scale,
+        ) {
+            return Err(QuantizedCoreError::PriceReconstructionMismatch { outcome });
+        }
+        outcome += 1;
     }
     Ok(())
 }
