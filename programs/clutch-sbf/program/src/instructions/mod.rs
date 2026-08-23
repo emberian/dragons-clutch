@@ -85,6 +85,9 @@ pub mod fractional_redemption;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_direct_v5;
+/// Capability-disabled counted exact-index account boundary.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_exact_index;
 /// Staged-disabled exact merge-payment composer and atomic writer.
 #[cfg(any(
     all(

@@ -62,6 +62,8 @@ use crate::instructions::direct_selection_v3;
 use crate::instructions::general_v2_direct_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 use crate::instructions::general_v2_identity;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+use crate::instructions::general_v2_settlement_producer_v5;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
@@ -618,6 +620,16 @@ fn process_general_v2(
         ExtensionAction::GeneralV2(
             action @ clutch_solana_layout::registry::GeneralV2Action::ConsumeDirectReceiptEggs,
         ) => general_v2_direct_v5::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+        ExtensionAction::GeneralV2(
+            action @ clutch_solana_layout::registry::GeneralV2Action::InitializeSettlementRoot,
+        ) => general_v2_settlement_producer_v5::process(
             program_id,
             accounts,
             request.sequence,

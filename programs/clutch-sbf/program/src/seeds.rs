@@ -279,6 +279,12 @@ pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
 /// Counted candidate-scoped General V2 SettlementRoot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_ROOT_SEED_DOMAIN_V1;
+/// Exact frozen-order locator child, one-to-one with an indexed Root PDA.
+pub const SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR: &[u8] =
+    clutch_general_v2_contract::FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1;
+/// Exact selected-candidate adjacency child, one-to-one with an indexed Root PDA.
+pub const SEED_GENERAL_V2_CANDIDATE_ADJACENCY: &[u8] =
+    clutch_general_v2_contract::CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1;
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
@@ -997,6 +1003,22 @@ pub fn general_v2_settlement_root_pda(
         program_id,
         &[SEED_GENERAL_V2_SETTLEMENT_ROOT, epoch, settlement_candidate],
     )
+}
+
+/// Canonical exact frozen-order locator for one indexed SettlementRoot.
+pub fn general_v2_frozen_order_locator_pda(
+    program_id: &Pubkey,
+    root: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR, root])
+}
+
+/// Canonical exact selected-candidate adjacency for one indexed SettlementRoot.
+pub fn general_v2_candidate_adjacency_pda(
+    program_id: &Pubkey,
+    root: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_CANDIDATE_ADJACENCY, root])
 }
 
 /// Canonical immutable-terms address and bump.

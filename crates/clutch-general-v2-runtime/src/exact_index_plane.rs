@@ -4,9 +4,9 @@
 //!
 //! The counted indexed Root now owns a centrally reserved account version and
 //! the canonical in-place Root PDA, but this module deliberately owns no live
-//! instruction or capability bit. It defines the active-width account pair and
-//! pure construction/closure postwrites before a later SBF adapter makes it
-//! reachable. Construction accepts only complete
+//! capability bit. It defines the active-width account pair and pure
+//! construction/closure postwrites consumed by a capability-disabled SBF
+//! adapter. Construction accepts only complete
 //! hostile-decoded V5 pages and the selected sealed CandidateFeed; no caller
 //! supplies a location, adjacency row, aggregate, count, or semantic identity.
 //!
@@ -109,10 +109,10 @@ pub const CANDIDATE_ORDER_AGGREGATE_ROW_BYTES_V1: usize = 32;
 pub const CANDIDATE_ORDER_SLICE_EDGE_BYTES_V1: usize = 16;
 /// Maximum real slice ends: two for every direct slice.
 pub const MAX_EXACT_INDEX_EDGES_V1: usize = MAX_SLICES * 2;
-/// The account plane has no live instruction/capability in the current profile.
+/// The account plane has no live capability in the current profile.
 /// The reserved Root successor owns its exact counts; promotion still requires
-/// the complete SBF transition and close family. Dealer or receipt counters
-/// must never be repurposed for this pair.
+/// capability admission. Dealer or receipt counters must never be repurposed
+/// for this pair.
 pub const EXACT_INDEX_PLANE_LIVE_ENABLED_V1: bool = false;
 /// Largest active locator body.
 pub const FROZEN_ORDER_LOCATOR_MAX_BYTES_V1: usize =
@@ -1192,6 +1192,36 @@ pub struct AuthenticateCountedExactIndexReadInputV1<'a> {
     pub locator: ExactIndexReadAccountInputV1<'a>,
     /// Sealed candidate adjacency PDA.
     pub adjacency: ExactIndexReadAccountInputV1<'a>,
+}
+
+/// Full-body-authenticated authority for a checked indexed-root mutation.
+///
+/// The private root can only be obtained after the canonical root and both
+/// sealed child bodies have been joined to the root-held body IDs. This keeps
+/// writable adapters from weakening the immutable-read authenticator by
+/// reporting false account privileges.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CountedExactIndexRootMutationV1 {
+    indexed_root: IndexedSettlementRootV1AccountV1,
+    _private: (),
+}
+
+impl CountedExactIndexRootMutationV1 {
+    /// Apply one existing structural base transition while preserving the
+    /// authenticated exact child identities and exhaustive child counts.
+    pub fn apply_base_transition(
+        self,
+        transition: clutch_general_v2_contract::IndexedSettlementBaseTransitionV1,
+    ) -> Result<IndexedSettlementRootV1AccountV1, ExactIndexPlaneErrorV1> {
+        self.indexed_root
+            .apply_base_transition(transition)
+            .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)
+    }
+
+    /// Exact live indexed root authenticated together with both child bodies.
+    pub const fn indexed_root(&self) -> &IndexedSettlementRootV1AccountV1 {
+        &self.indexed_root
+    }
 }
 
 impl IndexedPairCoverageV1 {
@@ -2617,14 +2647,57 @@ pub fn retire_counted_exact_index_root_v1(
 pub fn authenticate_counted_exact_index_read_v1<'a>(
     input: AuthenticateCountedExactIndexReadInputV1<'a>,
 ) -> Result<SealedExactIndexPairInputV1<'a>, ExactIndexPlaneErrorV1> {
+    let (_, sealed) = authenticate_counted_exact_index_join_v1(input, false, false)?;
+    Ok(sealed)
+}
+
+/// Authenticate a writable root plus two read-only sealed children before one
+/// checked base transition.
+pub fn authenticate_counted_exact_index_root_mutation_v1(
+    input: AuthenticateCountedExactIndexReadInputV1<'_>,
+) -> Result<CountedExactIndexRootMutationV1, ExactIndexPlaneErrorV1> {
+    let (indexed_root, _) = authenticate_counted_exact_index_join_v1(input, true, false)?;
+    Ok(CountedExactIndexRootMutationV1 {
+        indexed_root,
+        _private: (),
+    })
+}
+
+/// Authenticate a writable terminal root and both writable sealed children
+/// before exact pair retirement.
+pub fn authenticate_counted_exact_index_retirement_v1(
+    input: AuthenticateCountedExactIndexReadInputV1<'_>,
+) -> Result<CountedExactIndexRootMutationV1, ExactIndexPlaneErrorV1> {
+    let (indexed_root, _) = authenticate_counted_exact_index_join_v1(input, true, true)?;
+    Ok(CountedExactIndexRootMutationV1 {
+        indexed_root,
+        _private: (),
+    })
+}
+
+fn authenticate_counted_exact_index_join_v1<'a>(
+    input: AuthenticateCountedExactIndexReadInputV1<'a>,
+    root_writable: bool,
+    children_writable: bool,
+) -> Result<
+    (
+        IndexedSettlementRootV1AccountV1,
+        SealedExactIndexPairInputV1<'a>,
+    ),
+    ExactIndexPlaneErrorV1,
+> {
     if input.program_id.is_zero() {
         return Err(ExactIndexPlaneErrorV1::ZeroIdentity);
     }
-    for account in [input.root, input.locator, input.adjacency] {
+    for (account, expected_writable) in [
+        (input.root, root_writable),
+        (input.locator, children_writable),
+        (input.adjacency, children_writable),
+    ] {
         if account.account.is_zero()
             || account.owner != input.program_id
             || account.account != account.canonical_account
-            || account.writable
+            || account.writable != expected_writable
             || account.executable
         {
             return Err(ExactIndexPlaneErrorV1::BindingMismatch);
@@ -2679,16 +2752,19 @@ pub fn authenticate_counted_exact_index_read_v1<'a>(
     {
         return Err(ExactIndexPlaneErrorV1::RootBinding);
     }
-    Ok(SealedExactIndexPairInputV1 {
-        authority: CountedExactIndexReadAuthorityV1 {
-            plane_id: root.plane_id(),
-            locator_account: input.locator.account,
-            adjacency_account: input.adjacency.account,
-            _private: (),
+    Ok((
+        root,
+        SealedExactIndexPairInputV1 {
+            authority: CountedExactIndexReadAuthorityV1 {
+                plane_id: root.plane_id(),
+                locator_account: input.locator.account,
+                adjacency_account: input.adjacency.account,
+                _private: (),
+            },
+            locator_body: input.locator.body,
+            adjacency_body: input.adjacency.body,
         },
-        locator_body: input.locator.body,
-        adjacency_body: input.adjacency.body,
-    })
+    ))
 }
 
 fn close_credits(

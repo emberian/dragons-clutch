@@ -128,8 +128,9 @@ locator is globally reserved at `0xb5/1` and adjacency at `0xb6/1`; each exact
 active-width codec begins with that tag/version followed by its disjoint
 six-byte domain suffix. Each child also has a fresh one-per-Root canonical PDA
 domain.
-There is no action, dispatch entry, or profile capability. Promotion must wire
-every existing root transition through its checked indexed-root transition,
-allocate the two child coordinates/PDAs, and wire atomic child create, read, and
-retire routes. It must not reuse receipt or Dealer counters. Until those joins
-exist, the private typed postwrites remain unreachable from SBF.
+Action 39 has a staged exact account adapter and dispatch arm, but the central
+capability gate still refuses the tuple before any account is inspected. The
+same boundary owns full-body-ID bounded reads, V1-root upgrade, checked base
+transition, and exact sibling retirement adapters. Promotion must migrate every
+action-specific root writer to the checked successor and review the complete
+capability unit before enabling this plane.
