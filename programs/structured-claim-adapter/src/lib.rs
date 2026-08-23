@@ -20,19 +20,18 @@
 mod accounts;
 mod custody;
 mod current_lifecycle;
-mod dispatch;
 mod envelope;
 mod handler;
 mod identity;
 mod token2022_wire;
 
 pub use accounts::{
-    authenticate_base_market_v1, authenticate_general_base_position_v3_v1,
-    authenticate_structured_claim_base_position_v3_v1, authenticate_token_2022_mint_v1,
-    authenticate_token_2022_token_v1, decode_owned_descriptor_v1, AccountAccessV1, AccountFrameV1,
-    AccountProgramsV1, AccountRoleV1, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV3,
-    AuthenticatedTokenMintV1, AuthenticatedTokenV1, BasePositionPdaVerifierV1, RawAccountV1,
-    Token2022DecoderV1, MAX_ROUTE_ACCOUNTS,
+    authenticate_general_base_position_v3_v1, authenticate_structured_claim_base_position_v3_v1,
+    authenticate_token_2022_mint_v1, authenticate_token_2022_token_v1,
+    decode_owned_descriptor_v1, AccountAccessV1, AccountFrameV1, AccountProgramsV1,
+    AccountRoleV1, AuthenticatedBasePositionV3, AuthenticatedTokenMintV1,
+    AuthenticatedTokenV1, BasePositionPdaVerifierV1, RawAccountV1, Token2022DecoderV1,
+    MAX_ROUTE_ACCOUNTS,
 };
 pub use custody::{
     authenticate_structured_custody_call_v1, prepare_structured_custody_call_v1, AdapterSha256V1,
@@ -52,20 +51,16 @@ pub use current_lifecycle::{
     CurrentStructuredTransitionPlanV1, CurrentStructuredVaultAccountsV1,
     CURRENT_STRUCTURED_POSITION_PROJECTION_DOMAIN_V1, CURRENT_STRUCTURED_TRANSITION_DOMAIN_V1,
 };
-pub use dispatch::{dispatch_structured_claim_v1, StructuredClaimAccountLoaderV1};
 pub use envelope::{
     admit_runtime_envelope_v1, decode_instruction_v1, StructuredClaimEnvelopeV1,
     ENABLED_STRUCTURED_CLAIM_ACTION_MASK, RESERVED_STRUCTURED_CLAIM_ACTION_MASK,
 };
 pub use handler::{
     authenticate_base_vault_creation_v1, authenticate_base_vault_retirement_v1,
-    authenticate_structured_terminal_v1, prepare_create_descriptor_v1, prepare_mutation_v1,
-    BaseCapabilityVerifierV1, BaseCpiV1, BaseVaultCreationEvidenceV1,
-    BoundBaseVaultCreationV1, BoundBaseVaultRetirementV1, BoundStructuredTerminalV1,
-    CreateDescriptorContextV1, DescriptorWriteV1, ExecutionStepV1, MutationContextV1,
-    PreparedStructuredClaimRouteV1, PreparedStructuredClaimSemanticV1,
-    StructuredTerminalEvidenceV1, StructuredTerminalVerifierV1, StepReceiptV1,
-    SystemPdaOperationV1, Token2022CpiV1, MAX_EXECUTION_STEPS,
+    authenticate_structured_terminal_v1, BaseCapabilityVerifierV1,
+    BaseVaultCreationEvidenceV1, BoundBaseVaultCreationV1, BoundBaseVaultRetirementV1,
+    BoundStructuredTerminalV1, StructuredTerminalEvidenceV1, StructuredTerminalVerifierV1,
+    Token2022CpiV1,
 };
 #[cfg(target_os = "solana")]
 pub use identity::SolanaPdaVerifierV1;
