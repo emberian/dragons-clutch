@@ -55,6 +55,14 @@ pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
 pub const GENERAL_V2_EPOCH_ACCOUNT_TAG: u8 = 11;
 /// RelationV2-native counted General Epoch account version.
 pub const GENERAL_V2_EPOCH_ACCOUNT_VERSION: u8 = 6;
+/// Full-width global Position successor discriminator.
+pub const RETIREMENT_V3_POSITION_ACCOUNT_TAG: u8 = 6;
+/// Full-width global Position successor version.
+pub const RETIREMENT_V3_POSITION_ACCOUNT_VERSION: u8 = 3;
+/// Full-identity permanent Position tombstone discriminator.
+pub const RETIREMENT_POSITION_TOMBSTONE_V3_ACCOUNT_TAG: u8 = 0x75;
+/// Full-identity permanent Position tombstone version.
+pub const RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V3: u8 = 3;
 /// General V2 active-width ClearWork successor account discriminator.
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
 /// General V2 active-width ClearWork successor account version.
@@ -374,6 +382,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "retirement-position-tombstone-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_POSITION_TOMBSTONE_V3_ACCOUNT_TAG,
+            version: RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-full-identity-position-tombstone-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_V3_POSITION_ACCOUNT_TAG,
+            version: RETIREMENT_V3_POSITION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-full-width-position-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
