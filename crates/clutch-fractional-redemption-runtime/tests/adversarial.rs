@@ -1323,10 +1323,30 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
     assert_eq!(bearer.writable_mask, 0x55300);
     assert_eq!(bearer.signer_mask, 1);
     assert!(bearer.outcome_mint_suffix);
+    assert_eq!(bearer.post_mint_accounts, 0);
+    assert!(!bearer.credit_creation_suffix);
+
+    let internal_credit =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemInternalCredit);
+    assert_eq!(internal_credit.account_count, 19);
+    assert_eq!(internal_credit.signer_mask, 1);
+    assert!(!internal_credit.outcome_mint_suffix);
+    assert_eq!(internal_credit.post_mint_accounts, 0);
+    assert!(internal_credit.credit_creation_suffix);
+
+    let bearer_credit =
+        fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerCredit);
+    assert_eq!(bearer_credit.account_count, 19);
+    assert_eq!(bearer_credit.signer_mask, 1);
+    assert!(bearer_credit.outcome_mint_suffix);
+    assert_eq!(bearer_credit.post_mint_accounts, 4);
+    assert!(bearer_credit.credit_creation_suffix);
 
     let seal = fractional_account_contract_v1(FractionalRedemptionActionV1::SealClaimsExhausted);
     assert_eq!(seal.account_count, 12);
     assert_eq!(seal.writable_mask, 0x900);
     assert_eq!(seal.signer_mask, 0);
     assert!(!seal.outcome_mint_suffix);
+    assert_eq!(seal.post_mint_accounts, 0);
+    assert!(!seal.credit_creation_suffix);
 }
