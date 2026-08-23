@@ -114,9 +114,10 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether a family-local action has an allocation in the central registry.
 ///
-/// Allocation does not imply execution capability. General V2 and the bounded
-/// SourcePlane V3 portion of SourceSeries have registered local actions; every
-/// exact tuple remains separately disabled until its handler is admitted.
+/// Allocation does not imply execution capability. General V2, SourcePlane V3
+/// actions 1 through 12, and recurring-Series actions 13 through 18 have
+/// registered local actions; every exact tuple remains separately disabled
+/// until its handler is admitted.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
@@ -131,6 +132,7 @@ pub const fn extension_intent_action_allocated(
         Ok(
             clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
                 | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
+                | clutch_solana_layout::registry::ExtensionAction::RecurringSeries(_)
         )
     )
 }

@@ -1729,6 +1729,24 @@ mod extension_registry_tests {
                 "source action {local_action}"
             );
         }
+        for local_action in clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "series action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "series action {local_action}"
+            );
+        }
     }
 
     #[test]
