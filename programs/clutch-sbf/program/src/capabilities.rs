@@ -37,10 +37,12 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
 ))]
 pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v7";
-/// Non-production General V2 empty-book identity laboratory.
+/// Non-production General V2 quantized-candidate laboratory. Action 10 in
+/// this identity is the closed 17-account PriceGrid/Product tuple; no
+/// deployable profile admits the historical account frame.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v5";
+    "dragons-clutch/capability-profile/non-production-general-v2-quantized-candidate-lab/v6-closed-price-tuple";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(all(
@@ -86,8 +88,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x6e, 0x0e, 0xb3, 0x55, 0xbd, 0x8b, 0xf2, 0x0b, 0xd6, 0x72, 0x2c, 0xfd, 0x32, 0x5c, 0x73, 0x08,
-    0x92, 0xb0, 0x23, 0x41, 0x0d, 0xc2, 0x88, 0x52, 0x05, 0xaf, 0x0f, 0xbe, 0x68, 0xb7, 0x0e, 0xda,
+    0x30, 0xd2, 0x19, 0xcf, 0xe5, 0x58, 0xa3, 0x23, 0x2b, 0x12, 0x3f, 0x60, 0xbc, 0x67, 0x40, 0x0b,
+    0x8a, 0x01, 0x8b, 0xb5, 0xa6, 0x5b, 0x80, 0x39, 0x80, 0x71, 0xce, 0x33, 0x24, 0x1d, 0x1d, 0x69,
 ];
 
 /// Whether this artifact is the explicitly non-production identity lab.
