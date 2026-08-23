@@ -46,6 +46,8 @@ const GENERAL_MARKET_BINDING_DATA_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/binding-data/v2\0";
 const GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3: &[u8] =
     b"dragons-clutch/general-market/runtime-data/v3\0";
+const GENERAL_MARKET_LIABILITY_FOUNDING_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/general-market/liability-founding-postwrite/v3\0";
 const MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/market-resolution/activation-postwrite/v5\0";
 
@@ -136,6 +138,42 @@ pub(crate) struct GeneralMarketValueAuthorityV2 {
     pub(crate) deployment:
         crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
     pub(crate) receipt_id: CollateralId,
+}
+
+/// Private SBF proof that canonical liability state and Hoard custody were
+/// founded under the exact current Profile-selected token deployment and
+/// exact persisted rent balances.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedMarketLiabilityFoundingPostwriteV3 {
+    accepted: AcceptedMarketLiabilityFoundingV3,
+    deployment: crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
+    hoard_lamports: u64,
+    claim_ledger_lamports: u64,
+    receipt_id: CollateralId,
+}
+
+impl AuthenticatedMarketLiabilityFoundingPostwriteV3 {
+    /// Exact current collateral token deployment observed in this instruction.
+    pub(crate) const fn deployment(
+        self,
+    ) -> crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2 {
+        self.deployment
+    }
+
+    /// Exact admitted HoardV2 lamport balance.
+    pub(crate) const fn hoard_lamports(self) -> u64 {
+        self.hoard_lamports
+    }
+
+    /// Exact admitted ClaimLedgerV3 lamport balance.
+    pub(crate) const fn claim_ledger_lamports(self) -> u64 {
+        self.claim_ledger_lamports
+    }
+
+    /// Product-consumable exact runtime postwrite receipt.
+    pub(crate) const fn receipt_id(self) -> CollateralId {
+        self.receipt_id
+    }
 }
 
 /// Hostile-decoded full-width Resolution bound to its exact PDA and ledgers.
@@ -245,6 +283,55 @@ fn authenticated_account_data_id_v1(
     Ok(value)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn market_liability_founding_postwrite_receipt_id_v3(
+    accepted_receipt_id: CollateralId,
+    founding_id: CollateralId,
+    market_id: CollateralId,
+    realm_id: CollateralId,
+    policy_id: CollateralId,
+    release_id: CollateralId,
+    programdata_account: CollateralId,
+    deployment_slot: u64,
+    deployment_receipt_id: CollateralId,
+    hoard_account: &Pubkey,
+    hoard_id: CollateralId,
+    hoard_lamports: u64,
+    claim_ledger_account: &Pubkey,
+    claim_ledger_id: CollateralId,
+    claim_ledger_lamports: u64,
+    hoard_token_account: &Pubkey,
+    visible_hoard_atoms: u64,
+) -> Outcome<CollateralId> {
+    let receipt_id = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            GENERAL_MARKET_LIABILITY_FOUNDING_POSTWRITE_DOMAIN_V3,
+            &accepted_receipt_id.bytes(),
+            &founding_id.bytes(),
+            &market_id.bytes(),
+            &realm_id.bytes(),
+            &policy_id.bytes(),
+            &release_id.bytes(),
+            &programdata_account.bytes(),
+            &deployment_slot.to_le_bytes(),
+            &deployment_receipt_id.bytes(),
+            hoard_account.as_ref(),
+            &hoard_id.bytes(),
+            &hoard_lamports.to_le_bytes(),
+            claim_ledger_account.as_ref(),
+            &claim_ledger_id.bytes(),
+            &claim_ledger_lamports.to_le_bytes(),
+            hoard_token_account.as_ref(),
+            &visible_hoard_atoms.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(receipt_id)
+}
+
 /// Authenticate exact full-width liability/custody postwrites and release the
 /// private accepted founding receipt.
 ///
@@ -254,11 +341,12 @@ fn authenticated_account_data_id_v1(
 pub(crate) fn accept_general_market_liability_founding_postwrite_v3(
     program_id: &Pubkey,
     bound: BoundCollateralProfileV2,
+    deployment: crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
     plan: MarketLiabilityFoundingPlanV3,
     hoard_account: &AccountInfo<'_>,
     claim_ledger_account: &AccountInfo<'_>,
     hoard_token_account: &AccountInfo<'_>,
-) -> Outcome<AcceptedMarketLiabilityFoundingV3> {
+) -> Outcome<AuthenticatedMarketLiabilityFoundingPostwriteV3> {
     require_program_account(program_id, hoard_account, true, HOARD_V2_BYTES)?;
     require_program_account(
         program_id,
@@ -268,10 +356,20 @@ pub(crate) fn accept_general_market_liability_founding_postwrite_v3(
     )?;
     let hoard = plan.hoard();
     let claim_ledger = plan.claim_ledger();
-    require_deletable_rent_coverage_v1(hoard.rent, hoard_account.lamports(), true)?;
+    let release_id = bound
+        .release()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require(
+        deployment.release() == bound.release() && deployment.release_id() == release_id,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    let hoard_lamports = hoard_account.lamports();
+    let claim_ledger_lamports = claim_ledger_account.lamports();
+    require_deletable_rent_coverage_v1(hoard.rent, hoard_lamports, true)?;
     require_deletable_rent_coverage_v1(
         claim_ledger.rent,
-        claim_ledger_account.lamports(),
+        claim_ledger_lamports,
         true,
     )?;
     let market = hoard.market_instance_id.bytes();
@@ -311,7 +409,7 @@ pub(crate) fn accept_general_market_liability_founding_postwrite_v3(
     let hoard_token_data = hoard_token_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    accept_market_liability_founding_v3(
+    let accepted = accept_market_liability_founding_v3(
         bound,
         plan,
         MarketLiabilityFoundingPostwriteV3 {
@@ -329,7 +427,33 @@ pub(crate) fn accept_general_market_liability_founding_postwrite_v3(
             },
         },
     )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let receipt_id = market_liability_founding_postwrite_receipt_id_v3(
+        accepted.receipt_id(),
+        plan.founding_id(),
+        bound.market().market,
+        bound.realm_bound().realm().realm,
+        bound.policy_id(),
+        release_id,
+        deployment.programdata_account(),
+        deployment.deployment_slot(),
+        deployment.receipt_id(),
+        hoard_account.key,
+        plan.hoard_id(),
+        hoard_lamports,
+        claim_ledger_account.key,
+        plan.claim_ledger_id(),
+        claim_ledger_lamports,
+        hoard_token_account.key,
+        accepted.visible_hoard_atoms(),
+    )?;
+    Ok(AuthenticatedMarketLiabilityFoundingPostwriteV3 {
+        accepted,
+        deployment,
+        hoard_lamports,
+        claim_ledger_lamports,
+        receipt_id,
+    })
 }
 
 /// Authenticate the immutable General MarketBinding and its stable runtime.
@@ -1195,5 +1319,51 @@ mod rent_coverage_tests {
         .unwrap();
         assert_ne!(runtime_id, changed_runtime_id);
         assert_ne!(binding_id, runtime_id);
+    }
+
+    #[test]
+    fn founding_receipt_commits_deployment_and_both_exact_rent_balances() {
+        let hoard_account = Pubkey::new_from_array([10; 32]);
+        let claim_ledger_account = Pubkey::new_from_array([11; 32]);
+        let hoard_token_account = Pubkey::new_from_array([12; 32]);
+        let receipt = |programdata, deployment_slot, hoard_lamports, claim_ledger_lamports| {
+            market_liability_founding_postwrite_receipt_id_v3(
+                CollateralId::from_bytes([1; 32]),
+                CollateralId::from_bytes([2; 32]),
+                CollateralId::from_bytes([3; 32]),
+                CollateralId::from_bytes([4; 32]),
+                CollateralId::from_bytes([5; 32]),
+                CollateralId::from_bytes([6; 32]),
+                programdata,
+                deployment_slot,
+                CollateralId::from_bytes([8; 32]),
+                &hoard_account,
+                CollateralId::from_bytes([9; 32]),
+                hoard_lamports,
+                &claim_ledger_account,
+                CollateralId::from_bytes([13; 32]),
+                claim_ledger_lamports,
+                &hoard_token_account,
+                0,
+            )
+            .unwrap()
+        };
+        let exact = receipt(CollateralId::from_bytes([7; 32]), 19, 23, 29);
+        assert_ne!(
+            exact,
+            receipt(CollateralId::from_bytes([14; 32]), 19, 23, 29)
+        );
+        assert_ne!(
+            exact,
+            receipt(CollateralId::from_bytes([7; 32]), 20, 23, 29)
+        );
+        assert_ne!(
+            exact,
+            receipt(CollateralId::from_bytes([7; 32]), 19, 24, 29)
+        );
+        assert_ne!(
+            exact,
+            receipt(CollateralId::from_bytes([7; 32]), 19, 23, 30)
+        );
     }
 }
