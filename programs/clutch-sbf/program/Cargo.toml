@@ -52,7 +52,6 @@ non-production-failure-recovery-lab = [
     "dep:clutch-evidence-recovery",
     "dep:clutch-failure-policy-adapter",
     "dep:clutch-failure-policy-runtime",
-    "clutch-solana-layout/non-production-failure-recovery-lab",
 ]
 # Mutually exclusive deployable products. Each forwards the same identity to
 # both hostile wire crates so a narrow SBF cannot accidentally link the full

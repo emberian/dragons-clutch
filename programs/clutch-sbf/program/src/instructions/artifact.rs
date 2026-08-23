@@ -6,8 +6,7 @@
 //! body passes its pre-existing hostile-byte codec and semantic digest check.
 //! The final account contains the exact historical raw Policy, PriceGrid, or
 //! Terms bytes—or, only in the explicit non-production laboratory, one frozen
-//! Product/Series or Failure-policy codec body—at its content-derived PDA. It
-//! never contains a
+//! Product/Series codec body—at its content-derived PDA. It never contains a
 //! generic blob wrapper and consumers never read the staging account.
 //!
 //! The stage's funder is its sole writer and sealer.  It may abort at any
@@ -415,8 +414,7 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         | ArtifactKind::SeriesFundingQuoteV1
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
-        | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::FailureRelationPolicyV1) => {
+        | ArtifactKind::SeriesFundingTermsV2) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -642,8 +640,7 @@ fn create_final<'a>(
         | ArtifactKind::SeriesFundingQuoteV1
         | ArtifactKind::SeriesAttachmentPlanV1
         | ArtifactKind::SeriesPlanV5
-        | ArtifactKind::SeriesFundingTermsV2
-        | ArtifactKind::FailureRelationPolicyV1) => {
+        | ArtifactKind::SeriesFundingTermsV2) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,

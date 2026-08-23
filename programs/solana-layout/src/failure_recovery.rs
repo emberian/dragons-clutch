@@ -87,8 +87,12 @@ pub struct TriggerRelationRefusalV1 {
     pub common: RecoveryCommonV1,
     /// Exact Source-owned successful-evaluation handoff.
     pub source_success_handoff_id: [u8; HASH_BYTES],
-    /// Exact authenticated relation-result record.
+    /// Exact immutable Failure relation policy selected by Product.
+    pub relation_policy_id: [u8; HASH_BYTES],
+    /// Exact deterministic relation-execution record.
     pub relation_record_id: [u8; HASH_BYTES],
+    /// Exact atomic execution capability consumed by this transition.
+    pub relation_execution_id: [u8; HASH_BYTES],
     /// Closed deterministic refusal code selected by the frozen relation.
     pub refusal_code: u32,
 }
@@ -122,8 +126,12 @@ pub struct ResolveCallerFundedV1 {
     pub common: RecoveryCommonV1,
     /// Exact Source-owned successful-evaluation handoff.
     pub source_success_handoff_id: [u8; HASH_BYTES],
-    /// Exact authenticated accepted relation-result record.
+    /// Exact immutable Failure relation policy selected by Product.
+    pub relation_policy_id: [u8; HASH_BYTES],
+    /// Exact deterministic accepted relation-execution record.
     pub relation_record_id: [u8; HASH_BYTES],
+    /// Exact atomic execution capability consumed by this transition.
+    pub relation_execution_id: [u8; HASH_BYTES],
 }
 
 /// Strict `ResolvePaidRecovery` payload.
@@ -133,8 +141,12 @@ pub struct ResolvePaidRecoveryV1 {
     pub common: RecoveryCommonV1,
     /// Exact Source-owned successful-evaluation handoff.
     pub source_success_handoff_id: [u8; HASH_BYTES],
-    /// Exact authenticated accepted relation-result record.
+    /// Exact immutable Failure relation policy selected by Product.
+    pub relation_policy_id: [u8; HASH_BYTES],
+    /// Exact deterministic accepted relation-execution record.
     pub relation_record_id: [u8; HASH_BYTES],
+    /// Exact atomic execution capability consumed by this transition.
+    pub relation_execution_id: [u8; HASH_BYTES],
     /// Sole keeper/reward recipient.
     pub reward_recipient: [u8; HASH_BYTES],
     /// Exact scheduled liveness ceiling removed from remaining work.
@@ -194,19 +206,21 @@ pub const INITIALIZE_FAILURE_ROOT_PAYLOAD_BYTES_V1: usize = 200;
 /// Exact Source-trigger payload width.
 pub const TRIGGER_SOURCE_FAILURE_PAYLOAD_BYTES_V1: usize = 112;
 /// Exact relation-refusal trigger payload width.
-pub const TRIGGER_RELATION_REFUSAL_PAYLOAD_BYTES_V1: usize = 152;
+pub const TRIGGER_RELATION_REFUSAL_PAYLOAD_BYTES_V1: usize = 216;
 /// Exact schedule-advance payload width.
 pub const ADVANCE_RECOVERY_SCHEDULE_PAYLOAD_BYTES_V1: usize = 88;
 /// Exact accepted-work payload width.
 pub const ACCEPT_RECOVERY_WORK_PAYLOAD_BYTES_V1: usize = 152;
 /// Exact caller-funded resolution payload width.
-pub const RESOLVE_CALLER_FUNDED_PAYLOAD_BYTES_V1: usize = 144;
+pub const RESOLVE_CALLER_FUNDED_PAYLOAD_BYTES_V1: usize = 208;
 /// Exact paid-resolution payload width.
-pub const RESOLVE_PAID_RECOVERY_PAYLOAD_BYTES_V1: usize = 184;
+pub const RESOLVE_PAID_RECOVERY_PAYLOAD_BYTES_V1: usize = 248;
 /// Exact Recovery-close payload width.
 pub const CLOSE_RECOVERY_FUNDING_PAYLOAD_BYTES_V1: usize = 112;
 /// Exact semantic-root-close payload width.
 pub const CLOSE_FAILURE_ROOT_PAYLOAD_BYTES_V1: usize = 208;
+/// Largest payload admitted by Recovery78/v1.
+pub const MAX_FAILURE_RECOVERY_PAYLOAD_BYTES_V1: usize = RESOLVE_PAID_RECOVERY_PAYLOAD_BYTES_V1;
 
 /// Borrowed, strictly framed semantic-owner account body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -456,7 +470,7 @@ pub enum RecoveryAccountRoleV1 {
     SummaryProgramArtifact,
     SourceResult,
     SourceWorkReceipt,
-    RelationResult,
+    RelationExecutorRelease,
     Keeper,
     RecoveryPayer,
     NeutralSink,
@@ -528,13 +542,23 @@ const SOURCE_FAILURE_METAS: &[RecoveryAccountMetaV1] = &[
 pub const TRIGGER_SOURCE_FAILURE_METAS_V1: &[RecoveryAccountMetaV1] = SOURCE_FAILURE_METAS;
 /// Exact ordered account contract for a relation-refusal trigger.
 pub const TRIGGER_RELATION_REFUSAL_METAS_V1: &[RecoveryAccountMetaV1] = &[
-    SOURCE_FAILURE_METAS[0],
-    SOURCE_FAILURE_METAS[1],
-    SOURCE_FAILURE_METAS[2],
-    SOURCE_FAILURE_METAS[3],
-    SOURCE_FAILURE_METAS[4],
-    meta(RecoveryAccountRoleV1::RelationResult, false, false),
-    SOURCE_FAILURE_METAS[5],
+    meta(RecoveryAccountRoleV1::FailureRoot, true, false),
+    meta(RecoveryAccountRoleV1::SeriesRegistry, false, false),
+    meta(RecoveryAccountRoleV1::RegistryRelease, false, false),
+    meta(RecoveryAccountRoleV1::CapabilityProfile, false, false),
+    meta(RecoveryAccountRoleV1::SeriesArtifact, false, false),
+    meta(RecoveryAccountRoleV1::ProductTemplateArtifact, false, false),
+    meta(RecoveryAccountRoleV1::ClaimBasisArtifact, false, false),
+    meta(RecoveryAccountRoleV1::RecoveryPolicyArtifact, false, false),
+    meta(RecoveryAccountRoleV1::PricePolicyArtifact, false, false),
+    meta(RecoveryAccountRoleV1::GenesisArtifact, false, false),
+    meta(RecoveryAccountRoleV1::AttachmentArtifact, false, false),
+    meta(RecoveryAccountRoleV1::RelationExecutorRelease, false, false),
+    meta(RecoveryAccountRoleV1::SourceRelease, false, false),
+    meta(RecoveryAccountRoleV1::SourceOccurrence, false, false),
+    meta(RecoveryAccountRoleV1::SourceResult, false, false),
+    meta(RecoveryAccountRoleV1::SourceWorkReceipt, false, false),
+    meta(RecoveryAccountRoleV1::ClockSysvar, false, false),
 ];
 /// Exact ordered account contract for a schedule advance.
 pub const ADVANCE_RECOVERY_SCHEDULE_METAS_V1: &[RecoveryAccountMetaV1] = &[
@@ -557,24 +581,44 @@ pub const ACCEPT_RECOVERY_WORK_METAS_V1: &[RecoveryAccountMetaV1] = &[
 ];
 /// Exact ordered account contract for caller-funded resolution.
 pub const RESOLVE_CALLER_FUNDED_METAS_V1: &[RecoveryAccountMetaV1] = &[
-    SOURCE_FAILURE_METAS[0],
-    SOURCE_FAILURE_METAS[1],
-    SOURCE_FAILURE_METAS[2],
-    SOURCE_FAILURE_METAS[3],
-    SOURCE_FAILURE_METAS[4],
-    meta(RecoveryAccountRoleV1::RelationResult, false, false),
-    SOURCE_FAILURE_METAS[5],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[0],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[1],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[2],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[3],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[4],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[5],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[6],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[7],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[8],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[9],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[10],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[11],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[12],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[13],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[14],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[15],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[16],
 ];
 /// Exact ordered account contract for paid resolution.
 pub const RESOLVE_PAID_RECOVERY_METAS_V1: &[RecoveryAccountMetaV1] = &[
     ACCEPT_RECOVERY_WORK_METAS_V1[0],
     ACCEPT_RECOVERY_WORK_METAS_V1[1],
     ACCEPT_RECOVERY_WORK_METAS_V1[2],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[1],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[2],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[3],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[4],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[5],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[6],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[7],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[8],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[9],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[10],
+    TRIGGER_RELATION_REFUSAL_METAS_V1[11],
     ACCEPT_RECOVERY_WORK_METAS_V1[3],
     ACCEPT_RECOVERY_WORK_METAS_V1[4],
     ACCEPT_RECOVERY_WORK_METAS_V1[5],
     ACCEPT_RECOVERY_WORK_METAS_V1[6],
-    meta(RecoveryAccountRoleV1::RelationResult, false, false),
     ACCEPT_RECOVERY_WORK_METAS_V1[7],
     ACCEPT_RECOVERY_WORK_METAS_V1[8],
     ACCEPT_RECOVERY_WORK_METAS_V1[9],
@@ -655,15 +699,23 @@ pub fn decode_payload_v1(
             ))
         }
         registry::RecoveryAction::TriggerRelationRefusal => {
-            require_reserved(&input[148..152])?;
+            require_reserved(&input[212..216])?;
             let value = TriggerRelationRefusalV1 {
                 common,
                 source_success_handoff_id: id_at(input, 80),
-                relation_record_id: id_at(input, 112),
-                refusal_code: u32_at(input, 144),
+                relation_policy_id: id_at(input, 112),
+                relation_record_id: id_at(input, 144),
+                relation_execution_id: id_at(input, 176),
+                refusal_code: u32_at(input, 208),
             };
-            require_live(value.source_success_handoff_id)?;
-            require_live(value.relation_record_id)?;
+            for id in [
+                value.source_success_handoff_id,
+                value.relation_policy_id,
+                value.relation_record_id,
+                value.relation_execution_id,
+            ] {
+                require_live(id)?;
+            }
             if !(1..=5).contains(&value.refusal_code) {
                 return Err(CodecError::InvalidEnum);
             }
@@ -696,21 +748,37 @@ pub fn decode_payload_v1(
             let value = ResolveCallerFundedV1 {
                 common,
                 source_success_handoff_id: id_at(input, 80),
-                relation_record_id: id_at(input, 112),
+                relation_policy_id: id_at(input, 112),
+                relation_record_id: id_at(input, 144),
+                relation_execution_id: id_at(input, 176),
             };
-            require_live(value.source_success_handoff_id)?;
-            require_live(value.relation_record_id)?;
+            for id in [
+                value.source_success_handoff_id,
+                value.relation_policy_id,
+                value.relation_record_id,
+                value.relation_execution_id,
+            ] {
+                require_live(id)?;
+            }
             Ok(FailureRecoveryPayloadV1::ResolveCallerFunded(value))
         }
         registry::RecoveryAction::ResolvePaidRecovery => {
             let value = ResolvePaidRecoveryV1 {
                 common,
                 source_success_handoff_id: id_at(input, 80),
-                relation_record_id: id_at(input, 112),
-                reward_recipient: id_at(input, 144),
-                scheduled_ceiling_lamports: u64_at(input, 176),
+                relation_policy_id: id_at(input, 112),
+                relation_record_id: id_at(input, 144),
+                relation_execution_id: id_at(input, 176),
+                reward_recipient: id_at(input, 208),
+                scheduled_ceiling_lamports: u64_at(input, 240),
             };
-            require_live(value.relation_record_id)?;
+            for id in [
+                value.relation_policy_id,
+                value.relation_record_id,
+                value.relation_execution_id,
+            ] {
+                require_live(id)?;
+            }
             require_work(
                 value.source_success_handoff_id,
                 value.reward_recipient,
@@ -798,8 +866,10 @@ pub fn encode_payload_v1(value: &FailureRecoveryPayloadV1, output: &mut [u8]) ->
         }
         FailureRecoveryPayloadV1::TriggerRelationRefusal(v) => {
             output[80..112].copy_from_slice(&v.source_success_handoff_id);
-            output[112..144].copy_from_slice(&v.relation_record_id);
-            output[144..148].copy_from_slice(&v.refusal_code.to_le_bytes());
+            output[112..144].copy_from_slice(&v.relation_policy_id);
+            output[144..176].copy_from_slice(&v.relation_record_id);
+            output[176..208].copy_from_slice(&v.relation_execution_id);
+            output[208..212].copy_from_slice(&v.refusal_code.to_le_bytes());
         }
         FailureRecoveryPayloadV1::AdvanceRecoverySchedule(v) => {
             output[80] = v.expected_attempt_index
@@ -811,13 +881,17 @@ pub fn encode_payload_v1(value: &FailureRecoveryPayloadV1, output: &mut [u8]) ->
         }
         FailureRecoveryPayloadV1::ResolveCallerFunded(v) => {
             output[80..112].copy_from_slice(&v.source_success_handoff_id);
-            output[112..144].copy_from_slice(&v.relation_record_id);
+            output[112..144].copy_from_slice(&v.relation_policy_id);
+            output[144..176].copy_from_slice(&v.relation_record_id);
+            output[176..208].copy_from_slice(&v.relation_execution_id);
         }
         FailureRecoveryPayloadV1::ResolvePaidRecovery(v) => {
             output[80..112].copy_from_slice(&v.source_success_handoff_id);
-            output[112..144].copy_from_slice(&v.relation_record_id);
-            output[144..176].copy_from_slice(&v.reward_recipient);
-            output[176..184].copy_from_slice(&v.scheduled_ceiling_lamports.to_le_bytes());
+            output[112..144].copy_from_slice(&v.relation_policy_id);
+            output[144..176].copy_from_slice(&v.relation_record_id);
+            output[176..208].copy_from_slice(&v.relation_execution_id);
+            output[208..240].copy_from_slice(&v.reward_recipient);
+            output[240..248].copy_from_slice(&v.scheduled_ceiling_lamports.to_le_bytes());
         }
         FailureRecoveryPayloadV1::CloseRecoveryFunding(v) => {
             output[80..112].copy_from_slice(&v.recovery_terminal_receipt_id)
@@ -935,7 +1009,8 @@ fn u64_at(input: &[u8], offset: usize) -> u64 {
     ])
 }
 
-const _: () = assert!(CLOSE_FAILURE_ROOT_PAYLOAD_BYTES_V1 <= registry::MAX_EXTENSION_PAYLOAD_BYTES);
+const _: () =
+    assert!(MAX_FAILURE_RECOVERY_PAYLOAD_BYTES_V1 <= registry::MAX_EXTENSION_PAYLOAD_BYTES);
 
 #[cfg(test)]
 mod tests {
@@ -969,7 +1044,9 @@ mod tests {
             FailureRecoveryPayloadV1::TriggerRelationRefusal(TriggerRelationRefusalV1 {
                 common: common(),
                 source_success_handoff_id: [10; 32],
-                relation_record_id: [11; 32],
+                relation_policy_id: [11; 32],
+                relation_record_id: [12; 32],
+                relation_execution_id: [13; 32],
                 refusal_code: 2,
             }),
             FailureRecoveryPayloadV1::AdvanceRecoverySchedule(AdvanceRecoveryScheduleV1 {
@@ -985,13 +1062,17 @@ mod tests {
             FailureRecoveryPayloadV1::ResolveCallerFunded(ResolveCallerFundedV1 {
                 common: common(),
                 source_success_handoff_id: [15; 32],
-                relation_record_id: [16; 32],
+                relation_policy_id: [16; 32],
+                relation_record_id: [17; 32],
+                relation_execution_id: [18; 32],
             }),
             FailureRecoveryPayloadV1::ResolvePaidRecovery(ResolvePaidRecoveryV1 {
                 common: common(),
-                source_success_handoff_id: [17; 32],
-                relation_record_id: [18; 32],
-                reward_recipient: [19; 32],
+                source_success_handoff_id: [19; 32],
+                relation_policy_id: [20; 32],
+                relation_record_id: [21; 32],
+                relation_execution_id: [22; 32],
+                reward_recipient: [23; 32],
                 scheduled_ceiling_lamports: 20,
             }),
             FailureRecoveryPayloadV1::CloseRecoveryFunding(CloseRecoveryFundingV1 {
@@ -1036,7 +1117,7 @@ mod tests {
                     registry::RecoveryAction::CloseFailureRoot
                 }
             };
-            let mut bytes = [0; CLOSE_FAILURE_ROOT_PAYLOAD_BYTES_V1];
+            let mut bytes = [0; MAX_FAILURE_RECOVERY_PAYLOAD_BYTES_V1 + 1];
             let exact = payload_bytes_v1(action);
             assert_eq!(encode_payload_v1(&value, &mut bytes[..exact]), Ok(exact));
             assert_eq!(decode_payload_v1(action, &bytes[..exact]), Ok(value));
