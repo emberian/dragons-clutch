@@ -27,6 +27,7 @@
 mod account;
 mod binding;
 mod claim;
+mod claim_representation;
 mod close;
 mod codec;
 mod market_ledger;
@@ -41,6 +42,7 @@ mod transfer;
 pub use account::*;
 pub use binding::*;
 pub use claim::*;
+pub use claim_representation::*;
 pub use close::*;
 pub use market_ledger::*;
 pub use policy::*;

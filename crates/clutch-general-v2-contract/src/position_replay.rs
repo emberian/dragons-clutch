@@ -35,6 +35,7 @@ pub const GENERAL_POSITION_FOUNDING_GENERATION_V1: u64 = 1;
 const SETTLEMENT_FAMILY: u8 = 1;
 const STRUCTURED_EXCHANGE_FAMILY: u8 = 2;
 const COLLATERAL_CASH_FAMILY: u8 = 3;
+const CLAIM_REPRESENTATION_FAMILY: u8 = 4;
 const TRANSITION_VERSION_V1: u8 = 1;
 const OWNER_ACCOUNTING_ROLE: u8 = 1;
 const OWNER_CASH_ROLE: u8 = 2;
@@ -56,6 +57,10 @@ pub enum GeneralReplayTransitionKindV1 {
     Split,
     /// Legacy Intent `Merge`, unlocking complete-set backing into cash.
     Merge,
+    /// Move Position-owned native Eggs into independently issued bearer claims.
+    Materialize,
+    /// Burn bearer claims back into Position-owned native Eggs.
+    Dematerialize,
     /// Action 25 owner accounting; the Position body is unchanged.
     AccountReceiptEnd,
     /// Action 38 owner cash realization.
@@ -97,6 +102,18 @@ impl GeneralReplayTransitionKindV1 {
                 COLLATERAL_CASH_FAMILY,
                 TRANSITION_VERSION_V1,
                 4,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::Materialize => (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ),
+            Self::Dematerialize => (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ),
             Self::AccountReceiptEnd => (
@@ -170,6 +187,18 @@ impl GeneralReplayTransitionKindV1 {
                 4,
                 GENERAL_COLLATERAL_POSITION_ROLE,
             ) => Ok(Self::Merge),
+            (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                1,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Materialize),
+            (
+                CLAIM_REPRESENTATION_FAMILY,
+                TRANSITION_VERSION_V1,
+                2,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::Dematerialize),
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 25, OWNER_ACCOUNTING_ROLE) => {
                 Ok(Self::AccountReceiptEnd)
             }
@@ -758,6 +787,8 @@ where
             | GeneralReplayTransitionKindV1::WithdrawCash
             | GeneralReplayTransitionKindV1::Split
             | GeneralReplayTransitionKindV1::Merge
+            | GeneralReplayTransitionKindV1::Materialize
+            | GeneralReplayTransitionKindV1::Dematerialize
             | GeneralReplayTransitionKindV1::DirectBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
             | GeneralReplayTransitionKindV1::StructuredGeneral

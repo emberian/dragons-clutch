@@ -15,9 +15,10 @@
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
 //! | [`collateral_cash_v3`] | `Intent::Endow`, `Intent::WithdrawCash` over full-width PositionV3/HoardV2/GEN1 |
+//! | [`claim_representation_v3`] | `Intent::Materialize`, `Intent::Dematerialize` over PositionV3/ClaimLedgerV3/GEN1 and the separate claim release |
 //! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::CloseRevenuePolicyRecord` |
 //! | [`split`] | `Intent::Split` |
-//! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
+//! | [`merge_materialize`] | withdrawn lowered-ledger migration implementation; no live dispatch |
 //! | [`market_init`] | `Intent::CreateMarket` |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
@@ -27,7 +28,7 @@
 //! | `general_v2_receipt_v3` | capability-disabled exact Selected/Feed/PDA authentication for General Receipt V3; no dispatch route |
 //!
 //! Implemented: genesis (the five account-creating initializers), full-width
-//! collateral_cash_v3 (Endow/WithdrawCash), merge_materialize
+//! collateral_cash_v3 (Endow/WithdrawCash), claim_representation_v3
 //! (Materialize/Dematerialize), complete_set_v3 (Split/Merge), market_init,
 //! observe_resolve (FeedAdvance/Resolve/RedeemInternal), and the whole Tier 2
 //! general clearing lifecycle in orders_batch: funded placement and
@@ -44,6 +45,7 @@
 
 pub mod artifact;
 pub mod cash_exit;
+pub mod claim_representation_v3;
 pub mod collateral_cash_v3;
 pub(crate) mod collateral_position_v3;
 pub mod complete_set_v3;

@@ -55,8 +55,8 @@ use crate::instructions::general_v2_identity;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
-    artifact, collateral_cash_v3, complete_set_v3, external_exit, genesis, market_init,
-    merge_materialize, observe_resolve, orders_batch, source_ingest_v2,
+    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_exit, genesis,
+    market_init, observe_resolve, orders_batch, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -632,7 +632,7 @@ fn process_merge_materialize(
         ),
         Action::Layout(Intent::Materialize { .. })
         | Action::Layout(Intent::Dematerialize { .. }) => {
-            merge_materialize::process(program_id, accounts, &request)
+            claim_representation_v3::process_claim_representation_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
