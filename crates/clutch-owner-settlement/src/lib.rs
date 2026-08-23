@@ -14,7 +14,6 @@
 mod adapter;
 mod builder;
 mod direct;
-mod final_pot;
 mod virtual_claim;
 
 pub use adapter::{
@@ -43,15 +42,6 @@ pub use direct::{
     DirectEggSettlementPlanV1, DirectEggTransferAuditV1, DirectReceiptEndAccountingInputV1,
     DirectReceiptEndAccountingPlanV1, OrderKindV1, ReservationStateV1,
     DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
-};
-
-pub use final_pot::{
-    prepare_retire_owner_settlement_row_v1, AuthenticatedRoundingDischargeV1,
-    AuthenticatedSelectedFeeDischargeV1, AuthenticatedVirtualClaimDischargeV1,
-    FinalPotAuthorityBindingsV1, FinalPotDischargeKindV1, FinalPotDischargeReceiptV1,
-    FinalPotRetirementDispositionV1, FinalPotVirtualClaimOpeningV1, GeneralV2FinalPotV1,
-    OwnerSettlementRowRetirementPlanV1, FINAL_POT_DISCHARGE_RECEIPT_BODY_V1_BYTES,
-    FINAL_POT_DISCHARGE_RECEIPT_MAGIC_V1, GENERAL_V2_FINAL_POT_BODY_V1_BYTES,
 };
 
 pub use virtual_claim::{
