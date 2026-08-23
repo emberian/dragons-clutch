@@ -264,7 +264,11 @@ pub struct TransferAuthorityV2 {
     pub is_transaction_signer: bool,
     /// Whether the live adapter authenticated the canonical PDA and its bump.
     pub program_address_authenticated: bool,
-    /// Authority accounts are read-only in this contract.
+    /// Runtime writability after outer-message privilege union.
+    ///
+    /// Transaction signers may be writable when the same account also funds
+    /// lamports in the outer instruction. Canonical PDA authorities remain
+    /// strictly read-only.
     pub is_writable: bool,
     /// Authority accounts must not be executable.
     pub executable: bool,
@@ -275,7 +279,7 @@ pub struct TransferAuthorityV2 {
 impl TransferAuthorityV2 {
     pub(crate) fn validate(self) -> Result<()> {
         self.address.require_live()?;
-        if self.is_writable || self.executable {
+        if self.executable {
             return Err(Error::WrongAccountRole);
         }
         match self.kind {
@@ -285,7 +289,8 @@ impl TransferAuthorityV2 {
                 }
             }
             TransferAuthorityKindV2::ProgramDerived => {
-                if self.is_transaction_signer
+                if self.is_writable
+                    || self.is_transaction_signer
                     || !self.program_address_authenticated
                     || !self.data_is_empty
                 {
