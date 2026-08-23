@@ -11,7 +11,7 @@ same source profile.
 
 ## Canonical 298-byte payload
 
-The codec owner is `clutch-structured-claim-adapter`, adjacent to
+The codec owner is `clutch-structured-claim-runtime-contract`, adjacent to
 `prepare_atomic_position_asset_transfer_v1`; no `repr(C)` width is used as wire
 authority.
 
