@@ -567,7 +567,8 @@ fn product_funding_terms() -> SeriesFundingTermsV2 {
         series_plan_id: SeriesPlanV5Id::from_bytes(product_series().id().unwrap().bytes()),
         lamport_principal_refund: product_id(50),
         collateral_principal_refund_token_account: product_id(51),
-        neutral_sink: product_id(52),
+        neutral_collateral_disposition_token_account: product_id(52),
+        neutral_lamport_sink: product_id(55),
         collateral_mint: product_id(53),
         token_program: product_id(54),
     }

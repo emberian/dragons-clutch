@@ -42,7 +42,7 @@ pub const SERIES_PLAN_V5_BYTES: usize = 152;
 /// SHA-256 domain for [`SeriesFundingTermsV2`].
 pub const SERIES_FUNDING_TERMS_V2_DOMAIN: &[u8] = b"dragons-clutch/series-funding-terms/v2";
 /// Exact canonical byte length of [`SeriesFundingTermsV2`].
-pub const SERIES_FUNDING_TERMS_V2_BYTES: usize = 208;
+pub const SERIES_FUNDING_TERMS_V2_BYTES: usize = 240;
 
 const _: () = assert!(MAX_OUTCOMES == clutch_price_measure::MAX_OUTCOMES);
 const _: () = assert!(MAX_PAYOUTS == clutch_price_measure::MAX_OUTCOMES);
@@ -51,7 +51,7 @@ const _: () = assert!(PRICE_MEASURE_POLICY_BYTES == 96);
 const _: () = assert!(MARKET_GENESIS_PROFILE_V2_BYTES == 416);
 const _: () = assert!(MARKET_INSTANCE_PREIMAGE_V2_BYTES == 88);
 const _: () = assert!(SERIES_PLAN_V5_BYTES == 152);
-const _: () = assert!(SERIES_FUNDING_TERMS_V2_BYTES == 208);
+const _: () = assert!(SERIES_FUNDING_TERMS_V2_BYTES == 240);
 
 /// Immutable selection of quantized price-measure semantics and a bounded
 /// subset of the checker release's supported domain.
@@ -1024,8 +1024,10 @@ pub struct SeriesFundingTermsV2 {
     pub lamport_principal_refund: ContentId,
     /// Token account receiving refundable collateral principal.
     pub collateral_principal_refund_token_account: ContentId,
-    /// Immutable neutral destination for unowned residue.
-    pub neutral_sink: ContentId,
+    /// Receive-only token account for unowned collateral residue.
+    pub neutral_collateral_disposition_token_account: ContentId,
+    /// System-owned account for unowned lamport residue.
+    pub neutral_lamport_sink: ContentId,
     /// Exact collateral mint selected through the Realm/Profile.
     pub collateral_mint: ContentId,
     /// Exact admitted token-program identity.
@@ -1039,7 +1041,8 @@ impl SeriesFundingTermsV2 {
         let roles = [
             self.lamport_principal_refund,
             self.collateral_principal_refund_token_account,
-            self.neutral_sink,
+            self.neutral_collateral_disposition_token_account,
+            self.neutral_lamport_sink,
             self.collateral_mint,
             self.token_program,
         ];
@@ -1088,7 +1091,9 @@ impl SeriesFundingTermsV2 {
             || registry.realm_collateral.profile_id != genesis.profile_id
             || self.collateral_mint != registry.realm_collateral.collateral_mint
             || self.token_program != registry.realm_collateral.token_program
-            || self.neutral_sink != registry.realm_collateral.neutral_incinerator
+            || self.neutral_collateral_disposition_token_account
+                != registry.realm_collateral.neutral_incinerator
+            || self.neutral_lamport_sink != registry.realm_collateral.neutral_lamport_sink
         {
             return Err(Error::MismatchedArtifact);
         }
@@ -1117,7 +1122,8 @@ impl FixedCodec for SeriesFundingTermsV2 {
         writer.id(self.series_plan_id.content_id());
         writer.id(self.lamport_principal_refund);
         writer.id(self.collateral_principal_refund_token_account);
-        writer.id(self.neutral_sink);
+        writer.id(self.neutral_collateral_disposition_token_account);
+        writer.id(self.neutral_lamport_sink);
         writer.id(self.collateral_mint);
         writer.id(self.token_program);
         writer.finish()
@@ -1134,7 +1140,8 @@ impl FixedCodec for SeriesFundingTermsV2 {
             series_plan_id: SeriesPlanV5Id::from_bytes(reader.id().bytes()),
             lamport_principal_refund: reader.id(),
             collateral_principal_refund_token_account: reader.id(),
-            neutral_sink: reader.id(),
+            neutral_collateral_disposition_token_account: reader.id(),
+            neutral_lamport_sink: reader.id(),
             collateral_mint: reader.id(),
             token_program: reader.id(),
         };
@@ -1305,6 +1312,7 @@ fn validate_realm_collateral(value: RealmCollateralProjectionV1) -> Result<()> {
         value.collateral_mint,
         value.token_program,
         value.neutral_incinerator,
+        value.neutral_lamport_sink,
     ] {
         id.validate()?;
     }
