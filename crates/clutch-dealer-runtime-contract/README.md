@@ -92,7 +92,12 @@ rent codec.
 ## Not enabled
 
 No global account tag, instruction tag, capability-profile membership, program
-dependency, account meta list, or transfer path is allocated here.
+dependency, account meta list, or transfer path is allocated by this pure
+crate. The separate SBF adapter now allocates a non-production, catalog-only
+staged transport documented in
+[`DEALER_POLICY_SBF_VERTICAL_SLICE.md`](../../docs/implementation/DEALER_POLICY_SBF_VERTICAL_SLICE.md).
+That route persists an unadmitted immutable Policy and does not activate a
+facility action.
 `require_action_enabled` refuses every current action with `ActionDisabled`.
 The price-certificate fields are binding slots, not a choice between the still
 unresolved exact-divisibility and canonical-quantization profiles. Likewise,

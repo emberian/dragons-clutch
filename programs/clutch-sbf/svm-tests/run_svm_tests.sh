@@ -22,6 +22,8 @@ program="$(cd "$here/.." && pwd)"
 profile="default-production-inert"
 build_features=()
 test_features=()
+build_default=()
+test_default=()
 if [ "${1:-}" = "--non-production-mock-source" ]; then
   shift
   profile="NON-PRODUCTION-non-production-mock-source"
@@ -32,6 +34,13 @@ elif [ "${1:-}" = "--non-production-real-pyth-lab" ]; then
   profile="NON-PRODUCTION-non-production-real-pyth-lab"
   build_features=(--features non-production-real-pyth-lab)
   test_features=(--features non-production-real-pyth-lab)
+elif [ "${1:-}" = "--profile-non-production-dealer-policy-catalog-lab" ]; then
+  shift
+  profile="NON-PRODUCTION-dealer-policy-catalog-lab"
+  build_default=(--no-default-features)
+  test_default=(--no-default-features)
+  build_features=(--features custom-heap,profile-non-production-dealer-policy-catalog-lab)
+  test_features=(--features profile-non-production-dealer-policy-catalog-lab)
 fi
 
 solana_home="${SOLANA_HOME:-$HOME/.local/share/solana/install/active_release/bin}"
@@ -42,7 +51,7 @@ echo "== building the program ELF =="
 mkdir -p "$here/tests/fixtures"
 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="${SBF_TARGET_DIR:-$program/target/sbf-build}" \
   "$build_sbf" --manifest-path "$program/program/Cargo.toml" \
-  "${build_features[@]}" --sbf-out-dir "$here/tests/fixtures"
+  "${build_default[@]}" "${build_features[@]}" --sbf-out-dir "$here/tests/fixtures"
 # The laboratory receiver writes a canonical 134-byte update immediately
 # before append. It is not a provider-proof model; it exists so the bank proves
 # the real write/consume/rollback transaction seam rather than reading bytes
@@ -75,4 +84,4 @@ echo
 echo "== driving SVM profile: $profile =="
 cd "$here"
 export RUST_LOG="${RUST_LOG:-error}"
-cargo test --locked "${test_features[@]}" -- --nocapture --test-threads=1 "$@"
+cargo test --locked "${test_default[@]}" "${test_features[@]}" -- --nocapture --test-threads=1 "$@"

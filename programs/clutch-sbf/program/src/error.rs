@@ -16,6 +16,7 @@
 //! | `0x0070..=0x007f` | construction and typed-artifact appends ([`ClutchError::WrongSystemProgram`] .. [`ClutchError::ArtifactRefundMismatch`]) |
 //! | `0x0080..=0x008d` | resumable ResolutionWork semantic refusals |
 //! | `0x0090..=0x009f` | the clearing walk's checkpoint/feed seam and the revenue admission boundary ([`ClutchError::CheckpointCodecFault`] .. [`ClutchError::RevenuePolicyRecordMissing`]) |
+//! | `0x0150..=0x0152` | non-production Dealer-policy catalog transport |
 //! | `0x1000 + n` | [`clutch_solana_layout::CodecError`] variant `n` |
 //! | `0x2000 + n` | [`clutch_kernel::Error`] variant `n` |
 //! | `0x3000 + n` | [`clutch_solana_reference::Error`] variant `n` |
@@ -302,6 +303,15 @@ pub enum ClutchError {
     /// land here — the digest is recomputed from the presented bytes, never
     /// compared claim-to-claim.
     ScoreDigestMismatch = 0x00a1,
+    /// The staged DealerPolicy body failed its owning strict codec, semantic
+    /// validator, or canonical content-ID recomputation.
+    DealerPolicyFault = 0x0150,
+    /// Dealer-policy upload header, cursor, body, or immutable wrapper did not
+    /// match the exact request/PDA lifecycle.
+    DealerPolicyUploadMismatch = 0x0151,
+    /// A Dealer-policy rent principal, hostile prefund, or sink/refund split
+    /// did not match the stored full-principal plan.
+    DealerPolicyRentMismatch = 0x0152,
 }
 
 impl From<ClutchError> for ProgramError {

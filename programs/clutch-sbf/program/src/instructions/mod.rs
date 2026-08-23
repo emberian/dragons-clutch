@@ -42,6 +42,8 @@
 pub mod artifact;
 pub mod cash_exit;
 pub mod construction;
+/// Non-production immutable Dealer-policy catalog transport.
+pub mod dealer_policy;
 pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod external_exit;

@@ -33,13 +33,18 @@ name = "clutch_svm_fixture"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["profile-full"]
+profile-full = ["clutch-sbf/profile-full"]
 # Explicitly select the different laboratory ELF and expose only tests whose
 # successful value/source path depends on that compiled mock release.
-non-production-mock-source = ["clutch-sbf/non-production-mock-source"]
+non-production-mock-source = ["profile-full", "clutch-sbf/non-production-mock-source"]
 # Compiles the explicit local-real Pyth release row and its SVM campaign. This
 # is a different, non-production ELF identity; the default registry is unchanged.
-non-production-real-pyth-lab = ["clutch-sbf/non-production-real-pyth-lab"]
+non-production-real-pyth-lab = ["profile-full", "clutch-sbf/non-production-real-pyth-lab"]
+# Distinct real-ELF profile for the immutable Dealer-policy catalog only.
+profile-non-production-dealer-policy-catalog-lab = [
+    "clutch-sbf/profile-non-production-dealer-policy-catalog-lab",
+]
 
 [dependencies]
 # The frozen byte layouts and the reference-only codecs.  Both are
@@ -47,7 +52,8 @@ non-production-real-pyth-lab = ["clutch-sbf/non-production-real-pyth-lab"]
 # nothing and — this is the point — the account bytes this harness writes at
 # genesis come from the *same* encoders the program decodes with.  A hand-rolled
 # second copy would test the copy.
-clutch-sbf = { path = "../program", features = ["laboratory-fixtures"] }
+clutch-sbf = { path = "../program", default-features = false, features = ["laboratory-fixtures"] }
+clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 # The checkpoint's owning crate: the idle body the final grow writes on-chain
 # is compared byte-for-byte against `ClearWorkV1::encode_idle_into` here, so
 # the account image and the host image share one writer.

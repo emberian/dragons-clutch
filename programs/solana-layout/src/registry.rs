@@ -87,6 +87,26 @@ pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
+/// Non-production Dealer-policy upload-stage account discriminator.
+pub const DEALER_POLICY_STAGE_ACCOUNT_TAG: u8 = 0x7d;
+/// Non-production Dealer-policy upload-stage account version.
+pub const DEALER_POLICY_STAGE_ACCOUNT_VERSION: u8 = 1;
+/// Immutable Dealer-policy catalog account discriminator.
+pub const DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
+/// Immutable Dealer-policy catalog account version.
+pub const DEALER_POLICY_ACCOUNT_VERSION: u8 = 1;
+/// Frozen canonical `DealerPolicyV1` semantic-body length.
+pub const DEALER_POLICY_BODY_BYTES: usize = 1_148;
+/// Exact adapter-owned upload-stage header length.
+pub const DEALER_POLICY_STAGE_HEADER_BYTES: usize = 140;
+/// Exact upload-stage account length.
+pub const DEALER_POLICY_STAGE_ACCOUNT_BYTES: usize =
+    DEALER_POLICY_STAGE_HEADER_BYTES + DEALER_POLICY_BODY_BYTES;
+/// Exact adapter-owned immutable catalog header length.
+pub const DEALER_POLICY_ACCOUNT_HEADER_BYTES: usize = 56;
+/// Exact immutable catalog account length.
+pub const DEALER_POLICY_ACCOUNT_BYTES: usize =
+    DEALER_POLICY_ACCOUNT_HEADER_BYTES + DEALER_POLICY_BODY_BYTES;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -118,6 +138,9 @@ pub enum AllocationStatus {
     Frozen,
     /// Coordinates are reserved, but every runtime capability is disabled.
     ReservedDisabled,
+    /// Executable only in one explicitly named non-production laboratory
+    /// profile; every production profile remains disabled.
+    NonProductionLab,
 }
 
 /// Coordinates occupied by one collision-ledger entry.
@@ -197,7 +220,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: DEALER_FAMILY_TAG,
             version: DEALER_FAMILY_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::NonProductionLab,
         name: "covered-dealer",
     },
     CollisionLedgerEntry {
@@ -334,6 +357,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-selected-candidate-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_POLICY_STAGE_ACCOUNT_TAG,
+            version: DEALER_POLICY_STAGE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::NonProductionLab,
+        name: "non-production-dealer-policy-stage-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_POLICY_ACCOUNT_TAG,
+            version: DEALER_POLICY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::NonProductionLab,
+        name: "dealer-policy-catalog-v1-account",
     },
 ];
 
@@ -491,6 +532,59 @@ pub enum GeneralV2Action {
     ClosePosition = 34,
 }
 
+/// Dealer family-local policy-catalog transport actions.
+///
+/// These nonzero wire values deliberately do not reuse the pure Dealer
+/// runtime enum's `0..=21` representation. Only `SealPolicy` completes the
+/// semantic `CreatePolicy` action; the other values are its bounded transport
+/// lifecycle.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DealerPolicyAction {
+    /// Create one exact upload stage.
+    BeginPolicy = 1,
+    /// Append the next strict fixed-width chunk.
+    WritePolicy = 2,
+    /// Validate and materialize the immutable content-addressed policy.
+    SealPolicy = 3,
+    /// Close an incomplete stage under its stored rent split.
+    AbortPolicy = 4,
+}
+
+impl DealerPolicyAction {
+    /// First allocated Dealer policy action.
+    pub const FIRST_TAG: u8 = 1;
+    /// Last allocated Dealer policy action.
+    pub const LAST_TAG: u8 = 4;
+
+    /// Return the exact local wire tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one exact allocated local tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::BeginPolicy),
+            2 => Some(Self::WritePolicy),
+            3 => Some(Self::SealPolicy),
+            4 => Some(Self::AbortPolicy),
+            _ => None,
+        }
+    }
+}
+
+/// Exact body bytes accepted in each staged Dealer-policy write.
+pub const DEALER_POLICY_CHUNK_BYTES: usize = 192;
+/// Exact Begin payload bytes: policy ID, neutral sink, expiry slot.
+pub const DEALER_BEGIN_POLICY_PAYLOAD_BYTES: usize = 32 + 32 + 8;
+/// Exact Write payload bytes: policy ID, cursor, active length, padded chunk.
+pub const DEALER_WRITE_POLICY_PAYLOAD_BYTES: usize = 32 + 2 + 2 + DEALER_POLICY_CHUNK_BYTES;
+/// Exact Seal/Abort payload bytes: policy ID.
+pub const DEALER_POLICY_ID_PAYLOAD_BYTES: usize = 32;
+
+const _: () = assert!(DEALER_WRITE_POLICY_PAYLOAD_BYTES <= MAX_EXTENSION_PAYLOAD_BYTES);
+
 impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
@@ -584,6 +678,8 @@ impl GeneralV2Action {
 pub enum ExtensionAction {
     /// One General V2 local action.
     GeneralV2(GeneralV2Action),
+    /// One Dealer policy-catalog transport action.
+    DealerPolicy(DealerPolicyAction),
 }
 
 impl ExtensionAction {
@@ -591,6 +687,7 @@ impl ExtensionAction {
     pub const fn local_tag(self) -> u8 {
         match self {
             Self::GeneralV2(action) => action.tag(),
+            Self::DealerPolicy(action) => action.tag(),
         }
     }
 }
@@ -621,9 +718,12 @@ pub const fn decode_extension_action(
             Some(action) => Ok(ExtensionAction::GeneralV2(action)),
             None => Err(RegistryError::UnknownLocalAction),
         },
+        Some(ExtensionFamily::Dealer) => match DealerPolicyAction::from_tag(local_action) {
+            Some(action) => Ok(ExtensionAction::DealerPolicy(action)),
+            None => Err(RegistryError::UnknownLocalAction),
+        },
         Some(
             ExtensionFamily::StructuredClaim
-            | ExtensionFamily::Dealer
             | ExtensionFamily::SourceSeries
             | ExtensionFamily::Recovery,
         ) => Err(RegistryError::UnknownLocalAction),
@@ -839,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn general_actions_are_exhaustive_and_other_families_allocate_none() {
+    fn general_and_dealer_actions_are_exhaustive_and_other_families_allocate_none() {
         for local_action in u8::MIN..=u8::MAX {
             let general = decode_extension_action(74, 1, local_action);
             assert_eq!(
@@ -847,13 +947,57 @@ mod tests {
                 (GeneralV2Action::FIRST_TAG..=GeneralV2Action::LAST_TAG).contains(&local_action),
                 "general action {local_action}"
             );
-            for (tag, version) in [(75, 1), (76, 1), (77, 2), (78, 1)] {
+            let dealer = decode_extension_action(76, 1, local_action);
+            assert_eq!(
+                dealer.is_ok(),
+                (DealerPolicyAction::FIRST_TAG..=DealerPolicyAction::LAST_TAG)
+                    .contains(&local_action),
+                "dealer action {local_action}"
+            );
+            for (tag, version) in [(75, 1), (77, 2), (78, 1)] {
                 assert_eq!(
                     decode_extension_action(tag, version, local_action),
                     Err(RegistryError::UnknownLocalAction),
                     "{tag}/{version}/{local_action}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn dealer_policy_coordinates_and_payload_widths_are_frozen() {
+        let expected = [
+            (
+                DEALER_POLICY_STAGE_ACCOUNT_TAG,
+                DEALER_POLICY_STAGE_ACCOUNT_VERSION,
+            ),
+            (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
+        ];
+        for (tag, version) in expected {
+            let entry = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                entry.map(|entry| entry.status),
+                Some(AllocationStatus::NonProductionLab)
+            );
+        }
+        assert_eq!(DEALER_POLICY_CHUNK_BYTES, 192);
+        assert_eq!(DEALER_BEGIN_POLICY_PAYLOAD_BYTES, 72);
+        assert_eq!(DEALER_WRITE_POLICY_PAYLOAD_BYTES, 228);
+        assert_eq!(DEALER_POLICY_ID_PAYLOAD_BYTES, 32);
+
+        for action in [
+            DealerPolicyAction::BeginPolicy,
+            DealerPolicyAction::WritePolicy,
+            DealerPolicyAction::SealPolicy,
+            DealerPolicyAction::AbortPolicy,
+        ] {
+            assert_eq!(DealerPolicyAction::from_tag(action.tag()), Some(action));
+            assert_eq!(
+                decode_extension_action(DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION, action.tag()),
+                Ok(ExtensionAction::DealerPolicy(action))
+            );
         }
     }
 

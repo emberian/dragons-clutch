@@ -41,6 +41,10 @@
 use crate::accounts::Outcome;
 use crate::capabilities;
 use crate::error::ClutchError;
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+use crate::error::Refusal;
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+use crate::instructions::dealer_policy;
 #[cfg(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point"
@@ -58,6 +62,8 @@ use clutch_solana_layout::Intent;
     feature = "profile-direct-v3-source-v2-point"
 ))]
 use clutch_solana_reference::DirectV3Request;
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+use clutch_solana_reference::ExtensionRequest;
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -93,6 +99,8 @@ enum Route {
     DirectSelectionV3,
     #[cfg(feature = "profile-full")]
     ResolutionWork,
+    #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+    DealerPolicy,
     DecodeOnly,
 }
 
@@ -169,6 +177,22 @@ const INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT: u8 = 72;
 const INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT: u8 = 73;
 
 fn route_hint(instruction_data: &[u8]) -> Route {
+    #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+    if instruction_data.get(10).copied() == Some(ACTION_LAYOUT_HINT)
+        && instruction_data.get(13).copied()
+            == Some(clutch_solana_layout::registry::DEALER_FAMILY_TAG)
+        && instruction_data.get(14).copied()
+            == Some(clutch_solana_layout::registry::DEALER_FAMILY_VERSION)
+        && instruction_data.get(15).copied().is_some_and(|action| {
+            capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+                clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+                action,
+            )
+        })
+    {
+        return Route::DealerPolicy;
+    }
     match instruction_data.get(10).copied() {
         Some(ACTION_LAYOUT_HINT) => match instruction_data.get(13).copied() {
             Some(INTENT_SPLIT_HINT) => Route::Split,
@@ -286,6 +310,10 @@ pub fn process(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> Outcome<()> {
+    #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+    if route_hint(instruction_data) != Route::DealerPolicy {
+        return Err(ClutchError::UnsupportedInstruction.into());
+    }
     if disabled_canonical_tag(instruction_data) {
         return Err(ClutchError::UnsupportedInstruction.into());
     }
@@ -315,7 +343,32 @@ pub fn process(
         }
         #[cfg(feature = "profile-full")]
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+        Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[inline(never)]
+fn process_dealer_policy(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = ExtensionRequest::decode(instruction_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::UnsupportedInstruction))?;
+    match request.envelope.action {
+        clutch_solana_layout::registry::ExtensionAction::DealerPolicy(action) => {
+            dealer_policy::process(
+                program_id,
+                accounts,
+                request.sequence,
+                action,
+                request.envelope.payload,
+            )
+        }
+        _ => unexpected_route(),
     }
 }
 
@@ -683,6 +736,7 @@ pub fn not_yet_implemented() -> Outcome<()> {
 #[cfg(all(test, feature = "profile-full"))]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     use crate::error::Refusal;
     use clutch_solana_layout::{
         artifact::{ArtifactKind, ARTIFACT_CHUNK_BYTES},
@@ -693,7 +747,9 @@ mod tests {
         },
         Hash32, Intent, OrderRecord, OrderSlot, MAX_INTENT_BYTES, MAX_OUTCOMES,
     };
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     use clutch_solana_reference::Error as ReferenceError;
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     use solana_program_error::ProgramError;
 
     const REQUEST_TAG: u8 = 0xd1;
@@ -716,6 +772,7 @@ mod tests {
         request
     }
 
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn split_request(sequence: u64, quantity: u64) -> Vec<u8> {
         layout_request(
             sequence,
@@ -1259,6 +1316,7 @@ mod tests {
         request
     }
 
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn process_without_accounts(instruction_data: &[u8]) -> ProgramError {
         process(&Pubkey::new_from_array([9; 32]), &[], instruction_data)
             .unwrap_err()
@@ -1304,6 +1362,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn malformed_mutations_keep_the_canonical_decoder_refusal_across_routes() {
         let mut cases = Vec::new();
         for (intent, _) in intent_cases() {
@@ -1354,6 +1413,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn direct_v3_intents() -> [clutch_solana_layout::direct_selection_v3::DirectV3Intent; 11] {
         use clutch_solana_layout::direct_selection_v3::{DirectKeeperRewardsV3, DirectV3Intent};
         let rewards = DirectKeeperRewardsV3 {
@@ -1421,6 +1481,7 @@ mod tests {
         ]
     }
 
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn direct_v3_request(sequence: u64, index: usize) -> Vec<u8> {
         let request = clutch_solana_reference::DirectV3Request {
             sequence,
@@ -1437,6 +1498,7 @@ mod tests {
     /// the legacy decoder still refuses every one of those tags, so a V3
     /// request can never fall into a legacy direct handler.
     #[test]
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn direct_v3_family_routes_all_or_nothing() {
         for index in 0..direct_v3_intents().len() {
             let bytes = direct_v3_request(0, index);
@@ -1484,6 +1546,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn decode_precedes_account_checks_on_a_routed_request() {
         let valid = split_request(7, 5);
         assert_eq!(

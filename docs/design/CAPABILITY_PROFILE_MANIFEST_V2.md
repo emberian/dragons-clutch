@@ -75,6 +75,15 @@ ELF and a real-Pyth laboratory ELF therefore cannot share a capability identity
 even when their base profile feature is the same. Neither laboratory class is
 production or network-price evidence.
 
+The separately named
+`profile-non-production-dealer-policy-catalog-lab` is a capability profile,
+not a source identity. It enables only Dealer successor triples
+`(76,1,1..=4)`, binds account coordinates `0x7d/1` and `0x7e/1`, and carries
+the `production-inert` source identity because its route reads no source
+account. Its local SVM evidence is not deployment eligibility; the manifest
+producer remains unavailable until every required semantic-owner row is
+linked.
+
 The producer builds `profile-full` explicitly twice. Only a
 `production-inert` full profile is also built once through Cargo defaults, and
 the default artifact must equal the explicit artifact while bound to the same

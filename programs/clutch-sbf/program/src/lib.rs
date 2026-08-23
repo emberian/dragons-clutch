@@ -84,7 +84,8 @@
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-general-source-v2-point"
+    feature = "profile-general-source-v2-point",
+    feature = "profile-non-production-dealer-policy-catalog-lab"
 )))]
 compile_error!("select exactly one Dragon's Clutch capability profile");
 #[cfg(any(
@@ -96,6 +97,13 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
     all(
         feature = "profile-direct-v3-source-v2-point",
         feature = "profile-general-source-v2-point"
+    ),
+    all(
+        feature = "profile-non-production-dealer-policy-catalog-lab",
+        any(
+            feature = "profile-direct-v3-source-v2-point",
+            feature = "profile-general-source-v2-point"
+        )
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");

@@ -1240,6 +1240,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-dealer-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "clutch-kernel"
 version = "0.1.0"
 
@@ -1256,6 +1263,7 @@ dependencies = [
  "clutch-batch-policy-identity",
  "clutch-bspline",
  "clutch-bspline-accumulator",
+ "clutch-dealer-runtime-contract",
  "clutch-kernel",
  "clutch-liveness",
  "clutch-solana-layout",
@@ -1277,6 +1285,7 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-dealer-runtime-contract",
  "clutch-kernel",
  "clutch-sbf",
  "clutch-solana-layout",

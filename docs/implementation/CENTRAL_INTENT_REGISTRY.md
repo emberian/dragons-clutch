@@ -1,7 +1,7 @@
 # Central intent registry
 
-Status: registry allocation only. No successor action in this document is an
-executable runtime route.
+Status: General V2 remains registry-only. Dealer policy-catalog actions are
+executable only in one explicitly non-production laboratory profile.
 
 ## Frozen legacy space
 
@@ -33,7 +33,7 @@ family version creates a new namespace; it does not inherit capability.
 | --- | ---: | ---: | ---: | --- |
 | General V2 | 74 | `0x4a` | 1 | disabled |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
-| Covered dealer | 76 | `0x4c` | 1 | disabled |
+| Covered dealer | 76 | `0x4c` | 1 | policy catalog only in the named non-production lab |
 | Source plane / Series | 77 | `0x4d` | 2 | disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
 
@@ -78,9 +78,21 @@ General V2 reserves local actions 1 through 34, in order:
 34. `ClosePosition`
 
 These names allocate local tags only. They do not freeze payload bytes, account
-lists, account codecs, or transition semantics. The other four family action
-spaces are empty: every local action is unknown until an atomic design wave
-fixes its payload and capability contract.
+lists, account codecs, or transition semantics. Dealer now allocates the
+following bounded policy transport without enabling any facility/economic
+action:
+
+1. `BeginPolicy`
+2. `WritePolicy`
+3. `SealPolicy`
+4. `AbortPolicy`
+
+The exact payload widths are 72, 228, 32, and 32 bytes. `WritePolicy` carries a
+192-byte padded chunk and a strict cursor. The account coordinates `0x7d/1`
+(1,288-byte stage) and `0x7e/1` (1,204-byte immutable catalog) are part of the
+same atomic allocation. The local action values do not reuse the pure Dealer
+runtime enum's zero-based representation. `SealPolicy` persists an unadmitted
+catalog artifact; it does not initialize liquidity.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -104,11 +116,12 @@ account-layout inventory.
 ## Capability and activation rule
 
 Capability membership is keyed by the exact triple `(family tag, family
-version, local action)`. The executable set is currently empty. The SBF
-dispatcher recognizes an allocated General V2 triple only to return
-`UnsupportedInstruction` before reading accounts. Unknown family versions and
-unknown local actions fail strict decoding and cannot fall into a legacy
-handler.
+version, local action)`. All production executable sets remain empty for every
+successor. The distinct
+`profile-non-production-dealer-policy-catalog-lab` identity enables only
+`(76,1,1..=4)`. Every production profile returns `UnsupportedInstruction`
+before reading accounts. Unknown family versions and unknown local actions
+fail strict decoding and cannot fall into a legacy handler.
 
 A later activation must change the following atomically:
 
