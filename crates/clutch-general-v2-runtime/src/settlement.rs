@@ -35,13 +35,16 @@ use clutch_general_v2_contract::{
 };
 use clutch_owner_settlement::{
     build_owner_settlement_book_v2, derive_settlement_receipt_data_id_v2,
-    owner_rounding_residue_price_units, project_owner_receipt_end_v2,
+    owner_rounding_residue_price_units, prepare_create_owner_settlement_account_v2,
+    project_owner_receipt_end_v2, project_owner_settlement_account_v2,
     AuthenticatedOrderMembershipV2, AuthenticatedPositionV3,
     AuthenticatedSettlementReceiptEndV2,
     AuthenticatedSettlementReceiptV2, CandidateSettlementTotalsV2,
     Error as OwnerSettlementError, OrderKindV1, OwnerSettlementAccumulatorV2,
-    OwnerSettlementAccountProjectionV2, OwnerSettlementBookV2, PresentConsiderationV2,
-    PresentPriceV2, SelectedOwnerFeeV1, SettlementCashPotExpectationV1,
+    OwnerSettlementAccountProjectionV2, OwnerSettlementAccountViewV2, OwnerSettlementBookV2,
+    OwnerSettlementCreateFundingV1, OwnerSettlementCreatePlanV2,
+    OwnerSettlementPdaProjectionV2, PresentConsiderationV2, PresentPriceV2,
+    SelectedOwnerFeeV1, SelectedOwnerRowAuthorityV2, SettlementCashPotExpectationV1,
     SettlementReceiptDataHashV2, SettlementReceiptRouteV2, SettlementSideV1,
     VerifiedSettlementOrderV2, VirtualCashDirectionV1,
     OWNER_SETTLEMENT_BODY_V2_BYTES,
@@ -112,6 +115,16 @@ pub struct PositionAccountInputV3<'a> {
     /// SBF-authenticated Position V3 account identity.
     pub account: Id32,
     /// Exact canonical `PositionAccountV3` bytes.
+    pub encoded_body: &'a [u8],
+}
+
+/// One SBF-authenticated canonical Reservation account presented to the
+/// resumable entitlement materializer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaterializationReservationInputV3<'a> {
+    /// Canonical Reservation PDA authenticated by the outer adapter.
+    pub account: Id32,
+    /// Exact hostile canonical Reservation bytes at the current cursor.
     pub encoded_body: &'a [u8],
 }
 
@@ -1234,6 +1247,7 @@ pub struct AccountReceiptEndTransitionPlanV2 {
     owner_settlement_account: Id32,
     owner_settlement_poststate_body: [u8; OWNER_SETTLEMENT_BODY_V2_BYTES],
     reservation_account: Id32,
+    reservation_semantic_id: Id32,
     reservation_poststate_body: [u8; RESERVATION_ACCOUNT_BYTES],
     reservation_body_changed: bool,
     reserved_cash_handoff_atoms: u64,
@@ -1273,6 +1287,11 @@ impl AccountReceiptEndTransitionPlanV2 {
     /// Canonical Reservation account participating in the atomic comparison.
     pub const fn reservation_account(&self) -> Id32 {
         self.reservation_account
+    }
+
+    /// Canonical semantic Reservation identity decoded from the exact body.
+    pub const fn reservation_semantic_id(&self) -> Id32 {
+        self.reservation_semantic_id
     }
 
     /// Exact canonical Reservation successor body.
@@ -1896,8 +1915,7 @@ pub fn prepare_account_receipt_end_transition_v3(
             return Err(SettlementAdapterErrorV1::BindingMismatch)
         }
     };
-    if reservation.reservation.bytes() != input.reservation_account.bytes()
-        || reservation.market.bytes() != selected.market.bytes()
+    if reservation.market.bytes() != selected.market.bytes()
         || reservation.epoch.bytes() != selected.epoch.bytes()
         || reservation.owner != owner
         || reservation.order_id != order_id
@@ -1984,7 +2002,7 @@ pub fn prepare_account_receipt_end_transition_v3(
         candidate: selected.settlement_candidate_id.bytes(),
         owner_order_set_digest: owner_expectation.owner_order_set_digest,
         order_id: order_id.bytes(),
-        reservation: input.reservation_account.bytes(),
+        reservation: reservation.reservation.bytes(),
         owner: owner.bytes(),
         order_index: end.order_index,
         order_generation,
@@ -2124,6 +2142,7 @@ pub fn prepare_account_receipt_end_transition_v3(
         owner_settlement_account: Id32::new(owner_projection.owner_settlement_account)?,
         owner_settlement_poststate_body: owner_projection.owner_settlement_body,
         reservation_account: input.reservation_account,
+        reservation_semantic_id: Id32::new(reservation.reservation.bytes())?,
         reservation_poststate_body,
         reservation_body_changed,
         reserved_cash_handoff_atoms,
@@ -2306,6 +2325,860 @@ fn read_feed_u64(
     let mut encoded = [0u8; 8];
     encoded.copy_from_slice(value);
     Ok(u64::from_le_bytes(encoded))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FeedSettlementFactsV3 {
+    prices: [u64; MAX_OUTCOMES],
+    slices: [CanonicalSettlementSliceV1; MAX_SLICES],
+    entitled_units: [u64; MAX_ORDERS],
+    consideration_price_units: [u128; MAX_ORDERS],
+    end_count: [u16; MAX_ORDERS],
+    first_slice: [u16; MAX_ORDERS],
+    receipt_end_count: u16,
+}
+
+/// Complete checked input set behind one resumable action-24 slice.
+///
+/// Construction walks the whole frozen page projection, every canonical
+/// Reservation, and every distinct Position V3. Fields are private so a live
+/// adapter cannot replace the dense-index mapping or entitlement totals after
+/// the selected Feed has been checked.
+#[derive(Clone, Copy, Debug)]
+pub struct CandidateEntitlementProjectionV3 {
+    selected_candidate_account: Id32,
+    selected_candidate: clutch_general_v2_contract::SelectedCandidateV1AccountV1,
+    selected_feed_account: Id32,
+    feed: CandidateFeedHeaderV2,
+    settlement: CandidateSettlementProjectionV1,
+    reservation_accounts: [Id32; MAX_ORDERS],
+    reservations: [Option<ReservationAccount>; MAX_ORDERS],
+    first_slice: [u16; MAX_ORDERS],
+}
+
+impl CandidateEntitlementProjectionV3 {
+    /// Authenticated SelectedCandidate account being advanced.
+    pub const fn selected_candidate_account(&self) -> Id32 {
+        self.selected_candidate_account
+    }
+
+    /// Exact SelectedCandidate prestate at this materialization cursor.
+    pub const fn selected_candidate(
+        &self,
+    ) -> clutch_general_v2_contract::SelectedCandidateV1AccountV1 {
+        self.selected_candidate
+    }
+
+    /// Counted retained sealed Feed account.
+    pub const fn selected_feed_account(&self) -> Id32 {
+        self.selected_feed_account
+    }
+
+    /// Exact checked retained Feed header.
+    pub const fn feed(&self) -> CandidateFeedHeaderV2 {
+        self.feed
+    }
+
+    /// Candidate-wide settlement/owner expectation projection.
+    pub const fn settlement(&self) -> &CandidateSettlementProjectionV1 {
+        &self.settlement
+    }
+
+    /// Canonical Reservation account for one dense live-order index.
+    pub fn reservation_account(&self, order_index: u8) -> Option<Id32> {
+        if order_index < self.feed.order_count {
+            Some(self.reservation_accounts[usize::from(order_index)])
+        } else {
+            None
+        }
+    }
+
+    /// Exact decoded Reservation prestate for one dense live-order index.
+    pub fn reservation(&self, order_index: u8) -> Option<ReservationAccount> {
+        if order_index < self.feed.order_count {
+            self.reservations[usize::from(order_index)]
+        } else {
+            None
+        }
+    }
+
+    /// First canonical selected slice containing this real order.
+    pub fn first_slice(&self, order_index: u8) -> Option<u16> {
+        if order_index < self.feed.order_count {
+            let value = self.first_slice[usize::from(order_index)];
+            if value == u16::MAX {
+                None
+            } else {
+                Some(value)
+            }
+        } else {
+            None
+        }
+    }
+}
+
+/// One owner-row account supplied to the next-slice materializer.
+///
+/// The route decides whether this owner is first seen; callers cannot choose
+/// the variant that will be accepted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerRowMaterializationInputV3<'a> {
+    /// Canonical row is absent and must be created on this first owner slice.
+    Create {
+        /// Structural V2 PDA projection rederived by the SBF adapter.
+        derived: OwnerSettlementPdaProjectionV2,
+        /// Exact pre-fund-safe account creation facts.
+        funding: OwnerSettlementCreateFundingV1,
+        /// Dedicated counted rent-ledger account for this row.
+        rent_ledger: [u8; 32],
+        /// Canonical donation sink for unsolicited prefunding.
+        donation_sink: [u8; 32],
+    },
+    /// Canonical pristine row already exists from an earlier owner slice.
+    Existing {
+        /// Structural V2 PDA projection rederived by the SBF adapter.
+        derived: OwnerSettlementPdaProjectionV2,
+        /// Exact hostile current outer/body projection.
+        view: OwnerSettlementAccountViewV2<'a>,
+    },
+}
+
+/// Exact receipt-account rent funding and ledger facts for one new slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiptCreateFundingV3 {
+    /// Dragon's Clutch program identity assigned after allocation.
+    pub program_id: Id32,
+    /// Present payer of only the missing rent shortfall.
+    pub payer: Id32,
+    /// Sole eventual receipt-rent refund recipient.
+    pub refund_recipient: Id32,
+    /// Dedicated counted rent-ledger account for this receipt.
+    pub rent_ledger: Id32,
+    /// Canonical donation sink for unsolicited prefunding.
+    pub donation_sink: Id32,
+    /// Canonical System Program identity authenticated by the adapter.
+    pub system_program_id: Id32,
+    /// Payer's current lamport balance.
+    pub payer_lamports: u64,
+    /// Lamports already parked at the canonical receipt PDA.
+    pub target_lamports_before: u64,
+    /// Current target owner; fresh creation requires System Program.
+    pub target_owner_before: Id32,
+    /// Current target data length; fresh creation requires zero.
+    pub target_data_len_before: u32,
+    /// Whether the canonical target was presented writable.
+    pub target_writable: bool,
+    /// Executable targets can never become receipts.
+    pub target_executable: bool,
+    /// Exact rent-exempt minimum for the 217-byte account.
+    pub rent_minimum: u64,
+}
+
+/// Rent-safe exact V3 receipt creation output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiptCreatePlanV3 {
+    account: Id32,
+    program_id: Id32,
+    seed: SettlementReceiptSeedTupleV3,
+    bump: u8,
+    payer: Id32,
+    payer_debit_lamports: u64,
+    target_lamports_after: u64,
+    refund_recipient: Id32,
+    rent_ledger: Id32,
+    payer_rent_principal_lamports: u64,
+    prefunded_donation_lamports: u64,
+    donation_sink: Id32,
+    body: [u8; account_len::SETTLEMENT_RECEIPT_V3],
+}
+
+impl ReceiptCreatePlanV3 {
+    pub const fn account(&self) -> Id32 {
+        self.account
+    }
+
+    pub const fn program_id(&self) -> Id32 {
+        self.program_id
+    }
+
+    pub const fn seed(&self) -> SettlementReceiptSeedTupleV3 {
+        self.seed
+    }
+
+    pub const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    pub const fn payer(&self) -> Id32 {
+        self.payer
+    }
+
+    pub const fn payer_debit_lamports(&self) -> u64 {
+        self.payer_debit_lamports
+    }
+
+    pub const fn target_lamports_after(&self) -> u64 {
+        self.target_lamports_after
+    }
+
+    pub const fn refund_recipient(&self) -> Id32 {
+        self.refund_recipient
+    }
+
+    pub const fn rent_ledger(&self) -> Id32 {
+        self.rent_ledger
+    }
+
+    pub const fn payer_rent_principal_lamports(&self) -> u64 {
+        self.payer_rent_principal_lamports
+    }
+
+    pub const fn prefunded_donation_lamports(&self) -> u64 {
+        self.prefunded_donation_lamports
+    }
+
+    pub const fn donation_sink(&self) -> Id32 {
+        self.donation_sink
+    }
+
+    pub const fn body(&self) -> &[u8; account_len::SETTLEMENT_RECEIPT_V3] {
+        &self.body
+    }
+}
+
+/// Derived owner-row treatment for one real end on the current slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerRowMaterializationDispositionV3 {
+    /// First canonical owner occurrence creates this exact V2 row and ledger.
+    Create(OwnerSettlementCreatePlanV2),
+    /// Earlier occurrence already created the exact pristine row.
+    Existing {
+        /// Canonical V2 row account.
+        account: Id32,
+        /// Exact pristine 288-byte body required at this cursor.
+        body: [u8; OWNER_SETTLEMENT_BODY_V2_BYTES],
+    },
+}
+
+/// One Reservation stamp or exact already-stamped comparison on this slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReservationMaterializationPlanV3 {
+    account: Id32,
+    semantic_id: Id32,
+    order_index: u8,
+    first_occurrence: bool,
+    poststate_body: [u8; RESERVATION_ACCOUNT_BYTES],
+}
+
+impl ReservationMaterializationPlanV3 {
+    pub const fn account(&self) -> Id32 {
+        self.account
+    }
+
+    pub const fn semantic_id(&self) -> Id32 {
+        self.semantic_id
+    }
+
+    pub const fn order_index(&self) -> u8 {
+        self.order_index
+    }
+
+    pub const fn first_occurrence(&self) -> bool {
+        self.first_occurrence
+    }
+
+    pub const fn poststate_body(&self) -> &[u8; RESERVATION_ACCOUNT_BYTES] {
+        &self.poststate_body
+    }
+}
+
+/// Reconstruct the complete immutable entitlement projection at one selected
+/// slice cursor.
+///
+/// The caller must construct `order_projection` from the exact complete frozen
+/// page set in this instruction. Every Reservation is then required to be
+/// ACTIVE before its first canonical slice and exactly ENTITLED afterward;
+/// this makes interrupted materialization resumable without allowing an early
+/// stamp or a changed page mapping.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_candidate_entitlement_projection_v3(
+    selected_candidate: AuthenticatedSelectedCandidateV1<'_>,
+    selected_feed_account: Id32,
+    selected_feed_body: &[u8],
+    order_projection: &OwnerBlindBookProjectionV1,
+    expected_terms: Id32,
+    expected_reservation_policy: Id32,
+    reservation_inputs: &[MaterializationReservationInputV3<'_>],
+    collateral: BoundCollateralProfileV2,
+    position_inputs: &[PositionAccountInputV3<'_>],
+) -> Result<CandidateEntitlementProjectionV3, SettlementAdapterErrorV1> {
+    selected_candidate.account.validate()?;
+    let selected = *selected_candidate.account;
+    let (feed, tail) = complete_candidate_feed_v2(selected_feed_body, true)?;
+    let feed_bundle_id = derive_candidate_bundle_digest_v1(selected_feed_body)?;
+    if selected_candidate.artifact.is_zero()
+        || selected_feed_account != selected.selected_feed
+        || feed_bundle_id != selected.candidate_bundle_digest
+        || selected.slice_count == 0
+        || selected.next_slice_index >= selected.slice_count
+        || !matches!(selected.entitlement_state, 0 | 1)
+        || (selected.entitlement_state == 0 && selected.next_slice_index != 0)
+        || (selected.entitlement_state == 1 && selected.next_slice_index == 0)
+        || feed.epoch != selected.epoch
+        || feed.node != selected.source_admission_node
+        || feed.market != selected.market
+        || feed.order_set != selected.order_set
+        || feed.economic_domain_digest != selected.economic_domain_digest
+        || feed.settlement_candidate_id != selected.settlement_candidate_id
+        || feed.base_relation_candidate_id != selected.base_relation_candidate_id
+        || feed.settlement_witness_digest != selected.settlement_witness_digest
+        || feed.relation_policy_id != selected.relation_policy_id
+        || feed.price_measure_policy_v1_id != selected.price_measure_policy_v1_id
+        || feed.native_claim_basis_id != selected.native_claim_basis_id
+        || feed.candidate_price_digest != selected.candidate_price_digest
+        || feed.price_body_digest != selected.price_body_digest
+        || feed.epoch_generation != selected.epoch_generation
+        || feed.slice_count != selected.slice_count
+        || feed.candidate_kind != selected.candidate_kind
+        || feed.price_witness_schema != selected.price_witness_schema
+        || feed.quantized_semantics_version != selected.quantized_semantics_version
+        || order_projection.market() != selected.market
+        || order_projection.epoch() != selected.epoch
+        || order_projection.order_set() != selected.order_set
+        || order_projection.economic_domain_digest() != selected.economic_domain_digest
+        || order_projection.market_binding().relation_policy_id != selected.relation_policy_id
+        || order_projection.market_binding().price_measure_policy_v1_id
+            != selected.price_measure_policy_v1_id
+        || order_projection.market_binding().native_claim_basis_id != selected.native_claim_basis_id
+        || order_projection.domain().price_scale != feed.price_scale
+        || order_projection.domain().outcome_count != feed.outcome_count
+        || order_projection.book().len != feed.order_count
+        || expected_terms.is_zero()
+        || expected_reservation_policy.is_zero()
+        || reservation_inputs.len() != usize::from(feed.order_count)
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+
+    let facts = derive_feed_settlement_facts_v3(feed, tail.prices_le(), tail.fills_le(), tail.slices_le(), order_projection)?;
+    let (reservation_book, reservation_accounts, reservations) =
+        authenticate_materialization_reservations_v3(
+            order_projection,
+            expected_terms,
+            expected_reservation_policy,
+            reservation_inputs,
+            &facts,
+            selected.next_slice_index,
+        )?;
+    let positions = authenticate_settlement_position_book_v3(
+        order_projection,
+        &reservation_book,
+        collateral,
+        position_inputs,
+    )?;
+    let settlement = assemble_feed_settlement_projection_v3(
+        feed,
+        order_projection,
+        &reservation_book,
+        &positions,
+        facts,
+    )?;
+    Ok(CandidateEntitlementProjectionV3 {
+        selected_candidate_account: selected_candidate.artifact,
+        selected_candidate: selected,
+        selected_feed_account,
+        feed,
+        settlement,
+        reservation_accounts,
+        reservations,
+        first_slice: facts.first_slice,
+    })
+}
+
+fn derive_feed_settlement_facts_v3(
+    feed: CandidateFeedHeaderV2,
+    prices_le: &[u8],
+    fills_le: &[u8],
+    slices_le: &[u8],
+    projection: &OwnerBlindBookProjectionV1,
+) -> Result<FeedSettlementFactsV3, SettlementAdapterErrorV1> {
+    let mut prices = [0u64; MAX_OUTCOMES];
+    let mut outcome = 0usize;
+    while outcome < usize::from(feed.outcome_count) {
+        prices[outcome] = read_feed_u64(prices_le, outcome)?;
+        outcome += 1;
+    }
+    let mut slices = [CanonicalSettlementSliceV1::EMPTY; MAX_SLICES];
+    let mut entitled_units = [0u64; MAX_ORDERS];
+    let mut consideration_price_units = [0u128; MAX_ORDERS];
+    let mut end_count = [0u16; MAX_ORDERS];
+    let mut first_slice = [u16::MAX; MAX_ORDERS];
+    let mut receipt_end_count = 0u16;
+    let mut slice_index = 0u16;
+    while slice_index < feed.slice_count {
+        let record = read_feed_slice_v3(slices_le, slice_index)?;
+        if record.outcome >= feed.outcome_count {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        let route = record.route()?;
+        let (buy, sell) = match route {
+            SettlementReceiptRouteV2::Direct => (
+                SettlementLegV1::Order(record.buy_index),
+                SettlementLegV1::Order(record.sell_index),
+            ),
+            SettlementReceiptRouteV2::SplitToBuy => (
+                SettlementLegV1::Order(record.buy_index),
+                SettlementLegV1::Split,
+            ),
+            SettlementReceiptRouteV2::SellToMerge => (
+                SettlementLegV1::Merge,
+                SettlementLegV1::Order(record.sell_index),
+            ),
+        };
+        let canonical = CanonicalSettlementSliceV1 {
+            buy,
+            sell,
+            route: match route {
+                SettlementReceiptRouteV2::Direct => SettlementRouteV1::Direct,
+                SettlementReceiptRouteV2::SplitToBuy => SettlementRouteV1::SplitToBuy,
+                SettlementReceiptRouteV2::SellToMerge => SettlementRouteV1::SellToMerge,
+            },
+            outcome: record.outcome,
+            quantity: record.quantity,
+        };
+        slices[usize::from(slice_index)] = canonical;
+        if let SettlementLegV1::Order(order_index) = buy {
+            accumulate_feed_order_end_v3(
+                projection,
+                order_index,
+                SettlementSideV1::Buy,
+                slice_index,
+                record.outcome,
+                record.quantity,
+                &prices,
+                &mut entitled_units,
+                &mut consideration_price_units,
+                &mut end_count,
+                &mut first_slice,
+            )?;
+            receipt_end_count = receipt_end_count
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        if let SettlementLegV1::Order(order_index) = sell {
+            accumulate_feed_order_end_v3(
+                projection,
+                order_index,
+                SettlementSideV1::Sell,
+                slice_index,
+                record.outcome,
+                record.quantity,
+                &prices,
+                &mut entitled_units,
+                &mut consideration_price_units,
+                &mut end_count,
+                &mut first_slice,
+            )?;
+            receipt_end_count = receipt_end_count
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        if let (SettlementLegV1::Order(buy_index), SettlementLegV1::Order(sell_index)) =
+            (buy, sell)
+        {
+            let buy_owner = projection
+                .order_membership(buy_index)
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                .owner();
+            let sell_owner = projection
+                .order_membership(sell_index)
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                .owner();
+            if buy_owner == sell_owner {
+                return Err(SettlementAdapterErrorV1::OwnerPairingInfeasible);
+            }
+        }
+        slice_index = slice_index
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+
+    let mut order = 0usize;
+    while order < usize::from(feed.order_count) {
+        let fill = read_feed_u64(fills_le, order)?;
+        let mut unit_eggs = 0u64;
+        let mut unit_price = 0u128;
+        outcome = 0;
+        while outcome < usize::from(feed.outcome_count) {
+            let coefficient = projection.book().orders[order].coefficients[outcome];
+            unit_eggs = unit_eggs
+                .checked_add(coefficient)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            unit_price = unit_price
+                .checked_add(u128::from(coefficient) * u128::from(prices[outcome]))
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            outcome += 1;
+        }
+        let expected_units = unit_eggs
+            .checked_mul(fill)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        let expected_consideration = unit_price
+            .checked_mul(u128::from(fill))
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        if entitled_units[order] != expected_units
+            || consideration_price_units[order] != expected_consideration
+            || (fill == 0) != (end_count[order] == 0)
+            || (fill == 0) != (first_slice[order] == u16::MAX)
+        {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        order += 1;
+    }
+    Ok(FeedSettlementFactsV3 {
+        prices,
+        slices,
+        entitled_units,
+        consideration_price_units,
+        end_count,
+        first_slice,
+        receipt_end_count,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accumulate_feed_order_end_v3(
+    projection: &OwnerBlindBookProjectionV1,
+    order_index: u8,
+    expected_side: SettlementSideV1,
+    slice_index: u16,
+    outcome: u8,
+    quantity: u64,
+    prices: &[u64; MAX_OUTCOMES],
+    entitled_units: &mut [u64; MAX_ORDERS],
+    consideration_price_units: &mut [u128; MAX_ORDERS],
+    end_count: &mut [u16; MAX_ORDERS],
+    first_slice: &mut [u16; MAX_ORDERS],
+) -> Result<(), SettlementAdapterErrorV1> {
+    let index = usize::from(order_index);
+    if index >= usize::from(projection.book().len) {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let actual_side = match projection.book().orders[index].side {
+        Side::Buy => SettlementSideV1::Buy,
+        Side::Sell => SettlementSideV1::Sell,
+    };
+    if actual_side != expected_side {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    entitled_units[index] = entitled_units[index]
+        .checked_add(quantity)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    consideration_price_units[index] = consideration_price_units[index]
+        .checked_add(u128::from(quantity) * u128::from(prices[usize::from(outcome)]))
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    end_count[index] = end_count[index]
+        .checked_add(1)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if first_slice[index] == u16::MAX {
+        first_slice[index] = slice_index;
+    }
+    Ok(())
+}
+
+type MaterializationReservationSetV3 = (
+    AuthenticatedReservationBookV1,
+    [Id32; MAX_ORDERS],
+    [Option<ReservationAccount>; MAX_ORDERS],
+);
+
+fn authenticate_materialization_reservations_v3(
+    projection: &OwnerBlindBookProjectionV1,
+    expected_terms: Id32,
+    expected_reservation_policy: Id32,
+    inputs: &[MaterializationReservationInputV3<'_>],
+    facts: &FeedSettlementFactsV3,
+    next_slice_index: u16,
+) -> Result<MaterializationReservationSetV3, SettlementAdapterErrorV1> {
+    let order_count = projection.book().len;
+    if inputs.len() != usize::from(order_count) {
+        return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+    }
+    let mut reservation_ids = [Id32::ZERO; MAX_ORDERS];
+    let mut reservation_accounts = [Id32::ZERO; MAX_ORDERS];
+    let mut position_generations = [0u64; MAX_ORDERS];
+    let mut reserved_cash_atoms = [0u64; MAX_ORDERS];
+    let mut maximum_fee_atoms = [0u64; MAX_ORDERS];
+    let mut reservations = [None; MAX_ORDERS];
+    let mut index = 0usize;
+    while index < usize::from(order_count) {
+        let input = inputs[index];
+        let reservation = ReservationAccount::decode(input.encoded_body)?;
+        let order_index =
+            u8::try_from(index).map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        let membership = projection
+            .order_membership(order_index)
+            .ok_or(SettlementAdapterErrorV1::ReservationSetMismatch)?;
+        let economic_order = projection.book().orders[index];
+        let expected_side = match economic_order.side {
+            Side::Buy => 0,
+            Side::Sell => 1,
+        };
+        let expected_kind = match membership.kind() {
+            FrozenOrderKindV1::Single => 1,
+            FrozenOrderKindV1::Portfolio => 2,
+        };
+        let expected_plan = ReservationPlan::for_order(
+            membership.slot(),
+            projection.domain().outcome_count,
+            projection.domain().price_scale,
+            reservation.max_fee_atoms,
+        )?;
+        let entitled_before_cursor = facts.first_slice[index] < next_slice_index;
+        let state_valid = if entitled_before_cursor {
+            reservation.state == RESERVATION_STATE_ENTITLED
+                && facts.entitled_units[index] != 0
+                && reservation.entitled_units == facts.entitled_units[index]
+                && reservation.consumed_units == 0
+                && reservation.paid_units == 0
+                && reservation.remaining_cash_atoms == reservation.initial_cash_atoms
+                && reservation.remaining_internal == reservation.initial_internal
+        } else {
+            reservation.state == RESERVATION_STATE_ACTIVE
+                && reservation.entitled_units == 0
+                && reservation.consumed_units == 0
+                && reservation.paid_units == 0
+                && reservation.remaining_cash_atoms == reservation.initial_cash_atoms
+                && reservation.remaining_internal == reservation.initial_internal
+        };
+        if input.account.is_zero()
+            || reservation.market.bytes() != projection.market().bytes()
+            || reservation.epoch.bytes() != projection.epoch().bytes()
+            || reservation.owner.bytes() != membership.owner().bytes()
+            || reservation.order_id.bytes() != membership.order_id().bytes()
+            || reservation.order_generation != membership.generation()
+            || reservation.price_grid.bytes() != projection.price_grid_id().bytes()
+            || reservation.terms.bytes() != expected_terms.bytes()
+            || reservation.policy.bytes() != expected_reservation_policy.bytes()
+            || reservation.outcome_count != projection.domain().outcome_count
+            || reservation.side != expected_side
+            || reservation.order_kind != expected_kind
+            || reservation.initial_cash_atoms != expected_plan.cash_atoms
+            || reservation.max_fee_atoms != expected_plan.max_fee_atoms
+            || reservation.initial_internal != expected_plan.internal
+            || !state_valid
+        {
+            return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+        }
+        let mut prior = 0usize;
+        while prior < index {
+            if reservation_accounts[prior] == input.account
+                || reservation_ids[prior].bytes() == reservation.reservation.bytes()
+            {
+                return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+            }
+            prior += 1;
+        }
+        reservation_accounts[index] = input.account;
+        reservation_ids[index] = Id32::new(reservation.reservation.bytes())?;
+        position_generations[index] = reservation.position_generation;
+        reserved_cash_atoms[index] = reservation.initial_cash_atoms;
+        maximum_fee_atoms[index] = reservation.max_fee_atoms;
+        reservations[index] = Some(reservation);
+        index += 1;
+    }
+    Ok((
+        AuthenticatedReservationBookV1 {
+            market: projection.market(),
+            epoch: projection.epoch(),
+            order_set: projection.order_set(),
+            price_grid_id: projection.price_grid_id(),
+            terms: expected_terms,
+            reservation_policy: expected_reservation_policy,
+            reservation_ids,
+            position_generations,
+            reserved_cash_atoms,
+            maximum_fee_atoms,
+            order_count,
+        },
+        reservation_accounts,
+        reservations,
+    ))
+}
+
+fn assemble_feed_settlement_projection_v3(
+    feed: CandidateFeedHeaderV2,
+    projection: &OwnerBlindBookProjectionV1,
+    reservations: &AuthenticatedReservationBookV1,
+    positions: &AuthenticatedSettlementPositionBookV3,
+    facts: FeedSettlementFactsV3,
+) -> Result<CandidateSettlementProjectionV1, SettlementAdapterErrorV1> {
+    let owner_order_set_digest =
+        derive_owner_order_set_digest_v1(projection, reservations, positions)?;
+    let mut settlement_orders = [EMPTY_VERIFIED_SETTLEMENT_ORDER_V2; MAX_ORDERS];
+    let mut settlement_memberships = [None; MAX_ORDERS];
+    let mut settlement_order_count = 0usize;
+    let mut participating_owners = [Id32::ZERO; MAX_ORDERS];
+    let mut owner_count = 0usize;
+    let mut buy_price_units = 0u128;
+    let mut sell_price_units = 0u128;
+    let mut buy_present = false;
+    let mut sell_present = false;
+    let mut order = 0usize;
+    while order < usize::from(feed.order_count) {
+        if facts.end_count[order] != 0 {
+            let order_index =
+                u8::try_from(order).map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            let membership = projection
+                .order_membership(order_index)
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+            let position = positions
+                .position_for_owner(membership.owner())
+                .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
+            let side = match projection.book().orders[order].side {
+                Side::Buy => SettlementSideV1::Buy,
+                Side::Sell => SettlementSideV1::Sell,
+            };
+            let reserved_cash = match side {
+                SettlementSideV1::Buy => reservations.reserved_cash_atoms[order],
+                SettlementSideV1::Sell => 0,
+            };
+            settlement_orders[settlement_order_count] = VerifiedSettlementOrderV2 {
+                owner: membership.owner().bytes(),
+                order_index,
+                side,
+                consideration_price_units: PresentConsiderationV2::new(
+                    facts.consideration_price_units[order],
+                ),
+                slice_count: facts.end_count[order],
+                reserved_cash_atoms: reserved_cash,
+            };
+            let position_generation = reservations.position_generations[order];
+            if membership.generation() == 0
+                || position_generation == 0
+                || position.position().generation() != position_generation
+            {
+                return Err(SettlementAdapterErrorV1::PositionSetMismatch);
+            }
+            let (order_kind, single_outcome) = match membership.slot() {
+                OrderSlot::Single(record) => (OrderKindV1::Single, record.outcome),
+                OrderSlot::Portfolio(_) => (OrderKindV1::Portfolio, u8::MAX),
+                OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+                    return Err(SettlementAdapterErrorV1::BindingMismatch)
+                }
+            };
+            let settlement_membership = AuthenticatedOrderMembershipV2 {
+                market: projection.market().bytes(),
+                epoch: projection.epoch().bytes(),
+                candidate: feed.settlement_candidate_id.bytes(),
+                owner_order_set_digest: owner_order_set_digest.bytes(),
+                order_id: membership.order_id().bytes(),
+                reservation: reservations.reservation_ids[order].bytes(),
+                owner: membership.owner().bytes(),
+                order_index,
+                order_generation: membership.generation(),
+                position_generation,
+                side,
+                order_kind,
+                outcome_count: feed.outcome_count,
+                single_outcome,
+                entitled_units: facts.entitled_units[order],
+                entitled_consideration_price_units: PresentConsiderationV2::new(
+                    facts.consideration_price_units[order],
+                ),
+            };
+            settlement_membership.validate()?;
+            settlement_memberships[order] = Some(settlement_membership);
+            settlement_order_count += 1;
+            match side {
+                SettlementSideV1::Buy => {
+                    buy_present = true;
+                    buy_price_units = buy_price_units
+                        .checked_add(facts.consideration_price_units[order])
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                }
+                SettlementSideV1::Sell => {
+                    sell_present = true;
+                    sell_price_units = sell_price_units
+                        .checked_add(facts.consideration_price_units[order])
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                }
+            }
+            insert_owner(
+                &mut participating_owners,
+                &mut owner_count,
+                membership.owner(),
+            )?;
+        }
+        order += 1;
+    }
+
+    let mut rounding_pot_price_units = 0u128;
+    let mut owner_at = 0usize;
+    while owner_at < owner_count {
+        let owner = participating_owners[owner_at];
+        let mut owner_buy = 0u128;
+        let mut owner_sell = 0u128;
+        let mut row = 0usize;
+        while row < settlement_order_count {
+            let order = settlement_orders[row];
+            if order.owner == owner.bytes() {
+                match order.side {
+                    SettlementSideV1::Buy => {
+                        owner_buy = owner_buy
+                            .checked_add(order.consideration_price_units.value)
+                            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                    }
+                    SettlementSideV1::Sell => {
+                        owner_sell = owner_sell
+                            .checked_add(order.consideration_price_units.value)
+                            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+                    }
+                }
+            }
+            row += 1;
+        }
+        rounding_pot_price_units = rounding_pot_price_units
+            .checked_add(owner_rounding_residue_price_units(
+                owner_buy,
+                owner_sell,
+                feed.price_scale,
+            )?)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        owner_at += 1;
+    }
+    let virtual_split_price_units = u128::from(feed.virtual_split)
+        .checked_mul(u128::from(feed.price_scale))
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let virtual_merge_price_units = u128::from(feed.virtual_merge)
+        .checked_mul(u128::from(feed.price_scale))
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    Ok(CandidateSettlementProjectionV1 {
+        market: projection.market(),
+        epoch: projection.epoch(),
+        order_set: projection.order_set(),
+        candidate: feed.settlement_candidate_id,
+        owner_order_set_digest,
+        position_book: *positions,
+        price_scale: feed.price_scale,
+        prices: facts.prices,
+        slices: facts.slices,
+        slice_count: feed.slice_count,
+        receipt_end_count: facts.receipt_end_count,
+        settlement_orders,
+        settlement_memberships,
+        settlement_order_count: u8::try_from(settlement_order_count)
+            .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
+        participating_owners,
+        owner_count: u8::try_from(owner_count)
+            .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
+        buy_price_units,
+        sell_price_units,
+        buy_present,
+        sell_present,
+        rounding_pot_price_units,
+        virtual_split_price_units,
+        virtual_merge_price_units,
+    })
 }
 
 /// Derive the canonical owner-aware settlement decomposition.
