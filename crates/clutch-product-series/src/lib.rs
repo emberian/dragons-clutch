@@ -43,7 +43,8 @@ pub use compile::{
     compile_ordinal, AbsoluteRecoveryAttemptV1, CompiledOrdinalV1, CompiledScheduleV1,
 };
 pub use compiler_output::{
-    CompiledProductSeriesBundleV1, COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
+    assemble_compiled_product_series_bundle_v1, CompiledProductSeriesBundleV1,
+    ProductSeriesBundleInputsV1, COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN,
 };
 pub use funding::{
