@@ -3206,6 +3206,7 @@ const ERROR_CODE_PRICE_OUTSIDE_MOMENT_CONE: u8 = 47;
 
 // --- primitive writers -------------------------------------------------------
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn put_u8(out: &mut [u8], at: &mut usize, value: u8) {
     out[*at] = value;
     *at += 1;
@@ -3215,26 +3216,31 @@ fn put_bool(out: &mut [u8], at: &mut usize, value: bool) {
     put_u8(out, at, value as u8);
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn put_u16(out: &mut [u8], at: &mut usize, value: u16) {
     out[*at..*at + 2].copy_from_slice(&value.to_le_bytes());
     *at += 2;
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn put_u32(out: &mut [u8], at: &mut usize, value: u32) {
     out[*at..*at + 4].copy_from_slice(&value.to_le_bytes());
     *at += 4;
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn put_u64(out: &mut [u8], at: &mut usize, value: u64) {
     out[*at..*at + 8].copy_from_slice(&value.to_le_bytes());
     *at += 8;
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn put_u128(out: &mut [u8], at: &mut usize, value: u128) {
     out[*at..*at + 16].copy_from_slice(&value.to_le_bytes());
     *at += 16;
 }
 
+#[cfg_attr(feature = "profile-general-source-v2-point", inline(never))]
 fn put_i128(out: &mut [u8], at: &mut usize, value: i128) {
     out[*at..*at + 16].copy_from_slice(&value.to_le_bytes());
     *at += 16;
