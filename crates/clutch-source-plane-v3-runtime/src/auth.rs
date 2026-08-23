@@ -11,8 +11,10 @@ const ACCOUNT_DATA_DOMAIN: &[u8] = b"dragons-clutch/runtime-account-data/v1";
 const DEPLOYMENT_DOMAIN: &[u8] = b"dragons-clutch/runtime-deployment-binding/v1";
 const CLOCK_POLICY_DOMAIN: &[u8] = b"dragons-clutch/source-clock-policy/v1";
 const SOURCE_RELEASE_DOMAIN: &[u8] = b"dragons-clutch/source-release-manifest/v1";
+const SOURCE_RELEASE_V2_DOMAIN: &[u8] = b"dragons-clutch/source-release-manifest/v2";
 const SOURCE_RELEASE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-release/v1";
 const SOURCE_ROUTE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-route/v1";
+const RECEIVER_ROUTE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-receiver-route/v2";
 const PARSER_OUTPUT_DOMAIN: &[u8] = b"dragons-clutch/source-parser-output/v1";
 /// Exact canonical byte width returned by every reviewed Source V3 parser.
 pub const PARSER_OUTPUT_BYTES: usize = 120;
@@ -21,17 +23,20 @@ const BOUNDARY_DOMAIN: &[u8] = b"dragons-clutch/source-boundary-receipt/v1";
 const CLOCK_BUCKET_DOMAIN: &[u8] = b"dragons-clutch/authenticated-clock-bucket/v1";
 
 const SOURCE_RELEASE_MAGIC: [u8; 8] = [0x8a, 1, b'D', b'C', b'S', b'R', b'L', b'1'];
+const SOURCE_RELEASE_V2_MAGIC: [u8; 8] = [0x8a, 2, b'D', b'C', b'S', b'R', b'L', b'2'];
 const CLOCK_POLICY_MAGIC: [u8; 8] = *b"DCCLOCK1";
 const SCHEMA_V1: u16 = 1;
 
 /// Exact canonical bytes in [`ClockPolicyV1`].
 pub const CLOCK_POLICY_BYTES: usize = 64;
-/// Exact canonical bytes in [`SourceReleaseManifestV1`].
-pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 1_008;
+/// Exact canonical bytes in legacy [`SourceReleaseManifestV1`].
+pub const SOURCE_RELEASE_MANIFEST_V1_BYTES: usize = 1_008;
+/// Exact canonical bytes in [`SourceReleaseManifestV2`].
+pub const SOURCE_RELEASE_MANIFEST_BYTES: usize = 1_296;
 /// Registered main-program Source release account discriminator.
 pub const SOURCE_RELEASE_ACCOUNT_TAG: u8 = SOURCE_RELEASE_MAGIC[0];
 /// Registered main-program Source release account version.
-pub const SOURCE_RELEASE_ACCOUNT_VERSION: u8 = SOURCE_RELEASE_MAGIC[1];
+pub const SOURCE_RELEASE_ACCOUNT_VERSION: u8 = SOURCE_RELEASE_V2_MAGIC[1];
 
 /// A runtime account/program address, kept distinct from a content digest.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -188,7 +193,9 @@ impl DeploymentBindingV1 {
         Ok(ContentId::from_bytes(hasher.finalize().into()))
     }
 
-    pub(crate) fn authenticate(
+    /// Authenticate exact runtime Program and ProgramData account bytes,
+    /// linkage, loader ownership, executable state, and deployment slot.
+    pub fn authenticate(
         &self,
         program: RuntimeAccountViewV1<'_>,
         programdata: RuntimeAccountViewV1<'_>,
@@ -452,9 +459,9 @@ impl SourceReleaseManifestV1 {
     }
 
     /// Exact fixed manifest bytes.
-    pub fn encode(&self) -> Result<[u8; SOURCE_RELEASE_MANIFEST_BYTES]> {
+    pub fn encode(&self) -> Result<[u8; SOURCE_RELEASE_MANIFEST_V1_BYTES]> {
         self.validate()?;
-        let mut out = [0; SOURCE_RELEASE_MANIFEST_BYTES];
+        let mut out = [0; SOURCE_RELEASE_MANIFEST_V1_BYTES];
         out[..8].copy_from_slice(&SOURCE_RELEASE_MAGIC);
         out[8..10].copy_from_slice(&SCHEMA_V1.to_le_bytes());
         let mut at = 16;
@@ -510,7 +517,7 @@ impl SourceReleaseManifestV1 {
 
     /// Hostile-decode one exact immutable Source release account body.
     pub fn decode(input: &[u8]) -> Result<Self> {
-        if input.len() != SOURCE_RELEASE_MANIFEST_BYTES
+        if input.len() != SOURCE_RELEASE_MANIFEST_V1_BYTES
             || input[..8] != SOURCE_RELEASE_MAGIC
             || le_u16(&input[8..10]) != SCHEMA_V1
             || input[10..16].iter().any(|byte| *byte != 0)
@@ -587,12 +594,108 @@ impl SourceReleaseManifestV1 {
     }
 }
 
+/// Immutable Source release successor that pins the upgradeable receiver and
+/// its mutable configuration in addition to the legacy semantic route.
+///
+/// Version one remains decodable only as a historical artifact. Executable
+/// SourceSeries registration and routing consume this version-two account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceReleaseManifestV2 {
+    /// Complete version-one semantic route carried without reinterpretation.
+    pub base: SourceReleaseManifestV1,
+    /// Exact Pyth receiver Program/ProgramData release that owns the feed.
+    pub receiver: DeploymentBindingV1,
+    /// Exact receiver Config account used by this route.
+    pub receiver_config: RuntimeKey,
+    /// Exact receiver Config owner; it must equal `receiver.program`.
+    pub receiver_config_owner: RuntimeKey,
+    /// Digest of the complete receiver Config account bytes.
+    pub receiver_config_data_id: ContentId,
+}
+
+impl SourceReleaseManifestV2 {
+    /// Validate both the legacy route and the added receiver release boundary.
+    pub fn validate(&self) -> Result<()> {
+        self.base.validate()?;
+        self.receiver.validate()?;
+        self.receiver_config.validate()?;
+        self.receiver_config_owner.validate()?;
+        live_id(self.receiver_config_data_id)?;
+        if self.base.feed_owner != self.receiver.program
+            || self.receiver_config_owner != self.receiver.program
+            || self.receiver.program == self.base.adapter.program
+            || self.receiver.program == self.base.parser.program
+            || self.receiver_config == self.base.feed
+            || self.receiver_config == self.base.parser_config
+            || self.receiver_config == self.base.source_spec_account
+        {
+            return Err(Error::IdentityAlias);
+        }
+        Ok(())
+    }
+
+    /// Encode exact version-two bytes. The historical v1 body is nested in
+    /// full, preserving its discriminator and content identity.
+    pub fn encode(&self) -> Result<[u8; SOURCE_RELEASE_MANIFEST_BYTES]> {
+        self.validate()?;
+        let mut out = [0_u8; SOURCE_RELEASE_MANIFEST_BYTES];
+        out[..8].copy_from_slice(&SOURCE_RELEASE_V2_MAGIC);
+        out[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        let base = self.base.encode()?;
+        out[16..16 + SOURCE_RELEASE_MANIFEST_V1_BYTES].copy_from_slice(&base);
+        let mut at = 16 + SOURCE_RELEASE_MANIFEST_V1_BYTES;
+        encode_deployment(&self.receiver, &mut out, &mut at);
+        put_key(&mut out, &mut at, self.receiver_config);
+        put_key(&mut out, &mut at, self.receiver_config_owner);
+        put_id(&mut out, &mut at, self.receiver_config_data_id);
+        if at != out.len() {
+            return Err(Error::InvalidCodec);
+        }
+        Ok(out)
+    }
+
+    /// Hostile-decode exact version-two bytes; v1 never auto-upgrades.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        if input.len() != SOURCE_RELEASE_MANIFEST_BYTES
+            || input[..8] != SOURCE_RELEASE_V2_MAGIC
+            || le_u16(&input[8..10]) != 2
+            || input[10..16].iter().any(|byte| *byte != 0)
+        {
+            return Err(Error::InvalidCodec);
+        }
+        let base_end = 16 + SOURCE_RELEASE_MANIFEST_V1_BYTES;
+        let base = SourceReleaseManifestV1::decode(&input[16..base_end])?;
+        let mut at = base_end;
+        let receiver = decode_deployment(input, &mut at)?;
+        let receiver_config = take_key(input, &mut at);
+        let receiver_config_owner = take_key(input, &mut at);
+        let receiver_config_data_id = take_id(input, &mut at);
+        if at != input.len() {
+            return Err(Error::InvalidCodec);
+        }
+        let value = Self {
+            base,
+            receiver,
+            receiver_config,
+            receiver_config_owner,
+            receiver_config_data_id,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Content identity of the exact successor route.
+    pub fn id(&self) -> Result<ContentId> {
+        Ok(domain_id(SOURCE_RELEASE_V2_DOMAIN, &self.encode()?))
+    }
+}
+
 /// Exact immutable release account authenticated under the executing adapter program.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSourceReleaseV1 {
     account: RuntimeKey,
     account_data_id: ContentId,
-    manifest: SourceReleaseManifestV1,
+    manifest: SourceReleaseManifestV2,
     manifest_id: ContentId,
     authentication_id: ContentId,
 }
@@ -609,7 +712,7 @@ impl AuthenticatedSourceReleaseV1 {
     }
 
     /// Canonical release body.
-    pub const fn manifest(self) -> SourceReleaseManifestV1 {
+    pub const fn manifest(self) -> SourceReleaseManifestV2 {
         self.manifest
     }
 
@@ -620,12 +723,12 @@ impl AuthenticatedSourceReleaseV1 {
 
     /// Sole SourcePlane compatibility contract embedded in the release.
     pub const fn source_plane(self) -> SourcePlaneProgramV3 {
-        self.manifest.source_plane
+        self.manifest.base.source_plane
     }
 
     /// Sole Clock policy embedded in the canonical release.
     pub const fn clock_policy(self) -> ClockPolicyV1 {
-        self.manifest.clock_policy
+        self.manifest.base.clock_policy
     }
 
     /// Complete owner/PDA/body authentication receipt.
@@ -647,8 +750,8 @@ pub fn authenticate_source_release_account(
     if account.executable || account.signer || account.writable {
         return Err(Error::WrongPrivilege);
     }
-    let manifest = SourceReleaseManifestV1::decode(account.data)?;
-    if manifest.adapter.program != expected_adapter_program {
+    let manifest = SourceReleaseManifestV2::decode(account.data)?;
+    if manifest.base.adapter.program != expected_adapter_program {
         return Err(Error::MismatchedBinding);
     }
     let manifest_id = manifest.id()?;
@@ -677,7 +780,7 @@ pub fn authenticate_source_release_account(
 /// Authenticated immutable source route; fields are private to prevent partial joins.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSourceRouteV1 {
-    manifest: SourceReleaseManifestV1,
+    manifest: SourceReleaseManifestV2,
     release_account: RuntimeKey,
     release_manifest_id: ContentId,
     release_authentication_id: ContentId,
@@ -685,7 +788,40 @@ pub struct AuthenticatedSourceRouteV1 {
     source_plane_contract_id: ContentId,
     adapter_deployment_id: ContentId,
     parser_deployment_id: ContentId,
+    receiver_release_id: ContentId,
     clock_policy_id: ContentId,
+}
+
+/// Action-4 authentication of the release-selected receiver deployment and
+/// complete receiver Config bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedReceiverRouteV2 {
+    route_id: ContentId,
+    deployment_id: ContentId,
+    config_account_data_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedReceiverRouteV2 {
+    /// Exact base Source route to which this receiver belongs.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Exact authenticated receiver Program/ProgramData identity.
+    pub const fn deployment_id(self) -> ContentId {
+        self.deployment_id
+    }
+
+    /// Digest of the complete authenticated receiver Config account.
+    pub const fn config_account_data_id(self) -> ContentId {
+        self.config_account_data_id
+    }
+
+    /// Complete receiver deployment/config authentication receipt.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
 }
 
 impl AuthenticatedSourceRouteV1 {
@@ -716,32 +852,32 @@ impl AuthenticatedSourceRouteV1 {
 
     /// Sole reviewed SourcePlane semantic program selected by this release.
     pub const fn source_plane(self) -> SourcePlaneProgramV3 {
-        self.manifest.source_plane
+        self.manifest.base.source_plane
     }
 
     /// Existing SourceSpec identity.
     pub const fn source_spec_id(self) -> ContentId {
-        self.manifest.source_spec_id
+        self.manifest.base.source_spec_id
     }
 
     /// Runtime-authenticated existing SourceSpec account.
     pub const fn source_spec_account(self) -> RuntimeKey {
-        self.manifest.source_spec_account
+        self.manifest.base.source_spec_account
     }
 
     /// Reviewed runtime adapter program.
     pub const fn adapter_program(self) -> RuntimeKey {
-        self.manifest.adapter.program
+        self.manifest.base.adapter.program
     }
 
     /// Reviewed parser program.
     pub const fn parser_program(self) -> RuntimeKey {
-        self.manifest.parser.program
+        self.manifest.base.parser.program
     }
 
     /// Immutable parser configuration account selected by the release.
     pub const fn parser_config(self) -> RuntimeKey {
-        self.manifest.parser_config
+        self.manifest.base.parser_config
     }
 
     /// Exact reviewed runtime adapter deployment identity.
@@ -754,57 +890,78 @@ impl AuthenticatedSourceRouteV1 {
         self.parser_deployment_id
     }
 
+    /// Release-selected receiver deployment identity. Action 4 additionally
+    /// authenticates its current Program and ProgramData account bytes.
+    pub const fn receiver_release_id(self) -> ContentId {
+        self.receiver_release_id
+    }
+
+    /// Release-selected receiver program.
+    pub const fn receiver_program(self) -> RuntimeKey {
+        self.manifest.receiver.program
+    }
+
+    /// Release-selected receiver ProgramData account.
+    pub const fn receiver_programdata(self) -> RuntimeKey {
+        self.manifest.receiver.programdata
+    }
+
+    /// Release-selected receiver Config account.
+    pub const fn receiver_config(self) -> RuntimeKey {
+        self.manifest.receiver_config
+    }
+
     /// Exact evaluator-release binding selected by this immutable release.
     pub const fn evaluation_release_id(self) -> ContentId {
-        self.manifest.source_plane.release_id
+        self.manifest.base.source_plane.release_id
     }
 
     /// Mutable feed address.
     pub const fn feed(self) -> RuntimeKey {
-        self.manifest.feed
+        self.manifest.base.feed
     }
 
     /// Immutable source work-schedule identity.
     pub const fn source_work_schedule_id(self) -> ContentId {
-        self.manifest.source_work_schedule_id
+        self.manifest.base.source_work_schedule_id
     }
 
     /// Runtime liveness policy identity.
     pub const fn liveness_policy_id(self) -> ContentId {
-        self.manifest.liveness_policy_id
+        self.manifest.base.liveness_policy_id
     }
 
     /// Source compartment account.
     pub const fn source_compartment_account(self) -> RuntimeKey {
-        self.manifest.source_compartment_account
+        self.manifest.base.source_compartment_account
     }
 
     /// Source compartment semantic owner.
     pub const fn source_compartment_owner(self) -> RuntimeKey {
-        self.manifest.source_compartment_owner
+        self.manifest.base.source_compartment_owner
     }
 
     /// Frozen neutral sink.
     pub const fn neutral_sink(self) -> RuntimeKey {
-        self.manifest.neutral_sink
+        self.manifest.base.neutral_sink
     }
 
     pub(crate) const fn feed_owner(self) -> RuntimeKey {
-        self.manifest.feed_owner
+        self.manifest.base.feed_owner
     }
 
     /// Program that owns and derives immutable generation requests.
     pub const fn generation_authority_program(self) -> RuntimeKey {
-        self.manifest.generation_authority_program
+        self.manifest.base.generation_authority_program
     }
 
     pub(crate) const fn system_program(self) -> RuntimeKey {
-        self.manifest.system_program
+        self.manifest.base.system_program
     }
 
     /// Sole Clock policy embedded in the authenticated release account.
     pub const fn clock_policy(self) -> ClockPolicyV1 {
-        self.manifest.clock_policy
+        self.manifest.base.clock_policy
     }
 
     /// Derived identity of the sole Clock policy embedded in the release.
@@ -826,17 +983,20 @@ pub fn authenticate_source_route(
 ) -> Result<AuthenticatedSourceRouteV1> {
     let manifest = release.manifest();
     manifest.validate()?;
-    let source_plane_contract_id = manifest.source_plane.id()?;
+    let source_plane_contract_id = manifest.base.source_plane.id()?;
     let adapter_deployment_id = manifest
+        .base
         .adapter
         .authenticate(adapter_program, adapter_programdata)?;
     let parser_deployment_id = manifest
+        .base
         .parser
         .authenticate(parser_program, parser_programdata)?;
-    if parser_config.key != manifest.parser_config {
+    let receiver_release_id = manifest.receiver.id()?;
+    if parser_config.key != manifest.base.parser_config {
         return Err(Error::WrongAccount);
     }
-    if parser_config.owner != manifest.parser_config_owner {
+    if parser_config.owner != manifest.base.parser_config_owner {
         return Err(Error::WrongOwner);
     }
     if parser_config.executable {
@@ -845,13 +1005,15 @@ pub fn authenticate_source_route(
     if parser_config.signer || parser_config.writable {
         return Err(Error::WrongPrivilege);
     }
-    if account_data_id(parser_config.key, parser_config.data)? != manifest.parser_config_data_id {
+    if account_data_id(parser_config.key, parser_config.data)?
+        != manifest.base.parser_config_data_id
+    {
         return Err(Error::WrongAccountData);
     }
-    if source_spec_account.key != manifest.source_spec_account {
+    if source_spec_account.key != manifest.base.source_spec_account {
         return Err(Error::WrongAccount);
     }
-    if source_spec_account.owner != manifest.source_spec_owner {
+    if source_spec_account.owner != manifest.base.source_spec_owner {
         return Err(Error::WrongOwner);
     }
     if source_spec_account.executable || source_spec_account.signer || source_spec_account.writable
@@ -859,24 +1021,66 @@ pub fn authenticate_source_route(
         return Err(Error::WrongPrivilege);
     }
     if account_data_id(source_spec_account.key, source_spec_account.data)?
-        != manifest.source_spec_account_data_id
+        != manifest.base.source_spec_account_data_id
     {
         return Err(Error::WrongAccountData);
     }
-    let mut route_bytes = [0; 96];
+    let mut route_bytes = [0; 128];
     route_bytes[..32].copy_from_slice(&release.id().bytes());
     route_bytes[32..64].copy_from_slice(&adapter_deployment_id.bytes());
     route_bytes[64..96].copy_from_slice(&parser_deployment_id.bytes());
+    route_bytes[96..128].copy_from_slice(&receiver_release_id.bytes());
     Ok(AuthenticatedSourceRouteV1 {
         release_account: release.account(),
         release_manifest_id: release.manifest_id(),
         release_authentication_id: release.id(),
         route_id: domain_id(SOURCE_ROUTE_AUTH_DOMAIN, &route_bytes),
         source_plane_contract_id,
-        clock_policy_id: manifest.clock_policy.id()?,
+        clock_policy_id: manifest.base.clock_policy.id()?,
         manifest,
         adapter_deployment_id,
         parser_deployment_id,
+        receiver_release_id,
+    })
+}
+
+/// Authenticate the current receiver Program, ProgramData, and Config against
+/// the immutable successor Source release selected by `route`.
+pub fn authenticate_receiver_route_v2(
+    route: AuthenticatedSourceRouteV1,
+    receiver_program: RuntimeAccountViewV1<'_>,
+    receiver_programdata: RuntimeAccountViewV1<'_>,
+    receiver_config: RuntimeAccountViewV1<'_>,
+) -> Result<AuthenticatedReceiverRouteV2> {
+    let manifest = route.manifest;
+    let deployment_id = manifest
+        .receiver
+        .authenticate(receiver_program, receiver_programdata)?;
+    if deployment_id != route.receiver_release_id {
+        return Err(Error::MismatchedBinding);
+    }
+    if receiver_config.key != manifest.receiver_config {
+        return Err(Error::WrongAccount);
+    }
+    if receiver_config.owner != manifest.receiver_config_owner {
+        return Err(Error::WrongOwner);
+    }
+    if receiver_config.executable || receiver_config.signer || receiver_config.writable {
+        return Err(Error::WrongPrivilege);
+    }
+    let config_account_data_id = account_data_id(receiver_config.key, receiver_config.data)?;
+    if config_account_data_id != manifest.receiver_config_data_id {
+        return Err(Error::WrongAccountData);
+    }
+    let mut bytes = [0_u8; 96];
+    bytes[..32].copy_from_slice(&route.route_id.bytes());
+    bytes[32..64].copy_from_slice(&deployment_id.bytes());
+    bytes[64..96].copy_from_slice(&config_account_data_id.bytes());
+    Ok(AuthenticatedReceiverRouteV2 {
+        route_id: route.route_id,
+        deployment_id,
+        config_account_data_id,
+        authentication_id: domain_id(RECEIVER_ROUTE_AUTH_DOMAIN, &bytes),
     })
 }
 
@@ -1077,6 +1281,7 @@ impl AuthenticatedBoundaryV1 {
 #[allow(clippy::too_many_arguments)]
 pub fn authenticate_boundary(
     route: AuthenticatedSourceRouteV1,
+    receiver: AuthenticatedReceiverRouteV2,
     clock_policy: &ClockPolicyV1,
     clock: ClockSnapshotV1,
     feed: RuntimeAccountViewV1<'_>,
@@ -1085,6 +1290,11 @@ pub fn authenticate_boundary(
     parser_output: ParserOutputV1,
     invocation: AdapterInvocationV1,
 ) -> Result<AuthenticatedBoundaryV1> {
+    if receiver.route_id() != route.route_id()
+        || receiver.deployment_id() != route.receiver_release_id()
+    {
+        return Err(Error::MismatchedBinding);
+    }
     if clock_policy.id()? != route.clock_policy_id() {
         return Err(Error::MismatchedBinding);
     }
@@ -1141,7 +1351,7 @@ pub fn authenticate_boundary(
     );
     let invocation_id = invocation.id()?;
     let feed_account_data_id = parser_output.feed_account_data_id;
-    let mut bytes = [0; 224];
+    let mut bytes = [0; 256];
     bytes[..32].copy_from_slice(&route.route_id().bytes());
     bytes[32..64].copy_from_slice(&route.source_spec_id().bytes());
     bytes[64..72].copy_from_slice(&repair_generation.to_le_bytes());
@@ -1157,7 +1367,8 @@ pub fn authenticate_boundary(
     record_bytes[40..48].copy_from_slice(&parser_output.source_sequence.to_le_bytes());
     record_bytes[48..56].copy_from_slice(&parser_output.publish_slot.to_le_bytes());
     record_bytes[56..64].copy_from_slice(&parser_output.publish_time.to_le_bytes());
-    bytes[160..].copy_from_slice(&record_bytes);
+    bytes[160..192].copy_from_slice(&receiver.id().bytes());
+    bytes[192..].copy_from_slice(&record_bytes);
     Ok(AuthenticatedBoundaryV1 {
         route_id: route.route_id(),
         source_spec_id: route.source_spec_id(),

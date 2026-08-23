@@ -1283,10 +1283,14 @@ pub fn apply_interval_consensus_work_transition_v1<'a>(
 ) -> Outcome<ExternalWorkMutationV2> {
     authenticate_ordered_metas_v1(RecoveryAction::AdvanceIntervalConsensus, accounts)?;
     let root_account = &accounts[0];
-    let policy_account = &accounts[3];
-    let recovery_account = &accounts[4];
-    let keeper = &accounts[5];
-    let payer = &accounts[6];
+    // Accounts 1 and 2 are the authenticated shared Market root and pinned
+    // initiating Series link. Their Product-owned join is required before
+    // this helper can be reached; Failure owns only the atomic root/liveness
+    // mutation below.
+    let policy_account = &accounts[5];
+    let recovery_account = &accounts[6];
+    let keeper = &accounts[7];
+    let payer = &accounts[8];
     let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
     let failure_plan = plan.failure_plan();
     let work = failure_plan
@@ -1296,7 +1300,11 @@ pub fn apply_interval_consensus_work_transition_v1<'a>(
         payload.reward_recipient == keeper.key.to_bytes()
             && work.reward_recipient().bytes() == payload.reward_recipient
             && work.scheduled_ceiling_lamports() == payload.scheduled_ceiling_lamports
-            && work.source_success_handoff_id().bytes().iter().any(|byte| *byte != 0),
+            && work
+                .source_success_handoff_id()
+                .bytes()
+                .iter()
+                .any(|byte| *byte != 0),
         ClutchError::MismatchedState,
     )?;
     let expected_after = recovery_account

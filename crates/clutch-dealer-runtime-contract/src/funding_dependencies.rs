@@ -9,6 +9,30 @@ use crate::{
     FixedCodec, Id, Result, DELETABLE_RENT_OWNER_BYTES,
 };
 
+/// Derive the canonical immutable identity of a generic runtime-liveness
+/// policy used by Dealer. Every exact codec byte participates except the
+/// embedded policy ID itself, whose fixed region is replaced by zero bytes.
+pub fn dealer_runtime_liveness_policy_id_v1(
+    policy: clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1,
+) -> Result<Id> {
+    use sha2::{Digest, Sha256};
+
+    let mut bytes = [0u8; clutch_liveness::runtime_v1::RUNTIME_LIVENESS_POLICY_BYTES_V1];
+    policy
+        .encode(&mut bytes)
+        .map_err(|_| Error::MismatchedBinding)?;
+    bytes[HEADER_BYTES..HEADER_BYTES + 32].fill(0);
+    let mut hasher = Sha256::new();
+    hasher.update(crate::DEALER_RUNTIME_LIVENESS_POLICY_CONTENT_DOMAIN_V1);
+    hasher.update(bytes);
+    let identity = Id::from_bytes(hasher.finalize().into());
+    identity.validate_live()?;
+    if policy.policy_id.bytes() != identity.bytes() {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(identity)
+}
+
 /// Number of frozen Dealer action coordinates in one liveness schedule.
 pub const DEALER_LIVENESS_ACTION_COUNT_V1: usize = 22;
 /// Local semantic-body magic for a Dealer maximum-call liveness schedule.
@@ -488,6 +512,7 @@ impl DealerRuntimeLivenessBindingV1 {
              DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     ) -> Result<Self> {
         policy.validate().map_err(|_| Error::MismatchedBinding)?;
+        dealer_runtime_liveness_policy_id_v1(*policy)?;
         let mut value = Self {
             runtime_policy_id: from_liveness_id(policy.policy_id),
             realm_id: from_liveness_id(policy.realm_id),

@@ -34,13 +34,14 @@ pub use account::{
     WINDOW_WORK_ACCOUNT_TAG,
 };
 pub use auth::{
-    account_data_id, authenticate_boundary, authenticate_source_release_account,
-    authenticate_source_route, AdapterInvocationV1, AuthenticatedBoundaryV1,
-    AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
-    ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1,
-    RuntimeDerivedPdaV1, RuntimeKey, SourceReleaseManifestV1, CLOCK_POLICY_BYTES,
-    PARSER_OUTPUT_BYTES, SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION,
-    SOURCE_RELEASE_MANIFEST_BYTES,
+    account_data_id, authenticate_boundary, authenticate_receiver_route_v2,
+    authenticate_source_release_account, authenticate_source_route, AdapterInvocationV1,
+    AuthenticatedBoundaryV1, AuthenticatedClockBucketV1, AuthenticatedReceiverRouteV2,
+    AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1, ClockPolicyV1, ClockSnapshotV1,
+    DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
+    SourceReleaseManifestV1, SourceReleaseManifestV2, CLOCK_POLICY_BYTES, PARSER_OUTPUT_BYTES,
+    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_RELEASE_MANIFEST_BYTES,
+    SOURCE_RELEASE_MANIFEST_V1_BYTES,
 };
 pub use funding::{
     authenticate_source_work_receipt_account, plan_runtime_account_close_from_header,

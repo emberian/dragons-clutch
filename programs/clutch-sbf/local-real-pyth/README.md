@@ -56,9 +56,9 @@ The builder feature now also exposes two reusable boundaries:
   module constructs the selected validator's loopback-only argv, ledger,
   ports, mint identity, warp slot, digest-bound genesis-account files, and
   explicit main-program/adapter `--bpf-program` releases without starting a
-  process. Each program tuple carries its ID, expected ELF digest, and absolute
-  `.so` path; the eventual process launcher must check the bytes against that
-  digest before using the argv.
+  process. Each program tuple carries its Program, ProgramData, deployment
+  slot, expected ELF digest, and absolute `.so` path; the eventual process
+  launcher must check the bytes against that digest before using the argv.
 - `transaction_builder` accepts instruction bytes from their semantic owner,
   binds them to package/schema/release identity, preserves exact integer
   balance equations, and assembles unsigned blockhash-free Solana transactions.

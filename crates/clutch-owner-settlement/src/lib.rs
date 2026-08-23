@@ -101,7 +101,7 @@ pub use successor_v4::{
     OwnerSettlementExpectationBasisBookV4, OwnerSettlementExpectationBasisV4,
     OwnerSettlementExpectationV4, OwnerSettlementPdaProjectionV4,
     OwnerSettlementReceiptAccountingProjectionV4Row, OwnerSettlementStateV4,
-    OwnerSettlementTerminalProjectionV4, SelectedOwnerRowAuthorityV4,
+    OwnerSettlementTerminalProjectionV4, SettlementRootOwnerRowAuthorityV4,
     VerifiedSettlementOrderV4, OWNER_FINALIZED_ROW_DATA_ID_DOMAIN_V4,
     OWNER_SETTLEMENT_BODY_V4_BYTES, OWNER_SETTLEMENT_OUTER_TAG_V4,
     OWNER_SETTLEMENT_OUTER_VERSION_V4, OWNER_SETTLEMENT_PDA_DOMAIN_V4,

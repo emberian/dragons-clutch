@@ -2,7 +2,8 @@ use clutch_collateral_adapter_v2::{
     bind_claim_issuance_v1, bind_collateral_profile_v2, AdapterCatalogV2, AdapterReleaseV2,
     ClaimIssuanceBindingV1, ClaimLedgerV3, ClaimRuntimeObservationV1, CollateralPolicyV2, HoardV2,
     Id, MarketCollateralBindingV2, MarketLiabilityLifecycleV1, ProfileCollateralBindingV2,
-    RealmCollateralBindingV2, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
+    RealmCollateralBindingV2, ResolutionFinalizationFactsV5, ResolutionPayoutUnitBoundaryV5,
+    ResolutionV5, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
 };
 use clutch_fractional_redemption_runtime::*;
 use clutch_general_v2_contract::{
@@ -86,7 +87,7 @@ fn external_context(
     locked_claim_principal_atoms: u64,
 ) -> (
     BoundFractionalContextV1,
-    FractionalPolicyV1,
+    FractionalPolicyV2,
     FractionalLedgerV1,
 ) {
     let catalog = AdapterCatalogV2::new(&COLLATERAL_RELEASES).unwrap();
@@ -159,10 +160,25 @@ fn external_context(
     )
     .unwrap();
     let vector = payout();
-    let policy = FractionalPolicyV1 {
+    let resolution = ResolutionV5::finalized(
+        ResolutionFinalizationFactsV5 {
+            market_instance_id: cid(20),
+            native_claim_basis_id: cid(33),
+            finalization_evidence_id: cid(34),
+            outcome_count: vector.outcome_count,
+            payout_denominator: vector.denominator,
+            payout_weights: vector.weights,
+            generation: 7,
+            payout_unit_boundary: ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms,
+        },
+        8,
+        deletable_rent(46),
+    )
+    .unwrap();
+    let policy = FractionalPolicyV2 {
         market_instance: rid(20),
         resolution_account: rid(21),
-        payout_vector_id: vector.id().unwrap(),
+        resolution_data_id: rid_from_collateral(resolution.data_id(cid(21)).unwrap()),
         realm: rid(10),
         collateral_policy: rid_from_collateral(policy_id),
         collateral_release: rid_from_collateral(COLLATERAL_RELEASE.id().unwrap()),
@@ -233,7 +249,7 @@ fn external_context(
         claim_ledger_account,
         claim_ledger,
         hoard,
-        vector,
+        resolution,
         collateral,
         claims,
     )
@@ -370,14 +386,22 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
     supply[1] = 1;
     let (_context, policy, ledger) = external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
     let policy_bytes = policy.encode().unwrap();
-    assert_eq!(FractionalPolicyV1::decode(&policy_bytes), Ok(policy));
+    assert_eq!(policy_bytes[1], 2);
+    assert_eq!(FractionalPolicyV2::decode(&policy_bytes), Ok(policy));
+    let mut withdrawn_policy = policy_bytes;
+    withdrawn_policy[1] = 1;
+    assert_eq!(
+        FractionalPolicyV2::decode(&withdrawn_policy),
+        Err(Error::WrongVersion)
+    );
     let mut hostile = policy_bytes;
     hostile[6] = 1;
     assert_eq!(
-        FractionalPolicyV1::decode(&hostile),
+        FractionalPolicyV2::decode(&hostile),
         Err(Error::NonCanonicalPadding)
     );
     let ledger_bytes = ledger.encode().unwrap();
+    assert_eq!(ledger_bytes[1], 1);
     assert_eq!(FractionalLedgerV1::decode(&ledger_bytes), Ok(ledger));
     let mut hostile_ledger = ledger_bytes;
     hostile_ledger[112] = 1;
@@ -386,12 +410,12 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
         Err(Error::NonCanonicalPadding)
     );
 
-    let credit = FractionalCreditV1 {
+    let credit = FractionalCreditV2 {
         policy_account: rid(41),
         ledger_account: rid(42),
         market_instance: policy.market_instance,
         resolution_account: policy.resolution_account,
-        payout_vector_id: policy.payout_vector_id,
+        resolution_data_id: policy.resolution_data_id,
         claimant: rid(50),
         domain_generation: 7,
         account_generation: 1,
@@ -401,19 +425,26 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
         rent: split_rent(50),
     };
     let bytes = credit.encode().unwrap();
-    assert_eq!(FractionalCreditV1::decode(&bytes), Ok(credit));
+    assert_eq!(bytes[1], 2);
+    assert_eq!(FractionalCreditV2::decode(&bytes), Ok(credit));
+    let mut withdrawn_credit = bytes;
+    withdrawn_credit[1] = 1;
+    assert_eq!(
+        FractionalCreditV2::decode(&withdrawn_credit),
+        Err(Error::WrongVersion)
+    );
     let mut bad_padding = bytes;
     bad_padding[47] = 1;
     assert_eq!(
-        FractionalCreditV1::decode(&bad_padding),
+        FractionalCreditV2::decode(&bad_padding),
         Err(Error::NonCanonicalPadding)
     );
-    let tombstone = FractionalCreditTombstoneV1 {
+    let tombstone = FractionalCreditTombstoneV2 {
         policy_account: credit.policy_account,
         ledger_account: credit.ledger_account,
         market_instance: credit.market_instance,
         resolution_account: credit.resolution_account,
-        payout_vector_id: credit.payout_vector_id,
+        resolution_data_id: credit.resolution_data_id,
         claimant: credit.claimant,
         domain_generation: credit.domain_generation,
         account_generation: credit.account_generation,
@@ -421,9 +452,25 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
         stored_bump: credit.stored_bump,
         permanent_tombstone_principal: 40,
     };
+    let tombstone_bytes = tombstone.encode().unwrap();
+    assert_eq!(tombstone_bytes[1], 2);
     assert_eq!(
-        FractionalCreditTombstoneV1::decode(&tombstone.encode().unwrap()),
+        FractionalCreditTombstoneV2::decode(&tombstone_bytes),
         Ok(tombstone)
+    );
+    let mut withdrawn_tombstone = tombstone_bytes;
+    withdrawn_tombstone[1] = 1;
+    assert_eq!(
+        FractionalCreditTombstoneV2::decode(&withdrawn_tombstone),
+        Err(Error::WrongVersion)
+    );
+    assert_eq!(
+        policy.pda_seeds().prefix(),
+        b"fractional-redemption-policy:v2"
+    );
+    assert_eq!(
+        credit.pda_seeds().prefix(),
+        b"fractional-redemption-credit:v2"
     );
 }
 
@@ -459,6 +506,7 @@ fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
     let mut materialized = [0; MAX_OUTCOMES];
     materialized[0] = 1;
     let (context, _policy, _ledger) = external_context(0, 0, internal, materialized, 1);
+    assert!(context.resolution().payout_atoms(0, 1).is_err());
     let source = BearerClaimSourceV1 {
         claimant: rid(50),
         claim_token_account: rid(51),
@@ -484,6 +532,22 @@ fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
     .unwrap();
     assert_eq!(plan.paid_atoms, 0);
     assert_eq!(plan.claimant_numerator_after, 1);
+    assert_eq!(plan.resolution_payout.resolution_account(), cid(21));
+    assert_eq!(
+        plan.resolution_payout.resolution_semantic_id().bytes(),
+        context.resolution_semantic_id().bytes()
+    );
+    assert_eq!(
+        plan.resolution_payout.resolution_data_id().bytes(),
+        context.resolution_data_id().bytes()
+    );
+    assert_eq!(plan.resolution_payout.outcome(), 0);
+    assert_eq!(plan.resolution_payout.quantity(), 1);
+    assert_eq!(plan.resolution_payout.payout_weight(), 1);
+    assert_eq!(plan.resolution_payout.denominator(), 7);
+    assert_eq!(plan.resolution_payout.whole_atoms(), 0);
+    assert_eq!(plan.resolution_payout.remainder_numerator(), 1);
+    assert!(!plan.resolution_payout.is_exact());
     assert_eq!(plan.ledger_after.aggregate_credit_numerator, 1);
     assert_eq!(plan.ledger_after.active_credit_accounts, 1);
     assert_eq!(
@@ -511,6 +575,36 @@ fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
 }
 
 #[test]
+fn context_refuses_a_coherent_but_wrong_resolution_v5_body() {
+    let mut supply = [0; MAX_OUTCOMES];
+    supply[0] = 1;
+    supply[1] = 1;
+    let (context, policy, ledger) = external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
+    let wrong_resolution = ResolutionV5 {
+        facts: ResolutionFinalizationFactsV5 {
+            finalization_evidence_id: cid(35),
+            ..context.resolution().facts
+        },
+        ..context.resolution()
+    };
+    assert!(matches!(
+        bind_fractional_context_v1(
+            context.policy_account(),
+            policy,
+            context.ledger_account(),
+            ledger,
+            context.claim_ledger_account(),
+            context.claim_ledger(),
+            context.hoard(),
+            wrong_resolution,
+            context.collateral(),
+            context.claims(),
+        ),
+        Err(Error::MismatchedBinding)
+    ));
+}
+
+#[test]
 fn irreducible_terminal_credit_blocks_every_close_and_names_no_sweep_recipient() {
     let (context, _policy, _ledger) =
         external_context(1, 1, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 1);
@@ -535,12 +629,12 @@ fn irreducible_terminal_credit_blocks_every_close_and_names_no_sweep_recipient()
 #[test]
 fn close_refuses_a_nonzero_credit_without_changing_the_aggregate_owner() {
     let (context, policy, ledger) = external_context(1, 1, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 1);
-    let credit = FractionalCreditV1 {
+    let credit = FractionalCreditV2 {
         policy_account: context.policy_account(),
         ledger_account: context.ledger_account(),
         market_instance: policy.market_instance,
         resolution_account: policy.resolution_account,
-        payout_vector_id: policy.payout_vector_id,
+        resolution_data_id: policy.resolution_data_id,
         claimant: rid(50),
         domain_generation: 7,
         account_generation: 1,
@@ -621,6 +715,22 @@ fn exact_terminal_retirement_splits_only_policy_and_ledger_rent() {
     assert_eq!(close.ledger_funding().neutral_lamports(), 3);
     assert_eq!(close.terminal_requirement().market_instance_id(), rid(20));
     assert_eq!(close.terminal_requirement().domain_generation(), 7);
+    assert_eq!(close.terminal_requirement().resolution_account(), rid(21));
+    assert_eq!(
+        close.terminal_requirement().resolution_semantic_id(),
+        terminal_context.resolution_semantic_id()
+    );
+    assert_eq!(
+        close.terminal_requirement().resolution_data_id(),
+        terminal_context.resolution_data_id()
+    );
+    assert_eq!(
+        close.terminal_requirement().native_claim_basis_id().bytes(),
+        terminal_context
+            .claim_ledger()
+            .native_claim_basis_id
+            .bytes()
+    );
     assert_eq!(close.terminal_requirement().policy_account(), rid(41));
     assert_eq!(close.terminal_requirement().ledger_account(), rid(42));
     assert_eq!(
