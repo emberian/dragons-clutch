@@ -31,8 +31,8 @@ use clutch_solana_layout::product_series::SeriesMarketLinkAccountV1;
 use clutch_structured_claim::DeploymentBinding;
 use clutch_structured_claim_adapter::runtime_contract::{
     authenticate_wrapper_recipe_membership_v1, structured_descriptor_admission_receipt_v1,
-    structured_owner_release_id_v2,
-    DescriptorBasisV1, PositionAssetTransferPayloadV1, StructuredClaimActionV1,
+    structured_owner_release_id_v2, DescriptorBasisV1, PositionAssetTransferPayloadV1,
+    StructuredClaimActionV1,
     StructuredClaimDescriptorV2, StructuredClaimPayloadV1, StructuredClaimReplayExtensionV1,
     StructuredClaimRuntimeAddressesV1, StructuredMarketRootBindingV1, StructuredMarketRootV1,
     StructuredProductLineageV1, WrapperQuantityPayloadV1, WrapperRecipeHashV1, WrapperRecipeV1,
@@ -40,7 +40,7 @@ use clutch_structured_claim_adapter::runtime_contract::{
     STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1, STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
 };
 use clutch_structured_claim_adapter::{
-    authenticate_structured_custody_call_v1, bind_descriptor_v1,
+    bind_descriptor_v1,
     canonical_native_claim_id_v1, canonical_series_scoped_wrapper_product_id_v2,
     decode_canonical_wrapper_mint_v1, decode_canonical_wrapper_token_v1,
     prepare_current_redeem_terminal_v1, prepare_current_structured_position_poststate_v1,
@@ -48,8 +48,8 @@ use clutch_structured_claim_adapter::{
     BasePositionPdaVerifierV1,
     CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
     Error as StructuredAdapterError, PdaVerifierV1, RawAccountV1, RuntimeDeploymentsV1,
-    StructuredCustodyPdaVerifierV1, StructuredCustodyScratchV1,
-    STRUCTURED_CUSTODY_ACCOUNT_COUNT, STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
+    StructuredCustodyPdaVerifierV1, STRUCTURED_CUSTODY_ACCOUNT_COUNT,
+    STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
     STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
     STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1,
     STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1,
@@ -68,7 +68,8 @@ use crate::loader_state::{
 use crate::seeds;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_resolution_v5, RuntimeSha256,
+    authenticate_general_market_value_authority_v2, authenticate_resolution_v5,
+    GeneralMarketLiabilityAuthorityV2, RuntimeSha256,
 };
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_artifact::{
@@ -88,45 +89,41 @@ const IX_REALM: usize = 1;
 const IX_PROFILE: usize = 2;
 const IX_COLLATERAL_POLICY: usize = 3;
 const IX_COLLATERAL_TOKEN_PROGRAM: usize = 4;
-const IX_MARKET_BINDING: usize = 5;
-const IX_MARKET_RUNTIME: usize = 6;
-const IX_SOURCE_POSITION: usize = 7;
-const IX_SOURCE_REPLAY: usize = 8;
-const IX_DESTINATION_POSITION: usize = 9;
-const IX_DESTINATION_REPLAY: usize = 10;
-const IX_ACTOR: usize = 11;
-const IX_DESCRIPTOR: usize = 12;
-const IX_WRAPPER_PROGRAM: usize = 13;
-const IX_WRAPPER_PROGRAM_DATA: usize = 14;
-const IX_BASE_PROGRAM: usize = 15;
-const IX_BASE_PROGRAM_DATA: usize = 16;
-const IX_TOKEN_2022_PROGRAM: usize = 17;
-const IX_TOKEN_2022_PROGRAM_DATA: usize = 18;
-const IX_NATIVE_CLAIM_BASIS: usize = 19;
-const IX_MARKET_INSTANCE: usize = 20;
-const IX_HOARD_V2: usize = 21;
-const IX_CLAIM_LEDGER_V3: usize = 22;
-const IX_WRAPPER_MINT: usize = 23;
-const IX_WRAPPER_HOLDER: usize = 24;
-const IX_WRAPPER_MINT_AUTHORITY: usize = 25;
-const IX_COLLATERAL_MINT: usize = 26;
-const IX_HOARD_TOKEN: usize = 27;
-const IX_WRAPPER_RELEASE_V2: usize = 28;
-const IX_BASE_RELEASE_V2: usize = 29;
-const IX_TOKEN_RELEASE_V2: usize = 30;
-const IX_RESOLUTION_V5: usize = 31;
-const IX_CANONICAL_WRAPPER_RELEASE_V2: usize = 23;
-const IX_CANONICAL_BASE_RELEASE_V2: usize = 24;
-const IX_CANONICAL_TOKEN_RELEASE_V2: usize = 25;
+const IX_COLLATERAL_TOKEN_PROGRAM_DATA: usize = 5;
+const IX_MARKET_BINDING: usize = 6;
+const IX_MARKET_RUNTIME: usize = 7;
+const IX_SOURCE_POSITION: usize = 8;
+const IX_SOURCE_REPLAY: usize = 9;
+const IX_DESTINATION_POSITION: usize = 10;
+const IX_DESTINATION_REPLAY: usize = 11;
+const IX_ACTOR: usize = 12;
+const IX_DESCRIPTOR: usize = 13;
+const IX_WRAPPER_PROGRAM: usize = 14;
+const IX_WRAPPER_PROGRAM_DATA: usize = 15;
+const IX_BASE_PROGRAM: usize = 16;
+const IX_BASE_PROGRAM_DATA: usize = 17;
+const IX_TOKEN_2022_PROGRAM: usize = 18;
+const IX_TOKEN_2022_PROGRAM_DATA: usize = 19;
+const IX_NATIVE_CLAIM_BASIS: usize = 20;
+const IX_MARKET_INSTANCE: usize = 21;
+const IX_HOARD_V2: usize = 22;
+const IX_CLAIM_LEDGER_V3: usize = 23;
+const IX_WRAPPER_MINT: usize = 24;
+const IX_WRAPPER_HOLDER: usize = 25;
+const IX_WRAPPER_MINT_AUTHORITY: usize = 26;
+const IX_COLLATERAL_MINT: usize = 27;
+const IX_HOARD_TOKEN: usize = 28;
+const IX_WRAPPER_RELEASE_V2: usize = 29;
+const IX_BASE_RELEASE_V2: usize = 30;
+const IX_TOKEN_RELEASE_V2: usize = 31;
+const IX_RESOLUTION_V5: usize = 32;
 
-const STRUCTURED_CANONICAL_ACCOUNT_COUNT: usize = 26;
-
-const STRUCTURED_FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 28;
+const STRUCTURED_FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 29;
 /// Exact account count for current full-vector wrap and unwind, including
 /// three disjoint loader-release artifacts.
-pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT: usize = 31;
+pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT: usize = 32;
 /// Exact account count for current terminal wrapper redemption.
-pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 32;
+pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
 
 const ACCOUNT_ROLES: [AccountRoleV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     AccountRoleV1::VaultAuthority,
@@ -154,7 +151,13 @@ const ACCOUNT_ROLES: [AccountRoleV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     AccountRoleV1::ClaimLedgerV3,
 ];
 
-const STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT: usize = 33;
+// ProgramData proves the selected collateral release but is not part of the
+// historical Structured custody projection consumed by the adapter.
+const ACCOUNT_INDICES: [usize; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
+    0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+];
+
+const STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT: usize = 34;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 const CV_VAULT_AUTHORITY: usize = 0;
 const CV_PAYER: usize = 1;
@@ -164,31 +167,32 @@ const CV_REALM: usize = 4;
 const CV_PROFILE: usize = 5;
 const CV_POLICY: usize = 6;
 const CV_COLLATERAL_TOKEN_PROGRAM: usize = 7;
-const CV_MARKET_BINDING: usize = 8;
-const CV_MARKET_RUNTIME: usize = 9;
-const CV_POSITION: usize = 10;
-const CV_REPLAY: usize = 11;
-const CV_DESCRIPTOR: usize = 12;
-const CV_MINT: usize = 13;
-const CV_WRAPPER_PROGRAM: usize = 14;
-const CV_WRAPPER_PROGRAM_DATA: usize = 15;
-const CV_BASE_PROGRAM: usize = 16;
-const CV_BASE_PROGRAM_DATA: usize = 17;
-const CV_TOKEN_PROGRAM: usize = 18;
-const CV_TOKEN_PROGRAM_DATA: usize = 19;
-const CV_BASIS: usize = 20;
-const CV_MARKET_INSTANCE: usize = 21;
-const CV_HOARD: usize = 22;
-const CV_CLAIM_LEDGER: usize = 23;
-const CV_STRUCTURED_ROOT: usize = 24;
-const CV_SERIES_LINK: usize = 25;
-const CV_COMPILER_BUNDLE: usize = 26;
-const CV_ATTACHMENT: usize = 27;
-const CV_SERIES_REGISTRY_V2: usize = 28;
-const CV_REGISTRY_RELEASE_V2: usize = 29;
-const CV_CAPABILITY_PROFILE_V4: usize = 30;
-const CV_WRAPPER_RELEASE_V2: usize = 31;
-const CV_TOKEN_RELEASE_V2: usize = 32;
+const CV_COLLATERAL_TOKEN_PROGRAM_DATA: usize = 8;
+const CV_MARKET_BINDING: usize = 9;
+const CV_MARKET_RUNTIME: usize = 10;
+const CV_POSITION: usize = 11;
+const CV_REPLAY: usize = 12;
+const CV_DESCRIPTOR: usize = 13;
+const CV_MINT: usize = 14;
+const CV_WRAPPER_PROGRAM: usize = 15;
+const CV_WRAPPER_PROGRAM_DATA: usize = 16;
+const CV_BASE_PROGRAM: usize = 17;
+const CV_BASE_PROGRAM_DATA: usize = 18;
+const CV_TOKEN_PROGRAM: usize = 19;
+const CV_TOKEN_PROGRAM_DATA: usize = 20;
+const CV_BASIS: usize = 21;
+const CV_MARKET_INSTANCE: usize = 22;
+const CV_HOARD: usize = 23;
+const CV_CLAIM_LEDGER: usize = 24;
+const CV_STRUCTURED_ROOT: usize = 25;
+const CV_SERIES_LINK: usize = 26;
+const CV_COMPILER_BUNDLE: usize = 27;
+const CV_ATTACHMENT: usize = 28;
+const CV_SERIES_REGISTRY_V2: usize = 29;
+const CV_REGISTRY_RELEASE_V2: usize = 30;
+const CV_CAPABILITY_PROFILE_V4: usize = 31;
+const CV_WRAPPER_RELEASE_V2: usize = 32;
+const CV_TOKEN_RELEASE_V2: usize = 33;
 
 /// Private locus-aware deployment authority. Every field is derived from a
 /// hostile-decoded release artifact plus the complete current ProgramData
@@ -228,12 +232,13 @@ pub fn process_create(
         _ => return Err(ClutchError::NonCanonical.into()),
     };
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[CV_REALM],
         &accounts[CV_PROFILE],
         &accounts[CV_POLICY],
         &accounts[CV_COLLATERAL_TOKEN_PROGRAM],
+        &accounts[CV_COLLATERAL_TOKEN_PROGRAM_DATA],
         &accounts[CV_MARKET_BINDING],
         &accounts[CV_MARKET_RUNTIME],
         &accounts[CV_MARKET_INSTANCE],
@@ -242,6 +247,7 @@ pub fn process_create(
         false,
         false,
     )?;
+    let liabilities = value_authority.liabilities;
     let basis_artifact = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
         program_id,
         &accounts[CV_BASIS],
@@ -339,12 +345,12 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
     let signer = [
         true, true, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false,
     ];
     let mut writable = [
-        false, true, false, false, false, false, false, false, false, false, true, true, false,
-        false, false, false, false, false, false, false, false, false, false, false, true, false,
-        false, false, false, false, false, false, false,
+        false, true, false, false, false, false, false, false, false, false, false, true, true,
+        false, false, false, false, false, false, false, false, false, false, false, false, true,
+        false, false, false, false, false, false, false, false,
     ];
     writable[CV_SERIES_LINK] = structured_root_requires_product_write_v1(
         accounts[CV_STRUCTURED_ROOT].owner,
@@ -352,8 +358,8 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
     );
     let executable = [
         false, false, true, false, false, false, false, true, false, false, false, false, false,
-        false, true, false, true, false, true, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false,
+        false, false, true, false, true, false, true, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false,
     ];
     let mut index = 0_usize;
     while index < accounts.len() {
@@ -376,8 +382,13 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
-            let collateral_token_alias =
-                left == CV_COLLATERAL_TOKEN_PROGRAM && right == CV_TOKEN_PROGRAM;
+            let same_token_release = accounts[CV_COLLATERAL_TOKEN_PROGRAM].key
+                == accounts[CV_TOKEN_PROGRAM].key;
+            let collateral_token_alias = (left == CV_COLLATERAL_TOKEN_PROGRAM
+                && right == CV_TOKEN_PROGRAM)
+                || (same_token_release
+                    && left == CV_COLLATERAL_TOKEN_PROGRAM_DATA
+                    && right == CV_TOKEN_PROGRAM_DATA);
             require(
                 accounts[left].key != accounts[right].key || collateral_token_alias,
                 ClutchError::MismatchedState,
@@ -393,7 +404,7 @@ fn validate_create_privileges(program_id: &Pubkey, accounts: &[AccountInfo<'_>])
 fn admit_structured_descriptor_root_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    liabilities: super::collateral_position_v3::GeneralMarketLiabilityAuthorityV1,
+    liabilities: GeneralMarketLiabilityAuthorityV2,
     deployments: AuthenticatedStructuredDeploymentsV2,
     descriptor: StructuredClaimDescriptorV2,
     native_claim_id: [u8; 32],
@@ -757,205 +768,6 @@ fn write_and_reauthenticate_structured_root_v1(
     )
 }
 
-/// Execute General V2 action 35 after the central profile admitted its tuple.
-pub fn process(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    sequence: u64,
-    payload: &[u8],
-) -> Outcome<()> {
-    require_count(accounts, STRUCTURED_CANONICAL_ACCOUNT_COUNT)?;
-    require(sequence == 0, ClutchError::Replay)?;
-    require(
-        *accounts[IX_BASE_PROGRAM].key == *program_id,
-        ClutchError::MismatchedState,
-    )?;
-    let transfer = clutch_structured_claim_adapter::runtime_contract::decode_position_asset_transfer_payload_v1(
-        payload,
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-
-    // Authenticate the single Realm-selected collateral closure first. The
-    // private receipt, rather than caller-authored IDs, enters Structured's
-    // independent reconstruction below.
-    let liabilities = authenticate_general_market_liabilities_v1(
-        program_id,
-        &accounts[IX_REALM],
-        &accounts[IX_PROFILE],
-        &accounts[IX_COLLATERAL_POLICY],
-        &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
-        &accounts[IX_MARKET_BINDING],
-        &accounts[IX_MARKET_RUNTIME],
-        &accounts[IX_MARKET_INSTANCE],
-        &accounts[IX_HOARD_V2],
-        &accounts[IX_CLAIM_LEDGER_V3],
-        false,
-        false,
-    )?;
-    let basis_artifact = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
-        program_id,
-        &accounts[IX_NATIVE_CLAIM_BASIS],
-        ContentId::from_bytes(liabilities.market_binding.native_claim_basis_id.bytes()),
-    )?;
-    let basis = *basis_artifact.value();
-    require(
-        basis.outcome_count == liabilities.market_binding.outcome_count,
-        ClutchError::MismatchedState,
-    )?;
-
-    let descriptor_data = accounts[IX_DESCRIPTOR]
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let descriptor = StructuredClaimDescriptorV2::decode(&descriptor_data)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    drop(descriptor_data);
-
-    let deployments = authenticate_deployments(
-        program_id,
-        accounts,
-        descriptor,
-        [
-            IX_CANONICAL_WRAPPER_RELEASE_V2,
-            IX_CANONICAL_BASE_RELEASE_V2,
-            IX_CANONICAL_TOKEN_RELEASE_V2,
-        ],
-    )?;
-    let product_id = structured_replay_product(accounts)?;
-    let market_instance_id = liabilities
-        .market_instance
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .bytes();
-    let basis_id = basis_artifact.semantic_id().bytes();
-    let descriptor_basis = DescriptorBasisV1 {
-        market: market_instance_id,
-        terms_digest: basis_id,
-        basis_degree: basis.basis_degree,
-        denominator: basis.denominator,
-        outcome_count: basis.outcome_count,
-    };
-    let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
-        &descriptor,
-        descriptor_basis,
-        deployments.runtime.binding,
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let native_claim_id = canonical_native_claim_id_v1(&identity).map_err(map_adapter_error)?;
-    let canonical_product_id = canonical_series_scoped_wrapper_product_id_v2(
-        &identity,
-        native_claim_id,
-        descriptor.structured_root_id,
-        descriptor.wrapper_recipe_id,
-    )
-    .map_err(map_adapter_error)?;
-    require(product_id == canonical_product_id, ClutchError::MismatchedState)?;
-
-    let verifier = RuntimeStructuredPdaVerifierV1;
-    let addresses = derive_runtime_addresses(
-        accounts[IX_WRAPPER_PROGRAM].key,
-        canonical_product_id,
-        descriptor,
-    )?;
-    require(
-        addresses.descriptor == accounts[IX_DESCRIPTOR].key.to_bytes()
-            && addresses.vault_owner == accounts[IX_VAULT_AUTHORITY].key.to_bytes(),
-        ClutchError::WrongPda,
-    )?;
-    let bound_descriptor = bind_descriptor_v1(
-        descriptor,
-        descriptor_basis,
-        deployments.runtime,
-        native_claim_id,
-        canonical_product_id,
-        addresses,
-        &verifier,
-    )
-    .map_err(map_adapter_error)?;
-
-    let poststate = {
-        let borrowed = accounts
-            .iter()
-            .map(|account| {
-                account
-                    .try_borrow_data()
-                    .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))
-            })
-            .collect::<Outcome<Vec<_>>>()?;
-        let mut raw = Vec::with_capacity(STRUCTURED_CUSTODY_ACCOUNT_COUNT);
-        let mut index = 0_usize;
-        while index < STRUCTURED_CUSTODY_ACCOUNT_COUNT {
-            raw.push(RawAccountV1 {
-                role: ACCOUNT_ROLES[index],
-                key: accounts[index].key.to_bytes(),
-                owner: accounts[index].owner.to_bytes(),
-                lamports: accounts[index].lamports(),
-                data: &borrowed[index],
-                signer: accounts[index].is_signer,
-                writable: accounts[index].is_writable,
-                executable: accounts[index].executable,
-            });
-            index += 1;
-        }
-        let mut scratch = Box::new(StructuredCustodyScratchV1::ZEROED);
-        authenticate_structured_custody_call_v1(
-            &raw,
-            &bound_descriptor,
-            deployments.runtime,
-            liabilities.bound,
-            transfer,
-            &mut scratch,
-            &verifier,
-        )
-        .map_err(map_adapter_error)?
-        .poststate()
-    };
-
-    require(
-        poststate.source_position.address == accounts[IX_SOURCE_POSITION].key.to_bytes()
-            && poststate.source_replay.address == accounts[IX_SOURCE_REPLAY].key.to_bytes()
-            && poststate.destination_position.address
-                == accounts[IX_DESTINATION_POSITION].key.to_bytes()
-            && poststate.destination_replay.address
-                == accounts[IX_DESTINATION_REPLAY].key.to_bytes(),
-        ClutchError::MismatchedState,
-    )?;
-    verify_rent_and_exact_transfer(accounts, poststate, transfer)?;
-
-    // Acquire every mutable borrow before the first write. Any borrow or width
-    // refusal therefore leaves all four accounts unchanged without relying on
-    // a partial-write cleanup path.
-    let mut source_position = accounts[IX_SOURCE_POSITION]
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let mut source_replay = accounts[IX_SOURCE_REPLAY]
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let mut destination_position = accounts[IX_DESTINATION_POSITION]
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let mut destination_replay = accounts[IX_DESTINATION_REPLAY]
-        .try_borrow_mut_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    require(
-        source_position.len() == poststate.source_position.body.len()
-            && source_replay.len() == usize::from(poststate.source_replay.body_len)
-            && destination_position.len() == poststate.destination_position.body.len()
-            && destination_replay.len()
-                == usize::from(poststate.destination_replay.body_len),
-        ClutchError::WrongDataLength,
-    )?;
-    source_position.copy_from_slice(&poststate.source_position.body);
-    source_replay.copy_from_slice(
-        &poststate.source_replay.body[..usize::from(poststate.source_replay.body_len)],
-    );
-    destination_position.copy_from_slice(&poststate.destination_position.body);
-    destination_replay.copy_from_slice(
-        &poststate.destination_replay.body
-            [..usize::from(poststate.destination_replay.body_len)],
-    );
-    Ok(())
-}
-
 /// Execute current full-vector wrap, unwind, or terminal redemption under the
 /// wrapper-only vault signer.
 ///
@@ -1001,12 +813,13 @@ pub fn process_full_vector(
         _ => return Err(ClutchError::NonCanonical.into()),
     };
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[IX_REALM],
         &accounts[IX_PROFILE],
         &accounts[IX_COLLATERAL_POLICY],
         &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
+        &accounts[IX_COLLATERAL_TOKEN_PROGRAM_DATA],
         &accounts[IX_MARKET_BINDING],
         &accounts[IX_MARKET_RUNTIME],
         &accounts[IX_MARKET_INSTANCE],
@@ -1015,6 +828,7 @@ pub fn process_full_vector(
         true,
         true,
     )?;
+    let liabilities = value_authority.liabilities;
     let basis_artifact = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
         program_id,
         &accounts[IX_NATIVE_CLAIM_BASIS],
@@ -1108,15 +922,16 @@ pub fn process_full_vector(
         let mut raw = Vec::with_capacity(STRUCTURED_CUSTODY_ACCOUNT_COUNT);
         let mut index = 0usize;
         while index < STRUCTURED_CUSTODY_ACCOUNT_COUNT {
+            let account_index = ACCOUNT_INDICES[index];
             raw.push(RawAccountV1 {
                 role: ACCOUNT_ROLES[index],
-                key: accounts[index].key.to_bytes(),
-                owner: accounts[index].owner.to_bytes(),
-                lamports: accounts[index].lamports(),
-                data: &borrowed[index],
-                signer: accounts[index].is_signer,
-                writable: accounts[index].is_writable,
-                executable: accounts[index].executable,
+                key: accounts[account_index].key.to_bytes(),
+                owner: accounts[account_index].owner.to_bytes(),
+                lamports: accounts[account_index].lamports(),
+                data: &borrowed[account_index],
+                signer: accounts[account_index].is_signer,
+                writable: accounts[account_index].is_writable,
+                executable: accounts[account_index].executable,
             });
             index += 1;
         }
@@ -1203,18 +1018,14 @@ pub fn process_full_vector(
             hoard: liabilities.hoard,
             claim_ledger: liabilities.claim_ledger,
         };
-        // Hard refusal until the collateral V2 lane supplies its private,
-        // per-instruction ProgramData/ELF value-route receipt. The current
-        // planners reject this zero rather than accepting the historical V1
-        // liability projection as sufficient authority.
-        let unavailable_collateral_value_receipt_id = [0_u8; 32];
+        let collateral_value_receipt_id = value_authority.receipt_id.bytes();
         let plan = match action {
             StructuredClaimActionV1::WrapFull => prepare_current_wrap_full_v1(
                 &bound_descriptor,
                 liabilities.bound,
                 route_accounts,
                 liability_prestate,
-                unavailable_collateral_value_receipt_id,
+                collateral_value_receipt_id,
                 mint_before,
                 holder_before,
                 current_position_projection(user, &user_replay),
@@ -1227,7 +1038,7 @@ pub fn process_full_vector(
                 liabilities.bound,
                 route_accounts,
                 liability_prestate,
-                unavailable_collateral_value_receipt_id,
+                collateral_value_receipt_id,
                 mint_before,
                 holder_before,
                 current_position_projection(user, &user_replay),
@@ -1246,7 +1057,7 @@ pub fn process_full_vector(
                     liabilities.bound,
                     route_accounts,
                     liability_prestate,
-                    unavailable_collateral_value_receipt_id,
+                    collateral_value_receipt_id,
                     resolution.account_id.bytes(),
                     resolution.resolution,
                     mint_before,
@@ -1289,19 +1100,19 @@ fn validate_full_vector_privileges(
     accounts: &[AccountInfo<'_>],
 ) -> Outcome<()> {
     let signer = [
-        true, false, false, false, false, false, false, false, false, false, false, true, false,
+        true, false, false, false, false, false, false, false, false, false, false, false, true,
         false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false,
+        false, false, false,
     ];
     let writable = [
-        false, false, false, false, false, false, false, true, true, true, true, false, false,
         false, false, false, false, false, false, false, false, true, true, true, true, false,
-        false, false,
+        false, false, false, false, false, false, false, false, false, true, true, true, true,
+        false, false, false,
     ];
     let executable = [
         false, false, false, false, true, false, false, false, false, false, false, false, false,
-        true, false, true, false, true, false, false, false, false, false, false, false, false,
-        false, false,
+        false, true, false, true, false, true, false, false, false, false, false, false, false,
+        false, false, false,
     ];
     let mut index = 0usize;
     while index < STRUCTURED_FULL_VECTOR_CORE_ACCOUNT_COUNT {
@@ -1348,8 +1159,13 @@ fn validate_full_vector_privileges(
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
-            let token_program_alias =
-                left == IX_COLLATERAL_TOKEN_PROGRAM && right == IX_TOKEN_2022_PROGRAM;
+            let same_token_release = accounts[IX_COLLATERAL_TOKEN_PROGRAM].key
+                == accounts[IX_TOKEN_2022_PROGRAM].key;
+            let token_program_alias = (left == IX_COLLATERAL_TOKEN_PROGRAM
+                && right == IX_TOKEN_2022_PROGRAM)
+                || (same_token_release
+                    && left == IX_COLLATERAL_TOKEN_PROGRAM_DATA
+                    && right == IX_TOKEN_2022_PROGRAM_DATA);
             require(
                 accounts[left].key != accounts[right].key || token_program_alias,
                 ClutchError::MismatchedState,
@@ -1542,7 +1358,7 @@ fn id(bytes: [u8; 32]) -> Outcome<Identity32V1> {
 fn found_structured_vault(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    liabilities: super::collateral_position_v3::GeneralMarketLiabilityAuthorityV1,
+    liabilities: GeneralMarketLiabilityAuthorityV2,
     product_id: [u8; 32],
     descriptor_account: [u8; 32],
 ) -> Outcome<()> {

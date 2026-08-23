@@ -5,7 +5,7 @@ for StructuredClaim. Its capability mask is currently zero: no action is
 admitted while the Product, deployment-release, and collateral value-route
 authorities are still being joined.
 
-The disabled create seam uses an exact 33-account frame. The base side
+The disabled create seam uses an exact 34-account frame. The base side
 authenticates the Product SeriesRegistryV2, SeriesMarketLink, current BundleV5,
 ReleaseV2/ProfileV4, and current AttachmentV4, verifies
 fixed-depth recipe-set membership, atomically records Product's first Wrapper
@@ -16,6 +16,13 @@ and reauthenticates the root across CPI rather than treating successful CPI as
 evidence of the claimed Product/root transition. The Series link is writable
 only for first root admission; later descriptors must present it read-only and
 cannot advance Product state.
+
+The disabled full-vector and terminal frames use 32 and 33 accounts. Each
+places the Realm-selected collateral ProgramData immediately after its token
+program; the base authenticates the exact current ELF/slot release and commits
+that private value-route receipt into every transition receipt before mutation.
+The withdrawn canonical action 2/4 execution route is not dispatched, and the
+wrapper explicitly refuses those historical wire variants.
 
 Full-vector wrap/unwind and exact terminal redemption are implemented behind
 the zero mask. Compaction and retirement remain incomplete. Descriptor v1 is

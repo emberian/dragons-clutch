@@ -62,11 +62,11 @@ use crate::error::{Result, WrapperError};
 use crate::loader::{authenticate_release_v2, AuthenticatedReleaseV2, UPGRADEABLE_LOADER_ID};
 use crate::system::{create_permanent_pda, rent};
 
-const CREATE_ACCOUNT_COUNT: usize = 33;
-const CANONICAL_ACCOUNT_COUNT: usize = 29;
-const FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 28;
-const FULL_VECTOR_ACCOUNT_COUNT: usize = 31;
-const TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 32;
+const CREATE_ACCOUNT_COUNT: usize = 34;
+const CANONICAL_ACCOUNT_COUNT: usize = 30;
+const FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 29;
+const FULL_VECTOR_ACCOUNT_COUNT: usize = 32;
+const TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
 
 const VAULT_AUTHORITY: usize = 0;
 const PAYER: usize = 1;
@@ -76,58 +76,67 @@ const CREATE_REALM: usize = 4;
 const CREATE_PROFILE: usize = 5;
 const CREATE_POLICY: usize = 6;
 const CREATE_COLLATERAL_TOKEN: usize = 7;
-const CREATE_BINDING: usize = 8;
-const CREATE_RUNTIME: usize = 9;
-const CREATE_POSITION: usize = 10;
-const CREATE_REPLAY: usize = 11;
-const CREATE_DESCRIPTOR: usize = 12;
-const CREATE_MINT: usize = 13;
-const CREATE_WRAPPER_PROGRAM: usize = 14;
-const CREATE_WRAPPER_DATA: usize = 15;
-const CREATE_BASE_PROGRAM: usize = 16;
-const CREATE_BASE_DATA: usize = 17;
-const CREATE_TOKEN_PROGRAM: usize = 18;
-const CREATE_TOKEN_DATA: usize = 19;
-const CREATE_BASIS: usize = 20;
-const CREATE_MARKET: usize = 21;
-const CREATE_STRUCTURED_ROOT: usize = 24;
-const CREATE_SERIES_LINK: usize = 25;
-const CREATE_COMPILER_BUNDLE: usize = 26;
-const CREATE_ATTACHMENT: usize = 27;
-const CREATE_SERIES_REGISTRY_V2: usize = 28;
-const CREATE_REGISTRY_RELEASE_V2: usize = 29;
-const CREATE_CAPABILITY_PROFILE_V4: usize = 30;
-const CREATE_WRAPPER_RELEASE_V2: usize = 31;
-const CREATE_TOKEN_RELEASE_V2: usize = 32;
+const CREATE_COLLATERAL_TOKEN_DATA: usize = 8;
+const CREATE_BINDING: usize = 9;
+const CREATE_RUNTIME: usize = 10;
+const CREATE_POSITION: usize = 11;
+const CREATE_REPLAY: usize = 12;
+const CREATE_DESCRIPTOR: usize = 13;
+const CREATE_MINT: usize = 14;
+const CREATE_WRAPPER_PROGRAM: usize = 15;
+const CREATE_WRAPPER_DATA: usize = 16;
+const CREATE_BASE_PROGRAM: usize = 17;
+const CREATE_BASE_DATA: usize = 18;
+const CREATE_TOKEN_PROGRAM: usize = 19;
+const CREATE_TOKEN_DATA: usize = 20;
+const CREATE_BASIS: usize = 21;
+const CREATE_MARKET: usize = 22;
+const CREATE_STRUCTURED_ROOT: usize = 25;
+const CREATE_SERIES_LINK: usize = 26;
+const CREATE_COMPILER_BUNDLE: usize = 27;
+const CREATE_ATTACHMENT: usize = 28;
+const CREATE_SERIES_REGISTRY_V2: usize = 29;
+const CREATE_REGISTRY_RELEASE_V2: usize = 30;
+const CREATE_CAPABILITY_PROFILE_V4: usize = 31;
+const CREATE_WRAPPER_RELEASE_V2: usize = 32;
+const CREATE_TOKEN_RELEASE_V2: usize = 33;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 
-const C_DESCRIPTOR: usize = 12;
-const C_WRAPPER_PROGRAM: usize = 13;
-const C_WRAPPER_DATA: usize = 14;
-const C_BASE_PROGRAM: usize = 15;
-const C_BASE_DATA: usize = 16;
-const C_TOKEN_PROGRAM: usize = 17;
-const C_TOKEN_DATA: usize = 18;
-const C_BASIS: usize = 19;
-const C_MARKET: usize = 20;
-const C_HOARD: usize = 21;
-const C_LEDGER: usize = 22;
-const C_MINT: usize = 23;
-const C_HOLDER: usize = 24;
-const C_MINT_AUTHORITY: usize = 25;
-const CANONICAL_WRAPPER_RELEASE_V2: usize = 23;
-const CANONICAL_BASE_RELEASE_V2: usize = 24;
-const CANONICAL_TOKEN_RELEASE_V2: usize = 25;
-const CANONICAL_MINT: usize = 26;
-const CANONICAL_HOLDER: usize = 27;
-const CANONICAL_MINT_AUTHORITY: usize = 28;
-const C_ACTOR: usize = 11;
-const C_COLLATERAL_MINT: usize = 26;
-const C_HOARD_TOKEN: usize = 27;
-const C_WRAPPER_RELEASE_V2: usize = 28;
-const C_BASE_RELEASE_V2: usize = 29;
-const C_TOKEN_RELEASE_V2: usize = 30;
-const C_RESOLUTION_V5: usize = 31;
+const C_COLLATERAL_TOKEN_PROGRAM: usize = 4;
+const C_COLLATERAL_TOKEN_DATA: usize = 5;
+const C_BINDING: usize = 6;
+const C_RUNTIME: usize = 7;
+const C_SOURCE_POSITION: usize = 8;
+const C_SOURCE_REPLAY: usize = 9;
+const C_DESTINATION_POSITION: usize = 10;
+const C_DESTINATION_REPLAY: usize = 11;
+const C_ACTOR: usize = 12;
+const C_DESCRIPTOR: usize = 13;
+const C_WRAPPER_PROGRAM: usize = 14;
+const C_WRAPPER_DATA: usize = 15;
+const C_BASE_PROGRAM: usize = 16;
+const C_BASE_DATA: usize = 17;
+const C_TOKEN_PROGRAM: usize = 18;
+const C_TOKEN_DATA: usize = 19;
+const C_BASIS: usize = 20;
+const C_MARKET: usize = 21;
+const C_HOARD: usize = 22;
+const C_LEDGER: usize = 23;
+const C_MINT: usize = 24;
+const C_HOLDER: usize = 25;
+const C_MINT_AUTHORITY: usize = 26;
+const CANONICAL_WRAPPER_RELEASE_V2: usize = 24;
+const CANONICAL_BASE_RELEASE_V2: usize = 25;
+const CANONICAL_TOKEN_RELEASE_V2: usize = 26;
+const CANONICAL_MINT: usize = 27;
+const CANONICAL_HOLDER: usize = 28;
+const CANONICAL_MINT_AUTHORITY: usize = 29;
+const C_COLLATERAL_MINT: usize = 27;
+const C_HOARD_TOKEN: usize = 28;
+const C_WRAPPER_RELEASE_V2: usize = 29;
+const C_BASE_RELEASE_V2: usize = 30;
+const C_TOKEN_RELEASE_V2: usize = 31;
+const C_RESOLUTION_V5: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AuthenticatedStructuredDeploymentsV2 {
@@ -148,15 +157,8 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) 
         StructuredClaimPayloadV1::CreateDescriptor(value) => {
             create(program_id, accounts, value)
         }
-        StructuredClaimPayloadV1::WrapCanonical(value) => {
-            canonical(program_id, accounts, StructuredClaimActionV1::WrapCanonical, value)
-        }
-        StructuredClaimPayloadV1::UnwrapCanonical(value) => canonical(
-            program_id,
-            accounts,
-            StructuredClaimActionV1::UnwrapCanonical,
-            value,
-        ),
+        StructuredClaimPayloadV1::WrapCanonical(_)
+        | StructuredClaimPayloadV1::UnwrapCanonical(_) => Err(WrapperError::Instruction),
         StructuredClaimPayloadV1::WrapFull(value) => {
             full_vector(program_id, accounts, StructuredClaimActionV1::WrapFull, value)
         }
@@ -346,10 +348,10 @@ fn canonical(
     validate_canonical_accounts(program_id, accounts)?;
     let (mint_index, holder_index, mint_authority_index) = wrapper_token_indices(accounts)?;
     let (bound, descriptor) = load_bound_descriptor(program_id, accounts, payload.wrapper_product_id)?;
-    let source_before = decode_position(&accounts[7])?;
-    let destination_before = decode_position(&accounts[9])?;
-    let source_replay_before = decode_replay(&accounts[8])?;
-    let destination_replay_before = decode_replay(&accounts[10])?;
+    let source_before = decode_position(&accounts[C_SOURCE_POSITION])?;
+    let destination_before = decode_position(&accounts[C_DESTINATION_POSITION])?;
+    let source_replay_before = decode_replay(&accounts[C_SOURCE_REPLAY])?;
+    let destination_replay_before = decode_replay(&accounts[C_DESTINATION_REPLAY])?;
     let (user, vault) = match action {
         StructuredClaimActionV1::WrapCanonical => (source_before, destination_before),
         StructuredClaimActionV1::UnwrapCanonical => (destination_before, source_before),
@@ -533,10 +535,10 @@ fn full_vector(
     }
     let (bound, descriptor) =
         load_bound_descriptor(program_id, accounts, payload.wrapper_product_id)?;
-    let source_before = decode_position(&accounts[7])?;
-    let destination_before = decode_position(&accounts[9])?;
-    let source_replay_before = decode_replay(&accounts[8])?;
-    let destination_replay_before = decode_replay(&accounts[10])?;
+    let source_before = decode_position(&accounts[C_SOURCE_POSITION])?;
+    let destination_before = decode_position(&accounts[C_DESTINATION_POSITION])?;
+    let source_replay_before = decode_replay(&accounts[C_SOURCE_REPLAY])?;
+    let destination_replay_before = decode_replay(&accounts[C_DESTINATION_REPLAY])?;
     let (user_before, user_replay_before, vault_before, vault_replay_before) = match action {
         StructuredClaimActionV1::WrapFull => (
             source_before,
@@ -869,12 +871,12 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     let signer = [
         false, true, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false,
     ];
     let mut writable = [
-        false, true, false, false, false, false, false, false, false, false, true, true, true,
-        true, false, false, false, false, false, false, false, false, false, false, true, false,
-        false, false, false, false, false, false, false,
+        false, true, false, false, false, false, false, false, false, false, false, true, true,
+        true, true, false, false, false, false, false, false, false, false, false, false, true,
+        false, false, false, false, false, false, false, false,
     ];
     writable[CREATE_SERIES_LINK] = structured_root_requires_product_write(
         accounts[CREATE_STRUCTURED_ROOT].owner,
@@ -882,8 +884,8 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     );
     let executable = [
         false, false, true, false, false, false, false, true, false, false, false, false, false,
-        false, true, false, true, false, true, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false,
+        false, false, true, false, true, false, true, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false,
     ];
     validate_privileges(accounts, &signer, &writable, &executable)?;
     if *accounts[CREATE_WRAPPER_PROGRAM].key != *program_id
@@ -897,8 +899,13 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
-            let collateral_token_alias =
-                left == CREATE_COLLATERAL_TOKEN && right == CREATE_TOKEN_PROGRAM;
+            let same_token_release = accounts[CREATE_COLLATERAL_TOKEN].key
+                == accounts[CREATE_TOKEN_PROGRAM].key;
+            let collateral_token_alias = (left == CREATE_COLLATERAL_TOKEN
+                && right == CREATE_TOKEN_PROGRAM)
+                || (same_token_release
+                    && left == CREATE_COLLATERAL_TOKEN_DATA
+                    && right == CREATE_TOKEN_DATA);
             if accounts[left].key == accounts[right].key && !collateral_token_alias {
                 return Err(WrapperError::Accounts);
             }
@@ -942,7 +949,13 @@ fn validate_canonical_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
-            let token_program_alias = left == 4 && right == C_TOKEN_PROGRAM;
+            let same_token_release = accounts[C_COLLATERAL_TOKEN_PROGRAM].key
+                == accounts[C_TOKEN_PROGRAM].key;
+            let token_program_alias = (left == C_COLLATERAL_TOKEN_PROGRAM
+                && right == C_TOKEN_PROGRAM)
+                || (same_token_release
+                    && left == C_COLLATERAL_TOKEN_DATA
+                    && right == C_TOKEN_DATA);
             if accounts[left].key == accounts[right].key && !token_program_alias {
                 return Err(WrapperError::Accounts);
             }
@@ -967,19 +980,19 @@ fn validate_full_vector_accounts(
         return Err(WrapperError::Accounts);
     }
     let signer = [
-        false, false, false, false, false, false, false, false, false, false, false, true, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, true,
         false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false,
+        false, false, false,
     ];
     let writable = [
-        false, false, false, false, false, false, false, true, true, true, true, false, false,
         false, false, false, false, false, false, false, false, true, true, true, true, false,
-        false, false,
+        false, false, false, false, false, false, false, false, false, true, true, true, true,
+        false, false, false,
     ];
     let executable = [
         false, false, false, false, true, false, false, false, false, false, false, false, false,
-        true, false, true, false, true, false, false, false, false, false, false, false, false,
-        false, false,
+        false, true, false, true, false, true, false, false, false, false, false, false, false,
+        false, false, false,
     ];
     let mut privilege_index = 0usize;
     while privilege_index < FULL_VECTOR_CORE_ACCOUNT_COUNT {
@@ -1011,8 +1024,8 @@ fn validate_full_vector_accounts(
     if *accounts[C_WRAPPER_PROGRAM].key != *program_id
         || accounts[C_MINT].owner != accounts[C_TOKEN_PROGRAM].key
         || accounts[C_HOLDER].owner != accounts[C_TOKEN_PROGRAM].key
-        || accounts[C_COLLATERAL_MINT].owner != accounts[4].key
-        || accounts[C_HOARD_TOKEN].owner != accounts[4].key
+        || accounts[C_COLLATERAL_MINT].owner != accounts[C_COLLATERAL_TOKEN_PROGRAM].key
+        || accounts[C_HOARD_TOKEN].owner != accounts[C_COLLATERAL_TOKEN_PROGRAM].key
         || accounts[C_MINT].key == accounts[C_HOLDER].key
         || accounts[VAULT_AUTHORITY].key == accounts[C_ACTOR].key
     {
@@ -1022,7 +1035,13 @@ fn validate_full_vector_accounts(
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
-            let token_program_alias = left == 4 && right == C_TOKEN_PROGRAM;
+            let same_token_release = accounts[C_COLLATERAL_TOKEN_PROGRAM].key
+                == accounts[C_TOKEN_PROGRAM].key;
+            let token_program_alias = (left == C_COLLATERAL_TOKEN_PROGRAM
+                && right == C_TOKEN_PROGRAM)
+                || (same_token_release
+                    && left == C_COLLATERAL_TOKEN_DATA
+                    && right == C_TOKEN_DATA);
             if accounts[left].key == accounts[right].key && !token_program_alias {
                 return Err(WrapperError::Accounts);
             }
@@ -1532,10 +1551,10 @@ fn custody_authority(
     let hoard_data = accounts[C_HOARD]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let binding_data = accounts[5]
+    let binding_data = accounts[C_BINDING]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let runtime_data = accounts[6]
+    let runtime_data = accounts[C_RUNTIME]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let ledger_data = accounts[C_LEDGER]
@@ -1569,12 +1588,12 @@ fn custody_authority(
         deployment: bound.identity().deployment,
         hoard_account: accounts[C_HOARD].key.to_bytes(),
         hoard_body_digest: domain_hash(STRUCTURED_CUSTODY_HOARD_BODY_DOMAIN_V1, &hoard_data),
-        market_binding_account: accounts[5].key.to_bytes(),
+        market_binding_account: accounts[C_BINDING].key.to_bytes(),
         market_binding_body_digest: domain_hash(
             STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
             &binding_data,
         ),
-        market_runtime_account: accounts[6].key.to_bytes(),
+        market_runtime_account: accounts[C_RUNTIME].key.to_bytes(),
         market_runtime_body_digest: domain_hash(
             STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1,
             &runtime_data,
@@ -1593,13 +1612,13 @@ fn custody_authority(
         collateral_release_id: vault.collateral_release_id().bytes(),
         vault_authority: accounts[VAULT_AUTHORITY].key.to_bytes(),
         user_actor: accounts[C_ACTOR].key.to_bytes(),
-        source_position_account: accounts[7].key.to_bytes(),
+        source_position_account: accounts[C_SOURCE_POSITION].key.to_bytes(),
         source_position_body_digest: source_id,
-        source_replay_account: accounts[8].key.to_bytes(),
+        source_replay_account: accounts[C_SOURCE_REPLAY].key.to_bytes(),
         source_replay_body_digest: source_replay.semantic_id,
-        destination_position_account: accounts[9].key.to_bytes(),
+        destination_position_account: accounts[C_DESTINATION_POSITION].key.to_bytes(),
         destination_position_body_digest: destination_id,
-        destination_replay_account: accounts[10].key.to_bytes(),
+        destination_replay_account: accounts[C_DESTINATION_REPLAY].key.to_bytes(),
         destination_replay_body_digest: destination_replay.semantic_id,
         transfer,
     };
@@ -1626,10 +1645,10 @@ fn reconcile_base_delta(
     destination_replay_before: ReplaySnapshot,
     transfer: PositionAssetTransferPayloadV1,
 ) -> Result<()> {
-    let source_after = decode_position(&accounts[7])?;
-    let destination_after = decode_position(&accounts[9])?;
-    let source_replay_after = decode_replay(&accounts[8])?;
-    let destination_replay_after = decode_replay(&accounts[10])?;
+    let source_after = decode_position(&accounts[C_SOURCE_POSITION])?;
+    let destination_after = decode_position(&accounts[C_DESTINATION_POSITION])?;
+    let source_replay_after = decode_replay(&accounts[C_SOURCE_REPLAY])?;
+    let destination_replay_after = decode_replay(&accounts[C_DESTINATION_REPLAY])?;
     if immutable_position_fields(source_before, source_after).is_err()
         || immutable_position_fields(destination_before, destination_after).is_err()
         || source_before.rent() != source_after.rent()
@@ -1692,10 +1711,10 @@ fn reconcile_full_vector_base(
     expected_hoard: HoardV2,
     expected_claim_ledger: ClaimLedgerV3,
 ) -> Result<()> {
-    let source_after = decode_position(&accounts[7])?;
-    let destination_after = decode_position(&accounts[9])?;
-    let source_replay_after = decode_replay(&accounts[8])?;
-    let destination_replay_after = decode_replay(&accounts[10])?;
+    let source_after = decode_position(&accounts[C_SOURCE_POSITION])?;
+    let destination_after = decode_position(&accounts[C_DESTINATION_POSITION])?;
+    let source_replay_after = decode_replay(&accounts[C_SOURCE_REPLAY])?;
+    let destination_replay_after = decode_replay(&accounts[C_DESTINATION_REPLAY])?;
     let hoard_after = decode_hoard(accounts)?;
     let claim_ledger_after = decode_claim_ledger(accounts)?;
     let (expected_source, expected_destination) = match action {
@@ -1846,7 +1865,7 @@ fn invoke_base_transfer(
         metas.push(AccountMeta {
             pubkey: *accounts[index].key,
             is_signer: index == VAULT_AUTHORITY || index == C_ACTOR,
-            is_writable: (7..=10).contains(&index),
+            is_writable: (C_SOURCE_POSITION..=C_DESTINATION_REPLAY).contains(&index),
         });
         infos.push(accounts[index].clone());
         index += 1;
