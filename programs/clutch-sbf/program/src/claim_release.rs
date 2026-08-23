@@ -13,8 +13,8 @@ use solana_account_info::AccountInfo;
 
 use crate::accounts::Outcome;
 use crate::collateral_release::{
-    LOCAL_REAL_LEGACY_SPL_RELEASE_V2, LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2,
-    LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+    authenticate_immutable_collateral_release_v2, LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
+    LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2, LOCAL_REAL_TOKEN_2022_RELEASE_V2,
 };
 use crate::error::{ClutchError, Refusal};
 
@@ -42,40 +42,61 @@ pub const LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1: ClaimIssuanceBindingV1 = ClaimIs
     account_extensions: 0,
 };
 
-/// Authenticate the separately selected claim release against the presented
-/// outcome token program and the already authenticated collateral release.
-///
-/// Default/public builds have no compiled claim row and fail closed. The
-/// laboratory row is tied to the exact local-real Token-2022 binary and a
-/// claim-specific parser/CPI identity; it may not alias the collateral release
-/// even when both planes invoke the same executable program account.
+/// Withdrawn program-account-only admission retained so older routes fail
+/// closed instead of manufacturing deployment evidence from a compiled row.
 pub fn authenticate_claim_issuance_v1(
     collateral: BoundCollateralProfileV2,
     token_program: &AccountInfo<'_>,
 ) -> Outcome<BoundClaimIssuanceV1> {
-    let bound = authenticate_claim_issuance_runtime_v1(token_program)?;
+    let _ = (collateral, token_program);
+    Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
+/// Authenticate the claim plane against exact immutable Token-2022
+/// ProgramData before joining it to an independently authenticated collateral
+/// release.
+pub fn authenticate_claim_issuance_with_programdata_v1(
+    collateral: BoundCollateralProfileV2,
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<BoundClaimIssuanceV1> {
+    let bound = authenticate_claim_issuance_runtime_with_programdata_v1(
+        token_program,
+        token_programdata,
+    )?;
     LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
         .require_separate_from_collateral(collateral.release())
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     Ok(bound)
 }
 
-/// Authenticate the compiled claim plane where the action has no collateral
-/// program role, as with General Materialize/Dematerialize.
-///
-/// The compiled row is checked against every compiled local collateral family,
-/// so omitting a collateral account from the action cannot collapse the two
-/// semantic releases.
+/// Withdrawn program-account-only runtime admission. Current routes must use
+/// [`authenticate_claim_issuance_runtime_with_programdata_v1`].
 pub fn authenticate_claim_issuance_runtime_v1(
     token_program: &AccountInfo<'_>,
 ) -> Outcome<BoundClaimIssuanceV1> {
+    let _ = token_program;
+    Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
+/// Authenticate the independently selected claim release against immutable
+/// Upgradeable Loader state and exact deployed ELF bytes.
+pub fn authenticate_claim_issuance_runtime_with_programdata_v1(
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<BoundClaimIssuanceV1> {
     #[cfg(not(feature = "laboratory-fixtures"))]
     {
-        let _ = token_program;
+        let _ = (token_program, token_programdata);
         return Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable));
     }
     #[cfg(feature = "laboratory-fixtures")]
     {
+        let deployment = authenticate_immutable_collateral_release_v2(
+            LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+            token_program,
+            token_programdata,
+        )?;
         let binding = LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1;
         let expected = binding
             .id()
@@ -91,7 +112,7 @@ pub fn authenticate_claim_issuance_runtime_v1(
                 token_program_executable: token_program.executable,
                 token_program_writable: token_program.is_writable,
                 token_program_signer: token_program.is_signer,
-                token_program_deployment: LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2,
+                token_program_deployment: deployment.release().token_program_deployment,
                 parser_cpi_code: LOCAL_REAL_CLAIM_PARSER_CPI_CODE_ID_V1,
             },
             LOCAL_REAL_TOKEN_2022_RELEASE_V2,

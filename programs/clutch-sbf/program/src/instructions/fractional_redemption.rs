@@ -10,7 +10,7 @@
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
 };
-use crate::claim_release::authenticate_claim_issuance_v1;
+use crate::claim_release::authenticate_claim_issuance_with_programdata_v1;
 use crate::error::{ClutchError, Refusal};
 use crate::{capabilities, seeds, token};
 use clutch_collateral_adapter_v2::{
@@ -69,7 +69,7 @@ use super::genesis::{
 /// Exact account count for action 2.
 pub const REDEEM_INTERNAL_EXACT_ACCOUNT_COUNT_V1: usize = 15;
 /// Fixed exact-bearer prefix before one canonical mint per active outcome.
-pub const REDEEM_BEARER_EXACT_PREFIX_ACCOUNTS_V1: usize = 19;
+pub const REDEEM_BEARER_EXACT_PREFIX_ACCOUNTS_V1: usize = 20;
 /// Live-credit action-4 width, including its authenticated Rent sysvar.
 pub const REDEEM_INTERNAL_CREDIT_LIVE_ACCOUNT_COUNT_V1: usize = 19;
 /// Extra payer/System roles required only for fresh creation or reopen.
@@ -126,7 +126,8 @@ mod bearer_ix {
     pub const HOARD_AUTHORITY: usize = 15;
     pub const HOARD_TOKEN: usize = 16;
     pub const OUTCOME_TOKEN_PROGRAM: usize = 17;
-    pub const SOURCE: usize = 18;
+    pub const OUTCOME_TOKEN_PROGRAMDATA: usize = 18;
+    pub const SOURCE: usize = 19;
     pub const OUTCOME_MINTS: usize = super::REDEEM_BEARER_EXACT_PREFIX_ACCOUNTS_V1;
 }
 
@@ -1463,9 +1464,10 @@ fn process_redeem_bearer_exact(
     )?;
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[bearer_ix::RESOLUTION], liabilities)?;
-    let claim = authenticate_claim_issuance_v1(
+    let claim = authenticate_claim_issuance_with_programdata_v1(
         liabilities.bound,
         &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAM],
+        &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAMDATA],
     )?;
     let (policy, ledger) = decode_fractional_accounts(
         program_id,
@@ -1810,9 +1812,10 @@ fn process_redeem_bearer_credit(
     )?;
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[bearer_ix::RESOLUTION], liabilities)?;
-    let claim = authenticate_claim_issuance_v1(
+    let claim = authenticate_claim_issuance_with_programdata_v1(
         liabilities.bound,
         &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAM],
+        &accounts[bearer_ix::OUTCOME_TOKEN_PROGRAMDATA],
     )?;
     let (policy, ledger) = decode_fractional_accounts(
         program_id,

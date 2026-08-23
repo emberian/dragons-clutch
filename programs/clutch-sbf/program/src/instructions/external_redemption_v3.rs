@@ -8,7 +8,7 @@
 //! remainder projection.
 
 use crate::accounts::{expect_pda, require, Outcome};
-use crate::claim_release::authenticate_claim_issuance_v1;
+use crate::claim_release::authenticate_claim_issuance_with_programdata_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
 use crate::{seeds, token};
@@ -309,8 +309,11 @@ pub fn process_external_redemption_v3(
     )?;
     let resolution =
         authenticate_resolution_v5(program_id, &accounts[ix::RESOLUTION], liabilities)?;
-    let claim =
-        authenticate_claim_issuance_v1(liabilities.bound, &accounts[ix::OUTCOME_TOKEN_PROGRAM])?;
+    let claim = authenticate_claim_issuance_with_programdata_v1(
+        liabilities.bound,
+        &accounts[ix::OUTCOME_TOKEN_PROGRAM],
+        &accounts[ix::OUTCOME_TOKEN_PROGRAMDATA],
+    )?;
     let observed_before = observe_mints(
         program_id,
         accounts,

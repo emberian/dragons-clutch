@@ -31,6 +31,7 @@ pub struct FullWidthCollateralMarketV3 {
     pub hoard_authority: [u8; 32],
     pub hoard_token: [u8; 32],
     pub outcome_token_program: [u8; 32],
+    pub outcome_token_programdata: [u8; 32],
     pub outcome_mints: Vec<[u8; 32]>,
 }
 
@@ -407,6 +408,7 @@ pub fn claim_representation_v3_transaction(
         owner.replay,
         market.outcome_token_program,
         holder_token,
+        market.outcome_token_programdata,
     ];
     roles.extend_from_slice(&market.outcome_mints);
     assert_eq!(
@@ -427,6 +429,7 @@ pub fn claim_representation_v3_transaction(
             market.market_instance_artifact,
             market.hoard,
             market.outcome_token_program,
+            market.outcome_token_programdata,
         ],
     );
     let contract = contract_from_request(&data, market.outcome_mints.len());
@@ -491,6 +494,7 @@ pub fn redeem_external_v3_transaction(
         market.hoard_token,
         market.outcome_token_program,
         source,
+        market.outcome_token_programdata,
     ];
     roles.extend_from_slice(&market.outcome_mints);
     assert_eq!(
@@ -512,6 +516,7 @@ pub fn redeem_external_v3_transaction(
             market.collateral_mint,
             market.hoard_authority,
             market.outcome_token_program,
+            market.outcome_token_programdata,
         ],
     );
     let contract = contract_from_request(&data, market.outcome_mints.len());
@@ -562,6 +567,7 @@ mod tests {
             hoard_authority: key(20),
             hoard_token: key(21),
             outcome_token_program: key(22),
+            outcome_token_programdata: key(25),
             outcome_mints: vec![key(23), key(24)],
         }
     }

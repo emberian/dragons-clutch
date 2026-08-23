@@ -129,10 +129,11 @@ The frozen future account order is:
   MarketBinding; MarketRuntime; MarketInstance artifact; writable Hoard V2 and
   ClaimLedger V3; Resolution V5; fractional policy; writable aggregate ledger;
   collateral mint; writable destination; Hoard authority; writable Hoard token;
-  outcome token program; writable bearer source; then one mint per active
-  outcome, with only the selected mint writable. Credited form appends, after
-  those mints, credit/tombstone, authenticated Product Market root, its neutral
-  sink, and Rent sysvar; fresh/reopen mode then appends payer and System.
+  outcome token program; its exact immutable Upgradeable Loader ProgramData;
+  writable bearer source; then one mint per active outcome, with only the
+  selected mint writable. Credited form appends, after those mints,
+  credit/tombstone, authenticated Product Market root, its neutral sink, and
+  Rent sysvar; fresh/reopen mode then appends payer and System.
 - Transfer/merge: source and destination claimant signers; Realm collateral
   profile/policy/program; MarketBinding/Runtime/Instance; writable Hoard V2 and
   ClaimLedger V3; Resolution; policy; ledger; both credits; then either exact

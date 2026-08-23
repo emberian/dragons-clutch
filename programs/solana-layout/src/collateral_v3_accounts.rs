@@ -16,9 +16,9 @@ pub const WITHDRAW_ACCOUNT_COUNT_V3: usize = 16;
 /// Exact full-width Split/Merge account count.
 pub const COMPLETE_SET_ACCOUNT_COUNT_V3: usize = 14;
 /// Fixed Materialize/Dematerialize prefix before one mint per active outcome.
-pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize = 14;
+pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize = 15;
 /// Fixed RedeemExternal prefix before one mint per active outcome.
-pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize = 17;
+pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize = 18;
 
 /// Canonical indices shared by Endow and WithdrawCash.
 pub mod collateral_cash_indices_v3 {
@@ -82,6 +82,8 @@ pub mod claim_representation_indices_v3 {
     pub const OUTCOME_TOKEN_PROGRAM: usize = 12;
     /// Holder claim token account.
     pub const HOLDER_TOKEN: usize = 13;
+    /// Immutable ProgramData linked by the outcome token program.
+    pub const OUTCOME_TOKEN_PROGRAMDATA: usize = 14;
     /// First canonical outcome-mint role.
     pub const OUTCOME_MINTS: usize = super::CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3;
 }
@@ -122,6 +124,8 @@ pub mod external_redemption_indices_v3 {
     pub const OUTCOME_TOKEN_PROGRAM: usize = 15;
     /// Bearer claim token source.
     pub const SOURCE: usize = 16;
+    /// Immutable ProgramData linked by the outcome token program.
+    pub const OUTCOME_TOKEN_PROGRAMDATA: usize = 17;
     /// First canonical outcome-mint role.
     pub const OUTCOME_MINTS: usize = super::EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3;
 }
@@ -203,6 +207,8 @@ pub enum CollateralAccountRoleV3 {
     RentSysvar,
     /// Separately selected Token-2022 outcome-claim program.
     OutcomeTokenProgram,
+    /// Immutable Upgradeable Loader deployment behind the outcome program.
+    OutcomeTokenProgramData,
     /// Holder claim token account minted to or burned from.
     HolderClaimToken,
     /// Finalized canonical Resolution V5 account.
@@ -468,6 +474,11 @@ const CLAIM_REPRESENTATION_METAS_V3: &[CollateralAccountMetaV3;
     meta(CollateralAccountRoleV3::Replay, true, false),
     meta(CollateralAccountRoleV3::OutcomeTokenProgram, false, false),
     meta(CollateralAccountRoleV3::HolderClaimToken, true, false),
+    meta(
+        CollateralAccountRoleV3::OutcomeTokenProgramData,
+        false,
+        false,
+    ),
 ];
 
 const EXTERNAL_REDEMPTION_METAS_V3: &[CollateralAccountMetaV3;
@@ -497,6 +508,11 @@ const EXTERNAL_REDEMPTION_METAS_V3: &[CollateralAccountMetaV3;
     meta(CollateralAccountRoleV3::HoardToken, true, false),
     meta(CollateralAccountRoleV3::OutcomeTokenProgram, false, false),
     meta(CollateralAccountRoleV3::ExternalClaimSource, true, false),
+    meta(
+        CollateralAccountRoleV3::OutcomeTokenProgramData,
+        false,
+        false,
+    ),
 ];
 
 /// Construct the exact account contract for one enabled action.
@@ -786,6 +802,13 @@ mod tests {
         );
         assert_eq!(
             claim
+                .meta(claim_representation_indices_v3::OUTCOME_TOKEN_PROGRAMDATA)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::OutcomeTokenProgramData
+        );
+        assert_eq!(
+            claim
                 .meta(claim_representation_indices_v3::OUTCOME_MINTS + 1)
                 .unwrap()
                 .role,
@@ -806,6 +829,13 @@ mod tests {
                 .unwrap()
                 .role,
             CollateralAccountRoleV3::ExternalClaimSource
+        );
+        assert_eq!(
+            external
+                .meta(external_redemption_indices_v3::OUTCOME_TOKEN_PROGRAMDATA)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::OutcomeTokenProgramData
         );
     }
 
@@ -876,6 +906,15 @@ mod tests {
             assert_eq!(
                 validate_collateral_account_metas_v3(action, 2, selected, &accounts),
                 Ok(())
+            );
+
+            let programdata =
+                role_index(contract, CollateralAccountRoleV3::OutcomeTokenProgramData);
+            let mut deployment_alias = observed(action, 2, selected);
+            deployment_alias[programdata].key = deployment_alias[outcome_program].key;
+            assert_eq!(
+                validate_collateral_account_metas_v3(action, 2, selected, &deployment_alias),
+                Err(CodecError::MismatchedBinding)
             );
         }
     }

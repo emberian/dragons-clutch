@@ -1527,8 +1527,10 @@ fn disabled_adapter_refuses_before_payload_or_account_inspection() {
 #[test]
 fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
     let bearer = fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerExact);
-    assert_eq!(bearer.account_count, 19);
-    assert_eq!(bearer.writable_mask, 0x55300);
+    assert_eq!(bearer.account_count, 20);
+    assert_eq!(bearer.writable_mask, 0x95300);
+    assert_eq!(bearer.writable_mask & (1 << 18), 0);
+    assert_ne!(bearer.writable_mask & (1 << 19), 0);
     assert_eq!(bearer.signer_mask, 1);
     assert!(bearer.outcome_mint_suffix);
     assert_eq!(bearer.post_mint_accounts, 0);
@@ -1546,7 +1548,9 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
 
     let bearer_credit =
         fractional_account_contract_v1(FractionalRedemptionActionV1::RedeemBearerCredit);
-    assert_eq!(bearer_credit.account_count, 19);
+    assert_eq!(bearer_credit.account_count, 20);
+    assert_eq!(bearer_credit.writable_mask & (1 << 18), 0);
+    assert_ne!(bearer_credit.writable_mask & (1 << 19), 0);
     assert_eq!(bearer_credit.signer_mask, 1);
     assert!(bearer_credit.outcome_mint_suffix);
     assert_eq!(bearer_credit.post_mint_accounts, 4);
