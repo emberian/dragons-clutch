@@ -17,8 +17,8 @@ use {
     },
     clutch_sbf::{error::ClutchError, seeds},
     clutch_solana_layout::registry::{
-        DealerPolicyAction, ExtensionAction, ExtensionEnvelope, ExtensionFamily,
-        DEALER_BEGIN_POLICY_PAYLOAD_BYTES, DEALER_POLICY_ACCOUNT_BYTES,
+        DealerCatalogArtifactKindV1, DealerPolicyAction, ExtensionAction, ExtensionEnvelope,
+        ExtensionFamily, DEALER_BEGIN_POLICY_PAYLOAD_BYTES, DEALER_POLICY_ACCOUNT_BYTES,
         DEALER_POLICY_ACCOUNT_HEADER_BYTES, DEALER_POLICY_BODY_BYTES, DEALER_POLICY_CHUNK_BYTES,
         DEALER_POLICY_ID_PAYLOAD_BYTES, DEALER_POLICY_STAGE_ACCOUNT_BYTES,
         DEALER_POLICY_STAGE_HEADER_BYTES, DEALER_WRITE_POLICY_PAYLOAD_BYTES,
@@ -186,9 +186,10 @@ fn begin_payload(
     expires_slot: u64,
 ) -> [u8; DEALER_BEGIN_POLICY_PAYLOAD_BYTES] {
     let mut payload = [0; DEALER_BEGIN_POLICY_PAYLOAD_BYTES];
-    payload[..32].copy_from_slice(&policy_id);
-    payload[32..64].copy_from_slice(sink().as_ref());
-    payload[64..72].copy_from_slice(&expires_slot.to_le_bytes());
+    payload[0] = DealerCatalogArtifactKindV1::Policy as u8;
+    payload[8..40].copy_from_slice(&policy_id);
+    payload[40..72].copy_from_slice(sink().as_ref());
+    payload[72..80].copy_from_slice(&expires_slot.to_le_bytes());
     payload
 }
 
@@ -198,15 +199,19 @@ fn write_payload(
     bytes: &[u8],
 ) -> [u8; DEALER_WRITE_POLICY_PAYLOAD_BYTES] {
     let mut payload = [0; DEALER_WRITE_POLICY_PAYLOAD_BYTES];
-    payload[..32].copy_from_slice(&policy_id);
-    payload[32..34].copy_from_slice(&(cursor as u16).to_le_bytes());
-    payload[34..36].copy_from_slice(&(bytes.len() as u16).to_le_bytes());
-    payload[36..36 + bytes.len()].copy_from_slice(bytes);
+    payload[0] = DealerCatalogArtifactKindV1::Policy as u8;
+    payload[8..40].copy_from_slice(&policy_id);
+    payload[40..42].copy_from_slice(&(cursor as u16).to_le_bytes());
+    payload[42..44].copy_from_slice(&(bytes.len() as u16).to_le_bytes());
+    payload[44..44 + bytes.len()].copy_from_slice(bytes);
     payload
 }
 
 fn id_payload(policy_id: [u8; 32]) -> [u8; DEALER_POLICY_ID_PAYLOAD_BYTES] {
-    policy_id
+    let mut payload = [0; DEALER_POLICY_ID_PAYLOAD_BYTES];
+    payload[0] = DealerCatalogArtifactKindV1::Policy as u8;
+    payload[8..40].copy_from_slice(&policy_id);
+    payload
 }
 
 fn begin_ix(funder: Address, stage: Address, policy_id: [u8; 32]) -> Instruction {
@@ -378,6 +383,7 @@ async fn real_sbf_catalog_is_resumable_rent_exact_and_replay_safe() {
     let (stage, _) = Address::find_program_address(
         &[
             seeds::SEED_DEALER_POLICY_STAGE,
+            &[DealerCatalogArtifactKindV1::Policy as u8],
             uploader.pubkey().as_ref(),
             &policy_id,
         ],
@@ -605,6 +611,7 @@ async fn real_sbf_catalog_is_resumable_rent_exact_and_replay_safe() {
     let (abandoned_stage, _) = Address::find_program_address(
         &[
             seeds::SEED_DEALER_POLICY_STAGE,
+            &[DealerCatalogArtifactKindV1::Policy as u8],
             uploader.pubkey().as_ref(),
             &abandoned_id,
         ],
