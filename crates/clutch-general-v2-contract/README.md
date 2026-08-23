@@ -218,7 +218,7 @@ zero flags. Its pre-fund-safe creation plan must atomically update the separate
 rent ledger that owns payer principal, refund recipient, and donation sink.
 
 Action 26 is renamed `ConsumeDirectReceiptEggs` and has the exact disabled
-96-byte selector `epoch || receipt || settlement_transition_id`. The imported
+96-byte selector `epoch || receipt || delivery_transition_id`. The imported
 pure planner requires both real ends already accounting-latched, then
 atomically stages a distinct delivery latch, both Positions, and both
 Reservations while treating owner rows as read-only accounting evidence. It
@@ -228,7 +228,7 @@ receipt, call ordinal, quote ceiling, keeper payment, and payer refund.
 
 Actions 36 `ConsumeVirtualSplitReceiptEggs` and 37
 `ConsumeVirtualMergeReceiptEggs` each have a distinct strict 96-byte disabled
-selector `epoch || receipt || settlement_transition_id`. They are not aliases
+selector `epoch || receipt || delivery_transition_id`. They are not aliases
 for action 26 or for each other. A future handler must bind one checked
 selected-candidate witness and transition ID across the virtual inventory
 budget, FinalPot, Hoard/aggregate supply, one real receipt end, Position,

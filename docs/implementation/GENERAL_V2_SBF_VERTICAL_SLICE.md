@@ -322,10 +322,10 @@ and 36 through 38 do not create a success route.
 | 21 `ClaimSolver` | `selected_candidate[32]` |
 | 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner[32]` |
 | 25 `AccountReceiptEnd` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || receipt_accounting_id[32]` (160 bytes) |
-| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
 | 32 `CloseClearWork` | `epoch[32] || node[32]` |
-| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
-| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
+| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
 | 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32] || owner_finalization_id[32]` (192 bytes) |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
