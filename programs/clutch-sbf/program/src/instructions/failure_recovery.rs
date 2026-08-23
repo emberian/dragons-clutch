@@ -17,9 +17,6 @@ use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_v3,
     authenticate_series_registry_capability_refs_v2, AuthenticatedRegistryCapabilityV3,
 };
-use crate::instructions::product_series::{
-    authenticate_source_product_route_v3, AuthenticatedSourceProductRouteV3,
-};
 use crate::instructions::series_failure_funding::{
     fund_series_failure_accounts_v1, SeriesMarketCoreFundingReceiptV1,
 };
@@ -78,8 +75,8 @@ use clutch_solana_layout::failure_recovery::{
 use clutch_solana_layout::registry::{self, RecoveryAction};
 use clutch_source_plane_v3::{ContentId as SourceContentId, StatisticKeyV3};
 use clutch_source_plane_v3_runtime::{
-    AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
-    ClockSnapshotV1, FailurePolicySourceHandoffV1, RuntimeKey, SuccessfulEvaluationHandoffV1,
+    AuthenticatedSourceReleaseV1, ClockSnapshotV1, FailurePolicySourceHandoffV1, RuntimeKey,
+    SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -129,8 +126,6 @@ pub fn process(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSourceFailureJoinV1 {
     release: AuthenticatedSourceReleaseV1,
-    route: AuthenticatedSourceRouteV1,
-    receiver: AuthenticatedReceiverRouteV2,
     handoff: FailurePolicySourceHandoffV1,
     source: SourcePolicyHandoffJoinV1,
 }
@@ -140,8 +135,6 @@ impl AuthenticatedSourceFailureJoinV1 {
     /// the exact payload commitment.
     pub fn from_source_adapter(
         release: AuthenticatedSourceReleaseV1,
-        route: AuthenticatedSourceRouteV1,
-        receiver: AuthenticatedReceiverRouteV2,
         handoff: FailurePolicySourceHandoffV1,
         source: SourcePolicyHandoffJoinV1,
     ) -> Outcome<Self> {
@@ -153,10 +146,7 @@ impl AuthenticatedSourceFailureJoinV1 {
         require(
             source.handoff_id() == handoff.id()
                 && source.release_authentication_id() == release.id()
-                && route.release_authentication_id() == release.id()
-                && receiver.route_id() == route.route_id()
                 && source.route_id() == occurrence.route_id()
-                && source.route_id() == route.route_id()
                 && source.occurrence_account() == occurrence.occurrence_account()
                 && source.source_fact_authentication_id() == handoff.source_fact_receipt_id()
                 && source.clock_policy_id() == clock_policy_id
@@ -170,8 +160,6 @@ impl AuthenticatedSourceFailureJoinV1 {
         )?;
         Ok(Self {
             release,
-            route,
-            receiver,
             handoff,
             source,
         })
@@ -182,8 +170,6 @@ impl AuthenticatedSourceFailureJoinV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedSourceSuccessJoinV1 {
     release: AuthenticatedSourceReleaseV1,
-    route: AuthenticatedSourceRouteV1,
-    receiver: AuthenticatedReceiverRouteV2,
     handoff: SuccessfulEvaluationHandoffV1,
     source: SourcePolicyHandoffJoinV1,
 }
@@ -193,8 +179,6 @@ impl AuthenticatedSourceSuccessJoinV1 {
     /// exact payload commitment.
     pub fn from_source_adapter(
         release: AuthenticatedSourceReleaseV1,
-        route: AuthenticatedSourceRouteV1,
-        receiver: AuthenticatedReceiverRouteV2,
         handoff: SuccessfulEvaluationHandoffV1,
         source: SourcePolicyHandoffJoinV1,
     ) -> Outcome<Self> {
@@ -206,10 +190,7 @@ impl AuthenticatedSourceSuccessJoinV1 {
         require(
             source.handoff_id() == handoff.id()
                 && source.release_authentication_id() == release.id()
-                && route.release_authentication_id() == release.id()
-                && receiver.route_id() == route.route_id()
                 && source.route_id() == occurrence.route_id()
-                && source.route_id() == route.route_id()
                 && source.occurrence_account() == occurrence.occurrence_account()
                 && source.source_fact_authentication_id()
                     == handoff.result_account_authentication_id()
@@ -224,8 +205,6 @@ impl AuthenticatedSourceSuccessJoinV1 {
         )?;
         Ok(Self {
             release,
-            route,
-            receiver,
             handoff,
             source,
         })
@@ -241,7 +220,6 @@ impl AuthenticatedSourceSuccessJoinV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedFailureRelationExecutionV1 {
     relation: ExecutedFailureRelationV1,
-    source_product_route: AuthenticatedSourceProductRouteV3,
     relation_accounts: [Pubkey; 11],
 }
 
@@ -259,11 +237,6 @@ impl AuthenticatedFailureRelationExecutionV1 {
     /// Atomic execution capability identity.
     pub const fn relation_execution_id(self) -> [u8; 32] {
         self.relation.id().bytes()
-    }
-
-    /// Exact private Source/ProfileV4/BundleV5 route consumed by this relation.
-    pub const fn source_product_route_id(self) -> [u8; 32] {
-        self.source_product_route.id().bytes()
     }
 
     fn relation(self) -> ExecutedFailureRelationV1 {
@@ -369,13 +342,6 @@ pub fn authenticate_failure_relation_execution_v1(
             })?,
         ClutchError::MismatchedState,
     )?;
-    let source_product_route = authenticate_source_product_route_v3(
-        source.route,
-        source.receiver,
-        registry,
-        &bundle,
-        &genesis,
-    )?;
 
     let market = MarketInstancePreimageV2 {
         product_template_id: series.value().product_template_id,
@@ -419,7 +385,6 @@ pub fn authenticate_failure_relation_execution_v1(
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     Ok(AuthenticatedFailureRelationExecutionV1 {
         relation,
-        source_product_route,
         relation_accounts: [
             registry.series_registry_account(),
             registry.program_account(),
