@@ -3,7 +3,7 @@
 
 //! Separately deployed executable wrapper for StructuredClaim descriptor v2.
 //!
-//! The exact non-production capability profile admits actions 1 through 5.
+//! The non-production build seam currently admits no runtime action.
 //! Canonical and full wrap execute base custody before Token-2022 mint;
 //! canonical and full unwind burn before base custody. SVM rollback makes each
 //! sequence atomic, and this program re-reads exact integer deltas before success.
@@ -108,15 +108,11 @@ mod tests {
     use clutch_structured_claim_adapter::{admit_runtime_envelope_v1, Error};
 
     #[test]
-    fn capability_profile_admits_current_construction_and_wrap_routes() {
+    fn capability_profile_refuses_every_allocated_route() {
         for action in 1_u8..=8 {
             let input = [75, 1, action];
             let admitted = admit_runtime_envelope_v1(&input).map(|value| value.action.tag());
-            if matches!(action, 1 | 2 | 3 | 4 | 5) {
-                assert_eq!(admitted, Ok(action));
-            } else {
-                assert_eq!(admitted, Err(Error::CapabilityDisabled));
-            }
+            assert_eq!(admitted, Err(Error::CapabilityDisabled));
         }
     }
 }
