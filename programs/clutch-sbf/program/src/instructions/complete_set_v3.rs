@@ -23,9 +23,12 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v1, authenticate_general_position_replay_v1,
+    authenticate_general_market_value_authority_v2, authenticate_general_position_replay_v2,
     validate_full_width_collateral_accounts_v3, RuntimeSha256,
 };
+
+const COMPLETE_SET_RUNTIME_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/complete-set/runtime-receipt/v3\0";
 
 /// Exact full-width Split/Merge account list.
 pub const COMPLETE_SET_ACCOUNT_COUNT_V3: usize =
@@ -72,12 +75,13 @@ pub fn process_complete_set_v3(
         ClutchError::UnauthorizedActor,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v1(
+    let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
         &accounts[ix::REALM],
         &accounts[ix::PROFILE],
         &accounts[ix::POLICY],
         &accounts[ix::TOKEN_PROGRAM],
+        &accounts[ix::TOKEN_PROGRAMDATA],
         &accounts[ix::MARKET_BINDING],
         &accounts[ix::MARKET_RUNTIME],
         &accounts[ix::MARKET_INSTANCE],
@@ -86,12 +90,13 @@ pub fn process_complete_set_v3(
         true,
         true,
     )?;
+    let liabilities = value_authority.liabilities;
     require(
-        liabilities.market_binding.market_instance_v2_id.bytes() == market_instance_id.bytes()
+        liabilities.market_binding.base().market_instance_v2_id.bytes() == market_instance_id.bytes()
             && accounts[ix::HOARD_TOKEN].key.to_bytes() == liabilities.hoard.token_account.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let position = authenticate_general_position_replay_v1(
+    let position = authenticate_general_position_replay_v2(
         program_id,
         liabilities.bound,
         &accounts[ix::MARKET_BINDING],
@@ -162,6 +167,17 @@ pub fn process_complete_set_v3(
         settlement_post.semantic == position_post,
         ClutchError::MismatchedState,
     )?;
+    let runtime_receipt = CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            COMPLETE_SET_RUNTIME_RECEIPT_DOMAIN_V3,
+            &accepted.receipt_id().bytes(),
+            &value_authority.receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    runtime_receipt
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let replay = project_general_replay_transition_v1(
         position.replay,
         PositionSettlementPoststateV3 {
@@ -171,7 +187,7 @@ pub fn process_complete_set_v3(
         replay_kind,
         Id32::new(accepted.transition_id().bytes())
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        Id32::new(accepted.receipt_id().bytes())
+        Id32::new(runtime_receipt.bytes())
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         &RuntimeSha256,
     )

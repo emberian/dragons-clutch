@@ -6,17 +6,20 @@
 //! claim-program authority.
 
 use clutch_collateral_adapter_v2::{
-    bind_claim_issuance_v1, BoundClaimIssuanceV1, BoundCollateralProfileV2, ClaimIssuanceBindingV1,
-    ClaimRuntimeObservationV1, Id, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
+    bind_claim_issuance_v1, AdapterReleaseV2, BoundClaimIssuanceV1, BoundCollateralProfileV2,
+    ClaimIssuanceBindingV1, ClaimRuntimeObservationV1, Id, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
 };
 use solana_account_info::AccountInfo;
 
-use crate::accounts::Outcome;
+use crate::accounts::{require, Outcome};
 use crate::collateral_release::{
-    LOCAL_REAL_LEGACY_SPL_RELEASE_V2, LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2,
+    authenticate_collateral_release_deployment_v2, LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2,
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
 };
 use crate::error::{ClutchError, Refusal};
+
+const AUTHENTICATED_CLAIM_RELEASE_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/claim-release/current-loader-receipt/v1\0";
 
 /// Frozen local-real claim-adapter release identity.
 pub const LOCAL_REAL_CLAIM_ADAPTER_RELEASE_ID_V1: Id = Id::from_bytes([
@@ -42,60 +45,284 @@ pub const LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1: ClaimIssuanceBindingV1 = ClaimIs
     account_extensions: 0,
 };
 
-/// Authenticate the separately selected claim release against the presented
-/// outcome token program and the already authenticated collateral release.
+/// Checked claim-plane row selected by this exact program build.
 ///
-/// Default/public builds have no compiled claim row and fail closed. The
-/// laboratory row is tied to the exact local-real Token-2022 binary and a
-/// claim-specific parser/CPI identity; it may not alias the collateral release
-/// even when both planes invoke the same executable program account.
+/// Claim issuance is independent of Realm collateral selection, but still
+/// names one exact Token-2022 release from the same closed deployment catalog.
+/// No instruction account or environment variable may supply either field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CompiledClaimIssuanceReleaseV1 {
+    binding: ClaimIssuanceBindingV1,
+    token_release: AdapterReleaseV2,
+}
+
+impl CompiledClaimIssuanceReleaseV1 {
+    pub(crate) const fn checked(
+        binding: ClaimIssuanceBindingV1,
+        token_release: AdapterReleaseV2,
+    ) -> Self {
+        Self {
+            binding,
+            token_release,
+        }
+    }
+}
+
+#[cfg(feature = "laboratory-fixtures")]
+const COMPILED_CLAIM_ISSUANCE_RELEASE_V1: Option<CompiledClaimIssuanceReleaseV1> =
+    Some(CompiledClaimIssuanceReleaseV1::checked(
+        LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1,
+        LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+    ));
+
+#[cfg(all(
+    not(feature = "laboratory-fixtures"),
+    not(feature = "observed-positive-collateral-release-manifest")
+))]
+const COMPILED_CLAIM_ISSUANCE_RELEASE_V1: Option<CompiledClaimIssuanceReleaseV1> = None;
+
+#[cfg(feature = "observed-positive-collateral-release-manifest")]
+fn compiled_claim_issuance_release_v1() -> Option<CompiledClaimIssuanceReleaseV1> {
+    crate::observed_collateral_release_manifest_v2::OBSERVED_CLAIM_ISSUANCE_RELEASE_V1
+}
+
+#[cfg(not(feature = "observed-positive-collateral-release-manifest"))]
+fn compiled_claim_issuance_release_v1() -> Option<CompiledClaimIssuanceReleaseV1> {
+    COMPILED_CLAIM_ISSUANCE_RELEASE_V1
+}
+
+fn validate_compiled_claim_issuance_release_v1(
+    manifest: CompiledClaimIssuanceReleaseV1,
+) -> Outcome<()> {
+    manifest
+        .binding
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    manifest
+        .token_release
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require(
+        manifest.binding.token_program == manifest.token_release.token_program
+            && manifest.binding.token_program_deployment
+                == manifest.token_release.token_program_deployment
+            && manifest.binding.parser_cpi_code != manifest.token_release.parser_cpi_code,
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    manifest
+        .binding
+        .require_separate_from_collateral(manifest.token_release)
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
+fn require_claim_release_separate_from_collateral_v1(
+    claim: BoundClaimIssuanceV1,
+    collateral_release: AdapterReleaseV2,
+) -> Outcome<()> {
+    claim
+        .binding()
+        .require_separate_from_collateral(collateral_release)
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
+/// Private runtime proof that the independently selected claim plane is the
+/// exact current loader deployment named by its compiled release and is
+/// distinct from the authenticated Realm collateral release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedClaimIssuanceReleaseV1 {
+    bound: BoundClaimIssuanceV1,
+    token_programdata: Id,
+    deployment_slot: u64,
+    loader_receipt_id: Id,
+    receipt_id: Id,
+}
+
+impl AuthenticatedClaimIssuanceReleaseV1 {
+    /// Pure claim authority consumed by the collateral/claim transition.
+    pub(crate) const fn bound(self) -> BoundClaimIssuanceV1 {
+        self.bound
+    }
+
+    /// Exact current ProgramData account observed at admission.
+    pub(crate) const fn token_programdata(self) -> Id {
+        self.token_programdata
+    }
+
+    /// Loader-recorded deployment slot retained for Product founding proof.
+    pub(crate) const fn deployment_slot(self) -> u64 {
+        self.deployment_slot
+    }
+
+    /// Exact current loader observation receipt.
+    pub(crate) const fn loader_receipt_id(self) -> Id {
+        self.loader_receipt_id
+    }
+
+    /// Combined collateral-separation and current claim-release receipt.
+    pub(crate) const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
+}
+
+/// Withdrawn program-account-only admission retained so older routes fail
+/// closed instead of manufacturing deployment evidence from a compiled row.
 pub fn authenticate_claim_issuance_v1(
     collateral: BoundCollateralProfileV2,
     token_program: &AccountInfo<'_>,
 ) -> Outcome<BoundClaimIssuanceV1> {
-    let bound = authenticate_claim_issuance_runtime_v1(token_program)?;
-    LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
-        .require_separate_from_collateral(collateral.release())
-        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-    Ok(bound)
+    let _ = (collateral, token_program);
+    Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
 }
 
-/// Authenticate the compiled claim plane where the action has no collateral
-/// program role, as with General Materialize/Dematerialize.
-///
-/// The compiled row is checked against every compiled local collateral family,
-/// so omitting a collateral account from the action cannot collapse the two
-/// semantic releases.
+/// Mint a private Product-consumable release proof while returning no
+/// caller-shaped deployment fields.
+pub(crate) fn authenticate_claim_issuance_release_with_programdata_v1(
+    collateral: BoundCollateralProfileV2,
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedClaimIssuanceReleaseV1> {
+    let (bound, deployment) = authenticate_claim_issuance_runtime_release_with_programdata_v1(
+        token_program,
+        token_programdata,
+    )?;
+    require_claim_release_separate_from_collateral_v1(bound, collateral.release())?;
+    let collateral_release_id = collateral
+        .release()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let receipt_id = Id::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            AUTHENTICATED_CLAIM_RELEASE_RECEIPT_DOMAIN_V1,
+            &collateral.market().market.bytes(),
+            &collateral.realm_bound().realm().realm.bytes(),
+            &collateral.policy_id().bytes(),
+            &collateral_release_id.bytes(),
+            &bound.binding_id().bytes(),
+            &deployment.programdata_account().bytes(),
+            &deployment.deployment_slot().to_le_bytes(),
+            &deployment.receipt_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    receipt_id
+        .require_live()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedClaimIssuanceReleaseV1 {
+        bound,
+        token_programdata: deployment.programdata_account(),
+        deployment_slot: deployment.deployment_slot(),
+        loader_receipt_id: deployment.receipt_id(),
+        receipt_id,
+    })
+}
+
+/// Withdrawn program-account-only runtime admission. Current routes must use
+/// [`authenticate_claim_issuance_release_with_programdata_v1`] and retain its
+/// private loader receipt.
 pub fn authenticate_claim_issuance_runtime_v1(
     token_program: &AccountInfo<'_>,
 ) -> Outcome<BoundClaimIssuanceV1> {
-    #[cfg(not(feature = "laboratory-fixtures"))]
-    {
-        let _ = token_program;
-        return Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable));
+    let _ = token_program;
+    Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
+fn authenticate_claim_issuance_runtime_release_with_programdata_v1(
+    token_program: &AccountInfo<'_>,
+    token_programdata: &AccountInfo<'_>,
+) -> Outcome<(
+    BoundClaimIssuanceV1,
+    crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
+)> {
+    let manifest = compiled_claim_issuance_release_v1()
+        .ok_or(Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    validate_compiled_claim_issuance_release_v1(manifest)?;
+    let deployment = authenticate_collateral_release_deployment_v2(
+        manifest.token_release,
+        token_program,
+        token_programdata,
+    )?;
+    let expected = manifest
+        .binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let bound = bind_claim_issuance_v1(
+        expected,
+        manifest.binding,
+        ClaimRuntimeObservationV1 {
+            token_program: Id::from_bytes(token_program.key.to_bytes()),
+            token_program_executable: token_program.executable,
+            token_program_writable: token_program.is_writable,
+            token_program_signer: token_program.is_signer,
+            token_program_deployment: deployment.release().token_program_deployment,
+            parser_cpi_code: manifest.binding.parser_cpi_code,
+        },
+        manifest.token_release,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok((bound, deployment))
+}
+
+#[cfg(test)]
+mod checked_claim_release_tests {
+    use super::*;
+
+    #[test]
+    fn checked_claim_manifest_refuses_deployment_and_parser_aliases() {
+        let valid = CompiledClaimIssuanceReleaseV1::checked(
+            LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1,
+            LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+        );
+        assert!(validate_compiled_claim_issuance_release_v1(valid).is_ok());
+
+        let wrong_deployment = CompiledClaimIssuanceReleaseV1::checked(
+            ClaimIssuanceBindingV1 {
+                token_program_deployment: Id::from_bytes([93; 32]),
+                ..LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
+            },
+            LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+        );
+        assert!(validate_compiled_claim_issuance_release_v1(wrong_deployment).is_err());
+
+        let aliased_parser = CompiledClaimIssuanceReleaseV1::checked(
+            ClaimIssuanceBindingV1 {
+                parser_cpi_code: LOCAL_REAL_TOKEN_2022_RELEASE_V2.parser_cpi_code,
+                ..LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
+            },
+            LOCAL_REAL_TOKEN_2022_RELEASE_V2,
+        );
+        assert!(validate_compiled_claim_issuance_release_v1(aliased_parser).is_err());
     }
-    #[cfg(feature = "laboratory-fixtures")]
-    {
-        let binding = LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1;
-        let expected = binding
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-        binding
-            .require_separate_from_collateral(LOCAL_REAL_LEGACY_SPL_RELEASE_V2)
-            .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
-        bind_claim_issuance_v1(
+
+    #[test]
+    fn selected_claim_binding_not_local_constant_owns_collateral_separation() {
+        let selected_binding = ClaimIssuanceBindingV1 {
+            adapter_release: Id::from_bytes([94; 32]),
+            parser_cpi_code: Id::from_bytes([95; 32]),
+            ..LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
+        };
+        let expected = selected_binding.id().unwrap();
+        let bound = bind_claim_issuance_v1(
             expected,
-            binding,
+            selected_binding,
             ClaimRuntimeObservationV1 {
-                token_program: Id::from_bytes(token_program.key.to_bytes()),
-                token_program_executable: token_program.executable,
-                token_program_writable: token_program.is_writable,
-                token_program_signer: token_program.is_signer,
-                token_program_deployment: LOCAL_REAL_TOKEN_2022_DEPLOYMENT_ID_V2,
-                parser_cpi_code: LOCAL_REAL_CLAIM_PARSER_CPI_CODE_ID_V1,
+                token_program: selected_binding.token_program,
+                token_program_executable: true,
+                token_program_writable: false,
+                token_program_signer: false,
+                token_program_deployment: selected_binding.token_program_deployment,
+                parser_cpi_code: selected_binding.parser_cpi_code,
             },
             LOCAL_REAL_TOKEN_2022_RELEASE_V2,
         )
-        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+        .unwrap();
+        let aliased_collateral = AdapterReleaseV2::legacy_spl(
+            Id::from_bytes([96; 32]),
+            selected_binding.parser_cpi_code,
+        );
+        assert!(LOCAL_REAL_CLAIM_ISSUANCE_BINDING_V1
+            .require_separate_from_collateral(aliased_collateral)
+            .is_ok());
+        assert!(require_claim_release_separate_from_collateral_v1(bound, aliased_collateral)
+            .is_err());
     }
 }

@@ -51,9 +51,15 @@ pub const COMPLETE_SET_RECLASSIFICATION_RECEIPT_DOMAIN_V3: &[u8] =
 /// Fractional-ledger/ClaimLedger atomic successor domain.
 pub const FRACTIONAL_CLAIM_LEDGER_TRANSITION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/claim-ledger/fractional-transition/v3\0";
+/// Fractional-owned credit action joined to the ClaimLedger/0xa5 transition.
+pub const FRACTIONAL_CREDIT_CLAIM_LEDGER_TRANSITION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/claim-ledger/fractional-credit-transition/v3\0";
 /// Fractional claim payout and locked-principal release domain.
 pub const FRACTIONAL_CLAIM_REDEMPTION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/claim-ledger/fractional-redemption/v3\0";
+/// Burn-free credit payout receipt joined to its Fractional-owned action.
+pub const FRACTIONAL_EXTERNAL_CREDIT_PAYOUT_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/claim-ledger/fractional-credit-payout/v3\0";
 /// Explicit absent-0xa5 founding join domain.
 pub const FRACTIONAL_CLAIM_LEDGER_FOUNDING_DOMAIN_V3: &[u8] =
     b"dragons-clutch/claim-ledger/fractional-founding/v3\0";
@@ -843,9 +849,36 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
     mutation: FractionalClaimSupplyMutationV3,
     backend: &B,
 ) -> Result<FractionalClaimLedgerPlanV3> {
+    prepare_fractional_claim_ledger_successor_inner_v3(
+        claim_ledger,
+        fractional_ledger_before_id,
+        fractional_ledger_after_id,
+        consumed_sequence,
+        mutation,
+        None,
+        backend,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_fractional_claim_ledger_successor_inner_v3<B: PositionV3Sha256Backend>(
+    claim_ledger: ClaimLedgerV3,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_after_id: Id,
+    consumed_sequence: u64,
+    mutation: FractionalClaimSupplyMutationV3,
+    fractional_credit_transition_id: Option<Id>,
+    backend: &B,
+) -> Result<FractionalClaimLedgerPlanV3> {
     claim_ledger.validate()?;
     fractional_ledger_before_id.require_live()?;
     fractional_ledger_after_id.require_live()?;
+    if let Some(transition_id) = fractional_credit_transition_id {
+        transition_id.require_live()?;
+        if mutation != FractionalClaimSupplyMutationV3::Unchanged {
+            return Err(Error::MismatchedBinding);
+        }
+    }
     if claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
         || fractional_ledger_before_id == fractional_ledger_after_id
         || consumed_sequence != claim_ledger.next_fractional_sequence
@@ -900,7 +933,23 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
         }
     };
     let next_fractional_sequence = consumed_sequence.checked_add(1).ok_or(Error::Arithmetic)?;
-    let transition_id = if kind == 2 {
+    let transition_id = if let Some(fractional_credit_transition_id) =
+        fractional_credit_transition_id
+    {
+        digest(
+            FRACTIONAL_CREDIT_CLAIM_LEDGER_TRANSITION_DOMAIN_V3,
+            &[
+                &claim_ledger.market_instance_id.bytes(),
+                &claim_ledger.fractional_policy_id.bytes(),
+                &claim_ledger.fractional_ledger_account.bytes(),
+                &fractional_ledger_before_id.bytes(),
+                &fractional_ledger_after_id.bytes(),
+                &claim_ledger_before_id.bytes(),
+                &consumed_sequence.to_le_bytes(),
+                &fractional_credit_transition_id.bytes(),
+            ],
+        )
+    } else if kind == 2 {
         digest(
             FRACTIONAL_CLAIM_LEDGER_TRANSITION_DOMAIN_V3,
             &[
@@ -1263,9 +1312,15 @@ pub struct PreparedFractionalExternalClaimRedemptionV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedFractionalExternalCreditPayoutV3 {
     prepared: PreparedFractionalExternalClaimRedemptionV3,
+    fractional_credit_transition_id: Id,
 }
 
 impl PreparedFractionalExternalCreditPayoutV3 {
+    /// Fractional-owned commitment to the exact credit action and successors.
+    pub const fn fractional_credit_transition_id(self) -> Id {
+        self.fractional_credit_transition_id
+    }
+
     /// Exact unchanged-supply ClaimLedger/0xa5 successor.
     pub const fn fractional(self) -> FractionalClaimLedgerPlanV3 {
         self.prepared.fractional()
@@ -1345,6 +1400,7 @@ pub fn prepare_fractional_external_claim_redemption_v3<B: PositionV3Sha256Backen
             amount: quantity,
             observed_before: observed_materialized_before,
         },
+        None,
         payout_atoms,
         claimant,
         destination_token_account,
@@ -1365,11 +1421,13 @@ pub fn prepare_fractional_external_credit_payout_v3<B: PositionV3Sha256Backend>(
     fractional_ledger_before_id: Id,
     fractional_ledger_after_id: Id,
     consumed_sequence: u64,
+    fractional_credit_transition_id: Id,
     payout_atoms: u64,
     claimant: Id,
     destination_token_account: Id,
     backend: &B,
 ) -> Result<PreparedFractionalExternalCreditPayoutV3> {
+    fractional_credit_transition_id.require_live()?;
     Ok(PreparedFractionalExternalCreditPayoutV3 {
         prepared: prepare_fractional_external_payout_v3(
             hoard,
@@ -1378,11 +1436,13 @@ pub fn prepare_fractional_external_credit_payout_v3<B: PositionV3Sha256Backend>(
             fractional_ledger_after_id,
             consumed_sequence,
             FractionalClaimSupplyMutationV3::Unchanged,
+            Some(fractional_credit_transition_id),
             payout_atoms,
             claimant,
             destination_token_account,
             backend,
         )?,
+        fractional_credit_transition_id,
     })
 }
 
@@ -1394,6 +1454,7 @@ fn prepare_fractional_external_payout_v3<B: PositionV3Sha256Backend>(
     fractional_ledger_after_id: Id,
     consumed_sequence: u64,
     supply_mutation: FractionalClaimSupplyMutationV3,
+    fractional_credit_transition_id: Option<Id>,
     payout_atoms: u64,
     claimant: Id,
     destination_token_account: Id,
@@ -1412,12 +1473,13 @@ fn prepare_fractional_external_payout_v3<B: PositionV3Sha256Backend>(
     {
         return Err(Error::MismatchedBinding);
     }
-    let fractional = prepare_fractional_claim_ledger_successor_v3(
+    let fractional = prepare_fractional_claim_ledger_successor_inner_v3(
         claim_ledger,
         fractional_ledger_before_id,
         fractional_ledger_after_id,
         consumed_sequence,
         supply_mutation,
+        fractional_credit_transition_id,
         backend,
     )?;
     let hoard_before_id = hoard.semantic_id(backend)?;
@@ -1532,7 +1594,17 @@ pub fn accept_fractional_external_credit_payout_v3(
     prepared: PreparedFractionalExternalCreditPayoutV3,
     accepted: AcceptedBearerRedemptionCollateralV3,
 ) -> Result<FractionalClaimRedemptionPlanV3> {
-    accept_fractional_external_claim_redemption_v3(prepared.prepared, accepted)
+    let plan = accept_fractional_external_claim_redemption_v3(prepared.prepared, accepted)?;
+    let receipt_id = digest(
+        FRACTIONAL_EXTERNAL_CREDIT_PAYOUT_RECEIPT_DOMAIN_V3,
+        &[
+            &prepared.fractional_credit_transition_id.bytes(),
+            &plan.fractional.transition_id.bytes(),
+            &plan.receipt_id.bytes(),
+        ],
+    );
+    receipt_id.require_live()?;
+    Ok(FractionalClaimRedemptionPlanV3 { receipt_id, ..plan })
 }
 
 /// Burn or preserve native supply, advance the 0xa5 latch, and release exactly
@@ -1979,9 +2051,10 @@ fn identity(value: Id) -> Result<Identity32V1> {
 mod tests {
     use super::*;
     use crate::{
-        bind_collateral_profile_v2, AdapterCatalogV2, AdapterReleaseV2, CollateralPolicyV2,
-        MarketCollateralBindingV2, ProfileCollateralBindingV2, RealmCollateralBindingV2,
-        RuntimeReleaseObservationV2, LEGACY_SPL_TOKEN_PROGRAM,
+        accept_zero_claim_redemption_collateral_v2, bind_collateral_profile_v2,
+        prepare_zero_claim_redemption_collateral_v2, AdapterCatalogV2, AdapterReleaseV2,
+        CollateralPolicyV2, MarketCollateralBindingV2, ProfileCollateralBindingV2,
+        RealmCollateralBindingV2, RuntimeReleaseObservationV2, LEGACY_SPL_TOKEN_PROGRAM,
     };
     use sha2::{Digest, Sha256};
 
@@ -2070,6 +2143,49 @@ mod tests {
         bytes[64..72].copy_from_slice(&amount.to_le_bytes());
         bytes[108] = 1;
         bytes
+    }
+
+    fn mint_bytes(supply: u64) -> [u8; 82] {
+        let mut bytes = [0u8; 82];
+        bytes[36..44].copy_from_slice(&supply.to_le_bytes());
+        bytes[44] = 6;
+        bytes[45] = 1;
+        bytes
+    }
+
+    fn resolved_fractional_liabilities() -> (HoardV2, ClaimLedgerV3) {
+        let founded = prepare_market_liability_founding_v3(bound(), request(), &TestSha256)
+            .unwrap();
+        let hoard = HoardV2 {
+            lifecycle: MarketLiabilityLifecycleV1::Resolved,
+            ..founded.hoard()
+        };
+        let resolved_claim_ledger = ClaimLedgerV3 {
+            lifecycle: MarketLiabilityLifecycleV1::Resolved,
+            resolution_account: id(30),
+            ..founded.claim_ledger()
+        };
+        let claim_ledger = prepare_fractional_claim_ledger_founding_v3(
+            resolved_claim_ledger,
+            id(31),
+            id(32),
+            id(33),
+            &TestSha256,
+        )
+        .unwrap()
+        .claim_ledger_after();
+        (hoard, claim_ledger)
+    }
+
+    fn token_view<'a>(key: Id, data: &'a [u8], writable: bool) -> RuntimeAccountViewV2<'a> {
+        RuntimeAccountViewV2 {
+            key,
+            owner_program: LEGACY_SPL_TOKEN_PROGRAM,
+            data,
+            is_signer: false,
+            is_writable: writable,
+            executable: false,
+        }
     }
 
     fn postwrite<'a>(
@@ -2255,6 +2371,105 @@ mod tests {
         ] {
             assert_eq!(malformed.validate(), Err(Error::InvalidParameter));
         }
+    }
+
+    #[test]
+    fn external_credit_payout_refuses_zero_or_cross_paired_credit_transitions() {
+        let (hoard, claim_ledger) = resolved_fractional_liabilities();
+        assert_eq!(
+            prepare_fractional_external_credit_payout_v3(
+                hoard,
+                claim_ledger,
+                id(40),
+                id(41),
+                1,
+                Id::ZERO,
+                0,
+                id(50),
+                id(51),
+                &TestSha256,
+            ),
+            Err(Error::ZeroIdentity)
+        );
+        let first = prepare_fractional_external_credit_payout_v3(
+            hoard,
+            claim_ledger,
+            id(40),
+            id(41),
+            1,
+            id(60),
+            0,
+            id(50),
+            id(51),
+            &TestSha256,
+        )
+        .unwrap();
+        let wrong_transition = prepare_fractional_external_credit_payout_v3(
+            hoard,
+            claim_ledger,
+            id(40),
+            id(41),
+            1,
+            id(61),
+            0,
+            id(50),
+            id(51),
+            &TestSha256,
+        )
+        .unwrap();
+        let wrong_destination = prepare_fractional_external_credit_payout_v3(
+            hoard,
+            claim_ledger,
+            id(40),
+            id(41),
+            1,
+            id(60),
+            0,
+            id(50),
+            id(52),
+            &TestSha256,
+        )
+        .unwrap();
+        assert_ne!(
+            first.fractional().transition_id(),
+            wrong_transition.fractional().transition_id()
+        );
+        assert_eq!(
+            first.collateral_request().claim_redemption_id,
+            first.fractional().transition_id()
+        );
+
+        let mint_data = mint_bytes(0);
+        let hoard_data = token_bytes(0);
+        let destination_data = token_bytes(0);
+        let zero = prepare_zero_claim_redemption_collateral_v2(
+            bound(),
+            first.collateral_request(),
+            token_view(id(22), &mint_data, false),
+            token_view(id(5), &hoard_data, true),
+            token_view(id(51), &destination_data, true),
+        )
+        .unwrap();
+        let accepted = AcceptedBearerRedemptionCollateralV3::Zero(
+            accept_zero_claim_redemption_collateral_v2(
+                zero,
+                token_view(id(22), &mint_data, false),
+                token_view(id(5), &hoard_data, true),
+                token_view(id(51), &destination_data, true),
+            )
+            .unwrap(),
+        );
+        let accepted_first =
+            accept_fractional_external_credit_payout_v3(first, accepted).unwrap();
+        assert!(!accepted_first.receipt_id().is_zero());
+        assert_eq!(
+            accept_fractional_external_credit_payout_v3(wrong_transition, accepted),
+            Err(Error::PostAdmissionFailed)
+        );
+        assert_eq!(
+            accept_fractional_external_credit_payout_v3(wrong_destination, accepted),
+            Err(Error::PostAdmissionFailed)
+        );
     }
 
     #[test]

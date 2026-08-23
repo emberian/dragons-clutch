@@ -2,10 +2,11 @@
 
 //! Disabled exact index plane for frozen General V2 settlement inputs.
 //!
-//! This module deliberately owns no instruction discriminator, PDA prefix, or
-//! capability bit.  It defines a breaking, active-width account pair and pure
-//! construction/closure postwrites so the format can be reviewed before a
-//! later SBF adapter makes it reachable.  Construction accepts only complete
+//! The counted indexed Root now owns a centrally reserved account version and
+//! the canonical in-place Root PDA, but this module deliberately owns no live
+//! instruction or capability bit. It defines the active-width account pair and
+//! pure construction/closure postwrites before a later SBF adapter makes it
+//! reachable. Construction accepts only complete
 //! hostile-decoded V5 pages and the selected sealed CandidateFeed; no caller
 //! supplies a location, adjacency row, aggregate, count, or semantic identity.
 //!
@@ -18,13 +19,21 @@
 use clutch_batch::Side;
 use clutch_general_v2_contract::{
     DeletableRentOwnerV1, EconomicDomainV2AccountV1, Id32, MarketBindingV2,
-    ExactIndexChildrenStateV1, IndexedSettlementRootV1AccountV1, SettlementRootPhaseV1,
-    SettlementRootV1AccountV1, MARKET_BINDING_ACCOUNT_BYTES_V2, MAX_ORDERS, MAX_OUTCOMES,
-    MAX_SLICES,
+    ExactIndexChildrenStateV1, IndexedSettlementRootRentPreparationV1,
+    IndexedSettlementRootV1AccountV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG, INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+    INDEXED_SETTLEMENT_ROOT_BYTES_V1, MARKET_BINDING_ACCOUNT_BYTES_V2, MAX_ORDERS,
+    MAX_OUTCOMES, MAX_SLICES,
 };
 use clutch_product_series::MarketGenesisProfileV2;
 use clutch_solana_layout::{
-    order_page_v5::verify_page_v5, PriceGridAccount, MAX_ORDERS_PER_PAGE, MAX_ORDER_PAGES,
+    order_page_v5::verify_page_v5,
+    registry::{
+        GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES,
+        GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+        GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
+    },
+    PriceGridAccount, MAX_ORDERS_PER_PAGE, MAX_ORDER_PAGES,
 };
 use sha2::{Digest, Sha256};
 
@@ -77,10 +86,9 @@ pub const CANDIDATE_ORDER_SLICE_EDGE_BYTES_V1: usize = 16;
 /// Maximum real slice ends: two for every direct slice.
 pub const MAX_EXACT_INDEX_EDGES_V1: usize = MAX_SLICES * 2;
 /// The account plane has no live instruction/capability in the current profile.
-///
-/// Promotion must replace this structural refusal with a root successor that
-/// owns exact expected/admitted/live/retired counts for both siblings.  Dealer
-/// or receipt counters must never be repurposed for this pair.
+/// The reserved Root successor owns its exact counts; promotion still requires
+/// the complete SBF transition and close family. Dealer or receipt counters
+/// must never be repurposed for this pair.
 pub const EXACT_INDEX_PLANE_LIVE_ENABLED_V1: bool = false;
 /// Largest active locator body.
 pub const FROZEN_ORDER_LOCATOR_MAX_BYTES_V1: usize =
@@ -98,6 +106,16 @@ const _: () = assert!(MAX_ORDERS_PER_PAGE == 16);
 const _: () = assert!(EXACT_INDEX_COMMON_HEADER_BYTES_V1 == 664);
 const _: () = assert!(FROZEN_ORDER_LOCATOR_MAX_BYTES_V1 == 920);
 const _: () = assert!(CANDIDATE_ORDER_SLICE_INDEX_MAX_BYTES_V1 == 16_024);
+const _: () = assert!(
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG == GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG
+);
+const _: () = assert!(
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION
+        == GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION
+);
+const _: () = assert!(
+    INDEXED_SETTLEMENT_ROOT_BYTES_V1 == GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES
+);
 
 /// Fail-closed refusal set for the disabled exact index plane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1042,6 +1060,7 @@ impl ExactIndexPlaneCreatePostwritesV1 {
 pub struct CountedExactIndexRootCreatePostwritesV1 {
     indexed_root: IndexedSettlementRootV1AccountV1,
     indexed_root_data_id: Id32,
+    root_rent: IndexedSettlementRootRentPreparationV1,
     indexes: ExactIndexPlaneCreatePostwritesV1,
 }
 
@@ -1056,12 +1075,17 @@ impl CountedExactIndexRootCreatePostwritesV1 {
         self.indexed_root_data_id
     }
 
+    /// Exact fresh-allocation or in-place-upgrade root rent postwrites.
+    pub const fn root_rent_preparation(&self) -> &IndexedSettlementRootRentPreparationV1 {
+        &self.root_rent
+    }
+
     /// Private exact child creation postwrites in the same rollback domain.
     pub const fn index_postwrites(&self) -> &ExactIndexPlaneCreatePostwritesV1 {
         &self.indexes
     }
 
-    /// Encode the exact disabled indexed-root successor body.
+    /// Encode the exact reserved-disabled indexed-root successor body.
     pub fn encode_indexed_root(
         &self,
         output: &mut [u8],
@@ -1085,10 +1109,9 @@ pub struct IndexedPairCoverageV1 {
 
 /// Unforgeable placeholder for a future counted-root immutable-read authority.
 ///
-/// Its private fields will be populated only by the later SBF join after it
-/// authenticates both program-owned sealed PDAs and the root successor's exact
-/// plane/account bindings.  This keeps the cheap local-row reader unavailable
-/// to a live route until that trust boundary exists.
+/// Its private fields are populated only after the adapter projection checks
+/// all three canonical PDAs/owners and the root-held full child body IDs. This
+/// keeps the cheap local-row reader unavailable to unauthenticated callers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CountedExactIndexReadAuthorityV1 {
     plane_id: Id32,
@@ -1106,6 +1129,38 @@ pub struct SealedExactIndexPairInputV1<'a> {
     pub locator_body: &'a [u8],
     /// Exact active adjacency account body.
     pub adjacency_body: &'a [u8],
+}
+
+/// One adapter-authenticated read-only canonical PDA account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExactIndexReadAccountInputV1<'a> {
+    /// Actual account key.
+    pub account: Id32,
+    /// Complete hostile account bytes.
+    pub body: &'a [u8],
+    /// Actual account owner.
+    pub owner: Id32,
+    /// Canonical PDA independently derived by the SBF adapter.
+    pub canonical_account: Id32,
+    /// Canonical bump independently derived by the SBF adapter.
+    pub canonical_bump: u8,
+    /// Runtime writable privilege, which must be false for a sealed read.
+    pub writable: bool,
+    /// Runtime executable bit, which must be false.
+    pub executable: bool,
+}
+
+/// Complete authenticated Root/locator/adjacency read join.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticateCountedExactIndexReadInputV1<'a> {
+    /// Expected Dragon's Clutch program owner.
+    pub program_id: Id32,
+    /// Reserved indexed SettlementRoot V2 PDA.
+    pub root: ExactIndexReadAccountInputV1<'a>,
+    /// Sealed frozen-order locator PDA.
+    pub locator: ExactIndexReadAccountInputV1<'a>,
+    /// Sealed candidate adjacency PDA.
+    pub adjacency: ExactIndexReadAccountInputV1<'a>,
 }
 
 impl IndexedPairCoverageV1 {
@@ -1576,19 +1631,27 @@ pub fn construct_exact_index_plane_v1(
 ///
 /// Unlike the raw child constructor, this function can create its private
 /// admission capability because the returned root poststate owns exact
-/// expected/admitted/live counts of two. No live discriminator, seed, action,
-/// dispatch entry, or profile capability exists for this plan today.
+/// expected/admitted/live counts of two. The discriminator/version/PDA are
+/// centrally reserved, but no action, dispatch entry, or profile capability
+/// consumes this plan today.
 pub fn construct_counted_exact_index_root_v1(
+    root_rent: IndexedSettlementRootRentPreparationV1,
     input: ConstructExactIndexPlaneInputV1<'_>,
 ) -> Result<CountedExactIndexRootCreatePostwritesV1, ExactIndexPlaneErrorV1> {
     let root_account = input.settlement_root_account;
-    let base = *input.settlement_root;
+    if root_rent.root_account() != root_account
+        || root_rent.base_before() != input.settlement_root
+        || root_rent.neutral_sink() != input.market_binding.base().neutral_sink
+    {
+        return Err(ExactIndexPlaneErrorV1::RootBinding);
+    }
     let indexes = construct_exact_index_plane_v1(
         CountedExactIndexAdmissionV1 { _private: () },
         input,
     )?;
+    validate_root_and_index_rent_funding(&root_rent, &input)?;
     let indexed_root = IndexedSettlementRootV1AccountV1::new_live(
-        base,
+        *root_rent.base_after(),
         indexes.locator_account,
         indexes.adjacency_account,
         indexes.locator.common.plane_id,
@@ -1603,8 +1666,38 @@ pub fn construct_counted_exact_index_root_v1(
     Ok(CountedExactIndexRootCreatePostwritesV1 {
         indexed_root,
         indexed_root_data_id,
+        root_rent,
         indexes,
     })
+}
+
+fn validate_root_and_index_rent_funding(
+    root_rent: &IndexedSettlementRootRentPreparationV1,
+    input: &ConstructExactIndexPlaneInputV1<'_>,
+) -> Result<(), ExactIndexPlaneErrorV1> {
+    let root_payer = root_rent.rent_after().payer;
+    if root_payer == input.locator_create.account
+        || root_payer == input.adjacency_create.account
+        || input.locator_create.payer == input.settlement_root_account
+        || input.adjacency_create.payer == input.settlement_root_account
+    {
+        return Err(ExactIndexPlaneErrorV1::InvalidRent);
+    }
+    let mut combined_root_payer_debit = root_rent.payer_debit_lamports();
+    for create in [input.locator_create, input.adjacency_create] {
+        if create.payer == root_payer {
+            if create.payer_lamports != root_rent.payer_balance_before_lamports() {
+                return Err(ExactIndexPlaneErrorV1::InvalidRent);
+            }
+            combined_root_payer_debit = combined_root_payer_debit
+                .checked_add(create.rent_exempt_minimum)
+                .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+        }
+    }
+    if combined_root_payer_debit > root_rent.payer_balance_before_lamports() {
+        return Err(ExactIndexPlaneErrorV1::InvalidRent);
+    }
+    Ok(())
 }
 
 /// Validate exact cross-links and shared semantic bindings of a decoded pair.
@@ -1693,9 +1786,9 @@ pub fn indexed_pair_coverage_v1(
 /// Full account validation belongs to one-time construction. This read still
 /// hostile-decodes both constant headers and every selected local edge, but it
 /// does not walk unrelated page locations, order directories, or slice edges.
-/// The unforgeable authority represents the later adapter's proof that both
-/// immutable accounts are program-owned canonical PDAs named by a counted root
-/// successor. There is intentionally no authority constructor today.
+/// The unforgeable authority represents the adapter projection's proof that
+/// both immutable accounts are program-owned canonical PDAs named by the exact
+/// counted root successor and match its full body IDs.
 pub fn indexed_pair_coverage_from_sealed_accounts_v1(
     input: SealedExactIndexPairInputV1<'_>,
     buy_order: u8,
@@ -2480,6 +2573,90 @@ pub fn retire_counted_exact_index_root_v1(
         indexed_root_poststate,
         indexed_root_poststate_data_id,
         close,
+    })
+}
+
+/// Authenticate the reserved indexed root and both complete sealed child bodies.
+///
+/// The SBF adapter must independently derive the three canonical PDAs and
+/// bumps before calling this pure join. This function then hostile-decodes all
+/// three complete bodies and verifies the root-held full locator and adjacency
+/// data IDs before minting the bounded local-row read capability. The returned
+/// reader still touches only the requested locator rows and edge groups.
+pub fn authenticate_counted_exact_index_read_v1<'a>(
+    input: AuthenticateCountedExactIndexReadInputV1<'a>,
+) -> Result<SealedExactIndexPairInputV1<'a>, ExactIndexPlaneErrorV1> {
+    if input.program_id.is_zero() {
+        return Err(ExactIndexPlaneErrorV1::ZeroIdentity);
+    }
+    for account in [input.root, input.locator, input.adjacency] {
+        if account.account.is_zero()
+            || account.owner != input.program_id
+            || account.account != account.canonical_account
+            || account.writable
+            || account.executable
+        {
+            return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+        }
+    }
+    if input.root.account == input.locator.account
+        || input.root.account == input.adjacency.account
+        || input.locator.account == input.adjacency.account
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let root = IndexedSettlementRootV1AccountV1::decode(input.root.body)
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    if root.index_state() != ExactIndexChildrenStateV1::Live
+        || root.base().stored_bump() != input.root.canonical_bump
+        || root.locator_account() != input.locator.account
+        || root.adjacency_account() != input.adjacency.account
+    {
+        return Err(ExactIndexPlaneErrorV1::RootBinding);
+    }
+    let locator = FrozenOrderLocatorV1::decode(input.locator.body)?;
+    let adjacency = CandidateOrderSliceIndexV1::decode(input.adjacency.body)?;
+    validate_exact_index_pair(
+        input.locator.account,
+        &locator,
+        input.adjacency.account,
+        &adjacency,
+    )?;
+    if locator.common.stored_bump != input.locator.canonical_bump
+        || adjacency.common.stored_bump != input.adjacency.canonical_bump
+        || locator_data_id(&locator)? != root.locator_data_id()
+        || adjacency_data_id(&adjacency)? != root.adjacency_data_id()
+        || locator.common.plane_id != root.plane_id()
+        || locator.common.capability_profile != root.capability_profile_id()
+        || locator.common.settlement_root_account != input.root.account
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let base = root.base();
+    if locator.common.market != base.market()
+        || locator.common.epoch != base.epoch()
+        || locator.common.order_set != base.order_set()
+        || locator.common.settlement_candidate != base.settlement_candidate_id()
+        || locator.common.selected_feed != base.retained_feed()
+        || locator.common.candidate_bundle_digest != base.candidate_bundle_digest()
+        || locator.common.owner_order_set_digest != base.owner_order_set_digest()
+        || locator.common.market_binding_account != base.market_binding()
+        || locator.common.epoch_generation != base.epoch_generation()
+        || locator.common.order_count != base.order_count()
+        || locator.common.outcome_count != base.outcome_count()
+        || locator.common.slice_count != base.counts().expected_receipts
+    {
+        return Err(ExactIndexPlaneErrorV1::RootBinding);
+    }
+    Ok(SealedExactIndexPairInputV1 {
+        authority: CountedExactIndexReadAuthorityV1 {
+            plane_id: root.plane_id(),
+            locator_account: input.locator.account,
+            adjacency_account: input.adjacency.account,
+            _private: (),
+        },
+        locator_body: input.locator.body,
+        adjacency_body: input.adjacency.body,
     })
 }
 
