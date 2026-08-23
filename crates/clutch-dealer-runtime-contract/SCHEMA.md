@@ -164,6 +164,10 @@ exact account and semantic identities. Its terminal close authenticates and
 deletes both rent-owned accounts atomically after the Position, Replay, Epoch,
 LP, lease, pot, allocation, and claim families are exhausted; Initialize
 therefore cannot leave an uncounted receipt or refundable principal behind.
+Likewise, `DealerEpochBindingV2` owns its Bind receipt account and semantic
+identity. Both lapse and post-lease retirement authenticate that exact receipt
+body and emit independent, coalescible close credits for the Epoch and receipt;
+neither close may erase the Epoch while retaining its receipt rent.
 
 The Dealer schedule is finer grained. Actions map as follows:
 
