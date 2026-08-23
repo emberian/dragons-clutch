@@ -15,6 +15,7 @@
 
 mod descriptor;
 mod position_transfer;
+mod runtime;
 
 pub use descriptor::{
     reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1,
@@ -24,6 +25,11 @@ pub use descriptor::{
 pub use position_transfer::{
     prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
     AtomicPositionAssetTransferRequestV1, AtomicPositionAssetTransferResultV1, PositionProjectionV1,
+};
+pub use runtime::{
+    prepare_unwrap_canonical_v1, prepare_wrap_canonical_v1, CanonicalUnwrapRequestV1,
+    CanonicalWrapRequestV1, StructuredClaimRuntimeAddressesV1, WrapperMintProjectionV1,
+    WrapperTokenProjectionV1, WrapperTransitionPlanV1,
 };
 
 /// Maximum native outcome width shared with the structured-claim kernel.
@@ -65,6 +71,8 @@ pub enum Error {
     ReplayExhausted,
     /// A prospective result violates exact conservation.
     InvariantViolation,
+    /// The authoritative structured-claim economic machine refused the route.
+    EconomicTransitionRefused,
 }
 
 /// Result alias for adapter contracts.
