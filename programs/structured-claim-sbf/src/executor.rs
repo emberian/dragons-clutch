@@ -11,7 +11,7 @@ use clutch_product_series::{
 };
 use clutch_retirement::{
     PositionAccountV3, PositionPurposeV3, PositionV3Sha256Backend, ReplayV3Envelope,
-    ReplayV3HashBackend,
+    ReplayV3EnvelopeHeader, ReplayV3HashBackend,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
@@ -31,6 +31,7 @@ use clutch_structured_claim_adapter::runtime_contract::{
     StructuredClaimPayloadV1, StructuredClaimRuntimeAddressesV1,
     StructuredClaimReplayExtensionStateV1, StructuredClaimReplayExtensionV1,
     StructuredCustodyCallProjectionV1, StructuredMarketRootV1, WrapperQuantityPayloadV1,
+    VaultMutationPayloadV1,
     WrapperRecipeHashV1, DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
     DESCRIPTOR_ACCOUNT_VERSION, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
     STRUCTURED_CUSTODY_CALL_V1_DOMAIN, STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
@@ -40,7 +41,8 @@ use clutch_structured_claim_adapter::runtime_contract::{
 use clutch_structured_claim_adapter::{
     admit_runtime_envelope_v1, bind_descriptor_v1, canonical_native_claim_id_v1,
     canonical_series_scoped_wrapper_product_id_v2, decode_canonical_wrapper_mint_v1,
-    decode_canonical_wrapper_token_v1, plan_token_2022_cpi_v1,
+    decode_canonical_wrapper_token_v1, decode_retired_canonical_wrapper_mint_v1,
+    plan_token_2022_cpi_v1,
     PdaVerifierV1, RuntimeDeploymentsV1, Token2022CpiV1, Token2022InstructionPlanV1,
     DESCRIPTOR_SEED, MINT_AUTHORITY_SEED, MINT_SEED, VAULT_OWNER_SEED,
     STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
@@ -68,6 +70,7 @@ const FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 29;
 const FULL_VECTOR_ACCOUNT_COUNT: usize = 32;
 const TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
 const COMPACTION_ACCOUNT_COUNT: usize = 27;
+const RETIREMENT_ACCOUNT_COUNT: usize = 31;
 const _: () = assert!(
     clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
         == clutch_structured_claim_adapter::runtime_contract::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
@@ -171,6 +174,37 @@ const X_WRAPPER_RELEASE: usize = 24;
 const X_BASE_RELEASE: usize = 25;
 const X_TOKEN_RELEASE: usize = 26;
 
+const R_REALM: usize = 1;
+const R_PROFILE: usize = 2;
+const R_POLICY: usize = 3;
+const R_COLLATERAL_TOKEN_PROGRAM: usize = 4;
+const R_COLLATERAL_TOKEN_DATA: usize = 5;
+const R_BINDING: usize = 6;
+const R_RUNTIME: usize = 7;
+const R_POSITION: usize = 8;
+const R_REPLAY: usize = 9;
+const R_DESCRIPTOR: usize = 10;
+const R_WRAPPER_PROGRAM: usize = 11;
+const R_WRAPPER_DATA: usize = 12;
+const R_BASE_PROGRAM: usize = 13;
+const R_BASE_DATA: usize = 14;
+const R_TOKEN_PROGRAM: usize = 15;
+const R_TOKEN_DATA: usize = 16;
+const R_BASIS: usize = 17;
+const R_MARKET: usize = 18;
+const R_HOARD: usize = 19;
+const R_LEDGER: usize = 20;
+const R_MINT: usize = 21;
+const R_MINT_AUTHORITY: usize = 22;
+const R_ROOT: usize = 23;
+const R_LINK: usize = 24;
+const R_REFUND_OWNER: usize = 25;
+const R_NEUTRAL_SINK: usize = 26;
+const R_WRAPPER_RELEASE: usize = 27;
+const R_BASE_RELEASE: usize = 28;
+const R_TOKEN_RELEASE: usize = 29;
+const R_SYSTEM: usize = 30;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AuthenticatedStructuredDeploymentsV2 {
     runtime: RuntimeDeploymentsV1,
@@ -210,6 +244,9 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo<'_>], input: &[u8]) 
             StructuredClaimActionV1::RedeemTerminal,
             value,
         ),
+        StructuredClaimPayloadV1::RetireDescriptor(value) => {
+            retire_descriptor(program_id, accounts, value)
+        }
         _ => Err(WrapperError::Instruction),
     }
 }
@@ -373,6 +410,297 @@ fn create(
         deployments,
     )?;
     Ok(())
+}
+
+fn retire_descriptor(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    payload: VaultMutationPayloadV1,
+) -> Result<()> {
+    if accounts.len() != RETIREMENT_ACCOUNT_COUNT
+        || accounts[R_ROOT].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_ROOT].data_len() != STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+    {
+        return Err(WrapperError::Accounts);
+    }
+    let root_data = accounts[R_ROOT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let root_before = StructuredMarketRootV1::decode(&root_data)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(root_data);
+    let family_terminal = root_before.live_descriptor_count == 1;
+    validate_retirement_accounts(program_id, accounts, family_terminal)?;
+
+    let descriptor_data = accounts[R_DESCRIPTOR]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let descriptor_before = StructuredClaimDescriptorV2::decode(&descriptor_data)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(descriptor_data);
+    if descriptor_before.state != DescriptorStateV1::Active {
+        return Err(WrapperError::Identity);
+    }
+    let deployments = retirement_deployments(program_id, accounts, descriptor_before)?;
+    let basis_data = accounts[R_BASIS]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let mut basis = Box::new(NativeClaimBasisV1::ZEROED);
+    NativeClaimBasisV1::decode_into(&basis_data, &mut basis)
+        .map_err(|_| WrapperError::Identity)?;
+    let basis_id = hashv(&[
+        clutch_product_series::NATIVE_CLAIM_BASIS_DOMAIN,
+        &basis_data,
+    ])
+    .to_bytes();
+    drop(basis_data);
+    let market_data = accounts[R_MARKET]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let market = MarketInstancePreimageV2::decode(&market_data)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(market_data);
+    let market_id = market.id().map_err(|_| WrapperError::Identity)?.bytes();
+    let descriptor_basis = DescriptorBasisV1 {
+        market: market_id,
+        terms_digest: basis_id,
+        basis_degree: basis.basis_degree,
+        denominator: basis.denominator,
+        outcome_count: basis.outcome_count,
+    };
+    let identity = clutch_structured_claim_adapter::runtime_contract::reconstruct_descriptor_identity_v1(
+        &descriptor_before,
+        descriptor_basis,
+        deployments.runtime.binding,
+    )
+    .map_err(|_| WrapperError::Identity)?;
+    let native_claim_id = canonical_native_claim_id_v1(&identity)
+        .map_err(|_| WrapperError::Identity)?;
+    let product_id = canonical_series_scoped_wrapper_product_id_v2(
+        &identity,
+        native_claim_id,
+        descriptor_before.structured_root_id,
+        descriptor_before.wrapper_recipe_id,
+    )
+    .map_err(|_| WrapperError::Identity)?;
+    if payload.wrapper_product_id != product_id {
+        return Err(WrapperError::Identity);
+    }
+    let addresses = derive_addresses(program_id, product_id);
+    require_key(&accounts[R_DESCRIPTOR], addresses.descriptor.0)?;
+    require_key(&accounts[R_MINT], addresses.mint.0)?;
+    require_key(&accounts[R_MINT_AUTHORITY], addresses.mint_authority.0)?;
+    require_key(&accounts[VAULT_AUTHORITY], addresses.vault_owner.0)?;
+    if descriptor_before.descriptor_bump != addresses.descriptor.1
+        || descriptor_before.mint_bump != addresses.mint.1
+        || descriptor_before.mint_authority_bump != addresses.mint_authority.1
+        || descriptor_before.vault_owner_bump != addresses.vault_owner.1
+        || addresses.mint_authority.0 == addresses.vault_owner.0
+    {
+        return Err(WrapperError::Identity);
+    }
+    let bound = bind_descriptor_v1(
+        descriptor_before,
+        descriptor_basis,
+        deployments.runtime,
+        native_claim_id,
+        product_id,
+        StructuredClaimRuntimeAddressesV1 {
+            descriptor: addresses.descriptor.0.to_bytes(),
+            mint: addresses.mint.0.to_bytes(),
+            mint_authority: addresses.mint_authority.0.to_bytes(),
+            vault_owner: addresses.vault_owner.0.to_bytes(),
+        },
+        &RuntimePdaVerifier,
+    )
+    .map_err(|_| WrapperError::Identity)?;
+    let root_id = root_before
+        .binding
+        .id(&RuntimeSha)
+        .map_err(|_| WrapperError::Identity)?;
+    let root_pda = Pubkey::find_program_address(
+        &[STRUCTURED_ROOT_SEED_V1, &root_id.bytes()],
+        accounts[R_BASE_PROGRAM].key,
+    );
+    if *accounts[R_ROOT].key != root_pda.0
+        || root_before.root_bump != root_pda.1
+        || root_id.bytes() != descriptor_before.structured_root_id
+        || root_before.binding.owner_release_id != deployments.owner_release_id
+        || root_before.binding.market_instance_id.bytes() != market_id
+        || root_before.binding.link_account != accounts[R_LINK].key.to_bytes()
+        || root_before.binding.rent_refund_owner.bytes()
+            != accounts[R_REFUND_OWNER].key.to_bytes()
+        || root_before.binding.neutral_lamport_sink.bytes()
+            != accounts[R_NEUTRAL_SINK].key.to_bytes()
+    {
+        return Err(WrapperError::Identity);
+    }
+
+    let position_data = accounts[R_POSITION]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let replay_data = accounts[R_REPLAY]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let mint_data = accounts[R_MINT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let position_before = PositionAccountV3::decode(&position_data)
+        .map_err(|_| WrapperError::Identity)?;
+    let replay_before = ReplayV3Envelope::decode(&replay_data, &RuntimeSha)
+        .map_err(|_| WrapperError::Identity)?;
+    let extension_before = StructuredClaimReplayExtensionV1::decode(replay_before.extension())
+        .map_err(|_| WrapperError::Identity)?;
+    let replay_header_before = replay_before.header();
+    let mint_before = decode_canonical_wrapper_mint_v1(
+        accounts[R_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[R_MINT].key.to_bytes(),
+        addresses.mint_authority.0.to_bytes(),
+        &mint_data,
+    )
+    .map_err(|_| WrapperError::Token2022)?;
+    drop(position_data);
+    drop(replay_data);
+    drop(mint_data);
+    if mint_before.supply != 0
+        || position_before.purpose() != PositionPurposeV3::StructuredClaim
+        || position_before.owner().bytes() != addresses.vault_owner.0.to_bytes()
+        || position_before.controller().bytes() != addresses.vault_owner.0.to_bytes()
+        || position_before.purpose_binding_id().bytes() != product_id
+        || position_before.replay_account().bytes() != accounts[R_REPLAY].key.to_bytes()
+        || position_before.cash_atoms() != 0
+        || position_before.reserved_cash_atoms() != 0
+        || position_before.native_eggs() != [0; clutch_retirement::MAX_OUTCOMES]
+        || position_before.outstanding_reservations() != 0
+        || replay_before.header().position_account().bytes()
+            != accounts[R_POSITION].key.to_bytes()
+        || replay_before.header().replay_account().bytes() != accounts[R_REPLAY].key.to_bytes()
+        || replay_before.header().next_sequence() != payload.vault_replay_sequence
+        || position_before.generation() != payload.vault_generation
+        || extension_before.descriptor_account != accounts[R_DESCRIPTOR].key.to_bytes()
+        || extension_before.wrapper_product_id != product_id
+        || extension_before.vault_authority != addresses.vault_owner.0.to_bytes()
+    {
+        return Err(WrapperError::Identity);
+    }
+    let position_balance_before = accounts[R_POSITION].lamports();
+    let replay_balance_before = accounts[R_REPLAY].lamports();
+    let root_balance_before = accounts[R_ROOT].lamports();
+    let refund_balance_before = accounts[R_REFUND_OWNER].lamports();
+    let sink_balance_before = accounts[R_NEUTRAL_SINK].lamports();
+    let link_balance_before = accounts[R_LINK].lamports();
+    let link_data_before = accounts[R_LINK]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let mut link_before = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    SeriesMarketLinkAccountV1::decode_into(&link_data_before, &mut link_before)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(link_data_before);
+
+    let revoke = plan_token_2022_cpi_v1(
+        accounts[R_TOKEN_PROGRAM].key.to_bytes(),
+        Token2022CpiV1::RevokeMintAuthority {
+            mint: accounts[R_MINT].key.to_bytes(),
+            authority_before: accounts[R_MINT_AUTHORITY].key.to_bytes(),
+            authority_after: [0; 32],
+        },
+    )
+    .map_err(|_| WrapperError::Token2022)?;
+    let mint_authority_bump = [descriptor_before.mint_authority_bump];
+    let mint_authority_signer: [&[u8]; 3] = [
+        MINT_AUTHORITY_SEED,
+        &product_id,
+        &mint_authority_bump,
+    ];
+    invoke_token_plan(&revoke, accounts, &[&mint_authority_signer])?;
+    let mut descriptor_after = descriptor_before;
+    descriptor_after.state = DescriptorStateV1::Retired;
+    let descriptor_after_body = descriptor_after
+        .encode()
+        .map_err(|_| WrapperError::Identity)?;
+    accounts[R_DESCRIPTOR]
+        .try_borrow_mut_data()
+        .map_err(|_| WrapperError::Borrow)?
+        .copy_from_slice(&descriptor_after_body);
+    let revoked_data = accounts[R_MINT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let revoked_mint = decode_retired_canonical_wrapper_mint_v1(
+        accounts[R_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[R_MINT].key.to_bytes(),
+        &revoked_data,
+    )
+    .map_err(|_| WrapperError::Token2022)?;
+    drop(revoked_data);
+    if revoked_mint.supply != 0 || revoked_mint.mint_authority != [0; 32] {
+        return Err(WrapperError::Token2022);
+    }
+
+    invoke_base_retirement(accounts, payload, product_id, family_terminal)?;
+    reconcile_retirement(
+        accounts,
+        descriptor_after,
+        position_before,
+        replay_header_before,
+        root_before,
+        position_balance_before,
+        replay_balance_before,
+        root_balance_before,
+        refund_balance_before,
+        sink_balance_before,
+        link_balance_before,
+        &link_before,
+        family_terminal,
+        &bound,
+    )
+}
+
+fn retirement_deployments(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    descriptor: StructuredClaimDescriptorV2,
+) -> Result<AuthenticatedStructuredDeploymentsV2> {
+    let wrapper = authenticate_release_v2(
+        accounts[R_BASE_PROGRAM].key,
+        &accounts[R_WRAPPER_PROGRAM],
+        &accounts[R_WRAPPER_DATA],
+        &accounts[R_WRAPPER_RELEASE],
+        ContentId::from_bytes(STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1),
+    )?;
+    let base = authenticate_release_v2(
+        accounts[R_BASE_PROGRAM].key,
+        &accounts[R_BASE_PROGRAM],
+        &accounts[R_BASE_DATA],
+        &accounts[R_BASE_RELEASE],
+        ContentId::from_bytes(STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1),
+    )?;
+    let token = authenticate_release_v2(
+        accounts[R_BASE_PROGRAM].key,
+        &accounts[R_TOKEN_PROGRAM],
+        &accounts[R_TOKEN_DATA],
+        &accounts[R_TOKEN_RELEASE],
+        ContentId::from_bytes(STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1),
+    )?;
+    if *accounts[R_WRAPPER_PROGRAM].key != *program_id
+        || descriptor.wrapper_program_data != wrapper.program_data
+        || descriptor.wrapper_deployment_slot != wrapper.slot
+        || descriptor.base_program != accounts[R_BASE_PROGRAM].key.to_bytes()
+        || descriptor.base_program_data != base.program_data
+        || descriptor.base_deployment_slot != base.slot
+        || descriptor.token_2022_program != accounts[R_TOKEN_PROGRAM].key.to_bytes()
+        || descriptor.token_2022_program_data != token.program_data
+        || descriptor.token_2022_deployment_slot != token.slot
+    {
+        return Err(WrapperError::Deployment);
+    }
+    runtime_deployments(
+        accounts[R_WRAPPER_PROGRAM].key,
+        wrapper,
+        accounts[R_BASE_PROGRAM].key,
+        base,
+        accounts[R_TOKEN_PROGRAM].key,
+        token,
+    )
 }
 
 fn canonical(
@@ -1265,6 +1593,95 @@ fn validate_compaction_accounts(
     Ok(())
 }
 
+fn validate_retirement_accounts(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    family_terminal: bool,
+) -> Result<()> {
+    if accounts.len() != RETIREMENT_ACCOUNT_COUNT {
+        return Err(WrapperError::Accounts);
+    }
+    let mut index = 0usize;
+    while index < RETIREMENT_ACCOUNT_COUNT {
+        let writable = retirement_account_writable(index, family_terminal);
+        let executable = matches!(
+            index,
+            R_COLLATERAL_TOKEN_PROGRAM
+                | R_WRAPPER_PROGRAM
+                | R_BASE_PROGRAM
+                | R_TOKEN_PROGRAM
+                | R_SYSTEM
+        );
+        if accounts[index].is_signer
+            || accounts[index].is_writable != writable
+            || accounts[index].executable != executable
+        {
+            return Err(WrapperError::Accounts);
+        }
+        index += 1;
+    }
+    if *accounts[R_WRAPPER_PROGRAM].key != *program_id
+        || *accounts[R_SYSTEM].key != system_program::ID
+        || accounts[R_POSITION].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_REPLAY].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_ROOT].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_LINK].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_DESCRIPTOR].owner != program_id
+        || accounts[R_MINT].owner != accounts[R_TOKEN_PROGRAM].key
+        || accounts[VAULT_AUTHORITY].owner != &system_program::ID
+        || accounts[VAULT_AUTHORITY].data_len() != 0
+        || accounts[R_MINT_AUTHORITY].owner != &system_program::ID
+        || accounts[R_MINT_AUTHORITY].data_len() != 0
+        || accounts[R_REFUND_OWNER].owner != &system_program::ID
+        || accounts[R_REFUND_OWNER].data_len() != 0
+        || accounts[R_NEUTRAL_SINK].owner != &system_program::ID
+        || accounts[R_NEUTRAL_SINK].data_len() != 0
+    {
+        return Err(WrapperError::Accounts);
+    }
+    for release in [R_WRAPPER_RELEASE, R_BASE_RELEASE, R_TOKEN_RELEASE] {
+        if accounts[release].owner != accounts[R_BASE_PROGRAM].key {
+            return Err(WrapperError::Accounts);
+        }
+    }
+    let same_token_release =
+        accounts[R_COLLATERAL_TOKEN_PROGRAM].key == accounts[R_TOKEN_PROGRAM].key;
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            let token_alias = (left == R_COLLATERAL_TOKEN_PROGRAM && right == R_TOKEN_PROGRAM)
+                || (same_token_release
+                    && left == R_COLLATERAL_TOKEN_DATA
+                    && right == R_TOKEN_DATA);
+            if accounts[left].key == accounts[right].key && !token_alias {
+                return Err(WrapperError::Accounts);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    if accounts[R_REALM].key == accounts[R_PROFILE].key
+        || accounts[R_PROFILE].key == accounts[R_POLICY].key
+    {
+        return Err(WrapperError::Accounts);
+    }
+    Ok(())
+}
+
+const fn retirement_account_writable(index: usize, family_terminal: bool) -> bool {
+    matches!(
+        index,
+        R_POSITION
+            | R_REPLAY
+            | R_DESCRIPTOR
+            | R_MINT
+            | R_ROOT
+            | R_REFUND_OWNER
+            | R_NEUTRAL_SINK
+    ) || (index == R_LINK && family_terminal)
+}
+
 fn validate_privileges<const N: usize>(
     accounts: &[AccountInfo<'_>],
     signer: &[bool; N],
@@ -1993,6 +2410,267 @@ fn custody_authority(
         .map_err(|_| WrapperError::Identity)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn reconcile_retirement(
+    accounts: &[AccountInfo<'_>],
+    descriptor_after: StructuredClaimDescriptorV2,
+    position_before: PositionAccountV3,
+    replay_header_before: ReplayV3EnvelopeHeader,
+    root_before: StructuredMarketRootV1,
+    position_balance_before: u64,
+    replay_balance_before: u64,
+    root_balance_before: u64,
+    refund_balance_before: u64,
+    sink_balance_before: u64,
+    link_balance_before: u64,
+    link_before: &SeriesMarketLinkAccountV1,
+    family_terminal: bool,
+    bound: &clutch_structured_claim_adapter::BoundDescriptorV1,
+) -> Result<()> {
+    let descriptor_data = accounts[R_DESCRIPTOR]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let observed_descriptor = StructuredClaimDescriptorV2::decode(&descriptor_data)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(descriptor_data);
+    let mint_data = accounts[R_MINT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let observed_mint = decode_retired_canonical_wrapper_mint_v1(
+        accounts[R_TOKEN_PROGRAM].key.to_bytes(),
+        accounts[R_MINT].key.to_bytes(),
+        &mint_data,
+    )
+    .map_err(|_| WrapperError::Token2022)?;
+    drop(mint_data);
+    let mut expected_descriptor = *bound.descriptor();
+    expected_descriptor.state = DescriptorStateV1::Retired;
+    if descriptor_after != expected_descriptor
+        || observed_descriptor != descriptor_after
+        || observed_mint.address != bound.addresses().mint
+        || observed_mint.mint_authority != [0; 32]
+        || observed_mint.supply != 0
+        || observed_mint.decimals != 0
+        || observed_mint.freeze_authority != [0; 32]
+        || observed_mint.extension_mask != 0
+        || !observed_mint.initialized
+        || bound.wrapper_product_id() != position_before.purpose_binding_id().bytes()
+    {
+        return Err(WrapperError::Identity);
+    }
+
+    let position_data = accounts[R_POSITION]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let tombstone = clutch_retirement::PositionTombstoneV3::decode(&position_data)
+        .map_err(|_| WrapperError::BaseCustody)?;
+    drop(position_data);
+    let tombstone_fields = tombstone.fields();
+    if accounts[R_POSITION].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_POSITION].data_len() != clutch_retirement::POSITION_TOMBSTONE_V3_BYTES
+        || tombstone_fields.purpose != position_before.purpose()
+        || tombstone_fields.stored_bump != position_before.stored_bump()
+        || tombstone_fields.generation != position_before.generation()
+        || tombstone_fields.market_instance_id != position_before.market_instance_id()
+        || tombstone_fields.realm_id != position_before.realm_id()
+        || tombstone_fields.collateral_policy_id != position_before.collateral_policy_id()
+        || tombstone_fields.collateral_release_id != position_before.collateral_release_id()
+        || tombstone_fields.owner != position_before.owner()
+        || tombstone_fields.controller != position_before.controller()
+        || tombstone_fields.replay_account != position_before.replay_account()
+        || tombstone_fields.purpose_binding_id != position_before.purpose_binding_id()
+        || tombstone_fields.permanent_tombstone_principal
+            != position_before.rent().permanent_tombstone_principal
+        || accounts[R_POSITION].lamports()
+            != position_before.rent().permanent_tombstone_principal
+        || accounts[R_REPLAY].owner != &system_program::ID
+        || accounts[R_REPLAY].data_len() != 0
+        || accounts[R_REPLAY].lamports() != 0
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+
+    let position_principal = position_before
+        .rent()
+        .refundable_live_principal
+        .checked_add(position_before.rent().permanent_tombstone_principal)
+        .ok_or(WrapperError::Arithmetic)?;
+    let position_donation = position_balance_before
+        .checked_sub(position_principal)
+        .ok_or(WrapperError::BaseCustody)?;
+    let replay_refund = replay_header_before.rent().refundable_principal();
+    let replay_donation = replay_balance_before
+        .checked_sub(replay_refund)
+        .ok_or(WrapperError::BaseCustody)?;
+    let root_donation = root_balance_before
+        .checked_sub(root_before.rent_principal_lamports)
+        .ok_or(WrapperError::BaseCustody)?;
+    if root_donation < root_before.current_donation_lamports
+        || root_donation < root_before.donation_floor_lamports
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    let mut expected_refund = refund_balance_before
+        .checked_add(position_before.rent().refundable_live_principal)
+        .and_then(|value| value.checked_add(replay_refund))
+        .ok_or(WrapperError::Arithmetic)?;
+    let mut expected_sink = sink_balance_before
+        .checked_add(position_donation)
+        .and_then(|value| value.checked_add(replay_donation))
+        .ok_or(WrapperError::Arithmetic)?;
+    if family_terminal {
+        expected_refund = expected_refund
+            .checked_add(root_before.rent_principal_lamports)
+            .ok_or(WrapperError::Arithmetic)?;
+        expected_sink = expected_sink
+            .checked_add(root_donation)
+            .ok_or(WrapperError::Arithmetic)?;
+    }
+    if accounts[R_REFUND_OWNER].lamports() != expected_refund
+        || accounts[R_NEUTRAL_SINK].lamports() != expected_sink
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+
+    if family_terminal {
+        if root_before.live_descriptor_count != 1
+            || accounts[R_ROOT].owner != &system_program::ID
+            || accounts[R_ROOT].data_len() != 0
+            || accounts[R_ROOT].lamports() != 0
+        {
+            return Err(WrapperError::BaseCustody);
+        }
+    } else {
+        let root_data = accounts[R_ROOT]
+            .try_borrow_data()
+            .map_err(|_| WrapperError::Borrow)?;
+        let root_after = StructuredMarketRootV1::decode(&root_data)
+            .map_err(|_| WrapperError::BaseCustody)?;
+        drop(root_data);
+        if root_after.binding != root_before.binding
+            || root_after.product_lineage != root_before.product_lineage
+            || root_after.transition_sequence
+                != root_before
+                    .transition_sequence
+                    .checked_add(1)
+                    .ok_or(WrapperError::Arithmetic)?
+            || root_after.admitted_descriptor_count != root_before.admitted_descriptor_count
+            || root_after.live_descriptor_count
+                != root_before
+                    .live_descriptor_count
+                    .checked_sub(1)
+                    .ok_or(WrapperError::Arithmetic)?
+            || root_after.terminal_descriptor_count
+                != root_before
+                    .terminal_descriptor_count
+                    .checked_add(1)
+                    .ok_or(WrapperError::Arithmetic)?
+            || root_after.admission_transcript_id != root_before.admission_transcript_id
+            || root_after.terminal_transcript_id.is_zero()
+            || root_after.terminal_transcript_id == root_before.terminal_transcript_id
+            || !root_after.aggregate_terminal_receipt_id.is_zero()
+            || root_after.rent_principal_lamports != root_before.rent_principal_lamports
+            || root_after.donation_floor_lamports != root_before.donation_floor_lamports
+            || root_after.current_donation_lamports != root_donation
+            || root_after.root_bump != root_before.root_bump
+            || accounts[R_ROOT].owner != accounts[R_BASE_PROGRAM].key
+            || accounts[R_ROOT].data_len() != STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES
+            || accounts[R_ROOT].lamports() != root_balance_before
+        {
+            return Err(WrapperError::BaseCustody);
+        }
+    }
+
+    if link_before.state.binding().series_plan_id != root_before.binding.series_plan_id
+        || link_before.state.binding().ordinal != root_before.binding.ordinal
+        || link_before.state.binding().market_instance_id != root_before.binding.market_instance_id
+        || link_before.state.binding().generation != root_before.binding.generation
+        || link_before.state.transition_sequence()
+            != root_before.product_lineage.product_link_transition_sequence
+        || link_before
+            .state
+            .obligation_status(SeriesLinkObligationV1::Wrapper)
+            != SeriesLinkObligationStatusV1::Live
+        || link_before
+            .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper)
+            != root_before.product_lineage.product_admission_receipt_id
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    let link_data_after = accounts[R_LINK]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    if family_terminal {
+        let mut link_after = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+        SeriesMarketLinkAccountV1::decode_into(&link_data_after, &mut link_after)
+            .map_err(|_| WrapperError::Identity)?;
+        if link_after.stored_bump != link_before.stored_bump
+            || link_after.state.binding() != link_before.state.binding()
+            || link_after.state.phase() != link_before.state.phase()
+            || link_after.state.active_failure_sessions()
+                != link_before.state.active_failure_sessions()
+            || link_after.state.failure_sessions_started()
+                != link_before.state.failure_sessions_started()
+            || link_after.state.failure_session_transcript_id()
+                != link_before.state.failure_session_transcript_id()
+            || link_after.state.market_admission_sequence()
+                != link_before.state.market_admission_sequence()
+            || link_after.state.market_admission_receipt_id()
+                != link_before.state.market_admission_receipt_id()
+            || link_after.state.transition_sequence()
+                != link_before
+                    .state
+                    .transition_sequence()
+                    .checked_add(1)
+                    .ok_or(WrapperError::Arithmetic)?
+            || link_after
+                .state
+                .obligation_status(SeriesLinkObligationV1::Wrapper)
+                != SeriesLinkObligationStatusV1::Terminal
+            || link_after
+                .state
+                .obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper)
+                != link_before
+                    .state
+                    .obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper)
+            || link_after
+                .state
+                .obligation_terminal_receipt_id(SeriesLinkObligationV1::Wrapper)
+                .is_zero()
+        {
+            return Err(WrapperError::BaseCustody);
+        }
+        for obligation in [
+            SeriesLinkObligationV1::Dealer,
+            SeriesLinkObligationV1::Structured,
+            SeriesLinkObligationV1::Liquidity,
+        ] {
+            if link_after.state.obligation_status(obligation)
+                != link_before.state.obligation_status(obligation)
+                || link_after.state.obligation_admission_receipt_id(obligation)
+                    != link_before.state.obligation_admission_receipt_id(obligation)
+                || link_after.state.obligation_terminal_receipt_id(obligation)
+                    != link_before.state.obligation_terminal_receipt_id(obligation)
+            {
+                return Err(WrapperError::BaseCustody);
+            }
+        }
+    } else {
+        let mut link_after = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+        SeriesMarketLinkAccountV1::decode_into(&link_data_after, &mut link_after)
+            .map_err(|_| WrapperError::Identity)?;
+        if *link_after != *link_before {
+            return Err(WrapperError::BaseCustody);
+        }
+    }
+    drop(link_data_after);
+    if accounts[R_LINK].lamports() != link_balance_before {
+        return Err(WrapperError::BaseCustody);
+    }
+    Ok(())
+}
+
 fn reconcile_base_delta(
     accounts: &[AccountInfo<'_>],
     source_before: PositionAccountV3,
@@ -2338,6 +3016,51 @@ fn invoke_base_compaction(
     )
     .1];
     let signer: [&[u8]; 3] = [VAULT_OWNER_SEED, &payload.wrapper_product_id, &bump];
+    invoke_signed(&instruction, &infos, &[&signer]).map_err(|_| WrapperError::BaseCustody)
+}
+
+fn invoke_base_retirement(
+    accounts: &[AccountInfo<'_>],
+    payload: VaultMutationPayloadV1,
+    product: [u8; 32],
+    family_terminal: bool,
+) -> Result<()> {
+    let payload_body = payload.encode().map_err(|_| WrapperError::Instruction)?;
+    let request = ExtensionRequest {
+        sequence: 0,
+        envelope: ExtensionEnvelope {
+            family: ExtensionFamily::StructuredClaim,
+            action: ExtensionAction::StructuredClaim(StructuredClaimAction::RetireDescriptor),
+            payload: &payload_body,
+        },
+    };
+    let mut data = vec![0_u8; 13 + 3 + payload_body.len()];
+    let written = request
+        .encode(&mut data)
+        .map_err(|_| WrapperError::Instruction)?;
+    if written != data.len() {
+        return Err(WrapperError::Instruction);
+    }
+    let mut metas = Vec::with_capacity(RETIREMENT_ACCOUNT_COUNT);
+    let mut infos = Vec::with_capacity(RETIREMENT_ACCOUNT_COUNT + 1);
+    let mut index = 0usize;
+    while index < RETIREMENT_ACCOUNT_COUNT {
+        metas.push(AccountMeta {
+            pubkey: *accounts[index].key,
+            is_signer: index == VAULT_AUTHORITY,
+            is_writable: retirement_account_writable(index, family_terminal),
+        });
+        infos.push(accounts[index].clone());
+        index += 1;
+    }
+    infos.push(accounts[R_BASE_PROGRAM].clone());
+    let instruction = Instruction::new_with_bytes(*accounts[R_BASE_PROGRAM].key, &data, metas);
+    let bump = [Pubkey::find_program_address(
+        &[VAULT_OWNER_SEED, &product],
+        accounts[R_WRAPPER_PROGRAM].key,
+    )
+    .1];
+    let signer: [&[u8]; 3] = [VAULT_OWNER_SEED, &product, &bump];
     invoke_signed(&instruction, &infos, &[&signer]).map_err(|_| WrapperError::BaseCustody)
 }
 
@@ -2885,5 +3608,18 @@ mod tests {
             &Pubkey::new_from_array([92; 32]),
             0,
         ));
+    }
+
+    #[test]
+    fn retirement_link_is_writable_only_for_the_last_descriptor() {
+        assert_eq!(RETIREMENT_ACCOUNT_COUNT, 31);
+        assert!(!retirement_account_writable(R_LINK, false));
+        assert!(retirement_account_writable(R_LINK, true));
+        for index in [R_DESCRIPTOR, R_MINT, R_POSITION, R_REPLAY, R_ROOT] {
+            assert!(retirement_account_writable(index, false));
+            assert!(retirement_account_writable(index, true));
+        }
+        assert!(!retirement_account_writable(R_MINT_AUTHORITY, false));
+        assert!(!retirement_account_writable(R_MINT_AUTHORITY, true));
     }
 }

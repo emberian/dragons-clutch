@@ -28,8 +28,15 @@ Full-vector wrap/unwind, beneficiary-free surplus compaction, and exact
 terminal redemption are implemented behind the zero mask. Compaction uses a
 27-account vault-only frame, performs no Token-2022 CPI, and reconciles the
 unchanged mint plus exact PositionV3/ReplayV3/HoardV2/ClaimLedgerV3 successors.
-Descriptor retirement remains incomplete. Descriptor v1 is decode-only; live
-state is descriptor v2.
+Descriptor retirement uses a 31-account frame. The wrapper first revokes the
+zero-supply mint through its private mint-authority PDA, persists the descriptor
+tombstone, and calls the base with only the distinct vault-owner PDA signed.
+The base seals the purpose Replay, writes the permanent Position tombstone,
+deletes Replay with exact principal/donation disposition, advances the
+Structured root, and, for the last descriptor only, consumes Product's Wrapper
+obligation through Product's private terminal receipt before deleting the root.
+The wrapper hostile-reconciles every postimage and exact rent delta. Descriptor
+v1 is decode-only; live state is descriptor v2.
 
 This crate contains no fixtures, mock Source provider, wallet, deployment, or
 client signing path. Building it does not authorize deployment.

@@ -561,6 +561,14 @@ fn process_structured_claim(
             clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::RedeemTerminal,
             request.envelope.payload,
         ),
+        ExtensionAction::StructuredClaim(
+            clutch_solana_layout::registry::StructuredClaimAction::RetireDescriptor,
+        ) => structured_custody::process_retire_descriptor(
+            program_id,
+            accounts,
+            request.sequence,
+            request.envelope.payload,
+        ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
 }
