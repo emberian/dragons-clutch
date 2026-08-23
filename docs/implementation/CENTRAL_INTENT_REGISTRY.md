@@ -355,8 +355,12 @@ pure runtime elsewhere does not make a route executable.
 | `0x81/4` | General V2 | historical merge-delivery owner settlement V4 (292 bytes); withdrawn |
 | `0x81/5` | General V2 | sole future rent-owned owner settlement V5 (340 bytes) |
 | `0x82/1` | General V2 | selected fee record |
-| `0x83/1` | General V2 | owner fee carry |
-| `0x84/1` | General V2 | payer allocation |
+| `0x83/1` | General V2 history | withdrawn owner fee carry without persisted rent ownership |
+| `0x83/2` | General V2 history | withdrawn terminal carry receipt without persisted rent ownership |
+| `0x83/3` | General V2 | sole future rent-owned live owner fee carry (180 bytes) |
+| `0x83/4` | General V2 | sole future rent-owned terminal carry receipt (548 bytes) |
+| `0x84/1` | General V2 history | withdrawn payer allocation without persisted rent ownership |
+| `0x84/2` | General V2 | sole future rent-owned payer allocation (2,732 bytes) |
 | `0x85/1` | General V2 | recipient allocation |
 | `0x86/1` | General V2 | treasury ledger |
 | `0x87/1` | General V2 | settlement cash pot |
