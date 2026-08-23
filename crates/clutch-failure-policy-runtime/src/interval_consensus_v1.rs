@@ -113,14 +113,18 @@ pub struct FailureIntervalConsensusFundingFactsV1 {
     pub work_rent_principal_lamports: u64,
     /// Exact permanent replay-account rent principal supplied now.
     pub replay_rent_principal_lamports: u64,
-    /// Work-PDA balance before the payer's principal transfer.
-    pub work_prior_donation_lamports: u64,
-    /// Work-PDA balance immediately after the transfer.
-    pub work_post_funding_lamports: u64,
-    /// Replay-PDA balance before the payer's principal transfer.
-    pub replay_prior_donation_lamports: u64,
-    /// Replay-PDA balance immediately after the transfer.
-    pub replay_post_funding_lamports: u64,
+    /// Work-PDA donation floor observed before the creation transfer.
+    pub work_creation_donation_floor_lamports: u64,
+    /// Work-PDA donation observed when Begin authenticates the prefund.
+    pub work_observed_donation_lamports: u64,
+    /// Work-PDA balance observed by Begin.
+    pub work_observed_balance_lamports: u64,
+    /// Replay-PDA donation floor observed before the creation transfer.
+    pub replay_creation_donation_floor_lamports: u64,
+    /// Replay-PDA donation observed when Begin authenticates the prefund.
+    pub replay_observed_donation_lamports: u64,
+    /// Replay-PDA balance observed by Begin.
+    pub replay_observed_balance_lamports: u64,
     /// Sole external liveness Recovery work-capital account.
     pub recovery_compartment_account_id: LivenessId,
     /// Immutable liveness policy.
@@ -422,6 +426,16 @@ impl FailureIntervalConsensusStateV1 {
         {
             return Err(Error::BindingMismatch);
         }
+        let advanced = self.transition_nonce != 0;
+        if advanced
+            != (live(self.last_transition_receipt_id.bytes())
+                && live(self.last_liveness_receipt_id.bytes()))
+            || (!advanced
+                && (self.checked_coordinates != 0 || self.current_work_id != self.initial_work_id))
+            || (advanced && self.checked_coordinates == 0)
+        {
+            return Err(Error::BindingMismatch);
+        }
         match self.phase {
             FailureIntervalConsensusPhaseV1::Active => {
                 if live(self.certificate_id.bytes())
@@ -616,7 +630,7 @@ pub fn begin_failure_interval_consensus_v1(
         neutral_sink: facts.neutral_sink,
         work_rent_principal_lamports: facts.work_rent_principal_lamports,
         replay_rent_principal_lamports: facts.replay_rent_principal_lamports,
-        replay_preserved_lamports: facts.replay_post_funding_lamports,
+        replay_preserved_lamports: facts.replay_observed_balance_lamports,
         initial_work_id,
         current_work_id: initial_work_id,
         current_transcript: work.transcript(),
@@ -1063,22 +1077,24 @@ fn validate_funding_facts(
     runtime: &FailureRuntimeExternalV2,
     facts: FailureIntervalConsensusFundingFactsV1,
 ) -> Result<()> {
-    let work_expected = facts
-        .work_prior_donation_lamports
-        .checked_add(facts.work_rent_principal_lamports)
-        .ok_or(Error::BindingMismatch)?;
-    let replay_expected = facts
-        .replay_prior_donation_lamports
-        .checked_add(facts.replay_rent_principal_lamports)
-        .ok_or(Error::BindingMismatch)?;
+    validate_prefund_observation(
+        facts.work_rent_principal_lamports,
+        facts.work_creation_donation_floor_lamports,
+        facts.work_observed_donation_lamports,
+        facts.work_observed_balance_lamports,
+    )?;
+    validate_prefund_observation(
+        facts.replay_rent_principal_lamports,
+        facts.replay_creation_donation_floor_lamports,
+        facts.replay_observed_donation_lamports,
+        facts.replay_observed_balance_lamports,
+    )?;
     if facts.failure_policy_binding_id != runtime.binding_id()
         || facts.market_instance_id != runtime.binding().market_instance_id()
         || facts.generation != runtime.binding().generation()
         || facts.generation == 0
         || facts.work_rent_principal_lamports == 0
         || facts.replay_rent_principal_lamports == 0
-        || facts.work_post_funding_lamports != work_expected
-        || facts.replay_post_funding_lamports != replay_expected
         || facts.recovery_compartment_account_id != runtime.recovery_compartment_account_id()
         || facts.liveness_policy_id != runtime.liveness_policy_id()
         || facts.liveness_lifecycle_id != runtime.liveness_lifecycle_id()
@@ -1099,6 +1115,24 @@ fn validate_funding_facts(
         || facts.replay_account.bytes() == facts.recovery_compartment_account_id.bytes()
         || facts.work_account.bytes() == runtime.semantic_state_id().bytes()
         || facts.replay_account.bytes() == runtime.semantic_state_id().bytes()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn validate_prefund_observation(
+    principal_lamports: u64,
+    creation_donation_floor_lamports: u64,
+    observed_donation_lamports: u64,
+    observed_balance_lamports: u64,
+) -> Result<()> {
+    if principal_lamports == 0
+        || observed_donation_lamports < creation_donation_floor_lamports
+        || observed_donation_lamports
+            .checked_add(principal_lamports)
+            .ok_or(Error::BindingMismatch)?
+            != observed_balance_lamports
     {
         return Err(Error::BindingMismatch);
     }
@@ -1253,10 +1287,12 @@ fn hash_funding_facts(hasher: &mut Sha256, facts: FailureIntervalConsensusFundin
     hasher.update(facts.neutral_sink.bytes());
     hasher.update(facts.work_rent_principal_lamports.to_le_bytes());
     hasher.update(facts.replay_rent_principal_lamports.to_le_bytes());
-    hasher.update(facts.work_prior_donation_lamports.to_le_bytes());
-    hasher.update(facts.work_post_funding_lamports.to_le_bytes());
-    hasher.update(facts.replay_prior_donation_lamports.to_le_bytes());
-    hasher.update(facts.replay_post_funding_lamports.to_le_bytes());
+    hasher.update(facts.work_creation_donation_floor_lamports.to_le_bytes());
+    hasher.update(facts.work_observed_donation_lamports.to_le_bytes());
+    hasher.update(facts.work_observed_balance_lamports.to_le_bytes());
+    hasher.update(facts.replay_creation_donation_floor_lamports.to_le_bytes());
+    hasher.update(facts.replay_observed_donation_lamports.to_le_bytes());
+    hasher.update(facts.replay_observed_balance_lamports.to_le_bytes());
     hasher.update(facts.recovery_compartment_account_id.bytes());
     hasher.update(facts.liveness_policy_id.bytes());
     hasher.update(facts.liveness_lifecycle_id.bytes());
@@ -1343,6 +1379,31 @@ mod tests {
         assert_ne!(
             first,
             project_failure_interval_consensus_replay_id_v1(sibling).unwrap()
+        );
+    }
+
+    #[test]
+    fn later_prefund_donations_cannot_grief_begin_or_discount_principal() {
+        assert_eq!(validate_prefund_observation(100, 3, 9, 109), Ok(()));
+        assert_eq!(
+            validate_prefund_observation(100, 3, 2, 102),
+            Err(Error::BindingMismatch)
+        );
+        assert_eq!(
+            validate_prefund_observation(100, 3, 9, 108),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn replay_projection_refuses_a_half_recorded_paid_transition() {
+        let facts = FailureIntervalConsensusPersistedFactsV1 {
+            last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2::from_bytes([0; 32]),
+            ..active_facts()
+        };
+        assert_eq!(
+            project_failure_interval_consensus_replay_id_v1(facts),
+            Err(Error::BindingMismatch)
         );
     }
 }
