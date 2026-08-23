@@ -1075,6 +1075,11 @@ fn init_order_page(
     sequence: u64,
     intent: &PageInit,
 ) -> Outcome<()> {
+    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+    {
+        let _ = (program_id, accounts, sequence, intent);
+        return Err(ClutchError::UnsupportedInstruction.into());
+    }
     #[cfg(feature = "profile-direct-v3-source-v2-point")]
     {
         require(

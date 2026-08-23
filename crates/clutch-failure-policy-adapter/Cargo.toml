@@ -1,0 +1,22 @@
+[package]
+name = "clutch-failure-policy-adapter"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Account, authentication, intent, and mutation contract for the Dragon's Clutch failure runtime"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+clutch-evidence-recovery = { path = "../clutch-evidence-recovery" }
+clutch-failure-policy-runtime = { path = "../clutch-failure-policy-runtime" }
+clutch-liveness = { path = "../clutch-liveness" }
+clutch-product-series = { path = "../clutch-product-series" }
+clutch-source-plane-v3 = { path = "../clutch-source-plane-v3" }
+clutch-source-plane-v3-runtime = { path = "../clutch-source-plane-v3-runtime" }
+sha2 = { version = "=0.10.9", default-features = false }

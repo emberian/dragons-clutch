@@ -1,6 +1,6 @@
 # Evidence-only recovery runtime projection
 
-Status: **PURE KERNEL / HOST-TESTED / NOT AN SBF ADAPTER OR LIVE ABI**.
+Status: **PURE KERNEL WITH FIXED STATE CODEC / NOT AN SBF ADAPTER OR LIVE ROUTE**.
 
 `clutch-evidence-recovery` owns mutable phase, accepted-progress, reserve,
 rent, donation, and transition-plan semantics for `EvidenceOnlyRecoveryV1`. It
@@ -74,9 +74,15 @@ The adapter still owns all authority:
   the kernel independently checks the expected policy ID and attempt count,
   preventing replay of one component across different recovery semantics.
 
+The V2 state codec is the canonical persistence of this crate's complete
+mutable state, including the closed legacy/successor market-identity variant,
+compiled schedule, exact FundingQuote, funding owners, phase, generation,
+replay nonce, progress, and conservation ledgers. It allocates no Solana
+account tag or PDA and authenticates no account metadata.
+
 This crate defines no failure payout, Hoard funding, fee, future revenue,
-treasury input, Solana account tag, codec, PDA, CPI, Token-2022 type, source
-provider, or liveness promise.
+treasury input, Solana account tag, PDA, CPI, Token-2022 type, source provider,
+or liveness promise.
 
 ## Phase and anti-grief rules
 
