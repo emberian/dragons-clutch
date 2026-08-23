@@ -1516,6 +1516,8 @@ pub enum GeneralV2Action {
     InitializeSettlementRoot = 39,
     /// Complete one merge receipt's separately authenticated payment latch.
     FinalizeMergeReceiptPayment = 40,
+    /// Release and close one exact zero-fill Reservation.
+    ReleaseUnfilledReservation = 41,
 }
 
 /// Dealer family-local policy-catalog transport actions.
@@ -1667,7 +1669,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 40;
+    pub const LAST_TAG: u8 = 41;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -1712,6 +1714,7 @@ impl GeneralV2Action {
             Self::FinalizeOwnerSettlement => 38,
             Self::InitializeSettlementRoot => 39,
             Self::FinalizeMergeReceiptPayment => 40,
+            Self::ReleaseUnfilledReservation => 41,
         }
     }
 
@@ -1758,6 +1761,7 @@ impl GeneralV2Action {
             38 => Some(Self::FinalizeOwnerSettlement),
             39 => Some(Self::InitializeSettlementRoot),
             40 => Some(Self::FinalizeMergeReceiptPayment),
+            41 => Some(Self::ReleaseUnfilledReservation),
             _ => None,
         }
     }
