@@ -168,9 +168,11 @@ pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
 /// across artifact meanings. Realm binding remains inside Genesis V2.
 pub const SEED_PRODUCT_ARTIFACT_V1: &[u8] = b"dc:product-artifact:v1";
 /// Persistent V5 Series registration/replay-anchor prefix.
-pub const SEED_SERIES_REGISTRY_V1: &[u8] = b"dc:series-registry:v1";
+pub const SEED_SERIES_REGISTRY_V1: &[u8] =
+    clutch_solana_layout::product_series::SERIES_REGISTRY_PDA_PREFIX_V1;
 /// Mutable V5 Series funding-state prefix.
-pub const SEED_SERIES_FUNDING_V1: &[u8] = b"dc:series-funding:v1";
+pub const SEED_SERIES_FUNDING_V1: &[u8] =
+    clutch_solana_layout::product_series::SERIES_FUNDING_PDA_PREFIX_V1;
 /// Zero-data, System-owned per-component lamport custody prefix.
 pub const SEED_SERIES_LAMPORT_VAULT_V1: &[u8] = b"dc:series-lamports:v1";
 /// Sole PDA signing authority for one Series' collateral vault set.

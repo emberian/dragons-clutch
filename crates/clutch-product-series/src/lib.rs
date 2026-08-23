@@ -27,6 +27,7 @@ mod compiler_output_v5;
 mod foundation_funding;
 mod funding;
 mod funding_state;
+mod funding_state_v2;
 mod interval_consensus;
 mod market_family_aggregator;
 mod market_lifecycle;
@@ -101,6 +102,11 @@ pub use funding_state::{
     SeriesFundingComponentV1, SeriesFundingPhaseV1, SeriesFundingRequirementsV1,
     SeriesFundingStateV1, SeriesFundingTerminalProjectionV1, SERIES_FUNDING_COMPONENT_COUNT,
     SERIES_FUNDING_STATE_BYTES,
+};
+pub use funding_state_v2::{
+    AuthenticatedSeriesFundingAuthorityV2, SeriesComponentCapitalV2, SeriesFundingPhaseV2,
+    SeriesFundingStateV2, SeriesFundingTerminalProjectionV2, SERIES_COMPONENT_CAPITAL_BYTES_V2,
+    SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_V2_DOMAIN,
 };
 pub use interval_consensus::{
     advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
@@ -308,6 +314,10 @@ typed_id!(
 typed_id!(
     SeriesFundingQuoteV4Id,
     "Typed identity of one current 46-slot `SeriesFundingQuoteV4`."
+);
+typed_id!(
+    SeriesFundingStateV2Id,
+    "Typed semantic identity of one current `SeriesFundingStateV2`."
 );
 typed_id!(
     SeriesAttachmentPlanV4Id,
