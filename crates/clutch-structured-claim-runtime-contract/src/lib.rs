@@ -14,14 +14,23 @@
 //! boundaries and execute the returned plans exactly.
 
 mod construction;
+mod custody_wire;
 mod descriptor;
 mod position_transfer;
+mod replay_v3;
 mod runtime;
 mod wire;
 
 pub use construction::{
     prepare_permanent_identity_funding_v1, PermanentIdentityFundingPlanV1,
     PermanentTargetProjectionV1, WRAPPER_MINT_ACCOUNT_BYTES,
+};
+pub use custody_wire::{
+    decode_position_asset_transfer_payload_v1, PositionAssetTransferAuthorityKindV1,
+    PositionAssetTransferPayloadV1, StructuredCustodyCallProjectionV1, GENERAL_V2_FAMILY_TAG,
+    GENERAL_V2_FAMILY_VERSION, GENERAL_V2_TRANSFER_POSITION_ASSETS_ACTION,
+    POSITION_ASSET_TRANSFER_PAYLOAD_BYTES, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
+    STRUCTURED_CUSTODY_CALL_V1_DOMAIN,
 };
 pub use descriptor::{
     reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1, DescriptorStateV1,
@@ -32,6 +41,12 @@ pub use position_transfer::{
     prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
     AtomicPositionAssetTransferRequestV1, AtomicPositionAssetTransferResultV1,
     PositionProjectionV1,
+};
+pub use replay_v3::{
+    StructuredClaimReplayDeltaV1, StructuredClaimReplayExtensionStateV1,
+    StructuredClaimReplayExtensionV1, StructuredClaimReplayTransitionV1,
+    STRUCTURED_CLAIM_REPLAY_DELTA_BYTES_V1, STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1,
+    STRUCTURED_CLAIM_REPLAY_EXTENSION_BYTES_V1, STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1,
 };
 pub use runtime::{
     prepare_compact_donation_v1, prepare_redeem_terminal_v1, prepare_retire_descriptor_v1,
@@ -96,6 +111,8 @@ pub enum Error {
     InvalidAccount,
     /// A required base retirement/custody capability is unavailable or mismatched.
     AuthorityUnavailable,
+    /// A purpose-owned Replay V3 extension or exact transition join is invalid.
+    InvalidReplayExtension,
 }
 
 /// Result alias for adapter contracts.
