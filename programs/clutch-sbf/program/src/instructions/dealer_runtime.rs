@@ -4,9 +4,9 @@
 //!
 //! This module freezes strict payload parsing, the global eight-byte Dealer
 //! account envelope, and ordered semantic account roles for the PositionV3
-//! funding/activation/unwind/retirement slice. `Initialize` and `BindEpoch` are
-//! consumed by the executable non-production adapter; every other action
-//! remains refused before reading accounts.
+//! funding/activation/unwind/retirement slice. The admitted non-production
+//! adapter consumes only actions with complete account contracts; every other
+//! action remains refused before reading accounts.
 
 use clutch_dealer_runtime_contract::FixedCodec;
 use clutch_solana_layout::registry::DealerFacilityAction;
@@ -284,12 +284,16 @@ impl DealerRuntimePayloadV1 {
     ) -> Result<Self, DealerRuntimeContractErrorV1> {
         let suffix_len = match action {
             DealerFacilityAction::Initialize => 32,
-            DealerFacilityAction::CreateLpPage => 4,
+            DealerFacilityAction::CreateLpPage => 20,
             DealerFacilityAction::Contribute | DealerFacilityAction::WithdrawFunding => 12,
+            DealerFacilityAction::Activate
+            | DealerFacilityAction::CancelFunding
+            | DealerFacilityAction::RefundCancelledSponsor
+            | DealerFacilityAction::BindEpoch
+            | DealerFacilityAction::LapseEpoch => 16,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 4,
             DealerFacilityAction::QueueExit => 16,
             DealerFacilityAction::Claim | DealerFacilityAction::Retire => 8,
-            DealerFacilityAction::BindEpoch => 16,
             _ => 0,
         };
         let expected = DEALER_RUNTIME_PAYLOAD_PREFIX_BYTES_V1 + suffix_len;
@@ -338,7 +342,11 @@ impl DealerRuntimePayloadV1 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
                 }
             }
-            DealerFacilityAction::BindEpoch => {
+            DealerFacilityAction::Activate
+            | DealerFacilityAction::CancelFunding
+            | DealerFacilityAction::RefundCancelledSponsor
+            | DealerFacilityAction::BindEpoch
+            | DealerFacilityAction::LapseEpoch => {
                 value.liveness_call_ordinal = read_u32(input, 16);
                 if input[20..24].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
@@ -350,6 +358,14 @@ impl DealerRuntimePayloadV1 {
             }
             DealerFacilityAction::CreateLpPage => {
                 value.page_ordinal = read_u32(input, 16);
+                value.liveness_call_ordinal = read_u32(input, 20);
+                if input[24..28].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 28);
+                if value.liveness_call_ordinal == 0 {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
             }
             DealerFacilityAction::Contribute | DealerFacilityAction::WithdrawFunding => {
                 value.page_ordinal = read_u32(input, 16);
@@ -580,16 +596,16 @@ const INITIALIZE: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::LivenessRuntime, false, false),
-    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
-    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
-    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
-    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
-    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
-    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
-    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
@@ -604,9 +620,17 @@ const CREATE_FIRST: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::NewPage, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
@@ -618,10 +642,19 @@ const CREATE_NEXT: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::TailPage, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::NewPage, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
@@ -636,17 +669,27 @@ const LP_TRANSFER: &[DealerMetaSpecV1] = &[
 ];
 
 const ACTIVATE: &[DealerMetaSpecV1] = &[
-    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, false),
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::TailPage, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
 const SPONSOR_HALT: &[DealerMetaSpecV1] = &[
@@ -680,7 +723,7 @@ const BIND_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
     meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
@@ -700,18 +743,31 @@ const BIND_EPOCH: &[DealerMetaSpecV1] = &[
 ];
 
 const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
-    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
-    meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
 const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
@@ -737,20 +793,30 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
 ];
 
 const CANCEL_FUNDING: &[DealerMetaSpecV1] = &[
-    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, false),
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
 const REFUND_SPONSOR: &[DealerMetaSpecV1] = &[
-    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
@@ -758,8 +824,18 @@ const REFUND_SPONSOR: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
 const RETIRE_EXIT_TICKET: &[DealerMetaSpecV1] = &[
@@ -1102,14 +1178,7 @@ const fn recipient_alias_allowed_v1(left: DealerMetaRoleV1, right: DealerMetaRol
 #[inline(never)]
 pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Refusal> {
     match action {
-        DealerFacilityAction::CreateLpPage
-        | DealerFacilityAction::Contribute
-        | DealerFacilityAction::WithdrawFunding
-        | DealerFacilityAction::Activate
-        | DealerFacilityAction::CancelFunding
-        | DealerFacilityAction::RefundCancelledSponsor
-        | DealerFacilityAction::LapseEpoch
-        | DealerFacilityAction::SelectLeaseAndBegin
+        DealerFacilityAction::SelectLeaseAndBegin
         | DealerFacilityAction::Collect
         | DealerFacilityAction::Deliver
         | DealerFacilityAction::FinalizeSettlement
@@ -1123,7 +1192,15 @@ pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Ref
         | DealerFacilityAction::Retire => Err(ClutchError::UnsupportedInstruction.into()),
         // Enabled profiles route these actions to the executable handler before
         // reaching this function. Keep direct internal misuse fail-closed.
-        DealerFacilityAction::Initialize | DealerFacilityAction::BindEpoch => {
+        DealerFacilityAction::Initialize
+        | DealerFacilityAction::CreateLpPage
+        | DealerFacilityAction::Contribute
+        | DealerFacilityAction::WithdrawFunding
+        | DealerFacilityAction::Activate
+        | DealerFacilityAction::CancelFunding
+        | DealerFacilityAction::RefundCancelledSponsor
+        | DealerFacilityAction::BindEpoch
+        | DealerFacilityAction::LapseEpoch => {
             Err(ClutchError::UnsupportedInstruction.into())
         }
     }

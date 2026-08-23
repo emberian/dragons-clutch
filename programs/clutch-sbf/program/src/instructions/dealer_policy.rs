@@ -1,12 +1,12 @@
-//! Non-production immutable Dealer-policy catalog transport.
+//! Non-production immutable Dealer catalog transport.
 //!
 //! This is deliberately not a funded Dealer facility. It admits no market,
 //! Position, Replay, fee budget, liveness budget, Lease, Pot, trade, or token
-//! transfer. It only transports one exact
-//! [`DealerPolicyV1`](clutch_dealer_runtime_contract::DealerPolicyV1) body through a
-//! strict replay-cursor stage and materializes its content-addressed catalog
-//! account. Facility execution, where enabled, is owned by the separate
-//! `dealer_facility` adapter; this module never mutates economic state.
+//! transfer. It transports exactly one typed Dealer policy, action-liveness
+//! schedule, or generic runtime-liveness policy through a strict replay-cursor
+//! stage. Each kind has one frozen body length, identity rule, final PDA, and
+//! immutable account shape. Facility execution, where enabled, is owned by the
+//! separate `dealer_facility` adapter; this module never mutates economic state.
 //!
 //! Unlike the legacy artifact plane, this successor owns fresh account tags,
 //! PDA domains, rent attribution, and capability membership. A hostile stage
@@ -19,9 +19,15 @@
 use crate::accounts::{expect_pda, require, require_count, require_signer, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
-use clutch_dealer_runtime_contract::{DealerPolicyV1, FixedCodec, DEALER_POLICY_BYTES_V1};
+use clutch_dealer_runtime_contract::{
+    dealer_runtime_liveness_policy_id_v1, DealerLivenessScheduleV1, DealerPolicyV1, FixedCodec,
+    DEALER_LIVENESS_SCHEDULE_BYTES_V1, DEALER_POLICY_BYTES_V1,
+};
+use clutch_liveness::runtime_v1::{RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_POLICY_BYTES_V1};
 use clutch_solana_layout::registry::{
-    DealerPolicyAction, DEALER_BEGIN_POLICY_PAYLOAD_BYTES, DEALER_POLICY_ACCOUNT_BYTES,
+    DealerCatalogArtifactKindV1, DealerPolicyAction, DEALER_BEGIN_POLICY_PAYLOAD_BYTES,
+    DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES, DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG,
+    DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION, DEALER_POLICY_ACCOUNT_BYTES,
     DEALER_POLICY_ACCOUNT_HEADER_BYTES, DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION,
     DEALER_POLICY_BODY_BYTES, DEALER_POLICY_CHUNK_BYTES, DEALER_POLICY_ID_PAYLOAD_BYTES,
     DEALER_POLICY_STAGE_ACCOUNT_BYTES, DEALER_POLICY_STAGE_ACCOUNT_TAG,
@@ -53,6 +59,8 @@ const ABORT_ACCOUNT_COUNT: usize = 5;
 
 const _: () = {
     assert!(DEALER_POLICY_BODY_BYTES == DEALER_POLICY_BYTES_V1);
+    assert!(DEALER_LIVENESS_SCHEDULE_BYTES_V1 == 372);
+    assert!(RUNTIME_LIVENESS_POLICY_BYTES_V1 == 1_132);
     assert!(DEALER_POLICY_STAGE_HEADER_BYTES == 140);
     assert!(DEALER_POLICY_ACCOUNT_HEADER_BYTES == 56);
     assert!(DEALER_POLICY_STAGE_ACCOUNT_BYTES <= MAX_PERMITTED_DATA_INCREASE);
@@ -62,10 +70,12 @@ const _: () = {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct StageHeaderV1 {
     stored_bump: u8,
-    policy_id: [u8; 32],
+    artifact_kind: DealerCatalogArtifactKindV1,
+    artifact_id: [u8; 32],
     funder: [u8; 32],
     neutral_sink: [u8; 32],
     cursor: u16,
+    body_len: u16,
     created_slot: u64,
     expires_slot: u64,
     refundable_principal: u64,
@@ -155,6 +165,15 @@ fn read_array<const N: usize>(input: &[u8], offset: usize) -> Outcome<[u8; N]> {
         .ok_or_else(|| ClutchError::DealerPolicyUploadMismatch.into())
 }
 
+fn catalog_kind(input: &[u8]) -> Outcome<DealerCatalogArtifactKindV1> {
+    require(
+        input.len() >= 8 && input[1..8].iter().all(|byte| *byte == 0),
+        ClutchError::DealerPolicyUploadMismatch,
+    )?;
+    DealerCatalogArtifactKindV1::from_byte(input[0])
+        .ok_or_else(|| ClutchError::DealerPolicyUploadMismatch.into())
+}
+
 fn encode_stage_header(out: &mut [u8], header: StageHeaderV1) -> Outcome<()> {
     require(
         out.len() == DEALER_POLICY_STAGE_ACCOUNT_BYTES,
@@ -164,11 +183,12 @@ fn encode_stage_header(out: &mut [u8], header: StageHeaderV1) -> Outcome<()> {
     out[0] = DEALER_POLICY_STAGE_ACCOUNT_TAG;
     out[1] = DEALER_POLICY_STAGE_ACCOUNT_VERSION;
     out[2] = header.stored_bump;
-    out[8..40].copy_from_slice(&header.policy_id);
+    out[3] = header.artifact_kind as u8;
+    out[8..40].copy_from_slice(&header.artifact_id);
     out[40..72].copy_from_slice(&header.funder);
     out[72..104].copy_from_slice(&header.neutral_sink);
     out[104..106].copy_from_slice(&header.cursor.to_le_bytes());
-    out[106..108].copy_from_slice(&(DEALER_POLICY_BODY_BYTES as u16).to_le_bytes());
+    out[106..108].copy_from_slice(&header.body_len.to_le_bytes());
     out[108..116].copy_from_slice(&header.created_slot.to_le_bytes());
     out[116..124].copy_from_slice(&header.expires_slot.to_le_bytes());
     out[124..132].copy_from_slice(&header.refundable_principal.to_le_bytes());
@@ -187,30 +207,35 @@ fn decode_stage_header(input: &[u8]) -> Outcome<StageHeaderV1> {
         ClutchError::DealerPolicyUploadMismatch,
     )?;
     require(
-        input[3..8].iter().all(|byte| *byte == 0),
+        input[4..8].iter().all(|byte| *byte == 0),
         ClutchError::DealerPolicyUploadMismatch,
     )?;
+    let artifact_kind = DealerCatalogArtifactKindV1::from_byte(input[3])
+        .ok_or_else(|| Refusal::Adapter(ClutchError::DealerPolicyUploadMismatch))?;
+    let body_len = u16::from_le_bytes(read_array(input, 106)?);
     require(
-        u16::from_le_bytes(read_array(input, 106)?) as usize == DEALER_POLICY_BODY_BYTES,
+        usize::from(body_len) == artifact_kind.body_bytes(),
         ClutchError::DealerPolicyUploadMismatch,
     )?;
     let header = StageHeaderV1 {
         stored_bump: input[2],
-        policy_id: read_array(input, 8)?,
+        artifact_kind,
+        artifact_id: read_array(input, 8)?,
         funder: read_array(input, 40)?,
         neutral_sink: read_array(input, 72)?,
         cursor: u16::from_le_bytes(read_array(input, 104)?),
+        body_len,
         created_slot: u64::from_le_bytes(read_array(input, 108)?),
         expires_slot: u64::from_le_bytes(read_array(input, 116)?),
         refundable_principal: u64::from_le_bytes(read_array(input, 124)?),
         donation_floor: u64::from_le_bytes(read_array(input, 132)?),
     };
     require(
-        header.policy_id != [0; 32]
+        header.artifact_id != [0; 32]
             && header.funder != [0; 32]
             && header.neutral_sink != [0; 32]
             && header.funder != header.neutral_sink
-            && header.cursor as usize <= DEALER_POLICY_BODY_BYTES
+            && header.cursor <= header.body_len
             && header.created_slot < header.expires_slot
             && header.refundable_principal != 0,
         ClutchError::DealerPolicyUploadMismatch,
@@ -221,7 +246,8 @@ fn decode_stage_header(input: &[u8]) -> Outcome<StageHeaderV1> {
 fn require_stage(
     program_id: &Pubkey,
     stage: &AccountInfo,
-    policy_id: [u8; 32],
+    artifact_kind: DealerCatalogArtifactKindV1,
+    artifact_id: [u8; 32],
 ) -> Outcome<StageHeaderV1> {
     require(stage.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(stage.is_writable, ClutchError::NotWritable)?;
@@ -231,12 +257,17 @@ fn require_stage(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let header = decode_stage_header(&data)?;
     require(
-        header.policy_id == policy_id,
+        header.artifact_kind == artifact_kind && header.artifact_id == artifact_id,
         ClutchError::DealerPolicyUploadMismatch,
     )?;
     expect_pda(
         stage.key,
-        seeds::dealer_policy_stage_pda(program_id, &header.funder, &header.policy_id),
+        seeds::dealer_policy_stage_pda(
+            program_id,
+            header.artifact_kind as u8,
+            &header.funder,
+            &header.artifact_id,
+        ),
         Some(header.stored_bump),
     )?;
     let minimum = header
@@ -259,23 +290,47 @@ pub(super) fn create_full_principal_pda<'a>(
     space: usize,
     signer_seeds: &[&[u8]],
 ) -> Outcome<(u64, u64)> {
+    let principal = rent.minimum_balance(space)?;
+    require(principal != 0, ClutchError::DealerPolicyRentMismatch)?;
+    let donation = create_exact_payer_debit_pda(
+        program_id,
+        payer,
+        target,
+        system_program,
+        principal,
+        space,
+        signer_seeds,
+    )?;
+    Ok((principal, donation))
+}
+
+/// Allocate one predictable program account while debiting the named payer by
+/// the exact independently checked principal. Existing lamports remain a
+/// donation in the account and never discount that debit.
+pub(super) fn create_exact_payer_debit_pda<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    payer_debit: u64,
+    space: usize,
+    signer_seeds: &[&[u8]],
+) -> Outcome<u64> {
     require_creatable(target)?;
     require_signer(payer)?;
     require(payer.is_writable, ClutchError::NotWritable)?;
     require_system_program(system_program)?;
     require(
-        space <= MAX_PERMITTED_DATA_INCREASE,
+        payer_debit != 0 && space <= MAX_PERMITTED_DATA_INCREASE,
         ClutchError::AccountCreationFailed,
     )?;
     let donation = target.lamports();
-    let principal = rent.minimum_balance(space)?;
-    require(principal != 0, ClutchError::DealerPolicyRentMismatch)?;
     let after = donation
-        .checked_add(principal)
+        .checked_add(payer_debit)
         .ok_or(ClutchError::Arithmetic)?;
     let transfer = Instruction::new_with_bytes(
         SYSTEM_PROGRAM_ID,
-        &transfer_data(principal),
+        &transfer_data(payer_debit),
         vec![
             AccountMeta::new(*payer.key, true),
             AccountMeta::new(*target.key, false),
@@ -317,7 +372,7 @@ pub(super) fn create_full_principal_pda<'a>(
         target.lamports() == after && target.data_len() == space && target.owner == program_id,
         ClutchError::AccountCreationFailed,
     )?;
-    Ok((principal, donation))
+    Ok(donation)
 }
 
 fn route_final_prefund<'a>(
@@ -408,6 +463,112 @@ fn close_stage(stage: &AccountInfo, funder: &AccountInfo, sink: &AccountInfo) ->
     Ok(())
 }
 
+fn seal_liveness_schedule(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    header: StageHeaderV1,
+    body: &[u8],
+    rent: &RentParameters,
+) -> Outcome<()> {
+    let schedule = DealerLivenessScheduleV1::decode(body).map_err(dealer_fault)?;
+    let schedule_id = schedule.schedule_id().map_err(dealer_fault)?.bytes();
+    require(
+        schedule_id == header.artifact_id,
+        ClutchError::DealerPolicyFault,
+    )?;
+    let (final_address, bump) = seeds::dealer_liveness_schedule_pda(program_id, &schedule_id);
+    expect_pda(accounts[2].key, (final_address, bump), None)?;
+    require_creatable(&accounts[2])?;
+    route_final_prefund(
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &[seeds::SEED_DEALER_LIVENESS_SCHEDULE, &schedule_id, &[bump]],
+    )?;
+    let (_, observed_after_drain) = create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[2],
+        &accounts[4],
+        rent,
+        DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
+        &[seeds::SEED_DEALER_LIVENESS_SCHEDULE, &schedule_id, &[bump]],
+    )?;
+    require(
+        observed_after_drain == 0,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    {
+        let mut final_data = accounts[2]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        final_data.fill(0);
+        final_data[0] = DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG;
+        final_data[1] = DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION;
+        final_data[2] = bump;
+        schedule
+            .encode_into(&mut final_data[8..])
+            .map_err(dealer_fault)?;
+    }
+    close_stage(&accounts[1], &accounts[0], &accounts[3])
+}
+
+fn seal_runtime_liveness_policy(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    header: StageHeaderV1,
+    body: &[u8],
+    rent: &RentParameters,
+) -> Outcome<()> {
+    let policy = RuntimeLivenessPolicyV1::decode(body)
+        .map_err(|_| Refusal::Adapter(ClutchError::DealerPolicyFault))?;
+    let policy_id = dealer_runtime_liveness_policy_id_v1(policy)
+        .map_err(dealer_fault)?
+        .bytes();
+    require(
+        policy_id == header.artifact_id && policy.neutral_sink.bytes() == header.neutral_sink,
+        ClutchError::DealerPolicyFault,
+    )?;
+    let (final_address, bump) = seeds::dealer_runtime_liveness_policy_pda(program_id, &policy_id);
+    expect_pda(accounts[2].key, (final_address, bump), None)?;
+    require_creatable(&accounts[2])?;
+    route_final_prefund(
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &[
+            seeds::SEED_DEALER_RUNTIME_LIVENESS_POLICY,
+            &policy_id,
+            &[bump],
+        ],
+    )?;
+    let (_, observed_after_drain) = create_full_principal_pda(
+        program_id,
+        &accounts[0],
+        &accounts[2],
+        &accounts[4],
+        rent,
+        RUNTIME_LIVENESS_POLICY_BYTES_V1,
+        &[
+            seeds::SEED_DEALER_RUNTIME_LIVENESS_POLICY,
+            &policy_id,
+            &[bump],
+        ],
+    )?;
+    require(
+        observed_after_drain == 0,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    let mut final_data = accounts[2]
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    policy
+        .encode(&mut final_data[..])
+        .map_err(|_| Refusal::Adapter(ClutchError::DealerPolicyFault))?;
+    drop(final_data);
+    close_stage(&accounts[1], &accounts[0], &accounts[3])
+}
+
 fn begin(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -420,11 +581,12 @@ fn begin(
     )?;
     require_count(accounts, BEGIN_ACCOUNT_COUNT)?;
     require(sequence == 0, ClutchError::Replay)?;
-    let policy_id = read_array(payload, 0)?;
-    let neutral_sink: [u8; 32] = read_array(payload, 32)?;
-    let expires_slot = u64::from_le_bytes(read_array(payload, 64)?);
+    let artifact_kind = catalog_kind(payload)?;
+    let artifact_id = read_array(payload, 8)?;
+    let neutral_sink: [u8; 32] = read_array(payload, 40)?;
+    let expires_slot = u64::from_le_bytes(read_array(payload, 72)?);
     require(
-        policy_id != [0; 32] && neutral_sink != [0; 32],
+        artifact_id != [0; 32] && neutral_sink != [0; 32],
         ClutchError::DealerPolicyUploadMismatch,
     )?;
     require_signer(&accounts[0])?;
@@ -443,7 +605,8 @@ fn begin(
         ClutchError::InvalidArtifactExpiry,
     )?;
     let funder = accounts[0].key.to_bytes();
-    let (stage_address, bump) = seeds::dealer_policy_stage_pda(program_id, &funder, &policy_id);
+    let (stage_address, bump) =
+        seeds::dealer_policy_stage_pda(program_id, artifact_kind as u8, &funder, &artifact_id);
     expect_pda(accounts[1].key, (stage_address, bump), None)?;
     let (principal, donation) = create_full_principal_pda(
         program_id,
@@ -454,17 +617,20 @@ fn begin(
         DEALER_POLICY_STAGE_ACCOUNT_BYTES,
         &[
             seeds::SEED_DEALER_POLICY_STAGE,
+            &[artifact_kind as u8],
             &funder,
-            &policy_id,
+            &artifact_id,
             &[bump],
         ],
     )?;
     let header = StageHeaderV1 {
         stored_bump: bump,
-        policy_id,
+        artifact_kind,
+        artifact_id,
         funder,
         neutral_sink,
         cursor: 0,
+        body_len: artifact_kind.body_bytes() as u16,
         created_slot: current_slot,
         expires_slot,
         refundable_principal: principal,
@@ -491,16 +657,17 @@ fn write(
         ClutchError::WrongDataLength,
     )?;
     require_count(accounts, WRITE_ACCOUNT_COUNT)?;
-    let policy_id = read_array(payload, 0)?;
-    let cursor = u16::from_le_bytes(read_array(payload, 32)?);
-    let chunk_len = u16::from_le_bytes(read_array(payload, 34)?) as usize;
+    let artifact_kind = catalog_kind(payload)?;
+    let artifact_id = read_array(payload, 8)?;
+    let cursor = u16::from_le_bytes(read_array(payload, 40)?);
+    let chunk_len = u16::from_le_bytes(read_array(payload, 42)?) as usize;
     require_signer(&accounts[0])?;
     require(
         accounts[0].key != accounts[1].key,
         ClutchError::AccountAlias,
     )?;
     let slot = read_clock_slot(&accounts[2])?;
-    let header = require_stage(program_id, &accounts[1], policy_id)?;
+    let header = require_stage(program_id, &accounts[1], artifact_kind, artifact_id)?;
     require(
         accounts[0].key.to_bytes() == header.funder,
         ClutchError::UnauthorizedActor,
@@ -516,11 +683,11 @@ fn write(
         .checked_add(chunk_len)
         .ok_or(ClutchError::Arithmetic)?;
     require(
-        end <= DEALER_POLICY_BODY_BYTES,
+        end <= usize::from(header.body_len),
         ClutchError::DealerPolicyUploadMismatch,
     )?;
     require(
-        payload[36 + chunk_len..36 + DEALER_POLICY_CHUNK_BYTES]
+        payload[44 + chunk_len..44 + DEALER_POLICY_CHUNK_BYTES]
             .iter()
             .all(|byte| *byte == 0),
         ClutchError::DealerPolicyUploadMismatch,
@@ -530,7 +697,7 @@ fn write(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     data[DEALER_POLICY_STAGE_HEADER_BYTES + usize::from(cursor)
         ..DEALER_POLICY_STAGE_HEADER_BYTES + end]
-        .copy_from_slice(&payload[36..36 + chunk_len]);
+        .copy_from_slice(&payload[44..44 + chunk_len]);
     data[104..106].copy_from_slice(&(end as u16).to_le_bytes());
     require(
         decode_stage_header(&data)?.cursor as usize == end,
@@ -549,14 +716,13 @@ fn seal(
         ClutchError::WrongDataLength,
     )?;
     require_count(accounts, SEAL_ACCOUNT_COUNT)?;
-    let policy_id = read_array(payload, 0)?;
-    require(
-        sequence == DEALER_POLICY_BODY_BYTES as u64,
-        ClutchError::Replay,
-    )?;
+    let artifact_kind = catalog_kind(payload)?;
+    let artifact_id = read_array(payload, 8)?;
+    let body_len = artifact_kind.body_bytes();
+    require(sequence == body_len as u64, ClutchError::Replay)?;
     require_signer(&accounts[0])?;
     require(accounts[0].is_writable, ClutchError::NotWritable)?;
-    let header = require_stage(program_id, &accounts[1], policy_id)?;
+    let header = require_stage(program_id, &accounts[1], artifact_kind, artifact_id)?;
     require(
         accounts[0].key.to_bytes() == header.funder,
         ClutchError::UnauthorizedActor,
@@ -577,7 +743,7 @@ fn seal(
     let slot = read_clock_slot(&accounts[6])?;
     require(slot <= header.expires_slot, ClutchError::ArtifactExpired)?;
     require(
-        header.cursor as usize == DEALER_POLICY_BODY_BYTES,
+        usize::from(header.cursor) == body_len,
         ClutchError::ArtifactIncomplete,
     )?;
     let rent = read_rent(&accounts[5])?;
@@ -585,7 +751,26 @@ fn seal(
     let stage_data = accounts[1]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let body = &stage_data[DEALER_POLICY_STAGE_HEADER_BYTES..];
+    let body =
+        &stage_data[DEALER_POLICY_STAGE_HEADER_BYTES..DEALER_POLICY_STAGE_HEADER_BYTES + body_len];
+    require(
+        stage_data[DEALER_POLICY_STAGE_HEADER_BYTES + body_len..]
+            .iter()
+            .all(|byte| *byte == 0),
+        ClutchError::DealerPolicyUploadMismatch,
+    )?;
+    if artifact_kind == DealerCatalogArtifactKindV1::LivenessSchedule {
+        let body_copy = <[u8; DEALER_LIVENESS_SCHEDULE_BYTES_V1]>::try_from(body)
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        drop(stage_data);
+        return seal_liveness_schedule(program_id, accounts, header, &body_copy, &rent);
+    }
+    if artifact_kind == DealerCatalogArtifactKindV1::RuntimeLivenessPolicy {
+        let body_copy = <[u8; RUNTIME_LIVENESS_POLICY_BYTES_V1]>::try_from(body)
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        drop(stage_data);
+        return seal_runtime_liveness_policy(program_id, accounts, header, &body_copy, &rent);
+    }
     let policy = DealerPolicyV1::decode(body).map_err(dealer_fault)?;
     require(
         policy.neutral_sink.bytes() == header.neutral_sink,
@@ -596,7 +781,7 @@ fn seal(
         body,
     ])
     .to_bytes();
-    require(observed == policy_id, ClutchError::DealerPolicyFault)?;
+    require(observed == artifact_id, ClutchError::DealerPolicyFault)?;
     #[cfg(not(target_os = "solana"))]
     require(
         policy.policy_id().map_err(dealer_fault)?.bytes() == observed,
@@ -604,7 +789,7 @@ fn seal(
     )?;
     drop(stage_data);
 
-    let (final_address, bump) = seeds::dealer_policy_pda(program_id, &policy_id);
+    let (final_address, bump) = seeds::dealer_policy_pda(program_id, &artifact_id);
     expect_pda(accounts[2].key, (final_address, bump), None)?;
     require_creatable(&accounts[2])?;
     require(accounts[3].is_writable, ClutchError::NotWritable)?;
@@ -613,7 +798,7 @@ fn seal(
         &accounts[2],
         &accounts[3],
         &accounts[4],
-        &[seeds::SEED_DEALER_POLICY, &policy_id, &[bump]],
+        &[seeds::SEED_DEALER_POLICY, &artifact_id, &[bump]],
     )?;
     let (principal, observed_after_drain) = create_full_principal_pda(
         program_id,
@@ -622,7 +807,7 @@ fn seal(
         &accounts[4],
         &rent,
         DEALER_POLICY_ACCOUNT_BYTES,
-        &[seeds::SEED_DEALER_POLICY, &policy_id, &[bump]],
+        &[seeds::SEED_DEALER_POLICY, &artifact_id, &[bump]],
     )?;
     require(
         observed_after_drain == 0,
@@ -649,7 +834,7 @@ fn seal(
     validate_catalog_account(
         program_id,
         &accounts[2],
-        policy_id,
+        artifact_id,
         header.funder,
         principal,
         donation,
@@ -667,9 +852,10 @@ fn abort(
         ClutchError::WrongDataLength,
     )?;
     require_count(accounts, ABORT_ACCOUNT_COUNT)?;
-    let policy_id = read_array(payload, 0)?;
+    let artifact_kind = catalog_kind(payload)?;
+    let artifact_id = read_array(payload, 8)?;
     require_signer(&accounts[0])?;
-    let header = require_stage(program_id, &accounts[1], policy_id)?;
+    let header = require_stage(program_id, &accounts[1], artifact_kind, artifact_id)?;
     require(sequence == u64::from(header.cursor), ClutchError::Replay)?;
     require(
         accounts[2].key.to_bytes() == header.funder,
@@ -745,7 +931,7 @@ fn validate_catalog_account(
     require(observed == policy_id, ClutchError::DealerPolicyFault)
 }
 
-/// Execute one strictly allocated Dealer-policy transport action.
+/// Execute one strictly allocated Dealer immutable-catalog transport action.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -768,10 +954,12 @@ mod tests {
     fn header() -> StageHeaderV1 {
         StageHeaderV1 {
             stored_bump: 7,
-            policy_id: [1; 32],
+            artifact_kind: DealerCatalogArtifactKindV1::Policy,
+            artifact_id: [1; 32],
             funder: [2; 32],
             neutral_sink: [3; 32],
             cursor: 192,
+            body_len: DEALER_POLICY_BODY_BYTES as u16,
             created_slot: 10,
             expires_slot: 100,
             refundable_principal: 55,

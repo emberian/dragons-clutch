@@ -102,15 +102,39 @@
     return value;
   };
 
-  const boundedUrl = (value, name, schemes) => {
+  const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
     text(value, name, 512);
     let parsed;
     try { parsed = new URL(value); } catch (_) { throw new Error(`${name} must be an absolute URL.`); }
     if (!schemes.includes(parsed.protocol)) throw new Error(`${name} uses a disallowed URL scheme.`);
-    if (parsed.username || parsed.password || parsed.hash || parsed.search) throw new Error(`${name} must not contain credentials, a query, or a fragment.`);
+    if (parsed.username || parsed.password || parsed.hash || (!allowQuery && parsed.search)) throw new Error(`${name} must not contain userinfo, a fragment, or a disallowed query.`);
     const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
     if ((parsed.protocol === "http:" || parsed.protocol === "ws:") && !loopback) throw new Error(`${name} may use plaintext transport only on explicit loopback.`);
-    return parsed.toString().replace(/\/$/, "");
+    return preserveExact ? value : parsed.toString().replace(/\/$/, "");
+  };
+
+  const redactRpcEndpoint = (value) => {
+    const separator = value.indexOf("://");
+    if (separator < 1) throw new Error("RPC endpoint has no scheme separator.");
+    const scheme = value.slice(0, separator);
+    const remainder = value.slice(separator + 3);
+    const slash = remainder.indexOf("/");
+    const query = remainder.indexOf("?");
+    const boundaries = [slash, query].filter((index) => index >= 0);
+    const authorityEnd = boundaries.length === 0 ? remainder.length : Math.min(...boundaries);
+    const authority = remainder.slice(0, authorityEnd);
+    const suffix = remainder.slice(authorityEnd);
+    const queryAt = suffix.indexOf("?");
+    const path = queryAt < 0 ? suffix : suffix.slice(0, queryAt);
+    const redactedPath = path === "" ? "" : path === "/" ? "/" : "/<redacted>";
+    return `${scheme}://${authority}${redactedPath}${queryAt < 0 ? "" : "?<redacted>"}`;
+  };
+
+  const endpointBindingSha256 = async (value) => {
+    if (!root.crypto || !root.crypto.subtle) throw new Error("Web Crypto SHA-256 is required to bind credential-safe RPC endpoint identities.");
+    const bytes = new TextEncoder().encode(`dragons-clutch/rpc-endpoint-binding/v1\u0000${value}`);
+    const digest = new Uint8Array(await root.crypto.subtle.digest("SHA-256", bytes));
+    return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
   };
 
   const validateConfiguration = (raw) => {
@@ -119,8 +143,8 @@
     const clusterName = text(raw.clusterName, "cluster name", 48);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(clusterName)) throw new Error("cluster name contains unsupported characters.");
     const genesisHash = nonzeroAddress(raw.genesisHash, "genesis hash");
-    const rpcHttpUrl = boundedUrl(raw.rpcHttpUrl, "validator RPC HTTP URL", ["http:", "https:"]);
-    const rpcWebsocketUrl = boundedUrl(raw.rpcWebsocketUrl, "validator RPC WebSocket URL", ["ws:", "wss:"]);
+    const rpcHttpUrl = boundedUrl(raw.rpcHttpUrl, "validator RPC HTTP URL", ["http:", "https:"], true, true);
+    const rpcWebsocketUrl = boundedUrl(raw.rpcWebsocketUrl, "validator RPC WebSocket URL", ["ws:", "wss:"], true, true);
     if (raw.commitment !== "finalized" && raw.commitment !== "processed") throw new Error("commitment must be finalized or processed.");
     requirePlain(raw.release, "release");
     const programId = nonzeroAddress(raw.release.programId, "release.programId");
@@ -155,6 +179,21 @@
       bounds: Object.freeze({ maximumAccounts, maximumResponseBytes: maximumResponseBytes.toString(), timeoutMilliseconds: timeoutMilliseconds.toString(), maximumSlotLag })
     });
   };
+
+  const redactedConfiguration = (configuration) => Object.freeze({
+    schema: configuration.schema,
+    authority: configuration.authority,
+    operatorUrl: configuration.operatorUrl,
+    clusterName: configuration.clusterName,
+    genesisHash: configuration.genesisHash,
+    clusterKey: configuration.clusterKey,
+    rpcHttpEndpoint: Object.freeze({ redacted: redactRpcEndpoint(configuration.rpcHttpUrl) }),
+    rpcWebsocketEndpoint: Object.freeze({ redacted: redactRpcEndpoint(configuration.rpcWebsocketUrl) }),
+    rpcContact: configuration.rpcContact,
+    commitment: configuration.commitment,
+    release: configuration.release,
+    bounds: configuration.bounds
+  });
 
   const boundJsonShape = (value, name) => {
     let nodes = 0;
@@ -248,13 +287,82 @@
     return Object.freeze({ status: "ready", cluster: raw.cluster, projectionAuthority: "untrusted", signing: false, submission: false });
   };
 
-  const validateAcquisition = (raw, configuration) => {
+  const validateAcquisition = async (raw, configuration) => {
     requirePlain(raw, "acquisition");
     if (raw.authority !== "untrusted read model") throw new Error("acquisition authority is not the expected untrusted read model.");
+    if (bool(raw.authorityEligible, "acquisition.authorityEligible") !== false) throw new Error("operatord incorrectly marks an untrusted acquisition as authority-eligible.");
     const transportMode = text(raw.transportMode, "acquisition.transportMode", 80);
+    if (transportMode !== "finalized-plus-processed-websocket") throw new Error("operatord is not serving the required finalized-plus-processed WebSocket transport.");
     const processedAvailable = bool(raw.processedAvailable, "acquisition.processedAvailable");
+    requirePlain(raw.transportBinding, "acquisition.transportBinding");
+    const binding = raw.transportBinding;
+    requirePlain(binding.rpcHttpEndpoint, "transportBinding.rpcHttpEndpoint");
+    requirePlain(binding.rpcWebsocketEndpoint, "transportBinding.rpcWebsocketEndpoint");
+    const [httpBindingSha256, websocketBindingSha256] = await Promise.all([
+      endpointBindingSha256(configuration.rpcHttpUrl),
+      endpointBindingSha256(configuration.rpcWebsocketUrl)
+    ]);
+    if (binding.schema !== "dragons-clutch/operator-rpc-transport-binding/v2"
+        || binding.verificationDisposition !== "last-complete-untrusted-http-release-bracket"
+        || binding.authorityEligible !== false
+        || text(binding.clusterName, "transportBinding.clusterName", 48) !== configuration.clusterName
+        || nonzeroAddress(binding.genesisHash, "transportBinding.genesisHash") !== configuration.genesisHash
+        || text(binding.clusterKey, "transportBinding.clusterKey", 128) !== configuration.clusterKey
+        || text(binding.rpcHttpEndpoint.redacted, "transportBinding.rpcHttpEndpoint.redacted", 512) !== redactRpcEndpoint(configuration.rpcHttpUrl)
+        || hash32(binding.rpcHttpEndpoint.bindingSha256, "transportBinding.rpcHttpEndpoint.bindingSha256") !== httpBindingSha256
+        || text(binding.rpcWebsocketEndpoint.redacted, "transportBinding.rpcWebsocketEndpoint.redacted", 512) !== redactRpcEndpoint(configuration.rpcWebsocketUrl)
+        || hash32(binding.rpcWebsocketEndpoint.bindingSha256, "transportBinding.rpcWebsocketEndpoint.bindingSha256") !== websocketBindingSha256) {
+      throw new Error("operatord transport coordinates differ from the exact selected HTTP+WebSocket RPC target.");
+    }
+    if (!Array.isArray(binding.releases) || binding.releases.length === 0 || binding.releases.length > 256) throw new Error("transportBinding.releases is invalid.");
+    const boundRelease = binding.releases.find((release) => plain(release) && release.releaseKey === configuration.release.releaseKey);
+    if (!boundRelease
+        || nonzeroAddress(boundRelease.programId, "transportBinding.release.programId") !== configuration.release.programId
+        || nonzeroAddress(boundRelease.programData, "transportBinding.release.programData") !== configuration.release.programData
+        || positiveDecimal(boundRelease.deploymentSlot, "transportBinding.release.deploymentSlot").toString() !== configuration.release.deploymentSlot
+        || hash32(boundRelease.elfSha256, "transportBinding.release.elfSha256") !== configuration.release.elfSha256
+        || !Array.isArray(boundRelease.families)) {
+      throw new Error("operatord release coordinates differ from the exact selected Program/ProgramData/slot/ELF target.");
+    }
+    requirePlain(raw.processedSemantics, "acquisition.processedSemantics");
+    if (raw.processedSemantics.finality !== "nonfinal-rollbackable"
+        || raw.processedSemantics.authorityEligibility !== false
+        || typeof raw.processedSemantics.websocketGenesis !== "string"
+        || typeof raw.processedSemantics.accountRemoval !== "string") throw new Error("operatord does not expose the required genesis-bound, removal-aware, non-final, never-authoritative processed semantics.");
+    const processedTransport = raw.processedTransport === null ? null : (() => {
+      requirePlain(raw.processedTransport, "acquisition.processedTransport");
+      return Object.freeze({
+        phase: text(raw.processedTransport.phase, "processedTransport.phase", 80),
+        available: bool(raw.processedTransport.available, "processedTransport.available"),
+        websocketGenesisMatched: bool(raw.processedTransport.websocketGenesisMatched, "processedTransport.websocketGenesisMatched"),
+        connectionGeneration: decimal(raw.processedTransport.connectionGeneration, "processedTransport.connectionGeneration").toString(),
+        rollbackEpoch: decimal(raw.processedTransport.rollbackEpoch, "processedTransport.rollbackEpoch").toString(),
+        reconnectAttempt: decimal(raw.processedTransport.reconnectAttempt, "processedTransport.reconnectAttempt").toString(),
+        nextBackoffMilliseconds: decimal(raw.processedTransport.nextBackoffMilliseconds, "processedTransport.nextBackoffMilliseconds").toString(),
+        reconnectIndexedVersionsWithdrawn: decimal(raw.processedTransport.reconnectIndexedVersionsWithdrawn, "processedTransport.reconnectIndexedVersionsWithdrawn").toString(),
+        reconnectBufferedAccountsWithdrawn: decimal(raw.processedTransport.reconnectBufferedAccountsWithdrawn, "processedTransport.reconnectBufferedAccountsWithdrawn").toString(),
+        deadSlotRollbacks: decimal(raw.processedTransport.deadSlotRollbacks, "processedTransport.deadSlotRollbacks").toString(),
+        deadSlotIndexedVersionsWithdrawn: decimal(raw.processedTransport.deadSlotIndexedVersionsWithdrawn, "processedTransport.deadSlotIndexedVersionsWithdrawn").toString(),
+        deadSlotBufferedAccountsWithdrawn: decimal(raw.processedTransport.deadSlotBufferedAccountsWithdrawn, "processedTransport.deadSlotBufferedAccountsWithdrawn").toString(),
+        accountRemovalEvents: decimal(raw.processedTransport.accountRemovalEvents, "processedTransport.accountRemovalEvents").toString(),
+        closedAccountRemovals: decimal(raw.processedTransport.closedAccountRemovals, "processedTransport.closedAccountRemovals").toString(),
+        ownerChangedAccountRemovals: decimal(raw.processedTransport.ownerChangedAccountRemovals, "processedTransport.ownerChangedAccountRemovals").toString(),
+        accountProjectionsWithdrawn: decimal(raw.processedTransport.accountProjectionsWithdrawn, "processedTransport.accountProjectionsWithdrawn").toString(),
+        lastRollbackSlot: raw.processedTransport.lastRollbackSlot === null ? null : decimal(raw.processedTransport.lastRollbackSlot, "processedTransport.lastRollbackSlot").toString(),
+        lastRemovedAccount: raw.processedTransport.lastRemovedAccount === null ? null : nonzeroAddress(raw.processedTransport.lastRemovedAccount, "processedTransport.lastRemovedAccount"),
+        lastRemovalObservedOwner: raw.processedTransport.lastRemovalObservedOwner === null ? null : address(raw.processedTransport.lastRemovalObservedOwner, "processedTransport.lastRemovalObservedOwner"),
+        lastRemovalKind: raw.processedTransport.lastRemovalKind === null ? null : (() => {
+          if (raw.processedTransport.lastRemovalKind !== "closed" && raw.processedTransport.lastRemovalKind !== "owner-changed") throw new Error("processedTransport.lastRemovalKind is invalid.");
+          return raw.processedTransport.lastRemovalKind;
+        })(),
+        lastError: raw.processedTransport.lastError === null ? null : text(raw.processedTransport.lastError, "processedTransport.lastError", 512)
+      });
+    })();
+    if (processedTransport === null || processedTransport.available !== processedAvailable || (processedAvailable && !processedTransport.websocketGenesisMatched)) {
+      throw new Error("operatord processed availability differs from its exact transport-generation state.");
+    }
     if (configuration.commitment === "processed" && !processedAvailable) {
-      throw new Error(`Processed projection is disabled: operatord reports ${transportMode} without the complete processed subscription set.`);
+      throw new Error(`Processed projection is withdrawn: operatord reports ${processedTransport ? processedTransport.phase : transportMode} without a complete live subscription generation.`);
     }
     return Object.freeze({
       bootstrapComplete: bool(raw.bootstrapComplete, "acquisition.bootstrapComplete"),
@@ -266,14 +374,21 @@
       pendingRoot: raw.pendingRoot === null ? null : decimal(raw.pendingRoot, "acquisition.pendingRoot").toString(),
       nextReceiveSequence: decimal(raw.nextReceiveSequence, "acquisition.nextReceiveSequence").toString(),
       authority: raw.authority,
+      authorityEligible: false,
       transportMode,
-      processedAvailable
+      processedAvailable,
+      processedTransport,
+      transportBinding: Object.freeze({
+        rpcHttpEndpoint: Object.freeze({ redacted: binding.rpcHttpEndpoint.redacted, bindingSha256: httpBindingSha256 }),
+        rpcWebsocketEndpoint: Object.freeze({ redacted: binding.rpcWebsocketEndpoint.redacted, bindingSha256: websocketBindingSha256 }),
+        releaseKey: configuration.release.releaseKey
+      })
     });
   };
 
   const validateReleaseResponse = (raw, configuration) => {
     requirePlain(raw, "releases response");
-    if (raw.cluster !== configuration.clusterKey || !Array.isArray(raw.releases) || raw.releases.length > 256) throw new Error("release response does not match the selected cluster or bounds.");
+    if (raw.cluster !== configuration.clusterKey || raw.authorityEligible !== false || !Array.isArray(raw.releases) || raw.releases.length > 256) throw new Error("release response does not match the selected cluster, trust boundary, or bounds.");
     const releases = raw.releases.map((release, index) => {
       requirePlain(release, `releases[${index}]`);
       if (!Array.isArray(release.families) || release.families.length === 0 || release.families.length > 16) throw new Error(`releases[${index}].families is invalid.`);
@@ -303,7 +418,8 @@
 
   const validateAccount = (raw, index, effectiveCommitment) => {
     requirePlain(raw, `accounts[${index}]`);
-    if (raw.effectiveCommitment !== effectiveCommitment) throw new Error(`accounts[${index}] has the wrong effective commitment.`);
+    const expectedDisposition = effectiveCommitment === "processed" ? "nonfinal-rollbackable" : "finalized-projection";
+    if (raw.effectiveCommitment !== effectiveCommitment || raw.finalityDisposition !== expectedDisposition || raw.authorityEligible !== false) throw new Error(`accounts[${index}] has the wrong effective commitment or trust disposition.`);
     requirePlain(raw.decode, `accounts[${index}].decode`);
     if (raw.decode.status !== "canonical" && raw.decode.status !== "requires-context") throw new Error(`accounts[${index}] has an unknown decode status.`);
     const requirement = raw.decode.status === "requires-context" ? text(raw.decode.requirement, `accounts[${index}].decode.requirement`, 240) : null;
@@ -330,7 +446,8 @@
 
   const validateAccountsResponse = (raw, configuration) => {
     requirePlain(raw, "accounts response");
-    if (raw.cluster !== configuration.clusterKey || raw.effectiveCommitment !== configuration.commitment || !Array.isArray(raw.accounts)) throw new Error("accounts response differs from the selected cluster/commitment.");
+    const expectedDisposition = configuration.commitment === "processed" ? "nonfinal-rollbackable" : "finalized-projection";
+    if (raw.cluster !== configuration.clusterKey || raw.effectiveCommitment !== configuration.commitment || raw.finalityDisposition !== expectedDisposition || raw.authorityEligible !== false || !Array.isArray(raw.accounts)) throw new Error("accounts response differs from the selected cluster/commitment/trust boundary.");
     if (BigInt(raw.accounts.length) > BigInt(configuration.bounds.maximumAccounts)) throw new Error("accounts response exceeds the explicit browser account bound.");
     const all = raw.accounts.map((accountValue, index) => validateAccount(accountValue, index, configuration.commitment));
     const selected = all.filter((accountValue) => accountValue.releaseKey === configuration.release.releaseKey);
@@ -340,7 +457,7 @@
 
   const validateForks = (raw) => {
     requirePlain(raw, "fork response");
-    if (!Array.isArray(raw.frozenSlots) || raw.frozenSlots.length > 65_536 || !Array.isArray(raw.deadSlots) || raw.deadSlots.length > 65_536 || !Array.isArray(raw.nodes) || raw.nodes.length > 65_536) throw new Error("fork response arrays are invalid.");
+    if (raw.authorityEligible !== false || raw.processedTopology !== true || !Array.isArray(raw.frozenSlots) || raw.frozenSlots.length > 65_536 || !Array.isArray(raw.deadSlots) || raw.deadSlots.length > 65_536 || !Array.isArray(raw.nodes) || raw.nodes.length > 65_536) throw new Error("fork response trust boundary or arrays are invalid.");
     const finalizedRoot = raw.finalizedRoot === null ? null : (() => {
       requirePlain(raw.finalizedRoot, "forks.finalizedRoot");
       return Object.freeze({ slot: decimal(raw.finalizedRoot.slot, "forks.finalizedRoot.slot").toString(), blockhash: text(raw.finalizedRoot.blockhash, "forks.finalizedRoot.blockhash", 96) });
@@ -365,6 +482,8 @@
   const validateKeeper = (raw, configuration) => {
     requirePlain(raw, "keeper response");
     if (raw.effectiveCommitment !== configuration.commitment || !Array.isArray(raw.actions) || raw.actions.length > 4096) throw new Error("keeper response differs from the selected commitment or bounds.");
+    if (raw.authorityEligible !== false) throw new Error("keeper projection must never claim authority eligibility.");
+    if (configuration.commitment === "processed" && raw.actions.length !== 0) throw new Error("processed keeper construction must remain disabled.");
     const actions = raw.actions.map((actionValue, index) => {
       requirePlain(actionValue, `keeper.actions[${index}]`);
       requirePlain(actionValue.cursor, `keeper.actions[${index}].cursor`);
@@ -463,10 +582,10 @@
     ]);
     const unsafeForkAccounts = annotated.filter((accountValue) => accountValue.forkState === "dead-fork" || accountValue.forkState === "unidentified-fork").length;
     const staleAccounts = annotated.filter((accountValue) => accountValue.stale).length;
-    return Object.freeze({
+    const snapshot = {
       schema: "dragons-clutch/operatord-chain-projection/v1",
       authority: "untrusted-projection",
-      configuration,
+      configuration: redactedConfiguration(configuration),
       health,
       acquisition,
       release: Object.freeze({
@@ -483,6 +602,8 @@
         maximumAcceptedSlotLag: configuration.bounds.maximumSlotLag,
         staleAccountCount: String(staleAccounts),
         unsafeForkAccountCount: String(unsafeForkAccounts),
+        authorityEligible: false,
+        processedTransport: acquisition.processedTransport,
         forkNodeCount: String(forks.nodes.length),
         frozenSlotCount: String(forks.frozenSlots.length),
         deadSlotCount: String(forks.deadSlots.length)
@@ -495,20 +616,28 @@
       keeperActions,
       capabilities,
       forks
-    });
+    };
+    Object.defineProperty(snapshot, "sourceConfiguration", { value: configuration, enumerable: false });
+    return Object.freeze(snapshot);
   };
 
   const acquire = async (configuration, fetchFunction = root.fetch.bind(root)) => {
     const reader = new BoundedGetReader(configuration, fetchFunction);
     const healthRaw = await reader.get("/v1/health");
     const health = validateHealth(healthRaw, configuration);
-    const acquisition = validateAcquisition(await reader.get("/v1/acquisition"), configuration);
+    const acquisition = await validateAcquisition(await reader.get("/v1/acquisition"), configuration);
     const releases = validateReleaseResponse(await reader.get("/v1/releases"), configuration);
     const accounts = validateAccountsResponse(await reader.get(`/v1/accounts?commitment=${configuration.commitment}`), configuration);
     const keeper = validateKeeper(await reader.get(`/v1/keeper/next?commitment=${configuration.commitment}`), configuration);
     const forks = validateForks(await reader.get("/v1/forks"));
-    return deriveSnapshot(configuration, health, acquisition, releases, accounts, keeper, forks, reader.remaining.toString());
+    const endAcquisition = await validateAcquisition(await reader.get("/v1/acquisition"), configuration);
+    if (configuration.commitment === "processed"
+        && (endAcquisition.processedTransport.connectionGeneration !== acquisition.processedTransport.connectionGeneration
+          || endAcquisition.processedTransport.rollbackEpoch !== acquisition.processedTransport.rollbackEpoch)) {
+      throw new Error("Processed transport generation or rollback epoch changed during acquisition; reacquire a coherent non-final projection.");
+    }
+    return deriveSnapshot(configuration, health, endAcquisition, releases, accounts, keeper, forks, reader.remaining.toString());
   };
 
-  root.GlassChainClient = Object.freeze({ validateConfiguration, acquire, deriveSnapshot, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
+  root.GlassChainClient = Object.freeze({ validateConfiguration, redactedConfiguration, acquire, deriveSnapshot, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
 })(typeof globalThis === "object" ? globalThis : this);

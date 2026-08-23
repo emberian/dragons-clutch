@@ -4,8 +4,9 @@
 //! operator choose work, but never replace onchain account authentication.
 
 use crate::rpc_index::{
-    CanonicalFamily, IndexedProgramRelease, ObservedRpcAccount, ObservedSlot, ObservedSlotUpdate,
-    ObservedSlotUpdateKind, RpcCommitment, RpcIndexPlan,
+    CanonicalFamily, IndexedProgramRelease, ObservedRpcAccount, ObservedRpcAccountRemoval,
+    ObservedSlot, ObservedSlotUpdate, ObservedSlotUpdateKind, RpcAccountRemovalKind, RpcCommitment,
+    RpcIndexPlan,
 };
 use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
 use clutch_dealer_runtime_contract::{
@@ -63,13 +64,12 @@ use clutch_source_plane_v3::{
     MAX_RAW_PAGE_RECORDS,
 };
 use clutch_source_plane_v3_runtime::{
-    decode_runtime_account, ReopenLineageV1, RuntimeKey, SourceReleaseManifestV1,
-    SourceWorkReceiptAccountV1,
-    OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_TAG,
-    REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_TAG,
-    SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
-    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION, STATISTIC_RESULT_ACCOUNT_TAG,
-    WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
+    decode_runtime_account, ReopenLineageV1, RuntimeKey, SourceReleaseManifestV2,
+    SourceWorkReceiptAccountV1, OPEN_RAW_PAGE_ACCOUNT_TAG, RAW_PAGE_ACCOUNT_TAG,
+    REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, SOURCE_HEAD_ACCOUNT_TAG,
+    SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_WORK_RECEIPT_ACCOUNT_BYTES,
+    SOURCE_WORK_RECEIPT_ACCOUNT_TAG, SOURCE_WORK_RECEIPT_ACCOUNT_VERSION,
+    STATISTIC_RESULT_ACCOUNT_TAG, WINDOW_SEAL_ACCOUNT_TAG, WINDOW_WORK_ACCOUNT_TAG,
 };
 use clutch_structured_claim_runtime_contract::{
     DescriptorStateV1, StructuredClaimDescriptorV1, DESCRIPTOR_ACCOUNT_BYTES,
@@ -670,12 +670,12 @@ fn decode_source(
         Some(SOURCE_RELEASE_ACCOUNT_TAG)
             if data.get(1) == Some(&SOURCE_RELEASE_ACCOUNT_VERSION) =>
         {
-            let value = SourceReleaseManifestV1::decode(data)
+            let value = SourceReleaseManifestV2::decode(data)
                 .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
             let mut projection = runtime(
                 CanonicalAccountKind::SourceRelease,
                 None,
-                Some(value.source_spec_id.bytes()),
+                Some(value.base.source_spec_id.bytes()),
             );
             projection.secondary_binding = Some(
                 value
@@ -1272,6 +1272,13 @@ impl ForkLedger {
             return Err(AccountIndexError::RootRegression);
         }
         let hash = self.unique_hash_at(slot)?.to_string();
+        if self
+            .finalized_root
+            .as_ref()
+            .is_some_and(|(_, prior)| !self.is_ancestor(prior, &hash))
+        {
+            return Err(AccountIndexError::InvalidFork);
+        }
         if self.branch_contains_dead_slot(&hash) {
             return Err(AccountIndexError::InvalidFork);
         }
@@ -1319,6 +1326,15 @@ impl ForkLedger {
     #[must_use]
     pub fn is_dead(&self, slot: u64) -> bool {
         self.dead_slots.contains(&slot)
+    }
+
+    #[must_use]
+    pub fn slot_is_on_dead_branch(&self, slot: u64) -> bool {
+        self.hashes_by_slot.get(&slot).is_some_and(|hashes| {
+            hashes
+                .iter()
+                .any(|hash| self.branch_contains_dead_slot(hash))
+        })
     }
 
     #[must_use]
@@ -1404,6 +1420,19 @@ pub struct FinalizedAccountAbsence {
     pub receive_sequence: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessedAccountRemoval {
+    pub address: Address,
+    pub release_key: String,
+    pub observed_owner: Address,
+    pub observed_lamports: u64,
+    pub observed_data_bytes: usize,
+    pub kind: RpcAccountRemovalKind,
+    pub slot: u64,
+    pub receive_sequence: u64,
+    pub blockhash: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IndexCapacity {
     pub maximum_addresses: usize,
@@ -1418,6 +1447,7 @@ pub struct CanonicalAccountIndex {
     capacity: IndexCapacity,
     forks: ForkLedger,
     versions: BTreeMap<Address, Vec<IndexedAccountVersion>>,
+    processed_removals: BTreeMap<Address, Vec<ProcessedAccountRemoval>>,
     finalized_absences: BTreeMap<Address, FinalizedAccountAbsence>,
 }
 
@@ -1441,6 +1471,7 @@ impl CanonicalAccountIndex {
             capacity,
             forks: ForkLedger::default(),
             versions: BTreeMap::new(),
+            processed_removals: BTreeMap::new(),
             finalized_absences: BTreeMap::new(),
         })
     }
@@ -1471,6 +1502,182 @@ impl CanonicalAccountIndex {
         self.forks.finalize_root(slot)
     }
 
+    /// Invalidate every non-final subscription observation after a transport
+    /// disconnect. Finalized scans remain available, while fork topology and
+    /// processed versions are rebuilt only from a complete new subscription
+    /// generation. Rooted subscription rows are deliberately dropped too:
+    /// the next finalized scan, not a disconnected feed, owns their promotion.
+    pub fn rollback_processed_transport(&mut self) -> usize {
+        let mut removed = 0_usize;
+        self.versions.retain(|_, versions| {
+            let before = versions.len();
+            versions.retain(|version| matches!(&version.branch, IndexedBranch::FinalizedScan));
+            removed = removed.saturating_add(before.saturating_sub(versions.len()));
+            !versions.is_empty()
+        });
+        removed = removed.saturating_add(
+            self.processed_removals
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+        );
+        self.processed_removals.clear();
+        self.forks = ForkLedger::default();
+        removed
+    }
+
+    /// Remove already-indexed rows on every branch whose ancestry now contains
+    /// a dead slot. Finalized-scan baselines are never removed by a processed
+    /// rollback observation.
+    pub fn rollback_dead_processed_versions(&mut self) -> usize {
+        let forks = &self.forks;
+        let mut removed = 0_usize;
+        self.versions.retain(|_, versions| {
+            let before = versions.len();
+            versions.retain(|version| match &version.branch {
+                IndexedBranch::FinalizedScan => true,
+                IndexedBranch::Processed { blockhash } => {
+                    !forks.branch_contains_dead_slot(blockhash)
+                }
+            });
+            removed = removed.saturating_add(before.saturating_sub(versions.len()));
+            !versions.is_empty()
+        });
+        self.processed_removals.retain(|_, removals| {
+            let before = removals.len();
+            removals.retain(|removal| !forks.branch_contains_dead_slot(&removal.blockhash));
+            removed = removed.saturating_add(before.saturating_sub(removals.len()));
+            !removals.is_empty()
+        });
+        removed
+    }
+
+    fn reserve_observation_slot(&mut self, address: Address, finalized: bool) -> Result<()> {
+        let account_count = self.versions.get(&address).map_or(0, Vec::len);
+        let removal_count = self.processed_removals.get(&address).map_or(0, Vec::len);
+        if account_count.saturating_add(removal_count) < self.capacity.maximum_versions_per_address
+        {
+            return Ok(());
+        }
+        let oldest_account = self.versions.get(&address).and_then(|versions| {
+            versions
+                .iter()
+                .enumerate()
+                .filter(|(_, version)| matches!(&version.branch, IndexedBranch::Processed { .. }))
+                .min_by_key(|(_, version)| {
+                    (
+                        version.account.provenance.slot,
+                        version.account.provenance.receive_sequence,
+                    )
+                })
+                .map(|(index, version)| {
+                    (
+                        index,
+                        version.account.provenance.slot,
+                        version.account.provenance.receive_sequence,
+                    )
+                })
+        });
+        let oldest_removal = self.processed_removals.get(&address).and_then(|removals| {
+            removals
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, removal)| (removal.slot, removal.receive_sequence))
+                .map(|(index, removal)| (index, removal.slot, removal.receive_sequence))
+        });
+        match (oldest_account, oldest_removal) {
+            (Some((index, account_slot, account_sequence)), Some((_, slot, sequence)))
+                if (account_slot, account_sequence) <= (slot, sequence) =>
+            {
+                self.versions
+                    .get_mut(&address)
+                    .ok_or(AccountIndexError::CapacityExceeded)?
+                    .remove(index);
+            }
+            (_, Some((index, _, _))) => {
+                let removals = self
+                    .processed_removals
+                    .get_mut(&address)
+                    .ok_or(AccountIndexError::CapacityExceeded)?;
+                removals.remove(index);
+                let empty = removals.is_empty();
+                if empty {
+                    self.processed_removals.remove(&address);
+                }
+            }
+            (Some((index, _, _)), None) => {
+                self.versions
+                    .get_mut(&address)
+                    .ok_or(AccountIndexError::CapacityExceeded)?
+                    .remove(index);
+            }
+            (None, None) if finalized => {
+                self.versions
+                    .get_mut(&address)
+                    .and_then(|versions| (!versions.is_empty()).then(|| versions.remove(0)))
+                    .ok_or(AccountIndexError::CapacityExceeded)?;
+            }
+            (None, None) => return Err(AccountIndexError::CapacityExceeded),
+        }
+        Ok(())
+    }
+
+    pub fn record_processed_removal(&mut self, removal: ObservedRpcAccountRemoval) -> Result<bool> {
+        if removal.provenance.cluster_key != self.plan.cluster.key() {
+            return Err(AccountIndexError::WrongCluster);
+        }
+        if removal.provenance.commitment != RpcCommitment::Processed
+            || !matches!(
+                &removal.provenance.source,
+                crate::rpc_index::RpcObservationSource::ProcessedSubscription { .. }
+            )
+        {
+            return Err(AccountIndexError::InvalidFork);
+        }
+        let release = self
+            .release(&removal.provenance.release_key)
+            .ok_or(AccountIndexError::UnknownRelease)?;
+        if removal.address == Address::default()
+            || removal.observed_executable
+            || match removal.kind {
+                RpcAccountRemovalKind::Closed => {
+                    removal.observed_lamports != 0 || removal.observed_data_bytes != 0
+                }
+                RpcAccountRemovalKind::OwnerChanged => removal.observed_owner == release.program_id,
+            }
+        {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+        let known_release_address = self.versions.get(&removal.address).is_some_and(|versions| {
+            versions.iter().any(|version| {
+                version.account.provenance.release_key == removal.provenance.release_key
+            })
+        });
+        if !known_release_address {
+            return Ok(false);
+        }
+        let blockhash = self
+            .forks
+            .unique_hash_at(removal.provenance.slot)?
+            .to_string();
+        self.reserve_observation_slot(removal.address, false)?;
+        self.processed_removals
+            .entry(removal.address)
+            .or_default()
+            .push(ProcessedAccountRemoval {
+                address: removal.address,
+                release_key: removal.provenance.release_key,
+                observed_owner: removal.observed_owner,
+                observed_lamports: removal.observed_lamports,
+                observed_data_bytes: removal.observed_data_bytes,
+                kind: removal.kind,
+                slot: removal.provenance.slot,
+                receive_sequence: removal.provenance.receive_sequence,
+                blockhash,
+            });
+        Ok(true)
+    }
+
     pub fn ingest(&mut self, account: ObservedRpcAccount) -> Result<()> {
         let branch = match account.provenance.commitment {
             RpcCommitment::Finalized => IndexedBranch::FinalizedScan,
@@ -1489,16 +1696,31 @@ impl CanonicalAccountIndex {
         {
             return Err(AccountIndexError::CapacityExceeded);
         }
-        let versions = self.versions.entry(account.address).or_default();
-        if versions.len() >= self.capacity.maximum_versions_per_address {
-            versions.remove(0);
-        }
-        if versions.last().is_some_and(|previous| {
-            previous.account.provenance.receive_sequence >= account.provenance.receive_sequence
-                && previous.account.provenance.slot >= account.provenance.slot
-        }) {
+        if self
+            .versions
+            .get(&account.address)
+            .and_then(|versions| versions.last())
+            .is_some_and(|previous| {
+                previous.account.provenance.receive_sequence >= account.provenance.receive_sequence
+                    && previous.account.provenance.slot >= account.provenance.slot
+            })
+        {
             return Err(AccountIndexError::StaleObservation);
         }
+        if account.provenance.commitment == RpcCommitment::Finalized {
+            let release_key = account.provenance.release_key.as_str();
+            if let Some(versions) = self.versions.get_mut(&account.address) {
+                versions.retain(|version| {
+                    !matches!(&version.branch, IndexedBranch::FinalizedScan)
+                        || version.account.provenance.release_key != release_key
+                });
+            }
+        }
+        self.reserve_observation_slot(
+            account.address,
+            account.provenance.commitment == RpcCommitment::Finalized,
+        )?;
+        let versions = self.versions.entry(account.address).or_default();
         versions.push(IndexedAccountVersion {
             account,
             projection,
@@ -1550,28 +1772,52 @@ impl CanonicalAccountIndex {
                 let tip = self.forks.processed_tip();
                 versions
                     .iter()
-                    .rev()
-                    .find(|version| match (&version.branch, tip) {
+                    .filter(|version| match (&version.branch, tip) {
                         (IndexedBranch::FinalizedScan, _) => true,
                         (IndexedBranch::Processed { blockhash }, Some(tip)) => {
                             self.forks.is_ancestor(blockhash, tip)
                         }
                         _ => false,
                     })
-            }
-            RpcCommitment::Finalized => {
-                let root = self.forks.finalized_root().map(|(_, hash)| hash);
-                versions
-                    .iter()
-                    .rev()
-                    .find(|version| match (&version.branch, root) {
-                        (IndexedBranch::FinalizedScan, _) => true,
-                        (IndexedBranch::Processed { blockhash }, Some(root)) => {
-                            self.forks.is_ancestor(blockhash, root)
-                        }
-                        _ => false,
+                    .filter(|version| {
+                        let version_key = (
+                            version.account.provenance.slot,
+                            version.account.provenance.receive_sequence,
+                        );
+                        self.processed_removals
+                            .get(&address)
+                            .and_then(|removals| {
+                                removals
+                                    .iter()
+                                    .filter(|removal| {
+                                        removal.release_key
+                                            == version.account.provenance.release_key
+                                            && tip.is_some_and(|tip| {
+                                                self.forks.is_ancestor(&removal.blockhash, tip)
+                                            })
+                                    })
+                                    .max_by_key(|removal| (removal.slot, removal.receive_sequence))
+                            })
+                            .is_none_or(|removal| {
+                                (removal.slot, removal.receive_sequence) < version_key
+                            })
+                    })
+                    .max_by_key(|version| {
+                        (
+                            version.account.provenance.slot,
+                            version.account.provenance.receive_sequence,
+                        )
                     })
             }
+            RpcCommitment::Finalized => versions
+                .iter()
+                .filter(|version| matches!(&version.branch, IndexedBranch::FinalizedScan))
+                .max_by_key(|version| {
+                    (
+                        version.account.provenance.slot,
+                        version.account.provenance.receive_sequence,
+                    )
+                }),
         };
         selected.filter(|version| {
             self.finalized_absences.get(&address).is_none_or(|absence| {
@@ -1619,5 +1865,190 @@ impl CanonicalAccountIndex {
     #[must_use]
     pub fn cluster_key(&self) -> String {
         self.plan.cluster.key()
+    }
+}
+
+#[cfg(test)]
+mod processed_fork_tests {
+    use super::*;
+    use crate::rpc_index::{
+        RpcAcquisitionBounds, RpcClusterBinding, RpcObservationProvenance, RpcObservationSource,
+    };
+
+    const CLUSTER: &str = "test:11111111111111111111111111111111";
+
+    fn slot(slot: u64, parent_slot: u64, blockhash: &str, previous: &str) -> ObservedSlot {
+        ObservedSlot {
+            cluster_key: CLUSTER.to_string(),
+            slot,
+            parent_slot,
+            blockhash: blockhash.to_string(),
+            previous_blockhash: previous.to_string(),
+            commitment: RpcCommitment::Processed,
+            receive_sequence: slot,
+        }
+    }
+
+    #[test]
+    fn later_root_must_descend_from_the_previous_root() {
+        let mut ledger = ForkLedger::default();
+        ledger
+            .observe(slot(10, 9, "root-10", "unknown-9"), CLUSTER)
+            .unwrap();
+        ledger.finalize_root(10).unwrap();
+        ledger
+            .observe(slot(12, 11, "orphan-12", "orphan-11"), CLUSTER)
+            .unwrap();
+        assert_eq!(
+            ledger.finalize_root(12),
+            Err(AccountIndexError::InvalidFork)
+        );
+        let mut valid = ForkLedger::default();
+        valid
+            .observe(slot(10, 9, "root-10", "unknown-9"), CLUSTER)
+            .unwrap();
+        valid.finalize_root(10).unwrap();
+        valid
+            .observe(slot(11, 10, "child-11", "root-10"), CLUSTER)
+            .unwrap();
+        valid
+            .observe(slot(12, 11, "child-12", "child-11"), CLUSTER)
+            .unwrap();
+        assert_eq!(valid.finalize_root(12), Ok(()));
+    }
+
+    #[test]
+    fn dead_ancestor_marks_its_known_descendants_rollbackable() {
+        let mut ledger = ForkLedger::default();
+        ledger
+            .observe(slot(20, 19, "branch-20", "unknown-19"), CLUSTER)
+            .unwrap();
+        ledger
+            .observe(slot(21, 20, "branch-21", "branch-20"), CLUSTER)
+            .unwrap();
+        ledger
+            .observe_update(
+                ObservedSlotUpdate {
+                    cluster_key: CLUSTER.to_string(),
+                    slot: 20,
+                    parent_slot: Some(19),
+                    kind: ObservedSlotUpdateKind::Dead,
+                    receive_sequence: 22,
+                },
+                CLUSTER,
+            )
+            .unwrap();
+        assert!(ledger.slot_is_on_dead_branch(20));
+        assert!(ledger.slot_is_on_dead_branch(21));
+    }
+
+    #[test]
+    fn fork_bound_removal_masks_only_processed_and_reverts_with_dead_branch() {
+        let release = IndexedProgramRelease {
+            program_id: Address::new_from_array([0x31; 32]),
+            program_data: Address::new_from_array([0x32; 32]),
+            elf_sha256: [0x33; 32],
+            deployment_slot: 1,
+            families: vec![CanonicalFamily::General],
+        };
+        let release_key = release.key();
+        let plan = RpcIndexPlan {
+            cluster: RpcClusterBinding {
+                cluster_name: "test".to_string(),
+                genesis_hash: "11111111111111111111111111111111".to_string(),
+                rpc_http_url: "http://127.0.0.1:8899".to_string(),
+                rpc_websocket_url: "ws://127.0.0.1:8900".to_string(),
+            },
+            releases: vec![release.clone()],
+            bounds: RpcAcquisitionBounds {
+                maximum_accounts_per_scan: 8,
+                maximum_account_data_bytes: 1024,
+                maximum_total_response_bytes: 8192,
+                maximum_subscriptions: 8,
+            },
+        };
+        let mut index = CanonicalAccountIndex::new(
+            plan,
+            CanonicalDecoderContext {
+                source_neutral_sink: RuntimeKey::from_bytes([0x55; 32]),
+            },
+            IndexCapacity {
+                maximum_addresses: 8,
+                maximum_versions_per_address: 4,
+                maximum_fork_nodes: 8,
+            },
+        )
+        .unwrap();
+        let address = Address::new_from_array([0x41; 32]);
+        index.versions.insert(
+            address,
+            vec![IndexedAccountVersion {
+                account: ObservedRpcAccount {
+                    address,
+                    owner: release.program_id,
+                    lamports: 1,
+                    executable: false,
+                    rent_epoch: 0,
+                    data: vec![1],
+                    provenance: RpcObservationProvenance {
+                        cluster_key: CLUSTER.to_string(),
+                        release_key: release_key.clone(),
+                        slot: 10,
+                        commitment: RpcCommitment::Finalized,
+                        source: RpcObservationSource::FinalizedScan,
+                        receive_sequence: 1,
+                    },
+                },
+                projection: CanonicalAccountProjection::canonical(
+                    CanonicalFamily::General,
+                    CanonicalAccountKind::GeneralMarketRuntime,
+                ),
+                data_sha256: [0; 32],
+                branch: IndexedBranch::FinalizedScan,
+            }],
+        );
+        index
+            .observe_slot(slot(11, 10, "branch-11", "unknown-10"))
+            .unwrap();
+        index
+            .observe_slot_update(ObservedSlotUpdate {
+                cluster_key: CLUSTER.to_string(),
+                slot: 11,
+                parent_slot: Some(10),
+                kind: ObservedSlotUpdateKind::Frozen,
+                receive_sequence: 2,
+            })
+            .unwrap();
+        assert!(index
+            .record_processed_removal(ObservedRpcAccountRemoval {
+                address,
+                observed_owner: Address::default(),
+                observed_lamports: 0,
+                observed_executable: false,
+                observed_data_bytes: 0,
+                kind: RpcAccountRemovalKind::Closed,
+                provenance: RpcObservationProvenance {
+                    cluster_key: CLUSTER.to_string(),
+                    release_key,
+                    slot: 11,
+                    commitment: RpcCommitment::Processed,
+                    source: RpcObservationSource::ProcessedSubscription { subscription_id: 7 },
+                    receive_sequence: 3,
+                },
+            })
+            .unwrap());
+        assert!(index.current(address, RpcCommitment::Processed).is_none());
+        assert!(index.current(address, RpcCommitment::Finalized).is_some());
+        index
+            .observe_slot_update(ObservedSlotUpdate {
+                cluster_key: CLUSTER.to_string(),
+                slot: 11,
+                parent_slot: Some(10),
+                kind: ObservedSlotUpdateKind::Dead,
+                receive_sequence: 4,
+            })
+            .unwrap();
+        assert_eq!(index.rollback_dead_processed_versions(), 1);
+        assert!(index.current(address, RpcCommitment::Processed).is_some());
     }
 }

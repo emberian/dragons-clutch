@@ -48,9 +48,15 @@ Rows from other releases are counted and ignored rather than blended.
 binding HTTP it checks `getGenesisHash`, hostile-decodes each selected
 Program/ProgramData loader pair, checks the decoded deployment slot, and hashes
 the observed ProgramData ELF. It then repeatedly admits bounded finalized
-`getProgramAccounts` responses through `RpcIndexEngine`. Processed queries fail
-closed because this first transport does not yet own the required program,
-block, slot-update, and root WebSocket subscriptions. See
+`getProgramAccounts` responses through `RpcIndexEngine`. One bounded ordered
+WebSocket owner admits the complete program, block, slot-update, and root
+subscription set. It keeps processed reads withdrawn across registration,
+release-bracketed scan, replay, disconnect, rollback, and capped reconnect
+backoff. Before subscribing, the exact WebSocket connection must answer
+`getGenesisHash` with the selected genesis. The acquisition response publishes
+credential-safe redacted/SHA-256 bindings for the exact daemon HTTP+WebSocket
+coordinates plus the release coordinates; the browser hashes its selections
+and refuses any mismatch. See
 [`CHAIN_SERVE.md`](CHAIN_SERVE.md).
 
 ## Projection semantics
@@ -70,6 +76,14 @@ No absence statement is global: an empty family means only that the current
 bounded selected-release projection contained no row. All displayed state and
 keeper cursors are untrusted projections. The program must reload and
 authenticate complete accounts.
+
+Processed views are additionally non-final and rollbackable. Dead branches and
+transport reconnects are explicit withdrawal events, processed keeper actions
+are empty, and the page refuses to construct workflows from processed state.
+Well-formed closures and non-executable owner changes become release-specific,
+fork-bound removals instead of forcing a reconnect; malformed or ambiguous
+changes still fail closed. No processed projection or removal is
+authority-eligible.
 
 Successor coordinates are mirrored from the central registry only to label and
 frame construction material. Every family remains `reserved-disabled` in this
@@ -146,8 +160,8 @@ Every workflow node states that authoritative accounts must be reloaded.
   validation; no compiler math.
 - [`COMPILER_TRANSPORT.md`](COMPILER_TRANSPORT.md): exact Rust adapter JSON
   contract and canonicalization rule.
-- [`CHAIN_SERVE.md`](CHAIN_SERVE.md): explicit bounded RPC/index configuration
-  and finalized-only live acquisition boundary.
+- [`CHAIN_SERVE.md`](CHAIN_SERVE.md): explicit bounded HTTP/WebSocket acquisition,
+  processed rollback/reconnect, and finalized projection boundary.
 - `app.js`, `index.html`, `styles.css`: DOM presentation.
 - `manifest.json` and `terms.json`: retained historical evidence records; no
   shipped script loads them and they are not application defaults.

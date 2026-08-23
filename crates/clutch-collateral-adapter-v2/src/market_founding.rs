@@ -9,12 +9,17 @@
 //! mixture of individually valid but mutually unrelated accounts.
 
 use crate::{
-    digest, BoundCollateralProfileV2, ClaimMintFoundingPlanV2, CustodyCreationPlanV2, Error, Id,
+    digest, AcceptedClaimMintFoundingStepV2, AcceptedMarketLiabilityFoundingV3,
+    BoundCollateralProfileV2, ClaimMintFoundingPlanV2, CustodyCreationPlanV2, Error, Id,
     MarketLiabilityFoundingPlanV3, Result,
 };
+use clutch_retirement::MAX_OUTCOMES;
 
 /// Full-width shared Market-core founding identity domain.
 pub const MARKET_CORE_FOUNDING_DOMAIN_V3: &[u8] = b"dragons-clutch/market-core/founding/v3\0";
+/// Exhaustive accepted shared Market-core founding receipt domain.
+pub const ACCEPTED_MARKET_CORE_FOUNDING_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/market-core/founding-accepted/v3\0";
 
 /// Complete collateral/claim founding plan below Product and General
 /// authority.
@@ -24,6 +29,37 @@ pub struct MarketCoreFoundingPlanV3 {
     custody: CustodyCreationPlanV2,
     claim_mints: ClaimMintFoundingPlanV2,
     core_id: Id,
+}
+
+/// Exhaustive accepted Market-core founding capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedMarketCoreFoundingV3 {
+    plan: MarketCoreFoundingPlanV3,
+    liability_receipt_id: Id,
+    mint_receipt_ids: [Id; MAX_OUTCOMES],
+    receipt_id: Id,
+}
+
+impl AcceptedMarketCoreFoundingV3 {
+    /// Complete cross-release Market-core plan.
+    pub const fn plan(self) -> MarketCoreFoundingPlanV3 {
+        self.plan
+    }
+
+    /// Exact accepted HoardV2/ClaimLedgerV3/custody receipt.
+    pub const fn liability_receipt_id(self) -> Id {
+        self.liability_receipt_id
+    }
+
+    /// Ordered mint receipts with a canonical zero inactive tail.
+    pub const fn mint_receipt_ids(self) -> [Id; MAX_OUTCOMES] {
+        self.mint_receipt_ids
+    }
+
+    /// Exact exhaustive receipt Product may join before activation.
+    pub const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
 }
 
 impl MarketCoreFoundingPlanV3 {
@@ -148,16 +184,81 @@ pub fn compose_market_core_founding_v3(
     })
 }
 
+/// Join the liability receipt and every active one-mint receipt into the only
+/// complete Market-core activation capability.
+///
+/// Product remains the lifecycle owner and must additionally prove its exact
+/// ordered Founding counter, FoundationVault debits, General founding
+/// capability, and private one-shot activation authority.
+pub fn accept_market_core_founding_v3(
+    plan: MarketCoreFoundingPlanV3,
+    liabilities: AcceptedMarketLiabilityFoundingV3,
+    mint_steps: [Option<AcceptedClaimMintFoundingStepV2>; MAX_OUTCOMES],
+) -> Result<AcceptedMarketCoreFoundingV3> {
+    if liabilities.plan() != plan.liabilities {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let mut mint_receipt_ids = [Id::ZERO; MAX_OUTCOMES];
+    let active = usize::from(plan.claim_mints.outcome_count());
+    let mut index = 0usize;
+    while index < MAX_OUTCOMES {
+        match (index < active, mint_steps[index]) {
+            (true, Some(accepted)) => {
+                let outcome = u8::try_from(index).map_err(|_| Error::Arithmetic)?;
+                if accepted.step() != plan.claim_mints.step(outcome)? {
+                    return Err(Error::PostAdmissionFailed);
+                }
+                mint_receipt_ids[index] = accepted.receipt_id();
+            }
+            (false, None) => {}
+            _ => return Err(Error::PostAdmissionFailed),
+        }
+        index += 1;
+    }
+
+    let mut receipt_bytes = [[0u8; 32]; MAX_OUTCOMES];
+    index = 0;
+    while index < MAX_OUTCOMES {
+        receipt_bytes[index] = mint_receipt_ids[index].bytes();
+        index += 1;
+    }
+    let outcome_count = [plan.claim_mints.outcome_count()];
+    let mut parts: [&[u8]; 4 + MAX_OUTCOMES] = [&[]; 4 + MAX_OUTCOMES];
+    let core_bytes = plan.core_id.bytes();
+    let liability_bytes = liabilities.receipt_id().bytes();
+    let mint_founding_bytes = plan.claim_mints.founding_id().bytes();
+    parts[0] = &core_bytes;
+    parts[1] = &liability_bytes;
+    parts[2] = &mint_founding_bytes;
+    parts[3] = &outcome_count;
+    index = 0;
+    while index < MAX_OUTCOMES {
+        parts[4 + index] = &receipt_bytes[index];
+        index += 1;
+    }
+    let receipt_id = digest(ACCEPTED_MARKET_CORE_FOUNDING_DOMAIN_V3, &parts);
+    receipt_id.require_live()?;
+    Ok(AcceptedMarketCoreFoundingV3 {
+        plan,
+        liability_receipt_id: liabilities.receipt_id(),
+        mint_receipt_ids,
+        receipt_id,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
+        accept_claim_mint_founding_step_v2, accept_market_liability_founding_v3,
         bind_claim_issuance_v1, bind_collateral_profile_v2, prepare_claim_mint_founding_v2,
         prepare_hoard_creation_v2, prepare_market_liability_founding_v3, AdapterCatalogV2,
-        AdapterReleaseV2, ClaimIssuanceBindingV1, ClaimMintFoundingRequestV2,
-        ClaimRuntimeObservationV1, CollateralPolicyV2, MarketCollateralBindingV2,
+        AdapterReleaseV2, ClaimIssuanceBindingV1, ClaimMintFoundingPostwriteV2,
+        ClaimMintFoundingRequestV2, ClaimRuntimeObservationV1, CollateralPolicyV2,
+        MarketCollateralBindingV2, MarketLiabilityFoundingPostwriteV3,
         MarketLiabilityFoundingRequestV3, ProfileCollateralBindingV2, RealmCollateralBindingV2,
-        RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, LEGACY_SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM,
+        RuntimeAccountViewV2, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, CLAIM_LEDGER_V3_BYTES,
+        HOARD_V2_BYTES, LEGACY_SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM,
     };
     use clutch_retirement::{
         DeletableRentOwnerV1, Identity32V1, PositionV3Sha256Backend, MAX_OUTCOMES,
@@ -293,6 +394,66 @@ mod tests {
         .unwrap()
     }
 
+    fn accepted_liabilities(
+        bound: BoundCollateralProfileV2,
+        plan: MarketLiabilityFoundingPlanV3,
+    ) -> AcceptedMarketLiabilityFoundingV3 {
+        let mut hoard_data = [0u8; HOARD_V2_BYTES];
+        let mut claim_ledger_data = [0u8; CLAIM_LEDGER_V3_BYTES];
+        plan.hoard().encode(&mut hoard_data).unwrap();
+        plan.claim_ledger().encode(&mut claim_ledger_data).unwrap();
+        let mut token_data = [0u8; 165];
+        token_data[0..32].copy_from_slice(&id(22).bytes());
+        token_data[32..64].copy_from_slice(&id(4).bytes());
+        token_data[108] = 1;
+        accept_market_liability_founding_v3(
+            bound,
+            plan,
+            MarketLiabilityFoundingPostwriteV3 {
+                hoard_account: id(6),
+                hoard_data: &hoard_data,
+                claim_ledger_account: id(7),
+                claim_ledger_data: &claim_ledger_data,
+                hoard_token: RuntimeAccountViewV2 {
+                    key: id(5),
+                    owner_program: LEGACY_SPL_TOKEN_PROGRAM,
+                    data: &token_data,
+                    is_signer: false,
+                    is_writable: true,
+                    executable: false,
+                },
+            },
+        )
+        .unwrap()
+    }
+
+    fn accepted_mint_step(
+        claim: crate::BoundClaimIssuanceV1,
+        plan: ClaimMintFoundingPlanV2,
+        outcome: u8,
+    ) -> AcceptedClaimMintFoundingStepV2 {
+        let step = plan.step(outcome).unwrap();
+        accept_claim_mint_founding_step_v2(
+            claim,
+            step,
+            ClaimMintFoundingPostwriteV2 {
+                mint: step.mint(),
+                owner_program: TOKEN_2022_PROGRAM,
+                writable: true,
+                signer: false,
+                executable: false,
+                account_bytes: 82,
+                initialized: true,
+                decimals: 0,
+                supply_atoms: 0,
+                mint_authority: Some(step.mint_authority()),
+                freeze_authority: None,
+                extensions: 0,
+            },
+        )
+        .unwrap()
+    }
+
     #[test]
     fn composes_exact_collateral_liability_and_claim_planes() {
         let bound = collateral();
@@ -340,5 +501,39 @@ mod tests {
             ),
             Err(Error::MismatchedBinding)
         );
+    }
+
+    #[test]
+    fn core_acceptance_is_exhaustive_over_every_active_mint() {
+        let bound = collateral();
+        let liability_plan = liabilities(id(11), 2);
+        let mint_plan = claim_mints(id(11), 2, id(20));
+        let core = compose_market_core_founding_v3(
+            bound,
+            liability_plan,
+            prepare_hoard_creation_v2(bound).unwrap(),
+            mint_plan,
+        )
+        .unwrap();
+        let liability_receipt = accepted_liabilities(bound, liability_plan);
+        let claim = claim();
+        let mut mints = [None; MAX_OUTCOMES];
+        mints[0] = Some(accepted_mint_step(claim, mint_plan, 0));
+        assert_eq!(
+            accept_market_core_founding_v3(core, liability_receipt, mints),
+            Err(Error::PostAdmissionFailed)
+        );
+
+        mints[1] = Some(accepted_mint_step(claim, mint_plan, 1));
+        let accepted = accept_market_core_founding_v3(core, liability_receipt, mints).unwrap();
+        assert_eq!(accepted.plan(), core);
+        assert_eq!(
+            accepted.liability_receipt_id(),
+            liability_receipt.receipt_id()
+        );
+        assert!(!accepted.mint_receipt_ids()[0].is_zero());
+        assert!(!accepted.mint_receipt_ids()[1].is_zero());
+        assert_eq!(accepted.mint_receipt_ids()[2], Id::ZERO);
+        assert!(!accepted.receipt_id().is_zero());
     }
 }

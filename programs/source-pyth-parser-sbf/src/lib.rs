@@ -8,9 +8,11 @@
 //! route config and returns the canonical 120-byte [`ParserOutputV1`]. It
 //! performs no CPI and mutates no account.
 
-use clutch_pyth_parser_v1::{PythParserConfigV1, PythParserRequestV1};
+use clutch_pyth_parser_v1::{PythParserConfigV1, PythParserConfigV2, PythParserRequestV1};
 use clutch_source_plane_v3::ContentId;
-use clutch_source_plane_v3_runtime::{account_data_id, ParserOutputV1, RuntimeKey};
+use clutch_source_plane_v3_runtime::{
+    account_data_id, DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1, RuntimeKey,
+};
 use clutch_source_profile_v1::{
     normalize_interval, parse_full_price_update_v2, require_boundary, AccountView,
 };
@@ -24,7 +26,10 @@ use solana_pubkey::Pubkey;
 const CONFIG_POSITION: usize = 0;
 const FEED_POSITION: usize = 1;
 const CLOCK_POSITION: usize = 2;
-const ACCOUNT_COUNT: usize = 3;
+const RECEIVER_PROGRAM_POSITION: usize = 3;
+const RECEIVER_PROGRAMDATA_POSITION: usize = 4;
+const RECEIVER_CONFIG_POSITION: usize = 5;
+const ACCOUNT_COUNT: usize = 6;
 
 /// Stable parser refusal codes. These codes describe this parser artifact,
 /// not Source V3 core or Clutch dispatcher errors.
@@ -81,6 +86,9 @@ pub fn process_instruction(
     let config_account = &accounts[CONFIG_POSITION];
     let feed = &accounts[FEED_POSITION];
     let clock_account = &accounts[CLOCK_POSITION];
+    let receiver_program = &accounts[RECEIVER_PROGRAM_POSITION];
+    let receiver_programdata = &accounts[RECEIVER_PROGRAMDATA_POSITION];
+    let receiver_config = &accounts[RECEIVER_CONFIG_POSITION];
     if config_account.is_signer
         || config_account.is_writable
         || config_account.executable
@@ -91,6 +99,15 @@ pub fn process_instruction(
         || clock_account.is_signer
         || clock_account.is_writable
         || clock_account.executable
+        || receiver_program.is_signer
+        || receiver_program.is_writable
+        || !receiver_program.executable
+        || receiver_programdata.is_signer
+        || receiver_programdata.is_writable
+        || receiver_programdata.executable
+        || receiver_config.is_signer
+        || receiver_config.is_writable
+        || receiver_config.executable
     {
         return Err(ParserError::WrongAccounts.into());
     }
@@ -104,11 +121,17 @@ pub fn process_instruction(
     let config_data = config_account
         .try_borrow_data()
         .map_err(|_| ProgramError::from(ParserError::InvalidConfig))?;
-    let config = PythParserConfigV1::decode(&config_data)
+    let config = PythParserConfigV2::decode(&config_data)
         .map_err(|_| ProgramError::from(ParserError::InvalidConfig))?;
-    if config.config_account != config_account.key.to_bytes() {
+    if config.base.config_account != config_account.key.to_bytes() {
         return Err(ParserError::InvalidConfig.into());
     }
+    authenticate_receiver_release(
+        config,
+        receiver_program,
+        receiver_programdata,
+        receiver_config,
+    )?;
     let runtime_clock = Clock::get().map_err(|_| ParserError::InvalidClock)?;
     let unix_timestamp =
         u64::try_from(runtime_clock.unix_timestamp).map_err(|_| ParserError::InvalidClock)?;
@@ -116,7 +139,7 @@ pub fn process_instruction(
         .try_borrow_data()
         .map_err(|_| ProgramError::from(ParserError::InvalidFeed))?;
     let output = evaluate(
-        config,
+        config.base,
         request,
         ParserClockV1 {
             slot: runtime_clock.slot,
@@ -129,6 +152,70 @@ pub fn process_instruction(
     let return_bytes = output.encode().map_err(|_| ParserError::InvalidOutput)?;
     solana_cpi::set_return_data(&return_bytes);
     Ok(())
+}
+
+fn authenticate_receiver_release(
+    config: PythParserConfigV2,
+    receiver_program: &AccountInfo<'_>,
+    receiver_programdata: &AccountInfo<'_>,
+    receiver_config: &AccountInfo<'_>,
+) -> Result<(), ProgramError> {
+    if receiver_program.key.to_bytes() != config.base.receiver_program
+        || receiver_programdata.key.to_bytes() != config.receiver_programdata
+        || receiver_config.key.to_bytes() != config.receiver_config
+        || receiver_config.owner.to_bytes() != config.receiver_config_owner
+    {
+        return Err(ParserError::InvalidConfig.into());
+    }
+    let program_data = receiver_program
+        .try_borrow_data()
+        .map_err(|_| ParserError::InvalidConfig)?;
+    let programdata_data = receiver_programdata
+        .try_borrow_data()
+        .map_err(|_| ParserError::InvalidConfig)?;
+    let deployment = DeploymentBindingV1 {
+        program: RuntimeKey::from_bytes(config.base.receiver_program),
+        program_account_data_id: ContentId::from_bytes(config.receiver_program_account_data_id),
+        programdata: RuntimeKey::from_bytes(config.receiver_programdata),
+        programdata_account_data_id: ContentId::from_bytes(
+            config.receiver_programdata_account_data_id,
+        ),
+        loader: RuntimeKey::from_bytes(config.receiver_loader),
+        programdata_link_offset: config.receiver_programdata_link_offset,
+        deployment_slot_offset: config.receiver_deployment_slot_offset,
+        deployment_slot: config.receiver_deployment_slot,
+    };
+    deployment
+        .authenticate(
+            runtime_view(receiver_program, &program_data),
+            runtime_view(receiver_programdata, &programdata_data),
+        )
+        .map_err(|_| ProgramError::from(ParserError::InvalidConfig))?;
+    let receiver_config_data = receiver_config
+        .try_borrow_data()
+        .map_err(|_| ParserError::InvalidConfig)?;
+    if account_data_id(
+        RuntimeKey::from_bytes(receiver_config.key.to_bytes()),
+        &receiver_config_data,
+    )
+    .map_err(|_| ParserError::InvalidConfig)?
+        != ContentId::from_bytes(config.receiver_config_data_id)
+    {
+        return Err(ParserError::InvalidConfig.into());
+    }
+    Ok(())
+}
+
+fn runtime_view<'a>(account: &'a AccountInfo<'_>, data: &'a [u8]) -> RuntimeAccountViewV1<'a> {
+    RuntimeAccountViewV1 {
+        key: RuntimeKey::from_bytes(account.key.to_bytes()),
+        owner: RuntimeKey::from_bytes(account.owner.to_bytes()),
+        lamports: account.lamports(),
+        executable: account.executable,
+        writable: account.is_writable,
+        signer: account.is_signer,
+        data,
+    }
 }
 
 /// Pure, allocation-free parser semantics below the Solana account adapter.

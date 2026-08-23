@@ -12,8 +12,8 @@ use crate::rpc_index::{
     decode_block_notification, decode_program_notification, decode_program_scan_result,
     decode_response_result, decode_root_notification, decode_slot_update_notification,
     decode_subscription_registration, notification_subscription_id, program_scan_context_slot,
-    ObservedRpcAccount, ObservedSlotUpdateKind, PlannedRpcRequest, RpcIndexError, RpcIndexPlan,
-    RpcRequestPurpose,
+    ObservedRpcAccount, ObservedRpcProgramUpdate, ObservedSlotUpdateKind, PlannedRpcRequest,
+    RpcAccountRemovalKind, RpcIndexError, RpcIndexPlan, RpcRequestPurpose,
 };
 use serde_json::Value;
 use solana_address::Address;
@@ -88,7 +88,23 @@ pub enum RpcIndexEngineEvent {
         address: Address,
         slot: u64,
     },
+    AccountRemovalBuffered {
+        address: Address,
+        slot: u64,
+        kind: RpcAccountRemovalKind,
+    },
+    AccountRemoved {
+        address: Address,
+        observed_owner: Address,
+        slot: u64,
+        kind: RpcAccountRemovalKind,
+        projection_withdrawn: bool,
+    },
     BufferedAccountsDropped {
+        slot: u64,
+        account_count: usize,
+    },
+    IndexedAccountsRolledBack {
         slot: u64,
         account_count: usize,
     },
@@ -105,6 +121,12 @@ pub enum RpcIndexEngineEvent {
     RootDeferred {
         slot: u64,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessedReconnectRollback {
+    pub indexed_versions_removed: usize,
+    pub buffered_accounts_removed: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,7 +149,7 @@ pub struct RpcIndexEngine {
     completed_scans: BTreeSet<u64>,
     registered_requests: BTreeSet<u64>,
     active_subscriptions: BTreeMap<u64, PlannedRpcRequest>,
-    pending_accounts: BTreeMap<u64, Vec<ObservedRpcAccount>>,
+    pending_accounts: BTreeMap<u64, Vec<ObservedRpcProgramUpdate>>,
     pending_account_count: usize,
     pending_account_bytes: usize,
     pending_root: Option<u64>,
@@ -201,6 +223,23 @@ impl RpcIndexEngine {
         }
         self.completed_scans.clear();
         Ok(())
+    }
+
+    /// Withdraw the complete processed generation before any reconnect.
+    /// Server-assigned subscription IDs are connection-scoped and therefore
+    /// can never survive transport loss. Finalized scan state remains intact.
+    pub fn begin_processed_reconnect(&mut self) -> ProcessedReconnectRollback {
+        let rollback = ProcessedReconnectRollback {
+            indexed_versions_removed: self.index.rollback_processed_transport(),
+            buffered_accounts_removed: self.pending_account_count,
+        };
+        self.registered_requests.clear();
+        self.active_subscriptions.clear();
+        self.pending_accounts.clear();
+        self.pending_account_count = 0;
+        self.pending_account_bytes = 0;
+        self.pending_root = None;
+        rollback
     }
 
     #[must_use]
@@ -303,13 +342,13 @@ impl RpcIndexEngine {
             .ok_or(RpcIndexEngineError::SequenceExhausted)?;
         let events = match request.purpose {
             RpcRequestPurpose::ProgramSubscription => {
-                let account = decode_program_notification(
+                let update = decode_program_notification(
                     self.index.acquisition_plan(),
                     &request,
                     notification,
                     receive_sequence,
                 )?;
-                self.admit_processed_account(account)?
+                self.admit_processed_update(update)?
             }
             RpcRequestPurpose::BlockSubscription => {
                 let slot = decode_block_notification(
@@ -341,7 +380,19 @@ impl RpcIndexEngine {
                 match kind {
                     ObservedSlotUpdateKind::Frozen => events.extend(self.drain_slot(slot)?),
                     ObservedSlotUpdateKind::Dead => {
-                        if let Some(accounts) = self.pending_accounts.remove(&slot) {
+                        let dead_pending_slots = self
+                            .pending_accounts
+                            .keys()
+                            .copied()
+                            .filter(|pending_slot| {
+                                *pending_slot == slot
+                                    || self.index.forks().slot_is_on_dead_branch(*pending_slot)
+                            })
+                            .collect::<Vec<_>>();
+                        for pending_slot in dead_pending_slots {
+                            let Some(accounts) = self.pending_accounts.remove(&pending_slot) else {
+                                continue;
+                            };
                             let bytes = pending_bytes(&accounts)?;
                             self.pending_account_count = self
                                 .pending_account_count
@@ -352,8 +403,15 @@ impl RpcIndexEngine {
                                 .checked_sub(bytes)
                                 .ok_or(RpcIndexEngineError::CapacityExceeded)?;
                             events.push(RpcIndexEngineEvent::BufferedAccountsDropped {
-                                slot,
+                                slot: pending_slot,
                                 account_count: accounts.len(),
+                            });
+                        }
+                        let account_count = self.index.rollback_dead_processed_versions();
+                        if account_count > 0 {
+                            events.push(RpcIndexEngineEvent::IndexedAccountsRolledBack {
+                                slot,
+                                account_count,
                             });
                         }
                     }
@@ -382,21 +440,37 @@ impl RpcIndexEngine {
         Ok(events)
     }
 
-    fn admit_processed_account(
+    fn admit_processed_update(
         &mut self,
-        account: ObservedRpcAccount,
+        update: ObservedRpcProgramUpdate,
     ) -> Result<Vec<RpcIndexEngineEvent>> {
-        let address = account.address;
-        let slot = account.provenance.slot;
-        if self.index.forks().is_dead(slot) {
+        let address = update.address();
+        let slot = update.slot();
+        if self.index.forks().is_dead(slot) || self.index.forks().slot_is_on_dead_branch(slot) {
             return Ok(vec![RpcIndexEngineEvent::BufferedAccountsDropped {
                 slot,
                 account_count: 1,
             }]);
         }
-        if self.index.forks().is_frozen(slot) {
-            self.index.ingest(account)?;
-            return Ok(vec![RpcIndexEngineEvent::AccountIndexed { address, slot }]);
+        if self.index.forks().is_frozen(slot) && self.index.forks().unique_hash_at(slot).is_ok() {
+            return match update {
+                ObservedRpcProgramUpdate::Present(account) => {
+                    self.index.ingest(account)?;
+                    Ok(vec![RpcIndexEngineEvent::AccountIndexed { address, slot }])
+                }
+                ObservedRpcProgramUpdate::Removed(removal) => {
+                    let observed_owner = removal.observed_owner;
+                    let kind = removal.kind;
+                    let projection_withdrawn = self.index.record_processed_removal(removal)?;
+                    Ok(vec![RpcIndexEngineEvent::AccountRemoved {
+                        address,
+                        observed_owner,
+                        slot,
+                        kind,
+                        projection_withdrawn,
+                    }])
+                }
+            };
         }
         let maximum_pending = self
             .index
@@ -408,7 +482,7 @@ impl RpcIndexEngine {
         }
         let next_pending_bytes = self
             .pending_account_bytes
-            .checked_add(account.data.len())
+            .checked_add(update.retained_data_bytes())
             .ok_or(RpcIndexEngineError::CapacityExceeded)?;
         if next_pending_bytes
             > self
@@ -419,13 +493,25 @@ impl RpcIndexEngine {
         {
             return Err(RpcIndexEngineError::CapacityExceeded);
         }
-        self.pending_accounts.entry(slot).or_default().push(account);
+        let event = match &update {
+            ObservedRpcProgramUpdate::Present(_) => {
+                RpcIndexEngineEvent::AccountBuffered { address, slot }
+            }
+            ObservedRpcProgramUpdate::Removed(removal) => {
+                RpcIndexEngineEvent::AccountRemovalBuffered {
+                    address,
+                    slot,
+                    kind: removal.kind,
+                }
+            }
+        };
+        self.pending_accounts.entry(slot).or_default().push(update);
         self.pending_account_count = self
             .pending_account_count
             .checked_add(1)
             .ok_or(RpcIndexEngineError::CapacityExceeded)?;
         self.pending_account_bytes = next_pending_bytes;
-        Ok(vec![RpcIndexEngineEvent::AccountBuffered { address, slot }])
+        Ok(vec![event])
     }
 
     fn drain_slot(&mut self, slot: u64) -> Result<Vec<RpcIndexEngineEvent>> {
@@ -433,12 +519,45 @@ impl RpcIndexEngine {
             return Ok(Vec::new());
         };
         self.index.forks().unique_hash_at(slot)?;
+        if self.index.forks().slot_is_on_dead_branch(slot) {
+            let account_count = accounts.len();
+            let account_bytes = pending_bytes(accounts)?;
+            self.pending_accounts.remove(&slot);
+            self.pending_account_count = self
+                .pending_account_count
+                .checked_sub(account_count)
+                .ok_or(RpcIndexEngineError::CapacityExceeded)?;
+            self.pending_account_bytes = self
+                .pending_account_bytes
+                .checked_sub(account_bytes)
+                .ok_or(RpcIndexEngineError::CapacityExceeded)?;
+            return Ok(vec![RpcIndexEngineEvent::BufferedAccountsDropped {
+                slot,
+                account_count,
+            }]);
+        }
         let mut next_index = self.index.clone();
         let mut events = Vec::with_capacity(accounts.len());
-        for account in accounts.iter().cloned() {
-            let address = account.address;
-            next_index.ingest(account)?;
-            events.push(RpcIndexEngineEvent::AccountIndexed { address, slot });
+        for update in accounts.iter().cloned() {
+            let address = update.address();
+            match update {
+                ObservedRpcProgramUpdate::Present(account) => {
+                    next_index.ingest(account)?;
+                    events.push(RpcIndexEngineEvent::AccountIndexed { address, slot });
+                }
+                ObservedRpcProgramUpdate::Removed(removal) => {
+                    let observed_owner = removal.observed_owner;
+                    let kind = removal.kind;
+                    let projection_withdrawn = next_index.record_processed_removal(removal)?;
+                    events.push(RpcIndexEngineEvent::AccountRemoved {
+                        address,
+                        observed_owner,
+                        slot,
+                        kind,
+                        projection_withdrawn,
+                    });
+                }
+            }
         }
         let account_count = accounts.len();
         let account_bytes = pending_bytes(accounts)?;
@@ -462,8 +581,10 @@ impl RpcIndexEngine {
         match self.index.forks().unique_hash_at(root) {
             Ok(_) => {
                 self.index.finalize_root(root)?;
+                let mut events = self.drain_slot(root)?;
                 self.pending_root = None;
-                Ok(vec![RpcIndexEngineEvent::RootFinalized { slot: root }])
+                events.push(RpcIndexEngineEvent::RootFinalized { slot: root });
+                Ok(events)
             }
             Err(AccountIndexError::UnknownFork) => Ok(Vec::new()),
             Err(error) => Err(error.into()),
@@ -471,10 +592,10 @@ impl RpcIndexEngine {
     }
 }
 
-fn pending_bytes(accounts: &[ObservedRpcAccount]) -> Result<usize> {
+fn pending_bytes(accounts: &[ObservedRpcProgramUpdate]) -> Result<usize> {
     accounts.iter().try_fold(0usize, |total, account| {
         total
-            .checked_add(account.data.len())
+            .checked_add(account.retained_data_bytes())
             .ok_or(RpcIndexEngineError::CapacityExceeded)
     })
 }

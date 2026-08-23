@@ -23,13 +23,15 @@ pub const REOPEN_GENERATION_PAYLOAD_BYTES_V2: usize = 144;
 /// Exact canonical `CloseGeneration` payload width.
 pub const CLOSE_GENERATION_PAYLOAD_BYTES_V2: usize = 112;
 /// Typed artifact required by `RegisterRelease`.
-pub const SOURCE_RELEASE_ARTIFACT_KIND_V2: ArtifactKind = ArtifactKind::SourceReleaseManifestV1;
+pub const SOURCE_RELEASE_ARTIFACT_KIND_V2: ArtifactKind = ArtifactKind::SourceReleaseManifestV2;
 /// Exact body bytes transported by the Source release artifact.
-pub const SOURCE_RELEASE_ARTIFACT_BODY_BYTES_V2: usize = 1_008;
+pub const SOURCE_RELEASE_ARTIFACT_BODY_BYTES_V2: usize = 1_296;
 
 const _: () = {
     assert!(SOURCE_TRANSITION_PAYLOAD_BYTES_V2 == 160);
     assert!(SOURCE_RELEASE_ARTIFACT_BODY_BYTES_V2 == SOURCE_RELEASE_ARTIFACT_KIND_V2.exact_len());
+    assert!(registry::SOURCE_V3_RELEASE_ACCOUNT_VERSION_V1 == 1);
+    assert!(registry::SOURCE_V3_RELEASE_ACCOUNT_VERSION == 2);
     assert!(registry::SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_VERSION == 2);
     assert!(registry::SOURCE_V3_REOPEN_LINEAGE_ACCOUNT_BYTES == 352);
 };
@@ -96,15 +98,15 @@ fn map_source_adapter_error(error: SourceAdapterError) -> CodecError {
     }
 }
 
-/// Registration of one sealed, globally content-addressed 1,008-byte release artifact.
+/// Registration of one sealed, globally content-addressed 1,296-byte release artifact.
 ///
 /// The manifest body is deliberately absent from the instruction. The account
 /// in role [`SourceAccountRoleV2::SourceReleaseArtifact`] must be a sealed
-/// [`ArtifactKind::SourceReleaseManifestV1`] whose binding digest equals this
+/// [`ArtifactKind::SourceReleaseManifestV2`] whose binding digest equals this
 /// value; the SBF adapter then hostile-decodes those exact artifact bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegisterReleaseIntentV2 {
-    /// Canonical `SourceReleaseManifestV1::id()` and sealed artifact digest.
+    /// Canonical `SourceReleaseManifestV2::id()` and sealed artifact digest.
     pub source_release_manifest_id: [u8; HASH_BYTES],
 }
 
@@ -377,9 +379,7 @@ pub const fn payload_bytes_v2(action: registry::SourceSeriesAction) -> usize {
         | registry::SourceSeriesAction::FoldWindowPages
         | registry::SourceSeriesAction::SealWindow
         | registry::SourceSeriesAction::EvaluateStatistic => SOURCE_TRANSITION_PAYLOAD_BYTES_V2,
-        registry::SourceSeriesAction::EmitFailureHandoff => {
-            EMIT_FAILURE_HANDOFF_PAYLOAD_BYTES_V2
-        }
+        registry::SourceSeriesAction::EmitFailureHandoff => EMIT_FAILURE_HANDOFF_PAYLOAD_BYTES_V2,
         registry::SourceSeriesAction::ReopenGeneration => REOPEN_GENERATION_PAYLOAD_BYTES_V2,
         registry::SourceSeriesAction::CloseGeneration => CLOSE_GENERATION_PAYLOAD_BYTES_V2,
     }
@@ -516,6 +516,12 @@ pub enum SourceAccountRoleV2 {
     ClockSysvar,
     /// Mutable external provider feed read by the parser as read-only.
     Feed,
+    /// Release-selected Pyth receiver Program account.
+    ReceiverProgram,
+    /// Release-selected Pyth receiver ProgramData account.
+    ReceiverProgramData,
+    /// Exact receiver Config account pinned by the release.
+    ReceiverConfig,
     /// Existing or newly allocated SourceHead.
     SourceHead,
     /// Durable SourceHead lineage.
@@ -644,11 +650,7 @@ impl SourceAccountContractV2 {
     }
 }
 
-const fn meta(
-    role: SourceAccountRoleV2,
-    writable: bool,
-    signer: bool,
-) -> SourceAccountMetaV2 {
+const fn meta(role: SourceAccountRoleV2, writable: bool, signer: bool) -> SourceAccountMetaV2 {
     SourceAccountMetaV2 {
         role,
         writable,
@@ -706,6 +708,9 @@ const OPEN_RAW_PAGE_METAS_V2: &[SourceAccountMetaV2] = &[
 const INGEST_BOUNDARY_METAS_V2: &[SourceAccountMetaV2] = &[
     meta(SourceAccountRoleV2::ClockSysvar, false, false),
     meta(SourceAccountRoleV2::Feed, false, false),
+    meta(SourceAccountRoleV2::ReceiverProgram, false, false),
+    meta(SourceAccountRoleV2::ReceiverProgramData, false, false),
+    meta(SourceAccountRoleV2::ReceiverConfig, false, false),
     meta(SourceAccountRoleV2::SourceHead, false, false),
     meta(SourceAccountRoleV2::HeadLineage, false, false),
     meta(SourceAccountRoleV2::OpenRawPage, true, false),
@@ -862,17 +867,13 @@ const CREATION_REFUND_ALIASES_V2: &[SourceAccountAliasV2] = &[
 ];
 
 /// Return the exact ordered account-role and alias contract for one action.
-pub const fn account_contract_v2(
-    action: registry::SourceSeriesAction,
-) -> SourceAccountContractV2 {
+pub const fn account_contract_v2(action: registry::SourceSeriesAction) -> SourceAccountContractV2 {
     let prefix: &'static [SourceAccountMetaV2] = match action {
         registry::SourceSeriesAction::RegisterRelease => &[],
         _ => AUTHENTICATED_SOURCE_ROUTE_METAS_V2,
     };
     let (suffix, aliases) = match action {
-        registry::SourceSeriesAction::RegisterRelease => {
-            (REGISTER_RELEASE_METAS_V2, NO_ALIASES_V2)
-        }
+        registry::SourceSeriesAction::RegisterRelease => (REGISTER_RELEASE_METAS_V2, NO_ALIASES_V2),
         registry::SourceSeriesAction::InitializeHead => {
             (INITIALIZE_HEAD_METAS_V2, PAYER_KEEPER_ALIASES_V2)
         }
@@ -903,9 +904,7 @@ pub const fn account_contract_v2(
         registry::SourceSeriesAction::ReopenGeneration => {
             (REOPEN_GENERATION_METAS_V2, PAYER_KEEPER_ALIASES_V2)
         }
-        registry::SourceSeriesAction::CloseGeneration => {
-            (CLOSE_GENERATION_METAS_V2, NO_ALIASES_V2)
-        }
+        registry::SourceSeriesAction::CloseGeneration => (CLOSE_GENERATION_METAS_V2, NO_ALIASES_V2),
     };
     SourceAccountContractV2 {
         prefix,
@@ -920,8 +919,7 @@ fn alias_allowed(
     right: SourceAccountRoleV2,
 ) -> bool {
     contract.aliases.iter().any(|alias| {
-        (alias.left == left && alias.right == right)
-            || (alias.left == right && alias.right == left)
+        (alias.left == left && alias.right == right) || (alias.left == right && alias.right == left)
     })
 }
 
@@ -948,9 +946,7 @@ pub fn validate_account_metas_v2(
             if index == other_index || account.key != other.key {
                 continue;
             }
-            let other_requirement = contract
-                .meta(other_index)
-                .ok_or(CodecError::InvalidCount)?;
+            let other_requirement = contract.meta(other_index).ok_or(CodecError::InvalidCount)?;
             if !alias_allowed(contract, requirement.role, other_requirement.role) {
                 return Err(CodecError::MismatchedBinding);
             }
@@ -1026,11 +1022,9 @@ mod tests {
             | registry::SourceSeriesAction::InitializeWindowWork
             | registry::SourceSeriesAction::FoldWindowPages
             | registry::SourceSeriesAction::SealWindow
-            | registry::SourceSeriesAction::EvaluateStatistic => {
-                SourceSeriesPayloadV2::Transition(
-                    IntentPreimageV3::decode(&transition_bytes(action)).unwrap(),
-                )
-            }
+            | registry::SourceSeriesAction::EvaluateStatistic => SourceSeriesPayloadV2::Transition(
+                IntentPreimageV3::decode(&transition_bytes(action)).unwrap(),
+            ),
             registry::SourceSeriesAction::EmitFailureHandoff => {
                 SourceSeriesPayloadV2::EmitFailureHandoff(EmitFailureHandoffIntentV2 {
                     kind: SourceHandoffKindV2::FailureResult,
@@ -1068,8 +1062,8 @@ mod tests {
         assert_eq!(EMIT_FAILURE_HANDOFF_PAYLOAD_BYTES_V2, 80);
         assert_eq!(REOPEN_GENERATION_PAYLOAD_BYTES_V2, 144);
         assert_eq!(CLOSE_GENERATION_PAYLOAD_BYTES_V2, 112);
-        assert_eq!(SOURCE_RELEASE_ARTIFACT_BODY_BYTES_V2, 1_008);
-        assert_eq!(SOURCE_RELEASE_ARTIFACT_KIND_V2.byte(), 44);
+        assert_eq!(SOURCE_RELEASE_ARTIFACT_BODY_BYTES_V2, 1_296);
+        assert_eq!(SOURCE_RELEASE_ARTIFACT_KIND_V2.byte(), 47);
 
         for action in ACTIONS {
             let value = payload(action);
@@ -1174,10 +1168,7 @@ mod tests {
         accounts
     }
 
-    fn role_index(
-        contract: SourceAccountContractV2,
-        role: SourceAccountRoleV2,
-    ) -> usize {
+    fn role_index(contract: SourceAccountContractV2, role: SourceAccountRoleV2) -> usize {
         (0..contract.len())
             .find(|index| contract.meta(*index).unwrap().role == role)
             .unwrap()

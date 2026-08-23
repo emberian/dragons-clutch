@@ -289,14 +289,15 @@ impl AuthenticatedOpenRawPageV1 {
     }
 }
 
-/// Authenticate one writable SourceHead owner/PDA/envelope/body.
+/// Authenticate one SourceHead owner/PDA/envelope/body at the lineage-selected
+/// read-only or mutable privilege.
 pub fn authenticate_source_head_account(
     route: AuthenticatedSourceRouteV1,
     account: RuntimeAccountViewV1<'_>,
     derived_pda: RuntimeDerivedPdaV1,
     authenticated_lineage: AuthenticatedReopenLineageV1,
 ) -> Result<AuthenticatedSourceHeadV1> {
-    require_mutable_adapter_account(route, account, authenticated_lineage)?;
+    require_adapter_account(route, account, authenticated_lineage)?;
     let (header, head) =
         decode_runtime_account::<SourceHeadV3>(account.data, route.neutral_sink())?;
     head.validate()?;
@@ -661,6 +662,24 @@ fn require_mutable_adapter_account(
         return Err(Error::WrongExecutableState);
     }
     if account.signer || !account.writable {
+        return Err(Error::WrongPrivilege);
+    }
+    Ok(())
+}
+
+fn require_adapter_account(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+) -> Result<()> {
+    if account.owner != route.adapter_program() {
+        return Err(Error::WrongOwner);
+    }
+    if account.executable {
+        return Err(Error::WrongExecutableState);
+    }
+    let expected_writable = authenticated_lineage.access() == LineageAccessV1::Mutable;
+    if account.signer || account.writable != expected_writable {
         return Err(Error::WrongPrivilege);
     }
     Ok(())
