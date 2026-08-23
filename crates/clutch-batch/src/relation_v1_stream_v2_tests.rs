@@ -951,7 +951,6 @@ fn every_accepted_single_byte_mutation_has_v1_exact_continuation() {
     let snapshots = reachable_snapshots(SelfCrossPolicyV1::AllowGateAtPairing);
 
     let mut accepted = 0usize;
-    let mut v1_undefined = 0usize;
     for source in snapshots {
         let base = compact(&source, widths);
         for at in 0..base.len() {
@@ -988,20 +987,47 @@ fn every_accepted_single_byte_mutation_has_v1_exact_continuation() {
                     v1.push_order(&book.orders[index], candidate.fills[index])
                 }
                 _ => v1.end_pass(),
-            }));
-            let Ok(expected) = expected else {
-                // V1 has unchecked debug arithmetic on structurally valid but
-                // semantically impossible checkpoints. V2 must remain total;
-                // there is no V1 transition result to compare in this case.
-                v1_undefined += 1;
-                continue;
-            };
+            }))
+            .unwrap_or_else(|_| panic!("V1 panicked after snapshot mutation at byte {at}"));
             assert_eq!(actual, expected, "snapshot mutation at byte {at}");
             assert_lockstep_checkpoint(&v1, &mut v2, widths);
         }
     }
     assert_eq!(accepted, 23_339, "accepted corpus moved; re-audit it");
-    assert_eq!(v1_undefined, 2, "V1 undefined-transition set moved");
+}
+
+#[test]
+fn hostile_resumed_price_overflow_cannot_wrap_score() {
+    let widths = ClearWorkWidthsV2::new(2, 4, 3);
+    let snapshots = reachable_snapshots(SelfCrossPolicyV1::AllowGateAtPairing);
+    let mut v2 = compact(&snapshots[10], widths);
+
+    // The high byte of the first persisted price is structurally valid, but
+    // this corruption makes the dispersion score overflow. Resumption must be
+    // total in debug and release builds, preserve the earlier economic refusal,
+    // and produce the same non-wrapping checkpoint in both engines.
+    v2[168] ^= 0xff;
+    validate_clear_work_v2(&v2, widths).unwrap();
+
+    let mut v1_wire = vec![0u8; CLEAR_WORK_V1_BODY_BYTES];
+    expand_clear_work_v2_into_v1_wire(&v2, widths, &mut v1_wire).unwrap();
+    let mut v1 = ClearWorkV1::new();
+    v1.decode_into(&v1_wire).unwrap();
+
+    assert_eq!(
+        ClearWorkFeedV2::open(&mut v2, widths).unwrap().end_pass(),
+        Ok(super::relation_v1_stream::FeedStatusV1::Complete)
+    );
+    assert_eq!(
+        v1.end_pass(),
+        Ok(super::relation_v1_stream::FeedStatusV1::Complete)
+    );
+    assert_eq!(
+        v2_verdict(&mut v2, widths),
+        Some(Err(super::relation_v1::ErrorV1::ConsiderationMismatch))
+    );
+    assert_eq!(v1_verdict(&v1), v2_verdict(&mut v2, widths));
+    assert_lockstep_checkpoint(&v1, &mut v2, widths);
 }
 
 #[test]

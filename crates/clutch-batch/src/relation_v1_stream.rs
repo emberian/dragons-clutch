@@ -2413,8 +2413,16 @@ impl ClearWorkV1 {
                 ),
             }
             let price = self.cand.prices[outcome] as i128;
-            let weight = price * (scale - price);
-            weighted += weight * (direct as i128 - overlap as i128);
+            let weighted_term = price
+                .checked_mul(scale - price)
+                .and_then(|weight| weight.checked_mul(direct as i128 - overlap as i128));
+            match weighted_term.and_then(|term| weighted.checked_add(term)) {
+                Some(sum) => weighted = sum,
+                None => self.latch(
+                    pos(M14_SCORE, 0, outcome as u16, 0, 4),
+                    ErrorV1::ArithmeticOverflow,
+                ),
+            }
             self.summary.buy_flow[outcome] = flow;
             self.summary.sell_flow[outcome] = if self.flow_sell[outcome] > u64::MAX as u128 {
                 u64::MAX
