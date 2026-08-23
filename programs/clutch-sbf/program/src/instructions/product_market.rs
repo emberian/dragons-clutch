@@ -20,7 +20,8 @@ use clutch_liveness::runtime_adapter_v1::{
 use clutch_liveness::runtime_v1::RuntimeCompartmentKindV1;
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5, ContentId, MarketFoundationAccountGraphV2,
+    AuthenticatedMarketFamilyAuthorityV1, CompiledProductSeriesBundleV5, ContentId,
+    MarketFamilyAggregatorV1, MarketFamilyV1, MarketFoundationAccountGraphV2,
     MarketFoundationScheduleV2, MarketFoundationSlotV2, MarketFoundationStepProjectionV2,
     MarketFoundingAbortProjectionV1, MarketInstanceTerminalProjectionV1, MarketInstanceV2Id,
     MarketLifecyclePhaseV1, MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1,
@@ -213,6 +214,34 @@ impl<'state> AuthenticatedMarketLifecycleRootV1<'state> {
     /// Exact persisted refundable root rent principal.
     pub const fn rent_principal_lamports(self) -> u64 {
         self.value.rent_principal_lamports
+    }
+}
+
+/// Narrow authority required to persist exactly one General-family admission.
+///
+/// The default refusal prevents a coherent set of caller-provided successor
+/// fields from becoming write authority. The Product/General join implements
+/// this only for its private, authenticated preauthorization plus General
+/// postwrite capability.
+pub(crate) trait AuthenticatedGeneralFamilyRootWriteV1 {
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_general_family_root_write(
+        &self,
+        _root_account: Pubkey,
+        _root_pre_semantic_id: ContentId,
+        _root_pre_data_id: ContentId,
+        _root_pre_authentication_id: ContentId,
+        _market_instance_id: MarketInstanceV2Id,
+        _market_binding_id: ContentId,
+        _generation: u64,
+        _general_root_id: ContentId,
+        _family_admission_sequence: u32,
+        _product_preauthorization_id: ContentId,
+        _general_postwrite_semantic_id: ContentId,
+        _general_postwrite_data_id: ContentId,
+        _general_postwrite_authentication_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
     }
 }
 
@@ -2520,6 +2549,110 @@ pub fn finalize_market_lifecycle_terminal_v1(
         account,
         binding.market_instance_id,
         binding.generation,
+        rebound_output,
+    )
+}
+
+struct ExactGeneralFamilyAdmissionAuthorityV1 {
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    general_root_id: ContentId,
+    sequence: u32,
+    receipt_id: ContentId,
+}
+
+impl AuthenticatedMarketFamilyAuthorityV1 for ExactGeneralFamilyAdmissionAuthorityV1 {
+    fn authenticate_admission(
+        &self,
+        current: &MarketFamilyAggregatorV1,
+        family: MarketFamilyV1,
+        family_root_id: ContentId,
+        family_admission_sequence: u32,
+        admission_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if family != MarketFamilyV1::General
+            || current.binding().market_instance_id != self.market_instance_id
+            || current.binding().generation != self.generation
+            || family_root_id != self.general_root_id
+            || family_admission_sequence != self.sequence
+            || admission_receipt_id != self.receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Persist only the exact General-family admission authenticated by Product's
+/// private cross-owner authority. This is deliberately not a generic root
+/// successor writer.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_authenticated_general_family_admission_root_v1<'next, A>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV1<'_>,
+    successor: &MarketLifecycleRootV1,
+    family_admission_sequence: u32,
+    product_preauthorization_id: ContentId,
+    general_postwrite_semantic_id: ContentId,
+    general_postwrite_data_id: ContentId,
+    general_postwrite_authentication_id: ContentId,
+    authority: &A,
+    rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<AuthenticatedMarketLifecycleRootV1<'next>>
+where
+    A: AuthenticatedGeneralFamilyRootWriteV1 + ?Sized,
+{
+    let current = authenticated.state();
+    let binding = current.binding();
+    let current_semantic_id = current
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let general_root_id = current
+        .product_families()
+        .binding()
+        .family_root_id(MarketFamilyV1::General);
+    authority
+        .authenticate_general_family_root_write(
+            authenticated.account(),
+            current_semantic_id,
+            authenticated.data_id(),
+            authenticated.authentication_id(),
+            binding.market_instance_id,
+            market_binding_id,
+            binding.generation,
+            general_root_id,
+            family_admission_sequence,
+            product_preauthorization_id,
+            general_postwrite_semantic_id,
+            general_postwrite_data_id,
+            general_postwrite_authentication_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let exact_authority = ExactGeneralFamilyAdmissionAuthorityV1 {
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        general_root_id,
+        sequence: family_admission_sequence,
+        receipt_id: general_postwrite_semantic_id,
+    };
+    let expected = current
+        .admit_product_family_child(
+            &exact_authority,
+            MarketFamilyV1::General,
+            family_admission_sequence,
+            general_postwrite_semantic_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(expected == *successor, ClutchError::MismatchedState)?;
+    write_market_lifecycle_root_v1(
+        program_id,
+        account,
+        authenticated,
+        successor,
         rebound_output,
     )
 }
