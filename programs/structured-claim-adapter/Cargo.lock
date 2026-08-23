@@ -18,6 +18,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "clutch-accumulator"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-batch"
 version = "0.1.0"
 
@@ -30,6 +34,10 @@ dependencies = [
  "sha2",
  "solana-sha256-hasher",
 ]
+
+[[package]]
+name = "clutch-bspline"
+version = "0.1.0"
 
 [[package]]
 name = "clutch-kernel"
@@ -49,10 +57,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-solana-reference"
+version = "0.1.0"
+dependencies = [
+ "clutch-accumulator",
+ "clutch-bspline",
+ "clutch-kernel",
+ "clutch-solana-layout",
+]
+
+[[package]]
 name = "clutch-structured-claim"
 version = "0.1.0"
 dependencies = [
  "clutch-kernel",
+]
+
+[[package]]
+name = "clutch-structured-claim-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-structured-claim",
 ]
 
 [[package]]
@@ -61,7 +86,9 @@ version = "0.1.0"
 dependencies = [
  "clutch-kernel",
  "clutch-solana-layout",
+ "clutch-solana-reference",
  "clutch-structured-claim",
+ "clutch-structured-claim-runtime-contract",
  "sha2",
  "solana-pubkey",
  "solana-sha256-hasher",

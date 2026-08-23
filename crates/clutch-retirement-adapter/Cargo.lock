@@ -46,9 +46,6 @@ version = "0.1.0"
 [[package]]
 name = "clutch-general-v2-contract"
 version = "0.1.0"
-dependencies = [
- "clutch-owner-settlement",
-]
 
 [[package]]
 name = "clutch-kernel"
@@ -56,10 +53,6 @@ version = "0.1.0"
 
 [[package]]
 name = "clutch-liveness"
-version = "0.1.0"
-
-[[package]]
-name = "clutch-owner-settlement"
 version = "0.1.0"
 
 [[package]]
@@ -75,8 +68,6 @@ version = "0.1.0"
 dependencies = [
  "clutch-batch-policy-identity",
  "clutch-general-v2-contract",
- "clutch-liveness",
- "clutch-owner-settlement",
  "clutch-retirement",
  "clutch-solana-layout",
  "clutch-solana-reference",

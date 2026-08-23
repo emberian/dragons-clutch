@@ -5,29 +5,25 @@
 //! This module deliberately has no generic public "attestation" constructor.
 //! A class witness can be minted only inside this adapter after both an exact
 //! runtime account/absence check and the owning family's semantic terminality
-//! check. Today the General V2 Window and immutable Market binding have both
-//! halves, while ClearWork has exact runtime authentication but no terminal
-//! disposition. The fresh counted Epoch and explicit-liability FinalPot have
-//! both halves. The remaining child capabilities stay unmintable until their
-//! fresh codecs and semantic owners expose the required proofs.
+//! check.  Today the General V2 Window and immutable Market binding have both
+//! halves.  The remaining child families stay unmintable until their semantic
+//! owners expose equivalent terminal-or-absent capabilities.
 
 use clutch_general_v2_contract::{
-    CandidateWindowV4AccountV1, ClearWorkHeaderV2, GeneralEpochRetirementDispositionV1,
-    GeneralEpochTombstoneV2, GeneralEpochV6AccountV1, GeneralV2EpochChildCountsV1,
-    GeneralV2EpochChildKindV1, GeneralV2FinalPotV1AccountV1, MarketBindingV1,
-    MarketRuntimeV3AccountV1, FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG,
-    FINAL_POT_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_BYTES, GENERAL_EPOCH_ACCOUNT_TAG,
-    GENERAL_EPOCH_ACCOUNT_VERSION, GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES,
-    MARKET_BINDING_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION,
-    MARKET_RUNTIME_ACCOUNT_BYTES, MARKET_RUNTIME_ACCOUNT_TAG, MARKET_RUNTIME_ACCOUNT_VERSION,
-    MAX_OUTCOMES, WINDOW_ACCOUNT_BYTES, WINDOW_ACCOUNT_TAG, WINDOW_ACCOUNT_VERSION,
+    CandidateWindowV4AccountV1, MarketBindingV1, MARKET_BINDING_ACCOUNT_BYTES,
+    MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION, WINDOW_ACCOUNT_BYTES,
+    WINDOW_ACCOUNT_TAG, WINDOW_ACCOUNT_VERSION,
 };
-use clutch_retirement::{DeletableRentOwnerV1, Identity32V1, RetirementErrorV2};
+use clutch_retirement::{
+    DeletableRentOwnerV1, EpochChildKindV1, GeneralEpochPhaseV2, Identity32V1,
+    LiveGeneralEpochProjectionV2, RetirementErrorV2,
+};
 
 use crate::account_auth::{
     authenticate_epoch_budget_v1_exact, AbsentAccountViewV1, AccountAccessV2, AccountViewV2,
-    CanonicalPdaV1,
+    AuthenticatedAccountV2, CanonicalPdaV1,
 };
+use crate::composition::{project_live_general_epoch_retirement_v2, GeneralEpochAccountV5};
 use crate::RetirementAdapterErrorV2;
 
 const WINDOW_STORED_BUMP_OFFSET: usize = 563;
@@ -113,6 +109,21 @@ fn retirement_rent(
         value.refundable_principal,
         value.donation_floor,
     )?)
+}
+
+fn terminal_epoch(
+    authenticated_epoch: AuthenticatedAccountV2<'_>,
+) -> Result<LiveGeneralEpochProjectionV2, RetirementAdapterErrorV2> {
+    let epoch = project_live_general_epoch_retirement_v2(GeneralEpochAccountV5::decode(
+        authenticated_epoch.data(),
+    )?)?;
+    if !matches!(
+        epoch.phase,
+        GeneralEpochPhaseV2::Settled | GeneralEpochPhaseV2::Lapsed
+    ) {
+        return Err(RetirementErrorV2::WrongPhase.into());
+    }
+    Ok(epoch)
 }
 
 /// Exact authenticated General V2 Window deletion and terminal-ledger facts.
@@ -442,1044 +453,6 @@ pub fn authenticate_general_v2_root_siblings_v1(
     })
 }
 
-/// Fresh General V2 parent identity shared by every counted child capability.
-///
-/// `epoch_account` is always the full General V2 Epoch PDA. It is never the
-/// legacy Epoch V5 semantic identifier. Private fields prevent a caller from
-/// rebinding an owner-issued child capability to another generation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralV2EpochChildParentV1 {
-    program_id: Identity32V1,
-    market: Identity32V1,
-    epoch_account: Identity32V1,
-    epoch_generation: u64,
-}
-
-/// Exact writable fresh General V2 Epoch prestate.
-///
-/// Private state prevents callers from changing a counter without first
-/// authenticating the canonical account owner, PDA, length, tag/version, bump,
-/// and executable/access roles.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralV2EpochV1 {
-    parent: GeneralV2EpochChildParentV1,
-    state: GeneralEpochV6AccountV1,
-}
-
-impl AuthenticatedGeneralV2EpochV1 {
-    /// Exact program/MarketRuntime/Epoch/generation binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Authoritative pre-transition child counts.
-    pub const fn children(self) -> GeneralV2EpochChildCountsV1 {
-        self.state.children
-    }
-}
-
-/// Authenticate any valid fresh General V2 Epoch prestate for a counted child
-/// or root transition. This does not assert terminality.
-pub fn authenticate_general_v2_epoch_v1(
-    view: AccountViewV2<'_>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedGeneralV2EpochV1, RetirementAdapterErrorV2> {
-    let authenticated = authenticate_exact_family_account_v1(
-        view,
-        program_id,
-        canonical_pda,
-        AccountAccessV2::Writable,
-        ExactFamilySchemaV1 {
-            tag: GENERAL_EPOCH_ACCOUNT_TAG,
-            version: GENERAL_EPOCH_ACCOUNT_VERSION,
-            len: GENERAL_EPOCH_ACCOUNT_BYTES,
-            stored_bump_offset: GENERAL_EPOCH_ACCOUNT_BYTES - 2,
-        },
-    )?;
-    let state = GeneralEpochV6AccountV1::decode(authenticated.data)?;
-    Ok(AuthenticatedGeneralV2EpochV1 {
-        parent: GeneralV2EpochChildParentV1 {
-            program_id,
-            market: identity(state.market)?,
-            epoch_account: authenticated.address,
-            epoch_generation: state.generation,
-        },
-        state,
-    })
-}
-
-impl GeneralV2EpochChildParentV1 {
-    /// Exact program owner authenticated for the family account.
-    pub const fn program_id(self) -> Identity32V1 {
-        self.program_id
-    }
-
-    /// General V2 Market identity stored by the family owner.
-    pub const fn market(self) -> Identity32V1 {
-        self.market
-    }
-
-    /// Fresh General V2 Epoch PDA stored by the family owner.
-    pub const fn epoch_account(self) -> Identity32V1 {
-        self.epoch_account
-    }
-
-    /// Nonzero parent generation stored by the family owner.
-    pub const fn epoch_generation(self) -> u64 {
-        self.epoch_generation
-    }
-}
-
-/// Exact terminal fresh General V2 Epoch root required by every family join.
-///
-/// A legacy Epoch V5 account cannot mint this capability. Only the exact fresh
-/// General V2 Epoch codec, canonical PDA, owner, writable role, stored bump,
-/// terminal phase, generation, and nine zero authoritative counters do so.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralV2TerminalEpochV1 {
-    parent: GeneralV2EpochChildParentV1,
-    children: GeneralV2EpochChildCountsV1,
-    disposition: GeneralEpochRetirementDispositionV1,
-}
-
-impl AuthenticatedGeneralV2TerminalEpochV1 {
-    /// Exact program/Market/fresh-Epoch-PDA/generation binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// All nine authoritative child counters from the fresh Epoch owner.
-    pub const fn children(self) -> GeneralV2EpochChildCountsV1 {
-        self.children
-    }
-
-    /// Semantic-owner root disposition retaining full Market and funding
-    /// identity for the atomic tombstone/cursor transition.
-    pub const fn disposition(self) -> GeneralEpochRetirementDispositionV1 {
-        self.disposition
-    }
-}
-
-/// Authenticate the exact settlement-complete General V2 Epoch root and mint
-/// its terminal capability only after all nine authoritative counts are zero.
-pub fn authenticate_general_v2_terminal_epoch_v1(
-    view: AccountViewV2<'_>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedGeneralV2TerminalEpochV1, RetirementAdapterErrorV2> {
-    let authenticated = authenticate_general_v2_epoch_v1(view, program_id, canonical_pda)?;
-    let epoch = authenticated.state;
-    let disposition = epoch.retirement_disposition()?;
-    if disposition.stored_bump() != canonical_pda.bump() {
-        return Err(RetirementAdapterErrorV2::WrongBump);
-    }
-    Ok(AuthenticatedGeneralV2TerminalEpochV1 {
-        parent: authenticated.parent,
-        children: epoch.children,
-        disposition,
-    })
-}
-
-/// Exact authenticated General V2 ClearWork V2 runtime state.
-///
-/// This is deliberately not a terminal or close capability. The authoritative
-/// codec proves dynamic length, canonical tail padding, phase cursors, reward
-/// conservation, and the fresh Epoch-PDA/generation binding. General V2 still
-/// lacks a semantic-owner retirement disposition proving how the remaining
-/// reward and rent compartments close.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralV2ClearWorkAccountV1 {
-    account: Identity32V1,
-    parent: GeneralV2EpochChildParentV1,
-    node: Identity32V1,
-    order_set: Identity32V1,
-    feed: Identity32V1,
-    settlement_candidate: Identity32V1,
-    rent: DeletableRentOwnerV1,
-    reward_remaining: u64,
-    reward_earned: u64,
-    phase: u8,
-}
-
-impl AuthenticatedGeneralV2ClearWorkAccountV1 {
-    /// Canonical writable ClearWork PDA.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Exact fresh parent identity decoded from ClearWork.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// AdmissionNode owning this work account.
-    pub const fn node(self) -> Identity32V1 {
-        self.node
-    }
-
-    /// Frozen order-set identity checked by the semantic owner.
-    pub const fn order_set(self) -> Identity32V1 {
-        self.order_set
-    }
-
-    /// Canonical candidate Feed identity checked by the semantic owner.
-    pub const fn feed(self) -> Identity32V1 {
-        self.feed
-    }
-
-    /// Typed selected-candidate identity checked by the semantic owner.
-    pub const fn settlement_candidate(self) -> Identity32V1 {
-        self.settlement_candidate
-    }
-
-    /// Independently funded work-account rent compartment.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-
-    /// Exact unpaid reward reserve; no close disposition is inferred from it.
-    pub const fn reward_remaining(self) -> u64 {
-        self.reward_remaining
-    }
-
-    /// Exact monotonically earned rewards.
-    pub const fn reward_earned(self) -> u64 {
-        self.reward_earned
-    }
-
-    /// Authoritative work phase, retained without interpreting it as closable.
-    pub const fn phase(self) -> u8 {
-        self.phase
-    }
-}
-
-/// Authenticate the dynamic-width General V2 ClearWork V2 account exactly.
-///
-/// The authoritative decoder owns header/version, active-width calculation,
-/// tail padding, and all work semantics. This adapter additionally checks the
-/// runtime owner, canonical PDA, writable/non-executable role, and stored bump.
-pub fn authenticate_general_v2_clear_work_account_v1(
-    view: AccountViewV2<'_>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedGeneralV2ClearWorkAccountV1, RetirementAdapterErrorV2> {
-    if view.address != canonical_pda.address() {
-        return Err(RetirementAdapterErrorV2::WrongPda);
-    }
-    if view.owner != program_id {
-        return Err(RetirementAdapterErrorV2::WrongOwner);
-    }
-    if view.is_executable {
-        return Err(RetirementAdapterErrorV2::ExecutableAccount);
-    }
-    if !view.is_writable {
-        return Err(RetirementAdapterErrorV2::NotWritable);
-    }
-    let work = ClearWorkHeaderV2::decode_account(view.data)?;
-    if work.stored_bump != canonical_pda.bump() {
-        return Err(RetirementAdapterErrorV2::WrongBump);
-    }
-    let epoch_generation = work.epoch_generation;
-    if epoch_generation == 0 {
-        return Err(RetirementErrorV2::WrongGeneration.into());
-    }
-    Ok(AuthenticatedGeneralV2ClearWorkAccountV1 {
-        account: view.address,
-        parent: GeneralV2EpochChildParentV1 {
-            program_id,
-            market: identity(work.market)?,
-            epoch_account: identity(work.epoch)?,
-            epoch_generation,
-        },
-        node: identity(work.node)?,
-        order_set: identity(work.order_set)?,
-        feed: identity(work.feed)?,
-        settlement_candidate: identity(work.settlement_candidate_id)?,
-        rent: retirement_rent(work.rent)?,
-        reward_remaining: work.reward_remaining,
-        reward_earned: work.reward_earned,
-        phase: work.phase,
-    })
-}
-
-/// Owner-issued terminal CandidateIndex-page disposition.
-///
-/// No constructor is exposed: the current CandidateIndex codec does not carry
-/// the fresh General V2 Epoch PDA, generation, or deletable-rent owner. Its
-/// eventual owner must prove the full active mask closed and bind the exact
-/// reverse page cursor before minting this capability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedCandidateIndexPageTerminalV1 {
-    parent: GeneralV2EpochChildParentV1,
-    account: Identity32V1,
-    page_index: u16,
-    active_count: u16,
-    closed_mask: u64,
-    close_reward_lamports: u64,
-    rent: DeletableRentOwnerV1,
-}
-
-impl FamilyOwnedCandidateIndexPageTerminalV1 {
-    /// Fresh parent binding owned by the future counted codec.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Canonical counted page account.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Canonical page index in its exhaustive set.
-    pub const fn page_index(self) -> u16 {
-        self.page_index
-    }
-
-    /// Number of active entries whose complete mask was authenticated.
-    pub const fn active_count(self) -> u16 {
-        self.active_count
-    }
-
-    /// Exact authenticated closed-entry mask.
-    pub const fn closed_mask(self) -> u64 {
-        self.closed_mask
-    }
-
-    /// Prepaid permissionless page-close reward.
-    pub const fn close_reward_lamports(self) -> u64 {
-        self.close_reward_lamports
-    }
-
-    /// Deletable page rent owner; never a reward source.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-}
-
-/// Owner-issued terminal CandidateVerdict disposition.
-///
-/// No constructor is exposed until a counted verdict codec binds the fresh
-/// parent generation and the candidate owner proves every downstream verdict
-/// dependency exhausted.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedCandidateVerdictTerminalV1 {
-    parent: GeneralV2EpochChildParentV1,
-    account: Identity32V1,
-    candidate: Identity32V1,
-    verdict: Identity32V1,
-    rent: DeletableRentOwnerV1,
-}
-
-impl FamilyOwnedCandidateVerdictTerminalV1 {
-    /// Fresh General V2 parent binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Canonical counted verdict account.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Candidate whose dependency graph was exhausted.
-    pub const fn candidate(self) -> Identity32V1 {
-        self.candidate
-    }
-
-    /// Immutable verdict identity.
-    pub const fn verdict(self) -> Identity32V1 {
-        self.verdict
-    }
-
-    /// Deletable verdict rent owner.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-}
-
-/// Owner-issued terminal CandidateEscrow disposition.
-///
-/// Work, bond, cleanup, and solver amounts are retained separately so a future
-/// bridge cannot hide an unpaid compartment behind a scalar "terminal" bit.
-/// No constructor exists until the counted escrow owner proves every remaining
-/// amount zero and every required refund/slash/reward/claim exactly consumed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedCandidateEscrowTerminalV1 {
-    parent: GeneralV2EpochChildParentV1,
-    account: Identity32V1,
-    candidate: Identity32V1,
-    payer: Identity32V1,
-    refund_destination: Identity32V1,
-    work_remaining: u64,
-    bond_remaining: u64,
-    cleanup_remaining: u64,
-    solver_remaining: u64,
-    surplus_routed_lamports: u64,
-    rent: DeletableRentOwnerV1,
-}
-
-impl FamilyOwnedCandidateEscrowTerminalV1 {
-    /// Fresh General V2 parent binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Canonical counted escrow account.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Candidate whose economic compartments were exhausted.
-    pub const fn candidate(self) -> Identity32V1 {
-        self.candidate
-    }
-
-    /// Original escrow payer.
-    pub const fn payer(self) -> Identity32V1 {
-        self.payer
-    }
-
-    /// Immutable non-sink refund destination.
-    pub const fn refund_destination(self) -> Identity32V1 {
-        self.refund_destination
-    }
-
-    /// Unpaid work compartment, required to be zero by the future owner.
-    pub const fn work_remaining(self) -> u64 {
-        self.work_remaining
-    }
-
-    /// Unresolved bond compartment, required to be zero by the future owner.
-    pub const fn bond_remaining(self) -> u64 {
-        self.bond_remaining
-    }
-
-    /// Unpaid cleanup compartment, required to be zero by the future owner.
-    pub const fn cleanup_remaining(self) -> u64 {
-        self.cleanup_remaining
-    }
-
-    /// Unclaimed solver compartment, required to be zero by the future owner.
-    pub const fn solver_remaining(self) -> u64 {
-        self.solver_remaining
-    }
-
-    /// Donation-only surplus already routed by authoritative transitions.
-    pub const fn surplus_routed_lamports(self) -> u64 {
-        self.surplus_routed_lamports
-    }
-
-    /// Deletable escrow rent owner, separate from all economic compartments.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-}
-
-/// Owner-issued terminal ClearWork disposition.
-///
-/// Exact runtime authentication is already available through
-/// [`authenticate_general_v2_clear_work_account_v1`], but this terminal type
-/// remains unmintable until `clutch-general-v2-contract` owns the close-reward,
-/// remaining-reward, dependent-account, and deletion disposition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedClearWorkTerminalV1 {
-    account: AuthenticatedGeneralV2ClearWorkAccountV1,
-    close_reward_lamports: u64,
-    refundable_reward_lamports: u64,
-}
-
-impl FamilyOwnedClearWorkTerminalV1 {
-    /// Exact runtime-authenticated work account.
-    pub const fn account(self) -> AuthenticatedGeneralV2ClearWorkAccountV1 {
-        self.account
-    }
-
-    /// Prepaid permissionless work-close reward.
-    pub const fn close_reward_lamports(self) -> u64 {
-        self.close_reward_lamports
-    }
-
-    /// Any owner-authorized unused reward refund, never donation revenue.
-    pub const fn refundable_reward_lamports(self) -> u64 {
-        self.refundable_reward_lamports
-    }
-}
-
-/// Owner-issued terminal counted OrderPage disposition.
-///
-/// The current OrderPage V4 codec uses the legacy Epoch identity and has no
-/// parent generation or deletable-rent owner. Consequently this successor V5
-/// capability has no constructor until its authoritative codec and
-/// economically-empty page predicate exist.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedOrderPageTerminalV1 {
-    parent: GeneralV2EpochChildParentV1,
-    account: Identity32V1,
-    page_index: u16,
-    page_count: u16,
-    live_order_count: u16,
-    rent: DeletableRentOwnerV1,
-}
-
-impl FamilyOwnedOrderPageTerminalV1 {
-    /// Fresh General V2 parent binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Canonical counted OrderPage account.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Canonical page index in the frozen page set.
-    pub const fn page_index(self) -> u16 {
-        self.page_index
-    }
-
-    /// Exact frozen page-set width.
-    pub const fn page_count(self) -> u16 {
-        self.page_count
-    }
-
-    /// Authenticated live-order count, required to be zero by the owner.
-    pub const fn live_order_count(self) -> u16 {
-        self.live_order_count
-    }
-
-    /// Deletable page rent owner.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-}
-
-/// Owner-issued terminal counted Reservation-archive disposition.
-///
-/// The current General Reservation V7 envelope is intentionally not accepted:
-/// its body carries the legacy semantic Epoch identity. The eventual General
-/// V2 successor must bind the fresh Epoch PDA/generation and prove released or
-/// fully consumed state, zero remaining assets, paid quantity/cash agreement,
-/// and an already-cleared Position count marker.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedReservationArchiveTerminalV1 {
-    parent: GeneralV2EpochChildParentV1,
-    account: Identity32V1,
-    position: Identity32V1,
-    position_generation: u64,
-    state: u8,
-    remaining_cash_atoms: u64,
-    remaining_internal_atoms: [u64; MAX_OUTCOMES],
-    entitled_units: u64,
-    consumed_units: u64,
-    paid_units: u64,
-    position_counted: bool,
-    rent: DeletableRentOwnerV1,
-}
-
-impl FamilyOwnedReservationArchiveTerminalV1 {
-    /// Fresh General V2 parent binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Canonical counted Reservation account.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Position whose assets and count were released.
-    pub const fn position(self) -> Identity32V1 {
-        self.position
-    }
-
-    /// Generation of the bound Position.
-    pub const fn position_generation(self) -> u64 {
-        self.position_generation
-    }
-
-    /// Authoritative reservation terminal state.
-    pub const fn state(self) -> u8 {
-        self.state
-    }
-
-    /// Remaining reservation-owned cash, required to be zero.
-    pub const fn remaining_cash_atoms(self) -> u64 {
-        self.remaining_cash_atoms
-    }
-
-    /// Remaining reservation-owned claim atoms, required to be all zero.
-    pub const fn remaining_internal_atoms(self) -> [u64; MAX_OUTCOMES] {
-        self.remaining_internal_atoms
-    }
-
-    /// Exact stamped entitlement quantity.
-    pub const fn entitled_units(self) -> u64 {
-        self.entitled_units
-    }
-
-    /// Exact consumed claim quantity.
-    pub const fn consumed_units(self) -> u64 {
-        self.consumed_units
-    }
-
-    /// Exact cash-settled quantity; terminal consumed state requires equality.
-    pub const fn paid_units(self) -> u64 {
-        self.paid_units
-    }
-
-    /// Whether the account still owns a Position outstanding-count unit.
-    pub const fn position_counted(self) -> bool {
-        self.position_counted
-    }
-
-    /// Deletable Reservation rent owner.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-}
-
-/// Owner-issued terminal counted SettlementReceipt disposition.
-///
-/// This preserves independent real-end consumption, virtual-end shape, slice
-/// exhaustion, and owner-row dependency counts. The legacy receipt V2 body
-/// lacks a fresh General V2 parent generation, so no constructor is exposed
-/// until Receipt V3 and the owner-settlement terminal join both exist.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedSettlementReceiptTerminalV1 {
-    parent: GeneralV2EpochChildParentV1,
-    account: Identity32V1,
-    candidate: Identity32V1,
-    sequence: u64,
-    slice_index: u16,
-    expected_end_mask: u8,
-    consumed_end_mask: u8,
-    quantity: u64,
-    settled_quantity: u64,
-    consideration_price_units: u128,
-    owner_rows_remaining: u16,
-    rent: DeletableRentOwnerV1,
-}
-
-impl FamilyOwnedSettlementReceiptTerminalV1 {
-    /// Fresh General V2 parent binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Canonical counted receipt account.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Selected candidate whose exact slice was settled.
-    pub const fn candidate(self) -> Identity32V1 {
-        self.candidate
-    }
-
-    /// Canonical monotonically increasing receipt sequence.
-    pub const fn sequence(self) -> u64 {
-        self.sequence
-    }
-
-    /// Canonical zero-based selected-witness slice index.
-    pub const fn slice_index(self) -> u16 {
-        self.slice_index
-    }
-
-    /// Real ends present on the receipt; virtual ends have no bit.
-    pub const fn expected_end_mask(self) -> u8 {
-        self.expected_end_mask
-    }
-
-    /// Independently consumed real ends.
-    pub const fn consumed_end_mask(self) -> u8 {
-        self.consumed_end_mask
-    }
-
-    /// Exact slice quantity.
-    pub const fn quantity(self) -> u64 {
-        self.quantity
-    }
-
-    /// Exact settled quantity, required to equal `quantity` at retirement.
-    pub const fn settled_quantity(self) -> u64 {
-        self.settled_quantity
-    }
-
-    /// Frozen exact consideration in price units.
-    pub const fn consideration_price_units(self) -> u128 {
-        self.consideration_price_units
-    }
-
-    /// Owner-settlement rows still depending on this receipt, required zero.
-    pub const fn owner_rows_remaining(self) -> u16 {
-        self.owner_rows_remaining
-    }
-
-    /// Deletable receipt rent owner.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-}
-
-/// Exact liability compartments retained by a General V2 FinalPot terminal
-/// authority.
-///
-/// These values are collateral accounting, not lamport donations. Rounding
-/// slack remains in exact price units; virtual claims and their cash remain
-/// distinct; selected fees remain bound to their selected fee record. No
-/// field may be routed to the neutral sink. Only unsolicited lamports above
-/// the separately stored refundable rent principal are donation-eligible.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralV2FinalPotLiabilityCompartmentsV1 {
-    price_scale: u64,
-    owner_order_set_digest: [u8; 32],
-    owner_count: u16,
-    finalized_owner_count: u16,
-    consideration_debit_atoms: u64,
-    seller_credit_atoms: u64,
-    available_consideration_atoms: u64,
-    rounding_slack_price_units: u128,
-    realized_rounding_price_units: u128,
-    virtual_claim_cash_atoms: u64,
-    virtual_claim_internal_atoms: [u64; MAX_OUTCOMES],
-    fee_record: [u8; 32],
-    selected_fee_atoms: u64,
-    collected_fee_atoms: u64,
-    retired_owner_count: u16,
-    rounding_authority: [u8; 32],
-    virtual_claim_authority: [u8; 32],
-    fee_authority: [u8; 32],
-    rounding_disposition_id: [u8; 32],
-    virtual_claim_disposition_id: [u8; 32],
-    fee_disposition_id: [u8; 32],
-}
-
-impl GeneralV2FinalPotLiabilityCompartmentsV1 {
-    /// Exact collateral price scale.
-    pub const fn price_scale(self) -> u64 {
-        self.price_scale
-    }
-
-    /// Digest of the exact frozen owner/order membership book.
-    pub const fn owner_order_set_digest(self) -> [u8; 32] {
-        self.owner_order_set_digest
-    }
-
-    /// Exact frozen owner-row count.
-    pub const fn owner_count(self) -> u16 {
-        self.owner_count
-    }
-
-    /// Exactly finalized owner rows; terminality requires full equality.
-    pub const fn finalized_owner_count(self) -> u16 {
-        self.finalized_owner_count
-    }
-
-    /// Sum of owner payer conversions, excluding selected fees.
-    pub const fn consideration_debit_atoms(self) -> u64 {
-        self.consideration_debit_atoms
-    }
-
-    /// Sum of owner payee conversions.
-    pub const fn seller_credit_atoms(self) -> u64 {
-        self.seller_credit_atoms
-    }
-
-    /// Buyer consideration still held under explicit liability ownership.
-    pub const fn available_consideration_atoms(self) -> u64 {
-        self.available_consideration_atoms
-    }
-
-    /// Relation-certified rounding slack in exact price units.
-    pub const fn rounding_slack_price_units(self) -> u128 {
-        self.rounding_slack_price_units
-    }
-
-    /// Rounding slack actually realized by finalized owner rows.
-    pub const fn realized_rounding_price_units(self) -> u128 {
-        self.realized_rounding_price_units
-    }
-
-    /// Whole collateral atoms owned by the terminal virtual-claim cash ledger.
-    pub const fn virtual_claim_cash_atoms(self) -> u64 {
-        self.virtual_claim_cash_atoms
-    }
-
-    /// Per-outcome claim principal owned by the virtual pot position.
-    pub const fn virtual_claim_internal_atoms(self) -> [u64; MAX_OUTCOMES] {
-        self.virtual_claim_internal_atoms
-    }
-
-    /// Selected fee-record bytes; zero only when both fee amounts are zero.
-    pub const fn fee_record(self) -> [u8; 32] {
-        self.fee_record
-    }
-
-    /// Exact selected fee liability in collateral atoms.
-    pub const fn selected_fee_atoms(self) -> u64 {
-        self.selected_fee_atoms
-    }
-
-    /// Exact fees already collected under `fee_record`.
-    pub const fn collected_fee_atoms(self) -> u64 {
-        self.collected_fee_atoms
-    }
-
-    /// Owner rows atomically retired into the FinalPot latch.
-    pub const fn retired_owner_count(self) -> u16 {
-        self.retired_owner_count
-    }
-
-    /// Semantic authority for rounding-slack disposition.
-    pub const fn rounding_authority(self) -> [u8; 32] {
-        self.rounding_authority
-    }
-
-    /// Semantic authority for virtual claim/cash disposition.
-    pub const fn virtual_claim_authority(self) -> [u8; 32] {
-        self.virtual_claim_authority
-    }
-
-    /// Fee authority bytes; zero exactly for the zero-fee case.
-    pub const fn fee_authority(self) -> [u8; 32] {
-        self.fee_authority
-    }
-
-    /// Once-only rounding disposition receipt.
-    pub const fn rounding_disposition_id(self) -> [u8; 32] {
-        self.rounding_disposition_id
-    }
-
-    /// Once-only virtual-claim disposition receipt.
-    pub const fn virtual_claim_disposition_id(self) -> [u8; 32] {
-        self.virtual_claim_disposition_id
-    }
-
-    /// Once-only selected-fee disposition receipt.
-    pub const fn fee_disposition_id(self) -> [u8; 32] {
-        self.fee_disposition_id
-    }
-}
-
-/// Owner-issued terminal counted FinalPot disposition.
-///
-/// No constructor is exposed. The current legacy FinalPot V2 "closed means
-/// all zero" predicate is insufficient and is intentionally not reused. The
-/// future owner must join the complete owner-settlement book and independently
-/// authorize every liability compartment before this capability can exist.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FamilyOwnedFinalPotTerminalV1 {
-    parent: GeneralV2EpochChildParentV1,
-    account: Identity32V1,
-    candidate: Identity32V1,
-    liabilities: GeneralV2FinalPotLiabilityCompartmentsV1,
-    rent: DeletableRentOwnerV1,
-}
-
-/// Lamport-only FinalPot close split that cannot name any collateral
-/// liability as neutral-sink revenue.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FinalPotDonationOnlyLamportDispositionV1 {
-    rent_payer: Identity32V1,
-    rent_refund_lamports: u64,
-    neutral_sink: Identity32V1,
-    donation_lamports: u64,
-}
-
-impl FinalPotDonationOnlyLamportDispositionV1 {
-    /// Stored payer receiving only the refundable rent principal.
-    pub const fn rent_payer(self) -> Identity32V1 {
-        self.rent_payer
-    }
-
-    /// Exact refundable rent principal.
-    pub const fn rent_refund_lamports(self) -> u64 {
-        self.rent_refund_lamports
-    }
-
-    /// Immutable donation sink, never a collateral-liability recipient.
-    pub const fn neutral_sink(self) -> Identity32V1 {
-        self.neutral_sink
-    }
-
-    /// Hostile prefund plus later unsolicited account lamports only.
-    pub const fn donation_lamports(self) -> u64 {
-        self.donation_lamports
-    }
-}
-
-impl FamilyOwnedFinalPotTerminalV1 {
-    /// Fresh General V2 parent binding.
-    pub const fn parent(self) -> GeneralV2EpochChildParentV1 {
-        self.parent
-    }
-
-    /// Canonical counted FinalPot account.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-
-    /// Selected candidate owning the pot ledger.
-    pub const fn candidate(self) -> Identity32V1 {
-        self.candidate
-    }
-
-    /// Exact separately owned collateral liability compartments.
-    pub const fn liabilities(self) -> GeneralV2FinalPotLiabilityCompartmentsV1 {
-        self.liabilities
-    }
-
-    /// Deletable account rent owner; only surplus account lamports are
-    /// donation-eligible after returning this principal.
-    pub const fn rent(self) -> DeletableRentOwnerV1 {
-        self.rent
-    }
-
-    /// Split only the Solana account's lamports after every separately named
-    /// collateral liability disposition has already been authorized in the
-    /// same atomic plan.
-    ///
-    /// The neutral sink receives exactly the balance above refundable rent
-    /// principal. Rounding price units, virtual claims/cash, and selected fees
-    /// are not inputs to this arithmetic and therefore cannot be neutralized.
-    /// The sink must come from the exact same General V2 Market binding.
-    pub fn plan_donation_only_lamport_close(
-        self,
-        actual_account_lamports: u64,
-        neutral_sink: AuthenticatedGeneralV2NeutralSinkBindingV1,
-    ) -> Result<FinalPotDonationOnlyLamportDispositionV1, RetirementAdapterErrorV2> {
-        self.rent.validate()?;
-        if neutral_sink.program_id != self.parent.program_id
-            || neutral_sink.market != self.parent.market
-        {
-            return Err(RetirementErrorV2::WrongParent.into());
-        }
-        if self.account == neutral_sink.account || self.account == neutral_sink.neutral_sink {
-            return Err(RetirementErrorV2::AccountAlias.into());
-        }
-        if self.rent.payer() == neutral_sink.neutral_sink {
-            return Err(RetirementErrorV2::PayerIsNeutralSink.into());
-        }
-        let required_floor = self
-            .rent
-            .refundable_principal()
-            .checked_add(self.rent.donation_floor())
-            .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-        if actual_account_lamports < required_floor {
-            return Err(RetirementErrorV2::AccountBalanceShortfall.into());
-        }
-        Ok(FinalPotDonationOnlyLamportDispositionV1 {
-            rent_payer: self.rent.payer(),
-            rent_refund_lamports: self.rent.refundable_principal(),
-            neutral_sink: neutral_sink.neutral_sink,
-            donation_lamports: actual_account_lamports
-                .checked_sub(self.rent.refundable_principal())
-                .ok_or(RetirementErrorV2::AccountBalanceShortfall)?,
-        })
-    }
-}
-
-/// Exact runtime-authenticated, semantic-owner-issued FinalPot terminal proof.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralV2FinalPotTerminalV1 {
-    terminal: FamilyOwnedFinalPotTerminalV1,
-    family: AuthenticatedEpochChildFamilyV2,
-}
-
-impl AuthenticatedGeneralV2FinalPotTerminalV1 {
-    /// Complete explicit-liability FinalPot terminal facts.
-    pub const fn terminal(self) -> FamilyOwnedFinalPotTerminalV1 {
-        self.terminal
-    }
-
-    /// Exact family evidence consumable by the prospective zero-count root join.
-    pub const fn family(self) -> AuthenticatedEpochChildFamilyV2 {
-        self.family
-    }
-}
-
-/// Authenticate the reserved-disabled `0x89/1` FinalPot and mint terminal
-/// evidence only from its semantic owner's exhaustive disposition.
-pub fn authenticate_general_v2_final_pot_terminal_v1(
-    view: AccountViewV2<'_>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedGeneralV2FinalPotTerminalV1, RetirementAdapterErrorV2> {
-    let authenticated = authenticate_exact_family_account_v1(
-        view,
-        program_id,
-        canonical_pda,
-        AccountAccessV2::Writable,
-        ExactFamilySchemaV1 {
-            tag: FINAL_POT_ACCOUNT_TAG,
-            version: FINAL_POT_ACCOUNT_VERSION,
-            len: FINAL_POT_ACCOUNT_BYTES,
-            stored_bump_offset: FINAL_POT_ACCOUNT_BYTES - 2,
-        },
-    )?;
-    let account = GeneralV2FinalPotV1AccountV1::decode(authenticated.data)?;
-    let disposition = account
-        .semantic
-        .retirement_disposition()
-        .map_err(|_| RetirementAdapterErrorV2::InvalidSchema)?;
-    let parent = GeneralV2EpochChildParentV1 {
-        program_id,
-        market: Identity32V1::new(disposition.market())?,
-        epoch_account: Identity32V1::new(disposition.epoch())?,
-        epoch_generation: disposition.epoch_generation(),
-    };
-    let candidate = Identity32V1::new(disposition.candidate())?;
-    for independent in [parent.market, parent.epoch_account, candidate] {
-        if authenticated.address == independent {
-            return Err(RetirementErrorV2::AccountAlias.into());
-        }
-    }
-    let semantic = account.semantic;
-    let expected = semantic.settled.expectation;
-    let terminal = FamilyOwnedFinalPotTerminalV1 {
-        parent,
-        account: authenticated.address,
-        candidate,
-        liabilities: GeneralV2FinalPotLiabilityCompartmentsV1 {
-            price_scale: expected.price_scale,
-            owner_order_set_digest: expected.owner_order_set_digest,
-            owner_count: expected.owner_count,
-            finalized_owner_count: semantic.settled.finalized_owner_count,
-            consideration_debit_atoms: expected.consideration_debit_atoms,
-            seller_credit_atoms: expected.seller_credit_atoms,
-            available_consideration_atoms: semantic.settled.available_consideration_atoms,
-            rounding_slack_price_units: expected.rounding_pot_price_units,
-            realized_rounding_price_units: semantic.settled.realized_rounding_price_units,
-            virtual_claim_cash_atoms: expected.terminal_claim_cash_atoms,
-            virtual_claim_internal_atoms: semantic.initial_virtual_claim_internal_atoms,
-            fee_record: expected.fee_record,
-            selected_fee_atoms: expected.selected_fee_atoms,
-            collected_fee_atoms: semantic.settled.collected_fee_atoms,
-            retired_owner_count: semantic.retired_owner_count,
-            rounding_authority: semantic.authorities.rounding_authority,
-            virtual_claim_authority: semantic.authorities.virtual_claim_authority,
-            fee_authority: semantic.authorities.fee_authority,
-            rounding_disposition_id: disposition.rounding_disposition_id(),
-            virtual_claim_disposition_id: disposition.virtual_claim_disposition_id(),
-            fee_disposition_id: disposition.fee_disposition_id(),
-        },
-        rent: retirement_rent(account.rent)?,
-    };
-    Ok(AuthenticatedGeneralV2FinalPotTerminalV1 {
-        terminal,
-        family: AuthenticatedEpochChildFamilyV2 {
-            kind: GeneralV2EpochChildKindV1::FinalPot,
-            program_id,
-            market: parent.market,
-            epoch_account: parent.epoch_account,
-            epoch_generation: parent.epoch_generation,
-            runtime: FamilyRuntimeEvidenceV1::ExactTerminalAccount(authenticated.address),
-        },
-    })
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FamilyRuntimeEvidenceV1 {
     ExactTerminalAccount(Identity32V1),
@@ -1496,8 +469,7 @@ enum FamilyRuntimeEvidenceV1 {
 /// [`authenticate_epoch_child_terminal_account_v2`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FamilyOwnedTerminalEpochChildV1 {
-    kind: GeneralV2EpochChildKindV1,
-    program_id: Identity32V1,
+    kind: EpochChildKindV1,
     market: Identity32V1,
     epoch_account: Identity32V1,
     epoch_generation: u64,
@@ -1514,8 +486,7 @@ pub struct FamilyOwnedTerminalEpochChildV1 {
 /// this single canonical absence check as the final runtime obligation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FamilyOwnedFinalAbsenceEpochChildV1 {
-    kind: GeneralV2EpochChildKindV1,
-    program_id: Identity32V1,
+    kind: EpochChildKindV1,
     market: Identity32V1,
     epoch_account: Identity32V1,
     epoch_generation: u64,
@@ -1530,8 +501,7 @@ pub struct FamilyOwnedFinalAbsenceEpochChildV1 {
 /// close authority and cannot be obtained from a client projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedEpochChildFamilyV2 {
-    kind: GeneralV2EpochChildKindV1,
-    program_id: Identity32V1,
+    kind: EpochChildKindV1,
     market: Identity32V1,
     epoch_account: Identity32V1,
     epoch_generation: u64,
@@ -1540,7 +510,7 @@ pub struct AuthenticatedEpochChildFamilyV2 {
 
 impl AuthenticatedEpochChildFamilyV2 {
     /// Frozen Epoch child class authenticated by the family owner.
-    pub const fn kind(self) -> GeneralV2EpochChildKindV1 {
+    pub const fn kind(self) -> EpochChildKindV1 {
         self.kind
     }
 
@@ -1554,110 +524,24 @@ impl AuthenticatedEpochChildFamilyV2 {
 
     fn require(
         self,
-        kind: GeneralV2EpochChildKindV1,
-        epoch: AuthenticatedGeneralV2TerminalEpochV1,
-    ) -> Result<(), RetirementAdapterErrorV2> {
-        self.require_parent(kind, epoch.parent)?;
-        if epoch.children.get(kind) != 0 {
-            return Err(RetirementErrorV2::ChildOutstanding.into());
-        }
-        Ok(())
-    }
-
-    fn require_parent(
-        self,
-        kind: GeneralV2EpochChildKindV1,
-        parent: GeneralV2EpochChildParentV1,
+        kind: EpochChildKindV1,
+        epoch: LiveGeneralEpochProjectionV2,
+        epoch_account: Identity32V1,
     ) -> Result<(), RetirementAdapterErrorV2> {
         if self.kind != kind {
             return Err(RetirementErrorV2::WrongChildKind.into());
         }
-        if self.program_id != parent.program_id
-            || self.market != parent.market
-            || self.epoch_account != parent.epoch_account
-        {
+        if self.market != epoch.market || self.epoch_account != epoch_account {
             return Err(RetirementErrorV2::WrongParent.into());
         }
-        if self.epoch_generation != parent.epoch_generation {
+        if self.epoch_generation != epoch.retirement.epoch_generation {
             return Err(RetirementErrorV2::WrongGeneration.into());
+        }
+        if epoch.retirement.children.get(kind) != 0 {
+            return Err(RetirementErrorV2::ChildOutstanding.into());
         }
         Ok(())
     }
-}
-
-/// Prospective exact-once child retirement half that must be committed in the
-/// same Solana instruction as the authenticated child's physical deletion and
-/// its independently owned rent/liability disposition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedGeneralV2ChildRetirementV1 {
-    epoch_account: Identity32V1,
-    evidence_account: Identity32V1,
-    kind: GeneralV2EpochChildKindV1,
-    epoch_bytes_after: [u8; GENERAL_EPOCH_ACCOUNT_BYTES],
-    counts_after: GeneralV2EpochChildCountsV1,
-    root_became_count_zero: bool,
-}
-
-impl PreparedGeneralV2ChildRetirementV1 {
-    /// Fresh parent Epoch whose authoritative count must be written.
-    pub const fn epoch_account(self) -> Identity32V1 {
-        self.epoch_account
-    }
-
-    /// Exact terminal child account or canonical absence evidence.
-    pub const fn evidence_account(self) -> Identity32V1 {
-        self.evidence_account
-    }
-
-    /// Exhaustive semantic family decremented exactly once.
-    pub const fn kind(self) -> GeneralV2EpochChildKindV1 {
-        self.kind
-    }
-
-    /// Canonical complete Epoch postimage.
-    pub const fn epoch_bytes_after(self) -> [u8; GENERAL_EPOCH_ACCOUNT_BYTES] {
-        self.epoch_bytes_after
-    }
-
-    /// All nine prospective authoritative counts.
-    pub const fn counts_after(self) -> GeneralV2EpochChildCountsV1 {
-        self.counts_after
-    }
-
-    /// Whether this decrement exhausted all nine families. Root retirement
-    /// still requires a later/full terminal-family and root-sibling join.
-    pub const fn root_became_count_zero(self) -> bool {
-        self.root_became_count_zero
-    }
-}
-
-/// Prepare the root-counter half of one child close.
-///
-/// The adapter refuses a zero count, wrong class, wrong program/MarketRuntime,
-/// wrong Epoch PDA/generation, or an evidence/Epoch alias before producing any
-/// bytes. The runtime must stage child disposition, child deletion, and this
-/// postimage atomically; this pure function is deliberately not an executor.
-pub fn prepare_general_v2_child_retirement_v1(
-    epoch: AuthenticatedGeneralV2EpochV1,
-    child: AuthenticatedEpochChildFamilyV2,
-) -> Result<PreparedGeneralV2ChildRetirementV1, RetirementAdapterErrorV2> {
-    let kind = child.kind;
-    child.require_parent(kind, epoch.parent)?;
-    let evidence_account = child.evidence_address();
-    if evidence_account == epoch.parent.epoch_account {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
-    let next = epoch.state.child_retired(kind)?;
-    let mut epoch_bytes_after = [0u8; GENERAL_EPOCH_ACCOUNT_BYTES];
-    next.encode(&mut epoch_bytes_after)?;
-    Ok(PreparedGeneralV2ChildRetirementV1 {
-        epoch_account: epoch.parent.epoch_account,
-        evidence_account,
-        kind,
-        epoch_bytes_after,
-        counts_after: next.children,
-        root_became_count_zero: next.children.is_zero(),
-    })
 }
 
 /// Combine a family-owned terminality capability with exact runtime account
@@ -1676,9 +560,6 @@ pub fn authenticate_epoch_child_terminal_account_v2(
     if semantic.epoch_generation == 0 {
         return Err(RetirementErrorV2::WrongGeneration.into());
     }
-    if semantic.program_id != program_id {
-        return Err(RetirementAdapterErrorV2::WrongOwner);
-    }
     let authenticated = authenticate_exact_family_account_v1(
         account,
         program_id,
@@ -1688,7 +569,6 @@ pub fn authenticate_epoch_child_terminal_account_v2(
     )?;
     Ok(AuthenticatedEpochChildFamilyV2 {
         kind: semantic.kind,
-        program_id,
         market: semantic.market,
         epoch_account: semantic.epoch_account,
         epoch_generation: semantic.epoch_generation,
@@ -1700,15 +580,11 @@ pub fn authenticate_epoch_child_terminal_account_v2(
 /// canonical System-owned absence authentication.
 pub fn authenticate_epoch_child_final_absence_v2(
     absence: AbsentAccountViewV1,
-    program_id: Identity32V1,
     canonical_pda: CanonicalPdaV1,
     semantic: FamilyOwnedFinalAbsenceEpochChildV1,
 ) -> Result<AuthenticatedEpochChildFamilyV2, RetirementAdapterErrorV2> {
     if semantic.epoch_generation == 0 {
         return Err(RetirementErrorV2::WrongGeneration.into());
-    }
-    if semantic.program_id != program_id {
-        return Err(RetirementAdapterErrorV2::WrongOwner);
     }
     if absence.address != canonical_pda.address() {
         return Err(RetirementAdapterErrorV2::WrongPda);
@@ -1721,7 +597,6 @@ pub fn authenticate_epoch_child_final_absence_v2(
     }
     Ok(AuthenticatedEpochChildFamilyV2 {
         kind: semantic.kind,
-        program_id,
         market: semantic.market,
         epoch_account: semantic.epoch_account,
         epoch_generation: semantic.epoch_generation,
@@ -1756,63 +631,48 @@ pub struct AuthenticatedEpochChildFamiliesV2 {
 impl AuthenticatedEpochChildFamiliesV2 {
     fn array(
         self,
-    ) -> [(GeneralV2EpochChildKindV1, AuthenticatedEpochChildFamilyV2); EPOCH_CHILD_CLASS_CAPACITY_V2]
-    {
+    ) -> [(EpochChildKindV1, AuthenticatedEpochChildFamilyV2); EPOCH_CHILD_CLASS_CAPACITY_V2] {
         [
+            (EpochChildKindV1::CandidateBundle, self.candidate_bundle),
             (
-                GeneralV2EpochChildKindV1::CandidateBundle,
-                self.candidate_bundle,
-            ),
-            (
-                GeneralV2EpochChildKindV1::CandidateIndexPage,
+                EpochChildKindV1::CandidateIndexPage,
                 self.candidate_index_page,
             ),
+            (EpochChildKindV1::CandidateVerdict, self.candidate_verdict),
+            (EpochChildKindV1::CandidateEscrow, self.candidate_escrow),
+            (EpochChildKindV1::ClearWorkBundle, self.clear_work_bundle),
+            (EpochChildKindV1::OrderPage, self.order_page),
             (
-                GeneralV2EpochChildKindV1::CandidateVerdict,
-                self.candidate_verdict,
-            ),
-            (
-                GeneralV2EpochChildKindV1::CandidateEscrow,
-                self.candidate_escrow,
-            ),
-            (
-                GeneralV2EpochChildKindV1::ClearWorkBundle,
-                self.clear_work_bundle,
-            ),
-            (GeneralV2EpochChildKindV1::OrderPage, self.order_page),
-            (
-                GeneralV2EpochChildKindV1::ReservationArchive,
+                EpochChildKindV1::ReservationArchive,
                 self.reservation_archive,
             ),
-            (
-                GeneralV2EpochChildKindV1::SettlementReceipt,
-                self.settlement_receipt,
-            ),
-            (GeneralV2EpochChildKindV1::FinalPot, self.final_pot),
+            (EpochChildKindV1::SettlementReceipt, self.settlement_receipt),
+            (EpochChildKindV1::FinalPot, self.final_pot),
         ]
     }
 }
 
-/// Private-field result of joining an exact fresh General V2 terminal Epoch
-/// with all nine family-owned terminal-or-absent capabilities.
+/// Private-field result of joining an exact terminal Epoch V5 with all nine
+/// family-owned terminal-or-absent capabilities.
 ///
 /// This remains a prerequisite rather than root-close authority: it does not
 /// include the authenticated Window/Budget deletion plans, immutable neutral
 /// sink, recipient accounts, or runtime rollback contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedTerminalEpochFamiliesV2 {
-    epoch: AuthenticatedGeneralV2TerminalEpochV1,
+    epoch_account: Identity32V1,
+    epoch: LiveGeneralEpochProjectionV2,
     evidence_addresses: [Identity32V1; EPOCH_CHILD_CLASS_CAPACITY_V2],
 }
 
 impl AuthenticatedTerminalEpochFamiliesV2 {
-    /// Canonical fresh General V2 terminal Epoch account address.
+    /// Canonical terminal Epoch V5 account address.
     pub const fn epoch_account(self) -> Identity32V1 {
-        self.epoch.parent.epoch_account
+        self.epoch_account
     }
 
-    /// Exact private-field terminal Epoch capability bound to every family.
-    pub const fn epoch(self) -> AuthenticatedGeneralV2TerminalEpochV1 {
+    /// Exact terminal Epoch projection bound to every family proof.
+    pub const fn epoch(self) -> LiveGeneralEpochProjectionV2 {
         self.epoch
     }
 
@@ -1822,284 +682,30 @@ impl AuthenticatedTerminalEpochFamiliesV2 {
     }
 }
 
-/// Join the exact fresh General V2 terminal Epoch with all nine family proofs.
-///
-/// A legacy Epoch V5 account or semantic id cannot enter this join.
+/// Join the exact terminal Epoch V5 with all nine family-owned proofs.
 pub fn authenticate_terminal_epoch_families_v2(
-    authenticated_epoch: AuthenticatedGeneralV2TerminalEpochV1,
+    authenticated_epoch: AuthenticatedAccountV2<'_>,
     families: AuthenticatedEpochChildFamiliesV2,
 ) -> Result<AuthenticatedTerminalEpochFamiliesV2, RetirementAdapterErrorV2> {
-    if !authenticated_epoch.children.is_zero() {
+    let epoch = terminal_epoch(authenticated_epoch)?;
+    if !epoch.retirement.children.is_zero() {
         return Err(RetirementErrorV2::ChildOutstanding.into());
     }
 
     let entries = families.array();
-    let mut evidence_addresses =
-        [authenticated_epoch.parent.epoch_account; EPOCH_CHILD_CLASS_CAPACITY_V2];
+    let mut evidence_addresses = [authenticated_epoch.address(); EPOCH_CHILD_CLASS_CAPACITY_V2];
     let mut index = 0usize;
     while index < entries.len() {
         let (expected_kind, family) = entries[index];
-        family.require(expected_kind, authenticated_epoch)?;
+        family.require(expected_kind, epoch, authenticated_epoch.address())?;
         evidence_addresses[index] = family.evidence_address();
         index += 1;
     }
 
     Ok(AuthenticatedTerminalEpochFamiliesV2 {
-        epoch: authenticated_epoch,
+        epoch_account: authenticated_epoch.address(),
+        epoch,
         evidence_addresses,
-    })
-}
-
-/// Exact writable MarketRuntime cursor authenticated for General V2 root
-/// retirement. Private state prevents a caller from incrementing the retired
-/// counter without the complete root join below.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedGeneralV2MarketRuntimeV1 {
-    account: Identity32V1,
-    program_id: Identity32V1,
-    state: MarketRuntimeV3AccountV1,
-}
-
-impl AuthenticatedGeneralV2MarketRuntimeV1 {
-    /// Canonical MarketRuntime PDA.
-    pub const fn account(self) -> Identity32V1 {
-        self.account
-    }
-}
-
-/// Authenticate the exact monotone MarketRuntime account.
-pub fn authenticate_general_v2_market_runtime_v1(
-    view: AccountViewV2<'_>,
-    program_id: Identity32V1,
-    canonical_pda: CanonicalPdaV1,
-) -> Result<AuthenticatedGeneralV2MarketRuntimeV1, RetirementAdapterErrorV2> {
-    let authenticated = authenticate_exact_family_account_v1(
-        view,
-        program_id,
-        canonical_pda,
-        AccountAccessV2::Writable,
-        ExactFamilySchemaV1 {
-            tag: MARKET_RUNTIME_ACCOUNT_TAG,
-            version: MARKET_RUNTIME_ACCOUNT_VERSION,
-            len: MARKET_RUNTIME_ACCOUNT_BYTES,
-            stored_bump_offset: MARKET_RUNTIME_ACCOUNT_BYTES - 2,
-        },
-    )?;
-    Ok(AuthenticatedGeneralV2MarketRuntimeV1 {
-        account: authenticated.address,
-        program_id,
-        state: MarketRuntimeV3AccountV1::decode(authenticated.data)?,
-    })
-}
-
-/// Actual lamport balances and permissionless closer for one root transition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralV2RootFundingV1 {
-    /// Present permissionless closer receiving only the prepaid root reward.
-    pub keeper: Identity32V1,
-    /// Exact live Epoch account balance before resize to tombstone.
-    pub epoch_lamports: u64,
-    /// Exact Window balance before deletion.
-    pub window_lamports: u64,
-    /// Exact Budget balance before deletion.
-    pub budget_lamports: u64,
-}
-
-/// Complete lamport-only root disposition. No collateral amount is present.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralV2RootLamportDispositionV1 {
-    /// Permissionless closer.
-    pub keeper: Identity32V1,
-    /// Independently prepaid root-close reward.
-    pub keeper_reward_lamports: u64,
-    /// Epoch live-rent payer.
-    pub epoch_rent_payer: Identity32V1,
-    /// Refundable live Epoch principal.
-    pub epoch_rent_refund_lamports: u64,
-    /// Window rent payer.
-    pub window_rent_payer: Identity32V1,
-    /// Refundable Window principal.
-    pub window_rent_refund_lamports: u64,
-    /// Budget rent payer.
-    pub budget_rent_payer: Identity32V1,
-    /// Refundable Budget principal.
-    pub budget_rent_refund_lamports: u64,
-    /// Immutable Market-selected neutral donation sink.
-    pub neutral_sink: Identity32V1,
-    /// Sum of hostile prefunds and later unsolicited root-account lamports.
-    pub donation_lamports: u64,
-    /// Permanent principal retained in the Epoch tombstone.
-    pub tombstone_lamports: u64,
-}
-
-/// Fully joined prospective MarketRuntime/Epoch-tombstone/root-sibling commit.
-///
-/// The runtime still owns System transfers, resize/write/delete ordering, and
-/// transaction rollback. These bytes and amounts must be committed as one
-/// instruction; neither partial write is independently authorized.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedGeneralV2EpochRetirementV1 {
-    market_runtime_account: Identity32V1,
-    epoch_account: Identity32V1,
-    window_account: Identity32V1,
-    budget_account: Identity32V1,
-    market_runtime_bytes_after: [u8; MARKET_RUNTIME_ACCOUNT_BYTES],
-    epoch_tombstone_bytes: [u8; GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES],
-    lamports: GeneralV2RootLamportDispositionV1,
-}
-
-impl PreparedGeneralV2EpochRetirementV1 {
-    /// Mutable MarketRuntime receiving the once-only retirement increment.
-    pub const fn market_runtime_account(self) -> Identity32V1 {
-        self.market_runtime_account
-    }
-    /// Live Epoch resized in place to its permanent tombstone.
-    pub const fn epoch_account(self) -> Identity32V1 {
-        self.epoch_account
-    }
-    /// Terminal Window deleted by this atomic transition.
-    pub const fn window_account(self) -> Identity32V1 {
-        self.window_account
-    }
-    /// Terminal Budget deleted by this atomic transition.
-    pub const fn budget_account(self) -> Identity32V1 {
-        self.budget_account
-    }
-    /// Canonical MarketRuntime postimage.
-    pub const fn market_runtime_bytes_after(self) -> [u8; MARKET_RUNTIME_ACCOUNT_BYTES] {
-        self.market_runtime_bytes_after
-    }
-    /// Canonical permanent Epoch tombstone image.
-    pub const fn epoch_tombstone_bytes(self) -> [u8; GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES] {
-        self.epoch_tombstone_bytes
-    }
-    /// Exact lamport-only disposition.
-    pub const fn lamports(self) -> GeneralV2RootLamportDispositionV1 {
-        self.lamports
-    }
-}
-
-/// Join every terminal child family, mandatory root sibling, MarketRuntime
-/// cursor, immutable neutral sink, and exact funding compartment into one
-/// prospective General V2 Epoch retirement.
-pub fn prepare_general_v2_epoch_retirement_v1(
-    market_runtime: AuthenticatedGeneralV2MarketRuntimeV1,
-    terminal: AuthenticatedTerminalEpochFamiliesV2,
-    siblings: AuthenticatedGeneralV2RootSiblingsV1,
-    funding: GeneralV2RootFundingV1,
-) -> Result<PreparedGeneralV2EpochRetirementV1, RetirementAdapterErrorV2> {
-    let epoch = terminal.epoch;
-    let parent = epoch.parent;
-    let disposition = epoch.disposition;
-    if market_runtime.program_id != parent.program_id
-        || siblings.window.program_id != parent.program_id
-        || siblings.window.market != parent.market
-        || siblings.window.parent_epoch_account != parent.epoch_account
-        || siblings.window.epoch_generation != parent.epoch_generation
-        || siblings.budget.epoch_account != parent.epoch_account
-        || siblings.budget.epoch_generation != parent.epoch_generation
-        || market_runtime.account != identity(disposition.market_runtime())?
-        || market_runtime.state.market != disposition.market()
-        || market_runtime.state.market_binding != disposition.market_binding()
-        || market_runtime.state.market_instance_v2_id != disposition.market_instance_v2_id()
-        || siblings.neutral_sink.account != identity(disposition.market_binding())?
-        || siblings.window.account != identity(disposition.window())?
-        || siblings.budget.account != identity(disposition.budget())?
-    {
-        return Err(RetirementErrorV2::WrongParent.into());
-    }
-    if funding.keeper.is_zero()
-        || funding.keeper == parent.epoch_account
-        || funding.keeper == market_runtime.account
-        || funding.keeper == siblings.window.account
-        || funding.keeper == siblings.budget.account
-        || funding.keeper == siblings.neutral_sink.account
-        || funding.keeper == siblings.neutral_sink.neutral_sink
-    {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
-    for evidence in terminal.evidence_addresses {
-        if evidence == parent.epoch_account
-            || evidence == market_runtime.account
-            || evidence == siblings.window.account
-            || evidence == siblings.budget.account
-            || evidence == siblings.neutral_sink.account
-            || evidence == siblings.neutral_sink.neutral_sink
-        {
-            return Err(RetirementErrorV2::AccountAlias.into());
-        }
-    }
-
-    let epoch_rent = disposition.rent();
-    let epoch_required = epoch_rent
-        .refundable_live_principal
-        .checked_add(epoch_rent.permanent_tombstone_principal)
-        .and_then(|value| value.checked_add(epoch_rent.donation_floor))
-        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-    let window_required = siblings
-        .window
-        .rent
-        .refundable_principal()
-        .checked_add(siblings.window.rent.donation_floor())
-        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-    let budget_required = siblings
-        .budget
-        .rent
-        .refundable_principal()
-        .checked_add(siblings.budget.rent.donation_floor())
-        .and_then(|value| value.checked_add(siblings.budget.root_close_reward))
-        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-    if funding.epoch_lamports < epoch_required
-        || funding.window_lamports < window_required
-        || funding.budget_lamports < budget_required
-    {
-        return Err(RetirementErrorV2::AccountBalanceShortfall.into());
-    }
-    let epoch_donation = funding
-        .epoch_lamports
-        .checked_sub(epoch_rent.refundable_live_principal)
-        .and_then(|value| value.checked_sub(epoch_rent.permanent_tombstone_principal))
-        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-    let window_donation = funding
-        .window_lamports
-        .checked_sub(siblings.window.rent.refundable_principal())
-        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-    let budget_donation = funding
-        .budget_lamports
-        .checked_sub(siblings.budget.rent.refundable_principal())
-        .and_then(|value| value.checked_sub(siblings.budget.root_close_reward))
-        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-    let donation_lamports = epoch_donation
-        .checked_add(window_donation)
-        .and_then(|value| value.checked_add(budget_donation))
-        .ok_or(RetirementErrorV2::ArithmeticOverflow)?;
-
-    let runtime_after = market_runtime.state.recorded_retirement(disposition)?;
-    let tombstone = GeneralEpochTombstoneV2::from_disposition(disposition)?;
-    let mut market_runtime_bytes_after = [0u8; MARKET_RUNTIME_ACCOUNT_BYTES];
-    runtime_after.encode(&mut market_runtime_bytes_after)?;
-    let mut epoch_tombstone_bytes = [0u8; GENERAL_EPOCH_TOMBSTONE_ACCOUNT_BYTES];
-    tombstone.encode(&mut epoch_tombstone_bytes)?;
-    Ok(PreparedGeneralV2EpochRetirementV1 {
-        market_runtime_account: market_runtime.account,
-        epoch_account: parent.epoch_account,
-        window_account: siblings.window.account,
-        budget_account: siblings.budget.account,
-        market_runtime_bytes_after,
-        epoch_tombstone_bytes,
-        lamports: GeneralV2RootLamportDispositionV1 {
-            keeper: funding.keeper,
-            keeper_reward_lamports: siblings.budget.root_close_reward,
-            epoch_rent_payer: identity(epoch_rent.payer)?,
-            epoch_rent_refund_lamports: epoch_rent.refundable_live_principal,
-            window_rent_payer: siblings.window.rent.payer(),
-            window_rent_refund_lamports: siblings.window.rent.refundable_principal(),
-            budget_rent_payer: siblings.budget.rent.payer(),
-            budget_rent_refund_lamports: siblings.budget.rent.refundable_principal(),
-            neutral_sink: siblings.neutral_sink.neutral_sink,
-            donation_lamports,
-            tombstone_lamports: epoch_rent.permanent_tombstone_principal,
-        },
     })
 }
 

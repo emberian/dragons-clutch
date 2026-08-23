@@ -47,18 +47,22 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
 /// Existing Source Archive V2 account version.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
-/// General V2 monotone Market-runtime account discriminator.
+/// General V2 genesis-assisted Market-runtime account discriminator.
 pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
-/// First General V2 monotone Market-runtime version.
+/// RelationV2-native General Market-runtime account version.
 pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
-/// Settlement-complete counted General V2 Epoch discriminator.
+/// General V2 counted Epoch account discriminator.
 pub const GENERAL_V2_EPOCH_ACCOUNT_TAG: u8 = 11;
-/// Settlement-complete counted General V2 Epoch version.
+/// RelationV2-native counted General Epoch account version.
 pub const GENERAL_V2_EPOCH_ACCOUNT_VERSION: u8 = 6;
-/// Permanent General V2 Epoch tombstone discriminator.
-pub const GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_TAG: u8 = 0x76;
-/// Rent-owner-complete permanent Epoch tombstone version.
-pub const GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_VERSION: u8 = 2;
+/// Full-width global Position successor discriminator.
+pub const RETIREMENT_V3_POSITION_ACCOUNT_TAG: u8 = 6;
+/// Full-width global Position successor version.
+pub const RETIREMENT_V3_POSITION_ACCOUNT_VERSION: u8 = 3;
+/// Full-identity permanent Position tombstone discriminator.
+pub const RETIREMENT_POSITION_TOMBSTONE_V3_ACCOUNT_TAG: u8 = 0x75;
+/// Full-identity permanent Position tombstone version.
+pub const RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V3: u8 = 3;
 /// General V2 active-width ClearWork successor account discriminator.
 pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
 /// General V2 active-width ClearWork successor account version.
@@ -115,17 +119,57 @@ pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
+/// Dealer staged-policy account discriminator.
+pub const DEALER_POLICY_STAGE_ACCOUNT_TAG: u8 = 0x7d;
+/// Dealer staged-policy account version.
+pub const DEALER_POLICY_STAGE_ACCOUNT_VERSION: u8 = 1;
+/// Dealer immutable policy account discriminator.
+pub const DEALER_POLICY_ACCOUNT_TAG: u8 = 0x7e;
+/// Dealer immutable policy account version.
+pub const DEALER_POLICY_ACCOUNT_VERSION: u8 = 1;
+/// Source/Series registry account discriminator.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
+/// Source/Series registry account version.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
+/// Source/Series present-funding account discriminator.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
+/// Source/Series present-funding account version.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
 /// General V2 owner-aggregated settlement account discriminator.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
-/// First exact owner-settlement outer version.
+/// General V2 owner-aggregated settlement account version.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
-/// General V2 allocation-complete settlement cash-pot discriminator.
+/// General V2 selected composite-fee record envelope discriminator.
+pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
+/// General V2 selected composite-fee record envelope version.
+pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
+/// General V2 owner fee-carry envelope discriminator.
+pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
+/// General V2 owner fee-carry envelope version.
+pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
+/// General V2 temporary owner payer-allocation envelope discriminator.
+pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
+/// General V2 temporary owner payer-allocation envelope version.
+pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// General V2 temporary candidate-wide recipient-allocation discriminator.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x85;
+/// General V2 temporary candidate-wide recipient-allocation version.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// General V2 selected-record treasury-ledger envelope discriminator.
+pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
+/// General V2 selected-record treasury-ledger envelope version.
+pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
+/// General V2 buyer-first settlement cash-pot envelope discriminator.
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
-/// First exact settlement cash-pot outer version.
+/// General V2 buyer-first settlement cash-pot envelope version.
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
-/// General V2 explicit-liability FinalPot discriminator.
+/// StructuredClaim immutable descriptor envelope discriminator.
+pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG: u8 = 0x88;
+/// StructuredClaim immutable descriptor envelope version.
+pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION: u8 = 1;
+/// General V2 final settlement-pot account discriminator.
 pub const GENERAL_V2_FINAL_POT_ACCOUNT_TAG: u8 = 0x89;
-/// First exact FinalPot outer version.
+/// General V2 final settlement-pot account version.
 pub const GENERAL_V2_FINAL_POT_ACCOUNT_VERSION: u8 = 1;
 /// Immutable authenticated SourcePlane V3 release account discriminator.
 pub const SOURCE_V3_RELEASE_ACCOUNT_TAG: u8 = 0x8a;
@@ -306,6 +350,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-runtime-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_EPOCH_ACCOUNT_TAG,
+            version: GENERAL_V2_EPOCH_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-epoch-v6-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: 0x75,
             version: 1,
         },
@@ -324,38 +386,29 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_POSITION_TOMBSTONE_V3_ACCOUNT_TAG,
+            version: RETIREMENT_POSITION_TOMBSTONE_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-full-identity-position-tombstone-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: RETIREMENT_V3_POSITION_ACCOUNT_TAG,
+            version: RETIREMENT_V3_POSITION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-full-width-position-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: 0x76,
             version: 1,
         },
         status: AllocationStatus::ReservedDisabled,
         name: "retirement-provisional-general-epoch-tombstone-v1-account",
-    },
-    CollisionLedgerEntry {
-        coordinates: AllocationCoordinates::Exact {
-            namespace: WireNamespace::MainAccount,
-            tag: GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_TAG,
-            version: GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_VERSION,
-        },
-        status: AllocationStatus::ReservedDisabled,
-        name: "general-v2-epoch-tombstone-v2-account",
-    },
-    CollisionLedgerEntry {
-        coordinates: AllocationCoordinates::Exact {
-            namespace: WireNamespace::MainAccount,
-            tag: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
-            version: GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
-        },
-        status: AllocationStatus::ReservedDisabled,
-        name: "general-v2-market-runtime-v3-account",
-    },
-    CollisionLedgerEntry {
-        coordinates: AllocationCoordinates::Exact {
-            namespace: WireNamespace::MainAccount,
-            tag: GENERAL_V2_EPOCH_ACCOUNT_TAG,
-            version: GENERAL_V2_EPOCH_ACCOUNT_VERSION,
-        },
-        status: AllocationStatus::ReservedDisabled,
-        name: "general-v2-counted-epoch-v6-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -477,6 +530,42 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: DEALER_POLICY_STAGE_ACCOUNT_TAG,
+            version: DEALER_POLICY_STAGE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-policy-stage-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_POLICY_ACCOUNT_TAG,
+            version: DEALER_POLICY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-policy-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-series-registry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-series-funding-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
             version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
         },
@@ -486,11 +575,47 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
-            tag: SOURCE_V3_RELEASE_ACCOUNT_TAG,
-            version: SOURCE_V3_RELEASE_ACCOUNT_VERSION,
+            tag: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
+            version: GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-v3-release-v1-account",
+        name: "general-v2-selected-fee-record-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-fee-carry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-payer-allocation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-recipient-allocation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
+            version: GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-treasury-ledger-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -504,11 +629,11 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
-            tag: SOURCE_V3_HEAD_ACCOUNT_TAG,
-            version: SOURCE_V3_HEAD_ACCOUNT_VERSION,
+            tag: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+            version: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-v3-head-v1-account",
+        name: "structured-claim-descriptor-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -518,6 +643,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-final-pot-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_RELEASE_ACCOUNT_TAG,
+            version: SOURCE_V3_RELEASE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-release-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_HEAD_ACCOUNT_TAG,
+            version: SOURCE_V3_HEAD_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-head-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -716,10 +859,10 @@ pub enum GeneralV2Action {
     ClaimEpochUnused = 23,
     /// Freeze one settlement entitlement.
     FreezeEntitlement = 24,
-    /// Consume one entitled slice.
-    EntitleSlice = 25,
-    /// Release one terminal reservation.
-    ReleaseTerminalReservation = 26,
+    /// Account one authenticated receipt end without delivering Eggs.
+    AccountReceiptEnd = 25,
+    /// Atomically consume both real ends of one direct Egg receipt.
+    ConsumeDirectReceiptEggs = 26,
     /// Close one General V2 receipt.
     CloseReceipt = 27,
     /// Close one General V2 reservation.
@@ -736,13 +879,21 @@ pub enum GeneralV2Action {
     CloseEpoch = 33,
     /// Close one position.
     ClosePosition = 34,
+    /// Atomically transfer free cash and native Eggs between two Positions.
+    TransferPositionAssets = 35,
+    /// Atomically split complete-set inventory and consume its real buy end.
+    ConsumeVirtualSplitReceiptEggs = 36,
+    /// Atomically consume a real sell end and merge complete-set inventory.
+    ConsumeVirtualMergeReceiptEggs = 37,
+    /// Atomically realize one accounting-complete owner into the cash pot.
+    FinalizeOwnerSettlement = 38,
 }
 
 impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 34;
+    pub const LAST_TAG: u8 = 38;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -771,8 +922,8 @@ impl GeneralV2Action {
             Self::CloseCandidateIndexPage => 22,
             Self::ClaimEpochUnused => 23,
             Self::FreezeEntitlement => 24,
-            Self::EntitleSlice => 25,
-            Self::ReleaseTerminalReservation => 26,
+            Self::AccountReceiptEnd => 25,
+            Self::ConsumeDirectReceiptEggs => 26,
             Self::CloseReceipt => 27,
             Self::CloseReservation => 28,
             Self::ClosePage => 29,
@@ -781,6 +932,10 @@ impl GeneralV2Action {
             Self::CloseClearWork => 32,
             Self::CloseEpoch => 33,
             Self::ClosePosition => 34,
+            Self::TransferPositionAssets => 35,
+            Self::ConsumeVirtualSplitReceiptEggs => 36,
+            Self::ConsumeVirtualMergeReceiptEggs => 37,
+            Self::FinalizeOwnerSettlement => 38,
         }
     }
 
@@ -811,8 +966,8 @@ impl GeneralV2Action {
             22 => Some(Self::CloseCandidateIndexPage),
             23 => Some(Self::ClaimEpochUnused),
             24 => Some(Self::FreezeEntitlement),
-            25 => Some(Self::EntitleSlice),
-            26 => Some(Self::ReleaseTerminalReservation),
+            25 => Some(Self::AccountReceiptEnd),
+            26 => Some(Self::ConsumeDirectReceiptEggs),
             27 => Some(Self::CloseReceipt),
             28 => Some(Self::CloseReservation),
             29 => Some(Self::ClosePage),
@@ -821,6 +976,10 @@ impl GeneralV2Action {
             32 => Some(Self::CloseClearWork),
             33 => Some(Self::CloseEpoch),
             34 => Some(Self::ClosePosition),
+            35 => Some(Self::TransferPositionAssets),
+            36 => Some(Self::ConsumeVirtualSplitReceiptEggs),
+            37 => Some(Self::ConsumeVirtualMergeReceiptEggs),
+            38 => Some(Self::FinalizeOwnerSettlement),
             _ => None,
         }
     }
@@ -890,6 +1049,52 @@ impl SourceSeriesAction {
     }
 }
 
+/// Recurring-Series action allocations in the shared SourceSeries 77/v2 family.
+///
+/// SourcePlane V3 exclusively owns the disjoint [`SourceSeriesAction`] range.
+/// These Series tags reserve wire identity only; capability remains separate.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecurringSeriesAction {
+    /// Register one persistent V5 Series against an authenticated registry release.
+    RegisterSeries = 13,
+    /// Capitalize the five Series funding compartments.
+    ActivateFunding = 14,
+    /// Create or converge the next eligible occurrence atomically.
+    AdvanceOccurrence = 15,
+    /// Advance one elapsed ordinal without spending its allocation.
+    LapseOccurrence = 16,
+    /// Observe balance surplus as separately owned donation residue.
+    ObserveDonation = 17,
+    /// Refund remaining payer principal and dispose donation residue.
+    CloseFunding = 18,
+}
+
+impl RecurringSeriesAction {
+    /// First recurring-Series local action tag.
+    pub const FIRST_TAG: u8 = 13;
+    /// Last recurring-Series local action tag.
+    pub const LAST_TAG: u8 = 18;
+
+    /// Return the local action tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one recurring-Series local action tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            13 => Some(Self::RegisterSeries),
+            14 => Some(Self::ActivateFunding),
+            15 => Some(Self::AdvanceOccurrence),
+            16 => Some(Self::LapseOccurrence),
+            17 => Some(Self::ObserveDonation),
+            18 => Some(Self::CloseFunding),
+            _ => None,
+        }
+    }
+}
+
 /// One allocated successor family-local action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
@@ -897,6 +1102,8 @@ pub enum ExtensionAction {
     GeneralV2(GeneralV2Action),
     /// One SourcePlane V3 action in the shared SourceSeries family.
     SourceV3(SourceSeriesAction),
+    /// One recurring-Series action in the shared SourceSeries family.
+    RecurringSeries(RecurringSeriesAction),
 }
 
 impl ExtensionAction {
@@ -905,6 +1112,7 @@ impl ExtensionAction {
         match self {
             Self::GeneralV2(action) => action.tag(),
             Self::SourceV3(action) => action.tag(),
+            Self::RecurringSeries(action) => action.tag(),
         }
     }
 }
@@ -937,7 +1145,10 @@ pub const fn decode_extension_action(
         },
         Some(ExtensionFamily::SourceSeries) => match SourceSeriesAction::from_tag(local_action) {
             Some(action) => Ok(ExtensionAction::SourceV3(action)),
-            None => Err(RegistryError::UnknownLocalAction),
+            None => match RecurringSeriesAction::from_tag(local_action) {
+                Some(action) => Ok(ExtensionAction::RecurringSeries(action)),
+                None => Err(RegistryError::UnknownLocalAction),
+            },
         },
         Some(
             ExtensionFamily::StructuredClaim | ExtensionFamily::Dealer | ExtensionFamily::Recovery,
@@ -1089,7 +1300,7 @@ mod tests {
     }
 
     #[test]
-    fn every_registered_successor_account_coordinate_is_reserved_but_disabled() {
+    fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
             (
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
@@ -1098,10 +1309,6 @@ mod tests {
             (
                 GENERAL_V2_EPOCH_ACCOUNT_TAG,
                 GENERAL_V2_EPOCH_ACCOUNT_VERSION,
-            ),
-            (
-                GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_TAG,
-                GENERAL_V2_EPOCH_TOMBSTONE_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
@@ -1145,6 +1352,26 @@ mod tests {
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
+                GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
+                GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG,
                 GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
             ),
@@ -1152,6 +1379,89 @@ mod tests {
                 GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
                 GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
             ),
+        ];
+        for (tag, version) in expected {
+            let mut matches = 0u8;
+            let mut status = None;
+            for entry in CENTRAL_COLLISION_LEDGER {
+                if coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+                {
+                    matches += 1;
+                    status = Some(entry.status);
+                }
+            }
+            assert_eq!(matches, 1, "account {tag}/{version}");
+            assert_eq!(status, Some(AllocationStatus::ReservedDisabled));
+        }
+    }
+
+    #[test]
+    fn coordinated_post_selected_account_block_is_complete_and_disabled() {
+        let expected = [
+            (
+                DEALER_POLICY_STAGE_ACCOUNT_TAG,
+                DEALER_POLICY_STAGE_ACCOUNT_VERSION,
+            ),
+            (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
+            (
+                SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
+                GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
+                GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG,
+                GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION,
+            ),
+            (
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+                STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_FINAL_POT_ACCOUNT_TAG,
+                GENERAL_V2_FINAL_POT_ACCOUNT_VERSION,
+            ),
+        ];
+        for (tag, version) in expected {
+            let matching = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.map(|entry| entry.status),
+                Some(AllocationStatus::ReservedDisabled)
+            );
+        }
+    }
+
+    #[test]
+    fn source_v3_account_block_is_complete_and_disabled() {
+        let expected = [
             (
                 SOURCE_V3_RELEASE_ACCOUNT_TAG,
                 SOURCE_V3_RELEASE_ACCOUNT_VERSION,
@@ -1187,17 +1497,13 @@ mod tests {
             ),
         ];
         for (tag, version) in expected {
-            let mut matches = 0u8;
-            let mut status = None;
-            for entry in CENTRAL_COLLISION_LEDGER {
-                if coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
-                {
-                    matches += 1;
-                    status = Some(entry.status);
-                }
-            }
-            assert_eq!(matches, 1, "account {tag}/{version}");
-            assert_eq!(status, Some(AllocationStatus::ReservedDisabled));
+            let matching = CENTRAL_COLLISION_LEDGER.iter().find(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.map(|entry| entry.status),
+                Some(AllocationStatus::ReservedDisabled)
+            );
         }
     }
 
@@ -1252,8 +1558,10 @@ mod tests {
             assert_eq!(
                 source.is_ok(),
                 (SourceSeriesAction::FIRST_TAG..=SourceSeriesAction::LAST_TAG)
-                    .contains(&local_action),
-                "source action {local_action}"
+                    .contains(&local_action)
+                    || (RecurringSeriesAction::FIRST_TAG..=RecurringSeriesAction::LAST_TAG)
+                        .contains(&local_action),
+                "source-series action {local_action}"
             );
             for (tag, version) in [(75, 1), (76, 1), (78, 1)] {
                 assert_eq!(
