@@ -33,9 +33,10 @@ family version creates a new namespace; it does not inherit capability.
 | --- | ---: | ---: | ---: | --- |
 | General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
-| Covered dealer | 76 | `0x4c` | 1 | policy catalog only in the named non-production lab |
+| Covered dealer | 76 | `0x4c` | 1 | policy catalog plus Initialize/BindEpoch in the named non-production lab |
 | Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
+| Exact fractional redemption | 79 | `0x4f` | 1 | disabled |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
@@ -181,6 +182,40 @@ Recovery 78/v1 reserves these local actions, all disabled:
 8. `CloseRecoveryFunding`
 9. `CloseFailureRoot`
 
+FractionalRedemption 79/v1 reserves these local actions, all disabled:
+
+1. `Initialize`
+2. `RedeemInternalExact`
+3. `RedeemBearerExact`
+4. `RedeemInternalCredit`
+5. `RedeemBearerCredit`
+6. `TransferCredit`
+7. `MergeCredit`
+8. `CloseZeroCredit`
+9. `SealClaimsExhausted`
+10. `CloseEmptyLedger`
+
+The corresponding account coordinates are `0xa4/1` for the immutable
+Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
+credit and live-credit count, `0xa6/1` for one owner-scoped canonical numerator,
+and `0xa7/1` for the permanent zero-credit replay tombstone. Their exact body
+widths are 296, 224, 296, and 232 bytes. Resolution owns the vector,
+ClaimLedger V3 owns native claim supply, Hoard V2 owns locked claim principal
+and cash classification, Position V3 and Replay V3 own internal
+custody/replay, and the Realm collateral adapter owns transfers. The fractional
+accounts copy none of those mutable facts; ClaimLedger and `0xa5` advance one
+sequence and exact cross-account semantic-ID receipt atomically.
+
+The only admitted terminal policy in the runtime contract is
+`RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
+backing live. `CloseEmptyLedger` requires claims, aggregate credit, live credit
+accounts, and claim backing all to be zero. It then closes both `0xa4` and
+`0xa5` under one private ProductOccurrenceRoot terminal authorization, refunds
+each account's stored rent payer independently, and routes only hostile or
+unsolicited lamports to the neutral sink. It therefore cannot sweep Hoard
+principal, reinterpret donation surplus as revenue, strand policy rent, permit
+reinitialization, or silently forfeit claimant value.
+
 Dealer facility actions `5..=25` are allocated in runtime order
 `Initialize..=Retire`, while only policy transport `1..=4` is executable in the
 existing non-production catalog profile. Every facility action remains
@@ -233,6 +268,23 @@ slot sequence plus the complete generation tail. The ordered page-set fold uses
 `dragons-clutch/order-set/v5`, so neither a V4 leaf nor a V4 set can be silently
 reinterpreted. Position and Reservation identities are authenticated adapter
 joins and are not persisted in the page.
+
+## General ClearWork V3 allocation
+
+The central ledger reserves `17/3` as `ReservedDisabled` for the resumable
+RelationV2 Work successor. It is not a reinterpretation of withdrawn `17/2`:
+the fresh PDA domain is `clear-work:v3`, and the hostile decoders refuse the
+other version.
+
+The exact account length is `710 + 16*O + 8*N*O` bytes, at most 9,158 bytes for
+16 outcomes and 64 dense live orders. The 710-byte header owns the immutable
+candidate bindings, frozen-page and dense-order cursors, the previous live
+order ID, a canonical SHA-256 continuation, and a checked
+Pending/Valid/Refused disposition. The active-width tail owns the aggregate
+buy/sell flow vectors and exactly one filled-leg row per dense live order.
+This reservation does not enable actions 10 through 14 or claim settlement;
+their adapter must authenticate V5 pages, the retained feed, exact Product and
+price artifacts, and present-funded liveness before capability admission.
 
 ## Coordinated successor account block
 
@@ -317,7 +369,8 @@ Capability membership is keyed by the exact triple `(family tag, family
 version, local action)`. Production profiles retain empty successor executable
 sets. The distinct
 `profile-non-production-dealer-policy-catalog-lab` identity enables only
-`(76,1,1..=4)`. The separate
+`(76,1,1..=5)` and `(76,1,12)`: the four policy transport actions plus exact
+facility Initialize and BindEpoch. The separate
 `profile-non-production-general-v2-empty-book-identity-lab` enables only the
 actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
 General actions return `UnsupportedInstruction` before their handlers read

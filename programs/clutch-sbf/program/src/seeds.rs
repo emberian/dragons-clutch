@@ -214,6 +214,8 @@ pub const SEED_GENERAL_V2_NODE: &[u8] = clutch_general_v2_contract::CANDIDATE_NO
 pub const SEED_GENERAL_V2_FEED: &[u8] = clutch_general_v2_contract::CANDIDATE_FEED_SEED_DOMAIN_V1;
 /// General V2 active-width ClearWork seed prefix.
 pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V1;
+/// Disabled resumable RelationV2 ClearWork V3 seed prefix.
+pub const SEED_GENERAL_V2_WORK_V3: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V3;
 /// General V2 selected settlement-authority seed prefix.
 pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
@@ -522,6 +524,11 @@ pub fn general_v2_feed_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8)
 /// Canonical General V2 ClearWork PDA inherited from its AdmissionNode.
 pub fn general_v2_work_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_GENERAL_V2_WORK, node])
+}
+
+/// Disabled canonical General V2 resumable ClearWork V3 PDA.
+pub fn general_v2_work_v3_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WORK_V3, node])
 }
 
 /// Canonical General V2 selected settlement-authority PDA.

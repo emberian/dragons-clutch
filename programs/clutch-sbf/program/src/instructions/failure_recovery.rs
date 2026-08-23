@@ -38,6 +38,7 @@ use clutch_failure_policy_runtime::external_v2::{
     FailureRecoveryTerminalDispositionV2, FailureRecoveryTerminalReceiptV2,
     FailureRuntimeExternalV2,
 };
+use clutch_failure_policy_runtime::interval_consensus_v1::FailureIntervalConsensusAdvancePlanV1;
 use clutch_failure_policy_runtime::relation_execution_v1::{
     execute_failure_relation_v1, ExecutedFailureRelationV1, FailureRelationDispositionV1,
     FailureRelationPolicyV1,
@@ -1259,6 +1260,56 @@ fn apply_work_transition_v1<'a>(
         expected_after,
         root,
         plan,
+    )?;
+    apply_work_mutation(
+        root_account,
+        recovery_account,
+        keeper,
+        payer,
+        &mutation,
+        work,
+    )?;
+    Ok(mutation)
+}
+
+/// Atomically apply the Failure-root and sole liveness Recovery mutation for
+/// one already authenticated interval-consensus chunk. The caller must commit
+/// the corresponding `0xab`/`0xac` poststates in the same instruction.
+pub fn apply_interval_consensus_work_transition_v1<'a>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'a>],
+    payload: clutch_solana_layout::failure_recovery::AdvanceIntervalConsensusV1,
+    plan: FailureIntervalConsensusAdvancePlanV1,
+) -> Outcome<ExternalWorkMutationV2> {
+    authenticate_ordered_metas_v1(RecoveryAction::AdvanceIntervalConsensus, accounts)?;
+    let root_account = &accounts[0];
+    let policy_account = &accounts[3];
+    let recovery_account = &accounts[4];
+    let keeper = &accounts[5];
+    let payer = &accounts[6];
+    let root = authenticate_failure_root_v1(program_id, root_account, payload.common)?;
+    let failure_plan = plan.failure_plan();
+    let work = failure_plan
+        .work()
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        payload.reward_recipient == keeper.key.to_bytes()
+            && work.reward_recipient().bytes() == payload.reward_recipient
+            && work.scheduled_ceiling_lamports() == payload.scheduled_ceiling_lamports
+            && work.source_success_handoff_id().bytes().iter().any(|byte| *byte != 0),
+        ClutchError::MismatchedState,
+    )?;
+    let expected_after = recovery_account
+        .lamports()
+        .checked_sub(work.scheduled_ceiling_lamports())
+        .ok_or(ClutchError::Arithmetic)?;
+    let mutation = project_work_with_framed_accounts(
+        program_id,
+        policy_account,
+        recovery_account,
+        expected_after,
+        root,
+        failure_plan,
     )?;
     apply_work_mutation(
         root_account,

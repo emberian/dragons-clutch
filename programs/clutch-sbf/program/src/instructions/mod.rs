@@ -25,6 +25,7 @@
 //! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
 //! | `general_v2_fee_terminal` | capability-disabled exact pre/post seam for General action 38; no dispatch route |
 //! | `general_v2_receipt_v3` | capability-disabled exact Selected/Feed/PDA authentication for General Receipt V3; no dispatch route |
+//! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
 //! Implemented: genesis (the five account-creating initializers), full-width
 //! collateral_cash_v3 (Endow/WithdrawCash), merge_materialize
@@ -48,6 +49,9 @@ pub mod collateral_cash_v3;
 pub(crate) mod collateral_position_v3;
 pub mod complete_set_v3;
 pub mod construction;
+/// Non-production executable Dealer facility slice.
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+pub mod dealer_facility;
 /// Non-production immutable Dealer-policy catalog transport.
 pub mod dealer_policy;
 /// Capability-disabled Dealer facility account and instruction contracts.
@@ -57,12 +61,16 @@ pub mod direct_selection_v3;
 pub mod external_exit;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
+#[cfg(feature = "non-production-failure-recovery-lab")]
+pub mod failure_interval_consensus;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_terminal;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_identity;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_receipt_v3;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_settlement_root;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;

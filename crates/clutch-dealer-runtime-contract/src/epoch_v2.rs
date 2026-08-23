@@ -4,11 +4,11 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    CountedDealerChildV2, DealerActionLivenessAuthorizationV1, DealerChildKindV2,
-    DealerEmptyAssetTransferBundleV1, DealerFacilityReplayV1, DealerFundedDependenciesV2,
-    DealerLeaseV2, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
-    DealerPositionObservationV3, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
-    DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransitionIntentV1,
+    CountedDealerChildV2, DealerActionLivenessAuthorizationV1, DealerActionReceiptV1,
+    DealerChildKindV2, DealerEmptyAssetTransferBundleV1, DealerFacilityReplayV1,
+    DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1, DealerPhaseV2,
+    DealerPolicyV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
+    DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransitionIntentV1,
     DealerTransitionLivenessModeV1, DeletableRentOwnerV1, Error, FacilityPositionBindingV2,
     FixedCodec, Id, PreparedDealerReplayTransitionV1, Result,
     DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2, DELETABLE_RENT_OWNER_BYTES,
@@ -636,126 +636,74 @@ pub fn mark_epoch_leased_v2(
     Ok(next)
 }
 
-/// Exact rent close observation for one Epoch-binding account.
+/// Exact source-account balance observation for an atomic Epoch and retained
+/// Bind-receipt close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerEpochCloseRentV2 {
-    /// Exact payer credited by the close.
-    pub payer: Id,
-    /// Exact neutral sink credited by the close.
-    pub neutral_sink: Id,
-    /// Lamports observed before close.
-    pub lamports_before: u64,
-    /// Lamports observed after close; exactly zero.
-    pub lamports_after: u64,
-    /// Refund recipient balance before close.
-    pub payer_before: u64,
-    /// Refund recipient balance after close.
-    pub payer_after: u64,
-    /// Neutral-sink balance before close.
-    pub sink_before: u64,
-    /// Neutral-sink balance after close.
-    pub sink_after: u64,
+    /// Epoch account lamports before close.
+    pub epoch_lamports_before: u64,
+    /// Epoch account lamports after close; exactly zero.
+    pub epoch_lamports_after: u64,
+    /// Retained Bind receipt lamports before close.
+    pub bind_receipt_lamports_before: u64,
+    /// Retained Bind receipt lamports after close; exactly zero.
+    pub bind_receipt_lamports_after: u64,
+}
+
+/// Exact independent rent credits emitted by an Epoch close. The adapter must
+/// coalesce aliases before applying one atomic lamport postimage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerEpochCloseCreditsV2 {
+    pub epoch_refund_recipient: Id,
+    pub epoch_refund_lamports: u64,
+    pub epoch_neutral_sink: Id,
+    pub epoch_sink_lamports: u64,
+    pub bind_receipt_refund_recipient: Id,
+    pub bind_receipt_refund_lamports: u64,
+    pub bind_receipt_neutral_sink: Id,
+    pub bind_receipt_sink_lamports: u64,
 }
 
 fn validate_epoch_close_rent(
     epoch: &DealerEpochBindingV2,
+    bind_receipt: &DealerActionReceiptV1,
     observation: DealerEpochCloseRentV2,
-) -> Result<()> {
-    observation.payer.validate_live()?;
-    observation.neutral_sink.validate_live()?;
-    let protected = epoch
+) -> Result<DealerEpochCloseCreditsV2> {
+    let epoch_protected = epoch
         .rent
         .refundable_principal
         .checked_add(epoch.rent.donation_floor)
         .ok_or(Error::ArithmeticOverflow)?;
-    let donation = observation
-        .lamports_before
+    let receipt_rent = bind_receipt.rent();
+    let receipt_protected = receipt_rent
+        .refundable_principal
+        .checked_add(receipt_rent.donation_floor)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let epoch_sink_lamports = observation
+        .epoch_lamports_before
         .checked_sub(epoch.rent.refundable_principal)
         .ok_or(Error::ConservationFailure)?;
-    if observation.payer != epoch.rent.payer
-        || observation.neutral_sink != epoch.rent.neutral_sink
-        || observation.lamports_after != 0
-        || observation.lamports_before < protected
-        || observation.payer_after
-            != observation
-                .payer_before
-                .checked_add(epoch.rent.refundable_principal)
-                .ok_or(Error::ArithmeticOverflow)?
-        || observation.sink_after
-            != observation
-                .sink_before
-                .checked_add(donation)
-                .ok_or(Error::ArithmeticOverflow)?
+    let bind_receipt_sink_lamports = observation
+        .bind_receipt_lamports_before
+        .checked_sub(receipt_rent.refundable_principal)
+        .ok_or(Error::ConservationFailure)?;
+    if observation.epoch_lamports_after != 0
+        || observation.bind_receipt_lamports_after != 0
+        || observation.epoch_lamports_before < epoch_protected
+        || observation.bind_receipt_lamports_before < receipt_protected
     {
         return Err(Error::ConservationFailure);
     }
-    Ok(())
-}
-
-/// Legacy internal projection retained only while the stable-Replay successor is integrated.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn lapse_epoch_v2(
-    policy: &DealerPolicyV1,
-    state: &DealerStateV2,
-    state_account_id: Id,
-    binding: &FacilityPositionBindingV2,
-    epoch: &DealerEpochBindingV2,
-    schedule: &DealerLivenessScheduleV1,
-    runtime: &DealerRuntimeLivenessBindingV1,
-    lapse: &DealerActionLivenessAuthorizationV1,
-    position_before: &DealerPositionObservationV3,
-    position_after: &DealerPositionObservationV3,
-    current_slot: u64,
-    rent: DealerEpochCloseRentV2,
-) -> Result<DealerStateV2> {
-    state.validate_against_policy(policy)?;
-    epoch.validate()?;
-    lapse.validate_against(schedule, runtime)?;
-    let binding_id = binding.binding_id()?;
-    position_before.validate_current(state, binding, policy)?;
-    position_after.validate_against(binding, binding_id, policy)?;
-    let before = position_before.projection.position();
-    let after = position_after.projection.position();
-    if epoch.phase != DealerEpochBindingPhaseV2::Bound
-        || epoch.epoch_binding_account_id != state.active_epoch_binding_account_id
-        || epoch.epoch_id != state.active_epoch_id
-        || state.children.epoch_bindings != 1
-        || state.children.leases != 0
-        || state.children.settlement_pots != 0
-        || state_account_id != epoch.dealer_state_account_id
-        || current_slot < epoch.lapse_after_slot
-        || lapse.action != DealerRuntimeActionV1::LapseEpoch
-        || lapse.owner != state_account_id
-        || lapse.lifecycle_id != state.facility_id
-        || lapse.facility_generation != state.generation
-        || after.generation()
-            != state
-                .generation
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?
-        || after.lifecycle() != PositionLifecycleV3::Open
-        || before.cash_atoms() != after.cash_atoms()
-        || before.reserved_cash_atoms() != after.reserved_cash_atoms()
-        || before.native_eggs() != after.native_eggs()
-        || before.outstanding_reservations() != after.outstanding_reservations()
-        || Id::from_bytes(after.replay_account().bytes()) == state.facility_replay_account_id
-    {
-        return Err(Error::MismatchedBinding);
-    }
-    validate_epoch_close_rent(epoch, rent)?;
-    let mut next = *state;
-    next.active_epoch_id = Id::ZERO;
-    next.active_epoch_binding_account_id = Id::ZERO;
-    next.children.epoch_bindings = 0;
-    next.facility_position_id = position_after.semantic_id;
-    next.facility_replay_account_id = Id::from_bytes(after.replay_account().bytes());
-    next.generation = after.generation();
-    next.child_sequence = next
-        .child_sequence
-        .checked_add(1)
-        .ok_or(Error::ArithmeticOverflow)?;
-    next.validate_against_policy(policy)?;
-    Ok(next)
+    Ok(DealerEpochCloseCreditsV2 {
+        epoch_refund_recipient: epoch.rent.payer,
+        epoch_refund_lamports: epoch.rent.refundable_principal,
+        epoch_neutral_sink: epoch.rent.neutral_sink,
+        epoch_sink_lamports,
+        bind_receipt_refund_recipient: receipt_rent.payer,
+        bind_receipt_refund_lamports: receipt_rent.refundable_principal,
+        bind_receipt_neutral_sink: receipt_rent.neutral_sink,
+        bind_receipt_sink_lamports,
+    })
 }
 
 /// Atomic successor for Epoch lapse over one stable ReplayV3 account.
@@ -765,6 +713,8 @@ pub struct PreparedDealerEpochLapseV3 {
     pub state_after: DealerStateV2,
     /// Replay after the same generation advance.
     pub replay: PreparedDealerReplayTransitionV1,
+    /// Exact coalescible credits for the deleted Epoch and Bind receipt.
+    pub close_credits: DealerEpochCloseCreditsV2,
 }
 
 /// Lapse an unused Epoch without rotating or lowering the canonical Replay identity.
@@ -777,6 +727,7 @@ pub fn prepare_lapse_epoch_v3(
     epoch: &DealerEpochBindingV2,
     schedule: &DealerLivenessScheduleV1,
     runtime: &DealerRuntimeLivenessBindingV1,
+    bind_receipt: &DealerActionReceiptV1,
     lapse: &DealerActionLivenessAuthorizationV1,
     position_before: &DealerPositionObservationV3,
     position_after: &DealerPositionObservationV3,
@@ -787,6 +738,7 @@ pub fn prepare_lapse_epoch_v3(
 ) -> Result<PreparedDealerEpochLapseV3> {
     state.validate_against_policy(policy)?;
     epoch.validate()?;
+    bind_receipt.validate_against(schedule, runtime)?;
     lapse.validate_against(schedule, runtime)?;
     let binding_id = binding.binding_id()?;
     position_before.validate_current(state, binding, policy)?;
@@ -805,6 +757,13 @@ pub fn prepare_lapse_epoch_v3(
         || state.children.leases != 0
         || state.children.settlement_pots != 0
         || state_account_id != epoch.dealer_state_account_id
+        || bind_receipt.action != DealerRuntimeActionV1::BindEpoch
+        || bind_receipt.policy_id != epoch.policy_id
+        || bind_receipt.facility_id != epoch.facility_id
+        || bind_receipt.dealer_state_account_id != epoch.dealer_state_account_id
+        || bind_receipt.replay_account_id != state.facility_replay_account_id
+        || bind_receipt.receipt_account_id != epoch.bind_receipt_account_id
+        || bind_receipt.semantic_receipt_id()? != epoch.bind_receipt_semantic_id
         || current_slot < epoch.lapse_after_slot
         || lapse.action != DealerRuntimeActionV1::LapseEpoch
         || lapse.owner != state_account_id
@@ -820,7 +779,7 @@ pub fn prepare_lapse_epoch_v3(
     {
         return Err(Error::MismatchedBinding);
     }
-    validate_epoch_close_rent(epoch, rent)?;
+    let close_credits = validate_epoch_close_rent(epoch, bind_receipt, rent)?;
     let mut state_after = *state;
     state_after.active_epoch_id = Id::ZERO;
     state_after.active_epoch_binding_account_id = Id::ZERO;
@@ -857,6 +816,7 @@ pub fn prepare_lapse_epoch_v3(
     Ok(PreparedDealerEpochLapseV3 {
         state_after,
         replay: prepared,
+        close_credits,
     })
 }
 
@@ -878,6 +838,14 @@ fn validate_live_replay(state: &DealerStateV2, replay: &DealerFacilityReplayV1) 
 /// candidate. State proves that Lease and Pot are gone, while the mandatory
 /// Retirement receipt funds this separately executable cleanup without
 /// requiring deleted Lease bytes to be supplied again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerEpochRetirementV2 {
+    /// State after deleting the final Epoch child.
+    pub state_after: DealerStateV2,
+    /// Exact coalescible credits for the deleted Epoch and retained Bind receipt.
+    pub close_credits: DealerEpochCloseCreditsV2,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn retire_epoch_after_lease_v2(
     policy: &DealerPolicyV1,
@@ -886,11 +854,13 @@ pub fn retire_epoch_after_lease_v2(
     epoch: &DealerEpochBindingV2,
     schedule: &DealerLivenessScheduleV1,
     runtime: &DealerRuntimeLivenessBindingV1,
+    bind_receipt: &DealerActionReceiptV1,
     retire: &DealerActionLivenessAuthorizationV1,
     rent: DealerEpochCloseRentV2,
-) -> Result<DealerStateV2> {
+) -> Result<PreparedDealerEpochRetirementV2> {
     state_after_lease.validate_against_policy(policy)?;
     epoch.validate()?;
+    bind_receipt.validate_against(schedule, runtime)?;
     retire.validate_against(schedule, runtime)?;
     let post_generation = epoch
         .counted_generation
@@ -907,6 +877,13 @@ pub fn retire_epoch_after_lease_v2(
         || epoch.runtime_liveness_policy_id != runtime.runtime_policy_id
         || epoch.runtime_liveness_binding_digest != runtime.binding_digest()?
         || epoch.dealer_liveness_schedule_id != schedule.schedule_id()?.untyped()
+        || bind_receipt.action != DealerRuntimeActionV1::BindEpoch
+        || bind_receipt.policy_id != epoch.policy_id
+        || bind_receipt.facility_id != epoch.facility_id
+        || bind_receipt.dealer_state_account_id != epoch.dealer_state_account_id
+        || bind_receipt.replay_account_id != state_after_lease.facility_replay_account_id
+        || bind_receipt.receipt_account_id != epoch.bind_receipt_account_id
+        || bind_receipt.semantic_receipt_id()? != epoch.bind_receipt_semantic_id
         || state_after_lease.children.epoch_bindings != 1
         || state_after_lease.children.leases != 0
         || state_after_lease.children.settlement_pots != 0
@@ -919,7 +896,7 @@ pub fn retire_epoch_after_lease_v2(
     {
         return Err(Error::InvalidChildGraph);
     }
-    validate_epoch_close_rent(epoch, rent)?;
+    let close_credits = validate_epoch_close_rent(epoch, bind_receipt, rent)?;
     let mut next = *state_after_lease;
     next.active_epoch_id = Id::ZERO;
     next.active_epoch_binding_account_id = Id::ZERO;
@@ -929,7 +906,10 @@ pub fn retire_epoch_after_lease_v2(
         .checked_add(1)
         .ok_or(Error::ArithmeticOverflow)?;
     next.validate_against_policy(policy)?;
-    Ok(next)
+    Ok(PreparedDealerEpochRetirementV2 {
+        state_after: next,
+        close_credits,
+    })
 }
 
 const _: () = assert!(DEALER_EPOCH_BINDING_BYTES_V2 == 772);

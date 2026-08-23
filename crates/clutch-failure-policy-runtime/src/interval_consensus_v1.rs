@@ -113,14 +113,18 @@ pub struct FailureIntervalConsensusFundingFactsV1 {
     pub work_rent_principal_lamports: u64,
     /// Exact permanent replay-account rent principal supplied now.
     pub replay_rent_principal_lamports: u64,
-    /// Work-PDA balance before the payer's principal transfer.
-    pub work_prior_donation_lamports: u64,
-    /// Work-PDA balance immediately after the transfer.
-    pub work_post_funding_lamports: u64,
-    /// Replay-PDA balance before the payer's principal transfer.
-    pub replay_prior_donation_lamports: u64,
-    /// Replay-PDA balance immediately after the transfer.
-    pub replay_post_funding_lamports: u64,
+    /// Work-PDA donation floor observed before the creation transfer.
+    pub work_creation_donation_floor_lamports: u64,
+    /// Work-PDA donation observed when Begin authenticates the prefund.
+    pub work_observed_donation_lamports: u64,
+    /// Work-PDA balance observed by Begin.
+    pub work_observed_balance_lamports: u64,
+    /// Replay-PDA donation floor observed before the creation transfer.
+    pub replay_creation_donation_floor_lamports: u64,
+    /// Replay-PDA donation observed when Begin authenticates the prefund.
+    pub replay_observed_donation_lamports: u64,
+    /// Replay-PDA balance observed by Begin.
+    pub replay_observed_balance_lamports: u64,
     /// Sole external liveness Recovery work-capital account.
     pub recovery_compartment_account_id: LivenessId,
     /// Immutable liveness policy.
@@ -230,6 +234,87 @@ pub struct FailureIntervalConsensusStateV1 {
     close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1,
 }
 
+/// Untrusted complete semantic projection decoded from `0xab` plus `0xac`.
+///
+/// Public fields make account adaptation possible; this value is never
+/// authority. [`restore_failure_interval_consensus_state_v1`] requires a
+/// private adapter receipt that authenticated both account owner/PDA/bodies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureIntervalConsensusPersistedFactsV1 {
+    /// Current lifecycle phase.
+    pub phase: FailureIntervalConsensusPhaseV1,
+    /// Immutable interval lifecycle identity.
+    pub binding_id: FailureIntervalConsensusBindingIdV1,
+    /// Parent Failure policy binding.
+    pub failure_policy_binding_id: FailurePolicyBindingId,
+    /// Full-width V2 economic occurrence.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Exact Failure/liveness generation.
+    pub generation: u64,
+    /// Exact Source-owned successful interval handoff.
+    pub source_success_handoff_id: SourceContentId,
+    /// Immutable successful Source result owning the interval.
+    pub source_interval_id: SourceContentId,
+    /// Product-selected bounded interval profile.
+    pub interval_profile_id: QuantizedIntervalConsensusProfileV1Id,
+    /// Exact present-funding admission receipt.
+    pub funding_receipt_id: FailureIntervalConsensusFundingReceiptIdV1,
+    /// Canonical mutable work account.
+    pub work_account: FailureIntervalConsensusAccountIdV1,
+    /// Canonical permanent replay account.
+    pub replay_account: FailureIntervalConsensusAccountIdV1,
+    /// Immutable work-rent refund recipient.
+    pub rent_payer: FailureIntervalConsensusAccountIdV1,
+    /// Immutable donation sink.
+    pub neutral_sink: FailureIntervalConsensusAccountIdV1,
+    /// Exact refundable work rent principal.
+    pub work_rent_principal_lamports: u64,
+    /// Exact permanent replay rent principal.
+    pub replay_rent_principal_lamports: u64,
+    /// Last authenticated permanent replay balance.
+    pub replay_preserved_lamports: u64,
+    /// Canonical initial Product work identity.
+    pub initial_work_id: QuantizedIntervalConsensusWorkV1Id,
+    /// Canonical current Product work identity.
+    pub current_work_id: QuantizedIntervalConsensusWorkV1Id,
+    /// Current Product rolling transcript.
+    pub current_transcript: SourceContentId,
+    /// Exact coordinates already checked.
+    pub checked_coordinates: u64,
+    /// Exact inclusive interval coordinate count.
+    pub total_coordinates: u64,
+    /// Cumulative accepted semantic recovery progress.
+    pub accepted_recovery_progress_total: u64,
+    /// Monotone bounded-transition nonce.
+    pub transition_nonce: u64,
+    /// Last bounded transition identity, zero before first advance.
+    pub last_transition_receipt_id: FailureIntervalConsensusTransitionReceiptIdV1,
+    /// Last exact liveness work receipt, zero before first advance.
+    pub last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2,
+    /// Exhaustive Product certificate, zero before resolution.
+    pub certificate_id: QuantizedIntervalConsensusCertificateV1Id,
+    /// Failure resolution receipt, zero before resolution.
+    pub resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1,
+    /// Exact work close authorization, zero before close.
+    pub close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1,
+}
+
+/// Adapter-owned authority for restoring Failure interval state.
+///
+/// Implementors must be private types minted only after exact owner, PDA,
+/// complete `0xab`/`0xac` body, generation, and cross-account authentication.
+/// The default refuses so an empty implementation cannot restore state.
+pub trait AuthenticatedFailureIntervalConsensusStateV1 {
+    /// Authenticate the exact decoded facts and derived replay identity.
+    fn authenticate_interval_consensus_state(
+        &self,
+        _facts: FailureIntervalConsensusPersistedFactsV1,
+        _replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
 impl FailureIntervalConsensusStateV1 {
     /// Current lifecycle phase.
     pub const fn phase(&self) -> FailureIntervalConsensusPhaseV1 {
@@ -264,6 +349,40 @@ impl FailureIntervalConsensusStateV1 {
     /// Exact permanent replay account.
     pub const fn replay_account(&self) -> FailureIntervalConsensusAccountIdV1 {
         self.replay_account
+    }
+
+    /// Project complete semantic facts for exact account encoding.
+    pub const fn persisted_facts(&self) -> FailureIntervalConsensusPersistedFactsV1 {
+        FailureIntervalConsensusPersistedFactsV1 {
+            phase: self.phase,
+            binding_id: self.binding_id,
+            failure_policy_binding_id: self.failure_policy_binding_id,
+            market_instance_id: self.market_instance_id,
+            generation: self.generation,
+            source_success_handoff_id: self.source_success_handoff_id,
+            source_interval_id: self.source_interval_id,
+            interval_profile_id: self.interval_profile_id,
+            funding_receipt_id: self.funding_receipt_id,
+            work_account: self.work_account,
+            replay_account: self.replay_account,
+            rent_payer: self.rent_payer,
+            neutral_sink: self.neutral_sink,
+            work_rent_principal_lamports: self.work_rent_principal_lamports,
+            replay_rent_principal_lamports: self.replay_rent_principal_lamports,
+            replay_preserved_lamports: self.replay_preserved_lamports,
+            initial_work_id: self.initial_work_id,
+            current_work_id: self.current_work_id,
+            current_transcript: self.current_transcript,
+            checked_coordinates: self.checked_coordinates,
+            total_coordinates: self.total_coordinates,
+            accepted_recovery_progress_total: self.accepted_recovery_progress_total,
+            transition_nonce: self.transition_nonce,
+            last_transition_receipt_id: self.last_transition_receipt_id,
+            last_liveness_receipt_id: self.last_liveness_receipt_id,
+            certificate_id: self.certificate_id,
+            resolution_receipt_id: self.resolution_receipt_id,
+            close_authorization_id: self.close_authorization_id,
+        }
     }
 
     /// Commit one fresh plan and reject stale siblings.
@@ -307,6 +426,16 @@ impl FailureIntervalConsensusStateV1 {
         {
             return Err(Error::BindingMismatch);
         }
+        let advanced = self.transition_nonce != 0;
+        if advanced
+            != (live(self.last_transition_receipt_id.bytes())
+                && live(self.last_liveness_receipt_id.bytes()))
+            || (!advanced
+                && (self.checked_coordinates != 0 || self.current_work_id != self.initial_work_id))
+            || (advanced && self.checked_coordinates == 0)
+        {
+            return Err(Error::BindingMismatch);
+        }
         match self.phase {
             FailureIntervalConsensusPhaseV1::Active => {
                 if live(self.certificate_id.bytes())
@@ -337,6 +466,71 @@ impl FailureIntervalConsensusStateV1 {
         }
         Ok(())
     }
+}
+
+/// Restore private Failure state only through an authenticated `0xab`/`0xac`
+/// account join. Raw decoded projections cannot authorize a transition.
+pub fn restore_failure_interval_consensus_state_v1<
+    A: AuthenticatedFailureIntervalConsensusStateV1 + ?Sized,
+>(
+    authority: &A,
+    facts: FailureIntervalConsensusPersistedFactsV1,
+) -> Result<(
+    FailureIntervalConsensusStateV1,
+    FailureIntervalConsensusReplayV1,
+)> {
+    let state = state_from_persisted_facts(facts)?;
+    let replay = replay_from_state(state);
+    authority.authenticate_interval_consensus_state(facts, replay.id())?;
+    Ok((state, replay))
+}
+
+/// Derive the canonical replay identity from untrusted decoded facts without
+/// treating that identity as account authority.
+pub fn project_failure_interval_consensus_replay_id_v1(
+    facts: FailureIntervalConsensusPersistedFactsV1,
+) -> Result<FailureIntervalConsensusReplayReceiptIdV1> {
+    Ok(replay_from_state(state_from_persisted_facts(facts)?).id())
+}
+
+fn state_from_persisted_facts(
+    facts: FailureIntervalConsensusPersistedFactsV1,
+) -> Result<FailureIntervalConsensusStateV1> {
+    let state = FailureIntervalConsensusStateV1 {
+        phase: facts.phase,
+        binding_id: facts.binding_id,
+        failure_policy_binding_id: facts.failure_policy_binding_id,
+        market_instance_id: facts.market_instance_id,
+        generation: facts.generation,
+        source_success_handoff_id: facts.source_success_handoff_id,
+        source_interval_id: facts.source_interval_id,
+        interval_profile_id: facts.interval_profile_id,
+        funding_receipt_id: facts.funding_receipt_id,
+        work_account: facts.work_account,
+        replay_account: facts.replay_account,
+        rent_payer: facts.rent_payer,
+        neutral_sink: facts.neutral_sink,
+        work_rent_principal_lamports: facts.work_rent_principal_lamports,
+        replay_rent_principal_lamports: facts.replay_rent_principal_lamports,
+        replay_preserved_lamports: facts.replay_preserved_lamports,
+        initial_work_id: facts.initial_work_id,
+        current_work_id: facts.current_work_id,
+        current_transcript: facts.current_transcript,
+        checked_coordinates: facts.checked_coordinates,
+        total_coordinates: facts.total_coordinates,
+        accepted_recovery_progress_total: facts.accepted_recovery_progress_total,
+        transition_nonce: facts.transition_nonce,
+        last_transition_receipt_id: facts.last_transition_receipt_id,
+        last_liveness_receipt_id: facts.last_liveness_receipt_id,
+        certificate_id: facts.certificate_id,
+        resolution_receipt_id: facts.resolution_receipt_id,
+        close_authorization_id: facts.close_authorization_id,
+    };
+    state.check()?;
+    if state.persisted_facts() != facts {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(state)
 }
 
 /// Permanent replay-account semantic postimage.
@@ -436,7 +630,7 @@ pub fn begin_failure_interval_consensus_v1(
         neutral_sink: facts.neutral_sink,
         work_rent_principal_lamports: facts.work_rent_principal_lamports,
         replay_rent_principal_lamports: facts.replay_rent_principal_lamports,
-        replay_preserved_lamports: facts.replay_post_funding_lamports,
+        replay_preserved_lamports: facts.replay_observed_balance_lamports,
         initial_work_id,
         current_work_id: initial_work_id,
         current_transcript: work.transcript(),
@@ -526,10 +720,13 @@ pub fn plan_advance_failure_interval_consensus_v1(
         .checked_add(1)
         .ok_or(Error::BindingMismatch)?;
     let mut transition_hasher = Sha256::new();
+    let prior_replay_receipt_id = replay_from_state(*state).id();
     transition_hasher.update(TRANSITION_DOMAIN);
     transition_hasher.update(state.binding_id.bytes());
     transition_hasher.update(state.transition_nonce.to_le_bytes());
     transition_hasher.update(next_nonce.to_le_bytes());
+    transition_hasher.update(state.last_transition_receipt_id.bytes());
+    transition_hasher.update(prior_replay_receipt_id.bytes());
     transition_hasher.update(state.current_work_id.bytes());
     transition_hasher.update(next_work_id.bytes());
     transition_hasher.update(state.current_transcript.bytes());
@@ -869,28 +1066,35 @@ impl FailureIntervalConsensusStatePlanV1 {
     pub const fn resulting_phase(self) -> FailureIntervalConsensusPhaseV1 {
         self.after.phase
     }
+
+    /// Exact semantic poststate for account encoding in the same atomic batch.
+    pub const fn resulting_state(self) -> FailureIntervalConsensusStateV1 {
+        self.after
+    }
 }
 
 fn validate_funding_facts(
     runtime: &FailureRuntimeExternalV2,
     facts: FailureIntervalConsensusFundingFactsV1,
 ) -> Result<()> {
-    let work_expected = facts
-        .work_prior_donation_lamports
-        .checked_add(facts.work_rent_principal_lamports)
-        .ok_or(Error::BindingMismatch)?;
-    let replay_expected = facts
-        .replay_prior_donation_lamports
-        .checked_add(facts.replay_rent_principal_lamports)
-        .ok_or(Error::BindingMismatch)?;
+    validate_prefund_observation(
+        facts.work_rent_principal_lamports,
+        facts.work_creation_donation_floor_lamports,
+        facts.work_observed_donation_lamports,
+        facts.work_observed_balance_lamports,
+    )?;
+    validate_prefund_observation(
+        facts.replay_rent_principal_lamports,
+        facts.replay_creation_donation_floor_lamports,
+        facts.replay_observed_donation_lamports,
+        facts.replay_observed_balance_lamports,
+    )?;
     if facts.failure_policy_binding_id != runtime.binding_id()
         || facts.market_instance_id != runtime.binding().market_instance_id()
         || facts.generation != runtime.binding().generation()
         || facts.generation == 0
         || facts.work_rent_principal_lamports == 0
         || facts.replay_rent_principal_lamports == 0
-        || facts.work_post_funding_lamports != work_expected
-        || facts.replay_post_funding_lamports != replay_expected
         || facts.recovery_compartment_account_id != runtime.recovery_compartment_account_id()
         || facts.liveness_policy_id != runtime.liveness_policy_id()
         || facts.liveness_lifecycle_id != runtime.liveness_lifecycle_id()
@@ -911,6 +1115,24 @@ fn validate_funding_facts(
         || facts.replay_account.bytes() == facts.recovery_compartment_account_id.bytes()
         || facts.work_account.bytes() == runtime.semantic_state_id().bytes()
         || facts.replay_account.bytes() == runtime.semantic_state_id().bytes()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(())
+}
+
+fn validate_prefund_observation(
+    principal_lamports: u64,
+    creation_donation_floor_lamports: u64,
+    observed_donation_lamports: u64,
+    observed_balance_lamports: u64,
+) -> Result<()> {
+    if principal_lamports == 0
+        || observed_donation_lamports < creation_donation_floor_lamports
+        || observed_donation_lamports
+            .checked_add(principal_lamports)
+            .ok_or(Error::BindingMismatch)?
+            != observed_balance_lamports
     {
         return Err(Error::BindingMismatch);
     }
@@ -1065,10 +1287,12 @@ fn hash_funding_facts(hasher: &mut Sha256, facts: FailureIntervalConsensusFundin
     hasher.update(facts.neutral_sink.bytes());
     hasher.update(facts.work_rent_principal_lamports.to_le_bytes());
     hasher.update(facts.replay_rent_principal_lamports.to_le_bytes());
-    hasher.update(facts.work_prior_donation_lamports.to_le_bytes());
-    hasher.update(facts.work_post_funding_lamports.to_le_bytes());
-    hasher.update(facts.replay_prior_donation_lamports.to_le_bytes());
-    hasher.update(facts.replay_post_funding_lamports.to_le_bytes());
+    hasher.update(facts.work_creation_donation_floor_lamports.to_le_bytes());
+    hasher.update(facts.work_observed_donation_lamports.to_le_bytes());
+    hasher.update(facts.work_observed_balance_lamports.to_le_bytes());
+    hasher.update(facts.replay_creation_donation_floor_lamports.to_le_bytes());
+    hasher.update(facts.replay_observed_donation_lamports.to_le_bytes());
+    hasher.update(facts.replay_observed_balance_lamports.to_le_bytes());
     hasher.update(facts.recovery_compartment_account_id.bytes());
     hasher.update(facts.liveness_policy_id.bytes());
     hasher.update(facts.liveness_lifecycle_id.bytes());
@@ -1093,4 +1317,93 @@ fn require_live(bytes: [u8; 32]) -> Result<()> {
 
 fn live(bytes: [u8; 32]) -> bool {
     bytes.iter().any(|byte| *byte != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active_facts() -> FailureIntervalConsensusPersistedFactsV1 {
+        FailureIntervalConsensusPersistedFactsV1 {
+            phase: FailureIntervalConsensusPhaseV1::Active,
+            binding_id: FailureIntervalConsensusBindingIdV1::from_bytes([1; 32]),
+            failure_policy_binding_id: FailurePolicyBindingId::from_bytes([2; 32]),
+            market_instance_id: MarketInstanceV2Id::from_bytes([3; 32]),
+            generation: 1,
+            source_success_handoff_id: SourceContentId::from_bytes([4; 32]),
+            source_interval_id: SourceContentId::from_bytes([5; 32]),
+            interval_profile_id: QuantizedIntervalConsensusProfileV1Id::from_bytes([6; 32]),
+            funding_receipt_id: FailureIntervalConsensusFundingReceiptIdV1::from_bytes([7; 32]),
+            work_account: FailureIntervalConsensusAccountIdV1::from_bytes([8; 32]),
+            replay_account: FailureIntervalConsensusAccountIdV1::from_bytes([9; 32]),
+            rent_payer: FailureIntervalConsensusAccountIdV1::from_bytes([10; 32]),
+            neutral_sink: FailureIntervalConsensusAccountIdV1::from_bytes([11; 32]),
+            work_rent_principal_lamports: 100,
+            replay_rent_principal_lamports: 200,
+            replay_preserved_lamports: 203,
+            initial_work_id: QuantizedIntervalConsensusWorkV1Id::from_bytes([12; 32]),
+            current_work_id: QuantizedIntervalConsensusWorkV1Id::from_bytes([13; 32]),
+            current_transcript: SourceContentId::from_bytes([14; 32]),
+            checked_coordinates: 1,
+            total_coordinates: 2,
+            accepted_recovery_progress_total: 1,
+            transition_nonce: 1,
+            last_transition_receipt_id: FailureIntervalConsensusTransitionReceiptIdV1::from_bytes(
+                [15; 32],
+            ),
+            last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2::from_bytes([16; 32]),
+            certificate_id: QuantizedIntervalConsensusCertificateV1Id::from_bytes([0; 32]),
+            resolution_receipt_id: FailureIntervalConsensusResolutionReceiptIdV1::from_bytes(
+                [0; 32],
+            ),
+            close_authorization_id: FailureIntervalConsensusCloseAuthorizationIdV1::from_bytes(
+                [0; 32],
+            ),
+        }
+    }
+
+    #[test]
+    fn replay_derivation_is_finite_deterministic_and_transition_sensitive() {
+        let facts = active_facts();
+        let first = project_failure_interval_consensus_replay_id_v1(facts).unwrap();
+        let second = project_failure_interval_consensus_replay_id_v1(facts).unwrap();
+        assert_eq!(first, second);
+        assert!(first.bytes().iter().any(|byte| *byte != 0));
+
+        let sibling = FailureIntervalConsensusPersistedFactsV1 {
+            last_transition_receipt_id: FailureIntervalConsensusTransitionReceiptIdV1::from_bytes(
+                [17; 32],
+            ),
+            ..facts
+        };
+        assert_ne!(
+            first,
+            project_failure_interval_consensus_replay_id_v1(sibling).unwrap()
+        );
+    }
+
+    #[test]
+    fn later_prefund_donations_cannot_grief_begin_or_discount_principal() {
+        assert_eq!(validate_prefund_observation(100, 3, 9, 109), Ok(()));
+        assert_eq!(
+            validate_prefund_observation(100, 3, 2, 102),
+            Err(Error::BindingMismatch)
+        );
+        assert_eq!(
+            validate_prefund_observation(100, 3, 9, 108),
+            Err(Error::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn replay_projection_refuses_a_half_recorded_paid_transition() {
+        let facts = FailureIntervalConsensusPersistedFactsV1 {
+            last_liveness_receipt_id: FailureRecoveryWorkReceiptIdV2::from_bytes([0; 32]),
+            ..active_facts()
+        };
+        assert_eq!(
+            project_failure_interval_consensus_replay_id_v1(facts),
+            Err(Error::BindingMismatch)
+        );
+    }
 }

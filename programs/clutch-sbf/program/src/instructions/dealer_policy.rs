@@ -5,7 +5,8 @@
 //! transfer. It only transports one exact
 //! [`DealerPolicyV1`](clutch_dealer_runtime_contract::DealerPolicyV1) body through a
 //! strict replay-cursor stage and materializes its content-addressed catalog
-//! account. Every economic Dealer action remains disabled.
+//! account. Facility execution, where enabled, is owned by the separate
+//! `dealer_facility` adapter; this module never mutates economic state.
 //!
 //! Unlike the legacy artifact plane, this successor owns fresh account tags,
 //! PDA domains, rent attribution, and capability membership. A hostile stage
@@ -71,8 +72,59 @@ struct StageHeaderV1 {
     donation_floor: u64,
 }
 
-fn dealer_fault<T>(_: T) -> Refusal {
+pub(super) fn dealer_fault<T>(_: T) -> Refusal {
     ClutchError::DealerPolicyFault.into()
+}
+
+/// Authenticate an immutable published policy account for a Dealer facility.
+///
+/// The catalog wrapper remains the sole persisted owner of upload funding
+/// provenance. Facility handlers consume only the checked pure policy body and
+/// its recomputed content identity; they cannot reinterpret wrapper bytes.
+pub(super) fn authenticate_catalog_policy(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<([u8; 32], DealerPolicyV1)> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(
+        account.data_len() == DEALER_POLICY_ACCOUNT_BYTES,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    require(
+        data[0] == DEALER_POLICY_ACCOUNT_TAG
+            && data[1] == DEALER_POLICY_ACCOUNT_VERSION
+            && data[3..8].iter().all(|byte| *byte == 0),
+        ClutchError::DealerPolicyUploadMismatch,
+    )?;
+    let principal = u64::from_le_bytes(read_array(&data, 40)?);
+    require(
+        principal != 0 && account.lamports() >= principal,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    let body = &data[DEALER_POLICY_ACCOUNT_HEADER_BYTES..];
+    let policy = DealerPolicyV1::decode(body).map_err(dealer_fault)?;
+    let policy_id = solana_sha256_hasher::hashv(&[
+        clutch_dealer_runtime_contract::DEALER_POLICY_CONTENT_DOMAIN_V1,
+        body,
+    ])
+    .to_bytes();
+    require(policy_id != [0; 32], ClutchError::DealerPolicyFault)?;
+    expect_pda(
+        account.key,
+        seeds::dealer_policy_pda(program_id, &policy_id),
+        Some(data[2]),
+    )?;
+    require(
+        policy.policy_id().map_err(dealer_fault)?.bytes() == policy_id,
+        ClutchError::DealerPolicyFault,
+    )?;
+    Ok((policy_id, policy))
 }
 
 fn transfer_data(lamports: u64) -> [u8; SYSTEM_TRANSFER_DATA_LEN] {
@@ -198,7 +250,7 @@ fn require_stage(
     Ok(header)
 }
 
-fn create_full_principal_pda<'a>(
+pub(super) fn create_full_principal_pda<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
     target: &AccountInfo<'a>,
