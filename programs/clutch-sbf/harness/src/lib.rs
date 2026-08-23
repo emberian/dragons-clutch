@@ -1074,6 +1074,7 @@ fn redeem_external_transaction_repeated(
         shared.token_program,
         shared.collateral_mint.bytes,
         plane.hoard_authority.bytes,
+        shared.realm.bytes,
         shared.program.bytes,
         shared.compute_budget,
     ];
@@ -1104,6 +1105,8 @@ fn redeem_external_transaction_repeated(
         plane.hoard_authority.bytes,
         plane.hoard_token.bytes,
         shared.holder_outcome_token.bytes,
+        shared.realm.bytes,
+        shared.token_program,
     ];
     keys.extend(plane.outcome_mints.iter().map(|mint| mint.bytes));
     assert_eq!(

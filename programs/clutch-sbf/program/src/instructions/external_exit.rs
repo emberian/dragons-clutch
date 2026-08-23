@@ -6,23 +6,32 @@
 //! claim, and receives the immutable resolved payout from the pooled Hoard.
 //! Token-2022 mint supply is the aggregate external truth.
 
-use crate::accounts::{
-    self, expect_pda, require, require_distinct, require_signer, Outcome, StateRole,
-};
+use crate::accounts::{self, expect_pda, require, require_signer, Outcome, StateRole};
 use crate::claim_truth::{self, ObservedMintSupplies};
+use crate::collateral_release::authenticate_realm_collateral_v2;
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::observe_resolve::{bound_native_resolution, reconstruct_native_market};
 use crate::instructions::split::validate_token_program;
 use crate::{seeds, token};
+use clutch_collateral_adapter_v2::{
+    accept_claim_redemption_collateral_v2, admit_collateral_account_v2, admit_collateral_mint_v2,
+    prepare_claim_redemption_collateral_v2, refine_market_collateral_v2, BoundCollateralProfileV2,
+    ClaimRedemptionCollateralRequestV2, CollateralBackingV2, CpiAccountMetaV2, Id as CollateralId,
+    MarketCollateralBindingV2, MintObservationV2, PreparedClaimRedemptionCollateralV2,
+    RuntimeAccountViewV2, TokenAccountObservationV2, TokenAccountRoleV2, TransferAuthorityKindV2,
+    TransferAuthorityV2,
+};
 use clutch_kernel::{BasisMode, MarketState, PayoutVector, Phase, Position};
 use clutch_solana_layout::{
-    account_len, collateral,
+    account_len,
     native_resolution::NATIVE_RESOLUTION_LEN,
     occupation_resolution::{is_occupation_statistic, OCCUPATION_RESOLUTION_LEN},
-    Hash32, HoardAccount, Intent, PayoutVectorBytes, ProfileAccount, TermsAccount,
+    Hash32, HoardAccount, Intent, PayoutVectorBytes, TermsAccount,
 };
 use clutch_solana_reference::{Action, KernelAccount, Request, KERNEL_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 /// Bearer claimant and burn authority (signer).
@@ -43,22 +52,29 @@ pub const IX_RESOLUTION: usize = 6;
 pub const IX_TERMS: usize = 7;
 /// Realm collateral-policy bytes.
 pub const IX_POLICY: usize = 8;
-/// Pinned Token-2022 program.
-pub const IX_TOKEN_PROGRAM: usize = 9;
+/// Realm-selected collateral token program.
+pub const IX_COLLATERAL_TOKEN_PROGRAM: usize = 9;
+/// Compatibility name for the pre-split collateral program role.
+pub const IX_TOKEN_PROGRAM: usize = IX_COLLATERAL_TOKEN_PROGRAM;
 /// Frozen collateral mint.
 pub const IX_COLLATERAL_MINT: usize = 10;
 /// Claimant-owned collateral destination (writable).
 pub const IX_DESTINATION: usize = 11;
 /// Hoard signing authority PDA.
 pub const IX_HOARD_AUTHORITY: usize = 12;
-/// Hoard Token-2022 collateral account (writable).
+/// Release-selected Hoard collateral account (writable).
 pub const IX_HOARD_TOKEN: usize = 13;
 /// Claimant-owned outcome-token source (writable).
 pub const IX_SOURCE: usize = 14;
+/// Immutable Realm account selecting Profile V2.
+pub const IX_REALM: usize = 15;
+/// Separately fixed Token-2022 outcome claim program.
+pub const IX_OUTCOME_TOKEN_PROGRAM: usize = 16;
 /// First mint in the canonical complete outcome-mint suffix.
-pub const IX_OUTCOME_MINTS: usize = 15;
+pub const IX_OUTCOME_MINTS: usize = 17;
 
-const STATE_ROLES: [StateRole; 6] = [
+const STATE_ROLES: [StateRole; 7] = [
+    StateRole::read_only(IX_REALM, account_len::REALM),
     StateRole::read_only(IX_PROFILE, account_len::PROFILE),
     StateRole::read_only(IX_MARKET, account_len::MARKET),
     StateRole::writable(IX_HOARD, account_len::HOARD),
@@ -95,12 +111,12 @@ struct ExitRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TokenSnapshot {
     source: u64,
-    destination: u64,
-    hoard: u64,
-    decimals: u8,
     authority_bump: u8,
     mint_index: usize,
     observed: ObservedMintSupplies,
+    collateral_mint: MintObservationV2,
+    collateral_destination: TokenAccountObservationV2,
+    collateral_hoard: TokenAccountObservationV2,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -258,6 +274,39 @@ fn write_kernel_totals(
     Ok(())
 }
 
+fn runtime_account_view<'a>(account: &AccountInfo<'_>, data: &'a [u8]) -> RuntimeAccountViewV2<'a> {
+    RuntimeAccountViewV2 {
+        key: CollateralId::from_bytes(account.key.to_bytes()),
+        owner_program: CollateralId::from_bytes(account.owner.to_bytes()),
+        data,
+        is_signer: account.is_signer,
+        is_writable: account.is_writable,
+        executable: account.executable,
+    }
+}
+
+/// Collateral and claim programs are independent roles even when both resolve
+/// to Token-2022. Solana coalesces duplicate account metas, so this is the sole
+/// admitted alias; every state, mint, token account, and authority stays
+/// pairwise distinct.
+fn require_redemption_account_distinctness(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            let program_alias =
+                left == IX_COLLATERAL_TOKEN_PROGRAM && right == IX_OUTCOME_TOKEN_PROGRAM;
+            require(
+                accounts[left].key != accounts[right].key || program_alias,
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
 #[inline(never)]
 fn admit_tokens(
     program_id: &Pubkey,
@@ -265,8 +314,9 @@ fn admit_tokens(
     market: &accounts::MarketFacts,
     hoard: &HoardAccount,
     request: &ExitRequest,
+    bound: BoundCollateralProfileV2,
 ) -> Outcome<TokenSnapshot> {
-    validate_token_program(&accounts[IX_TOKEN_PROGRAM])?;
+    validate_token_program(&accounts[IX_OUTCOME_TOKEN_PROGRAM])?;
     let observed = claim_truth::observe_outcome_mints(
         program_id,
         accounts,
@@ -277,24 +327,7 @@ fn admit_tokens(
         Some(request.outcome),
     )?;
     let mint_index = IX_OUTCOME_MINTS + usize::from(request.outcome);
-    let policy_account = &accounts[IX_POLICY];
-    require(
-        !policy_account.is_writable
-            && !policy_account.executable
-            && policy_account.data_len() == collateral::COLLATERAL_POLICY_BYTES,
-        ClutchError::WrongDataLength,
-    )?;
-    let profile = ProfileAccount::decode(&accounts[IX_PROFILE].data.borrow())?;
-    let policy = collateral::verify_profile_identity(&policy_account.data.borrow(), &profile)?;
-    token::require_drivable_collateral(&policy)?;
-
     let collateral_mint = &accounts[IX_COLLATERAL_MINT];
-    require(
-        !collateral_mint.is_writable,
-        ClutchError::UnexpectedWritable,
-    )?;
-    let collateral_observation =
-        token::admit_mint(collateral_mint, &token::MintPolicy::collateral(&policy))?;
     let authority = &accounts[IX_HOARD_AUTHORITY];
     require(
         !authority.is_writable && !authority.executable && authority.data_is_empty(),
@@ -327,28 +360,137 @@ fn admit_tokens(
         source,
         &token::TokenAccountPolicy::holder(*accounts[mint_index].key, *accounts[IX_CLAIMANT].key),
     )?;
-    let destination_observation = token::admit_token_account(
-        destination,
-        &token::TokenAccountPolicy::collateral_holder(&policy, *accounts[IX_CLAIMANT].key),
+    let collateral_mint_data = collateral_mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let collateral_destination_data = destination
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let collateral_hoard_data = hoard_token
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let collateral_mint_observation = admit_collateral_mint_v2(
+        bound,
+        runtime_account_view(collateral_mint, &collateral_mint_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let collateral_destination_observation = admit_collateral_account_v2(
+        bound,
+        runtime_account_view(destination, &collateral_destination_data),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: CollateralId::from_bytes(destination.key.to_bytes()),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let collateral_hoard_observation = admit_collateral_account_v2(
+        bound,
+        runtime_account_view(hoard_token, &collateral_hoard_data),
+        TokenAccountRoleV2::Hoard,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    require(
+        collateral_hoard_observation.amount_atoms >= hoard.collateral_atoms,
+        ClutchError::TokenDeltaMismatch,
     )?;
-    let hoard_observation = token::admit_token_account(
-        hoard_token,
-        &token::TokenAccountPolicy::hoard(&policy, *authority.key),
-    )?;
-    token::require_hoard_covers_collateral(hoard.collateral_atoms, hoard_observation.amount)?;
     require(
         source_observation.amount >= request.quantity,
         ClutchError::TokenDeltaMismatch,
     )?;
     Ok(TokenSnapshot {
         source: source_observation.amount,
-        destination: destination_observation.amount,
-        hoard: hoard_observation.amount,
-        decimals: collateral_observation.decimals,
         authority_bump: authority_derived.1,
         mint_index,
         observed,
+        collateral_mint: collateral_mint_observation,
+        collateral_destination: collateral_destination_observation,
+        collateral_hoard: collateral_hoard_observation,
     })
+}
+
+fn claim_redemption_id(
+    market: Hash32,
+    resolution_account: &Pubkey,
+    request: &ExitRequest,
+    payout_atoms: u64,
+    source_supply_before: u64,
+) -> CollateralId {
+    const DOMAIN: &[u8] = b"dragons-clutch/external-claim-redemption/v2\0";
+    CollateralId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            DOMAIN,
+            &market.bytes(),
+            &resolution_account.to_bytes(),
+            &request.claimant.bytes(),
+            &request.source.bytes(),
+            &request.destination.bytes(),
+            &[request.outcome],
+            &request.quantity.to_le_bytes(),
+            &payout_atoms.to_le_bytes(),
+            &source_supply_before.to_le_bytes(),
+        ])
+        .to_bytes(),
+    )
+}
+
+fn cpi_account_meta(value: CpiAccountMetaV2) -> AccountMeta {
+    AccountMeta {
+        pubkey: Pubkey::new_from_array(value.address.bytes()),
+        is_signer: value.signer,
+        is_writable: value.writable,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn invoke_claim_collateral_payout<'a>(
+    prepared: PreparedClaimRedemptionCollateralV2,
+    mint: &AccountInfo<'a>,
+    hoard: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    signer: &[&[u8]],
+) -> Outcome<clutch_collateral_adapter_v2::AcceptedClaimRedemptionCollateralV2> {
+    let cpi = prepared.cpi();
+    require(
+        cpi.program_signed
+            && cpi.token_program == CollateralId::from_bytes(token_program.key.to_bytes())
+            && cpi.accounts[0].address == CollateralId::from_bytes(hoard.key.to_bytes())
+            && cpi.accounts[1].address == CollateralId::from_bytes(mint.key.to_bytes())
+            && cpi.accounts[2].address == CollateralId::from_bytes(destination.key.to_bytes())
+            && cpi.accounts[3].address == CollateralId::from_bytes(authority.key.to_bytes()),
+        ClutchError::MismatchedState,
+    )?;
+    let instruction = Instruction::new_with_bytes(
+        *token_program.key,
+        &cpi.data,
+        cpi.accounts.into_iter().map(cpi_account_meta).collect(),
+    );
+    let account_infos = [
+        hoard.clone(),
+        mint.clone(),
+        destination.clone(),
+        authority.clone(),
+        token_program.clone(),
+    ];
+    invoke_signed(&instruction, &account_infos, &[signer])
+        .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
+
+    let mint_after = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let hoard_after = hoard
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let destination_after = destination
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    accept_claim_redemption_collateral_v2(
+        prepared,
+        runtime_account_view(mint, &mint_after),
+        runtime_account_view(hoard, &hoard_after),
+        runtime_account_view(destination, &destination_after),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))
 }
 
 /// Burn bearer claims and pay their exact resolved collateral value.
@@ -359,7 +501,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         ClutchError::AccountCount,
     )?;
     require_signer(&accounts[IX_CLAIMANT])?;
-    require_distinct(accounts)?;
+    require_redemption_account_distinctness(accounts)?;
     accounts::validate_state_roles(program_id, accounts, &STATE_ROLES)?;
     let market = accounts::read_market(&accounts[IX_MARKET].data.borrow())?;
     require(
@@ -435,6 +577,25 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
             && profile.realm == market.realm,
         ClutchError::MismatchedState,
     )?;
+    let realm_collateral = authenticate_realm_collateral_v2(
+        program_id,
+        &accounts[IX_REALM],
+        &accounts[IX_PROFILE],
+        &accounts[IX_POLICY],
+        &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
+    )?;
+    let bound_collateral = refine_market_collateral_v2(
+        realm_collateral,
+        MarketCollateralBindingV2 {
+            market: CollateralId::from_bytes(market.market.bytes()),
+            realm: CollateralId::from_bytes(market.realm.bytes()),
+            profile: CollateralId::from_bytes(market.profile.bytes()),
+            collateral_cap_atoms: market.collateral_cap,
+            hoard_authority: CollateralId::from_bytes(accounts[IX_HOARD_AUTHORITY].key.to_bytes()),
+            hoard_token_account: CollateralId::from_bytes(accounts[IX_HOARD_TOKEN].key.to_bytes()),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     /* Terms and Resolution were fully decoded (including the terms digest) by
      * the small-facts readers above.  Resolve already bound the frozen payout
      * set into the program-owned kernel; redemption preserves that inductive
@@ -487,7 +648,14 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         terms.payout_count,
         terms.outcome_count,
     )?;
-    let snapshot = admit_tokens(program_id, accounts, &market, &hoard, &request)?;
+    let snapshot = admit_tokens(
+        program_id,
+        accounts,
+        &market,
+        &hoard,
+        &request,
+        bound_collateral,
+    )?;
 
     {
         let mut supply_data = accounts[IX_SUPPLY]
@@ -528,28 +696,79 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         }
     };
 
+    let prepared_collateral = if payout == 0 {
+        None
+    } else {
+        let mint_data = accounts[IX_COLLATERAL_MINT]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let hoard_data = accounts[IX_HOARD_TOKEN]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let destination_data = accounts[IX_DESTINATION]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        Some(
+            prepare_claim_redemption_collateral_v2(
+                bound_collateral,
+                ClaimRedemptionCollateralRequestV2 {
+                    claim_redemption_id: claim_redemption_id(
+                        market.market,
+                        accounts[IX_RESOLUTION].key,
+                        &request,
+                        payout,
+                        snapshot.observed.values[usize::from(request.outcome)],
+                    ),
+                    destination_token_account: CollateralId::from_bytes(
+                        accounts[IX_DESTINATION].key.to_bytes(),
+                    ),
+                    claim_semantic_owner: CollateralId::from_bytes(request.claimant.bytes()),
+                    payout_atoms: payout,
+                    backing_before: CollateralBackingV2 {
+                        locked_atoms: hoard.collateral_atoms,
+                        cap_atoms: market.collateral_cap,
+                    },
+                },
+                TransferAuthorityV2 {
+                    address: CollateralId::from_bytes(accounts[IX_HOARD_AUTHORITY].key.to_bytes()),
+                    kind: TransferAuthorityKindV2::ProgramDerived,
+                    is_transaction_signer: false,
+                    program_address_authenticated: true,
+                    is_writable: accounts[IX_HOARD_AUTHORITY].is_writable,
+                    executable: accounts[IX_HOARD_AUTHORITY].executable,
+                    data_is_empty: accounts[IX_HOARD_AUTHORITY].data_is_empty(),
+                },
+                runtime_account_view(&accounts[IX_COLLATERAL_MINT], &mint_data),
+                runtime_account_view(&accounts[IX_HOARD_TOKEN], &hoard_data),
+                runtime_account_view(&accounts[IX_DESTINATION], &destination_data),
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?,
+        )
+    };
+
     token::burn(
-        &accounts[IX_TOKEN_PROGRAM],
+        &accounts[IX_OUTCOME_TOKEN_PROGRAM],
         &accounts[IX_SOURCE],
         &accounts[snapshot.mint_index],
         &accounts[IX_CLAIMANT],
         request.quantity,
     )?;
-    if payout != 0 {
+    let accepted_collateral = if let Some(prepared) = prepared_collateral {
         let market_bytes = market.market.bytes();
         let bump = [snapshot.authority_bump];
         let signer: [&[u8]; 3] = [seeds::SEED_HOARD_AUTHORITY, &market_bytes, &bump];
-        token::transfer_checked_signed(
-            &accounts[IX_TOKEN_PROGRAM],
-            &accounts[IX_HOARD_TOKEN],
+        Some(invoke_claim_collateral_payout(
+            prepared,
             &accounts[IX_COLLATERAL_MINT],
+            &accounts[IX_HOARD_TOKEN],
             &accounts[IX_DESTINATION],
             &accounts[IX_HOARD_AUTHORITY],
-            payout,
-            snapshot.decimals,
+            &accounts[IX_COLLATERAL_TOKEN_PROGRAM],
             &signer,
-        )?;
-    }
+        )?)
+    } else {
+        None
+    };
 
     let after = claim_truth::observe_outcome_mints(
         program_id,
@@ -570,24 +789,54 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         token::token_amount(&accounts[IX_SOURCE])?,
         request.quantity,
     )?;
-    token::require_exact_credit(
-        snapshot.destination,
-        token::token_amount(&accounts[IX_DESTINATION])?,
-        payout,
-    )?;
-    token::require_exact_debit(
-        snapshot.hoard,
-        token::token_amount(&accounts[IX_HOARD_TOKEN])?,
-        payout,
-    )?;
-    hoard.collateral_atoms = hoard
+    let collateral_after = hoard
         .collateral_atoms
         .checked_sub(payout)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    token::require_hoard_covers_collateral(
-        hoard.collateral_atoms,
-        token::token_amount(&accounts[IX_HOARD_TOKEN])?,
-    )?;
+    if let Some(accepted) = accepted_collateral {
+        require(
+            accepted.backing_after.locked_atoms == collateral_after
+                && accepted.backing_after.cap_atoms == market.collateral_cap,
+            ClutchError::TokenDeltaMismatch,
+        )?;
+    } else {
+        let mint_data = accounts[IX_COLLATERAL_MINT]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let destination_data = accounts[IX_DESTINATION]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let hoard_data = accounts[IX_HOARD_TOKEN]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mint_after = admit_collateral_mint_v2(
+            bound_collateral,
+            runtime_account_view(&accounts[IX_COLLATERAL_MINT], &mint_data),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
+        let destination_after = admit_collateral_account_v2(
+            bound_collateral,
+            runtime_account_view(&accounts[IX_DESTINATION], &destination_data),
+            TokenAccountRoleV2::ReceiveOnly {
+                account: CollateralId::from_bytes(accounts[IX_DESTINATION].key.to_bytes()),
+            },
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
+        let hoard_after = admit_collateral_account_v2(
+            bound_collateral,
+            runtime_account_view(&accounts[IX_HOARD_TOKEN], &hoard_data),
+            TokenAccountRoleV2::Hoard,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::TokenDeltaMismatch))?;
+        require(
+            payout == 0
+                && mint_after == snapshot.collateral_mint
+                && destination_after == snapshot.collateral_destination
+                && hoard_after == snapshot.collateral_hoard,
+            ClutchError::TokenDeltaMismatch,
+        )?;
+    }
+    hoard.collateral_atoms = collateral_after;
     {
         let mut supply_data = accounts[IX_SUPPLY]
             .try_borrow_mut_data()

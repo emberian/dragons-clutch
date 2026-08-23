@@ -966,6 +966,8 @@ impl Founding {
             AccountMeta::new_readonly(self.hoard_authority, false),
             AccountMeta::new(self.hoard_token, false),
             AccountMeta::new(source, false),
+            AccountMeta::new_readonly(self.realm, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
         ];
         metas.extend(self.outcome_mints.iter().enumerate().map(|(index, mint)| {
             if index == 0 {

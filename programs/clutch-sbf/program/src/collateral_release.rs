@@ -9,7 +9,6 @@ use clutch_collateral_adapter_v2::{
     bind_realm_collateral_v2, AdapterCatalogV2, AdapterReleaseV2, BoundRealmCollateralV2,
     CollateralPolicyV2, Id, ProfileCollateralBindingV2, RealmCollateralBindingV2,
     RuntimeReleaseObservationV2, ADAPTER_RELEASE_V2_BYTES, COLLATERAL_POLICY_V2_BYTES,
-    TOKEN_2022_PROGRAM,
 };
 use clutch_solana_layout::{account_len, Hash32, ProfileAccount, RealmAccount, PROFILE_SCHEMA_V2};
 use solana_account_info::AccountInfo;
@@ -118,8 +117,7 @@ pub(crate) fn authenticate_realm_collateral_v2(
         .resolve(policy.adapter_release)
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     require(
-        selected.token_program == TOKEN_2022_PROGRAM
-            && token_program.key.to_bytes() == selected.token_program.bytes(),
+        token_program.key.to_bytes() == selected.token_program.bytes(),
         ClutchError::MismatchedState,
     )?;
     bind_realm_collateral_v2(
