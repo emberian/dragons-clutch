@@ -76,6 +76,58 @@ const FAILURE_MARKET_RESOLUTION_POSTWRITE_DOMAIN_V5: &[u8] =
 const RESOLVED_DISPOSITION_BYTE_V2: u8 = 1;
 const _: () = assert!(clutch_retirement::MAX_OUTCOMES * 8 == 128);
 
+/// Exact final-postwrite facts required before Source may terminalize.
+///
+/// This projection is only a testable equality boundary. The live adapter
+/// reconstructs it from Product's private Source input, this module's private
+/// postwrite, and the retained Failure receipt; callers cannot construct
+/// authority from these fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceResolutionFinalJoinFactsV5 {
+    postwrite_id: ContentId,
+    final_cell_state_id: ContentId,
+    failure_cell_after_id: ContentId,
+    activation_failure_receipt_id: ContentId,
+    failure_receipt_id: ContentId,
+    activation_product_certificate_id: ContentId,
+    failure_product_certificate_id: ContentId,
+    activation_market_instance_id: [u8; 32],
+    failure_market_instance_id: [u8; 32],
+    source_market_instance_id: [u8; 32],
+    activation_generation: u64,
+    failure_generation: u64,
+    source_failure_policy_binding_id: [u8; 32],
+    failure_policy_binding_id: [u8; 32],
+    source_successful_handoff_id: [u8; 32],
+    failure_source_handoff_id: [u8; 32],
+    resolution_account_id: ContentId,
+    resolution_semantic_id: ContentId,
+    resolution_data_id: ContentId,
+    source_resolution_input_id: ContentId,
+}
+
+fn require_source_resolution_final_join_v5(facts: SourceResolutionFinalJoinFactsV5) -> Outcome<()> {
+    require(
+        !facts.postwrite_id.is_zero()
+            && facts.final_cell_state_id == facts.failure_cell_after_id
+            && facts.activation_failure_receipt_id == facts.failure_receipt_id
+            && facts.activation_product_certificate_id == facts.failure_product_certificate_id
+            && facts.activation_market_instance_id == facts.failure_market_instance_id
+            && facts.activation_market_instance_id == facts.source_market_instance_id
+            && facts.activation_generation == facts.failure_generation
+            && facts.source_failure_policy_binding_id == facts.failure_policy_binding_id
+            && facts.source_successful_handoff_id == facts.failure_source_handoff_id
+            && !facts.resolution_account_id.is_zero()
+            && !facts.resolution_semantic_id.is_zero()
+            && !facts.resolution_data_id.is_zero()
+            && facts.resolution_account_id != facts.resolution_semantic_id
+            && facts.resolution_account_id != facts.resolution_data_id
+            && facts.resolution_semantic_id != facts.resolution_data_id
+            && !facts.source_resolution_input_id.is_zero(),
+        ClutchError::MismatchedState,
+    )
+}
+
 /// Private same-call proof consumed by the reusable Failure cell writer.
 ///
 /// Construction is possible only after the Resolution, Hoard, ClaimLedger,
@@ -1544,6 +1596,31 @@ mod adversarial_tests {
         }
     }
 
+    fn source_final_join() -> SourceResolutionFinalJoinFactsV5 {
+        SourceResolutionFinalJoinFactsV5 {
+            postwrite_id: content(1),
+            final_cell_state_id: content(2),
+            failure_cell_after_id: content(2),
+            activation_failure_receipt_id: content(3),
+            failure_receipt_id: content(3),
+            activation_product_certificate_id: content(4),
+            failure_product_certificate_id: content(4),
+            activation_market_instance_id: [5; 32],
+            failure_market_instance_id: [5; 32],
+            source_market_instance_id: [5; 32],
+            activation_generation: 6,
+            failure_generation: 6,
+            source_failure_policy_binding_id: [7; 32],
+            failure_policy_binding_id: [7; 32],
+            source_successful_handoff_id: [8; 32],
+            failure_source_handoff_id: [8; 32],
+            resolution_account_id: content(9),
+            resolution_semantic_id: content(10),
+            resolution_data_id: content(11),
+            source_resolution_input_id: content(12),
+        }
+    }
+
     #[test]
     fn every_resolution_role_alias_refuses() {
         let distinct = [
@@ -1732,6 +1809,31 @@ mod adversarial_tests {
         refuses!(certificate_source_occurrence_id, [9; 32]);
         refuses!(payout_active_len, 3);
         refuses!(registry_neutral_lamport_sink, [9; 32]);
+    }
+
+    #[test]
+    fn source_terminal_refuses_every_prewrite_or_cross_market_substitution() {
+        assert!(require_source_resolution_final_join_v5(source_final_join()).is_ok());
+        macro_rules! refuses {
+            ($field:ident, $value:expr) => {{
+                let mut facts = source_final_join();
+                facts.$field = $value;
+                assert!(require_source_resolution_final_join_v5(facts).is_err());
+            }};
+        }
+        refuses!(postwrite_id, ContentId::ZERO);
+        refuses!(final_cell_state_id, content(99));
+        refuses!(activation_failure_receipt_id, content(99));
+        refuses!(activation_product_certificate_id, content(99));
+        refuses!(activation_market_instance_id, [99; 32]);
+        refuses!(source_market_instance_id, [99; 32]);
+        refuses!(activation_generation, 99);
+        refuses!(source_failure_policy_binding_id, [99; 32]);
+        refuses!(source_successful_handoff_id, [99; 32]);
+        refuses!(resolution_account_id, ContentId::ZERO);
+        refuses!(resolution_semantic_id, content(9));
+        refuses!(resolution_data_id, content(10));
+        refuses!(source_resolution_input_id, ContentId::ZERO);
     }
 
     #[test]
