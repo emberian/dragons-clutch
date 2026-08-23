@@ -14,12 +14,13 @@
 //! | module | intents and actions |
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
-//! | [`collateral_cash_v3`] | withdrawn MarketBindingV1 Endow/Withdraw implementation; no checked dispatch |
-//! | [`claim_representation_v3`] | withdrawn MarketBindingV1 Materialize/Dematerialize implementation; no checked dispatch |
-//! | [`external_redemption_v3`] | withdrawn MarketBindingV1 external-redemption implementation; no checked dispatch |
+//! | [`collateral_cash_v3`] | current full-width `Intent::Endow` / `Intent::WithdrawCash` over MarketBindingV2 and Profile-selected collateral code |
+//! | [`claim_representation_v3`] | current full-width `Intent::Materialize` / `Intent::Dematerialize` over MarketBindingV2 and GeneralMarketValueAuthorityV2 |
+//! | [`external_redemption_v3`] | current full-width `Intent::RedeemExternal` over MarketBindingV2 and Profile-selected collateral code |
 //! | [`genesis`] | current `InitRealm`, `InitProfileV2`, direct-only `InitOrderPage`, and exact revenue-record close |
-//! | [`split`] | `Intent::Split` |
-//! | [`merge_materialize`] | withdrawn lowered-ledger migration implementation; no live dispatch |
+//! | [`complete_set_v3`] | current full-width `Intent::Split` / `Intent::Merge` over MarketBindingV2 and GeneralMarketValueAuthorityV2 |
+//! | [`split`] | historical lowered-ledger Split implementation; no checked dispatch |
+//! | [`merge_materialize`] | historical lowered-ledger Merge/representation implementation; no checked dispatch |
 //! | [`market_init`] | host-forensic legacy Market founder; no checked dispatch |
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
@@ -30,9 +31,10 @@
 //! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
 //!
 //! Checked profiles route only account families whose current schemas are
-//! closed. Historical implementations remain compiled for hostile host
-//! fixtures and dependency-lower migration work, but capability admission,
-//! request decoding, and dispatch cannot reach them.
+//! closed. The shared numeric value tags 2–5 and 15–17 are current full-width
+//! Collateral routes; the legacy founder and General placement/clearing
+//! families remain compiled only for hostile host fixtures and dependency-
+//! lower migration work, with no capability or checked dispatch.
 //!
 //! [`genesis`] owns namespace construction; [`orders_batch`] reuses its shared
 //! prefund-safe System-CPI helper for the two content-addressed submission

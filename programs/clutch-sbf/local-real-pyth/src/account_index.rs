@@ -31,7 +31,7 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_POLICY_ACCOUNT_TAG, FRACTIONAL_POLICY_ACCOUNT_VERSION,
 };
 use clutch_general_v2_contract::{
-    complete_candidate_feed_v2, AdmissionNodeStatusV1, AdmissionNodeV4AccountV1,
+    complete_candidate_feed_v2, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
     EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketRuntimeV3AccountV1,
     OwnerSettlementV5AccountV1, SettlementCashPotV1AccountV1,
@@ -106,7 +106,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v2-general-successor-current";
+    "dragons-clutch/canonical-account-decoders/v3-general-no-keeper-no-selected-candidate";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -549,14 +549,6 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         );
         projection.generation = Some(value.next_epoch_generation);
         projection.primary_binding = Some(value.market_instance_v2_id.bytes());
-        projection.keeper_hint = Some(KeeperHint {
-            lane: Some(WorkflowLane::Creation),
-            position: WorkflowPosition {
-                phase: 2,
-                item: value.next_epoch_index,
-            },
-            action: "init-epoch",
-        });
         projection
     } else if tag_version(
         data,
@@ -649,13 +641,6 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         let value = AdmissionNodeV4AccountV1::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let value = value.base();
-        let (lane, phase, action) = match value.status {
-            AdmissionNodeStatusV1::Committed => {
-                (WorkflowLane::Candidate, 2, "write-candidate-feed")
-            }
-            AdmissionNodeStatusV1::Revealed => (WorkflowLane::Candidate, 2, "write-candidate-feed"),
-            _ => (WorkflowLane::RecoveryRetirement, 2, "cleanup-candidate"),
-        };
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::General,
             CanonicalAccountKind::GeneralAdmissionNode,
@@ -663,14 +648,6 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(value.epoch_generation);
         projection.primary_binding = Some(value.epoch.bytes());
         projection.secondary_binding = Some(value.node.bytes());
-        projection.keeper_hint = Some(KeeperHint {
-            lane: Some(lane),
-            position: WorkflowPosition {
-                phase,
-                item: value.ordinal,
-            },
-            action,
-        });
         projection
     } else if tag_version(
         data,
@@ -679,14 +656,6 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     ) {
         let (value, _) = complete_candidate_feed_v2(data, false)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let complete = value.prices_written == value.outcome_count
-            && value.fills_written == value.order_count
-            && value.atoms_written == value.atom_count
-            && value.slices_written == value.slice_count;
-        let item = u64::from(value.prices_written)
-            + u64::from(value.fills_written)
-            + u64::from(value.atoms_written)
-            + u64::from(value.slices_written);
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::General,
             CanonicalAccountKind::GeneralCandidateFeedStage,
@@ -694,18 +663,6 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(value.epoch_generation);
         projection.primary_binding = Some(value.epoch.bytes());
         projection.secondary_binding = Some(value.node.bytes());
-        projection.keeper_hint = Some(KeeperHint {
-            lane: Some(WorkflowLane::Candidate),
-            position: WorkflowPosition {
-                phase: if complete { 4 } else { 3 },
-                item,
-            },
-            action: if complete {
-                "seal-candidate"
-            } else {
-                "write-candidate-feed"
-            },
-        });
         projection
     } else if tag_version(
         data,
@@ -721,25 +678,10 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(value.epoch_generation);
         projection.primary_binding = Some(value.epoch.bytes());
         projection.secondary_binding = Some(value.node.bytes());
-        projection.keeper_hint = Some(KeeperHint {
-            lane: Some(WorkflowLane::Candidate),
-            position: WorkflowPosition { phase: 5, item: 0 },
-            action: "init-clear-work",
-        });
         projection
     } else if tag_version(data, CLEAR_WORK_ACCOUNT_TAG, CLEAR_WORK_ACCOUNT_VERSION_V3) {
         let value = ClearWorkV3AccountV1::decode_account(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let (phase, item, action) = match value.phase {
-            0 => (6, 0, "grow-clear-work"),
-            1 => (7, u64::from(value.order_cursor), "advance-clear-orders"),
-            2 => (8, u64::from(value.slice_cursor), "advance-clear-slices"),
-            _ => (
-                9,
-                u64::from(value.slice_cursor),
-                "complete-candidate-verification",
-            ),
-        };
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::General,
             CanonicalAccountKind::GeneralClearWork,
@@ -747,11 +689,6 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(value.epoch_generation);
         projection.primary_binding = Some(value.epoch.bytes());
         projection.secondary_binding = Some(value.node.bytes());
-        projection.keeper_hint = Some(KeeperHint {
-            lane: Some(WorkflowLane::Candidate),
-            position: WorkflowPosition { phase, item },
-            action,
-        });
         projection
     } else if tag_version(data, EPOCH_BUDGET_ACCOUNT_TAG, EPOCH_BUDGET_ACCOUNT_VERSION) {
         let value = EpochBudgetV2AccountV1::decode(data)
@@ -835,6 +772,11 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     } else {
         return Ok(None);
     };
+    /* No General extension tuple is executable in the checked release. Keep
+     * canonical account indexing, but never advertise an impossible keeper
+     * action merely because an authenticated historical/current-state account
+     * has a locally recognizable cursor. */
+    projection.keeper_hint = None;
     Ok(Some(projection))
 }
 

@@ -14,7 +14,7 @@
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/full/v8-source-ingest-legacy-general-value-withdrawn";
+    "dragons-clutch/capability-profile/full/v9-source-ingest-current-collateral-legacy-general-founder-clearing-withdrawn";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
@@ -22,17 +22,17 @@ pub const PROFILE_LABEL: &str =
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v8-source-ingest-legacy-general-value-withdrawn";
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v9-source-ingest-current-collateral-legacy-general-founder-clearing-withdrawn";
 /// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/direct-v3-source-v2-point/v2-legacy-general-value-withdrawn";
+    "dragons-clutch/capability-profile/direct-v3-source-v2-point/v3-current-collateral-legacy-general-founder-withdrawn";
 /// Source V2 and archive-direct exact-point d1-d3 resolution product. The
 /// withdrawn General V3 request family is not resident in this successor
 /// identity.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/general-source-v2-point/v3-legacy-general-value-and-placement-withdrawn";
+    "dragons-clutch/capability-profile/general-source-v2-point/v4-current-collateral-legacy-general-founder-placement-withdrawn";
 /// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
@@ -55,8 +55,8 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x27, 0x65, 0x2c, 0x43, 0x68, 0xba, 0x15, 0x32, 0x9d, 0x1a, 0x9f, 0x54, 0x81, 0x8a, 0x33, 0x1a,
-    0x3c, 0xc7, 0x66, 0xb6, 0x64, 0xeb, 0x3d, 0x45, 0xb1, 0x30, 0xde, 0x9d, 0x6f, 0xb3, 0x36, 0x69,
+    0x34, 0x45, 0xfb, 0x16, 0x50, 0x0e, 0xdc, 0x79, 0xd7, 0x9e, 0xb3, 0x32, 0x2b, 0x50, 0x97, 0xe8,
+    0xf1, 0xc9, 0xda, 0x9a, 0x09, 0xb7, 0x41, 0xda, 0x53, 0x7a, 0xd7, 0xfd, 0x2b, 0x86, 0xca, 0xc3,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
@@ -65,20 +65,20 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x91, 0xb5, 0x80, 0x13, 0xd2, 0xca, 0x6d, 0x16, 0x27, 0xd0, 0x4b, 0x13, 0x98, 0x09, 0x18, 0x0a,
-    0x0b, 0xde, 0xf3, 0x5a, 0xe8, 0x5f, 0x6d, 0xd3, 0x44, 0x3f, 0x74, 0x6c, 0x4c, 0xcd, 0xdd, 0x54,
+    0x81, 0x9d, 0x26, 0xd9, 0x6a, 0x7f, 0x8c, 0x4c, 0x96, 0x2b, 0xfe, 0x30, 0xb0, 0x3a, 0x05, 0x69,
+    0xa7, 0x02, 0x2f, 0x22, 0x2a, 0xd4, 0x54, 0xa6, 0x4f, 0x22, 0x97, 0x3b, 0x5c, 0x1c, 0x84, 0xe3,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x2a, 0x22, 0xe9, 0x13, 0xba, 0xe1, 0x78, 0xb6, 0xbd, 0x37, 0xbd, 0x54, 0x76, 0xfd, 0x71, 0x6e,
-    0x82, 0x55, 0x04, 0xca, 0x3c, 0x5e, 0x76, 0x84, 0xd0, 0x7a, 0x7e, 0x2c, 0xf2, 0x0c, 0x3c, 0x97,
+    0x4e, 0x9c, 0x85, 0xd7, 0xe9, 0xe8, 0x8b, 0x59, 0xeb, 0xf3, 0xb9, 0x8f, 0xd5, 0x19, 0x77, 0x32,
+    0x7a, 0x49, 0xf9, 0xea, 0xad, 0xdd, 0x55, 0xfc, 0x70, 0x8f, 0xa4, 0xd4, 0xf1, 0xdf, 0x20, 0x91,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0xb8, 0x43, 0xd5, 0x0c, 0xaf, 0xe9, 0x64, 0x4e, 0x9f, 0x95, 0x81, 0x2e, 0x27, 0xbb, 0x2e, 0xd7,
-    0xe9, 0x0d, 0x2d, 0x8a, 0x7b, 0xf9, 0x80, 0x72, 0x64, 0x11, 0x84, 0x23, 0x9c, 0xaf, 0xa1, 0xa6,
+    0x32, 0x6d, 0x46, 0xb2, 0xab, 0x1b, 0x4b, 0xc7, 0xb7, 0xcf, 0xd9, 0x45, 0x66, 0x1f, 0x65, 0xd6,
+    0x3c, 0xcf, 0x31, 0x93, 0xf0, 0xe3, 0x6c, 0x36, 0x8a, 0xf1, 0x65, 0x8c, 0xe0, 0x6c, 0xb3, 0x60,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
 #[cfg(all(
@@ -132,18 +132,18 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
         return false;
     }
     match tag {
-        // Current Realm/Profile, artifact, revenue-record, and Source V2 plane.
-        10..=11 | 18..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
+        // Current full-width collateral/value, Realm/Profile, artifact,
+        // revenue-record, and Source V2 planes.
+        2..=5 | 10..=11 | 15..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
         // The old feed buffer, direct-page settlement and Source V1 families.
         6 | 22..=31 => cfg!(feature = "profile-full"),
         // Resumable occupation work.
         32..=35 => cfg!(feature = "profile-full"),
         // Withdrawn General construction, clearing, settlement, and close
         // routes are absent from every checked release. Tag 1 was the legacy
-        // seven-account Market founder. Tags 2..=5 and 15..=17 still consumed
-        // MarketBindingV1. Tags 12/13 named constructors whose sole live
-        // handler already refused in favor of typed artifact sealing.
-        1..=5 | 8..=9 | 12..=13 | 15..=17 | 47..=67 | 69 => false,
+        // seven-account Market founder. Tags 12/13 named constructors whose
+        // sole live handler already refused in favor of typed artifact sealing.
+        1 | 8..=9 | 12..=13 | 47..=67 | 69 => false,
         // The shared PlaceOrder wire is current only for exact DirectEpochV4.
         // The account-width-selected General fallback is withdrawn.
         7 => DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB,
@@ -277,11 +277,15 @@ mod tests {
         assert!(!legacy_intent_tag_enabled(74));
         assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
         assert_eq!(legacy_intent_tag_enabled(47), GENERAL_CLEARING);
-        for tag in 1..=5 {
+        for tag in [1, 8, 9, 12, 13, 69] {
             assert!(!legacy_intent_tag_enabled(tag), "withdrawn General tag {tag}");
         }
-        for tag in [8, 9, 12, 13, 15, 16, 17, 69] {
-            assert!(!legacy_intent_tag_enabled(tag), "withdrawn General tag {tag}");
+        for tag in [2, 3, 4, 5, 15, 16, 17] {
+            assert_eq!(
+                legacy_intent_tag_enabled(tag),
+                !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB,
+                "current full-width Collateral tag {tag}",
+            );
         }
         for tag in 47..=67 {
             assert!(!legacy_intent_tag_enabled(tag), "withdrawn General tag {tag}");

@@ -55,7 +55,9 @@ use crate::instructions::direct_selection_v3;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
 use crate::instructions::{
-    artifact, fractional_redemption, genesis, observe_resolve, orders_batch, source_ingest_v2,
+    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3,
+    external_redemption_v3, fractional_redemption, genesis, observe_resolve, orders_batch,
+    source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
@@ -80,7 +82,11 @@ use solana_pubkey::Pubkey;
 /// its untrusted discriminator happened to select a particular hint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Route {
+    Split,
+    MergeMaterialize,
     ObserveResolve,
+    ExternalExit,
+    CashExit,
     Artifact,
     OrdersBatch,
     Genesis,
@@ -111,11 +117,18 @@ enum Route {
 const ACTION_LAYOUT_HINT: u8 = 0;
 const ACTION_RESOLVE_HINT: u8 = 1;
 const ACTION_REDEEM_INTERNAL_HINT: u8 = 2;
+const INTENT_SPLIT_HINT: u8 = 2;
+const INTENT_MERGE_HINT: u8 = 3;
+const INTENT_MATERIALIZE_HINT: u8 = 4;
+const INTENT_DEMATERIALIZE_HINT: u8 = 5;
 const INTENT_FEED_ADVANCE_HINT: u8 = 6;
 const INTENT_PLACE_ORDER_HINT: u8 = 7;
 const INTENT_INIT_REALM_HINT: u8 = 10;
 const INTENT_INIT_PROFILE_HINT: u8 = 11;
 const INTENT_INIT_ORDER_PAGE_HINT: u8 = 14;
+const INTENT_ENDOW_HINT: u8 = 15;
+const INTENT_REDEEM_EXTERNAL_HINT: u8 = 16;
+const INTENT_WITHDRAW_CASH_HINT: u8 = 17;
 const INTENT_BEGIN_ARTIFACT_HINT: u8 = 18;
 const INTENT_WRITE_ARTIFACT_HINT: u8 = 19;
 const INTENT_SEAL_ARTIFACT_HINT: u8 = 20;
@@ -188,8 +201,14 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::RecurringSeries
             }
+            Some(INTENT_SPLIT_HINT) => Route::Split,
+            Some(INTENT_MERGE_HINT | INTENT_MATERIALIZE_HINT | INTENT_DEMATERIALIZE_HINT) => {
+                Route::MergeMaterialize
+            }
             #[cfg(feature = "profile-full")]
             Some(INTENT_FEED_ADVANCE_HINT) => Route::ObserveResolve,
+            Some(INTENT_REDEEM_EXTERNAL_HINT) => Route::ExternalExit,
+            Some(INTENT_WITHDRAW_CASH_HINT) => Route::CashExit,
             Some(
                 INTENT_BEGIN_ARTIFACT_HINT
                 | INTENT_WRITE_ARTIFACT_HINT
@@ -203,6 +222,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 INTENT_INIT_REALM_HINT
                 | INTENT_INIT_PROFILE_HINT
                 | INTENT_INIT_ORDER_PAGE_HINT
+                | INTENT_ENDOW_HINT
                 | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
             #[cfg(feature = "profile-full")]
@@ -286,7 +306,13 @@ pub fn process(
         return Err(ClutchError::UnsupportedInstruction.into());
     }
     match route_hint(instruction_data) {
+        Route::Split => process_split(program_id, accounts, instruction_data),
+        Route::MergeMaterialize => {
+            process_merge_materialize(program_id, accounts, instruction_data)
+        }
         Route::ObserveResolve => process_observe_resolve(program_id, accounts, instruction_data),
+        Route::ExternalExit => process_external_exit(program_id, accounts, instruction_data),
+        Route::CashExit => process_cash_exit(program_id, accounts, instruction_data),
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
         Route::OrdersBatch => process_orders_batch(program_id, accounts, instruction_data),
         Route::Genesis => process_genesis(program_id, accounts, instruction_data),
@@ -514,6 +540,60 @@ fn disabled_canonical_tag(instruction_data: &[u8]) -> bool {
 }
 
 #[inline(never)]
+fn process_split(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::Split {
+            market,
+            owner,
+            quantity,
+        }) => complete_set_v3::process_complete_set_v3(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            owner,
+            quantity,
+            complete_set_v3::CompleteSetActionV3::Split,
+        ),
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
+fn process_merge_materialize(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::Merge {
+            market,
+            owner,
+            quantity,
+        }) => complete_set_v3::process_complete_set_v3(
+            program_id,
+            accounts,
+            request.sequence,
+            market,
+            owner,
+            quantity,
+            complete_set_v3::CompleteSetActionV3::Merge,
+        ),
+        Action::Layout(Intent::Materialize { .. })
+        | Action::Layout(Intent::Dematerialize { .. }) => {
+            claim_representation_v3::process_claim_representation_v3(program_id, accounts, &request)
+        }
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
 fn process_observe_resolve(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -527,6 +607,36 @@ fn process_observe_resolve(
         }
         Action::Resolve { .. } | Action::RedeemInternal { .. } => {
             observe_resolve::process(program_id, accounts, &request)
+        }
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
+fn process_external_exit(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::RedeemExternal { .. }) => {
+            external_redemption_v3::process_external_redemption_v3(program_id, accounts, &request)
+        }
+        _ => unexpected_route(),
+    }
+}
+
+#[inline(never)]
+fn process_cash_exit(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = Request::decode(instruction_data)?;
+    match request.action {
+        Action::Layout(Intent::WithdrawCash { .. }) => {
+            collateral_cash_v3::process_withdraw_cash_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
@@ -582,6 +692,9 @@ fn process_genesis(
         | Action::Layout(Intent::InitOrderPage { .. })
         | Action::Layout(Intent::CloseRevenuePolicyRecord { .. }) => {
             genesis::process(program_id, accounts, &request)
+        }
+        Action::Layout(Intent::Endow { .. }) => {
+            collateral_cash_v3::process_endow_v3(program_id, accounts, &request)
         }
         _ => unexpected_route(),
     }
@@ -778,7 +891,7 @@ mod tests {
                     owner: hash(2),
                     quantity: 3,
                 },
-                Route::DecodeOnly,
+                Route::Split,
             ),
             (
                 Intent::Merge {
@@ -786,7 +899,7 @@ mod tests {
                     owner: hash(2),
                     quantity: 3,
                 },
-                Route::DecodeOnly,
+                Route::MergeMaterialize,
             ),
             (
                 Intent::Materialize {
@@ -796,7 +909,7 @@ mod tests {
                     outcome: 0,
                     quantity: 4,
                 },
-                Route::DecodeOnly,
+                Route::MergeMaterialize,
             ),
             (
                 Intent::Dematerialize {
@@ -806,7 +919,7 @@ mod tests {
                     outcome: 0,
                     quantity: 4,
                 },
-                Route::DecodeOnly,
+                Route::MergeMaterialize,
             ),
             (
                 Intent::FeedAdvance {
@@ -901,7 +1014,7 @@ mod tests {
                     outcome: 0,
                     quantity: 5,
                 },
-                Route::DecodeOnly,
+                Route::ExternalExit,
             ),
             (
                 Intent::WithdrawCash {
@@ -910,7 +1023,7 @@ mod tests {
                     destination: hash(3),
                     amount: 4,
                 },
-                Route::DecodeOnly,
+                Route::CashExit,
             ),
             (
                 Intent::BeginArtifact {
@@ -1263,12 +1376,7 @@ mod tests {
         .filter(|(intent, _)| {
             !matches!(
                 intent,
-                Intent::CreateMarket { .. }
-                    | Intent::Split { .. }
-                    | Intent::Merge { .. }
-                    | Intent::Materialize { .. }
-                    | Intent::Dematerialize { .. }
-                    | Intent::CancelOrder { .. }
+                Intent::CreateMarket { .. } | Intent::CancelOrder { .. }
                     | Intent::SettlePage { .. }
                     | Intent::InitClearWork { .. }
                     | Intent::GrowClearWork { .. }
@@ -1294,9 +1402,6 @@ mod tests {
                     | Intent::ClosePosition { .. }
                     | Intent::InitPriceGrid { .. }
                     | Intent::InitTerms { .. }
-                    | Intent::Endow { .. }
-                    | Intent::RedeemExternal { .. }
-                    | Intent::WithdrawCash { .. }
             )
                 && (!matches!(intent, Intent::PlaceOrder { .. })
                     || capabilities::legacy_intent_tag_enabled(7))

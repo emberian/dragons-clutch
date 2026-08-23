@@ -18,6 +18,8 @@
     feature = "non-production-legacy-general-v3-hostile-decode"
 ))]
 compile_error!("the withdrawn General V3 hostile decoder is host-only");
+#[cfg(all(target_os = "solana", test))]
+compile_error!("withdrawn General V3 test decoders are host-only");
 
 #[cfg(not(any(
     feature = "profile-full",
@@ -5522,12 +5524,7 @@ impl Intent {
     const fn is_withdrawn_general_v3(&self) -> bool {
         matches!(
             self,
-            Self::CreateMarket { .. }
-                | Self::Split { .. }
-                | Self::Merge { .. }
-                | Self::Materialize { .. }
-                | Self::Dematerialize { .. }
-                | Self::CancelOrder { .. }
+            Self::CreateMarket { .. } | Self::CancelOrder { .. }
                 | Self::SettlePage { .. }
                 | Self::InitClearWork { .. }
                 | Self::GrowClearWork { .. }
@@ -5553,9 +5550,6 @@ impl Intent {
                 | Self::ClosePosition { .. }
                 | Self::InitPriceGrid { .. }
                 | Self::InitTerms { .. }
-                | Self::Endow { .. }
-                | Self::RedeemExternal { .. }
-                | Self::WithdrawCash { .. }
         )
     }
 
@@ -5645,15 +5639,20 @@ impl Intent {
     /// Validate and encode into a caller-provided buffer.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
         #[cfg(not(feature = "non-production-legacy-general-v3-hostile-decode"))]
-        if !cfg!(test)
-            && (self.is_withdrawn_general_v3()
-                || (matches!(self, Self::PlaceOrder { .. })
-                    && !cfg!(any(
-                        feature = "profile-full",
-                        feature = "profile-direct-v3-source-v2-point"
-                    ))))
         {
-            return Err(CodecError::WrongTag);
+            if self.is_withdrawn_general_v3()
+                && !cfg!(all(test, feature = "profile-full"))
+            {
+                return Err(CodecError::WrongTag);
+            }
+            if matches!(self, Self::PlaceOrder { .. } | Self::InitOrderPage { .. })
+                && !cfg!(any(
+                    feature = "profile-full",
+                    feature = "profile-direct-v3-source-v2-point"
+                ))
+            {
+                return Err(CodecError::WrongTag);
+            }
         }
         if out.len() < self.encoded_len() {
             return Err(CodecError::OutputTooSmall);
@@ -6509,10 +6508,6 @@ impl Intent {
                     feed,
                 })
             }
-            #[cfg(any(
-                feature = "non-production-legacy-general-v3-hostile-decode",
-                all(test, feature = "profile-full")
-            ))]
             SPLIT_TAG | MERGE_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6537,10 +6532,6 @@ impl Intent {
                     }
                 })
             }
-            #[cfg(any(
-                feature = "non-production-legacy-general-v3-hostile-decode",
-                all(test, feature = "profile-full")
-            ))]
             MATERIALIZE_TAG | DEMATERIALIZE_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6572,10 +6563,6 @@ impl Intent {
                     }
                 })
             }
-            #[cfg(any(
-                feature = "non-production-legacy-general-v3-hostile-decode",
-                all(test, feature = "profile-full")
-            ))]
             REDEEM_EXTERNAL_TAG => {
                 let market = r.hash()?;
                 let claimant = r.hash()?;
@@ -6879,10 +6866,6 @@ impl Intent {
                     page_count,
                 })
             }
-            #[cfg(any(
-                feature = "non-production-legacy-general-v3-hostile-decode",
-                all(test, feature = "profile-full")
-            ))]
             ENDOW_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -6899,10 +6882,6 @@ impl Intent {
                     amount,
                 })
             }
-            #[cfg(any(
-                feature = "non-production-legacy-general-v3-hostile-decode",
-                all(test, feature = "profile-full")
-            ))]
             WITHDRAW_CASH_TAG => {
                 let market = r.hash()?;
                 let owner = r.hash()?;
@@ -12111,6 +12090,11 @@ mod tests {
         );
     }
 
+    #[cfg(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "non-production-legacy-general-v3-hostile-decode"
+    ))]
     #[test]
     fn placement_intents_carry_either_order_family_and_only_an_order() {
         let market = h(1);
@@ -12206,6 +12190,37 @@ mod tests {
         let n = single_placement.encode(&mut b).unwrap();
         assert_eq!(Intent::decode(&b[..n - 1]), Err(CodecError::Truncated));
         assert_eq!(Intent::decode(&b[..n + 1]), Err(CodecError::TrailingBytes));
+    }
+
+    #[cfg(all(
+        feature = "profile-general-source-v2-point",
+        not(feature = "non-production-legacy-general-v3-hostile-decode")
+    ))]
+    #[test]
+    fn direct_shared_placement_and_page_creation_do_not_encode_in_general_profile() {
+        let market = h(1);
+        let epoch = canonical_epoch_id(market, 4);
+        let mut bytes = [0u8; MAX_INTENT_BYTES];
+        assert_eq!(
+            Intent::PlaceOrder {
+                market,
+                epoch,
+                max_fee_atoms: 0,
+                slot: single(1),
+            }
+            .encode(&mut bytes),
+            Err(CodecError::WrongTag),
+        );
+        assert_eq!(
+            Intent::InitOrderPage {
+                market,
+                epoch,
+                page_index: 0,
+                page_count: 1,
+            }
+            .encode(&mut bytes),
+            Err(CodecError::WrongTag),
+        );
     }
 
     #[cfg(any(feature = "non-production-legacy-general-v3-hostile-decode", all(test, feature = "profile-full")))]
