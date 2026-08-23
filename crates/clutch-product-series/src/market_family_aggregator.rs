@@ -752,6 +752,18 @@ impl MarketFamilyAggregatorV1 {
         Ok((next, projection))
     }
 
+    /// Re-derive the exhaustive projection from an already-terminal aggregator.
+    ///
+    /// This is structural only; an adapter must authenticate the enclosing
+    /// Product root account before treating the projection as authority.
+    pub fn terminal_projection(&self) -> Result<MarketFamilyAggregatorTerminalProjectionV1> {
+        self.validate()?;
+        if self.phase != MarketFamilyAggregatorPhaseV1::Terminal {
+            return Err(Error::SeriesNotClosed);
+        }
+        MarketFamilyAggregatorTerminalProjectionV1::derive(self, self.exhaustive_summaries()?)
+    }
+
     /// Derive one typed exhaustive summary for each canonical family.
     pub fn exhaustive_summaries(
         &self,
