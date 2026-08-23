@@ -512,7 +512,9 @@ impl SeriesFundingStateV1 {
             lamport_principal_refund: funding_terms.lamport_principal_refund,
             collateral_principal_refund_token_account: funding_terms
                 .collateral_principal_refund_token_account,
-            neutral_sink: funding_terms.neutral_sink,
+            neutral_collateral_disposition_token_account: funding_terms
+                .neutral_collateral_disposition_token_account,
+            neutral_lamport_sink: funding_terms.neutral_lamport_sink,
             refundable_principal,
             donation_residue,
         };
@@ -584,8 +586,10 @@ pub struct SeriesFundingTerminalProjectionV1 {
     pub lamport_principal_refund: ContentId,
     /// Destination token account for refundable collateral principal.
     pub collateral_principal_refund_token_account: ContentId,
-    /// Neutral destination for unowned donation residue.
-    pub neutral_sink: ContentId,
+    /// Receive-only token account for unowned collateral donation residue.
+    pub neutral_collateral_disposition_token_account: ContentId,
+    /// System-owned destination for unowned lamport donation residue.
+    pub neutral_lamport_sink: ContentId,
     /// Unspent payer principal in exact component order.
     pub refundable_principal: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT],
     /// Unsolicited residue in exact component order.
@@ -834,9 +838,10 @@ mod tests {
             series_plan_id,
             lamport_principal_refund: ContentId::from_bytes([10; 32]),
             collateral_principal_refund_token_account: ContentId::from_bytes([11; 32]),
-            neutral_sink: ContentId::from_bytes([12; 32]),
-            collateral_mint: ContentId::from_bytes([13; 32]),
-            token_program: ContentId::from_bytes([14; 32]),
+            neutral_collateral_disposition_token_account: ContentId::from_bytes([12; 32]),
+            neutral_lamport_sink: ContentId::from_bytes([13; 32]),
+            collateral_mint: ContentId::from_bytes([14; 32]),
+            token_program: ContentId::from_bytes([15; 32]),
         }
     }
 

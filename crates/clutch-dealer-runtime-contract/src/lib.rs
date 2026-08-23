@@ -25,6 +25,7 @@ mod pda;
 mod policy;
 mod pot;
 mod rent;
+mod replay;
 mod state;
 
 pub use budget::*;
@@ -34,6 +35,7 @@ pub use pda::*;
 pub use policy::*;
 pub use pot::*;
 pub use rent::*;
+pub use replay::*;
 pub use state::*;
 
 use sha2::{Digest, Sha256};
