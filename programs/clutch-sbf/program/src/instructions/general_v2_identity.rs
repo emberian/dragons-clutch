@@ -1,12 +1,12 @@
 //! Non-production General V2 empty-book candidate-identity laboratory.
 //!
-//! This module deliberately exposes only the nine extension actions admitted
+//! This module deliberately exposes only the eleven extension actions admitted
 //! by its mutually exclusive capability profile. It proves a signed,
 //! committing local-SBF identity lifecycle over one genesis-assisted Product
 //! market and an empty RelationV2 book. It creates no orders, positions,
 //! entitlements, receipts, pots, token accounts, trades, or settlement. The
-//! ninth action pays only the present-funded solver prize to the destination
-//! already selected by that lifecycle.
+//! additional actions pay only the present-funded solver prize and retire the
+//! completed Work/node accounts along their pure, counted close graph.
 
 use crate::accounts::{require, require_count, require_signer, Outcome};
 use crate::capabilities;
@@ -88,7 +88,13 @@ pub fn process(
         IdentityLabPayloadV1::FinalizeSelection(request) => {
             finalize_selection(program_id, accounts, request)
         }
+        IdentityLabPayloadV1::CleanupCandidate(request) => {
+            cleanup_candidate(program_id, accounts, request)
+        }
         IdentityLabPayloadV1::ClaimSolver(request) => claim_solver(program_id, accounts, request),
+        IdentityLabPayloadV1::CloseClearWork(request) => {
+            close_clear_work(program_id, accounts, request)
+        }
     }
 }
 
@@ -314,6 +320,97 @@ fn require_compartment_balance(
             .ok_or(ClutchError::Arithmetic)?;
     }
     require(account.lamports() == expected, ClutchError::MismatchedState)
+}
+
+fn require_canonical_absence(
+    account: &AccountInfo,
+    expected_key: &Pubkey,
+    writable: bool,
+) -> Outcome<()> {
+    require(account.key == expected_key, ClutchError::WrongPda)?;
+    require(
+        *account.owner == SYSTEM_PROGRAM_ID
+            && !account.executable
+            && account.data_len() == 0
+            && account.lamports() == 0,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        account.is_writable == writable,
+        if writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )
+}
+
+fn release_closed_account(account: &AccountInfo) -> Outcome<()> {
+    {
+        let mut lamports = account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        **lamports = 0;
+    }
+    account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    account.assign(&SYSTEM_PROGRAM_ID);
+    Ok(())
+}
+
+fn apply_cleanup_credits(
+    destinations: &[AccountInfo],
+    credits: &contract::CleanupCandidateCreditsV1,
+) -> Outcome<()> {
+    for credit in credits.as_slice() {
+        let mut match_index = None;
+        let mut index = 0usize;
+        while index < destinations.len() {
+            if id(destinations[index].key) == credit.destination {
+                match_index = Some(index);
+                break;
+            }
+            index += 1;
+        }
+        let destination = match_index.ok_or(ClutchError::MismatchedState)?;
+        let account = &destinations[destination];
+        let after = account
+            .lamports()
+            .checked_add(credit.lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        **account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? = after;
+    }
+    Ok(())
+}
+
+fn apply_work_close_credits(
+    destinations: &[AccountInfo],
+    credits: &contract::CloseClearWorkCreditsV1,
+) -> Outcome<()> {
+    for credit in credits.as_slice() {
+        let mut match_index = None;
+        let mut index = 0usize;
+        while index < destinations.len() {
+            if id(destinations[index].key) == credit.destination {
+                match_index = Some(index);
+                break;
+            }
+            index += 1;
+        }
+        let destination = match_index.ok_or(ClutchError::MismatchedState)?;
+        let account = &destinations[destination];
+        let after = account
+            .lamports()
+            .checked_add(credit.lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        **account
+            .try_borrow_mut_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))? = after;
+    }
+    Ok(())
 }
 
 fn transfer_from_signer<'a>(
@@ -1937,6 +2034,332 @@ fn finalize_selection(
     encode_account(&accounts[0], |out| post.epoch.encode(out))?;
     encode_account(&accounts[1], |out| post.window.encode(out))?;
     encode_account(&accounts[2], |out| post.budget.encode(out))
+}
+
+/// Close one completed bounded ClearWork and decrement its authoritative
+/// Epoch count. Principal, donation, and close reward remain disjoint until
+/// the pure owner returns exact destination-coalesced credits.
+#[inline(never)]
+fn close_clear_work(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    request: contract::EpochNodePayloadV1,
+) -> Outcome<()> {
+    require_count(accounts, 7)?;
+    require_role(
+        program_id,
+        &accounts[0],
+        true,
+        contract::GENERAL_EPOCH_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[1],
+        false,
+        contract::MARKET_BINDING_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[2],
+        false,
+        contract::ADMISSION_NODE_ACCOUNT_BYTES,
+    )?;
+    require(
+        accounts[3].owner == program_id,
+        ClutchError::WrongProgramOwner,
+    )?;
+    require_writable_destination(&accounts[3])?;
+    for destination in &accounts[4..=6] {
+        require_writable_destination(destination)?;
+    }
+
+    let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[0])?)?;
+    let binding = contract::MarketBindingV1::decode(&borrow_data(&accounts[1])?)?;
+    let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[2])?)?;
+    let work = contract::ClearWorkHeaderV2::decode_account(&borrow_data(&accounts[3])?)?;
+
+    let binding_pda =
+        seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
+    require(
+        *accounts[1].key == binding_pda.0 && binding.stored_bump == binding_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &accounts[1].key.to_bytes(), epoch.epoch_index);
+    require(
+        *accounts[0].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let node_pda =
+        seeds::general_v2_node_pda(program_id, &accounts[0].key.to_bytes(), node.ordinal);
+    require(
+        *accounts[2].key == node_pda.0 && node.stored_bump == node_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let work_pda = seeds::general_v2_work_pda(program_id, &accounts[2].key.to_bytes());
+    require(
+        *accounts[3].key == work_pda.0 && work.stored_bump == work_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[2].key.to_bytes());
+    require(
+        id(accounts[5].key) == work.rent.payer && id(accounts[6].key) == binding.neutral_sink,
+        ClutchError::MismatchedState,
+    )?;
+    let mut source_index = 0usize;
+    while source_index <= 3 {
+        let mut destination_index = 4usize;
+        while destination_index <= 6 {
+            require(
+                accounts[source_index].key != accounts[destination_index].key,
+                ClutchError::AccountAlias,
+            )?;
+            destination_index += 1;
+        }
+        source_index += 1;
+    }
+    require_compartment_balance(&accounts[3], work.rent, &[work.reward_remaining])?;
+
+    let post = contract::close_clear_work_poststate_v1(contract::CloseClearWorkTransitionV1 {
+        epoch_id: id(accounts[0].key),
+        node_id: id(accounts[2].key),
+        work_id: id(accounts[3].key),
+        derived_feed_id: id(&feed_pda.0),
+        keeper_destination_id: id(accounts[4].key),
+        payer_destination_id: id(accounts[5].key),
+        neutral_sink_id: id(accounts[6].key),
+        payload: request,
+        epoch: &epoch,
+        node: &node,
+        work: &work,
+        binding: &binding,
+    })?;
+    require(post.close_work, ClutchError::MismatchedState)?;
+    let mut credited_lamports = 0u64;
+    for credit in post.credits.as_slice() {
+        credited_lamports = credited_lamports
+            .checked_add(credit.lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+    }
+    require(
+        accounts[3].lamports() == credited_lamports,
+        ClutchError::MismatchedState,
+    )?;
+
+    release_closed_account(&accounts[3])?;
+    apply_work_close_credits(&accounts[4..=6], &post.credits)?;
+    encode_account(&accounts[0], |out| post.epoch.encode(out))
+}
+
+/// Unlink and close one terminal reverse-list head after every dependent Work
+/// account is canonically absent. Optional Feed and Selected accounts use the
+/// pure contract's exhaustive presence partition.
+#[inline(never)]
+fn cleanup_candidate(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    request: contract::CleanupCandidatePayloadV1,
+) -> Outcome<()> {
+    require_count(accounts, 13)?;
+    require_role(
+        program_id,
+        &accounts[0],
+        true,
+        contract::GENERAL_EPOCH_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[1],
+        true,
+        contract::WINDOW_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[2],
+        false,
+        contract::MARKET_BINDING_ACCOUNT_BYTES,
+    )?;
+    require_role(
+        program_id,
+        &accounts[3],
+        true,
+        contract::ADMISSION_NODE_ACCOUNT_BYTES,
+    )?;
+    require_writable_destination(&accounts[4])?;
+    for destination in &accounts[7..=11] {
+        require_writable_destination(destination)?;
+    }
+    let slot = read_clock_slot(&accounts[12])?;
+
+    let epoch = contract::GeneralEpochV6AccountV1::decode(&borrow_data(&accounts[0])?)?;
+    let window = contract::CandidateWindowV4AccountV1::decode(&borrow_data(&accounts[1])?)?;
+    let binding = contract::MarketBindingV1::decode(&borrow_data(&accounts[2])?)?;
+    let node = contract::AdmissionNodeV3AccountV1::decode(&borrow_data(&accounts[3])?)?;
+
+    let binding_pda =
+        seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
+    require(
+        *accounts[2].key == binding_pda.0 && binding.stored_bump == binding_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let epoch_pda =
+        seeds::general_v2_epoch_pda(program_id, &accounts[2].key.to_bytes(), epoch.epoch_index);
+    require(
+        *accounts[0].key == epoch_pda.0 && epoch.stored_bump == epoch_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let window_pda = seeds::general_v2_window_pda(program_id, &accounts[0].key.to_bytes());
+    require(
+        *accounts[1].key == window_pda.0 && window.stored_bump == window_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let node_pda =
+        seeds::general_v2_node_pda(program_id, &accounts[0].key.to_bytes(), node.ordinal);
+    require(
+        *accounts[3].key == node_pda.0 && node.stored_bump == node_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[3].key.to_bytes());
+    let work_pda = seeds::general_v2_work_pda(program_id, &accounts[3].key.to_bytes());
+    require_canonical_absence(&accounts[5], &work_pda.0, false)?;
+    let previous = if node.ordinal == 1 {
+        Id32::ZERO
+    } else {
+        id(&seeds::general_v2_node_pda(
+            program_id,
+            &accounts[0].key.to_bytes(),
+            node.ordinal.checked_sub(1).ok_or(ClutchError::Arithmetic)?,
+        )
+        .0)
+    };
+
+    let feed_account = if accounts[4].owner == program_id {
+        let feed =
+            contract::CandidateFeedHeaderV2::decode_account(&borrow_data(&accounts[4])?, true)?;
+        require(
+            *accounts[4].key == feed_pda.0 && feed.stored_bump == feed_pda.1,
+            ClutchError::WrongPda,
+        )?;
+        require_compartment_balance(&accounts[4], feed.rent, &[feed.close_reward_lamports])?;
+        Some(feed)
+    } else {
+        require_canonical_absence(&accounts[4], &feed_pda.0, true)?;
+        None
+    };
+    let selected_account = if request.selected_candidate.is_zero() {
+        require_system_program(&accounts[6])?;
+        None
+    } else {
+        require_role(
+            program_id,
+            &accounts[6],
+            false,
+            contract::SELECTED_CANDIDATE_ACCOUNT_BYTES,
+        )?;
+        let selected = contract::SelectedCandidateV1AccountV1::decode(&borrow_data(&accounts[6])?)?;
+        let selected_pda = seeds::general_v2_selected_pda(
+            program_id,
+            &accounts[0].key.to_bytes(),
+            &selected.settlement_candidate_id.bytes(),
+        );
+        require(
+            *accounts[6].key == selected_pda.0 && selected.stored_bump == selected_pda.1,
+            ClutchError::WrongPda,
+        )?;
+        Some(selected)
+    };
+    let selected_view =
+        selected_account
+            .as_ref()
+            .map(|selected| contract::AuthenticatedSelectedCandidateV1 {
+                artifact: id(accounts[6].key),
+                account: selected,
+            });
+
+    require(
+        id(accounts[7].key) != Id32::ZERO,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        id(accounts[8].key) == node.rent.payer
+            && id(accounts[9].key) == node.refund_destination
+            && id(accounts[10].key) == binding.neutral_sink,
+        ClutchError::MismatchedState,
+    )?;
+    if let Some(feed) = feed_account {
+        require(
+            id(accounts[11].key) == feed.rent.payer,
+            ClutchError::MismatchedState,
+        )?;
+    } else {
+        require(
+            accounts[11].key == accounts[8].key,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    let mut source_index = 0usize;
+    while source_index <= 6 {
+        let mut destination_index = 7usize;
+        while destination_index <= 11 {
+            require(
+                accounts[source_index].key != accounts[destination_index].key,
+                ClutchError::AccountAlias,
+            )?;
+            destination_index += 1;
+        }
+        source_index += 1;
+    }
+    require_compartment_balance(
+        &accounts[3],
+        node.rent,
+        &[node.bond_lamports, node.cleanup_reward],
+    )?;
+
+    let post = contract::cleanup_candidate_poststate_v1(contract::CleanupCandidateTransitionV1 {
+        epoch_id: id(accounts[0].key),
+        window_id: id(accounts[1].key),
+        market_binding_id: id(accounts[2].key),
+        derived_feed_id: id(&feed_pda.0),
+        derived_work_id: id(&work_pda.0),
+        authenticated_work: Id32::ZERO,
+        derived_previous_node: previous,
+        keeper_destination: id(accounts[7].key),
+        current_slot: slot,
+        payload: request,
+        epoch: &epoch,
+        window: &window,
+        node: &node,
+        binding: &binding,
+        feed: feed_account.as_ref(),
+        selected: selected_view,
+    })?;
+    require(post.close_node, ClutchError::MismatchedState)?;
+    let source_lamports = accounts[3]
+        .lamports()
+        .checked_add(if post.close_feed {
+            accounts[4].lamports()
+        } else {
+            0
+        })
+        .ok_or(ClutchError::Arithmetic)?;
+    let mut credited_lamports = 0u64;
+    for credit in post.credits.as_slice() {
+        credited_lamports = credited_lamports
+            .checked_add(credit.lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+    }
+    require(
+        source_lamports == credited_lamports,
+        ClutchError::MismatchedState,
+    )?;
+
+    if post.close_feed {
+        release_closed_account(&accounts[4])?;
+    }
+    release_closed_account(&accounts[3])?;
+    apply_cleanup_credits(&accounts[7..=11], &post.credits)?;
+    encode_account(&accounts[0], |out| post.epoch.encode(out))?;
+    encode_account(&accounts[1], |out| post.window.encode(out))
 }
 
 /// Claim the one selected solver prize. This action is permissionless: the

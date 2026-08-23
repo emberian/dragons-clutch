@@ -1,7 +1,11 @@
 # General V2 SBF vertical slice
 
-Status: implementation map synchronized to the frozen pure-contract snapshot;
-all General V2 runtime capabilities remain disabled.
+Status: source implementation in the isolated non-production profile. Actions
+2, 6, 7, 8, 9, 10, 14, 15, 20, 21, and 32 have strict payload decoders, pure
+poststate owners, SBF dispatch/account handlers, and fresh PDA helpers. Current
+production profiles still disable every General V2 action. A real SBF build
+and committing local-bank campaign have not yet been run for this source
+checkpoint, so this status is not execution evidence.
 
 This document defines the smallest honest current-head path from the pure
 General V2 contracts to a committing local-validator execution. The first
@@ -22,15 +26,14 @@ The General V2 extension family is centrally reserved at outer intent family
 tag 74 decimal (`0x4a`), family version 1. Its family-local actions are
 allocated at `1..=34`. Allocation does not authorize execution.
 
-Every current SBF profile has an empty General V2 extension capability table.
+Every production SBF profile has an empty General V2 extension capability table.
 The existing `profile-general-source-v2-point` is the legacy General V1
 program, not a General V2 successor. Adding V2 success paths under that label
 or its existing profile identity would change release semantics without
 changing release identity.
 
-The first success-capable build therefore needs a mutually exclusive feature
-and a freshly frozen profile identity. The recommended deliberately awkward
-name is:
+The first success-capable source build uses the mutually exclusive feature and
+fresh profile identity:
 
 ```text
 profile-non-production-general-v2-empty-book-identity-lab
@@ -55,6 +58,8 @@ the pinned layout dependency graph.
 
 | Semantic owner | Tag/version | Exact active length |
 |---|---:|---:|
+| `MarketRuntimeV3AccountV1` | `3/3` | 148 |
+| `GeneralEpochV6AccountV1` | `11/6` | 321 |
 | `ClearWorkV2` | `17/2` | `672 + 16*O + 8*N*O`, maximum 9,120 |
 | sealed `CandidateFeedV2` | `18/2` | `538 + 8*O + 8*N + 24*A + 13*S`, maximum 6,970 |
 | `CandidateWindowV4` | `24/4` | 565 |
@@ -87,8 +92,7 @@ constants in the standalone General crate describe matching codec bytes, not a
 second allocation authority; the eventual adapter must add an explicit parity
 gate against the central registry.
 
-Two further semantic accounts are required and must be centrally reserved
-before implementation:
+The first implementation checkpoint additionally froze and centrally reserved:
 
 - Market semantic tag `3`, fresh version `3`: a RelationV2-native mutable
   Market runtime/cursor that points to the immutable `MarketBindingV1` and
@@ -97,9 +101,7 @@ before implementation:
   General Epoch with full MarketInstanceV2-derived semantics, phase,
   generation, frozen order-set identity, and exhaustive child counts.
 
-The exact codecs and lengths for `3/3` and `11/6` must be designed, hostile-byte
-tested, and frozen before adding their central-ledger rows. The retirement
-Market V2 and Epoch V5 are not substitutes: Market V2 inherits the legacy
+The retirement Market V2 and Epoch V5 are not substitutes: Market V2 inherits the legacy
 lowered Market identity, while Epoch V5 composes a legacy General Epoch whose
 relation version is one. No adapter may reinterpret either as RelationV2.
 
@@ -342,8 +344,8 @@ cursor implied by its exact record count.
 The order below is part of each action contract. Every handler first checks the
 exact meta count, signer/writable/executable flags, owners, codec bytes,
 identities, PDAs, bumps, clocks, aliases, rent, and aggregate balances.
-These ordered lists are likewise the proposed adapter contract, not a claim
-that the current program accepts them.
+These ordered lists describe the current source handler contract. They do not
+claim that a built ELF or local-bank transaction has exercised it yet.
 
 ### 6.1 `InitEpoch`
 
@@ -355,13 +357,14 @@ that the current program accepts them.
 5. vacant Window PDA, writable
 6. vacant Budget PDA, writable
 7. authenticated NativeClaimBasis artifact, read-only and program-owned
-8. System program, read-only and executable
-9. Rent sysvar, read-only
-10. Clock sysvar, read-only
+8. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
+9. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
+10. System program, read-only and executable
+11. Rent sysvar, read-only
+12. Clock sysvar, read-only
 
 Authenticate the full MarketInstanceV2 join through the MarketBinding PDA and
-require the exact next Epoch index. The missing MarketRuntime codec and seed
-are a prerequisite for this handler. Derive the four frozen child PDAs,
+require the exact next Epoch index. Derive the four frozen child PDAs,
 calculate full rent principals without
 discounting hostile prefunds, route prefunds into donation compartments,
 prepay the fixed 789-byte SelectedCandidate rent principal into the Budget's
@@ -489,8 +492,10 @@ count atomically. Do not reinstate the legacy roughly 50 KiB staged-grow path.
 5. AdmissionNode, writable
 6. sealed CandidateFeed, read-only
 7. authenticated NativeClaimBasis artifact, read-only
-8. ClearWork, writable
-9. Clock sysvar, read-only
+8. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
+9. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
+10. ClearWork, writable
+11. Clock sysvar, read-only
 
 Only `[S,V)` admits ordinary completion. The identity-only lab uses the
 bounded zero-order/zero-slice RelationV2 path plus the exact PriceMeasure V3
@@ -533,9 +538,63 @@ SelectedCandidate pointer in the Window. Then pay the finalization reward and
 transition the Epoch to `CandidateSelected`.
 
 Finalization copies the authenticated solver reward destination from the node
-but does not pay it. The unique solver prize remains present-funded in Budget.
-Local action 21 `ClaimSolver` is its separately authenticated one-way claim and
-is disabled in this lab.
+but does not pay it. The unique solver prize remains present-funded in Budget
+until local action 21 consumes it.
+
+### 6.9 `ClaimSolver`
+
+0. Epoch, read-only
+1. Window, read-only
+2. Budget, writable
+3. SelectedCandidate, read-only
+4. the SelectedCandidate's solver reward destination, writable
+
+The claim is permissionless. It authenticates the finalized counted graph,
+every PDA and generation join, the Window's selected pointer, and the exact
+immutable destination copied into SelectedCandidate. It consumes only the
+Budget's present-funded solver compartment and marks its one-way state paid.
+No caller signature can redirect the prize.
+
+### 6.10 `CloseClearWork`
+
+0. Epoch, writable
+1. MarketBinding, read-only
+2. terminal AdmissionNode, read-only
+3. terminal ClearWork, writable
+4. keeper reward destination, writable
+5. recorded Work-rent payer, writable
+6. immutable neutral sink, writable
+
+Only the bounded zero-order/zero-slice terminal Work owned by a verified-valid
+or checked-refused node can close. The pure owner authenticates every graph,
+generation, policy, reward, and active-width join, decrements Epoch's counted
+Work, and returns destination-coalesced rent-principal, donation, and close-
+reward credits before the adapter releases the account.
+
+### 6.11 `CleanupCandidate`
+
+0. Epoch, writable
+1. Window, writable
+2. MarketBinding, read-only
+3. reverse-head AdmissionNode, writable
+4. derived sealed Feed, writable, or canonical absent account
+5. derived ClearWork, canonical absent account
+6. SelectedCandidate, read-only, or System-program sentinel
+7. keeper reward destination, writable
+8. recorded Node-rent payer, writable
+9. recorded candidate refund destination, writable
+10. immutable neutral sink, writable
+11. recorded Feed-rent payer, writable; aliases node payer when Feed is absent
+12. Clock sysvar, read-only
+
+Cleanup refuses the pre-finalization working best and any node with live Work.
+For the selected source it closes only Node and retains Feed under the counted
+SelectedCandidate. For a non-selected terminal head it closes Node plus Feed,
+or Node after canonical Feed absence. It atomically decrements the Epoch and
+Window live counts, advances the reverse head, increments the closed count, and
+applies only the pure owner's destination-coalesced principal, donation,
+keeper, bond-refund, invalidity, and abandonment credits. Expired-unverified
+cleanup remains disabled because its residual Work economics are not frozen.
 
 Before finalization, Window exclusively owns the working best node, final ID,
 rank, and ordinal. Afterwards, SelectedCandidate is the single downstream
@@ -547,7 +606,7 @@ token transfer is created by the identity-only lab.
 
 ## 7. Capability boundary
 
-The identity-only lab enables exactly these local actions:
+The lab enables exactly these local actions:
 
 ```text
 2  InitEpoch
@@ -558,6 +617,9 @@ The identity-only lab enables exactly these local actions:
 10 InitClearWork
 14 CompleteCandidateVerification
 15 FinalizeSelection
+20 CleanupCandidate
+21 ClaimSolver
+32 CloseClearWork
 ```
 
 All other General V2 actions remain disabled. In particular:
@@ -570,14 +632,13 @@ All other General V2 actions remain disabled. In particular:
   work fits under the one-creation ceiling;
 - actions 12-13 are not needed by the bounded empty-book lab; generic streaming
   RelationV2 progress needs its own contract before activation;
-- actions 16-34 remain disabled, including expiry, cleanup, claims,
-  entitlements, settlement, and retirement.
+- actions 16-19, 22-31, and 33-34 remain disabled, including expiry,
+  entitlements, settlement, selected-artifact retirement, and root retirement.
 
-This lab therefore leaves the source node, retained feed, work,
+This lab can close completed Work and unlink terminal source nodes while
+retaining the selected Feed. It still leaves the retained Feed,
 SelectedCandidate, Window, Budget, EconomicDomain, and Epoch live. That is
-acceptable only under the explicit non-production label. The architecture
-permits the source node to close after SelectedCandidate owns the retained Feed
-and Work is absent. The retained Feed and SelectedCandidate may close only
+acceptable only under the explicit non-production label. The retained Feed and SelectedCandidate may close only
 after every selected slice has materialized into counted settlement state and
 settlement retirement authenticates the terminal. Those cleanup and settlement
 actions remain disabled in this lab.

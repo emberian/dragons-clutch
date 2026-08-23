@@ -1429,6 +1429,338 @@ pub fn finalize_selection_poststate_v1(
     })
 }
 
+/// Maximum number of distinct CleanupCandidate credit destinations.
+pub const MAX_CLEANUP_CREDITS_V1: usize = 5;
+
+/// One exact lamport credit authorized by candidate cleanup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CleanupCandidateCreditV1 {
+    /// Authenticated destination account identity.
+    pub destination: Id32,
+    /// Exact lamports credited to this destination.
+    pub lamports: u64,
+}
+
+impl CleanupCandidateCreditV1 {
+    const ZERO: Self = Self {
+        destination: Id32::ZERO,
+        lamports: 0,
+    };
+}
+
+/// Fixed-capacity, destination-coalesced cleanup credits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CleanupCandidateCreditsV1 {
+    entries: [CleanupCandidateCreditV1; MAX_CLEANUP_CREDITS_V1],
+    len: u8,
+}
+
+impl CleanupCandidateCreditsV1 {
+    /// Number of distinct live destinations.
+    pub const fn len(self) -> u8 {
+        self.len
+    }
+
+    /// Whether no lamports are authorized.
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Borrow the canonical first-seen destination order without padding.
+    pub fn as_slice(&self) -> &[CleanupCandidateCreditV1] {
+        &self.entries[..usize::from(self.len)]
+    }
+
+    fn new() -> Self {
+        Self {
+            entries: [CleanupCandidateCreditV1::ZERO; MAX_CLEANUP_CREDITS_V1],
+            len: 0,
+        }
+    }
+
+    fn add(&mut self, destination: Id32, lamports: u64) -> Result<(), CodecError> {
+        require_live(destination)?;
+        if lamports == 0 {
+            return Ok(());
+        }
+        let mut index = 0usize;
+        while index < usize::from(self.len) {
+            if self.entries[index].destination == destination {
+                self.entries[index].lamports = self.entries[index]
+                    .lamports
+                    .checked_add(lamports)
+                    .ok_or(CodecError::ArithmeticOverflow)?;
+                return Ok(());
+            }
+            index += 1;
+        }
+        if index == MAX_CLEANUP_CREDITS_V1 {
+            return Err(CodecError::InvalidCount);
+        }
+        self.entries[index] = CleanupCandidateCreditV1 {
+            destination,
+            lamports,
+        };
+        self.len = self
+            .len
+            .checked_add(1)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        Ok(())
+    }
+}
+
+/// Authenticated action-20 inputs for reverse-head candidate cleanup.
+///
+/// `feed` is `None` only after the adapter authenticates canonical absence at
+/// `derived_feed_id`. `authenticated_work` is zero under the same convention;
+/// any live Work makes cleanup refuse. A zero selected identity in the payload
+/// requires `selected == None`; otherwise the supplied artifact must match.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CleanupCandidateTransitionV1<'a> {
+    /// Actual Epoch PDA.
+    pub epoch_id: Id32,
+    /// Actual Window PDA.
+    pub window_id: Id32,
+    /// Actual MarketBinding PDA.
+    pub market_binding_id: Id32,
+    /// Canonical Feed PDA derived from the node, present or absent.
+    pub derived_feed_id: Id32,
+    /// Canonical Work PDA derived from the node, required absent.
+    pub derived_work_id: Id32,
+    /// Authenticated Work identity, or zero after canonical absence proof.
+    pub authenticated_work: Id32,
+    /// Canonical predecessor derived from ordinal minus one, or zero.
+    pub derived_previous_node: Id32,
+    /// Actual keeper reward destination.
+    pub keeper_destination: Id32,
+    /// Current Clock slot.
+    pub current_slot: u64,
+    /// Strict action-20 payload.
+    pub payload: CleanupCandidatePayloadV1,
+    /// Authoritative Epoch prestate.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Authoritative Window prestate.
+    pub window: &'a CandidateWindowV4AccountV1,
+    /// Terminal reverse-list-head node.
+    pub node: &'a AdmissionNodeV3AccountV1,
+    /// Immutable funding and penalty policy.
+    pub binding: &'a MarketBindingV1,
+    /// Authenticated sealed Feed, or canonical absence.
+    pub feed: Option<&'a CandidateFeedHeaderV2>,
+    /// Authenticated selected artifact exactly when the payload names one.
+    pub selected: Option<AuthenticatedSelectedCandidateV1<'a>>,
+}
+
+/// Exact action-20 poststates, closures, and coalesced credits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CleanupCandidatePoststateV1 {
+    /// Epoch after atomically decrementing its AdmissionNode count.
+    pub epoch: GeneralEpochV6AccountV1,
+    /// Window after atomically unlinking the reverse-list head.
+    pub window: CandidateWindowV4AccountV1,
+    /// Exhaustive cleanup disposition chosen by the shared classifier.
+    pub disposition: CandidateNodeCleanupDispositionV1,
+    /// AdmissionNode must close on every successful result.
+    pub close_node: bool,
+    /// Sealed Feed closes atomically only for a non-selected present feed.
+    pub close_feed: bool,
+    /// Sealed Feed remains under the counted SelectedCandidate authority.
+    pub retain_feed: bool,
+    /// Exact credits, already coalesced by destination.
+    pub credits: CleanupCandidateCreditsV1,
+}
+
+/// Close one terminal reverse-list-head candidate bundle without guessing any
+/// ExpiredUnverified work, refund, or penalty semantics.
+pub fn cleanup_candidate_poststate_v1(
+    request: CleanupCandidateTransitionV1<'_>,
+) -> Result<CleanupCandidatePoststateV1, CodecError> {
+    request.payload.validate()?;
+    request.epoch.validate()?;
+    request.window.validate()?;
+    request.node.validate()?;
+    request.binding.validate()?;
+    for id in [
+        request.epoch_id,
+        request.window_id,
+        request.market_binding_id,
+        request.derived_feed_id,
+        request.derived_work_id,
+        request.keeper_destination,
+    ] {
+        require_live(id)?;
+    }
+    if request.node.status == AdmissionNodeStatusV1::ExpiredUnverified {
+        return Err(CodecError::InvalidState);
+    }
+    if request.payload.epoch != request.epoch_id
+        || request.payload.node != request.node.node
+        || request.epoch.window != request.window_id
+        || request.epoch.market_binding != request.market_binding_id
+        || request.epoch.candidate_bundle_count == 0
+        || request.epoch.candidate_bundle_count
+            != request
+                .window
+                .live_node_count
+                .try_into()
+                .map_err(|_| CodecError::InvalidCount)?
+        || request.window.epoch != request.epoch_id
+        || request.window.market != request.epoch.market_runtime
+        || request.window.epoch_generation != request.epoch.generation
+        || request.node.epoch != request.epoch_id
+        || request.node.market != request.epoch.market_runtime
+        || request.node.epoch_generation != request.epoch.generation
+        || request.binding.market != request.epoch.market_runtime
+        || request.binding.admission_policy_id != request.node.admission_policy_id
+        || request.binding.relation_policy_id != request.node.relation_policy_id
+        || request.binding.score_policy_id != request.node.score_policy_id
+        || request.node.bond_lamports != request.binding.bond_lamports
+        || request.node.cleanup_reward != request.binding.node_cleanup_reward
+        || request.node.work_escrow_lamports != 0
+        || request.authenticated_work == request.derived_work_id
+        || !request.authenticated_work.is_zero()
+        || request.epoch_id == request.window_id
+        || request.node.node == request.derived_feed_id
+        || request.node.node == request.derived_work_id
+        || request.derived_feed_id == request.derived_work_id
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    match (
+        request.payload.selected_candidate.is_zero(),
+        request.selected,
+    ) {
+        (true, None) => {}
+        (false, Some(selected)) if selected.artifact == request.payload.selected_candidate => {}
+        _ => return Err(CodecError::MismatchedBinding),
+    }
+    let authenticated_feed = if let Some(feed) = request.feed {
+        feed.validate(true)?;
+        if feed.epoch != request.epoch_id
+            || feed.node != request.node.node
+            || feed.market != request.epoch.market_runtime
+            || feed.epoch_generation != request.epoch.generation
+            || feed.relation_policy_id != request.node.relation_policy_id
+            || feed.settlement_candidate_id != request.node.settlement_candidate_id
+            || feed.base_relation_candidate_id != request.node.base_relation_candidate_id
+            || feed.settlement_witness_digest != request.node.settlement_witness_digest
+            || feed.close_reward_lamports != request.binding.feed_close_reward
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        request.derived_feed_id
+    } else {
+        Id32::ZERO
+    };
+    let decision = CandidateNodeCleanupViewV1 {
+        node: request.node,
+        window_identity: request.window_id,
+        window: request.window,
+        epoch_generation: request.epoch.generation,
+        epoch_candidate_bundle_count: request.epoch.candidate_bundle_count,
+        epoch_selected_candidate_count: request.epoch.selected_candidate_count,
+        current_slot: request.current_slot,
+        derived_feed: request.derived_feed_id,
+        derived_previous_node: request.derived_previous_node,
+        authenticated_feed,
+        authenticated_work: request.authenticated_work,
+        selected: request.selected,
+    }
+    .classify()?;
+    let (close_feed, retain_feed) = match decision.disposition {
+        CandidateNodeCleanupDispositionV1::ProtectedWorkingBest => {
+            return Err(CodecError::InvalidState);
+        }
+        CandidateNodeCleanupDispositionV1::CloseNodeRetainingSelectedFeed => (false, true),
+        CandidateNodeCleanupDispositionV1::CloseNodeAndFeed => (true, false),
+        CandidateNodeCleanupDispositionV1::CloseNodeAfterFeedAbsent => (false, false),
+    };
+    if close_feed != request.feed.is_some()
+        || (retain_feed && request.feed.is_none())
+        || (!close_feed && !retain_feed && request.feed.is_some())
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let epoch = GeneralEpochV6AccountV1 {
+        candidate_bundle_count: decision.epoch_candidate_bundle_count_after,
+        ..*request.epoch
+    };
+    let window = CandidateWindowV4AccountV1 {
+        live_node_count: decision.window_live_node_count_after,
+        closed_node_count: decision.window_closed_node_count_after,
+        admission_head: decision.window_head_after,
+        ..*request.window
+    };
+    epoch.validate()?;
+    window.validate()?;
+
+    let mut credits = CleanupCandidateCreditsV1::new();
+    credits.add(
+        request.node.rent.payer,
+        request.node.rent.refundable_principal,
+    )?;
+    credits.add(
+        request.binding.neutral_sink,
+        request.node.rent.donation_floor,
+    )?;
+    credits.add(request.keeper_destination, request.node.cleanup_reward)?;
+    match request.node.status {
+        AdmissionNodeStatusV1::VerifiedValid => {
+            credits.add(request.node.refund_destination, request.node.bond_lamports)?;
+        }
+        AdmissionNodeStatusV1::VerifiedRefused => {
+            let refund = request
+                .node
+                .bond_lamports
+                .checked_sub(request.binding.invalidity_penalty)
+                .ok_or(CodecError::InvalidState)?;
+            credits.add(
+                request.binding.neutral_sink,
+                request.binding.invalidity_penalty,
+            )?;
+            credits.add(request.node.refund_destination, refund)?;
+        }
+        AdmissionNodeStatusV1::ExpiredCommitment => {
+            let refund = request
+                .node
+                .bond_lamports
+                .checked_sub(request.binding.abandonment_penalty)
+                .ok_or(CodecError::InvalidState)?;
+            credits.add(
+                request.binding.neutral_sink,
+                request.binding.abandonment_penalty,
+            )?;
+            credits.add(request.node.refund_destination, refund)?;
+        }
+        AdmissionNodeStatusV1::ExpiredUnverified => return Err(CodecError::InvalidState),
+        AdmissionNodeStatusV1::Committed | AdmissionNodeStatusV1::Revealed => {
+            return Err(CodecError::InvalidState);
+        }
+    }
+    if close_feed {
+        let feed = request.feed.ok_or(CodecError::MismatchedBinding)?;
+        credits.add(feed.rent.payer, feed.rent.refundable_principal)?;
+        credits.add(request.binding.neutral_sink, feed.rent.donation_floor)?;
+        credits.add(request.keeper_destination, feed.close_reward_lamports)?;
+    }
+    for credit in credits.as_slice() {
+        if credit.destination == request.node.node
+            || (close_feed && credit.destination == request.derived_feed_id)
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+    }
+    Ok(CleanupCandidatePoststateV1 {
+        epoch,
+        window,
+        disposition: decision.disposition,
+        close_node: true,
+        close_feed,
+        retain_feed,
+        credits,
+    })
+}
+
 /// Authenticated action-21 inputs for the unique solver-prize claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimSolverTransitionV1<'a> {
@@ -1514,6 +1846,229 @@ pub fn claim_solver_poststate_v1(
     Ok(ClaimSolverPoststateV1 {
         budget,
         solver_prize: request.budget.solver_initial,
+    })
+}
+
+/// Maximum number of distinct CloseClearWork credit destinations.
+pub const MAX_CLOSE_CLEAR_WORK_CREDITS_V1: usize = 3;
+
+/// One exact lamport credit authorized by terminal Work closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseClearWorkCreditV1 {
+    /// Authenticated destination account identity.
+    pub destination: Id32,
+    /// Exact lamports credited to this destination.
+    pub lamports: u64,
+}
+
+impl CloseClearWorkCreditV1 {
+    const ZERO: Self = Self {
+        destination: Id32::ZERO,
+        lamports: 0,
+    };
+}
+
+/// Fixed-capacity, destination-coalesced CloseClearWork credits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseClearWorkCreditsV1 {
+    entries: [CloseClearWorkCreditV1; MAX_CLOSE_CLEAR_WORK_CREDITS_V1],
+    len: u8,
+}
+
+impl CloseClearWorkCreditsV1 {
+    /// Number of distinct live destinations.
+    pub const fn len(self) -> u8 {
+        self.len
+    }
+
+    /// Whether no lamports are authorized.
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Borrow the canonical first-seen destination order without padding.
+    pub fn as_slice(&self) -> &[CloseClearWorkCreditV1] {
+        &self.entries[..usize::from(self.len)]
+    }
+
+    fn new() -> Self {
+        Self {
+            entries: [CloseClearWorkCreditV1::ZERO; MAX_CLOSE_CLEAR_WORK_CREDITS_V1],
+            len: 0,
+        }
+    }
+
+    fn add(&mut self, destination: Id32, lamports: u64) -> Result<(), CodecError> {
+        require_live(destination)?;
+        if lamports == 0 {
+            return Ok(());
+        }
+        let mut index = 0usize;
+        while index < usize::from(self.len) {
+            if self.entries[index].destination == destination {
+                self.entries[index].lamports = self.entries[index]
+                    .lamports
+                    .checked_add(lamports)
+                    .ok_or(CodecError::ArithmeticOverflow)?;
+                return Ok(());
+            }
+            index += 1;
+        }
+        if index == MAX_CLOSE_CLEAR_WORK_CREDITS_V1 {
+            return Err(CodecError::InvalidCount);
+        }
+        self.entries[index] = CloseClearWorkCreditV1 {
+            destination,
+            lamports,
+        };
+        self.len = self
+            .len
+            .checked_add(1)
+            .ok_or(CodecError::ArithmeticOverflow)?;
+        Ok(())
+    }
+}
+
+/// Authenticated action-32 inputs for bounded terminal ClearWork closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseClearWorkTransitionV1<'a> {
+    /// Actual parent Epoch PDA.
+    pub epoch_id: Id32,
+    /// Actual terminal AdmissionNode PDA.
+    pub node_id: Id32,
+    /// Actual ClearWork PDA being closed.
+    pub work_id: Id32,
+    /// Canonical Feed PDA derived from the same AdmissionNode.
+    pub derived_feed_id: Id32,
+    /// Actual permissionless keeper reward destination.
+    pub keeper_destination_id: Id32,
+    /// Actual recorded Work-rent payer destination.
+    pub payer_destination_id: Id32,
+    /// Actual immutable neutral-sink destination.
+    pub neutral_sink_id: Id32,
+    /// Strict action-32 payload, shared with other Epoch/node actions.
+    pub payload: EpochNodePayloadV1,
+    /// Frozen or finalized Epoch prestate.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Verified-valid or checked-refused node prestate.
+    pub node: &'a AdmissionNodeV3AccountV1,
+    /// Terminal bounded ClearWork prestate.
+    pub work: &'a ClearWorkHeaderV2,
+    /// Immutable policy and funding owner.
+    pub binding: &'a MarketBindingV1,
+}
+
+/// Exact action-32 poststate, close authorization, and coalesced credits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseClearWorkPoststateV1 {
+    /// Epoch after atomically decrementing its authoritative Work count.
+    pub epoch: GeneralEpochV6AccountV1,
+    /// ClearWork must close on every successful result.
+    pub close_work: bool,
+    /// Exact Work-rent, donation-floor, and close-reward credits.
+    pub credits: CloseClearWorkCreditsV1,
+}
+
+/// Close one terminal bounded empty-book Work without inferring expiry paths.
+pub fn close_clear_work_poststate_v1(
+    request: CloseClearWorkTransitionV1<'_>,
+) -> Result<CloseClearWorkPoststateV1, CodecError> {
+    request.epoch.validate()?;
+    request.node.validate()?;
+    request.work.validate()?;
+    request.binding.validate()?;
+    for id in [
+        request.epoch_id,
+        request.node_id,
+        request.work_id,
+        request.derived_feed_id,
+        request.keeper_destination_id,
+        request.payer_destination_id,
+        request.neutral_sink_id,
+        request.payload.epoch,
+        request.payload.node,
+    ] {
+        require_live(id)?;
+    }
+    if !matches!(
+        request.epoch.phase,
+        GeneralEpochPhaseV1::Frozen | GeneralEpochPhaseV1::Finalized
+    ) || request.epoch.work_count == 0
+        || !matches!(
+            request.node.status,
+            AdmissionNodeStatusV1::VerifiedValid | AdmissionNodeStatusV1::VerifiedRefused
+        )
+        || request.work.phase != 3
+        || request.work.order_count != 0
+        || request.work.slice_count != 0
+        || request.work.order_cursor != 0
+        || request.work.slice_cursor != 0
+        || request.payload.epoch != request.epoch_id
+        || request.payload.node != request.node_id
+        || request.node.node != request.node_id
+        || request.node.epoch != request.epoch_id
+        || request.work.epoch != request.epoch_id
+        || request.work.node != request.node_id
+        || request.work.feed != request.derived_feed_id
+        || request.node.market != request.epoch.market_runtime
+        || request.work.market != request.epoch.market_runtime
+        || request.node.epoch_generation != request.epoch.generation
+        || request.work.epoch_generation != request.epoch.generation
+        || request.work.order_set != request.epoch.order_set
+        || request.work.candidate_bundle_digest != request.node.candidate_bundle_digest
+        || request.work.settlement_candidate_id != request.node.settlement_candidate_id
+        || request.work.base_relation_candidate_id != request.node.base_relation_candidate_id
+        || request.work.relation_policy_id != request.node.relation_policy_id
+        || request.work.score_policy_id != request.node.score_policy_id
+        || request.work.candidate_kind != request.node.candidate_kind
+        || request.binding.market != request.epoch.market_runtime
+        || request.binding.relation_policy_id != request.work.relation_policy_id
+        || request.binding.score_policy_id != request.work.score_policy_id
+        || request.binding.price_measure_policy_v1_id != request.work.price_measure_policy_v1_id
+        || request.binding.native_claim_basis_id != request.work.native_claim_basis_id
+        || request.node.work_escrow_lamports != 0
+        || request.work.reward_remaining != request.binding.work_close_reward
+        || request.work.rent.payer != request.payer_destination_id
+        || request.binding.neutral_sink != request.neutral_sink_id
+        || request.work_id == request.epoch_id
+        || request.work_id == request.node_id
+        || request.work_id == request.derived_feed_id
+        || request.derived_feed_id == request.epoch_id
+        || request.derived_feed_id == request.node_id
+        || request.work_id == request.keeper_destination_id
+        || request.work_id == request.payer_destination_id
+        || request.work_id == request.neutral_sink_id
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let expected_earned = request
+        .binding
+        .price_check_reward
+        .checked_add(request.binding.completion_reward)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if request.work.reward_earned != expected_earned {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let epoch = GeneralEpochV6AccountV1 {
+        work_count: request
+            .epoch
+            .work_count
+            .checked_sub(1)
+            .ok_or(CodecError::ArithmeticOverflow)?,
+        ..*request.epoch
+    };
+    epoch.validate()?;
+    let mut credits = CloseClearWorkCreditsV1::new();
+    credits.add(
+        request.payer_destination_id,
+        request.work.rent.refundable_principal,
+    )?;
+    credits.add(request.neutral_sink_id, request.work.rent.donation_floor)?;
+    credits.add(request.keeper_destination_id, request.work.reward_remaining)?;
+    Ok(CloseClearWorkPoststateV1 {
+        epoch,
+        close_work: true,
+        credits,
     })
 }
 

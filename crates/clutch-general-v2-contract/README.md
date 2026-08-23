@@ -153,10 +153,25 @@ be synchronized before activation.
 
 General family `74/1` retains local action names `1..=34`. Strict allocation-free
 payload decoders and pure poststate owners now exist for the identity-lab spine
-at actions 2, 6, 7, 8, 9, 10, 14, and 15, plus the separately authenticated
-one-way solver-prize claim at action 21. This pure crate does not provide an
-account-meta handler or itself activate a runtime route; those remain separate
-adapter and release obligations.
+at actions 2, 6, 7, 8, 9, 10, 14, and 15, permissionless reverse-head cleanup
+at action 20, and the separately authenticated one-way solver-prize claim at
+action 21. Action 32 owns bounded terminal ClearWork closure and its paired
+Epoch Work-count decrement. This pure crate does not provide an account-meta
+handler or itself activate a runtime route; those remain separate adapter and
+release obligations.
+
+Action 20's strict 96-byte payload is `epoch || node || selected_candidate`.
+The selected field is all zero exactly when the Epoch and Window authenticate
+that no selected artifact exists; otherwise it is the actual artifact PDA and
+the adapter must decode that account. Fixed Feed and Work metas use their
+derived PDA identities even when the adapter proves canonical account absence.
+The pure transition refuses `ExpiredUnverified`: its remaining Work funding,
+refund, and penalty semantics are not inferred from another terminal class.
+Action 32 reuses the exact 64-byte `epoch || node` payload. It admits only a
+terminal phase-3, zero-order/zero-slice Work belonging to a VerifiedValid or
+VerifiedRefused node, returns the decremented Epoch and `close_work = true`,
+and coalesces Work rent principal to its recorded payer, hostile donation floor
+to the immutable neutral sink, and the present-funded close reward to keeper.
 The intended phases are:
 
 | Actions | Intended phase |

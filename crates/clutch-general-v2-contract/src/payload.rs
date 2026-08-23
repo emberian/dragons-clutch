@@ -19,10 +19,12 @@ pub const BEGIN_CANDIDATE_PAYLOAD_BYTES: usize = 64;
 pub const OPEN_CANDIDATE_FEED_PAYLOAD_BYTES: usize = 336;
 /// Exact fixed bytes before records in an action-8 segment variant.
 pub const WRITE_CANDIDATE_FEED_FIXED_BYTES: usize = 69;
-/// Exact payload bytes shared by actions 9, 10, and 14.
+/// Exact payload bytes shared by actions 9, 10, 14, and 32.
 pub const EPOCH_NODE_PAYLOAD_BYTES: usize = 64;
 /// Exact action-15 payload bytes.
 pub const FINALIZE_SELECTION_PAYLOAD_BYTES: usize = 32;
+/// Exact action-20 payload bytes.
+pub const CLEANUP_CANDIDATE_PAYLOAD_BYTES: usize = 96;
 /// Exact action-21 payload bytes.
 pub const CLAIM_SOLVER_PAYLOAD_BYTES: usize = 32;
 
@@ -410,6 +412,52 @@ pub struct FinalizeSelectionPayloadV1 {
     pub epoch: Id32,
 }
 
+/// Action-20 `CleanupCandidate` payload.
+///
+/// `selected_candidate` is the all-zero sentinel exactly when the Epoch has no
+/// selected artifact. Otherwise it is the actual SelectedCandidate PDA that
+/// the adapter must authenticate and decode. This keeps an optional
+/// fixed-position account meta unambiguous without defining another selected
+/// pointer beside the Window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CleanupCandidatePayloadV1 {
+    /// Parent Epoch PDA.
+    pub epoch: Id32,
+    /// Reverse-list-head AdmissionNode PDA to clean.
+    pub node: Id32,
+    /// Actual SelectedCandidate PDA, or canonical all-zero absence.
+    pub selected_candidate: Id32,
+}
+
+impl CleanupCandidatePayloadV1 {
+    /// Decode exactly 96 hostile bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::exact(input, CLEANUP_CANDIDATE_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut r)?,
+            node: live_id(&mut r)?,
+            selected_candidate: Id32::from_bytes(r.array()?),
+        };
+        r.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Validate live parents and the optional selected-artifact sentinel.
+    pub fn validate(self) -> Result<(), CodecError> {
+        if self.epoch.is_zero() || self.node.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if self.epoch == self.node
+            || self.selected_candidate == self.epoch
+            || self.selected_candidate == self.node
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+}
+
 /// Action-21 `ClaimSolver` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimSolverPayloadV1 {
@@ -461,8 +509,12 @@ pub enum IdentityLabPayloadV1<'a> {
     CompleteCandidateVerification(EpochNodePayloadV1),
     /// Action 15.
     FinalizeSelection(FinalizeSelectionPayloadV1),
+    /// Action 20.
+    CleanupCandidate(CleanupCandidatePayloadV1),
     /// Action 21.
     ClaimSolver(ClaimSolverPayloadV1),
+    /// Action 32.
+    CloseClearWork(EpochNodePayloadV1),
 }
 
 /// Decode only an enabled empty-book identity-lab action payload.
@@ -498,8 +550,14 @@ pub fn decode_identity_lab_payload_v1(
         15 => Ok(IdentityLabPayloadV1::FinalizeSelection(
             FinalizeSelectionPayloadV1::decode(payload)?,
         )),
+        20 => Ok(IdentityLabPayloadV1::CleanupCandidate(
+            CleanupCandidatePayloadV1::decode(payload)?,
+        )),
         21 => Ok(IdentityLabPayloadV1::ClaimSolver(
             ClaimSolverPayloadV1::decode(payload)?,
+        )),
+        32 => Ok(IdentityLabPayloadV1::CloseClearWork(
+            EpochNodePayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }
