@@ -1,0 +1,41 @@
+diff --git a/quic-client/src/nonblocking/quic_client.rs b/quic-client/src/nonblocking/quic_client.rs
+index 1bc4579..350e270 100644
+--- a/quic-client/src/nonblocking/quic_client.rs
++++ b/quic-client/src/nonblocking/quic_client.rs
+@@ -89 +89 @@ impl QuicLazyInitializedEndpoint {
+-                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
++                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+diff --git a/test-validator/src/lib.rs b/test-validator/src/lib.rs
+index 4c73cc5..a8d0f61 100644
+--- a/test-validator/src/lib.rs
++++ b/test-validator/src/lib.rs
+@@ -1193,8 +1193,2 @@ impl TestValidator {
+-                SocketAddr::new(
+-                    IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+-                    node.info.rpc().unwrap().port(),
+-                ),
+-                SocketAddr::new(
+-                    IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+-                    node.info.rpc_pubsub().unwrap().port(),
+-                ),
++                node.info.rpc().unwrap(),
++                node.info.rpc_pubsub().unwrap(),
+diff --git a/udp-client/src/lib.rs b/udp-client/src/lib.rs
+index 347b096..b4f1ec7 100644
+--- a/udp-client/src/lib.rs
++++ b/udp-client/src/lib.rs
+@@ -67,2 +67,2 @@ impl NewConnectionConfig for UdpConfig {
+-        // Use UNSPECIFIED for production validators to bind to all interfaces
+-        // Use LOCALHOST only in dev/test context to avoid port conflicts in CI
++        // This repository-local test-validator build keeps fallback UDP client
++        // sockets on loopback in both feature configurations.
+@@ -70 +70 @@ impl NewConnectionConfig for UdpConfig {
+-        let bind_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
++        let bind_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+diff --git a/validator/src/bin/solana-test-validator.rs b/validator/src/bin/solana-test-validator.rs
+index b91dae8..2a03d2f 100644
+--- a/validator/src/bin/solana-test-validator.rs
++++ b/validator/src/bin/solana-test-validator.rs
+@@ -192 +192 @@ fn main() {
+-    let faucet_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), faucet_port);
++    let faucet_addr = SocketAddr::new(bind_address, faucet_port);
