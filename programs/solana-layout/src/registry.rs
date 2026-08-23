@@ -212,7 +212,14 @@ pub const DEALER_POLICY_ACCOUNT_BYTES: usize =
 /// Source/Series registry account discriminator.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
 /// Source/Series registry account version.
-pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current Source/Series registry account version retaining BundleV5.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical decoder coordinate retained for untrusted index clients only.
+/// Runtime authority must use [`SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2`].
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2")]
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 =
+    SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1;
 /// Source/Series present-funding account discriminator.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 /// Source/Series present-funding account version.
@@ -1026,10 +1033,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-registry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-registry-v1-account",
+        name: "source-series-registry-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2833,7 +2849,7 @@ mod tests {
             (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
             (
                 SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
             ),
             (
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,

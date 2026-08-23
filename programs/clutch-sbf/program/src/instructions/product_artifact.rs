@@ -7,7 +7,9 @@
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
-use crate::loader_state::{decode_loader_pair_v1, LoaderAccountViewV1};
+use crate::loader_state::{
+    decode_loader_pair_v1, decode_synthesized_genesis_loader_pair_v1, LoaderAccountViewV1,
+};
 use crate::seeds;
 use clutch_product_series::{
     CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3,
@@ -22,7 +24,8 @@ use clutch_product_series::{
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
-    SeriesRegistryAccountV1, SERIES_REGISTRY_ACCOUNT_BYTES_V1,
+    SeriesRegistryAccountV1, SeriesRegistryAccountV2, SERIES_REGISTRY_ACCOUNT_BYTES_V1,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V2,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -59,19 +62,29 @@ product_artifact_type!(EvidenceOnlyRecoveryPolicyV1, EvidenceOnlyRecoveryPolicyV
 product_artifact_type!(ProductTemplateV4, ProductTemplateV4);
 product_artifact_type!(PriceMeasurePolicyV1, PriceMeasurePolicyV1);
 product_artifact_type!(MarketGenesisProfileV2, MarketGenesisProfileV2);
+#[cfg(test)]
 product_artifact_type!(SeriesFundingQuoteV1, SeriesFundingQuoteV1);
+#[cfg(test)]
 product_artifact_type!(SeriesAttachmentPlanV1, SeriesAttachmentPlanV1);
 product_artifact_type!(SeriesPlanV5, SeriesPlanV5);
 product_artifact_type!(SeriesFundingTermsV2, SeriesFundingTermsV2);
+#[cfg(test)]
 product_artifact_type!(CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV1);
 product_artifact_type!(MarketInstancePreimageV2, MarketInstancePreimageV2);
+#[cfg(test)]
 product_artifact_type!(SeriesFundingQuoteV2, SeriesFundingQuoteV2);
+#[cfg(test)]
 product_artifact_type!(CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV2);
+#[cfg(test)]
 product_artifact_type!(SeriesAttachmentPlanV2, SeriesAttachmentPlanV2);
+#[cfg(test)]
 product_artifact_type!(SeriesFundingQuoteV3, SeriesFundingQuoteV3);
+#[cfg(test)]
 product_artifact_type!(CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV3);
+#[cfg(test)]
 product_artifact_type!(SeriesAttachmentPlanV3, SeriesAttachmentPlanV3);
 product_artifact_type!(SeriesFundingQuoteV4, SeriesFundingQuoteV4);
+#[cfg(test)]
 product_artifact_type!(CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV4);
 product_artifact_type!(CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5);
 product_artifact_type!(SeriesAttachmentPlanV4, SeriesAttachmentPlanV4);
@@ -91,6 +104,7 @@ impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
     }
 }
 
+#[cfg(test)]
 impl ProductArtifactTypeV1 for RegistryCapabilityProfileV2 {
     const KIND: ArtifactKind = ArtifactKind::RegistryCapabilityProfileV2;
 
@@ -99,6 +113,7 @@ impl ProductArtifactTypeV1 for RegistryCapabilityProfileV2 {
     }
 }
 
+#[cfg(test)]
 impl ProductArtifactTypeV1 for RegistryCapabilityProfileV3 {
     const KIND: ArtifactKind = ArtifactKind::RegistryCapabilityProfileV3;
 
@@ -107,6 +122,7 @@ impl ProductArtifactTypeV1 for RegistryCapabilityProfileV3 {
     }
 }
 
+#[cfg(test)]
 impl ProductArtifactTypeV1 for RegistryProgramReleaseV1 {
     const KIND: ArtifactKind = ArtifactKind::RegistryProgramReleaseV1;
 
@@ -204,11 +220,30 @@ pub fn authenticate_product_artifact_v1<T: ProductArtifactTypeV1>(
 
 /// Private proof of exact capability references read from a SeriesRegistry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub struct AuthenticatedSeriesRegistryCapabilityRefsV1 {
     series_registry_account: Pubkey,
     series_plan_id: SeriesPlanV5Id,
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
+}
+
+/// Private exact current registry references, including the non-evictable
+/// BundleV5 compiler identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSeriesRegistryCapabilityRefsV2 {
+    series_registry_account: Pubkey,
+    series_plan_id: SeriesPlanV5Id,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    compiler_bundle_id: ContentId,
+}
+
+impl AuthenticatedSeriesRegistryCapabilityRefsV2 {
+    /// Exact BundleV5 identity retained by the current SeriesRegistry.
+    pub const fn compiler_bundle_id(self) -> ContentId {
+        self.compiler_bundle_id
+    }
 }
 
 /// Authenticate the persistent SeriesRegistry references without a Rent input.
@@ -218,8 +253,9 @@ pub struct AuthenticatedSeriesRegistryCapabilityRefsV1 {
 /// stored bump, and a present balance covering the immutable rent principal
 /// established when the account was created. A value-bearing consumer must
 /// still pass the returned private receipt through
-/// [`authenticate_registry_capability_v2`], which freshly authenticates the
+/// [`authenticate_registry_capability_v3`], which freshly authenticates the
 /// current loader state and both content-addressed registry artifacts.
+#[cfg(test)]
 pub fn authenticate_series_registry_capability_refs_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -262,7 +298,89 @@ pub fn authenticate_series_registry_capability_refs_v1(
     })
 }
 
+/// Authenticate current SeriesRegistry V2 references without a Rent sysvar.
+///
+/// This refuses the withdrawn V1 width/version and therefore cannot mint a
+/// current registry authority after the compiler/Source provenance was lost.
+pub fn authenticate_series_registry_capability_refs_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series: SeriesPlanV5Id,
+) -> Outcome<AuthenticatedSeriesRegistryCapabilityRefsV2> {
+    authenticate_series_registry_capability_refs_v2_with_role(
+        program_id,
+        account,
+        expected_series,
+        false,
+    )
+}
+
+/// Authenticate current SeriesRegistry references for an atomic mutation.
+/// This is distinct from the read-only relation seam so privilege union never
+/// silently weakens the exact account-role contract.
+pub(crate) fn authenticate_series_registry_capability_refs_v2_for_mutation(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series: SeriesPlanV5Id,
+) -> Outcome<AuthenticatedSeriesRegistryCapabilityRefsV2> {
+    authenticate_series_registry_capability_refs_v2_with_role(
+        program_id,
+        account,
+        expected_series,
+        true,
+    )
+}
+
+fn authenticate_series_registry_capability_refs_v2_with_role(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series: SeriesPlanV5Id,
+    writable: bool,
+) -> Outcome<AuthenticatedSeriesRegistryCapabilityRefsV2> {
+    expected_series
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    if writable {
+        require(account.is_writable, ClutchError::NotWritable)?;
+    } else {
+        require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    }
+    require(
+        account.data_len() == SERIES_REGISTRY_ACCOUNT_BYTES_V2,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesRegistryAccountV2::decode(&data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        value.series_plan_id == expected_series,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::series_registry_pda(program_id, &expected_series.bytes()),
+        Some(value.stored_bump),
+    )?;
+    require(
+        account.lamports() >= value.rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedSeriesRegistryCapabilityRefsV2 {
+        series_registry_account: *account.key,
+        series_plan_id: value.series_plan_id,
+        registry_release_id: value.registry_release_id,
+        capability_profile_id: value.capability_profile_id,
+        compiler_bundle_id: value.compiler_bundle_id.content_id(),
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 struct AuthenticatedRegistryArtifactPairV2 {
     release_artifact_account: Pubkey,
     profile_artifact_account: Pubkey,
@@ -273,6 +391,7 @@ struct AuthenticatedRegistryArtifactPairV2 {
 
 /// Loader-authenticated release/profile authority used before Series registration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub struct AuthenticatedRegistryCapabilityReleaseV2 {
     program_account: Pubkey,
     programdata_account: Pubkey,
@@ -283,6 +402,7 @@ pub struct AuthenticatedRegistryCapabilityReleaseV2 {
     projection: RegistryCapabilityProjectionV2,
 }
 
+#[cfg(test)]
 impl AuthenticatedRegistryCapabilityReleaseV2 {
     /// Current executable Program account.
     pub const fn program_account(self) -> Pubkey {
@@ -322,6 +442,7 @@ impl AuthenticatedRegistryCapabilityReleaseV2 {
 
 /// Persistent SeriesRegistry-bound capability authority for value-bearing consumers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub struct AuthenticatedRegistryCapabilityV2 {
     series_registry_account: Pubkey,
     series_plan_id: SeriesPlanV5Id,
@@ -334,6 +455,7 @@ pub struct AuthenticatedRegistryCapabilityV2 {
     projection: RegistryCapabilityProjectionV2,
 }
 
+#[cfg(test)]
 impl AuthenticatedRegistryCapabilityV2 {
     /// Exact authenticated SeriesRegistry account owning both references.
     pub const fn series_registry_account(self) -> Pubkey {
@@ -431,6 +553,7 @@ impl AuthenticatedRegistryCapabilityV2 {
     }
 }
 
+#[cfg(test)]
 fn authenticate_registry_artifact_pair_v2(
     program_id: &Pubkey,
     release_artifact: &AccountInfo<'_>,
@@ -478,6 +601,7 @@ fn authenticate_registry_artifact_pair_v2(
 
 /// Authenticate current loader state and both immutable artifacts against a SeriesRegistry.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub fn authenticate_registry_capability_v2(
     program_id: &Pubkey,
     registry_refs: AuthenticatedSeriesRegistryCapabilityRefsV1,
@@ -521,6 +645,7 @@ pub fn authenticate_registry_capability_v2(
 
 /// Strictly authenticate the release/profile pair before persisting Series references.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub fn authenticate_registry_capability_for_registration_v2(
     program_id: &Pubkey,
     release_artifact: &AccountInfo<'_>,
@@ -758,6 +883,36 @@ impl AuthenticatedRegistryCapabilityV3 {
     pub const fn realm_collateral(self) -> clutch_product_series::RealmCollateralProjectionV1 {
         self.profile.rules.realm_collateral
     }
+
+    /// Exact registry selector for the resolved statistic kind.
+    pub const fn statistic_registry_value(self) -> u16 {
+        self.profile.rules.statistic_registry_value
+    }
+
+    /// Exact resolved statistic kind.
+    pub const fn resolved_statistic(self) -> clutch_source_plane_v3::StatisticKindV3 {
+        self.profile.rules.resolved_statistic
+    }
+
+    /// Exact registry selector for coverage policy.
+    pub const fn coverage_policy_registry_value(self) -> u16 {
+        self.profile.rules.coverage_policy_registry_value
+    }
+
+    /// Exact registry selector for ambiguity policy.
+    pub const fn ambiguity_policy_registry_value(self) -> u8 {
+        self.profile.rules.ambiguity_policy_registry_value
+    }
+
+    /// Exact registry selector for edge policy.
+    pub const fn edge_policy_registry_value(self) -> u8 {
+        self.profile.rules.edge_policy_registry_value
+    }
+
+    /// Registry-resolved edge behavior.
+    pub const fn resolved_edge_policy(self) -> clutch_product_series::QuantizedEdgePolicyV1 {
+        self.profile.rules.resolved_edge_policy
+    }
 }
 
 fn authenticate_registry_artifact_pair_v3(
@@ -809,7 +964,7 @@ fn authenticate_registry_artifact_pair_v3(
 #[allow(clippy::too_many_arguments)]
 pub fn authenticate_registry_capability_v3(
     program_id: &Pubkey,
-    registry_refs: AuthenticatedSeriesRegistryCapabilityRefsV1,
+    registry_refs: AuthenticatedSeriesRegistryCapabilityRefsV2,
     program_account: &AccountInfo<'_>,
     programdata_account: &AccountInfo<'_>,
     release_artifact: &AccountInfo<'_>,
@@ -897,34 +1052,44 @@ pub fn authenticate_registry_capability_for_registration_v3(
     let programdata_data = programdata_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let loader = decode_loader_pair_v1(
-        LoaderAccountViewV1::new(
-            program_account.key.to_bytes(),
-            program_account.owner.to_bytes(),
-            program_account.executable,
-            &program_data,
-        ),
-        LoaderAccountViewV1::new(
-            programdata_account.key.to_bytes(),
-            programdata_account.owner.to_bytes(),
-            programdata_account.executable,
-            &programdata_data,
-        ),
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let release = authenticated.release;
-    let locus_matches_loader = matches!(
-        (release.locus, loader.state.deployment_slot),
-        (RegistryReleaseLocusV2::SynthesizedGenesisZero, 0)
-    ) || matches!(
-        (release.locus, loader.state.deployment_slot),
-        (RegistryReleaseLocusV2::ObservedPositive, slot) if slot != 0
+    let program_view = LoaderAccountViewV1::new(
+        program_account.key.to_bytes(),
+        program_account.owner.to_bytes(),
+        program_account.executable,
+        &program_data,
     );
+    let programdata_view = LoaderAccountViewV1::new(
+        programdata_account.key.to_bytes(),
+        programdata_account.owner.to_bytes(),
+        programdata_account.executable,
+        &programdata_data,
+    );
+    let deployment_slot = match release.locus {
+        RegistryReleaseLocusV2::SynthesizedGenesisZero => {
+            decode_synthesized_genesis_loader_pair_v1(program_view, programdata_view)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .deployment_slot
+        }
+        RegistryReleaseLocusV2::ObservedPositive => decode_loader_pair_v1(
+            program_view,
+            programdata_view,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .state
+        .deployment_slot,
+    };
     require(
         release.program.bytes() == program_id.to_bytes()
             && release.programdata.bytes() == programdata_account.key.to_bytes()
-            && release.deployment_slot == loader.state.deployment_slot
-            && locus_matches_loader
+            && release.deployment_slot == deployment_slot
+            && (matches!(
+                (release.locus, deployment_slot),
+                (RegistryReleaseLocusV2::SynthesizedGenesisZero, 0)
+            ) || matches!(
+                (release.locus, deployment_slot),
+                (RegistryReleaseLocusV2::ObservedPositive, slot) if slot != 0
+            ))
             && release.programdata_sha256.bytes()
                 == solana_sha256_hasher::hashv(&[&programdata_data]).to_bytes()
             && release.capability_manifest_id.bytes() == capabilities::PROFILE_ID

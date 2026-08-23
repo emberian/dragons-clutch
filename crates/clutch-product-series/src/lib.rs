@@ -163,7 +163,8 @@ pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
 };
 pub use source_series::{
-    compile_source_occurrence_v3, AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
+    compile_source_occurrence_v3, compile_source_occurrence_v4,
+    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
     SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use successor::{

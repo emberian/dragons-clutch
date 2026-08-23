@@ -11,7 +11,7 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, transfer_data, SYSTEM_PROGRAM_ID,
 };
 use crate::instructions::product_artifact::{
-    authenticate_product_artifact_v1, AuthenticatedRegistryCapabilityV2,
+    authenticate_product_artifact_v1, AuthenticatedRegistryCapabilityV3,
 };
 use crate::seeds;
 use clutch_liveness::runtime_adapter_v1::{
@@ -20,7 +20,7 @@ use clutch_liveness::runtime_adapter_v1::{
 use clutch_liveness::runtime_v1::RuntimeCompartmentKindV1;
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
-    CompiledProductSeriesBundleV4, ContentId, MarketFoundationAccountGraphV2,
+    CompiledProductSeriesBundleV5, ContentId, MarketFoundationAccountGraphV2,
     MarketFoundationScheduleV2, MarketFoundationSlotV2, MarketFoundationStepProjectionV2,
     MarketFoundingAbortProjectionV1, MarketInstanceTerminalProjectionV1, MarketInstanceV2Id,
     MarketLifecyclePhaseV1, MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1,
@@ -118,7 +118,7 @@ fn require_canonical_market_foundation_core_v2(
         ),
         (
             MarketFoundationSlotV2::FailureReplay,
-            seeds::failure_replay_tombstone_pda(program_id, &market, generation).0,
+            seeds::failure_market_replay_v2_pda(program_id, &market, generation).0,
         ),
         (
             MarketFoundationSlotV2::FailureIntervalWork,
@@ -175,7 +175,6 @@ impl<'state> AuthenticatedMarketLifecycleRootV1<'state> {
     pub const fn account(self) -> Pubkey {
         self.account
     }
-
     /// Program which authenticated and owns the account.
     pub const fn owner_program(self) -> Pubkey {
         self.owner_program
@@ -501,6 +500,18 @@ impl AuthenticatedMarketFoundationPreallocationV2 {
     pub const fn account(self) -> Pubkey {
         self.account
     }
+    /// Exact quote-owned foundation schedule.
+    pub const fn foundation_schedule_id(self) -> ContentId {
+        self.foundation_schedule_id
+    }
+    /// Exact canonical physical account graph.
+    pub const fn foundation_account_graph_id(self) -> ContentId {
+        self.foundation_account_graph_id
+    }
+    /// Root's ordered transcript after this preallocation was accepted.
+    pub const fn foundation_transcript_id(self) -> ContentId {
+        self.foundation_transcript_id
+    }
     /// Exact separately itemized refundable principal.
     pub const fn principal_lamports(self) -> u64 {
         self.principal_lamports
@@ -750,7 +761,7 @@ pub fn authenticate_market_recovery_schedule_v1(
     program_id: &Pubkey,
     root: AuthenticatedMarketLifecycleRootV1<'_>,
     link: AuthenticatedSeriesMarketLinkV1<'_>,
-    capability: AuthenticatedRegistryCapabilityV2,
+    capability: AuthenticatedRegistryCapabilityV3,
     funding_quote_account: &AccountInfo<'_>,
     liveness_policy_account: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedMarketRecoveryScheduleV1> {
@@ -769,6 +780,7 @@ pub fn authenticate_market_recovery_schedule_v1(
             && capability.program_account() == *program_id
             && capability
                 .profile()
+                .rules
                 .maximum_recovery_progress_units_per_call
                 != 0,
         ClutchError::MismatchedState,
@@ -823,6 +835,7 @@ pub fn authenticate_market_recovery_schedule_v1(
     let capability_profile_account = capability.profile_artifact_account();
     let maximum_progress_units_per_call = capability
         .profile()
+        .rules
         .maximum_recovery_progress_units_per_call;
     require(
         ContentId::from_bytes(policy.policy_id.bytes()) == root_binding.failure_liveness_policy_id
@@ -1015,7 +1028,7 @@ pub fn authenticate_series_wrapper_authorization_v1(
             && (wrapper_status == SeriesLinkObligationStatusV1::Live || link.is_writable()),
         ClutchError::MismatchedState,
     )?;
-    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV4>(
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
         program_id,
         compiler_bundle_account,
         binding.compiler_output_id,
@@ -1417,7 +1430,8 @@ pub(crate) fn authenticate_market_foundation_preallocation_v2(
     require(
         matches!(
             slot,
-            MarketFoundationSlotV2::FailureIntervalWork
+            MarketFoundationSlotV2::FailureReplay
+                | MarketFoundationSlotV2::FailureIntervalWork
                 | MarketFoundationSlotV2::FailureIntervalHistory
                 | MarketFoundationSlotV2::FractionalPolicy
                 | MarketFoundationSlotV2::FractionalLedger
