@@ -42,7 +42,7 @@ pub const PROFILE_LABEL: &str =
 /// deployable profile admits the historical account frame.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-general-v2-quantized-candidate-lab/v6-closed-price-tuple";
+    "dragons-clutch/capability-profile/non-production-general-v2-quantized-candidate-lab/v7-active-width-closed-tuple";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(all(
@@ -88,8 +88,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x30, 0xd2, 0x19, 0xcf, 0xe5, 0x58, 0xa3, 0x23, 0x2b, 0x12, 0x3f, 0x60, 0xbc, 0x67, 0x40, 0x0b,
-    0x8a, 0x01, 0x8b, 0xb5, 0xa6, 0x5b, 0x80, 0x39, 0x80, 0x71, 0xce, 0x33, 0x24, 0x1d, 0x1d, 0x69,
+    0x8e, 0xea, 0x88, 0x6c, 0x3c, 0xd9, 0x89, 0x24, 0x85, 0xbf, 0x9f, 0xcc, 0x1e, 0x77, 0x29, 0xd5,
+    0x70, 0x0b, 0x08, 0xe4, 0x4f, 0x6b, 0x88, 0x9a, 0x6e, 0xec, 0x88, 0x08, 0x7d, 0x7a, 0x18, 0x6b,
 ];
 
 /// Whether this artifact is the explicitly non-production identity lab.
@@ -242,6 +242,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 9),
     (74, 1, 10),
     (74, 1, 12),
+    (74, 1, 13),
     (74, 1, 14),
     (74, 1, 15),
     (74, 1, 16),
@@ -407,5 +408,13 @@ mod tests {
                 || GENERAL_V2_IDENTITY_LAB
                 || cfg!(feature = "profile-full"))
         );
+    }
+
+    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+    #[test]
+    fn general_active_width_clearing_is_one_coherent_capability_unit() {
+        for action in [10, 12, 13, 14] {
+            assert!(extension_intent_action_enabled(74, 1, action));
+        }
     }
 }
