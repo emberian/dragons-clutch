@@ -742,6 +742,11 @@ impl FailureRuntimeV1 {
         self.recovery.ledger()
     }
 
+    /// Immutable neutral sink selected by funded recovery admission.
+    pub const fn recovery_neutral_sink(&self) -> RecoveryIdentity {
+        self.recovery.neutral_sink()
+    }
+
     /// Monotone funded-recovery transition nonce used for replay protection.
     pub const fn transition_nonce(&self) -> u64 {
         self.recovery.transition_nonce()

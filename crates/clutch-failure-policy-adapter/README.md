@@ -28,8 +28,9 @@ all-zero durable root and zero-data reserve owned by the live program, then
 matches the full private admission receipt to the runtime binding, V5 Series,
 ordinal, V2 occurrence, FundingQuote, recovery state/generation, both initial
 principal compartments, and the observed reserve balance. Durable root rent is
-required to equal the adapter-authenticated rent amount, is preserved as an
-independent balance, and is never counted as recovery capital.
+persisted with its immutable payer and exact adapter-authenticated principal,
+is preserved independently, and is never counted as recovery capital. Hostile
+root prefund or later unsolicited lamports cannot become rent or principal.
 
 The fixed intent preimage binds action, immutable failure-policy binding,
 full-width V2 market identity, generation, expected replay nonce, Clock,
@@ -53,3 +54,8 @@ join is emitted only after resolution plus authenticated retirement root,
 permanent replay tombstone, and final SourcePlane release. Neither receipt
 consumes a liveness terminal receipt as an input; its own typed ID is the
 family-specific receipt projected into liveness.
+
+After that full lifecycle join, root close refunds only the persisted root-rent
+principal to its payer and sends every excess root lamport to the immutable
+neutral sink. The expendable reserve must already be zero. The replay tombstone
+is a separately owned permanent fact and is never closed by this adapter.

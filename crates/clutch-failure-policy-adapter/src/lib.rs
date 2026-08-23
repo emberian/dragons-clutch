@@ -11,8 +11,8 @@ use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock, Tran
 use clutch_failure_policy_runtime::{
     AcceptedResolutionV1, AdapterAuthenticatedRelationRefusalV1, FailureAdmissionReceiptId,
     FailureAdmissionReceiptV1, FailurePolicyBindingId, FailureRecoveryTerminalReceiptV1,
-    FailureRuntimeV1, FailureTerminalJoinV1, FailureTransitionPlanV1, LivenessWorkReceiptJoinV1,
-    FAILURE_RUNTIME_V1_BYTES,
+    FailureRuntimeV1, FailureTerminalJoinId, FailureTerminalJoinV1, FailureTransitionPlanV1,
+    LivenessWorkReceiptJoinV1, FAILURE_RUNTIME_V1_BYTES,
 };
 use clutch_product_series::MarketInstanceV2Id;
 use clutch_source_plane_v3::{
@@ -27,7 +27,7 @@ const INTENT_MAGIC: [u8; 8] = *b"DCFAILI1";
 const INTENT_SCHEMA: u16 = 1;
 
 /// Exact canonical durable failure-root width.
-pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_820;
+pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_860;
 /// Exact canonical failure intent width.
 pub const FAILURE_INTENT_V1_BYTES: usize = 344;
 
@@ -68,8 +68,10 @@ pub enum Error {
     ReserveDataNotEmpty,
     /// A newly allocated durable root contained nonzero prestate.
     RootDataNotZero,
-    /// Durable root lamports did not equal the adapter-authenticated rent amount.
+    /// Adapter-authenticated durable-root rent principal was zero or invalid.
     RootRentMismatch,
+    /// Durable root rent principal was no longer present.
+    RootRentUnderfunded,
     /// The admission receipt did not describe the complete runtime and reserve.
     AdmissionMismatch,
     /// The stored root digest did not match canonical runtime bytes.
@@ -117,17 +119,37 @@ impl AccountId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureRootAccountV1 {
     bump: u8,
+    root_rent_payer: AccountId,
+    root_rent_principal_lamports: u64,
     runtime_digest: [u8; 32],
     runtime: FailureRuntimeV1,
 }
 
 impl FailureRootAccountV1 {
     /// Construct a durable root from one fully checked runtime.
-    pub fn new(bump: u8, runtime: FailureRuntimeV1) -> Result<Self> {
+    pub fn new(
+        bump: u8,
+        root_rent_payer: AccountId,
+        root_rent_principal_lamports: u64,
+        runtime: FailureRuntimeV1,
+    ) -> Result<Self> {
+        if root_rent_payer.is_zero() {
+            return Err(Error::ZeroIdentity);
+        }
+        if root_rent_principal_lamports == 0 {
+            return Err(Error::RootRentMismatch);
+        }
         runtime.check()?;
-        let runtime_digest = runtime_digest(bump, &runtime)?;
+        let runtime_digest = runtime_digest(
+            bump,
+            root_rent_payer,
+            root_rent_principal_lamports,
+            &runtime,
+        )?;
         Ok(Self {
             bump,
+            root_rent_payer,
+            root_rent_principal_lamports,
             runtime_digest,
             runtime,
         })
@@ -138,7 +160,17 @@ impl FailureRootAccountV1 {
         self.bump
     }
 
-    /// Digest of exact canonical runtime bytes and bump.
+    /// Immutable destination for exact durable-root rent principal on close.
+    pub const fn root_rent_payer(&self) -> AccountId {
+        self.root_rent_payer
+    }
+
+    /// Exact durable-root rent principal, excluding unsolicited lamports.
+    pub const fn root_rent_principal_lamports(&self) -> u64 {
+        self.root_rent_principal_lamports
+    }
+
+    /// Digest of exact canonical runtime, bump, and root-rent ownership.
     pub const fn runtime_digest(&self) -> [u8; 32] {
         self.runtime_digest
     }
@@ -151,7 +183,14 @@ impl FailureRootAccountV1 {
     /// Encode the exact durable root body.
     pub fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.runtime.check()?;
-        if self.runtime_digest != runtime_digest(self.bump, &self.runtime)? {
+        if self.runtime_digest
+            != runtime_digest(
+                self.bump,
+                self.root_rent_payer,
+                self.root_rent_principal_lamports,
+                &self.runtime,
+            )?
+        {
             return Err(Error::DigestMismatch);
         }
         if output.len() != FAILURE_ROOT_ACCOUNT_V1_BYTES {
@@ -161,9 +200,11 @@ impl FailureRootAccountV1 {
         output[..8].copy_from_slice(&ROOT_MAGIC);
         output[8..10].copy_from_slice(&ROOT_SCHEMA.to_le_bytes());
         output[10] = self.bump;
-        output[12..44].copy_from_slice(&self.runtime_digest);
+        output[12..44].copy_from_slice(&self.root_rent_payer.bytes());
+        output[44..52].copy_from_slice(&self.root_rent_principal_lamports.to_le_bytes());
+        output[52..84].copy_from_slice(&self.runtime_digest);
         self.runtime
-            .encode_into(&mut output[44..FAILURE_ROOT_ACCOUNT_V1_BYTES])?;
+            .encode_into(&mut output[84..FAILURE_ROOT_ACCOUNT_V1_BYTES])?;
         Ok(())
     }
 
@@ -182,15 +223,38 @@ impl FailureRootAccountV1 {
             return Err(Error::NonCanonicalPadding);
         }
         let bump = input[10];
+        let mut payer = [0; 32];
+        payer.copy_from_slice(&input[12..44]);
+        let root_rent_payer = AccountId::from_bytes(payer);
+        if root_rent_payer.is_zero() {
+            return Err(Error::ZeroIdentity);
+        }
+        let root_rent_principal_lamports = u64::from_le_bytes(
+            input[44..52]
+                .try_into()
+                .map_err(|_| Error::WrongLength)?,
+        );
+        if root_rent_principal_lamports == 0 {
+            return Err(Error::RootRentMismatch);
+        }
         let mut stored = [0; 32];
-        stored.copy_from_slice(&input[12..44]);
-        let runtime = FailureRuntimeV1::decode(&input[44..])?;
+        stored.copy_from_slice(&input[52..84]);
+        let runtime = FailureRuntimeV1::decode(&input[84..])?;
         let value = Self {
             bump,
+            root_rent_payer,
+            root_rent_principal_lamports,
             runtime_digest: stored,
             runtime,
         };
-        if value.runtime_digest != runtime_digest(value.bump, &value.runtime)? {
+        if value.runtime_digest
+            != runtime_digest(
+                value.bump,
+                value.root_rent_payer,
+                value.root_rent_principal_lamports,
+                &value.runtime,
+            )?
+        {
             return Err(Error::DigestMismatch);
         }
         Ok(value)
@@ -245,8 +309,9 @@ impl FailureAccountInitializationV1 {
 /// complete successor admission receipt.
 ///
 /// Funding transfers must already be reflected in `reserve.lamports` and in the
-/// runtime's admission observation. Root lamports are independently supplied
-/// durable rent; this function never reclassifies them as recovery work/rent.
+/// runtime's admission observation. Exact root-rent principal is independently
+/// supplied; any excess root balance is only an eventual neutral donation and
+/// this function never reclassifies it as recovery work/rent.
 #[allow(clippy::too_many_arguments)]
 pub fn project_failure_initialization<'a>(
     root: AccountView<'a>,
@@ -254,11 +319,12 @@ pub fn project_failure_initialization<'a>(
     expected_root_key: AccountId,
     program_id: AccountId,
     bump: u8,
+    root_rent_payer: AccountId,
     required_root_rent_lamports: u64,
     runtime: FailureRuntimeV1,
     receipt: FailureAdmissionReceiptV1,
 ) -> Result<FailureAccountInitializationV1> {
-    if expected_root_key.is_zero() || program_id.is_zero() {
+    if expected_root_key.is_zero() || program_id.is_zero() || root_rent_payer.is_zero() {
         return Err(Error::ZeroIdentity);
     }
     if required_root_rent_lamports == 0 {
@@ -276,14 +342,17 @@ pub fn project_failure_initialization<'a>(
     if root.key == reserve.key {
         return Err(Error::AccountAlias);
     }
+    if root_rent_payer == root.key || root_rent_payer == reserve.key {
+        return Err(Error::AccountAlias);
+    }
     if root.data.len() != FAILURE_ROOT_ACCOUNT_V1_BYTES {
         return Err(Error::WrongLength);
     }
     if root.data.iter().any(|byte| *byte != 0) {
         return Err(Error::RootDataNotZero);
     }
-    if root.lamports != required_root_rent_lamports {
-        return Err(Error::RootRentMismatch);
+    if root.lamports < required_root_rent_lamports {
+        return Err(Error::RootRentUnderfunded);
     }
     if !reserve.data.is_empty() {
         return Err(Error::ReserveDataNotEmpty);
@@ -291,8 +360,12 @@ pub fn project_failure_initialization<'a>(
     runtime.check()?;
     let binding = runtime.binding();
     let expected_reserve = AccountId::from_bytes(binding.recovery_state_id().bytes());
+    let neutral_sink = AccountId::from_bytes(runtime.recovery_neutral_sink().bytes());
     if reserve.key != expected_reserve {
         return Err(Error::WrongKey);
+    }
+    if neutral_sink == root.key || neutral_sink == reserve.key {
+        return Err(Error::AccountAlias);
     }
     let ledger = runtime.ledger();
     if receipt.binding_id() != runtime.binding_id()
@@ -308,7 +381,12 @@ pub fn project_failure_initialization<'a>(
     {
         return Err(Error::AdmissionMismatch);
     }
-    let root_body = FailureRootAccountV1::new(bump, runtime)?;
+    let root_body = FailureRootAccountV1::new(
+        bump,
+        root_rent_payer,
+        required_root_rent_lamports,
+        runtime,
+    )?;
     Ok(FailureAccountInitializationV1 {
         root_key: root.key,
         reserve_key: reserve.key,
@@ -393,6 +471,16 @@ pub fn authenticate_failure_accounts<'a>(
     if reserve.key != expected_reserve {
         return Err(Error::WrongKey);
     }
+    if decoded.root_rent_payer() == root.key || decoded.root_rent_payer() == reserve.key {
+        return Err(Error::AccountAlias);
+    }
+    let neutral_sink = AccountId::from_bytes(decoded.runtime().recovery_neutral_sink().bytes());
+    if neutral_sink == root.key || neutral_sink == reserve.key {
+        return Err(Error::AccountAlias);
+    }
+    if root.lamports < decoded.root_rent_principal_lamports() {
+        return Err(Error::RootRentUnderfunded);
+    }
     Ok(AuthenticatedFailureAccountsV1 {
         root_key: root.key,
         reserve_key: reserve.key,
@@ -472,7 +560,12 @@ pub fn project_failure_transition(
     }
     let mut runtime = accounts.root.runtime();
     runtime.commit_plan(plan, actual_reserve_post_balance)?;
-    let after_root = FailureRootAccountV1::new(accounts.root.bump(), runtime)?;
+    let after_root = FailureRootAccountV1::new(
+        accounts.root.bump(),
+        accounts.root.root_rent_payer(),
+        accounts.root.root_rent_principal_lamports(),
+        runtime,
+    )?;
     Ok(FailureAccountMutationV1 {
         root_key: accounts.root_key,
         reserve_key: accounts.reserve_key,
@@ -960,6 +1053,102 @@ pub fn authenticate_terminal_join_intent(
     Ok(terminal)
 }
 
+/// Exact durable-root close plan after the separately owned permanent replay
+/// tombstone and all other terminal facts have joined.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureRootClosePlanV1 {
+    root_key: AccountId,
+    reserve_key: AccountId,
+    before_root_digest: [u8; 32],
+    terminal_join_id: FailureTerminalJoinId,
+    rent_refund_recipient: AccountId,
+    rent_refund_lamports: u64,
+    donation_neutral_sink: AccountId,
+    donation_neutral_lamports: u64,
+    expected_root_pre_balance: u64,
+}
+
+impl FailureRootClosePlanV1 {
+    /// Exact durable root being closed.
+    pub const fn root_key(&self) -> AccountId {
+        self.root_key
+    }
+
+    /// Exact zero-balance expendable reserve being closed.
+    pub const fn reserve_key(&self) -> AccountId {
+        self.reserve_key
+    }
+
+    /// Digest of the authenticated complete root prestate.
+    pub const fn before_root_digest(&self) -> [u8; 32] {
+        self.before_root_digest
+    }
+
+    /// Full lifecycle terminal join consumed by this close.
+    pub const fn terminal_join_id(&self) -> FailureTerminalJoinId {
+        self.terminal_join_id
+    }
+
+    /// Immutable payer receiving only exact durable-root rent principal.
+    pub const fn rent_refund_recipient(&self) -> AccountId {
+        self.rent_refund_recipient
+    }
+
+    /// Exact durable-root rent principal refund.
+    pub const fn rent_refund_lamports(&self) -> u64 {
+        self.rent_refund_lamports
+    }
+
+    /// Immutable neutral sink receiving every unsolicited root lamport.
+    pub const fn donation_neutral_sink(&self) -> AccountId {
+        self.donation_neutral_sink
+    }
+
+    /// Exact unsolicited root lamports neutralized on close.
+    pub const fn donation_neutral_lamports(&self) -> u64 {
+        self.donation_neutral_lamports
+    }
+
+    /// Exact total root balance consumed by the two close movements.
+    pub const fn expected_root_pre_balance(&self) -> u64 {
+        self.expected_root_pre_balance
+    }
+}
+
+/// Project terminal close of the durable root and empty expendable reserve.
+///
+/// The caller must coalesce the two movements if the immutable rent payer is
+/// also the neutral sink, verify the root reaches zero, close the zero-balance
+/// reserve, and preserve the separately owned replay tombstone atomically.
+pub fn project_failure_root_close(
+    accounts: AuthenticatedFailureAccountsV1,
+    intent: FailureIntentV1,
+    terminal: FailureTerminalJoinV1,
+) -> Result<FailureRootClosePlanV1> {
+    let terminal = authenticate_terminal_join_intent(accounts, intent, terminal)?;
+    if accounts.reserve_lamports != 0 {
+        return Err(Error::ReserveBalanceMismatch);
+    }
+    let principal = accounts.root.root_rent_principal_lamports();
+    let donation = accounts
+        .root_lamports
+        .checked_sub(principal)
+        .ok_or(Error::RootRentUnderfunded)?;
+    Ok(FailureRootClosePlanV1 {
+        root_key: accounts.root_key,
+        reserve_key: accounts.reserve_key,
+        before_root_digest: accounts.root.runtime_digest(),
+        terminal_join_id: terminal.id(),
+        rent_refund_recipient: accounts.root.root_rent_payer(),
+        rent_refund_lamports: principal,
+        donation_neutral_sink: AccountId::from_bytes(
+            accounts.root.runtime().recovery_neutral_sink().bytes(),
+        ),
+        donation_neutral_lamports: donation,
+        expected_root_pre_balance: accounts.root_lamports,
+    })
+}
+
 /// Authenticate the current finite recovery campaign's success/failure close
 /// receipt for projection into the separately owned liveness runtime.
 ///
@@ -1016,12 +1205,19 @@ fn validate_work_artifacts(
     Ok(())
 }
 
-fn runtime_digest(bump: u8, runtime: &FailureRuntimeV1) -> Result<[u8; 32]> {
+fn runtime_digest(
+    bump: u8,
+    root_rent_payer: AccountId,
+    root_rent_principal_lamports: u64,
+    runtime: &FailureRuntimeV1,
+) -> Result<[u8; 32]> {
     let mut bytes = [0; FAILURE_RUNTIME_V1_BYTES];
     runtime.encode_into(&mut bytes)?;
     let mut hasher = Sha256::new();
     hasher.update(ROOT_DIGEST_DOMAIN);
     hasher.update([bump]);
+    hasher.update(root_rent_payer.bytes());
+    hasher.update(root_rent_principal_lamports.to_le_bytes());
     hasher.update(bytes);
     Ok(hasher.finalize().into())
 }
