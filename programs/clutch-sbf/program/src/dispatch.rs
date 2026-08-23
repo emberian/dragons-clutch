@@ -48,13 +48,18 @@ use crate::error::ClutchError;
 use crate::instructions::direct_selection_v3;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 use crate::instructions::general_v2_identity;
+#[cfg(feature = "non-production-product-series-lab")]
+use crate::instructions::product_series;
 use crate::instructions::{
     artifact, cash_exit, external_exit, genesis, market_init, merge_materialize, observe_resolve,
     orders_batch, source_ingest_v2, split,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "non-production-product-series-lab"
+))]
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 #[cfg(any(
@@ -62,7 +67,10 @@ use clutch_solana_layout::Intent;
     feature = "profile-direct-v3-source-v2-point"
 ))]
 use clutch_solana_reference::DirectV3Request;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "non-production-product-series-lab"
+))]
 use clutch_solana_reference::ExtensionRequest;
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
@@ -101,6 +109,8 @@ enum Route {
     ResolutionWork,
     #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
     GeneralV2,
+    #[cfg(feature = "non-production-product-series-lab")]
+    RecurringSeries,
     DecodeOnly,
 }
 
@@ -192,6 +202,18 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                     }) =>
             {
                 Route::GeneralV2
+            }
+            #[cfg(feature = "non-production-product-series-lab")]
+            Some(clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG)
+                if instruction_data.get(14).copied()
+                    == Some(clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION)
+                    && instruction_data.get(15).copied().is_some_and(|action| {
+                        (clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG)
+                            .contains(&action)
+                    }) =>
+            {
+                Route::RecurringSeries
             }
             Some(INTENT_SPLIT_HINT) => Route::Split,
             Some(INTENT_MERGE_HINT | INTENT_MATERIALIZE_HINT | INTENT_DEMATERIALIZE_HINT) => {
@@ -308,6 +330,9 @@ pub fn process(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> Outcome<()> {
+    if let Some(action) = disabled_source_v3_action(instruction_data) {
+        return crate::source_plane_v3::process_reserved_disabled(action);
+    }
     if disabled_canonical_tag(instruction_data) {
         return Err(ClutchError::UnsupportedInstruction.into());
     }
@@ -339,7 +364,54 @@ pub fn process(
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
         #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
         Route::GeneralV2 => process_general_v2(program_id, accounts, instruction_data),
+        #[cfg(feature = "non-production-product-series-lab")]
+        Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+/// Decode the strict successor envelope and enter only the recurring-Series
+/// half of the shared SourceSeries family. The central capability check runs
+/// before this route and keeps all six actions unreachable in current builds.
+#[inline(never)]
+#[cfg(feature = "non-production-product-series-lab")]
+fn process_recurring_series(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::RecurringSeries(action) => product_series::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
+    }
+}
+
+/// Identify one exact allocated-but-disabled SourcePlane V3 action without
+/// decoding or inspecting its payload accounts.
+fn disabled_source_v3_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::SourceSeriesAction> {
+    if !disabled_canonical_tag(instruction_data) {
+        return None;
+    }
+    match clutch_solana_layout::registry::decode_extension_action(
+        instruction_data[13],
+        instruction_data[14],
+        instruction_data[15],
+    ) {
+        Ok(clutch_solana_layout::registry::ExtensionAction::SourceV3(action)) => Some(action),
+        _ => None,
     }
 }
 
@@ -361,6 +433,10 @@ fn process_general_v2(
             action,
             request.envelope.payload,
         ),
+        ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
     }
 }
 
@@ -1747,6 +1823,42 @@ mod extension_registry_tests {
                 "series action {local_action}"
             );
         }
+        for local_action in clutch_solana_layout::registry::StructuredClaimAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::StructuredClaimAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG,
+                clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "structured-claim action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "structured-claim action {local_action}"
+            );
+        }
+        for local_action in clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::RECOVERY_FAMILY_TAG,
+                clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "recovery action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "recovery action {local_action}"
+            );
+        }
     }
 
     #[test]
@@ -1755,9 +1867,12 @@ mod extension_registry_tests {
             (74, 2, 1),
             (74, 1, 0),
             (74, 1, 39),
-            (75, 1, 1),
+            (75, 1, 0),
+            (75, 1, 9),
             (77, 2, 0),
             (77, 2, 19),
+            (78, 1, 0),
+            (78, 1, 10),
             (79, 1, 1),
         ] {
             let bytes = extension_request(family_tag, family_version, local_action);

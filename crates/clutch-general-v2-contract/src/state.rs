@@ -2649,31 +2649,101 @@ pub fn quantized_witness_body_digest_v3<B: Sha256BackendV1>(
     input: &[u8],
     sealed: bool,
 ) -> Result<Id32, CodecError> {
-    live(candidate_feed)?;
     let (header, tail) = complete_candidate_feed_v2(input, sealed)?;
-    let mut fixed = [0u8; QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES];
-    let mut w = Writer::exact(&mut fixed, QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES)?;
-    for id in [
+    quantized_witness_parts_digest_v3(
+        backend,
         candidate_feed,
         header.economic_domain_digest,
         header.native_claim_basis_id,
         header.candidate_price_digest,
+        header.price_scale,
+        header.common_denominator,
+        header.price_witness_schema,
+        header.quantized_semantics_version,
+        header.basis_degree,
+        header.outcome_count,
+        header.atom_count,
+        tail.prices_le(),
+        tail.atoms_le(),
+    )
+}
+
+/// Derive the canonical V3 quantized witness-body digest from checked typed
+/// fields and exact active-width price/atom tails.
+///
+/// This is the single transcript owner used both before a feed is serialized
+/// by an offchain builder and after a Feed/Stage is decoded onchain. Callers
+/// must supply little-endian `u64` prices and `(u128, u64)` atom records with
+/// no inactive padding.
+#[allow(clippy::too_many_arguments)]
+pub fn quantized_witness_parts_digest_v3<B: Sha256BackendV1>(
+    backend: &B,
+    candidate_feed: Id32,
+    economic_domain_digest: Id32,
+    native_claim_basis_id: Id32,
+    candidate_price_digest: Id32,
+    price_scale: u64,
+    common_denominator: u64,
+    price_witness_schema: u8,
+    quantized_semantics_version: u8,
+    basis_degree: u8,
+    outcome_count: u8,
+    atom_count: u8,
+    prices_le: &[u8],
+    atoms_le: &[u8],
+) -> Result<Id32, CodecError> {
+    for id in [
+        candidate_feed,
+        economic_domain_digest,
+        native_claim_basis_id,
+        candidate_price_digest,
+    ] {
+        live(id)?;
+    }
+    let expected_prices = usize::from(outcome_count)
+        .checked_mul(8)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let expected_atoms = usize::from(atom_count)
+        .checked_mul(QUANTIZED_ATOM_BYTES)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if price_scale == 0
+        || common_denominator == 0
+        || price_witness_schema != PRICE_MEASURE_WITNESS_SCHEMA_V3
+        || quantized_semantics_version != QUANTIZED_PRICE_MEASURE_SEMANTICS_V1
+        || basis_degree > 3
+        || !(2..=MAX_OUTCOMES_U8).contains(&outcome_count)
+        || outcome_count <= basis_degree
+        || atom_count == 0
+        || atom_count > outcome_count
+        || atom_count > MAX_QUANTIZED_ATOMS_U8
+        || prices_le.len() != expected_prices
+        || atoms_le.len() != expected_atoms
+    {
+        return Err(CodecError::InvalidState);
+    }
+    let mut fixed = [0u8; QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES];
+    let mut w = Writer::exact(&mut fixed, QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES)?;
+    for id in [
+        candidate_feed,
+        economic_domain_digest,
+        native_claim_basis_id,
+        candidate_price_digest,
     ] {
         w.bytes(&id.bytes())?;
     }
-    w.u64(header.price_scale)?;
-    w.u64(header.common_denominator)?;
-    w.u8(header.price_witness_schema)?;
-    w.u8(header.quantized_semantics_version)?;
-    w.u8(header.basis_degree)?;
-    w.u8(header.outcome_count)?;
-    w.u8(header.atom_count)?;
+    w.u64(price_scale)?;
+    w.u64(common_denominator)?;
+    w.u8(price_witness_schema)?;
+    w.u8(quantized_semantics_version)?;
+    w.u8(basis_degree)?;
+    w.u8(outcome_count)?;
+    w.u8(atom_count)?;
     w.finish()?;
     Id32::new(backend.sha256(&[
         QUANTIZED_WITNESS_BODY_DIGEST_DOMAIN_V3,
         &fixed,
-        tail.prices_le(),
-        tail.atoms_le(),
+        prices_le,
+        atoms_le,
     ]))
 }
 
@@ -2682,12 +2752,30 @@ pub fn empty_settlement_witness_digest_v1<B: Sha256BackendV1>(
     backend: &B,
     base_relation_candidate_id: Id32,
 ) -> Result<Id32, CodecError> {
+    settlement_witness_digest_v1(backend, base_relation_candidate_id, 0, &[])
+}
+
+/// Derive the canonical settlement-witness identity from the checked base
+/// RelationV2 candidate and exact active-width settlement slice tail.
+pub fn settlement_witness_digest_v1<B: Sha256BackendV1>(
+    backend: &B,
+    base_relation_candidate_id: Id32,
+    slice_count: u16,
+    slices_le: &[u8],
+) -> Result<Id32, CodecError> {
     live(base_relation_candidate_id)?;
-    let empty_count = 0u16.to_le_bytes();
+    let expected = usize::from(slice_count)
+        .checked_mul(SETTLEMENT_SLICE_BYTES)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if slice_count > MAX_SLICES_U16 || slices_le.len() != expected {
+        return Err(CodecError::InvalidState);
+    }
+    let count = slice_count.to_le_bytes();
     Id32::new(backend.sha256(&[
         SETTLEMENT_WITNESS_DIGEST_DOMAIN_V1,
         &base_relation_candidate_id.bytes(),
-        &empty_count,
+        &count,
+        slices_le,
     ]))
 }
 

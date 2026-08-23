@@ -13,3 +13,4 @@ pub mod provider;
 pub mod session;
 pub mod session_builder;
 pub mod transaction_builder;
+pub mod workflow_graph;

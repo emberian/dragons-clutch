@@ -420,7 +420,7 @@ impl FailureRuntimeExternalV2 {
                 != funding_terms.lamport_principal_refund.bytes()
             || semantic_admission.rent_payer.bytes()
                 != funding_terms.lamport_principal_refund.bytes()
-            || semantic_admission.neutral_sink.bytes() != funding_terms.neutral_sink.bytes()
+            || semantic_admission.neutral_sink.bytes() != funding_terms.neutral_lamport_sink.bytes()
         {
             return Err(Error::BindingMismatch);
         }

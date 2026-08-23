@@ -1,3 +1,4 @@
+use clutch_product_series::{CompiledSourceOccurrenceV3, FixedCodec as ProductFixedCodec};
 use clutch_source_plane_v3::{
     ContentId, FixedCodec, RawPageV3, SourcePlaneProgramV3, StatisticKeyV3,
     StatisticResultStatusV3, StatisticResultV3, SummaryProgramV3, WindowClosureReceiptV3,
@@ -24,14 +25,15 @@ const WINDOW_EVIDENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-window-evid
 const EVALUATION_AUTHORITY_DOMAIN: &[u8] = b"dragons-clutch/evaluation-authority/v1";
 const EVALUATION_DOMAIN: &[u8] = b"dragons-clutch/authenticated-evaluation/v1";
 const RESULT_ABSENCE_DOMAIN: &[u8] = b"dragons-clutch/authenticated-statistic-result-absence/v1";
-const OCCURRENCE_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-record/v1";
+const RESULT_ACCOUNT_AUTH_DOMAIN: &[u8] =
+    b"dragons-clutch/authenticated-statistic-result-account/v1";
 const OCCURRENCE_JOIN_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-join/v1";
 const FAILURE_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/failure-policy-source-handoff/v1";
 const SUCCESS_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/successful-evaluation-source-handoff/v1";
-const OCCURRENCE_MAGIC: [u8; 8] = *b"DCSOCCV1";
 
 /// Exact Product/Series-owned occurrence record width.
-pub const SOURCE_OCCURRENCE_RECORD_BYTES: usize = 184;
+pub const SOURCE_OCCURRENCE_RECORD_BYTES: usize =
+    clutch_product_series::SOURCE_OCCURRENCE_RECORD_BYTES;
 /// Maximum immutable pages folded by one bounded runtime call.
 pub const MAX_PAGES_PER_FOLD: usize = 4;
 
@@ -506,6 +508,67 @@ pub struct AuthenticatedStatisticResultAbsenceV1 {
     absence_id: ContentId,
 }
 
+/// Runtime-authenticated persisted immutable StatisticResult generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedStatisticResultAccountV1 {
+    route_id: ContentId,
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    header: RuntimeAccountHeaderV1,
+    statistic_key_id: ContentId,
+    window_evidence_id: ContentId,
+    result: StatisticResultV3,
+    summary_program_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedStatisticResultAccountV1 {
+    /// Exact authenticated Source route owning this result account.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Physical predictable result account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Digest of the complete globally tagged account bytes.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Exact persisted account header and reopen generation.
+    pub const fn header(self) -> RuntimeAccountHeaderV1 {
+        self.header
+    }
+
+    /// Predictable StatisticKey bound to the physical result slot.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+
+    /// Exact authenticated Window evidence evaluated into the result.
+    pub const fn window_evidence_id(self) -> ContentId {
+        self.window_evidence_id
+    }
+
+    /// Canonical successful or refused StatisticResult.
+    pub const fn result(self) -> StatisticResultV3 {
+        self.result
+    }
+
+    /// Exact SummaryProgram whose semantics the persisted result satisfies.
+    pub const fn summary_program_id(self) -> ContentId {
+        self.summary_program_id
+    }
+
+    /// Complete owner/PDA/body/evaluation/lineage authentication identity.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
 impl AuthenticatedStatisticResultAbsenceV1 {
     /// Predictable StatisticKey whose result is absent.
     pub const fn statistic_key_id(self) -> ContentId {
@@ -654,6 +717,90 @@ pub fn authenticate_statistic_result(
     })
 }
 
+/// Authenticate one persisted result account from program ownership, exact
+/// PDA/body/lineage, and its complete Window/Summary semantics.
+///
+/// The evaluator invocation is required when the account is first written.
+/// Later instructions consume this durable account receipt rather than
+/// pretending an ephemeral CPI return receipt survived across transactions.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_statistic_result_account(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    summary: &SummaryProgramV3,
+    evidence: AuthenticatedWindowEvidenceV1,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+) -> Result<AuthenticatedStatisticResultAccountV1> {
+    require_immutable_adapter_account(route, account)?;
+    if authenticated_lineage.access() != LineageAccessV1::ReadOnly {
+        return Err(Error::WrongPrivilege);
+    }
+    validate_window_route(route, window)?;
+    key.validate()?;
+    let key_id = key.id()?;
+    let (header, result) =
+        decode_runtime_account::<StatisticResultV3>(account.data, route.neutral_sink())?;
+    result.validate_against(key, summary, &evidence.seal(), window)?;
+    let summary_program_id = summary.id()?;
+    if evidence.route_id() != route.route_id()
+        || evidence.window_id() != window.id()?
+        || evidence.source_spec_id() != window.source_spec_id
+        || evidence.source_plane_contract_id() != window.source_plane_program_id
+        || evidence.repair_generation() != window.repair_generation
+        || key.window_id != window.id()?
+        || key.summary_program_id != summary_program_id
+        || result.statistic_key_id() != key_id
+        || result.window_seal_id() != evidence.seal().id()?
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let recipe = PdaRecipeV3::statistic_result(key_id)?;
+    derived_pda.validate_for(
+        route.adapter_program(),
+        recipe.id()?,
+        account.key,
+        header.bump,
+    )?;
+    let account_data_id = account_data_id(account.key, account.data)?;
+    let lineage = authenticated_lineage.lineage();
+    lineage.validate()?;
+    if lineage.adapter_program != route.adapter_program()
+        || lineage.family != LineageFamilyV1::StatisticResult
+        || lineage.semantic_binding_id != key_id
+        || !lineage.is_open
+        || lineage.active_account != account.key
+        || lineage.latest_generation != header.generation
+        || lineage.last_opened_state_id != account_data_id
+        || lineage.source_work_schedule_id != route.source_work_schedule_id()
+        || lineage.neutral_sink != route.neutral_sink()
+    {
+        return Err(Error::InvalidLineage);
+    }
+    let mut bytes = [0_u8; 208];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&account.key.bytes());
+    bytes[64..96].copy_from_slice(&account_data_id.bytes());
+    bytes[96..128].copy_from_slice(&result.id()?.bytes());
+    bytes[128..160].copy_from_slice(&summary_program_id.bytes());
+    bytes[160..192].copy_from_slice(&authenticated_lineage.id().bytes());
+    bytes[192..200].copy_from_slice(&header.generation.to_le_bytes());
+    bytes[200] = header.bump;
+    Ok(AuthenticatedStatisticResultAccountV1 {
+        route_id: route.route_id(),
+        account: account.key,
+        account_data_id,
+        header,
+        statistic_key_id: key_id,
+        window_evidence_id: evidence.id(),
+        result,
+        summary_program_id,
+        authentication_id: domain_id(RESULT_ACCOUNT_AUTH_DOMAIN, &bytes),
+    })
+}
+
 /// Whether the Product/Series component was atomically created or read exact-existing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -761,6 +908,13 @@ impl OccurrenceSourceReceiptV1 {
     }
 }
 
+/// Validate and identify the exact Product/Series-owned 184-byte codec.
+pub fn source_occurrence_record_id(input: &[u8]) -> Result<ContentId> {
+    let occurrence = CompiledSourceOccurrenceV3::decode(input).map_err(|_| Error::InvalidCodec)?;
+    let id = occurrence.id().map_err(|_| Error::InvalidCodec)?;
+    Ok(ContentId::from_bytes(id.bytes()))
+}
+
 /// Join the exact Product/Series-owned 184-byte codec without persisting a parallel DTO.
 pub fn join_source_occurrence(
     route: AuthenticatedSourceRouteV1,
@@ -770,19 +924,10 @@ pub fn join_source_occurrence(
     window: &WindowSpecV3,
     key: &StatisticKeyV3,
 ) -> Result<OccurrenceSourceReceiptV1> {
-    let occurrence_record_bytes = occurrence_account.data;
-    if occurrence_record_bytes.len() != SOURCE_OCCURRENCE_RECORD_BYTES
-        || occurrence_record_bytes[..8] != OCCURRENCE_MAGIC
-        || le_u16(&occurrence_record_bytes[8..10]) != 1
-        || occurrence_record_bytes[10..16]
-            .iter()
-            .any(|byte| *byte != 0)
-        || occurrence_record_bytes[52..56]
-            .iter()
-            .any(|byte| *byte != 0)
-    {
-        return Err(Error::InvalidCodec);
-    }
+    let occurrence = CompiledSourceOccurrenceV3::decode(occurrence_account.data)
+        .map_err(|_| Error::InvalidCodec)?;
+    let occurrence_record_id =
+        ContentId::from_bytes(occurrence.id().map_err(|_| Error::InvalidCodec)?.bytes());
     if occurrence_account.owner != route.generation_authority_program() {
         return Err(Error::WrongOwner);
     }
@@ -794,28 +939,18 @@ pub fn join_source_occurrence(
     }
     validate_window_route(route, window)?;
     key.validate()?;
-    let series_plan_id = id_at(occurrence_record_bytes, 16);
-    let ordinal = le_u32(&occurrence_record_bytes[48..52]);
-    let market_instance_id = id_at(occurrence_record_bytes, 56);
-    let attachment_plan_id = id_at(occurrence_record_bytes, 88);
-    let source_window_id = id_at(occurrence_record_bytes, 120);
-    let statistic_key_id = id_at(occurrence_record_bytes, 152);
-    for id in [
-        series_plan_id,
-        market_instance_id,
-        attachment_plan_id,
-        source_window_id,
-        statistic_key_id,
-    ] {
-        live_id(id)?;
-    }
+    let series_plan_id = ContentId::from_bytes(occurrence.series_plan_id.bytes());
+    let ordinal = occurrence.ordinal;
+    let market_instance_id = ContentId::from_bytes(occurrence.market_instance_id.bytes());
+    let attachment_plan_id = ContentId::from_bytes(occurrence.attachment_plan_id.bytes());
+    let source_window_id = ContentId::from_bytes(occurrence.source_window_id.bytes());
+    let statistic_key_id = ContentId::from_bytes(occurrence.statistic_key_id.bytes());
     if source_window_id != window.id()?
         || statistic_key_id != key.id()?
         || key.window_id != source_window_id
     {
         return Err(Error::MismatchedBinding);
     }
-    let occurrence_record_id = domain_id(OCCURRENCE_DOMAIN, occurrence_record_bytes);
     derived_pda.validate_for(
         route.generation_authority_program(),
         occurrence_record_id,
@@ -887,7 +1022,7 @@ pub struct SuccessfulEvaluationHandoffV1 {
     failure_policy_binding_id: ContentId,
     occurrence: OccurrenceSourceReceiptV1,
     window_evidence_id: ContentId,
-    evaluation_id: ContentId,
+    result_account_authentication_id: ContentId,
     result: StatisticResultV3,
     clock_policy_id: ContentId,
     clock: ClockSnapshotV1,
@@ -904,19 +1039,20 @@ impl SuccessfulEvaluationHandoffV1 {
         clock: ClockSnapshotV1,
         window: &WindowSpecV3,
         evidence: AuthenticatedWindowEvidenceV1,
-        evaluation: AuthenticatedEvaluationV1,
+        result_account: AuthenticatedStatisticResultAccountV1,
     ) -> Result<Self> {
         live_id(failure_policy_binding_id)?;
         let clock_policy_id = clock_policy.id()?;
         let window_id = window.id()?;
-        let result = evaluation.result();
+        let result = result_account.result();
         let result_id = result.id()?;
         if result.status() != StatisticResultStatusV3::Success
             || result.refusal_code() != 0
             || occurrence.window_id() != window_id
             || occurrence.window_id() != evidence.window_id()
             || occurrence.route_id() != evidence.route_id()
-            || occurrence.statistic_key_id() != evaluation.statistic_key_id()
+            || occurrence.route_id() != result_account.route_id()
+            || occurrence.statistic_key_id() != result_account.statistic_key_id()
             || occurrence.source_spec_id() != window.source_spec_id
             || occurrence.source_spec_id() != evidence.source_spec_id()
             || occurrence.source_plane_contract_id() != window.source_plane_program_id
@@ -924,7 +1060,7 @@ impl SuccessfulEvaluationHandoffV1 {
             || occurrence.repair_generation() != window.repair_generation
             || occurrence.repair_generation() != evidence.repair_generation()
             || occurrence.clock_policy_id() != clock_policy_id
-            || evaluation.window_evidence_id() != evidence.id()
+            || result_account.window_evidence_id() != evidence.id()
             || result.statistic_key_id() != occurrence.statistic_key_id()
             || result.window_seal_id() != evidence.seal().id()?
             || clock.unix_timestamp
@@ -932,21 +1068,22 @@ impl SuccessfulEvaluationHandoffV1 {
         {
             return Err(Error::InvalidFailureHandoff);
         }
-        let mut bytes = [0; 240];
+        let mut bytes = [0; 272];
         bytes[..32].copy_from_slice(&failure_policy_binding_id.bytes());
         bytes[32..64].copy_from_slice(&occurrence.id().bytes());
         bytes[64..96].copy_from_slice(&evidence.id().bytes());
-        bytes[96..128].copy_from_slice(&evaluation.id().bytes());
-        bytes[128..160].copy_from_slice(&result_id.bytes());
-        bytes[160..192].copy_from_slice(&window_id.bytes());
-        bytes[192..224].copy_from_slice(&clock_policy_id.bytes());
-        bytes[224..232].copy_from_slice(&clock.slot.to_le_bytes());
-        bytes[232..240].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
+        bytes[96..128].copy_from_slice(&result_account.id().bytes());
+        bytes[128..160].copy_from_slice(&result_account.summary_program_id().bytes());
+        bytes[160..192].copy_from_slice(&result_id.bytes());
+        bytes[192..224].copy_from_slice(&window_id.bytes());
+        bytes[224..256].copy_from_slice(&clock_policy_id.bytes());
+        bytes[256..264].copy_from_slice(&clock.slot.to_le_bytes());
+        bytes[264..272].copy_from_slice(&clock.unix_timestamp.to_le_bytes());
         Ok(Self {
             failure_policy_binding_id,
             occurrence,
             window_evidence_id: evidence.id(),
-            evaluation_id: evaluation.id(),
+            result_account_authentication_id: result_account.id(),
             result,
             clock_policy_id,
             clock,
@@ -969,9 +1106,9 @@ impl SuccessfulEvaluationHandoffV1 {
         self.window_evidence_id
     }
 
-    /// Exact reviewed evaluator invocation/result authentication receipt.
-    pub const fn evaluation_id(self) -> ContentId {
-        self.evaluation_id
+    /// Exact persisted result-account owner/PDA/body/Summary/lineage receipt.
+    pub const fn result_account_authentication_id(self) -> ContentId {
+        self.result_account_authentication_id
     }
 
     /// Canonical successful StatisticResult; its constructor provenance is this receipt.
@@ -1060,21 +1197,22 @@ impl FailurePolicySourceHandoffV1 {
         clock: ClockSnapshotV1,
         window: &WindowSpecV3,
         evidence: AuthenticatedWindowEvidenceV1,
-        evaluation: AuthenticatedEvaluationV1,
+        result_account: AuthenticatedStatisticResultAccountV1,
     ) -> Result<Self> {
         live_id(failure_policy_binding_id)?;
-        let result = evaluation.result();
+        let result = result_account.result();
         if result.status() != StatisticResultStatusV3::Refused
             || result.refusal_code() == 0
             || occurrence.window_id() != evidence.window_id()
             || occurrence.route_id() != evidence.route_id()
-            || occurrence.statistic_key_id() != evaluation.statistic_key_id()
+            || occurrence.route_id() != result_account.route_id()
+            || occurrence.statistic_key_id() != result_account.statistic_key_id()
             || occurrence.source_spec_id() != evidence.source_spec_id()
             || occurrence.source_plane_contract_id() != evidence.source_plane_contract_id()
             || occurrence.repair_generation() != evidence.repair_generation()
             || occurrence.window_id() != window.id()?
             || occurrence.clock_policy_id() != clock_policy.id()?
-            || evaluation.window_evidence_id() != evidence.id()
+            || result_account.window_evidence_id() != evidence.id()
             || result.statistic_key_id() != occurrence.statistic_key_id()
             || result.window_seal_id() != evidence.seal().id()?
             || clock.unix_timestamp
@@ -1090,7 +1228,7 @@ impl FailurePolicySourceHandoffV1 {
             evidence.id(),
             result.id()?,
             result.refusal_code(),
-            evaluation.id(),
+            result_account.id(),
         )
     }
 
@@ -1252,28 +1390,10 @@ fn validate_window_route(route: AuthenticatedSourceRouteV1, window: &WindowSpecV
     Ok(())
 }
 
-fn id_at(input: &[u8], at: usize) -> ContentId {
-    let mut bytes = [0; 32];
-    bytes.copy_from_slice(&input[at..at + 32]);
-    ContentId::from_bytes(bytes)
-}
-
 fn window_work_state_id(work: &WindowWorkV3) -> Result<ContentId> {
     let mut bytes = [0; WINDOW_WORK_BYTES];
     work.encode_into(&mut bytes)?;
     Ok(domain_id(WORK_STATE_DOMAIN, &bytes))
-}
-
-fn le_u16(input: &[u8]) -> u16 {
-    let mut bytes = [0; 2];
-    bytes.copy_from_slice(input);
-    u16::from_le_bytes(bytes)
-}
-
-fn le_u32(input: &[u8]) -> u32 {
-    let mut bytes = [0; 4];
-    bytes.copy_from_slice(input);
-    u32::from_le_bytes(bytes)
 }
 
 const _: () = assert!(RAW_PAGE_BYTES == 2_152);

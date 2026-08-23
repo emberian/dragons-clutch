@@ -179,6 +179,8 @@ dependencies = [
  "clutch-product-series",
  "clutch-solana-layout",
  "clutch-solana-reference",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-adapter",
  "clutch-source-plane-v3-runtime",
  "solana-account-info",
  "solana-cpi",
@@ -247,6 +249,7 @@ dependencies = [
 name = "clutch-source-plane-v3-runtime"
 version = "0.1.0"
 dependencies = [
+ "clutch-product-series",
  "clutch-source-plane-v3",
  "clutch-source-plane-v3-adapter",
  "clutch-terminal-identity-v1",
