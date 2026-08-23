@@ -217,12 +217,76 @@ fn process_advance_occurrence(
     Err(ClutchError::AuthorizationUnavailable.into())
 }
 
+/// Free-lapse account contract: Series registry, funding state, Rent,
+/// executing program, linked ProgramData, Product registry artifact, Source
+/// release, Clock, then the nine immutable Series artifacts.
+const LAPSE_SERIES_ACCOUNT_COUNT_V1: usize = 8 + SERIES_ARTIFACT_ACCOUNT_COUNT_V1;
+const IX_LAPSE_REGISTRY: usize = 0;
+const IX_LAPSE_FUNDING: usize = 1;
+const IX_LAPSE_RENT: usize = 2;
+const IX_LAPSE_PROGRAM: usize = 3;
+const IX_LAPSE_PROGRAMDATA: usize = 4;
+const IX_LAPSE_PRODUCT_REGISTRY: usize = 5;
+const IX_LAPSE_SOURCE_RELEASE: usize = 6;
+const IX_LAPSE_CLOCK: usize = 7;
+const IX_LAPSE_ARTIFACTS: usize = 8;
+
 fn process_lapse_occurrence(
-    _program_id: &Pubkey,
-    _accounts: &[AccountInfo<'_>],
-    _request: LapseSeriesOccurrenceIntentV1,
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: LapseSeriesOccurrenceIntentV1,
 ) -> Outcome<()> {
-    Err(ClutchError::AuthorizationUnavailable.into())
+    require_count(accounts, LAPSE_SERIES_ACCOUNT_COUNT_V1)?;
+    let rent = read_rent(&accounts[IX_LAPSE_RENT])?;
+    let registry_account = read_series_registry_account(
+        program_id,
+        &accounts[IX_LAPSE_REGISTRY],
+        request.series_plan_id,
+        &rent,
+    )?;
+    require(registry_account.activation_consumed(), ClutchError::Replay)?;
+    let artifacts = authenticate_series_artifact_accounts(
+        program_id,
+        &accounts[IX_LAPSE_ARTIFACTS..],
+        request.series_plan_id,
+        registry_account.value().funding_terms_id,
+    )?;
+    let product_registry = authenticate_product_capability_registry_v2(
+        program_id,
+        &accounts[IX_LAPSE_PRODUCT_REGISTRY],
+        registry_account.value().registry_release_id,
+        &accounts[IX_LAPSE_PROGRAM],
+        &accounts[IX_LAPSE_PROGRAMDATA],
+    )?;
+    require(
+        product_registry.projection().capability_profile_id
+            == registry_account.value().capability_profile_id,
+        ClutchError::MismatchedState,
+    )?;
+    artifacts.validate_registry_projection(&product_registry.projection())?;
+    let funding = read_series_funding_account(
+        program_id,
+        &accounts[IX_LAPSE_FUNDING],
+        request.series_plan_id,
+        &artifacts.quote,
+        &rent,
+    )?;
+    let source_release = crate::source_plane_v3::authenticate_release(
+        program_id,
+        &accounts[IX_LAPSE_SOURCE_RELEASE],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let _authority = AuthenticatedProductSourceAuthorityV1::new(product_registry, source_release)?;
+    lapse_series_occurrence(
+        &accounts[IX_LAPSE_FUNDING],
+        funding,
+        registry_account,
+        &artifacts,
+        source_release,
+        &accounts[IX_LAPSE_CLOCK],
+        request.ordinal,
+    )?;
+    Ok(())
 }
 
 /// Current local account contract for the lamport donation route:
