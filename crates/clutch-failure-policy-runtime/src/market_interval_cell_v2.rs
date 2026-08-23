@@ -6,10 +6,15 @@
 //! and canonical reset. The cell retains its original Rent principal through
 //! every session and is physically closed only at exhaustive Market terminal.
 
+use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
-    begin_quantized_interval_consensus_v1, FixedCodec, MarketInstanceV2Id,
-    QuantizedIntervalConsensusContextV1, QuantizedIntervalConsensusWorkV1,
-    QUANTIZED_INTERVAL_CONSENSUS_WORK_BYTES_V1,
+    advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
+    restore_verified_quantized_interval_payout_v1,
+    AuthenticatedQuantizedIntervalConsensusHistoryV1, ContentId as ProductContentId, FixedCodec,
+    MarketInstanceV2Id, QuantizedIntervalConsensusCertificateV1Id,
+    QuantizedIntervalConsensusContextV1, QuantizedIntervalConsensusProgressV1,
+    QuantizedIntervalConsensusWorkV1, QuantizedIntervalConsensusWorkV1Id,
+    VerifiedQuantizedIntervalPayoutV1, QUANTIZED_INTERVAL_CONSENSUS_WORK_BYTES_V1,
 };
 use clutch_source_plane_v3::ContentId as SourceContentId;
 use clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1;
@@ -18,7 +23,8 @@ use sha2::{Digest, Sha256};
 use crate::market_interval_history_v2::{
     FailureMarketIntervalFundingReceiptIdV2, FailureMarketIntervalFundingReceiptV2,
     FailureMarketIntervalHistoryAppendReceiptV2, FailureMarketIntervalHistoryRootV2,
-    FailureMarketIntervalHistoryV2,
+    FailureMarketIntervalHistoryV2, FailureMarketIntervalTerminalDispositionV2,
+    FailureMarketIntervalTerminalFactsV2,
 };
 use crate::market_policy_v1::{FailureMarketAccountIdV1, FailureMarketAdmissionStateV1};
 use crate::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
@@ -29,6 +35,13 @@ const CELL_VERSION_V2: u16 = 2;
 const CELL_STATE_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-interval-cell-state/v2";
 const CELL_ACTIVATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-cell-activation/v2";
+const CELL_WORK_AUTHORIZATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/failure-market-interval-cell-work-authorization/v2";
+const CELL_ADVANCE_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-interval-cell-advance/v2";
+const CELL_RESOLUTION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/failure-market-interval-cell-resolution/v2";
+const CELL_EXHAUSTION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/failure-market-interval-cell-exhaustion/v2";
 const CELL_RESET_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-interval-cell-reset/v2";
 const HEADER_BYTES_V2: usize = 16;
 const AMOUNT_COUNT_V2: usize = 7;
@@ -70,6 +83,22 @@ cell_id!(
 cell_id!(
     FailureMarketIntervalCellResetReceiptIdV2,
     "Typed receipt for one terminal append and canonical Idle reset."
+);
+cell_id!(
+    FailureMarketIntervalCellWorkAuthorizationIdV2,
+    "Typed exact liveness work authorization for one priced cell advance."
+);
+cell_id!(
+    FailureMarketIntervalCellAdvanceReceiptIdV2,
+    "Typed receipt joining one Product work transition to exact liveness payment."
+);
+cell_id!(
+    FailureMarketIntervalCellResolutionReceiptIdV2,
+    "Typed private receipt for one exhaustive Product interval resolution."
+);
+cell_id!(
+    FailureMarketIntervalCellExhaustionReceiptIdV2,
+    "Typed private receipt for one deterministic finite-budget exhaustion."
 );
 
 /// Reusable-cell lifecycle.
@@ -496,6 +525,15 @@ impl FailureMarketIntervalCellV2 {
         self.validate()?;
         let policy = admission.binding().facts();
         let funding_facts = funding.facts();
+        let quote_facts = quote.facts();
+        let aggregate_calls = history
+            .completed_work_calls()
+            .checked_add(self.completed_work_calls)
+            .ok_or(Error::BindingMismatch)?;
+        let aggregate_rewards = history
+            .exact_reward_lamports()
+            .checked_add(self.exact_reward_lamports)
+            .ok_or(Error::BindingMismatch)?;
         if self.failure_policy_binding_id != admission.binding().id()
             || self.market_instance_id != policy.market_instance_id
             || self.generation != policy.generation
@@ -513,6 +551,17 @@ impl FailureMarketIntervalCellV2 {
             || self.quote_admission_receipt_id.bytes() != quote.id().bytes()
             || history.quote_admission_receipt_id().bytes()
                 != self.quote_admission_receipt_id.bytes()
+            || quote_facts.failure_policy_binding_id != self.failure_policy_binding_id
+            || aggregate_calls > u64::from(quote_facts.maximum_calls)
+            || aggregate_rewards > quote_facts.work_principal_lamports
+            || (self.phase != FailureMarketIntervalCellPhaseV2::Idle
+                && usize::from(self.attempt_index) >= usize::from(quote.schedule().attempt_count))
+        {
+            return Err(Error::BindingMismatch);
+        }
+        if self.phase != FailureMarketIntervalCellPhaseV2::Idle
+            && self.accepted_progress_units
+                > quote.schedule().attempts[usize::from(self.attempt_index)].max_progress_units
         {
             return Err(Error::BindingMismatch);
         }
@@ -745,6 +794,715 @@ pub fn plan_activate_failure_market_interval_cell_v2<
         },
         receipt,
     ))
+}
+
+/// Complete expected Product/liveness join for one bounded paid advance.
+/// This projection is not authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellAdvanceFactsV2 {
+    /// Exact Active cell prestate.
+    pub cell_before: FailureMarketIntervalCellStateIdV2,
+    /// Exact Active cell poststate.
+    pub cell_after: FailureMarketIntervalCellStateIdV2,
+    /// Exact append-only history prestate left unchanged by this call.
+    pub history_state: crate::market_interval_history_v2::FailureMarketIntervalHistoryStateIdV2,
+    /// Product structural-work preimage identity.
+    pub product_work_before: QuantizedIntervalConsensusWorkV1Id,
+    /// Product structural-work postimage identity.
+    pub product_work_after: QuantizedIntervalConsensusWorkV1Id,
+    /// Exact Product-reported bounded progress.
+    pub processed_coordinates: u16,
+    /// Current Market quote attempt row.
+    pub attempt_index: u8,
+    /// Progress in the current attempt before this call.
+    pub accepted_progress_before: u64,
+    /// Progress in the current attempt after this call.
+    pub accepted_progress_after: u64,
+    /// One-based shared liveness call ordinal across all archived sessions.
+    pub call_ordinal: u32,
+    /// Sole work/reward recipient authenticated by the adapter.
+    pub reward_recipient: LivenessId,
+    /// Exact reward and liveness debit ceiling; these are deliberately equal.
+    pub exact_reward_lamports: u64,
+    /// Family receipt identity passed into the liveness runtime.
+    pub work_authorization_id: FailureMarketIntervalCellWorkAuthorizationIdV2,
+    /// Exact receipt identity persisted by the liveness runtime; this is the
+    /// explicit typed projection of `work_authorization_id`, not a second
+    /// liveness-owned receipt truth.
+    pub runtime_work_receipt_id: LivenessId,
+}
+
+/// Private liveness adapter authority for one exact priced work transition.
+pub trait AuthenticatedFailureMarketIntervalCellAdvanceV2 {
+    /// Authenticate the Recovery compartment prestate, intent, receipt account,
+    /// keeper, exact debit/payment, and atomic Product/Failure postwrites.
+    fn authenticate_failure_market_interval_cell_advance(
+        &self,
+        _expected: FailureMarketIntervalCellAdvanceFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Private-field joined receipt for one Product/liveness advance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellAdvanceReceiptV2 {
+    id: FailureMarketIntervalCellAdvanceReceiptIdV2,
+    facts: FailureMarketIntervalCellAdvanceFactsV2,
+}
+
+impl FailureMarketIntervalCellAdvanceReceiptV2 {
+    /// Complete joined advance identity.
+    pub const fn id(self) -> FailureMarketIntervalCellAdvanceReceiptIdV2 {
+        self.id
+    }
+
+    /// Complete exact joined facts.
+    pub const fn facts(self) -> FailureMarketIntervalCellAdvanceFactsV2 {
+        self.facts
+    }
+}
+
+/// One exact priced Product structural-work transition.
+#[derive(Clone, Copy, Debug)]
+pub struct FailureMarketIntervalCellAdvancePlanV2 {
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    next_work: QuantizedIntervalConsensusWorkV1,
+    progress: QuantizedIntervalConsensusProgressV1,
+    receipt: FailureMarketIntervalCellAdvanceReceiptV2,
+}
+
+impl FailureMarketIntervalCellAdvancePlanV2 {
+    /// Complete resulting reusable cell.
+    pub const fn resulting_cell(&self) -> FailureMarketIntervalCellV2 {
+        self.cell_plan.after
+    }
+
+    /// Exact Product work postimage for the same atomic batch.
+    pub const fn next_work(&self) -> QuantizedIntervalConsensusWorkV1 {
+        self.next_work
+    }
+
+    /// Exact Product-reported progress.
+    pub const fn progress(&self) -> QuantizedIntervalConsensusProgressV1 {
+        self.progress
+    }
+
+    /// Private joined Product/liveness receipt.
+    pub const fn receipt(&self) -> FailureMarketIntervalCellAdvanceReceiptV2 {
+        self.receipt
+    }
+
+    /// Stale-checked reusable-cell plan.
+    pub const fn cell_plan(&self) -> FailureMarketIntervalCellPlanV2 {
+        self.cell_plan
+    }
+}
+
+/// Advance one active session by the exact Product progress and Market-owned
+/// quote. No caller-supplied ceiling or alternate payout destination exists.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_advance_failure_market_interval_cell_v2<
+    A: AuthenticatedFailureMarketIntervalCellAdvanceV2 + ?Sized,
+>(
+    authority: &A,
+    cell: FailureMarketIntervalCellV2,
+    admission: FailureMarketAdmissionStateV1,
+    funding: FailureMarketIntervalFundingReceiptV2,
+    history: FailureMarketIntervalHistoryV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    source_success: SuccessfulEvaluationHandoffV1,
+    context: QuantizedIntervalConsensusContextV1<'_>,
+    requested_coordinates: u16,
+    reward_recipient: LivenessId,
+) -> Result<FailureMarketIntervalCellAdvancePlanV2> {
+    cell.validate_against(admission, funding, history, quote)?;
+    if cell.phase != FailureMarketIntervalCellPhaseV2::Active
+        || source_success.id() != cell.source_handoff_id
+        || source_success.failure_policy_binding_id().bytes()
+            != cell.failure_policy_binding_id.bytes()
+        || reward_recipient.is_zero()
+    {
+        return Err(Error::WrongPhase);
+    }
+    let current_work = cell.product_work()?.ok_or(Error::WrongPhase)?;
+    let product_work_before = current_work.id()?;
+    let (next_work, progress) = advance_quantized_interval_consensus_work_v1(
+        &current_work,
+        context,
+        requested_coordinates,
+    )?;
+    let product_work_after = next_work.id()?;
+    let accepted_progress_before = cell.accepted_progress_units;
+    let accepted_progress_after = accepted_progress_before
+        .checked_add(u64::from(progress.processed_coordinates))
+        .ok_or(Error::BindingMismatch)?;
+    let exact_reward_lamports = quote.schedule().exact_progress_reward_lamports(
+        cell.attempt_index,
+        accepted_progress_before,
+        accepted_progress_after,
+    )?;
+    let next_session_calls = cell
+        .completed_work_calls
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let aggregate_calls = history
+        .completed_work_calls()
+        .checked_add(next_session_calls)
+        .ok_or(Error::BindingMismatch)?;
+    let aggregate_rewards = history
+        .exact_reward_lamports()
+        .checked_add(cell.exact_reward_lamports)
+        .and_then(|value| value.checked_add(exact_reward_lamports))
+        .ok_or(Error::BindingMismatch)?;
+    let quote_facts = quote.facts();
+    if aggregate_calls > u64::from(quote_facts.maximum_calls)
+        || aggregate_rewards > quote_facts.work_principal_lamports
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let call_ordinal = u32::try_from(aggregate_calls).map_err(|_| Error::BindingMismatch)?;
+    let next_nonce = cell
+        .transition_nonce
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let cell_before = cell.id()?;
+    let history_state = history.id()?;
+    let mut authorization_hasher = Sha256::new();
+    authorization_hasher.update(CELL_WORK_AUTHORIZATION_DOMAIN_V2);
+    authorization_hasher.update(cell.failure_policy_binding_id.bytes());
+    authorization_hasher.update(cell.market_instance_id.bytes());
+    authorization_hasher.update(cell.generation.to_le_bytes());
+    authorization_hasher.update(cell_before.bytes());
+    authorization_hasher.update(history_state.bytes());
+    authorization_hasher.update(product_work_before.bytes());
+    authorization_hasher.update(product_work_after.bytes());
+    authorization_hasher.update(cell.transition_nonce.to_le_bytes());
+    authorization_hasher.update(next_nonce.to_le_bytes());
+    authorization_hasher.update(progress.processed_coordinates.to_le_bytes());
+    authorization_hasher.update([cell.attempt_index]);
+    authorization_hasher.update(accepted_progress_before.to_le_bytes());
+    authorization_hasher.update(accepted_progress_after.to_le_bytes());
+    authorization_hasher.update(call_ordinal.to_le_bytes());
+    authorization_hasher.update(reward_recipient.bytes());
+    authorization_hasher.update(exact_reward_lamports.to_le_bytes());
+    let work_authorization_id = FailureMarketIntervalCellWorkAuthorizationIdV2::from_bytes(
+        authorization_hasher.finalize().into(),
+    );
+    require_live(work_authorization_id.bytes())?;
+    let runtime_work_receipt_id = LivenessId::from_bytes(work_authorization_id.bytes());
+    let mut receipt_hasher = Sha256::new();
+    receipt_hasher.update(CELL_ADVANCE_DOMAIN_V2);
+    receipt_hasher.update(cell_before.bytes());
+    receipt_hasher.update(history_state.bytes());
+    receipt_hasher.update(product_work_before.bytes());
+    receipt_hasher.update(product_work_after.bytes());
+    receipt_hasher.update(progress.processed_coordinates.to_le_bytes());
+    receipt_hasher.update([cell.attempt_index]);
+    receipt_hasher.update(accepted_progress_before.to_le_bytes());
+    receipt_hasher.update(accepted_progress_after.to_le_bytes());
+    receipt_hasher.update(call_ordinal.to_le_bytes());
+    receipt_hasher.update(reward_recipient.bytes());
+    receipt_hasher.update(exact_reward_lamports.to_le_bytes());
+    receipt_hasher.update(work_authorization_id.bytes());
+    let receipt_id =
+        FailureMarketIntervalCellAdvanceReceiptIdV2::from_bytes(receipt_hasher.finalize().into());
+    require_live(receipt_id.bytes())?;
+    let mut after = cell;
+    after.transition_nonce = next_nonce;
+    after.accepted_progress_units = accepted_progress_after;
+    after.completed_work_calls = next_session_calls;
+    after.exact_reward_lamports = cell
+        .exact_reward_lamports
+        .checked_add(exact_reward_lamports)
+        .ok_or(Error::BindingMismatch)?;
+    after.last_transition_receipt_id = SourceContentId::from_bytes(receipt_id.bytes());
+    after.last_liveness_work_receipt_id =
+        SourceContentId::from_bytes(runtime_work_receipt_id.bytes());
+    next_work.encode_into(&mut after.product_work_body)?;
+    after.validate_against(admission, funding, history, quote)?;
+    let cell_after = after.id()?;
+    let facts = FailureMarketIntervalCellAdvanceFactsV2 {
+        cell_before,
+        cell_after,
+        history_state,
+        product_work_before,
+        product_work_after,
+        processed_coordinates: progress.processed_coordinates,
+        attempt_index: cell.attempt_index,
+        accepted_progress_before,
+        accepted_progress_after,
+        call_ordinal,
+        reward_recipient,
+        exact_reward_lamports,
+        work_authorization_id,
+        runtime_work_receipt_id,
+    };
+    authority.authenticate_failure_market_interval_cell_advance(facts)?;
+    let receipt = FailureMarketIntervalCellAdvanceReceiptV2 {
+        id: receipt_id,
+        facts,
+    };
+    Ok(FailureMarketIntervalCellAdvancePlanV2 {
+        cell_plan: FailureMarketIntervalCellPlanV2 {
+            before: cell,
+            after,
+        },
+        next_work,
+        progress,
+        receipt,
+    })
+}
+
+/// Exact private resolution facts consumed by the Product/Resolution writer.
+/// This projection is not authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellResolutionFactsV2 {
+    /// Exact complete Active cell prestate.
+    pub cell_before: FailureMarketIntervalCellStateIdV2,
+    /// Exact terminal Resolved cell poststate.
+    pub cell_after: FailureMarketIntervalCellStateIdV2,
+    /// Full-width economic Market.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Shared Failure/liveness generation.
+    pub generation: u64,
+    /// Exclusive Product/Series link pin.
+    pub session_binding_id: SourceContentId,
+    /// Exact Source successful-evaluation handoff.
+    pub source_handoff_id: SourceContentId,
+    /// Complete terminal Product structural-work identity.
+    pub terminal_work_id: QuantizedIntervalConsensusWorkV1Id,
+    /// Exact exhaustive Product certificate.
+    pub product_certificate_id: QuantizedIntervalConsensusCertificateV1Id,
+    /// Last exact family work receipt persisted by the liveness runtime, or
+    /// zero for a zero-work terminal.
+    pub last_runtime_work_receipt_id: LivenessId,
+    /// Final bounded call count in this session.
+    pub completed_work_calls: u64,
+    /// Final exact keeper rewards in this session.
+    pub exact_reward_lamports: u64,
+}
+
+/// Private account/runtime authority for exhaustive resolution restoration.
+pub trait AuthenticatedFailureMarketIntervalCellResolutionV2:
+    AuthenticatedQuantizedIntervalConsensusHistoryV1
+{
+    /// Authenticate the exact 0xab transition chain, current Source handoff,
+    /// Product link/root, and once-only Resolution V5 writer prestate.
+    fn authenticate_failure_market_interval_cell_resolution(
+        &self,
+        _expected: FailureMarketIntervalCellResolutionFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Private exhaustive resolution capability and durable cell receipt.
+#[derive(Clone, Copy, Debug)]
+pub struct FailureMarketIntervalCellResolutionReceiptV2 {
+    id: FailureMarketIntervalCellResolutionReceiptIdV2,
+    failure_policy_binding_id: FailurePolicyBindingId,
+    facts: FailureMarketIntervalCellResolutionFactsV2,
+    verified_payout: VerifiedQuantizedIntervalPayoutV1,
+}
+
+impl FailureMarketIntervalCellResolutionReceiptV2 {
+    /// Complete private resolution identity.
+    pub const fn id(self) -> FailureMarketIntervalCellResolutionReceiptIdV2 {
+        self.id
+    }
+
+    /// Exact shared Failure policy.
+    pub const fn failure_policy_binding_id(self) -> FailurePolicyBindingId {
+        self.failure_policy_binding_id
+    }
+
+    /// Complete authenticated resolution facts.
+    pub const fn facts(self) -> FailureMarketIntervalCellResolutionFactsV2 {
+        self.facts
+    }
+
+    /// Private Product exhaustive-payout capability. The Product/Resolution
+    /// writer must consume this in the same atomic batch as the cell postwrite.
+    pub const fn verified_payout(self) -> VerifiedQuantizedIntervalPayoutV1 {
+        self.verified_payout
+    }
+}
+
+/// One exhaustive Product resolution and exact terminal cell postwrite.
+#[derive(Clone, Copy, Debug)]
+pub struct FailureMarketIntervalCellResolutionPlanV2 {
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    receipt: FailureMarketIntervalCellResolutionReceiptV2,
+}
+
+impl FailureMarketIntervalCellResolutionPlanV2 {
+    /// Complete terminal reusable-cell poststate.
+    pub const fn resulting_cell(&self) -> FailureMarketIntervalCellV2 {
+        self.cell_plan.after
+    }
+
+    /// Private Product/Failure resolution receipt.
+    pub const fn receipt(&self) -> FailureMarketIntervalCellResolutionReceiptV2 {
+        self.receipt
+    }
+
+    /// Stale-checked cell plan.
+    pub const fn cell_plan(&self) -> FailureMarketIntervalCellPlanV2 {
+        self.cell_plan
+    }
+}
+
+/// Restore Product's private exhaustive payout only from the exact persisted
+/// transition chain, then latch one once-only Failure resolution receipt.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_resolve_failure_market_interval_cell_v2<
+    A: AuthenticatedFailureMarketIntervalCellResolutionV2 + ?Sized,
+>(
+    authority: &A,
+    cell: FailureMarketIntervalCellV2,
+    admission: FailureMarketAdmissionStateV1,
+    funding: FailureMarketIntervalFundingReceiptV2,
+    history: FailureMarketIntervalHistoryV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    source_success: SuccessfulEvaluationHandoffV1,
+    context: QuantizedIntervalConsensusContextV1<'_>,
+) -> Result<FailureMarketIntervalCellResolutionPlanV2> {
+    cell.validate_against(admission, funding, history, quote)?;
+    if cell.phase != FailureMarketIntervalCellPhaseV2::Active
+        || source_success.id() != cell.source_handoff_id
+        || source_success.failure_policy_binding_id().bytes()
+            != cell.failure_policy_binding_id.bytes()
+    {
+        return Err(Error::WrongPhase);
+    }
+    let work = cell.product_work()?.ok_or(Error::WrongPhase)?;
+    if !work.is_complete()
+        || work.source_interval_id().bytes() != source_success.statistic_result_id()?.bytes()
+        || work.source_occurrence_id().bytes()
+            != source_success.occurrence().occurrence_record_id().bytes()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let verified_payout = restore_verified_quantized_interval_payout_v1(authority, &work, context)?;
+    let terminal_work_id = work.id()?;
+    let product_certificate_id = verified_payout.certificate().id()?;
+    let cell_before = cell.id()?;
+    let last_runtime_work_receipt_id =
+        LivenessId::from_bytes(cell.last_liveness_work_receipt_id.bytes());
+    let mut receipt_hasher = Sha256::new();
+    receipt_hasher.update(CELL_RESOLUTION_DOMAIN_V2);
+    receipt_hasher.update(cell.failure_policy_binding_id.bytes());
+    receipt_hasher.update(cell.market_instance_id.bytes());
+    receipt_hasher.update(cell.generation.to_le_bytes());
+    receipt_hasher.update(cell_before.bytes());
+    receipt_hasher.update(history.id()?.bytes());
+    receipt_hasher.update(cell.session_binding_id.bytes());
+    receipt_hasher.update(source_success.id().bytes());
+    receipt_hasher.update(terminal_work_id.bytes());
+    receipt_hasher.update(product_certificate_id.bytes());
+    receipt_hasher.update(last_runtime_work_receipt_id.bytes());
+    receipt_hasher.update(cell.completed_work_calls.to_le_bytes());
+    receipt_hasher.update(cell.exact_reward_lamports.to_le_bytes());
+    let id = FailureMarketIntervalCellResolutionReceiptIdV2::from_bytes(
+        receipt_hasher.finalize().into(),
+    );
+    require_live(id.bytes())?;
+    let mut after = cell;
+    after.phase = FailureMarketIntervalCellPhaseV2::Resolved;
+    after.disposition = FailureMarketIntervalCellDispositionV2::Resolved;
+    after.terminal_receipt_id = SourceContentId::from_bytes(id.bytes());
+    after.validate_against(admission, funding, history, quote)?;
+    let cell_after = after.id()?;
+    let facts = FailureMarketIntervalCellResolutionFactsV2 {
+        cell_before,
+        cell_after,
+        market_instance_id: cell.market_instance_id,
+        generation: cell.generation,
+        session_binding_id: cell.session_binding_id,
+        source_handoff_id: source_success.id(),
+        terminal_work_id,
+        product_certificate_id,
+        last_runtime_work_receipt_id,
+        completed_work_calls: cell.completed_work_calls,
+        exact_reward_lamports: cell.exact_reward_lamports,
+    };
+    authority.authenticate_failure_market_interval_cell_resolution(facts)?;
+    Ok(FailureMarketIntervalCellResolutionPlanV2 {
+        cell_plan: FailureMarketIntervalCellPlanV2 {
+            before: cell,
+            after,
+        },
+        receipt: FailureMarketIntervalCellResolutionReceiptV2 {
+            id,
+            failure_policy_binding_id: cell.failure_policy_binding_id,
+            facts,
+            verified_payout,
+        },
+    })
+}
+
+/// Canonical first exhaustion boundary reached by an incomplete session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FailureMarketIntervalExhaustionReasonV2 {
+    /// The exact attempt-row progress allocation was consumed.
+    AttemptProgress = 1,
+    /// The shared Market liveness call bound was consumed.
+    MarketCalls = 2,
+    /// The exact shared work principal was consumed.
+    MarketPrincipal = 3,
+}
+
+impl FailureMarketIntervalExhaustionReasonV2 {
+    fn byte(self) -> u8 {
+        match self {
+            Self::AttemptProgress => 1,
+            Self::MarketCalls => 2,
+            Self::MarketPrincipal => 3,
+        }
+    }
+}
+
+/// Exact deterministic exhaustion facts. This projection is not authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellExhaustionFactsV2 {
+    /// Exact incomplete Active cell prestate.
+    pub cell_before: FailureMarketIntervalCellStateIdV2,
+    /// Exact terminal Exhausted cell poststate.
+    pub cell_after: FailureMarketIntervalCellStateIdV2,
+    /// Full-width economic Market.
+    pub market_instance_id: MarketInstanceV2Id,
+    /// Shared Failure/liveness generation.
+    pub generation: u64,
+    /// Exact subordinate session binding.
+    pub session_binding_id: SourceContentId,
+    /// Exact incomplete Product work.
+    pub terminal_work_id: QuantizedIntervalConsensusWorkV1Id,
+    /// Canonical first reached exhaustion boundary.
+    pub reason: FailureMarketIntervalExhaustionReasonV2,
+    /// Exact attempt progress consumed.
+    pub accepted_progress_units: u64,
+    /// Exact shared completed-call total, including archived sessions.
+    pub aggregate_work_calls: u64,
+    /// Exact shared keeper-reward total, including archived sessions.
+    pub aggregate_reward_lamports: u64,
+}
+
+/// Private runtime authority for the exact exhaustion terminal postwrite.
+pub trait AuthenticatedFailureMarketIntervalCellExhaustionV2 {
+    /// Authenticate the persisted cell/history bodies and liveness compartment
+    /// without allowing a discretionary resolver or alternate disposition.
+    fn authenticate_failure_market_interval_cell_exhaustion(
+        &self,
+        _expected: FailureMarketIntervalCellExhaustionFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Private deterministic exhaustion receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellExhaustionReceiptV2 {
+    id: FailureMarketIntervalCellExhaustionReceiptIdV2,
+    failure_policy_binding_id: FailurePolicyBindingId,
+    facts: FailureMarketIntervalCellExhaustionFactsV2,
+}
+
+impl FailureMarketIntervalCellExhaustionReceiptV2 {
+    /// Complete exhaustion identity.
+    pub const fn id(self) -> FailureMarketIntervalCellExhaustionReceiptIdV2 {
+        self.id
+    }
+
+    /// Exact shared Failure policy.
+    pub const fn failure_policy_binding_id(self) -> FailurePolicyBindingId {
+        self.failure_policy_binding_id
+    }
+
+    /// Complete authenticated exhaustion facts.
+    pub const fn facts(self) -> FailureMarketIntervalCellExhaustionFactsV2 {
+        self.facts
+    }
+}
+
+/// One deterministic exhausted terminal and exact cell postwrite.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellExhaustionPlanV2 {
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    receipt: FailureMarketIntervalCellExhaustionReceiptV2,
+}
+
+impl FailureMarketIntervalCellExhaustionPlanV2 {
+    /// Complete terminal reusable-cell poststate.
+    pub const fn resulting_cell(self) -> FailureMarketIntervalCellV2 {
+        self.cell_plan.after
+    }
+
+    /// Private deterministic exhaustion receipt.
+    pub const fn receipt(self) -> FailureMarketIntervalCellExhaustionReceiptV2 {
+        self.receipt
+    }
+
+    /// Stale-checked cell plan.
+    pub const fn cell_plan(self) -> FailureMarketIntervalCellPlanV2 {
+        self.cell_plan
+    }
+}
+
+/// Latch the canonical first finite exhaustion boundary for incomplete work.
+pub fn plan_exhaust_failure_market_interval_cell_v2<
+    A: AuthenticatedFailureMarketIntervalCellExhaustionV2 + ?Sized,
+>(
+    authority: &A,
+    cell: FailureMarketIntervalCellV2,
+    admission: FailureMarketAdmissionStateV1,
+    funding: FailureMarketIntervalFundingReceiptV2,
+    history: FailureMarketIntervalHistoryV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+) -> Result<FailureMarketIntervalCellExhaustionPlanV2> {
+    cell.validate_against(admission, funding, history, quote)?;
+    if cell.phase != FailureMarketIntervalCellPhaseV2::Active {
+        return Err(Error::WrongPhase);
+    }
+    let work = cell.product_work()?.ok_or(Error::WrongPhase)?;
+    if work.is_complete() {
+        return Err(Error::WrongPhase);
+    }
+    let schedule = quote.schedule();
+    let attempt = schedule.attempts[usize::from(cell.attempt_index)];
+    let aggregate_work_calls = history
+        .completed_work_calls()
+        .checked_add(cell.completed_work_calls)
+        .ok_or(Error::BindingMismatch)?;
+    let aggregate_reward_lamports = history
+        .exact_reward_lamports()
+        .checked_add(cell.exact_reward_lamports)
+        .ok_or(Error::BindingMismatch)?;
+    let reason = canonical_exhaustion_reason(
+        cell.accepted_progress_units,
+        attempt.max_progress_units,
+        aggregate_work_calls,
+        u64::from(schedule.maximum_calls),
+        aggregate_reward_lamports,
+        quote.facts().work_principal_lamports,
+    )?;
+    let terminal_work_id = work.id()?;
+    let cell_before = cell.id()?;
+    let mut receipt_hasher = Sha256::new();
+    receipt_hasher.update(CELL_EXHAUSTION_DOMAIN_V2);
+    receipt_hasher.update(cell.failure_policy_binding_id.bytes());
+    receipt_hasher.update(cell.market_instance_id.bytes());
+    receipt_hasher.update(cell.generation.to_le_bytes());
+    receipt_hasher.update(cell_before.bytes());
+    receipt_hasher.update(history.id()?.bytes());
+    receipt_hasher.update(cell.session_binding_id.bytes());
+    receipt_hasher.update(terminal_work_id.bytes());
+    receipt_hasher.update([reason.byte()]);
+    receipt_hasher.update(cell.accepted_progress_units.to_le_bytes());
+    receipt_hasher.update(aggregate_work_calls.to_le_bytes());
+    receipt_hasher.update(aggregate_reward_lamports.to_le_bytes());
+    let id = FailureMarketIntervalCellExhaustionReceiptIdV2::from_bytes(
+        receipt_hasher.finalize().into(),
+    );
+    require_live(id.bytes())?;
+    let mut after = cell;
+    after.phase = FailureMarketIntervalCellPhaseV2::Resolved;
+    after.disposition = FailureMarketIntervalCellDispositionV2::Exhausted;
+    after.terminal_receipt_id = SourceContentId::from_bytes(id.bytes());
+    after.validate_against(admission, funding, history, quote)?;
+    let cell_after = after.id()?;
+    let facts = FailureMarketIntervalCellExhaustionFactsV2 {
+        cell_before,
+        cell_after,
+        market_instance_id: cell.market_instance_id,
+        generation: cell.generation,
+        session_binding_id: cell.session_binding_id,
+        terminal_work_id,
+        reason,
+        accepted_progress_units: cell.accepted_progress_units,
+        aggregate_work_calls,
+        aggregate_reward_lamports,
+    };
+    authority.authenticate_failure_market_interval_cell_exhaustion(facts)?;
+    Ok(FailureMarketIntervalCellExhaustionPlanV2 {
+        cell_plan: FailureMarketIntervalCellPlanV2 {
+            before: cell,
+            after,
+        },
+        receipt: FailureMarketIntervalCellExhaustionReceiptV2 {
+            id,
+            failure_policy_binding_id: cell.failure_policy_binding_id,
+            facts,
+        },
+    })
+}
+
+fn canonical_exhaustion_reason(
+    accepted_progress_units: u64,
+    maximum_attempt_progress_units: u64,
+    aggregate_work_calls: u64,
+    maximum_work_calls: u64,
+    aggregate_reward_lamports: u64,
+    work_principal_lamports: u64,
+) -> Result<FailureMarketIntervalExhaustionReasonV2> {
+    if accepted_progress_units == maximum_attempt_progress_units {
+        Ok(FailureMarketIntervalExhaustionReasonV2::AttemptProgress)
+    } else if aggregate_work_calls == maximum_work_calls {
+        Ok(FailureMarketIntervalExhaustionReasonV2::MarketCalls)
+    } else if aggregate_reward_lamports == work_principal_lamports {
+        Ok(FailureMarketIntervalExhaustionReasonV2::MarketPrincipal)
+    } else {
+        Err(Error::WrongPhase)
+    }
+}
+
+/// Project the exact terminal facts which the history owner must authenticate
+/// and append before this cell may reset. The terminal receipt and both cell
+/// postimages are derived from private state rather than caller DTOs.
+pub fn project_failure_market_interval_terminal_history_facts_v2(
+    cell: FailureMarketIntervalCellV2,
+    history: FailureMarketIntervalHistoryV2,
+) -> Result<FailureMarketIntervalTerminalFactsV2> {
+    cell.validate()?;
+    history.validate_internal()?;
+    if cell.phase != FailureMarketIntervalCellPhaseV2::Resolved
+        || history.failure_policy_binding_id() != cell.failure_policy_binding_id
+        || history.market_instance_id() != cell.market_instance_id
+        || history.generation() != cell.generation
+        || history.funding_receipt_id() != cell.funding_receipt_id
+        || history.history_account() != cell.history_account
+        || history.completed_session_count() != cell.completed_session_count
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let disposition = match cell.disposition {
+        FailureMarketIntervalCellDispositionV2::Resolved => {
+            FailureMarketIntervalTerminalDispositionV2::Resolved
+        }
+        FailureMarketIntervalCellDispositionV2::Exhausted => {
+            FailureMarketIntervalTerminalDispositionV2::Exhausted
+        }
+        FailureMarketIntervalCellDispositionV2::None => return Err(Error::WrongPhase),
+    };
+    let idle = project_idle_failure_market_interval_cell_v2(cell)?;
+    let last_liveness_work_receipt_id = if cell.last_liveness_work_receipt_id.is_zero() {
+        ProductContentId::ZERO
+    } else {
+        ProductContentId::from_bytes(cell.last_liveness_work_receipt_id.bytes())
+    };
+    Ok(FailureMarketIntervalTerminalFactsV2 {
+        history_before: history.id()?,
+        session_binding_id: ProductContentId::from_bytes(cell.session_binding_id.bytes()),
+        session_terminal_receipt_id: ProductContentId::from_bytes(cell.terminal_receipt_id.bytes()),
+        terminal_state_commitment: ProductContentId::from_bytes(cell.id()?.bytes()),
+        idle_state_commitment: ProductContentId::from_bytes(idle.id()?.bytes()),
+        last_liveness_work_receipt_id,
+        disposition,
+        completed_work_calls: u32::try_from(cell.completed_work_calls)
+            .map_err(|_| Error::BindingMismatch)?,
+        exact_reward_lamports: cell.exact_reward_lamports,
+    })
 }
 
 /// Private reset receipt proving history append and canonical Idle poststate.
@@ -980,6 +1738,26 @@ mod tests {
         assert_eq!(
             FailureMarketIntervalCellPhaseV2::decode(0),
             Err(Error::InvalidEnum)
+        );
+    }
+
+    #[test]
+    fn exhaustion_trigger_is_exact_ordered_and_refuses_near_misses() {
+        assert_eq!(
+            canonical_exhaustion_reason(5, 5, 7, 7, 11, 11),
+            Ok(FailureMarketIntervalExhaustionReasonV2::AttemptProgress)
+        );
+        assert_eq!(
+            canonical_exhaustion_reason(4, 5, 7, 7, 11, 11),
+            Ok(FailureMarketIntervalExhaustionReasonV2::MarketCalls)
+        );
+        assert_eq!(
+            canonical_exhaustion_reason(4, 5, 6, 7, 11, 11),
+            Ok(FailureMarketIntervalExhaustionReasonV2::MarketPrincipal)
+        );
+        assert_eq!(
+            canonical_exhaustion_reason(4, 5, 6, 7, 10, 11),
+            Err(Error::WrongPhase)
         );
     }
 }
