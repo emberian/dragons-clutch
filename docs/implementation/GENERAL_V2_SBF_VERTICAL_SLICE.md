@@ -104,7 +104,11 @@ gate against the central registry.
 
 The same central block reserves the StructuredClaim descriptor at `0x88/1`
 and a fresh General FinalPot at `0x89/1`. Neither reservation supplies a live
-route or a FinalPot codec/retirement authority in this lab.
+route or a FinalPot codec/retirement authority in this lab. SourcePlane V3 owns
+the immediately following `0x8a/1` through `0x92/1` block; General does not
+reinterpret those release, head, lineage, raw-page, work, seal, statistic, or
+liveness-receipt coordinates. Dealer allocations begin only after that
+coordinated block is complete.
 
 The first implementation checkpoint additionally froze and centrally reserved:
 
