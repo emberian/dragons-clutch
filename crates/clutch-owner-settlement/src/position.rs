@@ -100,3 +100,37 @@ pub struct PositionSettlementPoststateV3 {
     /// Receipt-authorized settlement preserves Replay sequence.
     pub replay_sequence: u64,
 }
+
+impl PositionSettlementPoststateV3 {
+    /// Validate this poststate as the exact permitted balance successor of an
+    /// authenticated Position V3 prestate.
+    ///
+    /// Every identity, purpose, lifecycle, generation, controller, Replay,
+    /// Reservation-count, and rent field must be byte-for-byte preserved. The
+    /// caller names the only three mutable balance compartments explicitly.
+    pub fn validate_successor_of(
+        self,
+        prestate: AuthenticatedPositionV3,
+        expected_cash_atoms: u64,
+        expected_reserved_cash_atoms: u64,
+        expected_native_eggs: [u64; MAX_OUTCOMES],
+    ) -> Result<()> {
+        prestate.validate()?;
+        let expected = PositionAccountV3::new(PositionV3Fields {
+            cash_atoms: expected_cash_atoms,
+            reserved_cash_atoms: expected_reserved_cash_atoms,
+            native_eggs: expected_native_eggs,
+            ..prestate.semantic.fields()
+        })
+        .map_err(|_| Error::InvalidAccount)?;
+        if self.account != prestate.account
+            || self.general_market_runtime != prestate.general_market_runtime
+            || self.prestate_semantic_id != prestate.semantic_id
+            || self.semantic != expected
+            || self.replay_sequence != prestate.replay_sequence
+        {
+            return Err(Error::InvariantViolation);
+        }
+        Ok(())
+    }
+}
