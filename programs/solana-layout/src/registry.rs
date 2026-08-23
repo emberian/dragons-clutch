@@ -137,8 +137,10 @@ pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
 /// General V2 owner-aggregated settlement account discriminator.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
-/// General V2 owner-aggregated settlement account version.
-pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn non-aliasing General V2 owner-settlement V1 version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
+/// Sole future presence-explicit General V2 owner-settlement version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 2;
 /// General V2 selected composite-fee record envelope discriminator.
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// General V2 selected composite-fee record envelope version.
@@ -583,10 +585,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-settlement-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-settlement-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1554,6 +1565,10 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
             ),
             (
@@ -1615,6 +1630,10 @@ mod tests {
             (
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
                 SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,

@@ -30,12 +30,13 @@ use clutch_general_v2_contract::{
     MAX_SLICES, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{
-    build_owner_settlement_book_v1, owner_rounding_residue_price_units,
-    AuthenticatedDirectSettlementReceiptV1, AuthenticatedOrderMembershipV1,
-    AuthenticatedSettlementReceiptEndV1, AuthenticatedVirtualMergeReceiptV1,
-    AuthenticatedVirtualSplitReceiptV1, CandidateSettlementTotalsV1, Error as OwnerSettlementError,
-    OrderKindV1, OwnerSettlementBookV1, SelectedOwnerFeeV1, SettlementCashPotExpectationV1,
-    SettlementSideV1, VerifiedSettlementOrderV1, VirtualCashDirectionV1,
+    build_owner_settlement_book_v2, derive_settlement_receipt_data_id_v2,
+    owner_rounding_residue_price_units, AuthenticatedOrderMembershipV2,
+    AuthenticatedSettlementReceiptEndV2, AuthenticatedSettlementReceiptV2,
+    CandidateSettlementTotalsV2, Error as OwnerSettlementError, OrderKindV1, OwnerSettlementBookV2,
+    PresentConsiderationV2, PresentPriceV2, SelectedOwnerFeeV1, SettlementCashPotExpectationV1,
+    SettlementReceiptDataHashV2, SettlementReceiptRouteV2, SettlementSideV1,
+    VerifiedSettlementOrderV2, VirtualCashDirectionV1,
 };
 use clutch_retirement::{
     project_general_position_v3, AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3,
@@ -176,6 +177,18 @@ impl PositionV3Sha256Backend for PositionBodySha256V3 {
         let mut hash = Sha256::new();
         hash.update(domain);
         hash.update(body);
+        hash.finalize().into()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReceiptDataSha256V2;
+
+impl SettlementReceiptDataHashV2 for ReceiptDataSha256V2 {
+    fn sha256(&self, domain: &[u8], transcript: &[u8]) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(domain);
+        hash.update(transcript);
         hash.finalize().into()
     }
 }
@@ -632,13 +645,15 @@ pub struct CandidateSettlementProjectionV1 {
     slices: [CanonicalSettlementSliceV1; MAX_SLICES],
     slice_count: u16,
     receipt_end_count: u16,
-    settlement_orders: [VerifiedSettlementOrderV1; MAX_ORDERS],
-    settlement_memberships: [Option<AuthenticatedOrderMembershipV1>; MAX_ORDERS],
+    settlement_orders: [VerifiedSettlementOrderV2; MAX_ORDERS],
+    settlement_memberships: [Option<AuthenticatedOrderMembershipV2>; MAX_ORDERS],
     settlement_order_count: u8,
     participating_owners: [Id32; MAX_ORDERS],
     owner_count: u8,
     buy_price_units: u128,
     sell_price_units: u128,
+    buy_present: bool,
+    sell_present: bool,
     rounding_pot_price_units: u128,
     virtual_split_price_units: u128,
     virtual_merge_price_units: u128,
@@ -679,8 +694,9 @@ impl CandidateSettlementProjectionV1 {
         &self,
         slice_index: u16,
         receipt: Id32,
-        settlement_transition_id: Id32,
-    ) -> Result<AuthenticatedDirectSettlementReceiptV1, SettlementAdapterErrorV1> {
+        receipt_accounting_id: Id32,
+        delivery_transition_id: Id32,
+    ) -> Result<AuthenticatedSettlementReceiptV2, SettlementAdapterErrorV1> {
         let slice = *self
             .slice(slice_index)
             .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
@@ -692,9 +708,11 @@ impl CandidateSettlementProjectionV1 {
             ) => (buy, sell),
             _ => return Err(SettlementAdapterErrorV1::BindingMismatch),
         };
-        Ok(AuthenticatedDirectSettlementReceiptV1 {
+        let mut value = AuthenticatedSettlementReceiptV2 {
             receipt: live_adapter_id(receipt)?,
-            settlement_transition_id: live_adapter_id(settlement_transition_id)?,
+            receipt_data_id: [0; 32],
+            receipt_accounting_id: live_adapter_id(receipt_accounting_id)?,
+            delivery_transition_id: live_adapter_id(delivery_transition_id)?,
             market: self.market.bytes(),
             epoch: self.epoch.bytes(),
             candidate: self.candidate.bytes(),
@@ -707,16 +725,23 @@ impl CandidateSettlementProjectionV1 {
                 .settlement_order_membership(sell_order)
                 .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
                 .order_id,
+            route: SettlementReceiptRouteV2::Direct,
             outcome: slice.outcome,
             quantity: slice.quantity,
-            price: self.prices[usize::from(slice.outcome)],
-            consideration_price_units: slice_consideration(&self.prices, slice)?,
+            price: PresentPriceV2::new(self.prices[usize::from(slice.outcome)]),
+            consideration_price_units: PresentConsiderationV2::new(slice_consideration(
+                &self.prices,
+                slice,
+            )?),
             slice_index,
             sequence: u64::from(slice_index) + 1,
             settled_quantity: 0,
-            consumed_end_mask: 0,
-            expected_end_mask: 0b11,
-        })
+            accounted_end_mask: 0,
+            delivered_end_mask: 0,
+        };
+        value.receipt_data_id = derive_projection_receipt_data_id_v2(value, self)?;
+        value.validate(self.position_book.market_binding.outcome_count)?;
+        Ok(value)
     }
 
     /// Bind fresh account identities to one derived virtual-split receipt.
@@ -724,8 +749,9 @@ impl CandidateSettlementProjectionV1 {
         &self,
         slice_index: u16,
         receipt: Id32,
-        settlement_transition_id: Id32,
-    ) -> Result<AuthenticatedVirtualSplitReceiptV1, SettlementAdapterErrorV1> {
+        receipt_accounting_id: Id32,
+        delivery_transition_id: Id32,
+    ) -> Result<AuthenticatedSettlementReceiptV2, SettlementAdapterErrorV1> {
         let slice = *self
             .slice(slice_index)
             .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
@@ -737,9 +763,11 @@ impl CandidateSettlementProjectionV1 {
             ) => buy,
             _ => return Err(SettlementAdapterErrorV1::BindingMismatch),
         };
-        Ok(AuthenticatedVirtualSplitReceiptV1 {
+        let mut value = AuthenticatedSettlementReceiptV2 {
             receipt: live_adapter_id(receipt)?,
-            settlement_transition_id: live_adapter_id(settlement_transition_id)?,
+            receipt_data_id: [0; 32],
+            receipt_accounting_id: live_adapter_id(receipt_accounting_id)?,
+            delivery_transition_id: live_adapter_id(delivery_transition_id)?,
             market: self.market.bytes(),
             epoch: self.epoch.bytes(),
             candidate: self.candidate.bytes(),
@@ -748,16 +776,24 @@ impl CandidateSettlementProjectionV1 {
                 .settlement_order_membership(buy_order)
                 .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
                 .order_id,
+            sell_order_id: [0; 32],
+            route: SettlementReceiptRouteV2::SplitToBuy,
             outcome: slice.outcome,
             quantity: slice.quantity,
-            price: self.prices[usize::from(slice.outcome)],
-            consideration_price_units: slice_consideration(&self.prices, slice)?,
+            price: PresentPriceV2::new(self.prices[usize::from(slice.outcome)]),
+            consideration_price_units: PresentConsiderationV2::new(slice_consideration(
+                &self.prices,
+                slice,
+            )?),
             slice_index,
             sequence: u64::from(slice_index) + 1,
             settled_quantity: 0,
-            consumed_end_mask: 0,
-            expected_end_mask: 0b01,
-        })
+            accounted_end_mask: 0,
+            delivered_end_mask: 0,
+        };
+        value.receipt_data_id = derive_projection_receipt_data_id_v2(value, self)?;
+        value.validate(self.position_book.market_binding.outcome_count)?;
+        Ok(value)
     }
 
     /// Bind fresh account identities to one derived virtual-merge receipt.
@@ -765,8 +801,9 @@ impl CandidateSettlementProjectionV1 {
         &self,
         slice_index: u16,
         receipt: Id32,
-        settlement_transition_id: Id32,
-    ) -> Result<AuthenticatedVirtualMergeReceiptV1, SettlementAdapterErrorV1> {
+        receipt_accounting_id: Id32,
+        delivery_transition_id: Id32,
+    ) -> Result<AuthenticatedSettlementReceiptV2, SettlementAdapterErrorV1> {
         let slice = *self
             .slice(slice_index)
             .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
@@ -778,27 +815,37 @@ impl CandidateSettlementProjectionV1 {
             ) => sell,
             _ => return Err(SettlementAdapterErrorV1::BindingMismatch),
         };
-        Ok(AuthenticatedVirtualMergeReceiptV1 {
+        let mut value = AuthenticatedSettlementReceiptV2 {
             receipt: live_adapter_id(receipt)?,
-            settlement_transition_id: live_adapter_id(settlement_transition_id)?,
+            receipt_data_id: [0; 32],
+            receipt_accounting_id: live_adapter_id(receipt_accounting_id)?,
+            delivery_transition_id: live_adapter_id(delivery_transition_id)?,
             market: self.market.bytes(),
             epoch: self.epoch.bytes(),
             candidate: self.candidate.bytes(),
             owner_order_set_digest: self.owner_order_set_digest.bytes(),
+            buy_order_id: [0; 32],
             sell_order_id: self
                 .settlement_order_membership(sell_order)
                 .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
                 .order_id,
+            route: SettlementReceiptRouteV2::SellToMerge,
             outcome: slice.outcome,
             quantity: slice.quantity,
-            price: self.prices[usize::from(slice.outcome)],
-            consideration_price_units: slice_consideration(&self.prices, slice)?,
+            price: PresentPriceV2::new(self.prices[usize::from(slice.outcome)]),
+            consideration_price_units: PresentConsiderationV2::new(slice_consideration(
+                &self.prices,
+                slice,
+            )?),
             slice_index,
             sequence: u64::from(slice_index) + 1,
             settled_quantity: 0,
-            consumed_end_mask: 0,
-            expected_end_mask: 0b10,
-        })
+            accounted_end_mask: 0,
+            delivered_end_mask: 0,
+        };
+        value.receipt_data_id = derive_projection_receipt_data_id_v2(value, self)?;
+        value.validate(self.position_book.market_binding.outcome_count)?;
+        Ok(value)
     }
 
     /// Number of real receipt ends across all slices.
@@ -852,27 +899,70 @@ impl CandidateSettlementProjectionV1 {
     pub fn bind_receipt_end_account(
         &self,
         receipt_end_index: u16,
-        receipt: Id32,
-        settlement_transition_id: Id32,
-        consumed_end_mask: u8,
-    ) -> Result<AuthenticatedSettlementReceiptEndV1, SettlementAdapterErrorV1> {
+        receipt: AuthenticatedSettlementReceiptV2,
+    ) -> Result<AuthenticatedSettlementReceiptEndV2, SettlementAdapterErrorV1> {
+        receipt.validate(self.position_book.market_binding.outcome_count)?;
+        if derive_projection_receipt_data_id_v2(receipt, self)? != receipt.receipt_data_id {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
         let end = self
             .receipt_end(receipt_end_index)
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        let slice = *self
+            .slice(end.slice_index)
             .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
         let side_mask = match end.side {
             SettlementSideV1::Buy => 0b01,
             SettlementSideV1::Sell => 0b10,
         };
-        if receipt.is_zero()
-            || settlement_transition_id.is_zero()
-            || consumed_end_mask & !end.expected_end_mask != 0
-            || consumed_end_mask & side_mask != 0
+        let route = match end.route {
+            SettlementRouteV1::Direct => SettlementReceiptRouteV2::Direct,
+            SettlementRouteV1::SplitToBuy => SettlementReceiptRouteV2::SplitToBuy,
+            SettlementRouteV1::SellToMerge => SettlementReceiptRouteV2::SellToMerge,
+        };
+        let expected_buy_order = match slice.buy {
+            SettlementLegV1::Order(index) => {
+                self.settlement_order_membership(index)
+                    .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                    .order_id
+            }
+            SettlementLegV1::Merge => [0; 32],
+            SettlementLegV1::Split => return Err(SettlementAdapterErrorV1::BindingMismatch),
+        };
+        let expected_sell_order = match slice.sell {
+            SettlementLegV1::Order(index) => {
+                self.settlement_order_membership(index)
+                    .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                    .order_id
+            }
+            SettlementLegV1::Split => [0; 32],
+            SettlementLegV1::Merge => return Err(SettlementAdapterErrorV1::BindingMismatch),
+        };
+        if receipt.market != self.market.bytes()
+            || receipt.epoch != self.epoch.bytes()
+            || receipt.candidate != self.candidate.bytes()
+            || receipt.owner_order_set_digest != self.owner_order_set_digest.bytes()
+            || receipt.buy_order_id != expected_buy_order
+            || receipt.sell_order_id != expected_sell_order
+            || receipt.route != route
+            || receipt.outcome != end.outcome
+            || receipt.quantity != end.quantity
+            || receipt.price != PresentPriceV2::new(self.prices[usize::from(end.outcome)])
+            || receipt.consideration_price_units
+                != PresentConsiderationV2::new(end.consideration_price_units)
+            || receipt.slice_index != end.slice_index
+            || receipt.sequence != u64::from(end.slice_index) + 1
+            || receipt.settled_quantity != 0
+            || receipt.delivered_end_mask != 0
+            || receipt.accounted_end_mask & !end.expected_end_mask != 0
+            || receipt.accounted_end_mask & side_mask != 0
         {
             return Err(SettlementAdapterErrorV1::ReceiptLatchMismatch);
         }
-        Ok(AuthenticatedSettlementReceiptEndV1 {
-            receipt: receipt.bytes(),
-            settlement_transition_id: settlement_transition_id.bytes(),
+        let value = AuthenticatedSettlementReceiptEndV2 {
+            receipt: receipt.receipt,
+            receipt_data_id: receipt.receipt_data_id,
+            receipt_accounting_id: receipt.receipt_accounting_id,
             market: self.market.bytes(),
             epoch: self.epoch.bytes(),
             candidate: self.candidate.bytes(),
@@ -880,13 +970,16 @@ impl CandidateSettlementProjectionV1 {
             owner: end.owner.bytes(),
             order_index: end.order_index,
             side: end.side,
-            consideration_price_units: end.consideration_price_units,
+            route,
+            consideration_price_units: PresentConsiderationV2::new(end.consideration_price_units),
             completes_order: end.completes_order,
             slice_index: end.slice_index,
             sequence: u64::from(end.slice_index) + 1,
-            consumed_end_mask,
+            accounted_end_mask: receipt.accounted_end_mask,
             expected_end_mask: end.expected_end_mask,
-        })
+        };
+        value.validate()?;
+        Ok(value)
     }
 
     fn derive_receipt_end(
@@ -950,8 +1043,7 @@ impl CandidateSettlementProjectionV1 {
         }
     }
 
-    /// Existing owner-settlement Direct/virtual runtime membership for one
-    /// filled dense order index.
+    /// Presence-explicit owner-settlement membership for one filled order.
     ///
     /// This is absent for an unfilled order. The SBF adapter must still decode
     /// the post-selection entitled Reservation and authenticate its account
@@ -959,7 +1051,7 @@ impl CandidateSettlementProjectionV1 {
     pub fn settlement_order_membership(
         &self,
         order_index: u8,
-    ) -> Option<AuthenticatedOrderMembershipV1> {
+    ) -> Option<AuthenticatedOrderMembershipV2> {
         self.settlement_memberships
             .get(usize::from(order_index))
             .copied()
@@ -1028,7 +1120,7 @@ impl CandidateSettlementProjectionV1 {
                     SettlementSideV1::Buy => {
                         has_buy = true;
                         buy_price_units =
-                            buy_price_units.checked_add(row.consideration_price_units)?;
+                            buy_price_units.checked_add(row.consideration_price_units.value)?;
                         reserved_buy_cash_atoms =
                             reserved_buy_cash_atoms.checked_add(row.reserved_cash_atoms)?;
                     }
@@ -1047,11 +1139,19 @@ impl CandidateSettlementProjectionV1 {
         })
     }
 
-    fn totals(&self, selected_fee_atoms: u128) -> CandidateSettlementTotalsV1 {
-        CandidateSettlementTotalsV1 {
+    fn totals(&self, selected_fee_atoms: u128) -> CandidateSettlementTotalsV2 {
+        CandidateSettlementTotalsV2 {
             owner_count: u16::from(self.owner_count),
-            buy_price_units: self.buy_price_units,
-            sell_price_units: self.sell_price_units,
+            buy_price_units: if self.buy_present {
+                PresentConsiderationV2::new(self.buy_price_units)
+            } else {
+                PresentConsiderationV2::ABSENT
+            },
+            sell_price_units: if self.sell_present {
+                PresentConsiderationV2::new(self.sell_price_units)
+            } else {
+                PresentConsiderationV2::ABSENT
+            },
             selected_fee_atoms,
             rounding_pot_price_units: self.rounding_pot_price_units,
             owner_slice_end_count: self.receipt_end_count,
@@ -1096,7 +1196,6 @@ pub fn derive_candidate_settlement_v1(
     let mut slice = 0usize;
     while slice < usize::from(slice_count) {
         if let SettlementLegV1::Order(order) = slices[slice].buy {
-            require_nonzero_receipt_consideration(candidate, slices[slice])?;
             per_order_end_count[usize::from(order)] = per_order_end_count[usize::from(order)]
                 .checked_add(1)
                 .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
@@ -1105,7 +1204,6 @@ pub fn derive_candidate_settlement_v1(
                 .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
         }
         if let SettlementLegV1::Order(order) = slices[slice].sell {
-            require_nonzero_receipt_consideration(candidate, slices[slice])?;
             per_order_end_count[usize::from(order)] = per_order_end_count[usize::from(order)]
                 .checked_add(1)
                 .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
@@ -1116,13 +1214,15 @@ pub fn derive_candidate_settlement_v1(
         slice += 1;
     }
 
-    let mut settlement_orders = [EMPTY_VERIFIED_SETTLEMENT_ORDER; MAX_ORDERS];
+    let mut settlement_orders = [EMPTY_VERIFIED_SETTLEMENT_ORDER_V2; MAX_ORDERS];
     let mut settlement_memberships = [None; MAX_ORDERS];
     let mut settlement_order_count = 0usize;
     let mut participating_owners = [Id32::ZERO; MAX_ORDERS];
     let mut owner_count = 0usize;
     let mut buy_price_units = 0u128;
     let mut sell_price_units = 0u128;
+    let mut buy_present = false;
+    let mut sell_present = false;
     let mut order = 0usize;
     while order < usize::from(projection.book().len) {
         let fill = candidate.economic_candidate().fills[order];
@@ -1137,8 +1237,8 @@ pub fn derive_candidate_settlement_v1(
                 .position_for_owner(membership.owner())
                 .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
             let value = order_consideration_price_units(candidate, projection, order, fill)?;
-            if value == 0 || per_order_end_count[order] == 0 {
-                return Err(SettlementAdapterErrorV1::ZeroConsiderationReceiptEnd);
+            if per_order_end_count[order] == 0 {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
             }
             let side = match projection.book().orders[order].side {
                 Side::Buy => SettlementSideV1::Buy,
@@ -1148,12 +1248,12 @@ pub fn derive_candidate_settlement_v1(
                 SettlementSideV1::Buy => reservations.reserved_cash_atoms[order],
                 SettlementSideV1::Sell => 0,
             };
-            settlement_orders[settlement_order_count] = VerifiedSettlementOrderV1 {
+            settlement_orders[settlement_order_count] = VerifiedSettlementOrderV2 {
                 owner: membership.owner().bytes(),
                 order_index: u8::try_from(order)
                     .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
                 side,
-                consideration_price_units: value,
+                consideration_price_units: PresentConsiderationV2::new(value),
                 slice_count: per_order_end_count[order],
                 reserved_cash_atoms: reserved_cash,
             };
@@ -1175,7 +1275,7 @@ pub fn derive_candidate_settlement_v1(
                     return Err(SettlementAdapterErrorV1::BindingMismatch);
                 }
             };
-            settlement_memberships[order] = Some(AuthenticatedOrderMembershipV1 {
+            let settlement_membership = AuthenticatedOrderMembershipV2 {
                 market: projection.market().bytes(),
                 epoch: projection.epoch().bytes(),
                 candidate: candidate_id.bytes(),
@@ -1192,16 +1292,20 @@ pub fn derive_candidate_settlement_v1(
                 outcome_count: projection.domain().outcome_count,
                 single_outcome,
                 entitled_units,
-                entitled_consideration_price_units: value,
-            });
+                entitled_consideration_price_units: PresentConsiderationV2::new(value),
+            };
+            settlement_membership.validate()?;
+            settlement_memberships[order] = Some(settlement_membership);
             settlement_order_count += 1;
             match side {
                 SettlementSideV1::Buy => {
+                    buy_present = true;
                     buy_price_units = buy_price_units
                         .checked_add(value)
                         .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
                 }
                 SettlementSideV1::Sell => {
+                    sell_present = true;
                     sell_price_units = sell_price_units
                         .checked_add(value)
                         .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
@@ -1229,12 +1333,12 @@ pub fn derive_candidate_settlement_v1(
                 match row.side {
                     SettlementSideV1::Buy => {
                         owner_buy = owner_buy
-                            .checked_add(row.consideration_price_units)
+                            .checked_add(row.consideration_price_units.value)
                             .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
                     }
                     SettlementSideV1::Sell => {
                         owner_sell = owner_sell
-                            .checked_add(row.consideration_price_units)
+                            .checked_add(row.consideration_price_units.value)
                             .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
                     }
                 }
@@ -1277,6 +1381,8 @@ pub fn derive_candidate_settlement_v1(
             .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
         buy_price_units,
         sell_price_units,
+        buy_present,
+        sell_present,
         rounding_pot_price_units,
         virtual_split_price_units,
         virtual_merge_price_units,
@@ -1411,7 +1517,7 @@ fn authenticate_owner_fee_envelopes(
 }
 
 /// Assemble the complete fee book against independently derived participants
-/// and candidate totals. No caller-supplied `CandidateSettlementTotalsV1` is
+/// and candidate totals. No caller-supplied `CandidateSettlementTotalsV2` is
 /// accepted by this bridge.
 pub fn assemble_candidate_owner_fee_book_v1(
     settlement: &CandidateSettlementProjectionV1,
@@ -1450,20 +1556,20 @@ pub fn assemble_candidate_owner_fee_book_v1(
 
 /// Private checked bridge into the owner-settlement builder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OwnerSettlementBridgeV1 {
-    totals: CandidateSettlementTotalsV1,
-    book: Option<OwnerSettlementBookV1>,
+pub struct OwnerSettlementBridgeV2 {
+    totals: CandidateSettlementTotalsV2,
+    book: Option<OwnerSettlementBookV2>,
     cash_pot_expectation: Option<SettlementCashPotExpectationV1>,
 }
 
-impl OwnerSettlementBridgeV1 {
+impl OwnerSettlementBridgeV2 {
     /// Candidate-wide totals recomputed from exact rows and terminal fees.
-    pub const fn totals(&self) -> CandidateSettlementTotalsV1 {
+    pub const fn totals(&self) -> CandidateSettlementTotalsV2 {
         self.totals
     }
 
     /// Canonical owner book, absent only for a zero-fill candidate.
-    pub fn book(&self) -> Option<&OwnerSettlementBookV1> {
+    pub fn book(&self) -> Option<&OwnerSettlementBookV2> {
         self.book.as_ref()
     }
 
@@ -1478,20 +1584,20 @@ impl OwnerSettlementBridgeV1 {
 }
 
 /// Join a complete private fee book into canonical owner settlement rows.
-pub fn bridge_owner_settlement_v1(
+pub fn bridge_owner_settlement_v2(
     settlement: &CandidateSettlementProjectionV1,
     fee_book: Option<&SelectedOwnerFeeBookV1>,
-) -> Result<OwnerSettlementBridgeV1, SettlementAdapterErrorV1> {
+) -> Result<OwnerSettlementBridgeV2, SettlementAdapterErrorV1> {
     if settlement.owner_count == 0 {
         if fee_book.is_some()
             || settlement.settlement_order_count != 0
             || settlement.receipt_end_count != 0
-            || settlement.buy_price_units != 0
-            || settlement.sell_price_units != 0
+            || settlement.buy_present
+            || settlement.sell_present
         {
             return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
         }
-        return Ok(OwnerSettlementBridgeV1 {
+        return Ok(OwnerSettlementBridgeV2 {
             totals: settlement.totals(0),
             book: None,
             cash_pot_expectation: None,
@@ -1511,7 +1617,7 @@ pub fn bridge_owner_settlement_v1(
         owner += 1;
     }
     let totals = settlement.totals(fees.selected_fee_atoms());
-    let book = build_owner_settlement_book_v1(
+    let book = build_owner_settlement_book_v2(
         settlement.market.bytes(),
         settlement.epoch.bytes(),
         settlement.candidate.bytes(),
@@ -1566,7 +1672,7 @@ pub fn bridge_owner_settlement_v1(
             .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
     };
     cash_pot_expectation.validate()?;
-    Ok(OwnerSettlementBridgeV1 {
+    Ok(OwnerSettlementBridgeV2 {
         totals,
         book: Some(book),
         cash_pot_expectation: Some(cash_pot_expectation),
@@ -1578,7 +1684,7 @@ pub fn bridge_owner_settlement_v1(
 pub struct SettlementReadyDirectCandidateV1 {
     candidate: BuiltDirectCandidateV1,
     settlement: CandidateSettlementProjectionV1,
-    owner_settlement: OwnerSettlementBridgeV1,
+    owner_settlement: OwnerSettlementBridgeV2,
     header: CandidateFeedHeaderV2,
     settlement_witness_digest: Id32,
     candidate_bundle_digest: Id32,
@@ -1601,7 +1707,7 @@ impl SettlementReadyDirectCandidateV1 {
     }
 
     /// Canonical owner-settlement bridge and exact totals.
-    pub const fn owner_settlement(&self) -> &OwnerSettlementBridgeV1 {
+    pub const fn owner_settlement(&self) -> &OwnerSettlementBridgeV2 {
         &self.owner_settlement
     }
 
@@ -1659,7 +1765,7 @@ pub fn encode_settlement_ready_direct_candidate_v1(
     if admission_node.settlement_witness_digest != settlement_witness_digest {
         return Err(SettlementAdapterErrorV1::SettlementWitnessMismatch);
     }
-    let owner_settlement = bridge_owner_settlement_v1(&settlement, fee_book)?;
+    let owner_settlement = bridge_owner_settlement_v2(&settlement, fee_book)?;
     let header = candidate.encode_sealed_candidate_feed_v2(
         candidate_feed_output,
         candidate_feed_identity,
@@ -1812,8 +1918,6 @@ pub enum SettlementAdapterErrorV1 {
     OwnerPairingInfeasible,
     /// Canonical construction exceeded the frozen 416-slice capacity.
     SliceCapacityExceeded,
-    /// Existing owner-settlement V1 cannot consume a zero-price receipt end.
-    ZeroConsiderationReceiptEnd,
     /// Fee rows did not exactly cover canonical participating owners.
     FeeOwnerMismatch,
     /// Authenticated receipt latch was not canonical for the derived end.
@@ -1870,11 +1974,11 @@ impl From<FeeError> for SettlementAdapterErrorV1 {
     }
 }
 
-const EMPTY_VERIFIED_SETTLEMENT_ORDER: VerifiedSettlementOrderV1 = VerifiedSettlementOrderV1 {
+const EMPTY_VERIFIED_SETTLEMENT_ORDER_V2: VerifiedSettlementOrderV2 = VerifiedSettlementOrderV2 {
     owner: [0; 32],
     order_index: 0,
     side: SettlementSideV1::Buy,
-    consideration_price_units: 0,
+    consideration_price_units: PresentConsiderationV2::ABSENT,
     slice_count: 0,
     reserved_cash_atoms: 0,
 };
@@ -2199,17 +2303,6 @@ fn derive_pairing_slices(
     u16::try_from(emitted).map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)
 }
 
-fn require_nonzero_receipt_consideration(
-    candidate: &BuiltDirectCandidateV1,
-    slice: CanonicalSettlementSliceV1,
-) -> Result<(), SettlementAdapterErrorV1> {
-    let consideration = slice_consideration(&candidate.price().prices, slice)?;
-    if consideration == 0 {
-        return Err(SettlementAdapterErrorV1::ZeroConsiderationReceiptEnd);
-    }
-    Ok(())
-}
-
 fn slice_consideration(
     prices: &[u64; MAX_OUTCOMES],
     slice: CanonicalSettlementSliceV1,
@@ -2217,6 +2310,18 @@ fn slice_consideration(
     u128::from(slice.quantity)
         .checked_mul(u128::from(prices[usize::from(slice.outcome)]))
         .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)
+}
+
+fn derive_projection_receipt_data_id_v2(
+    receipt: AuthenticatedSettlementReceiptV2,
+    settlement: &CandidateSettlementProjectionV1,
+) -> Result<[u8; 32], SettlementAdapterErrorV1> {
+    derive_settlement_receipt_data_id_v2(
+        receipt,
+        settlement.position_book.market_binding.outcome_count,
+        &ReceiptDataSha256V2,
+    )
+    .map_err(SettlementAdapterErrorV1::OwnerSettlement)
 }
 
 fn live_adapter_id(id: Id32) -> Result<[u8; 32], SettlementAdapterErrorV1> {
