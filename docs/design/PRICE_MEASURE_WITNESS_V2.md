@@ -220,6 +220,30 @@ Both the one-atom witness at 6 and the equal two-atom mixture at 5 and 7 are
 primitive certificates for the same price. The body digest authenticates the
 chosen sidecar but cannot enter the candidate's economic or tie-breaking key.
 
+### Exact bounded atom construction
+
+The kernel now also exposes `solve_quantized_atom_pair_hull_v1`, an inverse
+constructor for singleton and two-atom representations over a caller-declared
+canonical finite coordinate set. It searches singletons and lexicographic
+pairs, derives the unique primitive rational interpolation weight directly
+from the first differing payout coordinate, exact-checks every active payout
+equation, and sends the constructed certificate through the production
+quantized verifier. It never enumerates denominators, uses floating residuals,
+or introduces a second rounding boundary.
+
+The constructor has a positive caller-declared pair-evaluation limit. Its
+result separates a verified solution, exhaustion of every singleton and pair
+in the declared set, and work-limit truncation. Its report records whether the
+declared set was the complete integer Terms domain. Even complete-domain
+exhaustion is only a negative result for support of size at most two; it is not
+a full finite-polytope membership decision because an exact representation may
+require three through `outcome_count` atoms.
+
+The returned binding bytes remain authority-neutral. The constructor does not
+own accounts, hashes, lifecycle, candidate identity, ranking, or execution;
+the adapter must authenticate the same complete Product/Market/Grid tuple as
+the verifier path before accepting the emitted sidecar.
+
 ## 4. Adapter certificate interface
 
 `AdapterBindingsV2` is a typed trust-boundary input, not an account layout. The
@@ -270,8 +294,9 @@ Before a production SBF profile selects the finite checker:
    already remints the exact Product/Grid capability rather than trusting a
    policy bit;
 2. independently generate the transfer templates and derivation manifest;
-3. add a solver that emits exact continuous moments or quantized atoms without
-   treating floating residuals as consensus evidence;
+3. extend the exact singleton/two-atom constructor to support three through
+   `outcome_count` atoms, or retain that restriction explicitly in every
+   proposing client; no floating residual may become consensus evidence;
 4. decide whether the `u64` denominator lattice is a deliberate sufficient
    inner profile or prove a constructive completeness bound;
 5. measure host, SBF, streamed-resume, stack, account-rent, and close costs;
