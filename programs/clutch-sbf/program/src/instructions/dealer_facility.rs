@@ -517,6 +517,81 @@ fn authenticate_action_receipt(
     Ok((bump, receipt))
 }
 
+/// Program-local authority that one exact counted `0xae/v2` postwrite was
+/// decoded from its program-owned PDA.  The private fields prevent General
+/// retirement code from substituting a caller-shaped terminal DTO.
+pub(crate) struct AuthenticatedCoveredDealerTerminalPostwriteV2 {
+    account_id: Id,
+    owner_program_id: Id,
+    bump: u8,
+    terminal: CoveredDealerTerminalV2,
+}
+
+impl AuthenticatedCoveredDealerTerminalPostwriteV2 {
+    /// Exact authenticated physical attachment account.
+    pub(crate) const fn account_id(&self) -> Id {
+        self.account_id
+    }
+
+    /// Program which owns the authenticated postwrite bytes.
+    pub(crate) const fn owner_program_id(&self) -> Id {
+        self.owner_program_id
+    }
+
+    /// Exact PDA bump authenticated from the outer envelope and seed tuple.
+    pub(crate) const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    /// Borrow the exact decoded terminal body; no detached field DTO exists.
+    pub(crate) const fn terminal(&self) -> &CoveredDealerTerminalV2 {
+        &self.terminal
+    }
+}
+
+/// Authenticate the writable counted Dealer attachment consumed by General's
+/// later retirement bridge.  This does not decrement a General count or close
+/// the account; those writes remain exclusively General-owned.
+pub(crate) fn authenticate_covered_dealer_terminal_postwrite_for_retirement_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedCoveredDealerTerminalPostwriteV2> {
+    let (bump, terminal) = dealer_body::<CoveredDealerTerminalV2>(
+        program_id,
+        account,
+        true,
+        DEALER_COVERED_SELECTION_ACCOUNT_TAG,
+        DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+        DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::dealer_covered_selection_pda(
+            program_id,
+            &terminal.epoch_id().bytes(),
+            &terminal.settlement_candidate_id().bytes(),
+        ),
+        Some(bump),
+    )?;
+    let terminal_rent = terminal.rent();
+    let floor = terminal_rent
+        .refundable_principal
+        .checked_add(terminal_rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        terminal.selection_account_id() == id(account.key)
+            && terminal.stored_bump() == bump
+            && account.lamports() >= floor,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedCoveredDealerTerminalPostwriteV2 {
+        account_id: id(account.key),
+        owner_program_id: id(program_id),
+        bump,
+        terminal,
+    })
+}
+
 fn authenticate_fee_terminal_for_dealer(
     program_id: &Pubkey,
     closure_manifest_account: &AccountInfo<'_>,
@@ -6071,7 +6146,7 @@ fn finalize_or_abort_lease_pot(
         ClutchError::MismatchedState,
     )?;
 
-    create_full_principal_pda(
+    let (created_receipt_principal, observed_receipt_donation) = create_full_principal_pda(
         program_id,
         &accounts[0],
         &accounts[16],
@@ -6083,6 +6158,11 @@ fn finalize_or_abort_lease_pot(
             &receipt_slot.bytes(),
             &[receipt_bump],
         ],
+    )?;
+    require(
+        created_receipt_principal == receipt.rent.refundable_principal
+            && observed_receipt_donation == receipt.rent.donation_floor,
+        ClutchError::DealerPolicyRentMismatch,
     )?;
     apply_liveness_transition(
         &accounts[9 + compartment.index()],
@@ -6127,12 +6207,29 @@ fn finalize_or_abort_lease_pot(
         selection_bump,
         &terminal,
     )?;
+    let receipt_rent = terminal.action_receipt_rent();
+    let expected_receipt_lamports = receipt_rent
+        .refundable_principal
+        .checked_add(receipt_rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        receipt_rent.payer == id(accounts[17].key)
+            && receipt_rent.neutral_sink == id(accounts[25].key)
+            && accounts[16].lamports() == expected_receipt_lamports,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    release_dealer_account(&accounts[16])?;
     release_dealer_account(&accounts[19])?;
     release_dealer_account(&accounts[20])?;
     let refunds = close.refund_lamports();
+    credit_lamports(&accounts[17], receipt_rent.refundable_principal)?;
     credit_lamports(&accounts[23], refunds[0])?;
     credit_lamports(&accounts[24], refunds[1])?;
-    credit_lamports(&accounts[25], close.neutral_sink_lamports())
+    let neutral_credit = close
+        .neutral_sink_lamports()
+        .checked_add(receipt_rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    credit_lamports(&accounts[25], neutral_credit)
 }
 
 /// Execute one facility action admitted by the non-production profile.

@@ -38,6 +38,7 @@ const TERMINAL_RESERVED_BYTES_V2: usize = DEALER_COVERED_TERMINAL_BYTES_V2
     - (TERMINAL_IDENTITY_COUNT_V2 * 32)
     - (TERMINAL_U64_COUNT_V2 * 8)
     - TERMINAL_SCALAR_BYTES_V2
+    - DELETABLE_RENT_OWNER_BYTES
     - DELETABLE_RENT_OWNER_BYTES;
 
 /// Persisted, rent-owned proof that Dealer economics reached one exact terminal postwrite.
@@ -86,6 +87,7 @@ pub struct CoveredDealerTerminalV2 {
     action: DealerRuntimeActionV1,
     outcome: FeeTerminalOutcomeV1,
     stored_bump: u8,
+    action_receipt_rent: DeletableRentOwnerV1,
     rent: DeletableRentOwnerV1,
 }
 
@@ -217,6 +219,7 @@ impl CoveredDealerTerminalV2 {
             action: close.action(),
             outcome: fee_terminal.outcome,
             stored_bump: selection.stored_bump,
+            action_receipt_rent: action_receipt.rent(),
             rent: selection.rent,
         };
         value.validate()?;
@@ -228,6 +231,7 @@ impl CoveredDealerTerminalV2 {
         for identity in self.identities() {
             identity.validate_live()?;
         }
+        self.action_receipt_rent.validate()?;
         self.rent.validate()?;
         let physical = [
             self.selection_account_id,
@@ -272,6 +276,7 @@ impl CoveredDealerTerminalV2 {
             || self.position_pre_semantic_id == self.position_post_semantic_id
             || self.replay_pre_semantic_id == self.replay_post_semantic_id
             || self.state_pre_content_id == self.state_post_content_id
+            || self.action_receipt_rent.neutral_sink != self.rent.neutral_sink
             || self.rent.payer == self.rent.neutral_sink
         {
             return Err(Error::InvalidParameter);
@@ -295,6 +300,10 @@ impl CoveredDealerTerminalV2 {
             outcome_byte(self.outcome),
             self.stored_bump,
         ]);
+        hasher.update(self.action_receipt_rent.payer.bytes());
+        hasher.update(self.action_receipt_rent.neutral_sink.bytes());
+        hasher.update(self.action_receipt_rent.refundable_principal.to_le_bytes());
+        hasher.update(self.action_receipt_rent.donation_floor.to_le_bytes());
         hasher.update(self.rent.payer.bytes());
         hasher.update(self.rent.neutral_sink.bytes());
         hasher.update(self.rent.refundable_principal.to_le_bytes());
@@ -378,6 +387,8 @@ impl CoveredDealerTerminalV2 {
     pub const fn liveness_receipt_account_id(&self) -> Id { self.liveness_receipt_account_id }
     /// Terminal liveness receipt semantic identity.
     pub const fn liveness_receipt_semantic_id(&self) -> Id { self.liveness_receipt_semantic_id }
+    /// Exact principal/donation disposition of the atomically consumed action receipt.
+    pub const fn action_receipt_rent(&self) -> DeletableRentOwnerV1 { self.action_receipt_rent }
     /// Retained rent owner of the counted attachment.
     pub const fn rent(&self) -> DeletableRentOwnerV1 { self.rent }
     /// Stored PDA bump.
@@ -424,6 +435,7 @@ impl FixedCodec for CoveredDealerTerminalV2 {
         writer.u8(self.stored_bump);
         writer.reserved(5);
         writer.reserved(TERMINAL_RESERVED_BYTES_V2);
+        self.action_receipt_rent.encode_body(&mut writer);
         self.rent.encode_body(&mut writer);
         writer.finish()
     }
@@ -463,7 +475,9 @@ impl FixedCodec for CoveredDealerTerminalV2 {
             dealer_generation_after: numbers[1], general_epoch_generation: numbers[2],
             selected_ordinal: numbers[3], replay_ordinal_before: numbers[4],
             replay_ordinal_after: numbers[5], terminal_slot: numbers[6], action, outcome,
-            stored_bump, rent: DeletableRentOwnerV1::decode_body(&mut reader),
+            stored_bump,
+            action_receipt_rent: DeletableRentOwnerV1::decode_body(&mut reader),
+            rent: DeletableRentOwnerV1::decode_body(&mut reader),
         };
         reader.finish()?;
         value.validate()?;
@@ -503,7 +517,7 @@ fn decode_outcome(value: u8) -> Result<FeeTerminalOutcomeV1> {
 }
 
 const _: () = assert!(DEALER_COVERED_TERMINAL_BYTES_V2 == 5_436);
-const _: () = assert!(TERMINAL_RESERVED_BYTES_V2 == 4_224);
+const _: () = assert!(TERMINAL_RESERVED_BYTES_V2 == 4_144);
 
 #[cfg(test)]
 mod adversarial_tests {
@@ -540,6 +554,10 @@ mod adversarial_tests {
             replay_ordinal_before: 11, replay_ordinal_after: 12, terminal_slot: 13,
             action: DealerRuntimeActionV1::FinalizeSettlement,
             outcome: FeeTerminalOutcomeV1::Settled, stored_bump: 17,
+            action_receipt_rent: DeletableRentOwnerV1 {
+                payer: id(99), neutral_sink: id(101), refundable_principal: 98,
+                donation_floor: 97,
+            },
             rent: DeletableRentOwnerV1 {
                 payer: id(100), neutral_sink: id(101), refundable_principal: 102,
                 donation_floor: 103,
@@ -579,5 +597,8 @@ mod adversarial_tests {
         let mut root_as_lease = terminal();
         root_as_lease.settlement_root_account_id = root_as_lease.lease_account_id;
         assert_eq!(root_as_lease.validate(), Err(Error::MismatchedBinding));
+        let mut wrong_sink = terminal();
+        wrong_sink.action_receipt_rent.neutral_sink = id(102);
+        assert_eq!(wrong_sink.validate(), Err(Error::InvalidParameter));
     }
 }
