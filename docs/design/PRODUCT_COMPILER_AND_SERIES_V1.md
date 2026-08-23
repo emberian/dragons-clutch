@@ -1,6 +1,6 @@
 # Product compiler and recurring Series V1
 
-Status: **PROPOSED / EXECUTABLE HOST MODEL / NON-PRODUCTION SBF ARTIFACT CATALOG ONLY** (2026-08-23)
+Status: **PROPOSED / EXECUTABLE HOST + ALLOCATION-FREE SUCCESSOR CORE / NON-PRODUCTION SBF ARTIFACT CATALOG ONLY** (2026-08-23)
 
 Executable model: [`research/product-compiler-v1`](../../research/product-compiler-v1)
 
@@ -20,6 +20,19 @@ catalog only: it does not register or activate a Series, authenticate registry
 selectors, capitalize a funding account, compile an occurrence, or create a
 Market. Runtime price-witness activation remains blocked on an authenticated
 registry-selector and exact-price adapter join.
+
+The allocation-free successor core now goes beyond that SBF catalog without
+pretending the catalog route is an activation route. It derives canonical
+SourcePlane V3 Window and Statistic identities through a default-deny adapter
+authority, emits an immutable source-occurrence provenance record, derives
+exact whole-Series funding requirements, and defines one 324-byte mutable
+funding/lifecycle state with five segregated quote compartments. The state is
+the sole owner of the next ordinal; created count and active/closed phase are
+derived rather than persisted twice. Its transitions require adapter-authenticated
+Clock, registry/collateral binding, custody, exact-existing component state,
+and donation transfers. No concrete SBF adapter implements that authority yet,
+so these are executable pure transition contracts, not evidence of live account
+mutation.
 
 The laboratory artifact ABI is exact:
 
@@ -211,16 +224,25 @@ Series. Lapse spends nothing and leaves its allocation explicitly refundable.
 Activation requires exact present funding for:
 
 ```text
-instance_count * creation/rent allocation
-instance_count * mandatory work/keeper allocation
-instance_count * liquidity-blueprint tranche cap
+instance_count * market-core allocation
+instance_count * evidence-recovery reserve
+instance_count * source/archive/window/evaluator work
+instance_count * liquidity-facility allocation
+instance_count * canonical wrapper-set allocation
 ```
 
-The mutable state stores these as three segregated compartments. Instance
-creation atomically debits one item from each. There is no future-fee input,
-Hoard principal input, volume forecast, or implicit borrowing. A production
-account design should split the work envelope further into source/archive,
-auction, and resolution reserves when their exact route quotes are frozen.
+`SeriesFundingQuoteV1` remains the sole immutable owner of those five
+per-occurrence amounts. The mutable funding state stores only remaining payer
+principal, donation residue, and absent-component allocation-consumption counts
+for each component; it joins every transition back to the quote instead of
+copying the quote into a second persisted truth. Exact-existing components
+debit zero. Market core and its
+mandatory recovery state share one authenticated present/absent branch. Lapse
+debits nothing. Unused payer principal remains refundable, while unsolicited
+donations remain separately owned terminal residue. There is no future-fee
+input, Hoard principal input, volume forecast, or implicit borrowing. A future
+production account design may split the source-work envelope further only when
+the exact route quotes and custody owners are frozen.
 
 Series collateral is passive-liquidity capital, not claimant backing. User
 split/endowment collateral enters the market-local Hoard separately and remains
@@ -292,8 +314,10 @@ child counters, and exact runtime account widths do not exist yet.
 2. Add fixed hostile-byte codecs for HatcheryProgram, SummaryProgram, and a
    compact persisted Instance. Product Template, basis, price policy, Genesis,
    Series Plan, attachment, quote, and funding-terms codecs now have a
-   non-production immutable SBF publication path, but there is still no
-   authenticated Series registry or mutable funding state.
+   non-production immutable SBF publication path. The pure successor now has a
+   hostile funding-state codec and authenticated-authority transition seam, but
+   there is still no SBF Series registry, funding PDA/custody ABI, or adapter
+   implementing that seam.
 3. Bind the full InstanceId in Market identity and add a monotone market epoch
    cursor; do not retain caller-chosen market or epoch identities.
 4. Give every Series compartment payer-principal/donation/terminal ownership
