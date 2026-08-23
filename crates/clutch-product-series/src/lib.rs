@@ -19,8 +19,10 @@
 mod artifacts;
 mod codec;
 mod compile;
+mod compiler_output;
 mod funding;
 mod funding_state;
+mod product_registry;
 mod registry;
 mod source_series;
 mod successor;
@@ -40,6 +42,10 @@ pub use clutch_bspline::{BasisSpec as QuantizedBasisSpecV1, EdgePolicy as Quanti
 pub use compile::{
     compile_ordinal, AbsoluteRecoveryAttemptV1, CompiledOrdinalV1, CompiledScheduleV1,
 };
+pub use compiler_output::{
+    CompiledProductSeriesBundleV1, COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN,
+};
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
     AdapterAuthenticatedFulfillmentStatusV1, ComponentDebitV1, DebitProjectionV1,
@@ -51,6 +57,10 @@ pub use funding_state::{
     SeriesFundingComponentV1, SeriesFundingPhaseV1, SeriesFundingRequirementsV1,
     SeriesFundingStateV1, SeriesFundingTerminalProjectionV1, SERIES_FUNDING_COMPONENT_COUNT,
     SERIES_FUNDING_STATE_BYTES,
+};
+pub use product_registry::{
+    ProductCapabilityRegistryV2, ProductProgramReleaseV1, PRODUCT_CAPABILITY_REGISTRY_V2_BYTES,
+    PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN,
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
@@ -161,6 +171,10 @@ typed_id!(
     "Typed identity of one `SeriesAttachmentPlanV1`."
 );
 typed_id!(SeriesPlanId, "Typed identity of one `SeriesPlanV4`.");
+typed_id!(
+    CompiledProductSeriesBundleV1Id,
+    "Typed identity of one `CompiledProductSeriesBundleV1` compiler output."
+);
 typed_id!(
     SeriesFundingQuoteId,
     "Typed identity of one `SeriesFundingQuoteV1`."

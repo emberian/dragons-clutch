@@ -226,6 +226,8 @@ fn quote() -> SeriesFundingQuoteV1 {
             lamports: 10,
             collateral_atoms: 0,
         },
+        failure_root_rent_principal_lamports: 3,
+        failure_replay_tombstone_rent_principal_lamports: 2,
         recovery_reserve: ComponentDebitV1 {
             lamports: 40,
             collateral_atoms: 0,

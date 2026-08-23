@@ -197,6 +197,19 @@ contract domains; neither ID is accepted from a caller or persisted. The
 receipt data ID instead hashes the authenticated PDA plus the exact current
 217-byte prestate, so both mutable latch families are committed.
 
+## General OwnerSettlement V3 allocation
+
+The central ledger reserves `0x81/3` as `ReservedDisabled` for the canonical
+General owner row. Its exact 292 bytes are tag `0x81`, version `3`, the
+authoritative 288-byte `clutch-owner-settlement` V3 semantic body, stored bump,
+and one reserved-zero flags byte. The strict outer decoder authenticates the
+V3 envelope before invoking the V3 body decoder.
+
+Coordinates `0x81/1` and `0x81/2` remain separately reserved but withdrawn.
+Future routes recognize neither as V3 and perform no migration or
+reinterpretation. The canonical PDA tuple is `owner-settlement:v3`, counted
+Epoch PDA, final `SettlementCandidateId`, and semantic owner.
+
 ## General OrderPage V5 allocation
 
 The central collision ledger reserves main-account coordinate `8/5` as
@@ -226,7 +239,8 @@ pure runtime elsewhere does not make a route executable.
 | `0x7f/1` | Recurring Series | registry |
 | `0x80/1` | Recurring Series | present-funding compartments |
 | `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
-| `0x81/2` | General V2 | presence-explicit owner settlement V2; sole future row |
+| `0x81/2` | General V2 | withdrawn presence-explicit owner settlement V2; never a live alias |
+| `0x81/3` | General V2 | canonical Reservation-handoff owner settlement V3 |
 | `0x82/1` | General V2 | selected fee record |
 | `0x83/1` | General V2 | owner fee carry |
 | `0x84/1` | General V2 | payer allocation |

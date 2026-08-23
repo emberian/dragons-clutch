@@ -12,8 +12,9 @@ publish = false
 description = "NON-PRODUCTION synthetic local-only signed-RPC Pyth-to-Clutch campaign"
 
 [features]
-default = ["campaign"]
+default = ["campaign", "operator"]
 builder = ["dep:solana-keypair"]
+operator = ["dep:base64", "dep:serde", "dep:serde_json", "dep:sha2"]
 campaign = [
   "dep:base64",
   "dep:borsh",
@@ -45,8 +46,10 @@ clutch-sbf-svm-tests = { path = "../svm-tests", features = ["non-production-real
 clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
 clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
+clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-liveness = { path = "../../../crates/clutch-liveness" }
 clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement" }
 clutch-product-series = { path = "../../../crates/clutch-product-series" }
 clutch-retirement = { path = "../../../crates/clutch-retirement" }
@@ -54,6 +57,7 @@ clutch-solana-layout = { path = "../../solana-layout" }
 clutch-solana-reference = { path = "../../solana-reference" }
 clutch-source-plane-v3-adapter = { path = "../../../crates/clutch-source-plane-v3-adapter" }
 clutch-source-plane-v3-runtime = { path = "../../../crates/clutch-source-plane-v3-runtime" }
+clutch-source-plane-v3 = { path = "../../../crates/clutch-source-plane-v3" }
 clutch-structured-claim-runtime-contract = { path = "../../../crates/clutch-structured-claim-runtime-contract" }
 
 # Exact released host SDKs matching the pinned pyth-crosschain capture. The
@@ -71,6 +75,7 @@ base64 = { version = "=0.22.1", optional = true }
 bincode = "=1.3.3"
 serde = { version = "=1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "=1.0.151", optional = true }
+sha2 = { version = "=0.10.9", optional = true }
 
 # Same coherent host transaction stack as svm-tests/devnet-paces.
 solana-account = { version = "=4.3.2", optional = true }

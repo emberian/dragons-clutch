@@ -49,8 +49,8 @@ reservations, or any mismatch with the candidate's owner count, buy/sell
 price-unit totals, fee atoms, rounding pot, and receipt-end count. Output rows
 are lexicographically owner-sorted for canonical account creation and paging.
 
-The account-neutral successor binds each future row to the ordered
-`owner-settlement:v2`, Epoch, final-candidate, owner PDA preimage; creates it
+The historical V2 account-neutral successor bound each row to the ordered
+`owner-settlement:v2`, Epoch, final-candidate, owner PDA preimage; created it
 with pre-fund-safe rent ownership; and stages each receipt-end accounting latch
 without moving Eggs. Accounting uses a receipt-scoped `receipt_accounting_id`;
 delivery uses a distinct `delivery_transition_id`, so neither replay latch can
@@ -79,7 +79,7 @@ semantic receipt prestate rather than a detached authorization flag. The pure V2
 projection does not activate action 25: its eventual handler must atomically
 advance the canonical Reservation accounting state, reserved-cash handoff,
 receipt latch, and V2 owner row.
-V2 cash realization is an explicitly non-authorizing structural projection. It
+Historical V2 cash realization is an explicitly non-authorizing structural projection. It
 consumes the complete V2 row, canonical Position V3, and candidate cash pot;
 the row's immutable selected-fee amount is its only fee input. It derives the
 finalized row data ID from the exact terminal 288-byte body, stages the exact

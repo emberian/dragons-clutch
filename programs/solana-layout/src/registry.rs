@@ -161,8 +161,13 @@ pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
 /// Withdrawn non-aliasing General V2 owner-settlement V1 version.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
-/// Sole future presence-explicit General V2 owner-settlement version.
-pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 2;
+/// Withdrawn presence-explicit General V2 owner-settlement V2 version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2: u8 = 2;
+/// Sole future Reservation-handoff General owner-settlement version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3: u8 = 3;
+/// Current General owner-settlement version; an alias only for V3.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 =
+    GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3;
 /// General V2 selected composite-fee record envelope discriminator.
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// General V2 selected composite-fee record envelope version.
@@ -736,10 +741,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-settlement-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-owner-settlement-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1985,7 +1999,11 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
             ),
             (
                 GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
@@ -2057,7 +2075,11 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
             ),
             (
                 GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
