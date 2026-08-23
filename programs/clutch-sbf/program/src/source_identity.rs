@@ -4,14 +4,15 @@
 //! price source?" is one file, readable end to end, with no identity byte
 //! reachable from anywhere else in the runtime. Two audiences depend on that:
 //! the E2 freeze act, which fills the [`mainnet`] block in, and every reader
-//! who needs to see that the shipped default artifact trusts a *fabricated*
-//! identity that cannot exist on any cluster.
+//! who needs to see that the shipped default artifact trusts no source release
+//! until an explicitly named real-infrastructure profile is compiled.
 //!
 //! ## The two blocks
 //!
 //! * [`fixture`] — the fabricated Pyth-shaped identity used by bank tests and
-//!   the local-validator walk. It is compiled into the **default** ELF and it
-//!   is what retires `SourceReleaseUnavailable` (`0x79`) for exactly one spec.
+//!   the local-validator walk. It is compiled only into the explicit
+//!   `non-production-mock-source` ELF and retires
+//!   `SourceReleaseUnavailable` (`0x79`) for exactly one laboratory spec.
 //!   Every one of its account addresses is a program-derived address, so no
 //!   private key exists for any of them and no account can be created at them
 //!   on a real cluster by anyone. See [`fixture`]'s own documentation for the
@@ -104,15 +105,12 @@ pub struct PullReleaseV2 {
 
 /// The fabricated, provably unreachable Pyth-shaped laboratory identity.
 ///
-/// ## Why a fabricated identity is compiled into the default ELF
+/// ## Why a fabricated identity remains available
 ///
-/// Before this module the default artifact could not run a source lifecycle at
-/// all: `release_registered` was `false` unconditionally and every ingestion
-/// arm was `#[cfg(not(non-production-mock-source))] => Err`. The only lifecycle
-/// evidence that existed came from a *different ELF* — the mock profile — so
-/// "the default artifact's ingestion path works" had never been observed even
-/// once. Registering one laboratory identity closes that gap on the artifact
-/// that actually ships.
+/// This identity exercises the complete source lifecycle in an explicitly
+/// non-production mock-source ELF. The default ELF deliberately registers no
+/// fabricated release; local lifecycle evidence therefore cannot be mistaken
+/// for source authority in the artifact intended for real infrastructure.
 ///
 /// ## Why it admits nothing anywhere
 ///
@@ -648,12 +646,20 @@ pub fn select_release(spec: crate::source_v2::spec::SourceSpecV2) -> Option<Pull
 /// collateral boundary, and again at resolution. Adding a row is a new ELF
 /// identity and a full reseal cycle by construction
 /// (`R2_PULL_PROMOTION_PLAN.md` §4 item 3).
-#[cfg(not(feature = "non-production-real-pyth-lab"))]
+#[cfg(not(any(
+    feature = "non-production-mock-source",
+    feature = "non-production-real-pyth-lab"
+)))]
+pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[];
+
+/// The fabricated row exists only in the explicit mock-source ELF.
+#[cfg(feature = "non-production-mock-source")]
 pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[fixture::RELEASE];
 
-/// The extra row exists only in an unmistakably non-production laboratory ELF.
+/// The real observed Pyth row exists alone in its unmistakably non-production
+/// laboratory ELF; it never inherits the fabricated fixture authority.
 #[cfg(feature = "non-production-real-pyth-lab")]
-pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[fixture::RELEASE, real_pyth_lab::RELEASE];
+pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[real_pyth_lab::RELEASE];
 
 #[cfg(test)]
 mod tests {
@@ -684,11 +690,15 @@ mod tests {
         assert!(mainnet::PARSER_VERSION.is_none());
         assert!(mainnet::ACTIVATION_UNIX_TIMESTAMP.is_none());
         assert!(mainnet::POST_ABI.is_none());
-        #[cfg(not(feature = "non-production-real-pyth-lab"))]
-        assert_eq!(REGISTERED_RELEASES.len(), 1);
+        #[cfg(not(any(
+            feature = "non-production-mock-source",
+            feature = "non-production-real-pyth-lab"
+        )))]
+        assert!(REGISTERED_RELEASES.is_empty());
+        #[cfg(feature = "non-production-mock-source")]
+        assert_eq!(REGISTERED_RELEASES, &[fixture::RELEASE]);
         #[cfg(feature = "non-production-real-pyth-lab")]
-        assert_eq!(REGISTERED_RELEASES.len(), 2);
-        assert_eq!(REGISTERED_RELEASES[0], fixture::RELEASE);
+        assert_eq!(REGISTERED_RELEASES, &[real_pyth_lab::RELEASE]);
     }
 
     #[test]
@@ -740,8 +750,9 @@ mod tests {
         fixture::REGISTERED_SPEC_FIELDS
     }
 
+    #[cfg(feature = "non-production-mock-source")]
     #[test]
-    fn the_registry_admits_exactly_the_compiled_release() {
+    fn the_mock_registry_admits_exactly_the_fixture_release() {
         use crate::source_v2::spec::{SourceSpecFieldsV2, SourceSpecV2};
 
         let admitted = SourceSpecV2::new(fixture_spec_fields()).expect("valid spec");
@@ -782,6 +793,15 @@ mod tests {
             assert_ne!(spec.feed_id(), fixture::REGISTERED_SPEC_ID);
             assert_eq!(select_release(spec), None);
         }
+    }
+
+    #[cfg(not(feature = "non-production-mock-source"))]
+    #[test]
+    fn non_mock_elf_refuses_the_fixture_release() {
+        use crate::source_v2::spec::SourceSpecV2;
+
+        let fixture = SourceSpecV2::new(fixture_spec_fields()).expect("valid fixture spec");
+        assert_eq!(select_release(fixture), None);
     }
 
     #[test]

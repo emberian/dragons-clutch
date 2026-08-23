@@ -1,9 +1,14 @@
+#![cfg(any(
+    feature = "non-production-mock-source",
+    feature = "non-production-real-pyth-lab"
+))]
+
 //! The v2 pull source, founded, ingested, sealed and resolved on a real bank.
 //!
-//! `r2_pull_endow.rs` showed the default ELF taking custody against a v2
-//! SourceSpec that was *installed at genesis*, because no instruction could
-//! create one. This file closes that circle. Every state transition below is a
-//! real transaction against the real SBF ELF, through the four new layout tags:
+//! `r2_pull_endow.rs` showed an explicit source-laboratory ELF taking custody
+//! against a v2 SourceSpec installed at genesis. This file closes that circle.
+//! Every state transition below is a real transaction against that exact lab
+//! SBF ELF, through the four new layout tags:
 //!
 //! | tag | intent | what it does here |
 //! | ---: | --- | --- |
@@ -2525,7 +2530,7 @@ async fn a_release_this_elf_does_not_carry_cannot_found_its_source_at_all() {
 
 #[tokio::test]
 async fn custody_opens_against_the_spec_this_family_just_founded() {
-    /* `r2_pull_endow.rs` showed the default ELF taking custody against a v2
+    /* `r2_pull_endow.rs` showed the source-laboratory ELF taking custody against a v2
      * spec *installed at genesis*, because nothing could create one. This is
      * the same boundary against a spec the chain founded a transaction
      * earlier: 0x79 before, accepted after, with the same market and the same

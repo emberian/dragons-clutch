@@ -65,15 +65,15 @@ checked signed 2-by-2 determinants, checks the reconstruction in every active
 outcome, reduces all masses and their denominator by their exact common gcd,
 and independently invokes the same production verifier.
 
-The determinant substrate uses a fixed 512-bit magnitude so the difference of
-two full `u64` products, the support-four determinants, and subsequent exact
-reconstruction remain representable without signed overflow. It uses exact
-division and binary gcd;
-there are no unchecked casts, allocations, floats, or rounding. Exhaustive outcomes
-separate no rational singleton/pair/triple, exact triples whose primitive
-masses exceed V1's `u64` encoding, and work truncation. The support-three API
-makes no statement about representations requiring four through
-`outcome_count` atoms.
+The determinant substrate uses a fixed 2048-bit magnitude so the difference of
+two full `u64` products, determinants through the maximum 15-by-15 affine
+system, Bareiss intermediates, and subsequent exact reconstruction remain
+representable without signed overflow. It uses exact division and binary gcd;
+there are no unchecked casts, allocations, floats, or rounding. Exhaustive
+outcomes separate no rational singleton/pair/triple, exact triples whose
+primitive masses exceed V1's `u64` encoding, and work truncation. The
+support-three API makes no statement about representations requiring four
+through `outcome_count` atoms.
 
 `solve_quantized_atom_support4_hull_v1` adds a separately bounded
 lexicographic quartet search. For each affine-independent quartet it selects
@@ -85,7 +85,7 @@ largest-remainder/lowest-index-tie payout boundary; the inverse solve adds no
 rounding or approximation.
 
 The quartet path uses a crate-internal fixed 3-by-3 matrix and row-pivoted
-Bareiss fraction-free elimination over signed 512-bit magnitudes. The fixed
+Bareiss fraction-free elimination over signed 2048-bit magnitudes. The fixed
 width covers full-`u64` 3-by-3 determinants and determinant-times-payout
 reconstruction; overflow and non-exact divisions refuse explicitly. This is
 safe, `no_std`, allocation-free arithmetic rather than a general dynamic
@@ -102,6 +102,32 @@ support four without a representable certificate. In particular,
 records whether the declared set covered the complete integer Terms domain.
 The deterministic first certificate is neither a fair-value nor an optimality
 claim.
+
+`solve_quantized_atom_hull_v1` removes the support-four construction ceiling.
+It searches support sizes in increasing order through `outcome_count`, with a
+positive caller-declared subset budget applied separately to each support
+family. A fixed lexicographic combination cursor uses no recursion or
+allocation. Each support first passes an exact rectangular fraction-free rank
+selection. Affinely dependent supports are skipped soundly: a positive convex
+representation on a dependent set can move to a proper face, hence to a
+smaller support the increasing search already exhausted. An independent
+support uses the selected square subsystem, exact Cramer determinants, a check
+of every original payout equation, primitive reduction, and the independent
+production verifier.
+
+The largest native system has side `outcome_count - 1 = 15`. Hadamard bounds
+its full-`u64` determinants below 1000 bits and the largest pre-division
+Bareiss product below 2048 bits; determinant-times-payout reconstruction also
+stays below that fixed width. Thus the remaining capability limits are not an
+artificial support cap: they are the caller's explicit per-support work bound,
+the named primitive-`u64` certificate-mass profile, and any coordinates omitted
+from a partial declared set. If every family through `outcome_count` and every
+integer Terms coordinate are exhausted, `Unsupported` is a complete finite
+quantized-hull negative by affine Caratheodory. Otherwise `WorkTruncated`,
+`OutOfProfile`, or a non-full-domain report states the narrower fact.
+The large fixed working matrices are constructor machinery; their SBF stack
+and compute-unit suitability has not been measured and is not an adapter
+admission claim.
 
 ## Continuous exact profile
 
