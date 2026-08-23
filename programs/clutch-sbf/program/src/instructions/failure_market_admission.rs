@@ -19,7 +19,8 @@ use clutch_failure_policy_runtime::market_policy_v1::{
     AuthenticatedFailureMarketRecoveryFundingV1, FailureMarketAdmissionStateV1,
     FailureMarketPolicyBindingV1, FailureMarketPrepaidDebitReceiptIdV1,
     FailureMarketRecoveryFundingFactsV1, FailureMarketRecoveryFundingReceiptV1,
-    FailureMarketRootFundingReceiptV1, FAILURE_MARKET_ADMISSION_STATE_BYTES_V1,
+    FailureMarketRootBalanceDispositionV1, FailureMarketRootFundingReceiptV1,
+    FAILURE_MARKET_ADMISSION_STATE_BYTES_V1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, RuntimePersistedAccountViewV1,
@@ -88,6 +89,42 @@ impl AuthenticatedFailureMarketRootV2 {
     /// Complete policy and initial funding semantic state.
     pub const fn state(self) -> FailureMarketAdmissionStateV1 {
         self.state
+    }
+}
+
+/// Exact writable account prestate for eventual terminal root disposition.
+///
+/// This is deliberately not terminal authority. It only authenticates the
+/// persisted root and the two immutable lamport destinations, then projects
+/// the sole valid principal/donation split. A Product-owned private terminal
+/// receipt must still be consumed before any mutation may use this value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureMarketClosePrestateV2 {
+    root: AuthenticatedFailureMarketRootV2,
+    disposition: FailureMarketRootBalanceDispositionV1,
+    refund_owner_post_balance: u64,
+    neutral_sink_post_balance: u64,
+}
+
+impl AuthenticatedFailureMarketClosePrestateV2 {
+    /// Exact authenticated root and immutable policy/funding state.
+    pub(crate) const fn root(self) -> AuthenticatedFailureMarketRootV2 {
+        self.root
+    }
+
+    /// Sole exact close-time principal/donation split.
+    pub(crate) const fn disposition(self) -> FailureMarketRootBalanceDispositionV1 {
+        self.disposition
+    }
+
+    /// Checked refund-recipient postbalance.
+    pub(crate) const fn refund_owner_post_balance(self) -> u64 {
+        self.refund_owner_post_balance
+    }
+
+    /// Checked neutral-sink postbalance.
+    pub(crate) const fn neutral_sink_post_balance(self) -> u64 {
+        self.neutral_sink_post_balance
     }
 }
 
@@ -454,6 +491,55 @@ pub fn authenticate_failure_market_root_v2(
         account: *root.key,
         bump: record.bump,
         state,
+    })
+}
+
+/// Authenticate the exact close-time accounts and project their postbalances.
+///
+/// This performs no write and accepts no terminal ID or caller-provided
+/// disposition. The eventual close wrapper must additionally consume
+/// Product's private whole-Market terminal receipt in the same instruction.
+pub(crate) fn authenticate_failure_market_close_prestate_v2<'a>(
+    program_id: &Pubkey,
+    root: &AccountInfo<'a>,
+    refund_owner: &AccountInfo<'a>,
+    neutral_sink: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedFailureMarketClosePrestateV2> {
+    require_distinct(&[root.clone(), refund_owner.clone(), neutral_sink.clone()])?;
+    for recipient in [refund_owner, neutral_sink] {
+        require(recipient.is_writable, ClutchError::NotWritable)?;
+        require(!recipient.is_signer, ClutchError::NonCanonical)?;
+        require(!recipient.executable, ClutchError::ExecutableAccount)?;
+    }
+    let authenticated = authenticate_failure_market_root_v2(program_id, root, true)?;
+    let disposition = authenticated
+        .state()
+        .project_root_balance_disposition(root.lamports())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        disposition.root_account_id().bytes() == root.key.to_bytes()
+            && disposition.rent_refund_owner().bytes() == refund_owner.key.to_bytes()
+            && disposition.neutral_sink().bytes() == neutral_sink.key.to_bytes()
+            && disposition.expected_root_pre_balance() == root.lamports()
+            && disposition
+                .rent_refund_lamports()
+                .checked_add(disposition.donation_neutral_lamports())
+                == Some(root.lamports()),
+        ClutchError::MismatchedState,
+    )?;
+    let refund_owner_post_balance = refund_owner
+        .lamports()
+        .checked_add(disposition.rent_refund_lamports())
+        .ok_or(ClutchError::Arithmetic)?;
+    let neutral_sink_post_balance = neutral_sink
+        .lamports()
+        .checked_add(disposition.donation_neutral_lamports())
+        .ok_or(ClutchError::Arithmetic)?;
+    Ok(AuthenticatedFailureMarketClosePrestateV2 {
+        root: authenticated,
+        disposition,
+        refund_owner_post_balance,
+        neutral_sink_post_balance,
     })
 }
 
