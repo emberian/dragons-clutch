@@ -22,11 +22,6 @@ use clutch_product_series::{
 use clutch_source_plane_v3::ContentId as SourceContentId;
 use sha2::{Digest, Sha256};
 
-use crate::external_v2::FailureRecoveryTerminalReceiptIdV2;
-use crate::interval_consensus_v1::{
-    FailureIntervalConsensusReplayReceiptIdV1, FailureIntervalConsensusTerminalReceiptIdV1,
-};
-use crate::retirement_v1::ClosedFailureRecoveryJoinIdV1;
 use crate::{Error, FailurePolicyBindingId, Result};
 
 const MARKET_POLICY_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-policy/v1";
@@ -35,7 +30,6 @@ const MARKET_RECOVERY_FUNDING_DOMAIN_V1: &[u8] =
 const MARKET_ROOT_FUNDING_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-root-funding/v1";
 const MARKET_ADMISSION_STATE_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/failure-market-admission-state/v1";
-const MARKET_FAMILY_TERMINAL_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-family-terminal/v1";
 const MARKET_ADMISSION_STATE_MAGIC_V1: [u8; 8] = *b"DCFMRKT1";
 const MARKET_ADMISSION_STATE_SCHEMA_V1: u16 = 1;
 
@@ -100,23 +94,6 @@ pub struct FailureMarketAdmissionStateIdV1([u8; 32]);
 
 impl FailureMarketAdmissionStateIdV1 {
     /// Construct from digest bytes without claiming account authenticity.
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// Return exact digest bytes.
-    pub const fn bytes(self) -> [u8; 32] {
-        self.0
-    }
-}
-
-/// Typed identity of the exhaustive market-level Failure terminal receipt.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct FailureMarketFamilyTerminalReceiptIdV1([u8; 32]);
-
-impl FailureMarketFamilyTerminalReceiptIdV1 {
-    /// Construct from digest bytes without claiming authenticity.
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
@@ -439,109 +416,6 @@ impl FailureMarketRootBalanceDispositionV1 {
     pub const fn donation_neutral_lamports(self) -> u64 {
         self.donation_neutral_lamports
     }
-}
-
-/// Successful whole-Failure-family terminal disposition.
-///
-/// Product's successful Market terminal path requires a finalized Resolution,
-/// so V1 admits only the resolved interval path. Timeout/abort and dormant
-/// evidence-only retirement remain separate, fail-closed successors.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum FailureMarketFamilyTerminalDispositionV1 {
-    /// One bounded interval session resolved, its work and Recovery custody
-    /// closed, and its permanent replay remained readable.
-    ResolvedInterval = 1,
-}
-
-impl FailureMarketFamilyTerminalDispositionV1 {
-    const fn byte(self) -> u8 {
-        match self {
-            Self::ResolvedInterval => 1,
-        }
-    }
-}
-
-/// Complete expected facts for one market-level Failure terminal receipt.
-///
-/// This projection is not authority. The live adapter must derive it from the
-/// two distinct root accounts, the successful liveness close, and permanent
-/// interval replay before an implementation of
-/// [`AuthenticatedFailureMarketFamilyTerminalV1`] may admit it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FailureMarketFamilyTerminalFactsV1 {
-    /// Exact successful terminal disposition.
-    pub disposition: FailureMarketFamilyTerminalDispositionV1,
-    /// Immutable Failure policy.
-    pub failure_policy_binding_id: FailurePolicyBindingId,
-    /// Full-width economic Market.
-    pub market_instance_id: MarketInstanceV2Id,
-    /// Shared Failure/Source/liveness generation.
-    pub generation: u64,
-    /// Complete immutable admission-state identity.
-    pub admission_state_id: FailureMarketAdmissionStateIdV1,
-    /// Physical immutable `0xa0/v2` admission root.
-    pub admission_root_account_id: FailureMarketAccountIdV1,
-    /// Distinct physical mutable `0xa0/v1` Failure runtime root.
-    pub runtime_root_account_id: FailureMarketAccountIdV1,
-    /// Resolved semantic-runtime terminal receipt.
-    pub recovery_terminal_receipt_id: FailureRecoveryTerminalReceiptIdV2,
-    /// Exact successful close of sole liveness Recovery custody.
-    pub closed_recovery_join_id: ClosedFailureRecoveryJoinIdV1,
-    /// Exact closed bounded interval session.
-    pub interval_terminal_receipt_id: FailureIntervalConsensusTerminalReceiptIdV1,
-    /// Permanent `0xac/v1` replay account retained for Product consumption.
-    pub interval_replay_account_id: FailureMarketAccountIdV1,
-    /// Exact terminal replay postimage stored in that account.
-    pub interval_replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1,
-}
-
-/// Private-field market-level Failure terminal capability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FailureMarketFamilyTerminalReceiptV1 {
-    id: FailureMarketFamilyTerminalReceiptIdV1,
-    facts: FailureMarketFamilyTerminalFactsV1,
-}
-
-impl FailureMarketFamilyTerminalReceiptV1 {
-    /// Complete terminal receipt identity consumed by Product.
-    pub const fn id(self) -> FailureMarketFamilyTerminalReceiptIdV1 {
-        self.id
-    }
-
-    /// Exact authenticated terminal facts.
-    pub const fn facts(self) -> FailureMarketFamilyTerminalFactsV1 {
-        self.facts
-    }
-}
-
-/// Adapter-owned authority over the two roots, closed Recovery custody, and
-/// permanent interval replay. The default refuses every projection.
-pub trait AuthenticatedFailureMarketFamilyTerminalV1 {
-    /// Authenticate every expected fact without accepting caller IDs as truth.
-    fn authenticate_failure_market_family_terminal(
-        &self,
-        _expected: FailureMarketFamilyTerminalFactsV1,
-    ) -> Result<()> {
-        Err(Error::BindingMismatch)
-    }
-}
-
-/// Mint the resolved market-level Failure receipt after exact adapter auth.
-pub fn admit_failure_market_family_terminal_v1<
-    A: AuthenticatedFailureMarketFamilyTerminalV1 + ?Sized,
->(
-    authority: &A,
-    admission: FailureMarketAdmissionStateV1,
-    facts: FailureMarketFamilyTerminalFactsV1,
-) -> Result<FailureMarketFamilyTerminalReceiptV1> {
-    validate_family_terminal(admission, facts)?;
-    authority.authenticate_failure_market_family_terminal(facts)?;
-    let id = hash_family_terminal(facts);
-    if id.bytes().iter().all(|byte| *byte == 0) {
-        return Err(Error::BindingMismatch);
-    }
-    Ok(FailureMarketFamilyTerminalReceiptV1 { id, facts })
 }
 
 impl FailureMarketAdmissionStateV1 {
@@ -945,51 +819,6 @@ fn validate_root_funding(
     Ok(())
 }
 
-fn validate_family_terminal(
-    admission: FailureMarketAdmissionStateV1,
-    facts: FailureMarketFamilyTerminalFactsV1,
-) -> Result<()> {
-    admission.validate()?;
-    let policy = admission.binding.facts;
-    let terminal_ids = [
-        facts.recovery_terminal_receipt_id.bytes(),
-        facts.closed_recovery_join_id.bytes(),
-        facts.interval_terminal_receipt_id.bytes(),
-        facts.interval_replay_receipt_id.bytes(),
-    ];
-    if facts.disposition != FailureMarketFamilyTerminalDispositionV1::ResolvedInterval
-        || facts.failure_policy_binding_id != admission.binding.id
-        || facts.market_instance_id != policy.market_instance_id
-        || facts.generation != policy.generation
-        || facts.admission_state_id != admission.id()?
-        || facts.admission_root_account_id != admission.root_funding.facts.root_account_id
-        || facts.runtime_root_account_id.bytes() != policy.recovery_state_id.bytes()
-        || facts.admission_root_account_id == facts.runtime_root_account_id
-        || facts.interval_replay_account_id == facts.admission_root_account_id
-        || facts.interval_replay_account_id == facts.runtime_root_account_id
-        || facts.interval_replay_account_id.bytes()
-            == policy.recovery_compartment_account_id.bytes()
-        || facts.interval_replay_account_id.bytes() == policy.neutral_sink.bytes()
-        || terminal_ids
-            .iter()
-            .any(|id| id.iter().all(|byte| *byte == 0))
-    {
-        return Err(Error::BindingMismatch);
-    }
-    let mut index = 0usize;
-    while index < terminal_ids.len() {
-        let mut sibling = index + 1;
-        while sibling < terminal_ids.len() {
-            if terminal_ids[index] == terminal_ids[sibling] {
-                return Err(Error::BindingMismatch);
-            }
-            sibling += 1;
-        }
-        index += 1;
-    }
-    Ok(())
-}
-
 fn validate_facts(facts: FailureMarketPolicyFactsV1) -> Result<()> {
     let product_ids = [
         facts.market_instance_id.bytes(),
@@ -1130,26 +959,6 @@ fn hash_root_funding(
     hasher.update(facts.donation_floor_lamports.to_le_bytes());
     hasher.update(facts.observed_balance_lamports.to_le_bytes());
     FailureMarketRootFundingReceiptIdV1::from_bytes(hasher.finalize().into())
-}
-
-fn hash_family_terminal(
-    facts: FailureMarketFamilyTerminalFactsV1,
-) -> FailureMarketFamilyTerminalReceiptIdV1 {
-    let mut hasher = Sha256::new();
-    hasher.update(MARKET_FAMILY_TERMINAL_DOMAIN_V1);
-    hasher.update([facts.disposition.byte()]);
-    hasher.update(facts.failure_policy_binding_id.bytes());
-    hasher.update(facts.market_instance_id.bytes());
-    hasher.update(facts.generation.to_le_bytes());
-    hasher.update(facts.admission_state_id.bytes());
-    hasher.update(facts.admission_root_account_id.bytes());
-    hasher.update(facts.runtime_root_account_id.bytes());
-    hasher.update(facts.recovery_terminal_receipt_id.bytes());
-    hasher.update(facts.closed_recovery_join_id.bytes());
-    hasher.update(facts.interval_terminal_receipt_id.bytes());
-    hasher.update(facts.interval_replay_account_id.bytes());
-    hasher.update(facts.interval_replay_receipt_id.bytes());
-    FailureMarketFamilyTerminalReceiptIdV1::from_bytes(hasher.finalize().into())
 }
 
 struct AdmissionWriterV1<'a> {
@@ -1343,24 +1152,6 @@ mod tests {
     }
 
     impl AuthenticatedFailureMarketRootFundingV1 for Refusing {}
-
-    #[derive(Clone, Copy, Debug)]
-    struct ExactFamilyTerminal(FailureMarketFamilyTerminalFactsV1);
-
-    impl AuthenticatedFailureMarketFamilyTerminalV1 for ExactFamilyTerminal {
-        fn authenticate_failure_market_family_terminal(
-            &self,
-            expected: FailureMarketFamilyTerminalFactsV1,
-        ) -> Result<()> {
-            if self.0 == expected {
-                Ok(())
-            } else {
-                Err(Error::BindingMismatch)
-            }
-        }
-    }
-
-    impl AuthenticatedFailureMarketFamilyTerminalV1 for Refusing {}
 
     fn facts() -> FailureMarketPolicyFactsV1 {
         let mut next = 1u8;
@@ -1765,82 +1556,6 @@ mod tests {
                 &ExactRootFunding(hidden_shortfall),
                 binding,
                 hidden_shortfall,
-            ),
-            Err(Error::BindingMismatch)
-        );
-    }
-
-    #[test]
-    fn family_terminal_requires_distinct_roots_and_complete_replay_chain() {
-        let policy_facts = facts();
-        let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
-        let recovery_facts = funding(binding);
-        let recovery = admit_failure_market_recovery_funding_v1(
-            &ExactFunding(recovery_facts),
-            binding,
-            recovery_facts,
-        )
-        .unwrap();
-        let root_facts = root_funding(binding);
-        let root = admit_failure_market_root_funding_v1(
-            &ExactRootFunding(root_facts),
-            binding,
-            root_facts,
-        )
-        .unwrap();
-        let admission =
-            FailureMarketAdmissionStateV1::from_receipts(binding, recovery, root).unwrap();
-        let exact = FailureMarketFamilyTerminalFactsV1 {
-            disposition: FailureMarketFamilyTerminalDispositionV1::ResolvedInterval,
-            failure_policy_binding_id: binding.id(),
-            market_instance_id: binding.facts().market_instance_id,
-            generation: binding.facts().generation,
-            admission_state_id: admission.id().unwrap(),
-            admission_root_account_id: root_facts.root_account_id,
-            runtime_root_account_id: FailureMarketAccountIdV1::from_bytes(
-                binding.facts().recovery_state_id.bytes(),
-            ),
-            recovery_terminal_receipt_id: FailureRecoveryTerminalReceiptIdV2::from_bytes([101; 32]),
-            closed_recovery_join_id: ClosedFailureRecoveryJoinIdV1::from_bytes([102; 32]),
-            interval_terminal_receipt_id: FailureIntervalConsensusTerminalReceiptIdV1::from_bytes(
-                [103; 32],
-            ),
-            interval_replay_account_id: FailureMarketAccountIdV1::from_bytes([104; 32]),
-            interval_replay_receipt_id: FailureIntervalConsensusReplayReceiptIdV1::from_bytes(
-                [105; 32],
-            ),
-        };
-        let receipt =
-            admit_failure_market_family_terminal_v1(&ExactFamilyTerminal(exact), admission, exact)
-                .unwrap();
-        assert_eq!(receipt.facts(), exact);
-        assert!(receipt.id().bytes().iter().any(|byte| *byte != 0));
-        assert_eq!(
-            admit_failure_market_family_terminal_v1(&Refusing, admission, exact),
-            Err(Error::BindingMismatch)
-        );
-
-        let mut aliased_root = exact;
-        aliased_root.admission_root_account_id = exact.runtime_root_account_id;
-        assert_eq!(
-            admit_failure_market_family_terminal_v1(
-                &ExactFamilyTerminal(aliased_root),
-                admission,
-                aliased_root,
-            ),
-            Err(Error::BindingMismatch)
-        );
-
-        let mut replayed_receipt = exact;
-        replayed_receipt.interval_replay_receipt_id =
-            FailureIntervalConsensusReplayReceiptIdV1::from_bytes(
-                exact.interval_terminal_receipt_id.bytes(),
-            );
-        assert_eq!(
-            admit_failure_market_family_terminal_v1(
-                &ExactFamilyTerminal(replayed_receipt),
-                admission,
-                replayed_receipt,
             ),
             Err(Error::BindingMismatch)
         );

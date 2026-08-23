@@ -515,7 +515,7 @@ impl FailureMarketIntervalCellV2 {
         Ok(())
     }
 
-    fn validate_against(
+    pub(crate) fn validate_against(
         self,
         admission: FailureMarketAdmissionStateV1,
         funding: FailureMarketIntervalFundingReceiptV2,
