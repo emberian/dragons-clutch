@@ -17,6 +17,7 @@ const HEAD_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-head/v1";
 const OPEN_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-open-raw-page/v1";
 const OPEN_STATE_DOMAIN: &[u8] = b"dragons-clutch/open-raw-page-state/v1";
 const INGEST_TRANSITION_DOMAIN: &[u8] = b"dragons-clutch/source-ingest-transition/v1";
+const SEAL_OPEN_TRANSITION_DOMAIN: &[u8] = b"dragons-clutch/source-seal-open-page/v1";
 const GENERATION_REQUEST_MAGIC: [u8; 8] = *b"DCSGEN01";
 const GENERATION_REQUEST_DOMAIN: &[u8] = b"dragons-clutch/source-generation-request/v1";
 const GENERATION_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-generation/v1";
@@ -496,6 +497,47 @@ pub struct IngestBatchOutputV1 {
     pub last_clock_slot: u64,
     /// Atomic compare-and-swap receipt binding both before accounts and all outputs.
     pub transition_receipt_id: ContentId,
+}
+
+/// Pure output of sealing the exact authenticated open-page prefix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealOpenPageOutputV1 {
+    /// Source head after committing the immutable page.
+    pub head_after: SourceHeadV3,
+    /// Exact immutable page created from the open prefix.
+    pub sealed_page: RawPageV3,
+    /// Atomic receipt binding both mutable preimages and both semantic outputs.
+    pub transition_receipt_id: ContentId,
+}
+
+/// Seal one nonempty authenticated open page without smuggling another append.
+pub fn seal_authenticated_open_page(
+    route: AuthenticatedSourceRouteV1,
+    authenticated_head: AuthenticatedSourceHeadV1,
+    authenticated_open: AuthenticatedOpenRawPageV1,
+) -> Result<SealOpenPageOutputV1> {
+    if authenticated_head.route_id() != route.route_id()
+        || authenticated_open.route_id() != route.route_id()
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let head = authenticated_head.head();
+    let open = authenticated_open.open();
+    head.validate()?;
+    open.validate_against_head(&head)?;
+    let sealed_page = open.seal()?;
+    let head_after = head.commit_page(&sealed_page)?;
+    let mut bytes = [0_u8; 160];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&authenticated_head.id().bytes());
+    bytes[64..96].copy_from_slice(&authenticated_open.id().bytes());
+    bytes[96..128].copy_from_slice(&head_after.snapshot_id()?.bytes());
+    bytes[128..160].copy_from_slice(&sealed_page.id()?.bytes());
+    Ok(SealOpenPageOutputV1 {
+        head_after,
+        sealed_page,
+        transition_receipt_id: domain_id(SEAL_OPEN_TRANSITION_DOMAIN, &bytes),
+    })
 }
 
 /// Append a bounded sequence and optionally seal/advance atomically.
