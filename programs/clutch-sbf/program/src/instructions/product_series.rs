@@ -23,7 +23,8 @@ use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_for_registration_v3,
     authenticate_registry_capability_v3, authenticate_series_registry_capability_refs_v2,
     authenticate_series_registry_capability_refs_v2_for_mutation,
-    AuthenticatedRegistryCapabilityReleaseV3, AuthenticatedRegistryCapabilityV3,
+    AuthenticatedProductArtifactV1, AuthenticatedRegistryCapabilityReleaseV3,
+    AuthenticatedRegistryCapabilityV3,
 };
 use crate::instructions::series_failure_funding::{
     mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
@@ -67,8 +68,8 @@ use clutch_solana_layout::product_series::{
 use clutch_solana_layout::registry::RecurringSeriesAction;
 use clutch_source_plane_v3::{SourcePlaneProgramV3, StatisticKindV3, SummaryProgramV3};
 use clutch_source_plane_v3_runtime::{
-    AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, ClockSnapshotV1,
-    OccurrenceSourceReceiptV1,
+    AuthenticatedClockBucketV1, AuthenticatedReceiverRouteV2, AuthenticatedSourceReleaseV1,
+    AuthenticatedSourceRouteV1, ClockSnapshotV1, OccurrenceSourceReceiptV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -77,6 +78,8 @@ use solana_pubkey::Pubkey;
 
 /// Closed number of physical Series funding compartments.
 pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
+const SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/source-product-route-authentication/v3";
 /// Canonical generation of the sole funding activation permitted by V1.
 pub const SERIES_ACTIVATION_GENERATION_V1: u64 = 1;
 
@@ -597,6 +600,133 @@ impl AuthenticatedCompiledProductSeriesBundleV5 {
     pub const fn bundle_id(self) -> CompiledProductSeriesBundleV5Id {
         self.bundle_id
     }
+}
+
+/// Private current Source/ProfileV4/BundleV5 route authority.
+///
+/// The Source route receipts prove the exact adapter/parser/receiver
+/// Program/ProgramData, deployment-slot and Config bodies selected by
+/// `SourceReleaseManifestV2`. The Product receipts prove hostile decoding,
+/// content-addressed accounts, current ProfileV4 registry authority, BundleV5,
+/// and the Realm/Profile collateral selection. There is no byte decoder or
+/// public constructor for this capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourceProductRouteV3 {
+    id: ContentId,
+    source_route_id: ContentId,
+    receiver_route_id: ContentId,
+    source_release_manifest_id: ContentId,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+    market_genesis_profile_id: clutch_product_series::MarketGenesisProfileV2Id,
+    realm_id: ContentId,
+    profile_id: ContentId,
+    collateral_mint: ContentId,
+    collateral_token_program: ContentId,
+}
+
+impl AuthenticatedSourceProductRouteV3 {
+    /// Authentication identity of the complete current route.
+    pub const fn id(self) -> ContentId {
+        self.id
+    }
+
+    /// Exact Source release selected by current BundleV5.
+    pub const fn source_release_manifest_id(self) -> ContentId {
+        self.source_release_manifest_id
+    }
+
+    /// Exact current compiler graph.
+    pub const fn compiler_bundle_id(self) -> CompiledProductSeriesBundleV5Id {
+        self.compiler_bundle_id
+    }
+
+    /// Immutable Realm selected by ProfileV4 and GenesisV2.
+    pub const fn realm_id(self) -> ContentId {
+        self.realm_id
+    }
+
+    /// Immutable collateral Profile selected by ProfileV4 and GenesisV2.
+    pub const fn profile_id(self) -> ContentId {
+        self.profile_id
+    }
+}
+
+/// Mint the sole private current Source/Product route from authenticated SBF
+/// receipts. Caller-shaped IDs or decoded-but-unauthenticated bodies cannot
+/// enter this join.
+pub fn authenticate_source_product_route_v3(
+    route: AuthenticatedSourceRouteV1,
+    receiver: AuthenticatedReceiverRouteV2,
+    registry: AuthenticatedRegistryCapabilityReleaseV3,
+    bundle: &AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
+    genesis: &AuthenticatedProductArtifactV1<MarketGenesisProfileV2>,
+) -> Outcome<AuthenticatedSourceProductRouteV3> {
+    let bundle_value = bundle.value();
+    let genesis_value = genesis.value();
+    let bundle_id = bundle_value
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let genesis_id = genesis_value
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projection = registry.projection();
+    let owners = registry.semantic_owners();
+    let collateral = registry.realm_collateral();
+    require(
+        receiver.route_id() == route.route_id()
+            && bundle.semantic_id() == bundle_id.content_id()
+            && genesis.semantic_id() == genesis_id.content_id()
+            && bundle_value.source_release_manifest_id.bytes()
+                == route.release_manifest_id().bytes()
+            && bundle_value.source_plane_contract_id.bytes()
+                == route.source_plane_contract_id().bytes()
+            && bundle_value.source_spec_id.bytes() == route.source_spec_id().bytes()
+            && bundle_value.registry_release_id == registry.registry_release_id()
+            && bundle_value.capability_profile_id.content_id()
+                == registry.capability_profile_id()
+            && bundle_value.source_plane_contract_id == owners.source_plane_contract_id
+            && bundle_value.source_spec_id == owners.source_spec_id
+            && bundle_value.market_genesis_profile_id == genesis_id
+            && genesis_value.capability_profile_id == registry.capability_profile_id()
+            && genesis_value.realm_id == collateral.realm_id
+            && genesis_value.profile_id == collateral.profile_id
+            && projection.realm_collateral == collateral,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V3,
+            &route.route_id().bytes(),
+            &receiver.id().bytes(),
+            &route.release_manifest_id().bytes(),
+            &registry.registry_release_id().bytes(),
+            &registry.capability_profile_id().bytes(),
+            &bundle_id.bytes(),
+            &genesis_id.bytes(),
+            &collateral.realm_id.bytes(),
+            &collateral.profile_id.bytes(),
+            &collateral.collateral_mint.bytes(),
+            &collateral.token_program.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceProductRouteV3 {
+        id,
+        source_route_id: route.route_id(),
+        receiver_route_id: receiver.id(),
+        source_release_manifest_id: route.release_manifest_id(),
+        registry_release_id: registry.registry_release_id(),
+        capability_profile_id: registry.capability_profile_id(),
+        compiler_bundle_id: bundle_id,
+        market_genesis_profile_id: genesis_id,
+        realm_id: collateral.realm_id,
+        profile_id: collateral.profile_id,
+        collateral_mint: collateral.collateral_mint,
+        collateral_token_program: collateral.token_program,
+    })
 }
 
 #[cfg(test)]

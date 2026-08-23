@@ -29,7 +29,10 @@ use clutch_owner_settlement::{
     AuthenticatedSettlementReceiptEndV1, DirectEggSettlementInputV1, OwnerSettlementAccumulatorV1,
     SettlementCashPotV1, VirtualMergeReceiptInputV1, VirtualSplitReceiptInputV1,
 };
-use clutch_product_series::{SeriesFundingQuoteV1, SeriesFundingTermsV2};
+use clutch_product_series::{
+    CompiledProductSeriesBundleV5, MarketGenesisProfileV2, RegistryCapabilityProjectionV2,
+    SeriesFundingQuoteV1, SeriesFundingTermsV2,
+};
 use clutch_retirement::PositionAccountV3;
 use clutch_solana_layout::product_series::{
     ActivateSeriesFundingIntentV1, AdvanceSeriesOccurrenceIntentV1, CloseSeriesFundingIntentV1,
@@ -60,6 +63,7 @@ use clutch_structured_claim_runtime_contract::{
 };
 use solana_address::Address;
 use solana_instruction::AccountMeta;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 pub type Result<T> = core::result::Result<T, WorkflowGraphError>;
@@ -162,10 +166,14 @@ impl ReleasedConfigAccount {
 pub struct OperatorSourcePolicySelectionV1 {
     pub registry_release_id: [u8; 32],
     pub capability_profile_id: [u8; 32],
-    pub compiled_product_bundle_id: [u8; 32],
+    pub compiled_product_bundle_v5_id: [u8; 32],
+    pub market_genesis_profile_id: [u8; 32],
     pub realm_id: [u8; 32],
     pub profile_id: [u8; 32],
     pub collateral_policy_id: [u8; 32],
+    pub collateral_mint: [u8; 32],
+    pub collateral_token_program: [u8; 32],
+    pub market_collateral_cap_ceiling: u64,
     pub source_release_manifest_id: [u8; 32],
     pub source_plane_contract_id: [u8; 32],
     pub source_spec_id: [u8; 32],
@@ -177,22 +185,72 @@ impl OperatorSourcePolicySelectionV1 {
         let identities = [
             self.registry_release_id,
             self.capability_profile_id,
-            self.compiled_product_bundle_id,
+            self.compiled_product_bundle_v5_id,
+            self.market_genesis_profile_id,
             self.realm_id,
             self.profile_id,
             self.collateral_policy_id,
+            self.collateral_mint,
+            self.collateral_token_program,
             self.source_release_manifest_id,
             self.source_plane_contract_id,
             self.source_spec_id,
             self.source_spec_account_data_id,
         ];
         if identities.iter().any(|identity| *identity == [0; 32])
+            || self.market_collateral_cap_ceiling == 0
             || self.realm_id == self.profile_id
         {
             Err(WorkflowGraphError::ZeroIdentity)
         } else {
             Ok(())
         }
+    }
+
+    /// Join the hostile-decoded current Product bodies to the exact Realm and
+    /// Source policy selected by this operator release.
+    fn validate_product_route(
+        self,
+        bundle: &CompiledProductSeriesBundleV5,
+        registry: &RegistryCapabilityProjectionV2,
+        genesis: &MarketGenesisProfileV2,
+    ) -> Result<()> {
+        self.validate()?;
+        genesis
+            .validate_shape()
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        let bundle_id = bundle
+            .id()
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        let genesis_id = genesis
+            .id()
+            .map_err(|_| WorkflowGraphError::InvalidCanonicalState)?;
+        let owners = registry.semantic_owners;
+        let collateral = registry.realm_collateral;
+        if bundle_id.bytes() != self.compiled_product_bundle_v5_id
+            || bundle.market_genesis_profile_id != genesis_id
+            || bundle.registry_release_id.bytes() != self.registry_release_id
+            || bundle.capability_profile_id.bytes() != self.capability_profile_id
+            || bundle.source_release_manifest_id.bytes() != self.source_release_manifest_id
+            || bundle.source_plane_contract_id.bytes() != self.source_plane_contract_id
+            || bundle.source_spec_id.bytes() != self.source_spec_id
+            || registry.registry_release_id.bytes() != self.registry_release_id
+            || registry.capability_profile_id.bytes() != self.capability_profile_id
+            || owners.source_plane_contract_id.bytes() != self.source_plane_contract_id
+            || owners.source_spec_id.bytes() != self.source_spec_id
+            || genesis_id.bytes() != self.market_genesis_profile_id
+            || genesis.capability_profile_id.bytes() != self.capability_profile_id
+            || genesis.realm_id.bytes() != self.realm_id
+            || genesis.profile_id.bytes() != self.profile_id
+            || collateral.realm_id.bytes() != self.realm_id
+            || collateral.profile_id.bytes() != self.profile_id
+            || collateral.collateral_mint.bytes() != self.collateral_mint
+            || collateral.token_program.bytes() != self.collateral_token_program
+            || collateral.market_collateral_cap_ceiling != self.market_collateral_cap_ceiling
+        {
+            return Err(WorkflowGraphError::WrongProgramRelease);
+        }
+        Ok(())
     }
 }
 
@@ -265,9 +323,6 @@ pub struct ExplicitOperatorReleaseManifest {
 
 impl ExplicitOperatorReleaseManifest {
     pub fn validate(&self) -> Result<()> {
-        if self.manifest_sha256 == [0; 32] {
-            return Err(WorkflowGraphError::ZeroIdentity);
-        }
         self.clutch.validate()?;
         if let Some(route) = self.real_pyth {
             route.validate()?;
@@ -299,7 +354,63 @@ impl ExplicitOperatorReleaseManifest {
                 return Err(WorkflowGraphError::DuplicateRelease);
             }
         }
+        if self.manifest_sha256 == [0; 32]
+            || self.manifest_sha256 != self.computed_manifest_sha256()
+        {
+            return Err(WorkflowGraphError::WrongProgramRelease);
+        }
         Ok(())
+    }
+
+    /// Recompute the exact operator-manifest identity from every program,
+    /// ProgramData, ELF, Config, Product/Realm, feed, and semantic-owner field.
+    pub fn computed_manifest_sha256(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"dragons-clutch/explicit-operator-release-manifest/v2");
+        hash_released_program(&mut hasher, self.clutch);
+        match self.real_pyth {
+            None => hasher.update([0]),
+            Some(route) => {
+                hasher.update([1]);
+                hash_released_program(&mut hasher, route.parser);
+                hash_released_config(&mut hasher, route.parser_config);
+                hash_released_program(&mut hasher, route.receiver);
+                hash_released_config(&mut hasher, route.receiver_config);
+                hash_released_program(&mut hasher, route.transport);
+                hasher.update(route.feed_account.to_bytes());
+                hasher.update(route.provider_feed_id);
+                let policy = route.source_policy;
+                for identity in [
+                    policy.registry_release_id,
+                    policy.capability_profile_id,
+                    policy.compiled_product_bundle_v5_id,
+                    policy.market_genesis_profile_id,
+                    policy.realm_id,
+                    policy.profile_id,
+                    policy.collateral_policy_id,
+                    policy.collateral_mint,
+                    policy.collateral_token_program,
+                    policy.source_release_manifest_id,
+                    policy.source_plane_contract_id,
+                    policy.source_spec_id,
+                    policy.source_spec_account_data_id,
+                ] {
+                    hasher.update(identity);
+                }
+                hasher.update(policy.market_collateral_cap_ceiling.to_le_bytes());
+            }
+        }
+        hasher.update(
+            u64::try_from(self.semantic_releases.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for release in &self.semantic_releases {
+            hash_manifest_string(&mut hasher, &release.package);
+            hash_manifest_string(&mut hasher, &release.schema);
+            hasher.update(release.release_sha256);
+        }
+        hasher.finalize().into()
     }
 
     fn admits_owner(&self, owner: &SemanticOwner) -> Result<()> {
@@ -314,6 +425,27 @@ impl ExplicitOperatorReleaseManifest {
             Err(WorkflowGraphError::UnknownSemanticRelease)
         }
     }
+}
+
+fn hash_released_program(hasher: &mut Sha256, release: ReleasedProgram) {
+    hasher.update(release.program_id.to_bytes());
+    hasher.update(release.program_account_data_id);
+    hasher.update(release.program_data.to_bytes());
+    hasher.update(release.programdata_account_data_id);
+    hasher.update(release.deployment_slot.to_le_bytes());
+    hasher.update(release.elf_sha256);
+}
+
+fn hash_released_config(hasher: &mut Sha256, config: ReleasedConfigAccount) {
+    hasher.update(config.account.to_bytes());
+    hasher.update(config.owner.to_bytes());
+    hasher.update(config.account_data_id);
+    hasher.update(config.body_sha256);
+}
+
+fn hash_manifest_string(hasher: &mut Sha256, value: &str) {
+    hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 /// Independent resumable lanes in the operator graph.
@@ -1154,6 +1286,13 @@ pub struct SourceCrankObservation<'a> {
     /// Canonical immutable release body selected by the operator. Execution
     /// independently authenticates its owner, content-addressed PDA and bytes.
     pub release: &'a SourceReleaseManifestV2,
+    /// Hostile-decoded current compiler graph. The SBF adapter independently
+    /// authenticates the content-addressed BundleV5 account.
+    pub product_bundle: &'a CompiledProductSeriesBundleV5,
+    /// ProfileV4-derived Registry projection observed for this route.
+    pub registry: &'a RegistryCapabilityProjectionV2,
+    /// Exact Realm/Profile Genesis body named by BundleV5.
+    pub genesis: &'a MarketGenesisProfileV2,
     /// Physical immutable release account observed by the operator.
     pub release_account: Address,
     /// Canonical release-selected paid-work schedule body. The physical
@@ -1174,6 +1313,11 @@ impl SourceCrankObservation<'_> {
         let route = manifest
             .real_pyth
             .ok_or(WorkflowGraphError::WrongProgramRelease)?;
+        route.source_policy.validate_product_route(
+            self.product_bundle,
+            self.registry,
+            self.genesis,
+        )?;
         if self.generation == 0
             || self.observed_state_sha256 == [0; 32]
             || self.lineages.is_empty()
@@ -2464,6 +2608,7 @@ pub fn owner_accounting_is_complete(owner: &OwnerSettlementAccumulatorV1) -> Res
 #[cfg(test)]
 mod operator_release_manifest_tests {
     use super::*;
+    use clutch_product_series as product;
 
     fn address(byte: u8) -> Address {
         Address::new_from_array([byte; 32])
@@ -2493,15 +2638,117 @@ mod operator_release_manifest_tests {
         OperatorSourcePolicySelectionV1 {
             registry_release_id: [30; 32],
             capability_profile_id: [31; 32],
-            compiled_product_bundle_id: [32; 32],
-            realm_id: [33; 32],
-            profile_id: [34; 32],
-            collateral_policy_id: [35; 32],
-            source_release_manifest_id: [36; 32],
-            source_plane_contract_id: [37; 32],
-            source_spec_id: [38; 32],
-            source_spec_account_data_id: [39; 32],
+            compiled_product_bundle_v5_id: [32; 32],
+            market_genesis_profile_id: [33; 32],
+            realm_id: [34; 32],
+            profile_id: [35; 32],
+            collateral_policy_id: [36; 32],
+            collateral_mint: [37; 32],
+            collateral_token_program: [38; 32],
+            market_collateral_cap_ceiling: 1,
+            source_release_manifest_id: [39; 32],
+            source_plane_contract_id: [40; 32],
+            source_spec_id: [41; 32],
+            source_spec_account_data_id: [42; 32],
         }
+    }
+
+    fn product_id(byte: u8) -> product::ContentId {
+        product::ContentId::from_bytes([byte; 32])
+    }
+
+    fn product_selection() -> (
+        OperatorSourcePolicySelectionV1,
+        CompiledProductSeriesBundleV5,
+        RegistryCapabilityProjectionV2,
+        MarketGenesisProfileV2,
+    ) {
+        let genesis = MarketGenesisProfileV2 {
+            realm_id: product_id(34),
+            profile_id: product_id(35),
+            price_grid_id: product_id(43),
+            price_measure_policy_id: product::PriceMeasurePolicyV1Id::from_bytes([44; 32]),
+            fee_policy_id: product_id(45),
+            relation_policy_id: product_id(46),
+            score_policy_id: product_id(47),
+            candidate_lifecycle_policy_id: product_id(48),
+            candidate_liveness_policy_id: product_id(49),
+            retirement_policy_id: product_id(50),
+            capability_profile_id: product_id(31),
+            terminal_disposition_registry_value: 1,
+            native_bearer_lot: 1,
+            coordinate_domain_min: 1,
+            coordinate_domain_max: 2,
+        };
+        let bundle = CompiledProductSeriesBundleV5 {
+            registry_release_id: product_id(30),
+            capability_profile_id: product::RegistryCapabilityProfileV4Id::from_bytes([31; 32]),
+            source_release_manifest_id: product_id(39),
+            source_plane_contract_id: product_id(40),
+            source_spec_id: product_id(41),
+            summary_program_id: product_id(51),
+            product_compiler_release_id: product_id(52),
+            native_claim_basis_id: product::NativeClaimBasisId::from_bytes([53; 32]),
+            evidence_only_recovery_policy_id:
+                product::EvidenceOnlyRecoveryPolicyId::from_bytes([54; 32]),
+            product_template_id: product::ProductTemplateId::from_bytes([55; 32]),
+            price_measure_policy_id: product::PriceMeasurePolicyV1Id::from_bytes([44; 32]),
+            market_genesis_profile_id: genesis.id().unwrap(),
+            funding_quote_id: product::SeriesFundingQuoteV4Id::from_bytes([56; 32]),
+            attachment_plan_id: product::SeriesAttachmentPlanV4Id::from_bytes([57; 32]),
+            series_plan_id: product::SeriesPlanV5Id::from_bytes([58; 32]),
+            funding_terms_id: product::SeriesFundingTermsV2Id::from_bytes([59; 32]),
+        };
+        let registry = RegistryCapabilityProjectionV2 {
+            registry_release_id: product_id(30),
+            capability_profile_id: product_id(31),
+            statistic_registry_value: 1,
+            coverage_policy_registry_value: 1,
+            ambiguity_policy_registry_value: 1,
+            edge_policy_registry_value: 1,
+            burn_terminal_disposition_registry_value: 1,
+            resolved_edge_policy: product::QuantizedEdgePolicyV1::Refuse,
+            supported_basis_degrees: [true; 4],
+            max_outcome_count: 1,
+            max_degree_zero_payout_count: 1,
+            max_recovery_attempt_count: 1,
+            min_coverage_policy_parameter: 1,
+            max_coverage_policy_parameter: 1,
+            max_window_span_buckets: 1,
+            max_series_instance_count: 1,
+            maximum_interval_width: 1,
+            maximum_coordinates_per_advance: 1,
+            maximum_recovery_progress_units_per_call: 1,
+            semantic_owners: product::CapabilitySemanticOwnersV2 {
+                source_plane_contract_id: product_id(40),
+                source_spec_id: product_id(41),
+                summary_program_id: bundle.summary_program_id,
+                native_claim_basis_id: bundle.native_claim_basis_id,
+                evidence_only_recovery_policy_id: bundle.evidence_only_recovery_policy_id,
+                product_compiler_release_id: bundle.product_compiler_release_id,
+                price_grid_id: genesis.price_grid_id,
+                price_measure_policy_id: genesis.price_measure_policy_id,
+                fee_policy_id: genesis.fee_policy_id,
+                relation_policy_id: genesis.relation_policy_id,
+                score_policy_id: genesis.score_policy_id,
+                candidate_lifecycle_policy_id: genesis.candidate_lifecycle_policy_id,
+                candidate_liveness_policy_id: genesis.candidate_liveness_policy_id,
+                retirement_policy_id: genesis.retirement_policy_id,
+            },
+            realm_collateral: product::RealmCollateralProjectionV1 {
+                realm_id: genesis.realm_id,
+                profile_id: genesis.profile_id,
+                collateral_mint: product_id(37),
+                token_program: product_id(38),
+                neutral_incinerator: product_id(60),
+                neutral_lamport_sink: product_id(61),
+                market_collateral_cap_ceiling: 1,
+            },
+        };
+        let mut selection = policy();
+        selection.compiled_product_bundle_v5_id = bundle.id().unwrap().bytes();
+        selection.market_genesis_profile_id = genesis.id().unwrap().bytes();
+        (selection, bundle, registry, genesis)
     }
 
     fn real_pyth() -> RealPythOperatorRouteV1 {
@@ -2518,8 +2765,8 @@ mod operator_release_manifest_tests {
     }
 
     fn manifest(route: Option<RealPythOperatorRouteV1>) -> ExplicitOperatorReleaseManifest {
-        ExplicitOperatorReleaseManifest {
-            manifest_sha256: [1; 32],
+        let mut manifest = ExplicitOperatorReleaseManifest {
+            manifest_sha256: [0; 32],
             clutch: program(1, 2, 20),
             real_pyth: route,
             semantic_releases: vec![SemanticOwner {
@@ -2527,7 +2774,9 @@ mod operator_release_manifest_tests {
                 schema: "source-release-manifest-v2".into(),
                 release_sha256: [2; 32],
             }],
-        }
+        };
+        manifest.manifest_sha256 = manifest.computed_manifest_sha256();
+        manifest
     }
 
     #[test]
@@ -2562,6 +2811,40 @@ mod operator_release_manifest_tests {
         assert_eq!(
             manifest(Some(route)).validate(),
             Err(WorkflowGraphError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn operator_manifest_refuses_a_digest_from_another_exact_route() {
+        let sealed = manifest(Some(real_pyth()));
+        let mut substituted = sealed.clone();
+        substituted.real_pyth.as_mut().unwrap().provider_feed_id = [91; 32];
+        assert_eq!(
+            substituted.validate(),
+            Err(WorkflowGraphError::WrongProgramRelease)
+        );
+    }
+
+    #[test]
+    fn product_route_binds_bundle_v5_profile_v4_and_realm_collateral() {
+        let (selection, bundle, registry, genesis) = product_selection();
+        assert_eq!(
+            selection.validate_product_route(&bundle, &registry, &genesis),
+            Ok(())
+        );
+
+        let mut wrong_realm = registry;
+        wrong_realm.realm_collateral.realm_id = product_id(62);
+        assert_eq!(
+            selection.validate_product_route(&bundle, &wrong_realm, &genesis),
+            Err(WorkflowGraphError::WrongProgramRelease)
+        );
+
+        let mut wrong_source = bundle;
+        wrong_source.source_release_manifest_id = product_id(63);
+        assert_eq!(
+            selection.validate_product_route(&wrong_source, &registry, &genesis),
+            Err(WorkflowGraphError::WrongProgramRelease)
         );
     }
 }
