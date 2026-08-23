@@ -24,7 +24,8 @@ use clutch_product_series::{
     MarketFoundationScheduleV2, MarketFoundationSlotV2, MarketFoundationStepProjectionV2,
     MarketFoundingAbortProjectionV1, MarketInstanceTerminalProjectionV1, MarketInstanceV2Id,
     MarketLifecyclePhaseV1, MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1,
-    SeriesAttachmentPlanV4, SeriesFundingComponentV2, SeriesFundingQuoteV4,
+    MarketResolutionActivationV1, SeriesAttachmentPlanV4, SeriesFundingComponentV2,
+    SeriesFundingQuoteV4,
     SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationStatusV1,
     SeriesLinkObligationV1, SeriesMarketDispositionV1, SeriesMarketLinkPhaseV1, SeriesMarketLinkV1,
     SeriesMarketLinkV1Id, SeriesPlanV5Id,
@@ -2583,6 +2584,63 @@ fn write_market_lifecycle_root_v1<'next>(
         ClutchError::MismatchedState,
     )?;
     Ok(rebound)
+}
+
+/// Default-refusing same-program authority for the sole Resolution V5 root write.
+///
+/// The isolated Failure/Collateral composer implements this only for a private
+/// postwrite receipt constructed after all three liability accounts have been
+/// hostile-reauthenticated. A pure activation value is never sufficient.
+pub(crate) trait AuthenticatedMarketResolutionActivationWriteV1 {
+    /// Authenticate the exact Product/Failure/Collateral postwrite join.
+    fn authenticate_market_resolution_activation_write_v1(
+        &self,
+        _root_authentication_before: ContentId,
+        _expected: MarketResolutionActivationV1,
+        _slot10_preallocation_id: ContentId,
+        _collateral_plan_receipt_id: ContentId,
+        _collateral_postwrite_receipt_id: ContentId,
+        _failure_resolution_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Record the once-only Product Resolution activation through its narrow authority.
+pub(crate) fn record_market_resolution_activation_v1<
+    'next,
+    A: AuthenticatedMarketResolutionActivationWriteV1 + ?Sized,
+>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV1<'_>,
+    activation: MarketResolutionActivationV1,
+    slot10_preallocation_id: ContentId,
+    collateral_plan_receipt_id: ContentId,
+    collateral_postwrite_receipt_id: ContentId,
+    failure_resolution_receipt_id: ContentId,
+    authority: &A,
+    rebound_output: &'next mut MarketLifecycleRootAccountV1,
+) -> Outcome<AuthenticatedMarketLifecycleRootV1<'next>> {
+    authority.authenticate_market_resolution_activation_write_v1(
+        authenticated.authentication_id(),
+        activation,
+        slot10_preallocation_id,
+        collateral_plan_receipt_id,
+        collateral_postwrite_receipt_id,
+        failure_resolution_receipt_id,
+    )?;
+    let successor = authenticated
+        .state()
+        .record_resolution_activation(activation)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_market_lifecycle_root_v1(
+        program_id,
+        account,
+        authenticated,
+        &successor,
+        rebound_output,
+    )
 }
 
 /// Persist a pure per-Series link successor and reauthenticate exact bytes.
