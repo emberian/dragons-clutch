@@ -28,6 +28,7 @@ use clutch_solana_layout::registry::{
     GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
     GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
 };
+use clutch_solana_layout::MAX_ORDERS_PER_PAGE;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -157,10 +158,13 @@ impl ExactIndexCommonV1 {
         {
             if id.is_zero() { return Err(ExactIndexPlaneErrorV1::ZeroIdentity); }
         }
+        let maximum_references = self.slice_count.checked_mul(2)
+            .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
         if self.order_count == 0 || usize::from(self.order_count) > MAX_ORDERS
             || self.outcome_count < 2 || usize::from(self.outcome_count) > MAX_OUTCOMES
             || self.slice_count == 0 || usize::from(self.slice_count) > MAX_SLICES
             || self.slice_reference_count < self.slice_count
+            || self.slice_reference_count > maximum_references
             || usize::from(self.slice_reference_count) > MAX_EXACT_INDEX_SLICE_REFERENCES_V1
             || self.page_count == 0 || usize::from(self.page_count) > 4
         { return Err(ExactIndexPlaneErrorV1::InvalidCount); }
@@ -168,6 +172,7 @@ impl ExactIndexCommonV1 {
         while page < 4 {
             if (page < usize::from(self.page_count))
                 != (self.page_physical_slot_counts[page] != 0)
+                || usize::from(self.page_physical_slot_counts[page]) > MAX_ORDERS_PER_PAGE
             {
                 return Err(ExactIndexPlaneErrorV1::InvalidCount);
             }
@@ -1046,6 +1051,22 @@ mod tests {
         assert_eq!(value.order_count, 2);
         assert_eq!(value.page_physical_slot_counts[0], 3);
         assert_eq!(value.validate(), Ok(()));
+        assert_eq!(
+            ExactIndexCommonV1 {
+                page_physical_slot_counts: [17, 0, 0, 0],
+                ..value
+            }
+            .validate(),
+            Err(ExactIndexPlaneErrorV1::InvalidCount),
+        );
+        assert_eq!(
+            ExactIndexCommonV1 {
+                slice_reference_count: 5,
+                ..value
+            }
+            .validate(),
+            Err(ExactIndexPlaneErrorV1::InvalidCount),
+        );
     }
 
     #[test]
