@@ -11,10 +11,10 @@
 use clutch_product_series::{ContentId as ProductContentId, MarketInstanceV2Id};
 use sha2::{Digest, Sha256};
 
-use crate::market_policy_v2::{
+use crate::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateV1, FailureMarketFamilyTerminalReceiptIdV1,
 };
-use crate::market_quote_v2::FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use crate::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
 use crate::{Error, FailurePolicyBindingId, Result};
 
 const FUNDING_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-interval-funding/v2";
