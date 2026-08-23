@@ -2759,6 +2759,13 @@ impl SeriesMarketLinkV1 {
     ) -> ContentId {
         self.admission_receipts[obligation.index()]
     }
+    /// Exact Product terminal projection receipt for a consumed obligation.
+    pub const fn obligation_terminal_receipt_id(
+        self,
+        obligation: SeriesLinkObligationV1,
+    ) -> ContentId {
+        self.terminal_receipts[obligation.index()]
+    }
     /// Link transition sequence.
     pub const fn transition_sequence(self) -> u64 {
         self.transition_sequence
