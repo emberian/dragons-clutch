@@ -44,17 +44,23 @@ The builder feature now also exposes two reusable boundaries:
   Real-source configuration is either one SHA-256-pinned local capture or a
   credential-free HTTPS reader with an exact account-read ceiling. The same
   module constructs the selected validator's loopback-only argv, ledger,
-  ports, mint identity, warp slot, and digest-bound genesis-account files
-  without starting a process.
+  ports, mint identity, warp slot, digest-bound genesis-account files, and
+  explicit main-program/adapter `--bpf-program` releases without starting a
+  process. Each program tuple carries its ID, expected ELF digest, and absolute
+  `.so` path; the eventual process launcher must check the bytes against that
+  digest before using the argv.
 - `transaction_builder` accepts instruction bytes from their semantic owner,
   binds them to package/schema/release identity, preserves exact integer
   balance equations, and assembles unsigned blockhash-free Solana transactions.
   Its flow inventory covers SourcePlane V3, General V2 candidate construction,
   owner settlement, fees, direct Eggs, liveness, Product Series, and structured
-  claims. Main-program successor envelopes use the central family allocation;
-  SourcePlane and liveness keep their separately owned codecs. The resulting
-  object always reports `signed=false` and `submitted=false`, and reserved SBF
-  routes remain labeled `ReservedDisabled`. `build_current_workflow` refuses
+  claims. General V2 and recurring-Series successor envelopes consume typed
+  action coordinates and allocation status directly from the central registry;
+  structured-claim local actions remain explicitly semantic-owner-bound until
+  centrally allocated. Every route stays production-inert until the dispatcher
+  and a checked release manifest admit it. SourcePlane and liveness keep their
+  separately owned codecs. The resulting object always reports `signed=false`,
+  `submitted=false`, and `ReservedDisabled`. `build_current_workflow` refuses
   to substitute any missing flow: it requires SourcePlane V3, General V2
   candidate work, settlement, fees, direct Eggs, liveness, Series, and
   structured claims. Cursor-bearing work remains an ordered unsigned sequence;

@@ -36,7 +36,7 @@ pub use auth::{
     AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1,
     ClockPolicyV1, ClockSnapshotV1, DeploymentBindingV1, ParserOutputV1, RuntimeAccountViewV1,
     RuntimeDerivedPdaV1, RuntimeKey, SourceReleaseManifestV1, CLOCK_POLICY_BYTES,
-    PARSER_OUTPUT_BYTES, SOURCE_RELEASE_MANIFEST_BYTES,
+    SOURCE_RELEASE_MANIFEST_BYTES,
 };
 pub use funding::{
     authenticate_source_work_receipt_account, plan_source_account_close,

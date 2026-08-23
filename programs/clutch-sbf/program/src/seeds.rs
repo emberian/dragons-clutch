@@ -104,6 +104,23 @@ pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
 /// DirectBatchPolicy V3 final-artifact seed prefix, disjoint from legacy policy.
 pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
+/// Globally content-addressed successor Product/Series artifact prefix.
+///
+/// The kind byte is a seed so transparent 32-byte typed IDs are never cast
+/// across artifact meanings. Realm binding remains inside Genesis V2.
+pub const SEED_PRODUCT_ARTIFACT_V1: &[u8] = b"dc:product-artifact:v1";
+/// Persistent V5 Series registration/replay-anchor prefix.
+pub const SEED_SERIES_REGISTRY_V1: &[u8] = b"dc:series-registry:v1";
+/// Mutable V5 Series funding-state prefix.
+pub const SEED_SERIES_FUNDING_V1: &[u8] = b"dc:series-funding:v1";
+/// Zero-data, System-owned per-component lamport custody prefix.
+pub const SEED_SERIES_LAMPORT_VAULT_V1: &[u8] = b"dc:series-lamports:v1";
+/// Sole PDA signing authority for one Series' collateral vault set.
+pub const SEED_SERIES_COLLATERAL_AUTHORITY_V1: &[u8] = b"dc:series-collateral-auth:v1";
+/// Per-component release-selected collateral custody prefix.
+pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
+/// Immutable SourcePlane V3 occurrence-provenance record prefix.
+pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
 /// Direct candidate-window account seed prefix.
 pub const SEED_DIRECT_WINDOW: &[u8] = b"dragons-clutch:direct-window:v1";
 /// Full-width verified direct candidate seed prefix.
@@ -483,6 +500,64 @@ pub fn policy_pda(program_id: &Pubkey, profile: &[u8; 32], digest: &[u8; 32]) ->
 /// Canonical full-width batch-policy artifact address.
 pub fn batch_policy_pda(program_id: &Pubkey, epoch: &[u8; 32], digest: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_BATCH_POLICY, epoch, digest])
+}
+
+/// Canonical immutable successor Product/Series artifact address.
+pub fn product_artifact_pda(program_id: &Pubkey, kind: u8, digest: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_PRODUCT_ARTIFACT_V1, &[kind], digest])
+}
+
+/// Canonical immutable registered-Series address.
+pub fn series_registry_pda(program_id: &Pubkey, series: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SERIES_REGISTRY_V1, series])
+}
+
+/// Canonical mutable funding-state address for one registered Series.
+pub fn series_funding_pda(program_id: &Pubkey, series: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SERIES_FUNDING_V1, series])
+}
+
+/// Canonical zero-data lamport custody address for one funding component.
+///
+/// `component` is the exact `SeriesFundingComponentV1` discriminant `0..=4`;
+/// the instruction parser must refuse every other byte before deriving it.
+pub fn series_lamport_vault_pda(
+    program_id: &Pubkey,
+    series: &[u8; 32],
+    component: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SERIES_LAMPORT_VAULT_V1, series, &[component]],
+    )
+}
+
+/// Canonical sole signing authority for one Series' five collateral vaults.
+pub fn series_collateral_authority_pda(program_id: &Pubkey, series: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_SERIES_COLLATERAL_AUTHORITY_V1, series])
+}
+
+/// Canonical release-selected collateral vault for one funding component.
+///
+/// Address allocation is owned here; token-account semantic admission remains
+/// the collateral adapter's typed boundary.
+pub fn series_collateral_vault_pda(
+    program_id: &Pubkey,
+    series: &[u8; 32],
+    component: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SERIES_COLLATERAL_VAULT_V1, series, &[component]],
+    )
+}
+
+/// Canonical immutable SourcePlane provenance account for one compiled record.
+pub fn source_occurrence_pda(program_id: &Pubkey, source_occurrence_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_SOURCE_OCCURRENCE_V1, source_occurrence_id],
+    )
 }
 
 /// Canonical DirectBatchPolicy V3 artifact address.

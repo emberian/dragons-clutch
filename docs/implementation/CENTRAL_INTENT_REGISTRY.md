@@ -34,7 +34,7 @@ family version creates a new namespace; it does not inherit capability.
 | General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
 | Covered dealer | 76 | `0x4c` | 1 | disabled |
-| Source plane / Series | 77 | `0x4d` | 2 | disabled |
+| Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
@@ -114,8 +114,51 @@ actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
-The other three family action spaces are empty: every local action is unknown
-until an atomic design wave fixes its payload and capability contract.
+Source/Series V2 partitions its action namespace without aliases. SourcePlane
+V3 exclusively owns local actions 1 through 12:
+
+1. `RegisterRelease`
+2. `InitializeHead`
+3. `OpenRawPage`
+4. `IngestBoundaryBatch`
+5. `SealRawPage`
+6. `InitializeWindowWork`
+7. `FoldWindowPages`
+8. `SealWindow`
+9. `EvaluateStatistic`
+10. `EmitFailureHandoff`
+11. `ReopenGeneration`
+12. `CloseGeneration`
+
+Recurring Series exclusively owns local actions 13 through 18, whose exact
+laboratory payload codecs live in `clutch_solana_layout::product_series`:
+
+13. `RegisterSeries`
+14. `ActivateFunding`
+15. `AdvanceOccurrence`
+16. `LapseOccurrence`
+17. `ObserveDonation`
+18. `CloseFunding`
+
+Allocation still grants no execution capability. The program's executable
+Source/Series set remains empty. In particular, a decoded registry release ID
+or capability-profile ID is not authority: registration stays disabled until
+the adapter authenticates the authoritative central release, and every
+value-bearing action stays disabled until its exact source, collateral,
+liveness, and failure receipts are authenticated.
+
+Dealer owns `0x7d/1` for its staged policy and `0x7e/1` for its immutable
+policy. The Source/Series account namespace reserves the disjoint `0x7f/1` for
+the persistent Series registration/replay anchor and `0x80/1` for the mutable
+Series-funding wrapper. Their exact 168-byte and 376-byte codecs are fixed but
+reserved-disabled. The funding wrapper adds tag/version/bump/flags, exact
+refundable account-rent principal, and five release-selected collateral-vault
+rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
+copy its cursor or component-balance facts.
+
+The Structured, Dealer, and Recovery family action spaces remain empty: every
+local action is unknown until an atomic design wave fixes its payload and
+capability contract.
 
 ## Coordinated successor account block
 
@@ -175,8 +218,10 @@ The source-only
 `profile-non-production-general-v2-empty-book-identity-lab` enables only the
 actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
 General actions return `UnsupportedInstruction` before their handlers read
-accounts. Unknown family versions and unknown local actions fail strict
-decoding and cannot fall into a legacy handler.
+accounts. Every allocated Source/Series action also returns
+`UnsupportedInstruction` before account reads. Unknown family versions and
+unknown local actions fail strict decoding and cannot fall into a legacy
+handler.
 
 A later activation must change the following atomically:
 
@@ -194,4 +239,6 @@ confined to the named non-production profile. Actions 35 through 38 have
 frozen canonical payload contracts but remain `ReservedDisabled`. Every other
 General V2 action remains allocation-only. Unlisted future local-action proposals, and
 every proposed account shape, stay outside the central ledger until their
-atomic review is complete.
+atomic review is complete. Source/Series V2 local actions 1 through 18 are
+likewise reserved-disabled allocations; a frozen laboratory payload codec does
+not grant execution capability.
