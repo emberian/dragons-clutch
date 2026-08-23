@@ -27,3 +27,6 @@ Initial records:
   specification, and the `native_decide` ban codified. Supersedes 0003; adopted
   2026-08-20 ([../decisions/ADOPTED_2026-08-20.md](../decisions/ADOPTED_2026-08-20.md)
   item 2).
+- [0006](0006-two-window-candidate-lifecycle.md): proposed two-window general
+  candidate lifecycle with an enumerable sealed set, prepaid permissionless
+  verification, hard expiry, and score-policy-independent rank keys.
