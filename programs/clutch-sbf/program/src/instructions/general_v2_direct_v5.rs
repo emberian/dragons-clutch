@@ -3,7 +3,8 @@
 //! Account order is fixed and exhaustive:
 //! 0 SettlementRoot, 1 retained Feed, 2 ReceiptV5, 3 MarketBindingV2,
 //! 4 MarketRuntimeV3, 5 Realm, 6 ProfileV2, 7 collateral policy,
-//! 8 Token-2022 program, 9 MarketInstanceV2 artifact, 10 Rent sysvar,
+//! 8 Token-2022 program, 9 MarketInstanceV2 artifact,
+//! 10 MarketGenesisProfileV2 artifact, 11 Rent sysvar,
 //! then buyer and seller groups of five accounts each: read-only OwnerRowV5,
 //! read-only OrderPageV5, writable ReservationV9, writable PositionV3, and
 //! writable GEN1 ReplayV3.
@@ -28,7 +29,7 @@ use clutch_general_v2_runtime::{
     ConsumeDirectReceiptEggsInputV5, DirectEggDeliveryEndpointInputV5,
     OwnerSettlementAccountProjectionV5, OwnerSettlementAccountViewV5, PositionAccountInputV3,
 };
-use clutch_product_series::{ContentId, MarketInstancePreimageV2};
+use clutch_product_series::{ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2};
 use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
 use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
 use clutch_solana_layout::registry::GeneralV2Action;
@@ -53,7 +54,7 @@ use super::general_v2_receipt_v5::{
 use super::product_artifact::authenticate_product_artifact_v1;
 
 /// Exact action-26 account count.
-pub const ACCOUNT_COUNT: usize = 21;
+pub const ACCOUNT_COUNT: usize = 22;
 pub const IX_ROOT: usize = 0;
 pub const IX_FEED: usize = 1;
 pub const IX_RECEIPT: usize = 2;
@@ -64,17 +65,18 @@ pub const IX_PROFILE: usize = 6;
 pub const IX_COLLATERAL_POLICY: usize = 7;
 pub const IX_TOKEN_PROGRAM: usize = 8;
 pub const IX_MARKET_INSTANCE: usize = 9;
-pub const IX_RENT_SYSVAR: usize = 10;
-pub const IX_BUYER_ROW: usize = 11;
-pub const IX_BUYER_PAGE: usize = 12;
-pub const IX_BUYER_RESERVATION: usize = 13;
-pub const IX_BUYER_POSITION: usize = 14;
-pub const IX_BUYER_REPLAY: usize = 15;
-pub const IX_SELLER_ROW: usize = 16;
-pub const IX_SELLER_PAGE: usize = 17;
-pub const IX_SELLER_RESERVATION: usize = 18;
-pub const IX_SELLER_POSITION: usize = 19;
-pub const IX_SELLER_REPLAY: usize = 20;
+pub const IX_MARKET_GENESIS: usize = 10;
+pub const IX_RENT_SYSVAR: usize = 11;
+pub const IX_BUYER_ROW: usize = 12;
+pub const IX_BUYER_PAGE: usize = 13;
+pub const IX_BUYER_RESERVATION: usize = 14;
+pub const IX_BUYER_POSITION: usize = 15;
+pub const IX_BUYER_REPLAY: usize = 16;
+pub const IX_SELLER_ROW: usize = 17;
+pub const IX_SELLER_PAGE: usize = 18;
+pub const IX_SELLER_RESERVATION: usize = 19;
+pub const IX_SELLER_POSITION: usize = 20;
+pub const IX_SELLER_REPLAY: usize = 21;
 
 #[derive(Debug)]
 struct EndpointData<'a> {
@@ -180,6 +182,12 @@ fn authenticate_market_collateral_v2(
         ContentId::from_bytes(root.market_instance_v2_id().bytes()),
     )?;
     let instance = *artifact.value();
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        &accounts[IX_MARKET_GENESIS],
+        ContentId::from_bytes(base.market_genesis_profile_v2_id.bytes()),
+    )?;
+    let genesis = *genesis.value();
     require(
         instance
             .id()
@@ -187,7 +195,14 @@ fn authenticate_market_collateral_v2(
             .bytes()
             == root.market_instance_v2_id().bytes()
             && instance.market_genesis_profile_id.content_id().bytes()
-                == base.market_genesis_profile_v2_id.bytes(),
+                == base.market_genesis_profile_v2_id.bytes()
+            && genesis.realm_id.bytes() == realm.realm().realm.bytes()
+            && genesis.profile_id.bytes() == realm.realm().profile.bytes()
+            && genesis.price_measure_policy_id.content_id().bytes()
+                == base.price_measure_policy_v1_id.bytes()
+            && genesis.relation_policy_id.bytes() == base.relation_policy_id.bytes()
+            && genesis.score_policy_id.bytes() == base.score_policy_id.bytes()
+            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID,
         ClutchError::MismatchedState,
     )?;
     let market_id = CollateralId::from_bytes(root.market_instance_v2_id().bytes());
@@ -550,6 +565,7 @@ mod tests {
             IX_COLLATERAL_POLICY,
             IX_TOKEN_PROGRAM,
             IX_MARKET_INSTANCE,
+            IX_MARKET_GENESIS,
             IX_RENT_SYSVAR,
             IX_BUYER_ROW,
             IX_BUYER_PAGE,
