@@ -34,7 +34,7 @@ family version creates a new namespace; it does not inherit capability.
 | General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
 | Covered dealer | 76 | `0x4c` | 1 | disabled |
-| Source plane / Series | 77 | `0x4d` | 2 | disabled |
+| Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
@@ -81,6 +81,31 @@ General V2 reserves local actions 1 through 38, in order:
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
 
+SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
+1 through 12:
+
+1. `RegisterRelease`
+2. `InitializeHead`
+3. `OpenRawPage`
+4. `IngestBoundaryBatch`
+5. `SealRawPage`
+6. `InitializeWindowWork`
+7. `FoldWindowPages`
+8. `SealWindow`
+9. `EvaluateStatistic`
+10. `EmitFailureHandoff`
+11. `ReopenGeneration`
+12. `CloseGeneration`
+
+Recurring Series owns actions 13 through 18:
+
+13. `RegisterSeries`
+14. `ActivateFunding`
+15. `AdvanceOccurrence`
+16. `LapseOccurrence`
+17. `ObserveDonation`
+18. `CloseFunding`
+
 These registry names allocate local tags only; this document does not freeze
 payload bytes, account lists, account codecs, transition semantics, or runtime
 capabilities. Action-specific contracts may do so separately. In particular,
@@ -89,6 +114,48 @@ actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
+Source/Series V2 partitions its action namespace without aliases. SourcePlane
+V3 exclusively owns local actions 1 through 12:
+
+1. `RegisterRelease`
+2. `InitializeHead`
+3. `OpenRawPage`
+4. `IngestBoundaryBatch`
+5. `SealRawPage`
+6. `InitializeWindowWork`
+7. `FoldWindowPages`
+8. `SealWindow`
+9. `EvaluateStatistic`
+10. `EmitFailureHandoff`
+11. `ReopenGeneration`
+12. `CloseGeneration`
+
+Recurring Series exclusively owns local actions 13 through 18, whose exact
+laboratory payload codecs live in `clutch_solana_layout::product_series`:
+
+13. `RegisterSeries`
+14. `ActivateFunding`
+15. `AdvanceOccurrence`
+16. `LapseOccurrence`
+17. `ObserveDonation`
+18. `CloseFunding`
+
+Allocation still grants no execution capability. The program's executable
+Source/Series set remains empty. In particular, a decoded registry release ID
+or capability-profile ID is not authority: registration stays disabled until
+the adapter authenticates the authoritative central release, and every
+value-bearing action stays disabled until its exact source, collateral,
+liveness, and failure receipts are authenticated.
+
+Dealer owns `0x7d/1` for its staged policy and `0x7e/1` for its immutable
+policy. The Source/Series account namespace reserves the disjoint `0x7f/1` for
+the persistent Series registration/replay anchor and `0x80/1` for the mutable
+Series-funding wrapper. Their exact 168-byte and 376-byte codecs are fixed but
+reserved-disabled. The funding wrapper adds tag/version/bump/flags, exact
+refundable account-rent principal, and five release-selected collateral-vault
+rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
+copy its cursor or component-balance facts.
+
 Recovery 78/v1 reserves these local actions, all disabled:
 
 1. `InitializeFailureRoot`
@@ -101,26 +168,50 @@ Recovery 78/v1 reserves these local actions, all disabled:
 8. `CloseRecoveryFunding`
 9. `CloseFailureRoot`
 
-The Structured-claim and Covered-dealer family action spaces remain empty:
-every local action is unknown until an atomic design wave fixes its payload and
-capability contract.
+The Structured and Dealer family action spaces remain empty: every local action
+is unknown until an atomic design wave fixes its payload and capability
+contract.
 
-## Disabled failure/recovery account block
+## Coordinated successor account block
 
-The main-account namespace reserves one contiguous block after the tentative
-Dealer range `0x93..=0x9e`; `0x9f` deliberately remains unallocated:
+The central collision ledger is the sole allocation owner for the following
+contiguous successor block. Every row is `ReservedDisabled`; an account codec
+or pure runtime elsewhere does not make a route executable.
 
-| account family | tag | version | semantic codec owner |
-| --- | ---: | ---: | --- |
-| Failure external semantic root | `0xa0` | 1 | failure adapter; root rent only |
-| Immutable runtime-liveness policy | `0xa1` | 1 | liveness runtime |
-| External Recovery compartment | `0xa2` | 1 | liveness runtime; sole work/rent custody |
-| Failure replay tombstone | `0xa3` | 1 | terminal/replay owner |
+| tag/version | owner | account |
+|---:|---|---|
+| `0x7d/1` | Dealer | staged policy |
+| `0x7e/1` | Dealer | immutable policy |
+| `0x7f/1` | Recurring Series | registry |
+| `0x80/1` | Recurring Series | present-funding compartments |
+| `0x81/1` | General V2 | owner settlement |
+| `0x82/1` | General V2 | selected fee record |
+| `0x83/1` | General V2 | owner fee carry |
+| `0x84/1` | General V2 | payer allocation |
+| `0x85/1` | General V2 | recipient allocation |
+| `0x86/1` | General V2 | treasury ledger |
+| `0x87/1` | General V2 | settlement cash pot |
+| `0x88/1` | StructuredClaim | descriptor |
+| `0x89/1` | General V2 | FinalPot |
+| `0x8a/1` | SourcePlane V3 | release |
+| `0x8b/1` | SourcePlane V3 | head |
+| `0x8c/1` | SourcePlane V3 | reopen lineage |
+| `0x8d/1` | SourcePlane V3 | open raw page |
+| `0x8e/1` | SourcePlane V3 | immutable raw page |
+| `0x8f/1` | SourcePlane V3 | window work |
+| `0x90/1` | SourcePlane V3 | window seal |
+| `0x91/1` | SourcePlane V3 | statistic result |
+| `0x92/1` | SourcePlane V3 | liveness work receipt |
+| `0xa0/1` | Failure | external semantic root; root rent only |
+| `0xa1/1` | Liveness | immutable runtime policy |
+| `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
+| `0xa3/1` | Terminal/replay | failure-generation tombstone |
 
-The failure root never aliases `0xa2`, never holds recovery work principal, and
-never emits a keeper transfer. An accepted-work instruction must rewrite the
-failure root and the external Recovery compartment atomically; the latter is
-the sole account debited for the keeper payment and payer headroom refund.
+Tags `0x93..=0x9e` remain outside this wave's ownership for the coordinated
+Dealer design, and `0x9f` deliberately remains unallocated. The failure root
+never aliases `0xa2`, holds recovery work principal, or emits a keeper transfer.
+Accepted work rewrites the failure root and Recovery compartment atomically;
+only the latter is debited for the keeper payment and payer headroom refund.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -149,8 +240,10 @@ The source-only
 `profile-non-production-general-v2-empty-book-identity-lab` enables only the
 actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
 General actions return `UnsupportedInstruction` before their handlers read
-accounts. Unknown family versions and unknown local actions fail strict
-decoding and cannot fall into a legacy handler.
+accounts. Every allocated Source/Series action also returns
+`UnsupportedInstruction` before account reads. Unknown family versions and
+unknown local actions fail strict decoding and cannot fall into a legacy
+handler.
 
 A later activation must change the following atomically:
 
@@ -168,4 +261,6 @@ confined to the named non-production profile. Actions 35 through 38 have
 frozen canonical payload contracts but remain `ReservedDisabled`. Every other
 General V2 action remains allocation-only. Unlisted future local-action proposals, and
 every proposed account shape, stay outside the central ledger until their
-atomic review is complete.
+atomic review is complete. Source/Series V2 local actions 1 through 18 are
+likewise reserved-disabled allocations; a frozen laboratory payload codec does
+not grant execution capability.

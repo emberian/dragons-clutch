@@ -3,112 +3,112 @@
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 
-//! Production-bound, allocation-free Solana seam for transferable structured
-//! claims.
+//! Disabled-by-default Solana trust-boundary adapter for structured claims.
 //!
-//! This crate owns the wrapper descriptor and request bytes, binds them to the
-//! existing base layouts and executable deployments, projects exact Token-2022
-//! effects, and stages checked CPI plans. It deliberately owns no backing or
-//! supply ledger: those facts remain in the base [`clutch_solana_layout::PositionAccount`],
-//! [`clutch_solana_layout::SupplyLedgerAccount`], Hoard/kernel state, and the
-//! actual Token-2022 mint.
+//! `clutch-structured-claim-runtime-contract` is the sole owner of the
+//! descriptor bytes, family-local payloads, and economic state transitions.
+//! This crate does not restate those DTOs. It owns only work that necessarily
+//! lives at the SBF boundary: family admission, deployment hashing, PDA
+//! authentication, hostile Solana account projection, exact CPI staging, and
+//! post-CPI reconciliation.
 //!
-//! Account borrowing, upgradeable-loader decoding, Token-2022 byte decoding,
-//! signer checks, and `invoke_signed` remain in the small SBF dispatcher seam.
-//! The dispatcher must feed only authenticated projections into this crate and
-//! reconcile every successful CPI receipt and final post-state.
+//! Every family-local action is currently reserved but disabled. The
+//! admission check runs after reading only the three-byte extension header and
+//! before payload or account data is read. Pure planning APIs exist so the
+//! complete handler can be implemented before activation; they are not runtime
+//! admission and cannot make the deployed dispatcher execute this family.
 
-mod codec;
+mod accounts;
+mod envelope;
+mod handler;
 mod identity;
-mod plan;
-mod projection;
 
-pub use codec::{
-    Action, RequestV1, StructuredClaimDescriptorV1, WrapperReplayV1, DESCRIPTOR_BYTES,
-    REPLAY_BYTES, REQUEST_BYTES,
+pub use accounts::{
+    authenticate_base_market_v1, authenticate_base_position_v1, authenticate_token_2022_mint_v1,
+    authenticate_token_2022_token_v1, decode_owned_descriptor_v1, AccountAccessV1, AccountFrameV1,
+    AccountProgramsV1, AccountRoleV1, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV1,
+    AuthenticatedTokenMintV1, AuthenticatedTokenV1, BasePositionPdaVerifierV1, RawAccountV1,
+    Token2022DecoderV1, MAX_ROUTE_ACCOUNTS,
+};
+pub use envelope::{
+    admit_runtime_envelope_v1, decode_instruction_v1, StructuredClaimEnvelopeV1,
+    ENABLED_STRUCTURED_CLAIM_ACTION_MASK, RESERVED_STRUCTURED_CLAIM_ACTION_MASK,
+};
+pub use handler::{
+    authenticate_base_vault_creation_v1, authenticate_base_vault_retirement_v1,
+    prepare_create_descriptor_v1, prepare_mutation_v1, BaseCapabilityVerifierV1, BaseCpiV1,
+    BaseVaultCreationEvidenceV1, BoundBaseVaultCreationV1, BoundBaseVaultRetirementV1,
+    CreateDescriptorContextV1, DescriptorWriteV1, ExecutionStepV1, MutationContextV1,
+    PreparedStructuredClaimRouteV1, PreparedStructuredClaimSemanticV1, StepReceiptV1,
+    SystemPdaOperationV1, Token2022CpiV1, MAX_EXECUTION_STEPS,
 };
 #[cfg(target_os = "solana")]
-pub use identity::SolanaPdaVerifier;
+pub use identity::SolanaPdaVerifierV1;
 pub use identity::{
-    bind_descriptor, canonical_replay_namespace, canonical_wrapper_product_id, AddressBinding,
-    PdaVerifier, RuntimeDeployments, DESCRIPTOR_SEED, MINT_SEED, REPLAY_SEED, VAULT_OWNER_SEED,
-};
-#[cfg(not(target_os = "solana"))]
-pub use plan::plan_route;
-#[cfg(target_os = "solana")]
-pub use plan::plan_route_solana;
-pub use plan::{
-    plan_route_into, reconcile_post_state, reconcile_receipts, AdapterContext,
-    BaseReplayProjection, CpiReceipt, CpiStep, CpiStepKind, ExpectedPostState, RoutePlan,
-    RouteScratch, MAX_CPI_STEPS,
-};
-pub use projection::{
-    check_market_closure, AccountAccess, AccountRole, AccountSet, AuthenticatedMarket,
-    MintProjection, TokenAccountProjection,
+    bind_descriptor_v1, canonical_native_claim_id_v1, canonical_wrapper_product_id_v1,
+    BoundDescriptorV1, PdaVerifierV1, RuntimeDeploymentsV1, DESCRIPTOR_SEED, MINT_AUTHORITY_SEED,
+    MINT_SEED, VAULT_OWNER_SEED,
 };
 
-/// Canonical identity or Solana address bytes.
+/// The canonical semantic/runtime contract consumed by this adapter.
+pub use clutch_structured_claim_runtime_contract as runtime_contract;
+
+/// Canonical key or digest bytes.
 pub type Key = [u8; 32];
-/// Maximum native Egg width.
-pub const MAX_OUTCOMES: usize = clutch_structured_claim::MAX_OUTCOMES;
 
-/// A total refusal from the wrapper adapter seam.
+/// Deterministic refusal at the structured-claim SBF boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Error {
-    /// A fixed codec received too few bytes.
-    Truncated,
-    /// A fixed codec received trailing bytes.
-    TrailingBytes,
-    /// A codec discriminator was wrong.
-    WrongTag,
-    /// A codec version was wrong.
-    WrongVersion,
-    /// An enum, flag, or reserved byte was noncanonical.
-    NonCanonical,
-    /// An identity was zero, aliased, or mismatched.
-    InvalidIdentity,
-    /// A descriptor did not bind the authenticated Market and Terms.
-    DescriptorBinding,
-    /// A supplied digest did not equal the canonical digest.
+    /// The extension family tag is not structured claims.
+    WrongFamily,
+    /// The extension family version is not version one.
+    WrongFamilyVersion,
+    /// The family-local action is not allocated by the canonical contract.
+    UnknownAction,
+    /// This allocated action has no runtime capability in the current ELF.
+    CapabilityDisabled,
+    /// The instruction envelope or action payload has a hostile exact length.
+    InvalidInstruction,
+    /// Account roles, ordering, aliases, owners, or privileges are invalid.
+    InvalidAccounts,
+    /// Hostile persisted account bytes failed their canonical owner codec.
+    InvalidAccountData,
+    /// A deployment or upgradeable-loader observation is not exact.
+    InvalidDeployment,
+    /// A native-claim or wrapper-product digest is not the canonical digest.
     DigestMismatch,
-    /// A descriptor, mint, or vault-owner PDA did not derive canonically.
+    /// A descriptor, mint, authority, Position, or Replay PDA is not canonical.
     PdaMismatch,
-    /// A deployment differed from the descriptor's immutable binding.
-    DeploymentMismatch,
-    /// Account roles alias or lack required signer/writable/executable access.
-    InvalidAccountSet,
-    /// A Position was closed, foreign, stale, reserved, or otherwise unusable.
-    InvalidPosition,
-    /// A replay sequence or generation was stale, skipped, or exhausted.
-    ReplayMismatch,
-    /// A Token-2022 mint or token-account projection violated the V1 profile.
-    InvalidTokenProjection,
-    /// An observed Token-2022 delta differed from the staged exact delta.
-    TokenDeltaMismatch,
-    /// The internal/external SupplyLedger did not close against kernel truth.
-    SupplyClosureMismatch,
-    /// A checked transition would exceed the immutable collateral cap.
-    CollateralCapExceeded,
-    /// A checked integer operation overflowed or underflowed.
+    /// The authenticated base Market/Terms/Hoard/kernel/supply join does not close.
+    BaseClosureMismatch,
+    /// The Token-2022 parser boundary refused the mint or holder account.
+    Token2022Boundary,
+    /// A base-program construction or retirement capability is absent or mismatched.
+    BaseCapabilityUnavailable,
+    /// Exact shortfall, state, or transition arithmetic failed.
     Arithmetic,
-    /// A CPI receipt did not match the staged program, operation, or arguments.
-    CpiReceiptMismatch,
-    /// The final authenticated accounts differed from the fully staged post-state.
+    /// An executed CPI receipt differs from the completely staged operation.
+    ReceiptMismatch,
+    /// Re-read authoritative accounts differ from the staged post-state.
     PostStateMismatch,
-    /// The structured-claim semantic core refused the route.
-    StructuredClaim(clutch_structured_claim::Error),
+    /// The canonical runtime contract refused the request.
+    Runtime(runtime_contract::Error),
 }
 
-impl From<clutch_structured_claim::Error> for Error {
-    fn from(value: clutch_structured_claim::Error) -> Self {
-        Self::StructuredClaim(value)
+impl From<runtime_contract::Error> for Error {
+    fn from(value: runtime_contract::Error) -> Self {
+        match value {
+            runtime_contract::Error::InvalidLength => Self::InvalidInstruction,
+            runtime_contract::Error::UnknownAction => Self::UnknownAction,
+            other => Self::Runtime(other),
+        }
     }
 }
 
-/// Result alias for the adapter seam.
+/// Result alias for the SBF boundary.
 pub type Result<T> = core::result::Result<T, Error>;
 
-pub(crate) fn is_zero(key: &Key) -> bool {
+pub(crate) const fn is_zero(key: &Key) -> bool {
     *key == [0; 32]
 }

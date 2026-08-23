@@ -1075,6 +1075,52 @@ impl SourceSeriesAction {
     }
 }
 
+/// Recurring-Series action allocations in the shared SourceSeries 77/v2 family.
+///
+/// SourcePlane V3 exclusively owns the disjoint [`SourceSeriesAction`] range.
+/// These Series tags reserve wire identity only; capability remains separate.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecurringSeriesAction {
+    /// Register one persistent V5 Series against an authenticated registry release.
+    RegisterSeries = 13,
+    /// Capitalize the five Series funding compartments.
+    ActivateFunding = 14,
+    /// Create or converge the next eligible occurrence atomically.
+    AdvanceOccurrence = 15,
+    /// Advance one elapsed ordinal without spending its allocation.
+    LapseOccurrence = 16,
+    /// Observe balance surplus as separately owned donation residue.
+    ObserveDonation = 17,
+    /// Refund remaining payer principal and dispose donation residue.
+    CloseFunding = 18,
+}
+
+impl RecurringSeriesAction {
+    /// First recurring-Series local action tag.
+    pub const FIRST_TAG: u8 = 13;
+    /// Last recurring-Series local action tag.
+    pub const LAST_TAG: u8 = 18;
+
+    /// Return the local action tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one recurring-Series local action tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            13 => Some(Self::RegisterSeries),
+            14 => Some(Self::ActivateFunding),
+            15 => Some(Self::AdvanceOccurrence),
+            16 => Some(Self::LapseOccurrence),
+            17 => Some(Self::ObserveDonation),
+            18 => Some(Self::CloseFunding),
+            _ => None,
+        }
+    }
+}
+
 /// Evidence-only Recovery family-local action allocations inside 78/v1.
 ///
 /// These coordinates freeze payload/account contracts only. Every capability
@@ -1137,6 +1183,8 @@ pub enum ExtensionAction {
     GeneralV2(GeneralV2Action),
     /// One SourcePlane V3 action in the shared SourceSeries family.
     SourceV3(SourceSeriesAction),
+    /// One recurring-Series action in the shared SourceSeries family.
+    RecurringSeries(RecurringSeriesAction),
     /// One evidence-only Recovery action.
     Recovery(RecoveryAction),
 }
@@ -1147,6 +1195,7 @@ impl ExtensionAction {
         match self {
             Self::GeneralV2(action) => action.tag(),
             Self::SourceV3(action) => action.tag(),
+            Self::RecurringSeries(action) => action.tag(),
             Self::Recovery(action) => action.tag(),
         }
     }
@@ -1180,7 +1229,10 @@ pub const fn decode_extension_action(
         },
         Some(ExtensionFamily::SourceSeries) => match SourceSeriesAction::from_tag(local_action) {
             Some(action) => Ok(ExtensionAction::SourceV3(action)),
-            None => Err(RegistryError::UnknownLocalAction),
+            None => match RecurringSeriesAction::from_tag(local_action) {
+                Some(action) => Ok(ExtensionAction::RecurringSeries(action)),
+                None => Err(RegistryError::UnknownLocalAction),
+            },
         },
         Some(ExtensionFamily::Recovery) => match RecoveryAction::from_tag(local_action) {
             Some(action) => Ok(ExtensionAction::Recovery(action)),
@@ -1581,24 +1633,6 @@ mod tests {
     }
 
     #[test]
-    fn recovery_actions_are_exact_and_disabled_allocations() {
-        for local_action in u8::MIN..=u8::MAX {
-            let expected =
-                (RecoveryAction::FIRST_TAG..=RecoveryAction::LAST_TAG).contains(&local_action);
-            assert_eq!(
-                decode_extension_action(
-                    RECOVERY_FAMILY_TAG,
-                    RECOVERY_FAMILY_VERSION,
-                    local_action,
-                )
-                .is_ok(),
-                expected,
-                "recovery action {local_action}"
-            );
-        }
-    }
-
-    #[test]
     fn counted_retirement_wrapper_coordinates_are_reserved_but_disabled() {
         let expected = [
             (
@@ -1649,8 +1683,10 @@ mod tests {
             assert_eq!(
                 source.is_ok(),
                 (SourceSeriesAction::FIRST_TAG..=SourceSeriesAction::LAST_TAG)
-                    .contains(&local_action),
-                "source action {local_action}"
+                    .contains(&local_action)
+                    || (RecurringSeriesAction::FIRST_TAG..=RecurringSeriesAction::LAST_TAG)
+                        .contains(&local_action),
+                "source-series action {local_action}"
             );
             let recovery = decode_extension_action(78, 1, local_action);
             assert_eq!(

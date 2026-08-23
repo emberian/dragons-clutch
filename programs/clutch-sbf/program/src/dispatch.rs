@@ -361,7 +361,9 @@ fn process_general_v2(
             action,
             request.envelope.payload,
         ),
-        ExtensionAction::SourceV3(_) | ExtensionAction::Recovery(_) => unexpected_route(),
+        ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
     }
 }
 
@@ -1730,6 +1732,24 @@ mod extension_registry_tests {
                 "source action {local_action}"
             );
         }
+        for local_action in clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG
+        {
+            let bytes = extension_request(
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+                local_action,
+            );
+            assert!(
+                disabled_canonical_tag(&bytes),
+                "series action {local_action}"
+            );
+            assert_eq!(
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
+                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                "series action {local_action}"
+            );
+        }
         for local_action in clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
             ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG
         {
@@ -1759,8 +1779,6 @@ mod extension_registry_tests {
             (75, 1, 1),
             (77, 2, 0),
             (77, 2, 19),
-            (78, 1, 0),
-            (78, 1, 10),
             (79, 1, 1),
         ] {
             let bytes = extension_request(family_tag, family_version, local_action);
