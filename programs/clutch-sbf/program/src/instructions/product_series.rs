@@ -13,16 +13,21 @@
 //! Source/Series capability tuples remain disabled and none of these mutation
 //! helpers is reachable from instruction data.
 
-use crate::accounts::{expect_pda, require, require_signer, Outcome};
+use crate::accounts::{expect_pda, require, require_count, require_signer, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
     create_pda_account, require_system_program, transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
 use clutch_product_series::{
-    AuthenticatedSeriesFundingAuthorityV1, ComponentDebitV1, SeriesFundingComponentV1,
-    SeriesFundingQuoteV1, SeriesFundingStateV1, SeriesPlanV5Id, SERIES_FUNDING_COMPONENT_COUNT,
+    AuthenticatedSeriesFundingAuthorityV1, ComponentDebitV1, ContentId,
+    EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
+    PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProjectionV2,
+    SeriesAttachmentPlanV1, SeriesFundingComponentV1, SeriesFundingQuoteV1,
+    SeriesFundingRequirementsV1, SeriesFundingStateV1, SeriesFundingTermsV2,
+    SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id, SERIES_FUNDING_COMPONENT_COUNT,
 };
+use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
     SeriesFundingAccountV1, SeriesRegistryAccountV1, SERIES_FUNDING_ACCOUNT_BYTES_V1,
     SERIES_REGISTRY_ACCOUNT_BYTES_V1,
@@ -35,12 +40,325 @@ use solana_pubkey::Pubkey;
 /// Closed number of physical Series funding compartments.
 pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
 
+/// Exact read-only Product/Series artifact count used by registration and
+/// every later transition that reconstructs the immutable join.
+pub const SERIES_ARTIFACT_ACCOUNT_COUNT_V1: usize = 9;
+
+/// SeriesPlan V5 artifact account index.
+pub const IX_SERIES_ARTIFACT_PLAN: usize = 0;
+/// SeriesFundingTerms V2 artifact account index.
+pub const IX_SERIES_ARTIFACT_FUNDING_TERMS: usize = 1;
+/// ProductTemplate V4 artifact account index.
+pub const IX_SERIES_ARTIFACT_TEMPLATE: usize = 2;
+/// NativeClaimBasis V1 artifact account index.
+pub const IX_SERIES_ARTIFACT_BASIS: usize = 3;
+/// EvidenceOnlyRecoveryPolicy V1 artifact account index.
+pub const IX_SERIES_ARTIFACT_RECOVERY: usize = 4;
+/// PriceMeasurePolicy V1 artifact account index.
+pub const IX_SERIES_ARTIFACT_PRICE_POLICY: usize = 5;
+/// MarketGenesisProfile V2 artifact account index.
+pub const IX_SERIES_ARTIFACT_GENESIS: usize = 6;
+/// SeriesFundingQuote V1 artifact account index.
+pub const IX_SERIES_ARTIFACT_QUOTE: usize = 7;
+/// SeriesAttachmentPlan V1 artifact account index.
+pub const IX_SERIES_ARTIFACT_ATTACHMENT: usize = 8;
+
+/// Exact decoded immutable bodies selected by one registered Series.
+///
+/// Construction is private to [`authenticate_series_artifact_accounts`], so a
+/// caller cannot obtain this type from claimed IDs or caller-built projections.
+/// It proves account owner, read-only role, exact body length, content-derived
+/// PDA, hostile decode, recomputed typed identity, and all body-to-body
+/// references. It deliberately does not prove central-registry provenance.
+#[derive(Debug)]
+pub struct AuthenticatedSeriesArtifactsV1 {
+    /// Finite recurring Series plan.
+    pub series: Box<SeriesPlanV5>,
+    /// Immutable principal/refund/sink/mint/program ownership.
+    pub funding_terms: Box<SeriesFundingTermsV2>,
+    /// Reusable relative Product semantics.
+    pub template: Box<ProductTemplateV4>,
+    /// Exact canonical payout partition.
+    pub basis: Box<NativeClaimBasisV1>,
+    /// Exact evidence-only recovery schedule.
+    pub recovery: Box<EvidenceOnlyRecoveryPolicyV1>,
+    /// Exact quantized price-measure semantics.
+    pub price_policy: Box<PriceMeasurePolicyV1>,
+    /// Immutable Realm/Profile and venue semantics.
+    pub genesis: Box<MarketGenesisProfileV2>,
+    /// Per-occurrence component funding quote.
+    pub quote: Box<SeriesFundingQuoteV1>,
+    /// Operational attachment identities excluded from Market identity.
+    pub attachment: Box<SeriesAttachmentPlanV1>,
+}
+
+impl AuthenticatedSeriesArtifactsV1 {
+    /// Apply the pure complete registry join after the adapter has separately
+    /// authenticated the authoritative registry release and selector mapping.
+    ///
+    /// Success here does not authenticate a caller-built projection; it merely
+    /// avoids duplicating any artifact equality or capability rule in SBF.
+    pub fn validate_registry_projection(
+        &self,
+        projection: &RegistryCapabilityProjectionV2,
+    ) -> Outcome<SeriesFundingRequirementsV1> {
+        self.series
+            .validate_bindings(
+                &self.template,
+                &self.basis,
+                &self.recovery,
+                &self.price_policy,
+                &self.genesis,
+                &self.attachment,
+                projection,
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.funding_terms
+            .validate_bindings(
+                &self.series,
+                &self.template,
+                &self.basis,
+                &self.recovery,
+                &self.price_policy,
+                &self.genesis,
+                projection,
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.quote
+            .validate_recovery_binding(&self.recovery)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        SeriesFundingRequirementsV1::derive(&self.series, &self.attachment, &self.quote)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+fn require_product_artifact_metadata(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    kind: ArtifactKind,
+    digest: ContentId,
+) -> Outcome<()> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(
+        account.data_len() == kind.exact_len(),
+        ClutchError::WrongDataLength,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::product_artifact_pda(program_id, kind.byte(), &digest.bytes()),
+        None,
+    )
+}
+
+fn decode_product_artifact<T: FixedCodec>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    kind: ArtifactKind,
+    digest: ContentId,
+) -> Outcome<Box<T>> {
+    require_product_artifact_metadata(program_id, account, kind, digest)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    T::decode(&data)
+        .map(Box::new)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+fn decode_basis_artifact(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected: clutch_product_series::NativeClaimBasisId,
+) -> Outcome<Box<NativeClaimBasisV1>> {
+    require_product_artifact_metadata(
+        program_id,
+        account,
+        ArtifactKind::NativeClaimBasisV1,
+        expected.content_id(),
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let mut value = Box::new(NativeClaimBasisV1::ZEROED);
+    NativeClaimBasisV1::decode_into(&data, &mut value)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        value
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == expected,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(value)
+}
+
+/// Authenticate and decode the exact nine immutable Product/Series artifacts.
+///
+/// The account order is frozen by the `IX_SERIES_ARTIFACT_*` constants. Every
+/// dependent expected ID comes from an already-authenticated parent body, not
+/// from another instruction field. The two root IDs are the registration
+/// payload's Series and FundingTerms claims. Central registry and runtime
+/// release accounts are intentionally absent from this mechanical segment.
+pub fn authenticate_series_artifact_accounts(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    expected_series: SeriesPlanV5Id,
+    expected_funding_terms: SeriesFundingTermsV2Id,
+) -> Outcome<AuthenticatedSeriesArtifactsV1> {
+    require_count(accounts, SERIES_ARTIFACT_ACCOUNT_COUNT_V1)?;
+    expected_series
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    expected_funding_terms
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let series = decode_product_artifact::<SeriesPlanV5>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_PLAN],
+        ArtifactKind::SeriesPlanV5,
+        expected_series.content_id(),
+    )?;
+    require(
+        series
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == expected_series,
+        ClutchError::MismatchedState,
+    )?;
+    let funding_terms = decode_product_artifact::<SeriesFundingTermsV2>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_FUNDING_TERMS],
+        ArtifactKind::SeriesFundingTermsV2,
+        expected_funding_terms.content_id(),
+    )?;
+    require(
+        funding_terms
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == expected_funding_terms
+            && funding_terms.series_plan_id == expected_series,
+        ClutchError::MismatchedState,
+    )?;
+
+    let template = decode_product_artifact::<ProductTemplateV4>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_TEMPLATE],
+        ArtifactKind::ProductTemplateV4,
+        series.product_template_id.content_id(),
+    )?;
+    require(
+        template
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == series.product_template_id,
+        ClutchError::MismatchedState,
+    )?;
+    let genesis = decode_product_artifact::<MarketGenesisProfileV2>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_GENESIS],
+        ArtifactKind::MarketGenesisProfileV2,
+        series.market_genesis_profile_id.content_id(),
+    )?;
+    require(
+        genesis
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == series.market_genesis_profile_id,
+        ClutchError::MismatchedState,
+    )?;
+    let attachment = decode_product_artifact::<SeriesAttachmentPlanV1>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_ATTACHMENT],
+        ArtifactKind::SeriesAttachmentPlanV1,
+        series.attachment_plan_id.content_id(),
+    )?;
+    require(
+        attachment
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == series.attachment_plan_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    let basis = decode_basis_artifact(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_BASIS],
+        template.native_claim_basis_id,
+    )?;
+    let recovery = decode_product_artifact::<EvidenceOnlyRecoveryPolicyV1>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_RECOVERY],
+        ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
+        template.evidence_only_recovery_policy_id.content_id(),
+    )?;
+    require(
+        recovery
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == template.evidence_only_recovery_policy_id,
+        ClutchError::MismatchedState,
+    )?;
+    let price_policy = decode_product_artifact::<PriceMeasurePolicyV1>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_PRICE_POLICY],
+        ArtifactKind::PriceMeasurePolicyV1,
+        genesis.price_measure_policy_id.content_id(),
+    )?;
+    require(
+        price_policy
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == genesis.price_measure_policy_id,
+        ClutchError::MismatchedState,
+    )?;
+    let quote = decode_product_artifact::<SeriesFundingQuoteV1>(
+        program_id,
+        &accounts[IX_SERIES_ARTIFACT_QUOTE],
+        ArtifactKind::SeriesFundingQuoteV1,
+        attachment.funding_quote_id.content_id(),
+    )?;
+    require(
+        quote
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == attachment.funding_quote_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    template
+        .validate_bindings(&basis, &recovery)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    genesis
+        .validate_bindings(&basis, &price_policy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    quote
+        .validate_recovery_binding(&recovery)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    SeriesFundingRequirementsV1::derive(&series, &attachment, &quote)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    Ok(AuthenticatedSeriesArtifactsV1 {
+        series,
+        funding_terms,
+        template,
+        basis,
+        recovery,
+        price_policy,
+        genesis,
+        quote,
+        attachment,
+    })
+}
+
 /// Exact accounted balances for all five physical custody pairs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesCustodyBalancesV1 {
     /// Native balance in each zero-data System-owned PDA.
     pub lamports: [u64; SERIES_CUSTODY_COUNT_V1],
-    /// Collateral atoms in each Token-2022 segregated vault.
+    /// Collateral atoms in each release-selected segregated vault.
     pub collateral_atoms: [u64; SERIES_CUSTODY_COUNT_V1],
 }
 

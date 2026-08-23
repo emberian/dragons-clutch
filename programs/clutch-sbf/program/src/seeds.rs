@@ -117,7 +117,7 @@ pub const SEED_SERIES_FUNDING_V1: &[u8] = b"dc:series-funding:v1";
 pub const SEED_SERIES_LAMPORT_VAULT_V1: &[u8] = b"dc:series-lamports:v1";
 /// Sole PDA signing authority for one Series' collateral vault set.
 pub const SEED_SERIES_COLLATERAL_AUTHORITY_V1: &[u8] = b"dc:series-collateral-auth:v1";
-/// Per-component Token-2022 collateral custody prefix.
+/// Per-component release-selected collateral custody prefix.
 pub const SEED_SERIES_COLLATERAL_VAULT_V1: &[u8] = b"dc:series-collateral:v1";
 /// Immutable SourcePlane V3 occurrence-provenance record prefix.
 pub const SEED_SOURCE_OCCURRENCE_V1: &[u8] = b"dc:source-occurrence:v1";
@@ -313,7 +313,7 @@ pub fn series_collateral_authority_pda(program_id: &Pubkey, series: &[u8; 32]) -
     find(program_id, &[SEED_SERIES_COLLATERAL_AUTHORITY_V1, series])
 }
 
-/// Canonical Token-2022 vault address for one funding component.
+/// Canonical release-selected collateral vault for one funding component.
 ///
 /// Address allocation is owned here; token-account semantic admission remains
 /// the collateral adapter's typed boundary.

@@ -83,15 +83,28 @@ Components are the closed discriminants `0..=4` in quote/state order. Each
 lamport component is a zero-data, System-owned PDA custody address. The funding
 state is the semantic balance owner; the physical vault balance is an
 authenticated observation and may exceed the accounted balance only as
-donation. Each collateral component is an independently admitted Token-2022
-`SegregatedVault`. Its sole signing authority is the Series collateral-authority
-PDA; its collateral semantic owner is the SeriesPlanV5Id and its external
-adapter compartment is `component + 1` so zero remains invalid.
+donation. Each collateral component is an independently admitted,
+release-selected `SegregatedVault`: 165-byte legacy SPL for an admitted legacy
+Realm or 170-byte ImmutableOwner Token-2022 for an admitted Token-2022-base
+Realm. Its sole signing authority is the Series collateral-authority PDA; its
+collateral semantic owner is the SeriesPlanV5Id and its external adapter
+compartment is `component + 1` so zero remains invalid. Outcome/Egg issuance is
+an independent Token-2022 plane and does not force the collateral family.
 
 Series collateral is operational/passive-liquidity capital. It is never Egg
 liability backing and never joins the market Hoard.
 
 ## Runtime activation boundary
+
+The reusable immutable-artifact account segment is exactly nine read-only
+program-owned content PDAs in this order: SeriesPlan V5, SeriesFundingTerms V2,
+ProductTemplate V4, NativeClaimBasis V1, EvidenceOnlyRecoveryPolicy V1,
+PriceMeasurePolicy V1, MarketGenesisProfile V2, SeriesFundingQuote V1, and
+SeriesAttachmentPlan V1. Only the first two identities come from the
+registration payload. Every other expected address and digest is taken from an
+already authenticated parent body. The disabled SBF adapter now hostile-decodes
+all nine and checks the complete body reference graph; that still does not turn
+a caller-built registry projection into registry authentication.
 
 No action may be enabled from the codecs alone. At minimum:
 
