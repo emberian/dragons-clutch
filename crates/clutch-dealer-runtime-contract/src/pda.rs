@@ -44,6 +44,8 @@ pub const DEALER_CLAIM_WORK_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-claim-v1";
 pub const DEALER_EXIT_TICKET_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-exit-v1";
 /// Canonical PDA seed prefix for the permanent V2 root tombstone.
 pub const DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-root-v2";
+/// Canonical PDA seed prefix for one content-addressed action receipt.
+pub const DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-action-receipt-v1";
 /// Canonical PDA seed prefix for segregated fee budgets.
 pub const FEE_BUDGET_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-fee-v1";
 /// Canonical PDA seed prefix for segregated liveness budgets.
@@ -98,6 +100,8 @@ pub enum DealerPdaFamilyV1 {
     RootTombstoneV2 = 21,
     /// Owner-scoped mutable exit ticket.
     ExitTicketV1 = 22,
+    /// Deletable immutable action receipt addressed by its semantic slot.
+    ActionReceiptV1 = 23,
     /// Singleton fee budget addressed by facility.
     FeeBudget = 5,
     /// Singleton liveness budget addressed by facility.
@@ -374,6 +378,16 @@ impl DealerPdaPreimageV1 {
         )
     }
 
+    /// Action receipt: `[b"dc-dealer-action-receipt-v1", slot_id]`.
+    pub fn action_receipt_v1(slot_id: Id) -> Result<Self> {
+        slot_id.validate_live()?;
+        Self::two(
+            DealerPdaFamilyV1::ActionReceiptV1,
+            DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1,
+            &slot_id.bytes(),
+        )
+    }
+
     /// Permanent root tombstone: `[b"dc-dealer-root-v2", facility_id]`.
     pub fn root_tombstone_v2(facility_id: Id) -> Result<Self> {
         facility_id.validate_live()?;
@@ -479,6 +493,9 @@ impl DealerPdaPreimageV1 {
             }
             DealerPdaFamilyV1::ExitTicketV1 => {
                 (DEALER_EXIT_TICKET_PDA_DOMAIN_V1, 3usize, crate::ID_BYTES)
+            }
+            DealerPdaFamilyV1::ActionReceiptV1 => {
+                (DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1, 2usize, 0usize)
             }
             DealerPdaFamilyV1::RootTombstoneV2 => {
                 (DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2, 2usize, 0usize)

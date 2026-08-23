@@ -24,7 +24,7 @@ pub const DEALER_FUNDED_DEPENDENCIES_MAGIC_V1: [u8; 8] = *b"DCFDDEP1";
 /// Exact local semantic-body version.
 pub const DEALER_FUNDED_DEPENDENCIES_VERSION_V1: u16 = 1;
 /// Exact bytes in one funded-budget dependency body.
-pub const DEALER_FUNDED_DEPENDENCIES_BYTES_V1: usize = HEADER_BYTES + (10 * 32) + (2 * 8);
+pub const DEALER_FUNDED_DEPENDENCIES_BYTES_V1: usize = HEADER_BYTES + (12 * 32) + (2 * 8);
 /// Local semantic-body magic for the rent-owned counted successor.
 pub const DEALER_FUNDED_DEPENDENCIES_MAGIC_V2: [u8; 8] = *b"DCFDDEP2";
 /// Exact local semantic-body version for the counted successor.
@@ -999,6 +999,10 @@ pub struct DealerFundedBudgetDependenciesV1 {
     pub liveness_schedule_id: Id,
     /// Exact external runtime-liveness policy identity.
     pub runtime_liveness_policy_id: Id,
+    /// Exact deployed program owning the generic policy and compartments.
+    pub runtime_liveness_program_id: Id,
+    /// Physical immutable generic runtime-policy account.
+    pub runtime_liveness_policy_account_id: Id,
     /// Digest of the authenticated external seven-account binding projection.
     pub runtime_liveness_binding_digest: Id,
     /// Exact immutable fee-policy identity.
@@ -1025,6 +1029,8 @@ impl DealerFundedBudgetDependenciesV1 {
             self.facility_id,
             self.liveness_schedule_id,
             self.runtime_liveness_policy_id,
+            self.runtime_liveness_program_id,
+            self.runtime_liveness_policy_account_id,
             self.runtime_liveness_binding_digest,
             self.fee_policy_id,
             self.collateral_mint,
@@ -1040,6 +1046,9 @@ impl DealerFundedBudgetDependenciesV1 {
         if self.counted_generation != 0
             || self.dealer_liveness_work_principal_lamports == 0
             || self.asset_vault_authority_account_id == self.neutral_sink
+            || self.runtime_liveness_program_id == self.runtime_liveness_policy_account_id
+            || self.runtime_liveness_policy_account_id == self.asset_vault_authority_account_id
+            || self.runtime_liveness_policy_account_id == self.neutral_sink
         {
             return Err(Error::InvalidParameter);
         }
@@ -1088,6 +1097,7 @@ impl DealerFundedBudgetDependenciesV1 {
             if (index != DealerLivenessCompartmentV1::Source.index()
                 && runtime.owners[index] != binding.dealer_state_account_id)
                 || runtime.generations[index] != self.counted_generation
+                || runtime.account_ids[index] == self.runtime_liveness_policy_account_id
                 || runtime.account_ids[index] == self.asset_vault_authority_account_id
                 || runtime.account_ids[index] == binding.facility_position_account_id
                 || runtime.account_ids[index] == binding.facility_replay_account_id
@@ -1145,6 +1155,8 @@ impl FixedCodec for DealerFundedBudgetDependenciesV1 {
             self.facility_id,
             self.liveness_schedule_id,
             self.runtime_liveness_policy_id,
+            self.runtime_liveness_program_id,
+            self.runtime_liveness_policy_account_id,
             self.runtime_liveness_binding_digest,
             self.fee_policy_id,
             self.collateral_mint,
@@ -1170,6 +1182,8 @@ impl FixedCodec for DealerFundedBudgetDependenciesV1 {
             facility_id: reader.id(),
             liveness_schedule_id: reader.id(),
             runtime_liveness_policy_id: reader.id(),
+            runtime_liveness_program_id: reader.id(),
+            runtime_liveness_policy_account_id: reader.id(),
             runtime_liveness_binding_digest: reader.id(),
             fee_policy_id: reader.id(),
             collateral_mint: reader.id(),
@@ -1276,6 +1290,8 @@ impl DealerFundedDependenciesV2 {
             if (index != DealerLivenessCompartmentV1::Source.index()
                 && runtime.owners[index] != binding.dealer_state_account_id)
                 || runtime.generations[index] != self.bindings.counted_generation
+                || runtime.account_ids[index]
+                    == self.bindings.runtime_liveness_policy_account_id
                 || runtime.account_ids[index] == self.bindings.asset_vault_authority_account_id
                 || runtime.account_ids[index] == binding.facility_position_account_id
                 || runtime.account_ids[index] == binding.facility_replay_account_id
@@ -1630,8 +1646,8 @@ pub fn close_funded_dependencies_v2(
 
 const _: () = assert!(DEALER_LIVENESS_ACTION_COUNT_V1 == 22);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_BYTES_V1 == 372);
-const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V1 == 348);
-const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 == 472);
+const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V1 == 412);
+const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 == 536);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

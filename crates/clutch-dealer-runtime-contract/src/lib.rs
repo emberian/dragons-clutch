@@ -17,6 +17,7 @@
 //! is the sole transient selected-leg custody owner and its custody is derived
 //! from exact aggregate conservation facts rather than mirrored balance fields.
 
+mod action_receipt;
 mod budget;
 mod codec;
 mod epoch_v2;
@@ -50,6 +51,7 @@ mod terminal_state;
 mod transitions;
 mod transitions_v3;
 
+pub use action_receipt::*;
 pub use budget::*;
 pub use epoch_v2::*;
 pub use exit_ticket::*;
@@ -133,6 +135,9 @@ pub const DEALER_RUNTIME_LIVENESS_BINDING_CONTENT_DOMAIN_V1: &[u8] =
 /// Content domain for one typed successful Dealer-action liveness receipt.
 pub const DEALER_ACTION_LIVENESS_RECEIPT_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/action-liveness-receipt/v1\0";
+/// Content-addressed slot domain for one physical Dealer action receipt.
+pub const DEALER_ACTION_RECEIPT_SLOT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/action-receipt-slot/v1\0";
 /// Initial domain for the canonical sealed LP page-set fold.
 pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/lp-page-set/init/v1\0";

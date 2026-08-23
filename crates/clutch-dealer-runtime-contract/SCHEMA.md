@@ -23,6 +23,7 @@ dragons-clutch/dealer-runtime/liveness-schedule/v1\0
 dragons-clutch/dealer-runtime/funded-dependencies/v1\0
 dragons-clutch/dealer-runtime/runtime-liveness-binding/v1\0
 dragons-clutch/dealer-runtime/action-liveness-receipt/v1\0
+dragons-clutch/dealer-runtime/action-receipt-slot/v1\0
 dragons-clutch/dealer-runtime/state/v1\0
 dragons-clutch/dealer-runtime/lp-page/v1\0
 dragons-clutch/dealer-runtime/lease/v1\0
@@ -41,7 +42,8 @@ dragons-clutch/dealer-runtime/liveness-budget/v1\0
 | DealerFacilityPositionV1 | `DCFPOSV1` | 388 | policy/facility/full Market/collateral/token/State authority/Replay identities `12..236`; phase/padding `236..244`; generation/cash `244..260`; exact Egg balances `260..388` |
 | DealerRootTombstoneV1 | `DCRTMBV1` | 276 | policy/facility/Position binding/terminal State/root account/rent payer/sink identities `12..236`; terminal generation/child sequence and exact original rent split `236..276` |
 | DealerLivenessScheduleV1 | `DCLSCHV1` | 372 | exact action mask/reserved `12..20`; maximum-call vector indexed by the frozen 22-action enum `20..196`; per-success lamport rewards `196..372` |
-| DealerFundedBudgetDependenciesV1 | `DCFDDEP1` | 348 | ten exact policy/facility/schedule/runtime/fee/collateral/token/State/sink identities `12..332`; admission generation and exact six-compartment Dealer work principal `332..348` |
+| DealerActionReceiptV1 | `DCACTRC1` | 532 | twelve exact Dealer/runtime/account identities `12..396`; action/compartment and runtime/Dealer generation, call ordinal, ceiling, payment, Replay ordinal `396..452`; deletable rent owner `452..532` |
+| DealerFundedBudgetDependenciesV1 | `DCFDDEP1` | 412 | twelve exact policy/facility/schedule/runtime-policy/runtime-program/runtime-policy-account/fee/collateral/token/State/sink identities `12..396`; admission generation and exact six-compartment Dealer work principal `396..412` |
 | DealerStateV1 | `DCDSTAT1` | 680 | IDs `12..364`; phase/disposition/width `364..372`; generation/child-sequence/share/sponsor facts `372..420`; signed `q[16]` `420..548`; eleven exhaustive counts `548..592`; root rent `592..680` |
 | LpPageV1 | `DCLPPGV1` | 1,208 | policy/facility `12..76`; generation/chain/flags/revision `76..104`; 16 × 64-byte entries `104..1128`; child rent `1128..1208` |
 | DealerLeaseV1 | `DCLSEV01` | 652 | 16 identities `12..524`; generation/deadlines `524..564`; width/row-count/padding `564..572`; child rent `572..652` |
@@ -133,12 +135,28 @@ balances, and four terminal-path call/work vectors. The external liveness
 runtime remains sole owner of mutable calls, balances, receipts, refunds,
 donations, and close transitions.
 
+The persisted funded-dependency body separately pins the deployed liveness
+program and physical immutable runtime-policy account. These are account
+authority facts and therefore are not folded into the pure seven-body
+projection; the live adapter must require that exact program to own the exact
+policy account and all seven compartment accounts on every transition.
+
 Each successful funded Dealer transition additionally authenticates one
 `DealerActionLivenessAuthorizationV1`. Its semantic digest commits the action,
 compartment, runtime account/owner/facility, quote schedule, receipt account and
 program, runtime generation, Dealer economic generation, monotone call ordinal,
 and exact action ceiling. The external runtime independently owns and checks
 the ordinal, remaining work, keeper/refund transfers, and atomic account write.
+
+The physical `DealerActionReceiptV1` is globally reserved at account
+coordinate `0xa8/1` with an eight-byte global envelope followed by the exact
+532-byte body. Its PDA is
+`[b"dc-dealer-action-receipt-v1", receipt_slot_id]`, where `receipt_slot_id`
+commits the facility, runtime account, Replay account, action/compartment,
+both generations, runtime call ordinal, and Replay ordinal. The postimage also
+owns the actual keeper payment and an explicit deletable-rent split; neither is
+work-capital custody. Only an adapter-authenticated exact postimage may project
+the generic runtime intent and receipt observation.
 
 The Dealer schedule is finer grained. Actions map as follows:
 
