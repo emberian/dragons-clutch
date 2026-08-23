@@ -45,6 +45,7 @@ dragons-clutch/dealer-runtime/liveness-budget/v1\0
 | DealerLivenessScheduleV1 | `DCLSCHV1` | 372 | exact action mask/reserved `12..20`; maximum-call vector indexed by the frozen 22-action enum `20..196`; per-success lamport rewards `196..372` |
 | DealerActionReceiptV1 | `DCACTRC1` | 532 | twelve exact Dealer/runtime/account identities `12..396`; action/compartment and runtime/Dealer generation, call ordinal, ceiling, payment, Replay ordinal `396..452`; deletable rent owner `452..532` |
 | DealerFundedBudgetDependenciesV1 | `DCFDDEP1` | 412 | twelve exact policy/facility/schedule/runtime-policy/runtime-program/runtime-policy-account/fee/collateral/token/State/sink identities `12..396`; admission generation and exact six-compartment Dealer work principal `396..412` |
+| DealerFundedDependenciesV2 | `DCFDDEP2` | 600 | nested immutable V1 dependency transcript `12..424`; non-cyclic PositionV3 purpose binding `424..456`; exact Initialize receipt account and semantic identities `456..520`; deletable rent owner `520..600` |
 | DealerStateV1 | `DCDSTAT1` | 680 | IDs `12..364`; phase/disposition/width `364..372`; generation/child-sequence/share/sponsor facts `372..420`; signed `q[16]` `420..548`; eleven exhaustive counts `548..592`; root rent `592..680` |
 | LpPageV1 | `DCLPPGV1` | 1,208 | policy/facility `12..76`; generation/chain/flags/revision `76..104`; 16 × 64-byte entries `104..1128`; child rent `1128..1208` |
 | DealerLeaseV1 | `DCLSEV01` | 652 | 16 identities `12..524`; generation/deadlines `524..564`; width/row-count/padding `564..572`; child rent `572..652` |
@@ -158,6 +159,15 @@ both generations, runtime call ordinal, and Replay ordinal. The postimage also
 owns the actual keeper payment and an explicit deletable-rent split; neither is
 work-capital custody. Only an adapter-authenticated exact postimage may project
 the generic runtime intent and receipt observation.
+The counted `DealerFundedDependenciesV2` child co-owns the Initialize receipt's
+exact account and semantic identities. Its terminal close authenticates and
+deletes both rent-owned accounts atomically after the Position, Replay, Epoch,
+LP, lease, pot, allocation, and claim families are exhausted; Initialize
+therefore cannot leave an uncounted receipt or refundable principal behind.
+Likewise, `DealerEpochBindingV2` owns its Bind receipt account and semantic
+identity. Both lapse and post-lease retirement authenticate that exact receipt
+body and emit independent, coalescible close credits for the Epoch and receipt;
+neither close may erase the Epoch while retaining its receipt rent.
 
 The Dealer schedule is finer grained. Actions map as follows:
 

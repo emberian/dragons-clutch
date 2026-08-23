@@ -4,9 +4,9 @@ use core::convert::TryFrom;
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerFacilityGenesisV1, DealerPhaseV2, DealerPolicyV1, DealerRuntimeActionV1,
-    DealerStateV2, DeletableRentOwnerV1, Error, FacilityPositionBindingV1, FixedCodec, Id,
-    Result, DELETABLE_RENT_OWNER_BYTES,
+    DealerActionReceiptV1, DealerFacilityGenesisV1, DealerPhaseV2, DealerPolicyV1,
+    DealerRuntimeActionV1, DealerStateV2, DeletableRentOwnerV1, Error, FacilityPositionBindingV1,
+    FixedCodec, Id, Result, DELETABLE_RENT_OWNER_BYTES,
 };
 
 /// Number of frozen Dealer action coordinates in one liveness schedule.
@@ -30,10 +30,11 @@ pub const DEALER_FUNDED_DEPENDENCIES_MAGIC_V2: [u8; 8] = *b"DCFDDEP2";
 /// Exact local semantic-body version for the counted successor.
 pub const DEALER_FUNDED_DEPENDENCIES_VERSION_V2: u16 = 2;
 /// Exact bytes: outer header, frozen V1 dependency payload, canonical Position
-/// V3 purpose-binding identity, and one deletable-rent owner. The nested V1
-/// header is intentional provenance.
+/// V3 purpose-binding identity, the counted Initialize receipt account and
+/// semantic identities, and one deletable-rent owner. The nested V1 header is
+/// intentional provenance.
 pub const DEALER_FUNDED_DEPENDENCIES_BYTES_V2: usize =
-    HEADER_BYTES + DEALER_FUNDED_DEPENDENCIES_BYTES_V1 + 32 + DELETABLE_RENT_OWNER_BYTES;
+    HEADER_BYTES + DEALER_FUNDED_DEPENDENCIES_BYTES_V1 + (3 * 32) + DELETABLE_RENT_OWNER_BYTES;
 
 /// Typed content identity for a frozen Dealer liveness schedule.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -469,8 +470,7 @@ pub struct DealerRuntimeLivenessBindingV1 {
     pub(crate) terminal_path_calls: [[u32; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
         DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
     /// Exact work-lamport vectors for the same four terminal paths.
-    pub(crate) terminal_path_work_lamports: [[u64;
-        DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+    pub(crate) terminal_path_work_lamports: [[u64; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
         DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
 }
 
@@ -485,11 +485,9 @@ impl DealerRuntimeLivenessBindingV1 {
     pub fn from_canonical(
         policy: &clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1,
         compartments: &[clutch_liveness::runtime_v1::RuntimeCompartmentV1;
-            DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+             DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
     ) -> Result<Self> {
-        policy
-            .validate()
-            .map_err(|_| Error::MismatchedBinding)?;
+        policy.validate().map_err(|_| Error::MismatchedBinding)?;
         let mut value = Self {
             runtime_policy_id: from_liveness_id(policy.policy_id),
             realm_id: from_liveness_id(policy.realm_id),
@@ -506,8 +504,7 @@ impl DealerRuntimeLivenessBindingV1 {
             work_principal_lamports: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             rent_principal_lamports: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             maximum_calls: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
-            maximum_lamports_per_call: [0;
-                DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            maximum_lamports_per_call: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             account_balance_before: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             account_balance_after: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
             terminal_path_calls: [[0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
@@ -523,8 +520,7 @@ impl DealerRuntimeLivenessBindingV1 {
                 .map_err(|_| Error::MismatchedBinding)?;
             if compartment.kind.index() != index
                 || compartment.identity.policy_id != policy.policy_id
-                || compartment.identity.lifecycle_id
-                    != compartments[0].identity.lifecycle_id
+                || compartment.identity.lifecycle_id != compartments[0].identity.lifecycle_id
                 || compartment.identity.neutral_sink != policy.neutral_sink
             {
                 return Err(Error::MismatchedBinding);
@@ -624,34 +620,22 @@ impl DealerRuntimeLivenessBindingV1 {
     }
 
     /// Work principal funded now for one canonical compartment.
-    pub const fn work_principal_lamports(
-        self,
-        compartment: DealerLivenessCompartmentV1,
-    ) -> u64 {
+    pub const fn work_principal_lamports(self, compartment: DealerLivenessCompartmentV1) -> u64 {
         self.work_principal_lamports[compartment.index()]
     }
 
     /// Refundable rent principal funded now for one canonical compartment.
-    pub const fn rent_principal_lamports(
-        self,
-        compartment: DealerLivenessCompartmentV1,
-    ) -> u64 {
+    pub const fn rent_principal_lamports(self, compartment: DealerLivenessCompartmentV1) -> u64 {
         self.rent_principal_lamports[compartment.index()]
     }
 
     /// Exact admitted account balance immediately before present funding.
-    pub const fn account_balance_before(
-        self,
-        compartment: DealerLivenessCompartmentV1,
-    ) -> u64 {
+    pub const fn account_balance_before(self, compartment: DealerLivenessCompartmentV1) -> u64 {
         self.account_balance_before[compartment.index()]
     }
 
     /// Exact admitted account balance immediately after present funding.
-    pub const fn account_balance_after(
-        self,
-        compartment: DealerLivenessCompartmentV1,
-    ) -> u64 {
+    pub const fn account_balance_after(self, compartment: DealerLivenessCompartmentV1) -> u64 {
         self.account_balance_after[compartment.index()]
     }
 
@@ -1209,6 +1193,10 @@ pub struct DealerFundedDependenciesV2 {
     pub bindings: DealerFundedBudgetDependenciesV1,
     /// Immutable purpose binding for the canonical shared Position V3.
     pub facility_position_binding_id: Id,
+    /// Exact physical Initialize receipt retained until this child retires.
+    pub initialize_receipt_account_id: Id,
+    /// Exact semantic Initialize receipt retained until this child retires.
+    pub initialize_receipt_semantic_id: Id,
     /// Exact rent principal owner and donation disposition for this child.
     pub rent: DeletableRentOwnerV1,
 }
@@ -1218,9 +1206,14 @@ impl DealerFundedDependenciesV2 {
     pub fn validate(&self) -> Result<()> {
         self.bindings.validate()?;
         self.facility_position_binding_id.validate_live()?;
+        self.initialize_receipt_account_id.validate_live()?;
+        self.initialize_receipt_semantic_id.validate_live()?;
         self.rent.validate()?;
         if self.rent.neutral_sink != self.bindings.neutral_sink
             || self.rent.payer == self.bindings.asset_vault_authority_account_id
+            || self.initialize_receipt_account_id == self.bindings.asset_vault_authority_account_id
+            || self.initialize_receipt_account_id
+                == self.bindings.runtime_liveness_policy_account_id
         {
             return Err(Error::MismatchedBinding);
         }
@@ -1290,8 +1283,7 @@ impl DealerFundedDependenciesV2 {
             if (index != DealerLivenessCompartmentV1::Source.index()
                 && runtime.owners[index] != binding.dealer_state_account_id)
                 || runtime.generations[index] != self.bindings.counted_generation
-                || runtime.account_ids[index]
-                    == self.bindings.runtime_liveness_policy_account_id
+                || runtime.account_ids[index] == self.bindings.runtime_liveness_policy_account_id
                 || runtime.account_ids[index] == self.bindings.asset_vault_authority_account_id
             {
                 return Err(Error::MismatchedBinding);
@@ -1345,6 +1337,8 @@ impl FixedCodec for DealerFundedDependenciesV2 {
         );
         writer.bytes(&nested);
         writer.id(self.facility_position_binding_id);
+        writer.id(self.initialize_receipt_account_id);
+        writer.id(self.initialize_receipt_semantic_id);
         self.rent.encode_body(&mut writer);
         writer.finish()
     }
@@ -1359,6 +1353,8 @@ impl FixedCodec for DealerFundedDependenciesV2 {
         let value = Self {
             bindings: DealerFundedBudgetDependenciesV1::decode(&nested)?,
             facility_position_binding_id: reader.id(),
+            initialize_receipt_account_id: reader.id(),
+            initialize_receipt_semantic_id: reader.id(),
             rent: DeletableRentOwnerV1::decode_body(&mut reader),
         };
         reader.finish()?;
@@ -1547,6 +1543,10 @@ pub struct DealerFundedDependencyCloseBalanceV2 {
     pub account_lamports_before: u64,
     /// Dependency account lamports after the atomic close; must be zero.
     pub account_lamports_after: u64,
+    /// Counted Initialize receipt lamports before the atomic close.
+    pub initialize_receipt_lamports_before: u64,
+    /// Counted Initialize receipt lamports after the atomic close; must be zero.
+    pub initialize_receipt_lamports_after: u64,
 }
 
 /// Pure result of the final counted dependency close.
@@ -1556,6 +1556,8 @@ pub struct DealerFundedDependencyCloseV2 {
     pub state_after: DealerStateV2,
     /// Deleted dependency account.
     pub closed_dependency_account_id: Id,
+    /// Deleted Initialize receipt account co-owned by the dependency child.
+    pub closed_initialize_receipt_account_id: Id,
     /// Sole refundable-principal recipient.
     pub refund_recipient: Id,
     /// Exact refundable principal.
@@ -1564,6 +1566,14 @@ pub struct DealerFundedDependencyCloseV2 {
     pub neutral_sink: Id,
     /// Exact donation floor plus later surplus.
     pub sink_lamports: u64,
+    /// Sole refundable-principal recipient for the Initialize receipt.
+    pub initialize_receipt_refund_recipient: Id,
+    /// Exact refundable Initialize-receipt principal.
+    pub initialize_receipt_refund_lamports: u64,
+    /// Sole Initialize-receipt donation/surplus recipient.
+    pub initialize_receipt_neutral_sink: Id,
+    /// Exact Initialize-receipt donation floor plus later surplus.
+    pub initialize_receipt_sink_lamports: u64,
 }
 
 /// Close the V2 dependency only after Position/Replay are gone and the
@@ -1574,14 +1584,17 @@ pub fn close_funded_dependencies_v2(
     dependency_account_id: Id,
     dependency: &DealerFundedDependenciesV2,
     policy: &DealerPolicyV1,
+    schedule: &DealerLivenessScheduleV1,
     runtime: &DealerRuntimeLivenessBindingV1,
     terminal: &DealerRuntimeLivenessTerminalV1,
+    initialize_receipt: &DealerActionReceiptV1,
     balance: DealerFundedDependencyCloseBalanceV2,
 ) -> Result<DealerFundedDependencyCloseV2> {
     state.validate_against_policy(policy)?;
     dependency.validate()?;
     dealer_state_account_id.validate_live()?;
     dependency_account_id.validate_live()?;
+    initialize_receipt.validate_against(schedule, runtime)?;
     terminal.validate_against(runtime)?;
     if state.phase != DealerPhaseV2::Retiring
         || state.children.facility_positions != 0
@@ -1604,11 +1617,20 @@ pub fn close_funded_dependencies_v2(
         || dependency.bindings.asset_vault_authority_account_id != dealer_state_account_id
         || dependency.bindings.runtime_liveness_binding_digest != runtime.binding_digest()?
         || dependency.bindings.runtime_liveness_policy_id != runtime.runtime_policy_id
+        || dependency.bindings.liveness_schedule_id != schedule.schedule_id()?.untyped()
+        || initialize_receipt.action != DealerRuntimeActionV1::Initialize
+        || initialize_receipt.policy_id != state.policy_id
+        || initialize_receipt.facility_id != state.facility_id
+        || initialize_receipt.dealer_state_account_id != dealer_state_account_id
+        || initialize_receipt.replay_account_id != state.facility_replay_account_id
+        || initialize_receipt.receipt_account_id != dependency.initialize_receipt_account_id
+        || initialize_receipt.semantic_receipt_id()? != dependency.initialize_receipt_semantic_id
         || terminal.runtime_binding_digest != dependency.bindings.runtime_liveness_binding_digest
         || terminal.state_authority_account_id != dealer_state_account_id
         || terminal.lifecycle_id != state.facility_id
         || dependency.rent.neutral_sink != policy.neutral_sink
         || balance.account_lamports_after != 0
+        || balance.initialize_receipt_lamports_after != 0
     {
         return Err(Error::MismatchedBinding);
     }
@@ -1624,6 +1646,18 @@ pub fn close_funded_dependencies_v2(
         .account_lamports_before
         .checked_sub(dependency.rent.refundable_principal)
         .ok_or(Error::ArithmeticOverflow)?;
+    let receipt_rent = initialize_receipt.rent();
+    let receipt_protected = receipt_rent
+        .refundable_principal
+        .checked_add(receipt_rent.donation_floor)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if balance.initialize_receipt_lamports_before < receipt_protected {
+        return Err(Error::ConservationFailure);
+    }
+    let initialize_receipt_sink_lamports = balance
+        .initialize_receipt_lamports_before
+        .checked_sub(receipt_rent.refundable_principal)
+        .ok_or(Error::ArithmeticOverflow)?;
     let mut state_after = *state;
     state_after.children.funded_dependencies = 0;
     state_after.funded_dependencies_account_id = Id::ZERO;
@@ -1635,17 +1669,22 @@ pub fn close_funded_dependencies_v2(
     Ok(DealerFundedDependencyCloseV2 {
         state_after,
         closed_dependency_account_id: dependency_account_id,
+        closed_initialize_receipt_account_id: dependency.initialize_receipt_account_id,
         refund_recipient: dependency.rent.payer,
         refund_lamports: dependency.rent.refundable_principal,
         neutral_sink: dependency.rent.neutral_sink,
         sink_lamports,
+        initialize_receipt_refund_recipient: receipt_rent.payer,
+        initialize_receipt_refund_lamports: receipt_rent.refundable_principal,
+        initialize_receipt_neutral_sink: receipt_rent.neutral_sink,
+        initialize_receipt_sink_lamports,
     })
 }
 
 const _: () = assert!(DEALER_LIVENESS_ACTION_COUNT_V1 == 22);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_BYTES_V1 == 372);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V1 == 412);
-const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 == 536);
+const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 == 600);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

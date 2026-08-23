@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Capability-disabled Dealer facility wire and account contract.
+//! Dealer facility wire and account contract.
 //!
 //! This module freezes strict payload parsing, the global eight-byte Dealer
 //! account envelope, and ordered semantic account roles for the PositionV3
-//! funding/activation/unwind/retirement slice. It deliberately exposes no executable
-//! handler: capability dispatch refuses every Dealer facility action before
-//! reading accounts.
+//! funding/activation/unwind/retirement slice. `Initialize` and `BindEpoch` are
+//! consumed by the executable non-production adapter; every other action
+//! remains refused before reading accounts.
 
 use clutch_dealer_runtime_contract::FixedCodec;
 use clutch_solana_layout::registry::DealerFacilityAction;
@@ -580,15 +580,16 @@ const INITIALIZE: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
     meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, true),
-    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
     meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
@@ -679,13 +680,20 @@ const BIND_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
-    meta(DealerMetaRoleV1::LivenessCompartment, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
     meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::EpochBinding, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::GeneralEpoch, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::GeneralWindow, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::EconomicDomain, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
-    meta(DealerMetaRoleV1::PriceMeasurePolicy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
@@ -1094,14 +1102,12 @@ const fn recipient_alias_allowed_v1(left: DealerMetaRoleV1, right: DealerMetaRol
 #[inline(never)]
 pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Refusal> {
     match action {
-        DealerFacilityAction::Initialize
-        | DealerFacilityAction::CreateLpPage
+        DealerFacilityAction::CreateLpPage
         | DealerFacilityAction::Contribute
         | DealerFacilityAction::WithdrawFunding
         | DealerFacilityAction::Activate
         | DealerFacilityAction::CancelFunding
         | DealerFacilityAction::RefundCancelledSponsor
-        | DealerFacilityAction::BindEpoch
         | DealerFacilityAction::LapseEpoch
         | DealerFacilityAction::SelectLeaseAndBegin
         | DealerFacilityAction::Collect
@@ -1115,6 +1121,11 @@ pub fn process_reserved_disabled(action: DealerFacilityAction) -> Result<(), Ref
         | DealerFacilityAction::Resolve
         | DealerFacilityAction::Claim
         | DealerFacilityAction::Retire => Err(ClutchError::UnsupportedInstruction.into()),
+        // Enabled profiles route these actions to the executable handler before
+        // reaching this function. Keep direct internal misuse fail-closed.
+        DealerFacilityAction::Initialize | DealerFacilityAction::BindEpoch => {
+            Err(ClutchError::UnsupportedInstruction.into())
+        }
     }
 }
 
