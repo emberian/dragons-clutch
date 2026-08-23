@@ -20,8 +20,12 @@ structured-General tuples.
 
 The structural transition derives Position and Replay successor semantic IDs
 internally from exact canonical bodies. It commits the consumed ordinal,
-receipt/finalized-row data owner, Position account, pre/post Position IDs, and
-generations. Action 25 requires an unchanged Position. Direct/merge sellers
+action-specific transition and evidence IDs, Position account, pre/post
+Position IDs, and generations. Action 25 evidence is the exact receipt
+prestate data ID. Action 38 uses the finalized V2 row data ID as its transition
+ID and the authenticated deleted payer-allocation prestate data ID as evidence;
+structured exchange uses its exact dual-endpoint delta evidence. Action 25
+requires an unchanged Position. Direct/merge sellers
 and zero-price owner finalization may legitimately leave Position bytes
 unchanged because their authoritative mutations live in Reservation, receipt,
 row, or pot state; their Replay still advances. A structural plan is never an
