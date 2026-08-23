@@ -1,6 +1,6 @@
 # General V2 contract
 
-This crate is the disabled, dependency-free account and identity contract for
+This crate is the disabled, SBF-neutral account and identity contract for
 the future General V2 vertical spine. It is `no_std`, uses no allocator, and
 contains no Solana SDK, account-memory, CPI, token, clock, or signature code.
 
@@ -8,6 +8,25 @@ Nothing here is a live route. The SBF capability table remains fail-closed, and
 allocating a tag does not authorize a handler. In particular, the current
 Market, CandidateLifecycle V4, RelationV2 adapter, settlement adapter, and
 counted Epoch codecs must not be described as General V2-compatible.
+
+The General-owned Position Replay extension uses schema coordinate `GEN1` and
+an exact 136-byte extension under canonical variable-width Replay V3 (344
+bytes including its 208-byte common prefix). It retains the General runtime
+Market, current Position V3 semantic ID, and the last transition/delta IDs plus
+one exhaustive family/version/action/endpoint tuple. Hostile decode admits
+only action 25 owner accounting, action 38 owner cash, action 26 buyer/seller,
+action 36 split buyer, action 37 merge seller, and action 35
+structured-General tuples.
+
+The structural transition derives Position and Replay successor semantic IDs
+internally from exact canonical bodies. It commits the consumed ordinal,
+receipt/finalized-row data owner, Position account, pre/post Position IDs, and
+generations. Action 25 requires an unchanged Position. Direct/merge sellers
+and zero-price owner finalization may legitimately leave Position bytes
+unchanged because their authoritative mutations live in Reservation, receipt,
+row, or pot state; their Replay still advances. A structural plan is never an
+execution capability: the live composer must rederive the concrete typed
+action plan from authenticated prestates before atomically writing both bodies.
 
 ## Frozen account coordinates
 
@@ -22,7 +41,7 @@ counted Epoch codecs must not be described as General V2-compatible.
 | `AdmissionNodeV3AccountV1` | `0x77/1` | 743 |
 | `EpochBudgetV2AccountV1` | `0x78/1` | 272 |
 | immutable `MarketBindingV1` | `0x79/1` | 540 |
-| counted-retirement Replay successor | `0x7a/1` | 132, owned by retirement/reference |
+| purpose-owned Replay V3 with General `GEN1` extension | `0x7a/3` | 344 (`208 + 136`), common prefix owned by retirement |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
 | disabled `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
