@@ -45,6 +45,10 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const FRACTIONAL_REDEMPTION_FAMILY_TAG: u8 = 79;
 /// Exact fractional-redemption successor intent-family version.
 pub const FRACTIONAL_REDEMPTION_FAMILY_VERSION: u8 = 1;
+/// Current Direct-market successor intent-family tag.
+pub const DIRECT_MARKET_FAMILY_TAG: u8 = 80;
+/// Current Direct-market successor intent-family version.
+pub const DIRECT_MARKET_FAMILY_VERSION: u8 = 1;
 
 /// Existing Source Archive V2 **account** discriminator: hexadecimal `0x74`,
 /// decimal 116.
@@ -485,6 +489,22 @@ pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG: u8 = 0xad;
 pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION: u8 = 1;
 /// Counted Dealer CoveredDealer selection attachment discriminator.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
+/// Current Direct root and lifecycle-count owner discriminator.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb1;
+/// Current Direct root account version.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Current Direct exact-selection owner discriminator.
+pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
+/// Current Direct exact-selection account version.
+pub const DIRECT_SELECTION_ACCOUNT_VERSION: u8 = 1;
+/// Current Direct permanent action replay/terminal receipt discriminator.
+pub const DIRECT_ACTION_REPLAY_ACCOUNT_TAG: u8 = 0xb3;
+/// Current Direct permanent action replay/terminal receipt version.
+pub const DIRECT_ACTION_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Current Direct funded Reservation owner discriminator.
+pub const DIRECT_RESERVATION_ACCOUNT_TAG: u8 = 0xb4;
+/// Current Direct funded Reservation account version.
+pub const DIRECT_RESERVATION_ACCOUNT_VERSION: u8 = 1;
 /// First Dealer CoveredDealer selection attachment version.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_VERSION: u8 = 1;
 /// In-place terminal postwrite version of the counted Dealer attachment.
@@ -512,6 +532,10 @@ const _: () = assert!(GENERAL_V2_FAMILY_TAG == 74);
 const _: () = assert!(DEALER_COVERED_SELECTION_ACCOUNT_TAG == 0xae);
 const _: () = assert!(DEALER_SERIES_OBLIGATION_ACCOUNT_TAG == 0xaf);
 const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb0);
+const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_TAG == 0xb1);
+const _: () = assert!(DIRECT_SELECTION_ACCOUNT_TAG == 0xb2);
+const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
+const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -734,6 +758,51 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "exact-fractional-redemption",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainIntent,
+            tag: DIRECT_MARKET_FAMILY_TAG,
+            version: DIRECT_MARKET_FAMILY_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "direct-market-v1",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DIRECT_MARKET_ROOT_ACCOUNT_TAG,
+            version: DIRECT_MARKET_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "direct-market-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DIRECT_SELECTION_ACCOUNT_TAG,
+            version: DIRECT_SELECTION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "direct-selection-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DIRECT_ACTION_REPLAY_ACCOUNT_TAG,
+            version: DIRECT_ACTION_REPLAY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "direct-action-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DIRECT_RESERVATION_ACCOUNT_TAG,
+            version: DIRECT_RESERVATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "direct-reservation-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1652,6 +1721,8 @@ pub enum ExtensionFamily {
     Recovery,
     /// Exact fractional-redemption and owner-credit services.
     FractionalRedemption,
+    /// Current Direct-market lifecycle and settlement services.
+    DirectMarket,
 }
 
 impl ExtensionFamily {
@@ -1664,6 +1735,7 @@ impl ExtensionFamily {
             Self::SourceSeries => SOURCE_SERIES_FAMILY_TAG,
             Self::Recovery => RECOVERY_FAMILY_TAG,
             Self::FractionalRedemption => FRACTIONAL_REDEMPTION_FAMILY_TAG,
+            Self::DirectMarket => DIRECT_MARKET_FAMILY_TAG,
         }
     }
 
@@ -1676,6 +1748,7 @@ impl ExtensionFamily {
             Self::SourceSeries => SOURCE_SERIES_FAMILY_VERSION,
             Self::Recovery => RECOVERY_FAMILY_VERSION,
             Self::FractionalRedemption => FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+            Self::DirectMarket => DIRECT_MARKET_FAMILY_VERSION,
         }
     }
 
@@ -1692,6 +1765,7 @@ impl ExtensionFamily {
             (FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION) => {
                 Some(Self::FractionalRedemption)
             }
+            (DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION) => Some(Self::DirectMarket),
             _ => None,
         }
     }
@@ -2416,6 +2490,88 @@ impl FractionalRedemptionAction {
     }
 }
 
+/// Current Direct-market family-local action allocations inside `80/1`.
+///
+/// These coordinates remain capability-disabled until all thirteen actions,
+/// their Product family joins, and their bounded SBF frames are admitted as
+/// one release unit. They never reuse legacy Direct V3 tags `36..=46`.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectMarketAction {
+    /// Create the root and permanent replay while admitting one Product child.
+    InitializeMarket = 1,
+    /// Admit one of the exact zero-to-two funded order Reservations.
+    AdmitOrder = 2,
+    /// Cancel one pre-freeze Reservation and return its locked liabilities.
+    CancelOrder = 3,
+    /// Freeze the exhaustive Reservation prefix into one immutable book.
+    FreezeBook = 4,
+    /// Submit one bounded valid RelationV2 candidate.
+    SubmitCandidate = 5,
+    /// Seal submissions and initialize exhaustive verification traversal.
+    BeginVerification = 6,
+    /// Verify the next canonical retained candidate coordinate.
+    VerifyCandidate = 7,
+    /// Select the best valid submitted candidate or the exact empty result.
+    FinalizeSelection = 8,
+    /// Atomically settle the selected Egg/cash pair and both GEN1 replays.
+    SettlePair = 9,
+    /// Terminalize a frozen epoch with no submitted candidate.
+    LapseEmpty = 10,
+    /// Terminalize a nonempty epoch whose verification never selected.
+    LapseUnselected = 11,
+    /// Terminalize selected authority after its settlement deadline.
+    LapseSelected = 12,
+    /// Retire all transient state and terminalize the Product Direct child.
+    RetireTerminal = 13,
+}
+
+impl DirectMarketAction {
+    /// First Direct-market local action.
+    pub const FIRST_TAG: u8 = 1;
+    /// Last Direct-market local action.
+    pub const LAST_TAG: u8 = 13;
+
+    /// Return the exact family-local tag without an unchecked cast.
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::InitializeMarket => 1,
+            Self::AdmitOrder => 2,
+            Self::CancelOrder => 3,
+            Self::FreezeBook => 4,
+            Self::SubmitCandidate => 5,
+            Self::BeginVerification => 6,
+            Self::VerifyCandidate => 7,
+            Self::FinalizeSelection => 8,
+            Self::SettlePair => 9,
+            Self::LapseEmpty => 10,
+            Self::LapseUnselected => 11,
+            Self::LapseSelected => 12,
+            Self::RetireTerminal => 13,
+        }
+    }
+
+    /// Decode one exact allocated local tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::InitializeMarket),
+            2 => Some(Self::AdmitOrder),
+            3 => Some(Self::CancelOrder),
+            4 => Some(Self::FreezeBook),
+            5 => Some(Self::SubmitCandidate),
+            6 => Some(Self::BeginVerification),
+            7 => Some(Self::VerifyCandidate),
+            8 => Some(Self::FinalizeSelection),
+            9 => Some(Self::SettlePair),
+            10 => Some(Self::LapseEmpty),
+            11 => Some(Self::LapseUnselected),
+            12 => Some(Self::LapseSelected),
+            13 => Some(Self::RetireTerminal),
+            _ => None,
+        }
+    }
+}
+
 /// One allocated successor family-local action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
@@ -2435,6 +2591,8 @@ pub enum ExtensionAction {
     Recovery(RecoveryAction),
     /// One exact fractional-redemption action.
     FractionalRedemption(FractionalRedemptionAction),
+    /// One current Direct-market action.
+    DirectMarket(DirectMarketAction),
 }
 
 impl ExtensionAction {
@@ -2447,6 +2605,7 @@ impl ExtensionAction {
             Self::SourceV3(_) | Self::RecurringSeries(_) => ExtensionFamily::SourceSeries,
             Self::Recovery(_) => ExtensionFamily::Recovery,
             Self::FractionalRedemption(_) => ExtensionFamily::FractionalRedemption,
+            Self::DirectMarket(_) => ExtensionFamily::DirectMarket,
         }
     }
 
@@ -2461,6 +2620,7 @@ impl ExtensionAction {
             Self::RecurringSeries(action) => action.tag(),
             Self::Recovery(action) => action.tag(),
             Self::FractionalRedemption(action) => action.tag(),
+            Self::DirectMarket(action) => action.tag(),
         }
     }
 }
@@ -2521,6 +2681,10 @@ pub const fn decode_extension_action(
                 None => Err(RegistryError::UnknownLocalAction),
             }
         }
+        Some(ExtensionFamily::DirectMarket) => match DirectMarketAction::from_tag(local_action) {
+            Some(action) => Ok(ExtensionAction::DirectMarket(action)),
+            None => Err(RegistryError::UnknownLocalAction),
+        },
         None => Err(RegistryError::UnknownFamilyVersion),
     }
 }
@@ -2644,6 +2808,9 @@ mod tests {
                         (78, 1) => Some(IntentAllocation::Extension(ExtensionFamily::Recovery)),
                         (79, 1) => Some(IntentAllocation::Extension(
                             ExtensionFamily::FractionalRedemption,
+                        )),
+                        (80, 1) => Some(IntentAllocation::Extension(
+                            ExtensionFamily::DirectMarket,
                         )),
                         _ => None,
                     }
@@ -3250,6 +3417,13 @@ mod tests {
                 (FractionalRedemptionAction::FIRST_TAG..=FractionalRedemptionAction::LAST_TAG)
                     .contains(&local_action),
                 "fractional-redemption action {local_action}"
+            );
+            let direct = decode_extension_action(80, 1, local_action);
+            assert_eq!(
+                direct.is_ok(),
+                (DirectMarketAction::FIRST_TAG..=DirectMarketAction::LAST_TAG)
+                    .contains(&local_action),
+                "direct-market action {local_action}"
             );
         }
     }
