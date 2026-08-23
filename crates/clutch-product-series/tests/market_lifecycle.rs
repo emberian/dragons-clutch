@@ -177,14 +177,17 @@ fn hostile_active_failure_session_cannot_erase_transcript() {
 
 #[test]
 fn failure_transcript_survives_session_release() {
-    let released = active_link()
-        .pin_failure_session(id(27))
-        .unwrap()
-        .release_failure_session(id(28))
-        .unwrap();
+    let pinned = active_link().pin_failure_session(id(27)).unwrap();
+    let pinned_transcript = pinned.failure_session_transcript_id();
+    let released = pinned.release_failure_session(id(28)).unwrap();
     assert_eq!(released.active_failure_sessions(), 0);
     assert_eq!(released.failure_sessions_started(), 1);
     assert_ne!(released.failure_session_transcript_id(), ContentId::ZERO);
+    assert_ne!(released.failure_session_transcript_id(), pinned_transcript);
+    assert_eq!(
+        released.release_failure_session(id(28)),
+        Err(Error::WorkStateMismatch)
+    );
 
     let mut body = [0_u8; SERIES_MARKET_LINK_BYTES_V1];
     released.encode_into(&mut body).unwrap();

@@ -26,9 +26,10 @@ use clutch_product_series::{
     MarketLifecyclePhaseV1, MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1,
     MarketResolutionActivationV1, SeriesAttachmentPlanV4, SeriesFundingComponentV2,
     SeriesFundingQuoteV4,
-    SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationStatusV1,
-    SeriesLinkObligationV1, SeriesMarketDispositionV1, SeriesMarketLinkPhaseV1, SeriesMarketLinkV1,
-    SeriesMarketLinkV1Id, SeriesPlanV5Id,
+    SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationDispositionV1,
+    SeriesLinkObligationStatusV1, SeriesLinkObligationTerminalProjectionV1,
+    SeriesLinkObligationV1, SeriesMarketDispositionV1, SeriesMarketLinkPhaseV1,
+    SeriesMarketLinkV1, SeriesMarketLinkV1Id, SeriesPlanV5Id, SourceOccurrenceV1Id,
 };
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
@@ -53,6 +54,10 @@ const MARKET_INSTANCE_TERMINAL_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-instance-terminal-authentication/v1";
 const SERIES_WRAPPER_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-wrapper-authentication/v1";
+const SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-wrapper-terminal-authentication/v1";
+const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-failure-release-authentication/v1";
 const MARKET_RECOVERY_SCHEDULE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-recovery-schedule-authentication/v1";
 const MARKET_FOUNDATION_DEBIT_AUTHENTICATION_DOMAIN_V1: &[u8] =
@@ -925,6 +930,252 @@ pub struct AuthenticatedSeriesWrapperAuthorizationV1 {
     wrapper_status: SeriesLinkObligationStatusV1,
     wrapper_admission_receipt_id: ContentId,
     link_transition_sequence: u64,
+}
+
+/// Default-refusing Structured owner consumed by the Product Wrapper terminalizer.
+///
+/// Implementations must be private postwrite receipts which prove the complete
+/// Structured descriptor/root/mint/vault retirement. Public projection bytes
+/// or caller IDs cannot implement this authority by themselves.
+pub(crate) trait AuthenticatedSeriesWrapperTerminalOwnerV1 {
+    /// Exact Structured aggregate terminal receipt committed by Product.
+    fn owner_terminal_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    /// Exact hostile-reauthenticated Structured root account.
+    fn structured_root_account(&self) -> Outcome<Pubkey> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    /// Complete Structured root semantic postimage.
+    fn structured_root_semantic_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    /// Exact Structured root account-data digest.
+    fn structured_root_data_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    /// Authenticate the exact Product link and immutable Wrapper admission.
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_series_wrapper_terminal_owner_v1(
+        &self,
+        _link_account: Pubkey,
+        _series_plan_id: SeriesPlanV5Id,
+        _ordinal: u32,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _wrapper_admission_receipt_id: ContentId,
+        _owner_terminal_receipt_id: ContentId,
+        _structured_root_account: Pubkey,
+        _structured_root_semantic_id: ContentId,
+        _structured_root_data_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Private Product postwrite receipt for one exact Wrapper obligation terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesWrapperTerminalV1 {
+    id: ContentId,
+    link_account: Pubkey,
+    link_authentication_before: ContentId,
+    link_authentication_after: ContentId,
+    link_semantic_before: ContentId,
+    link_semantic_after: ContentId,
+    wrapper_admission_receipt_id: ContentId,
+    owner_terminal_receipt_id: ContentId,
+    product_terminal_projection: SeriesLinkObligationTerminalProjectionV1,
+    structured_root_account: Pubkey,
+    structured_root_semantic_id: ContentId,
+    structured_root_data_id: ContentId,
+}
+
+impl AuthenticatedSeriesWrapperTerminalV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn link_account(self) -> Pubkey {
+        self.link_account
+    }
+
+    pub(crate) const fn link_authentication_before(self) -> ContentId {
+        self.link_authentication_before
+    }
+
+    pub(crate) const fn link_authentication_after(self) -> ContentId {
+        self.link_authentication_after
+    }
+
+    pub(crate) const fn link_semantic_before(self) -> ContentId {
+        self.link_semantic_before
+    }
+
+    pub(crate) const fn link_semantic_after(self) -> ContentId {
+        self.link_semantic_after
+    }
+
+    pub(crate) const fn wrapper_admission_receipt_id(self) -> ContentId {
+        self.wrapper_admission_receipt_id
+    }
+
+    pub(crate) const fn product_terminal_projection(
+        self,
+    ) -> SeriesLinkObligationTerminalProjectionV1 {
+        self.product_terminal_projection
+    }
+
+    pub(crate) const fn owner_terminal_receipt_id(self) -> ContentId {
+        self.owner_terminal_receipt_id
+    }
+
+    pub(crate) const fn structured_root_account(self) -> Pubkey {
+        self.structured_root_account
+    }
+
+    pub(crate) const fn structured_root_semantic_id(self) -> ContentId {
+        self.structured_root_semantic_id
+    }
+
+    pub(crate) const fn structured_root_data_id(self) -> ContentId {
+        self.structured_root_data_id
+    }
+}
+
+/// Default-refusing Failure archive owner consumed by the Product link release.
+///
+/// The implementation must be minted only after the terminal reusable cell was
+/// appended to the exact market history and the cell was hostile-reauthenticated
+/// in canonical Idle. Product separately authenticates the live `0xad` prestate
+/// and joins both owners on the complete Market/session tuple.
+pub(crate) trait AuthenticatedSeriesFailureArchivePostwriteV2 {
+    fn archive_postwrite_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    fn append_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    fn reset_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    fn market_instance_id(&self) -> Outcome<MarketInstanceV2Id> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    fn generation(&self) -> Outcome<u64> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    fn source_occurrence_id(&self) -> Outcome<SourceOccurrenceV1Id> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    fn session_binding_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    fn session_terminal_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_series_failure_archive_postwrite_v2(
+        &self,
+        _archive_postwrite_id: ContentId,
+        _append_receipt_id: ContentId,
+        _reset_receipt_id: ContentId,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _source_occurrence_id: SourceOccurrenceV1Id,
+        _session_binding_id: ContentId,
+        _session_terminal_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Private Product postwrite proving one exact Failure session pin was released.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesFailureSessionReleaseV1 {
+    id: ContentId,
+    link_account: Pubkey,
+    link_authentication_before: ContentId,
+    link_authentication_after: ContentId,
+    link_semantic_before: ContentId,
+    link_semantic_after: ContentId,
+    transition_sequence_before: u64,
+    transition_sequence_after: u64,
+    failure_session_transcript_before: ContentId,
+    failure_session_transcript_after: ContentId,
+    session_terminal_receipt_id: ContentId,
+    archive_postwrite_id: ContentId,
+    append_receipt_id: ContentId,
+    reset_receipt_id: ContentId,
+}
+
+impl AuthenticatedSeriesFailureSessionReleaseV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn link_account(self) -> Pubkey {
+        self.link_account
+    }
+
+    pub(crate) const fn link_authentication_before(self) -> ContentId {
+        self.link_authentication_before
+    }
+
+    pub(crate) const fn link_authentication_after(self) -> ContentId {
+        self.link_authentication_after
+    }
+
+    pub(crate) const fn link_semantic_before(self) -> ContentId {
+        self.link_semantic_before
+    }
+
+    pub(crate) const fn link_semantic_after(self) -> ContentId {
+        self.link_semantic_after
+    }
+
+    pub(crate) const fn transition_sequence_before(self) -> u64 {
+        self.transition_sequence_before
+    }
+
+    pub(crate) const fn transition_sequence_after(self) -> u64 {
+        self.transition_sequence_after
+    }
+
+    pub(crate) const fn failure_session_transcript_before(self) -> ContentId {
+        self.failure_session_transcript_before
+    }
+
+    pub(crate) const fn failure_session_transcript_after(self) -> ContentId {
+        self.failure_session_transcript_after
+    }
+
+    pub(crate) const fn session_terminal_receipt_id(self) -> ContentId {
+        self.session_terminal_receipt_id
+    }
+
+    pub(crate) const fn archive_postwrite_id(self) -> ContentId {
+        self.archive_postwrite_id
+    }
+
+    pub(crate) const fn append_receipt_id(self) -> ContentId {
+        self.append_receipt_id
+    }
+
+    pub(crate) const fn reset_receipt_id(self) -> ContentId {
+        self.reset_receipt_id
+    }
 }
 
 impl AuthenticatedSeriesWrapperAuthorizationV1 {
@@ -2776,6 +3027,141 @@ pub(crate) fn pin_series_market_link_failure_v1<'next>(
         &successor,
         rebound_output,
     )
+}
+
+/// Release one exact subordinate Failure session only after its terminal cell
+/// was appended to durable market history and reset to canonical Idle.
+pub(crate) fn release_series_market_link_failure_v1<
+    A: AuthenticatedSeriesFailureArchivePostwriteV2 + ?Sized,
+>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedSeriesMarketLinkV1<'_>,
+    archive: &A,
+    rebound_output: &mut SeriesMarketLinkAccountV1,
+) -> Outcome<AuthenticatedSeriesFailureSessionReleaseV1> {
+    let binding = authenticated.state().binding();
+    let semantic_before = authenticated
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let authentication_before = authenticated.authentication_id();
+    let transition_sequence_before = authenticated.state().transition_sequence();
+    let failure_session_transcript_before =
+        authenticated.state().failure_session_transcript_id();
+    let failure_sessions_started_before = authenticated.state().failure_sessions_started();
+    let archive_postwrite_id = archive.archive_postwrite_id()?;
+    let append_receipt_id = archive.append_receipt_id()?;
+    let reset_receipt_id = archive.reset_receipt_id()?;
+    let market_instance_id = archive.market_instance_id()?;
+    let generation = archive.generation()?;
+    let source_occurrence_id = archive.source_occurrence_id()?;
+    let session_binding_id = archive.session_binding_id()?;
+    let session_terminal_receipt_id = archive.session_terminal_receipt_id()?;
+    for receipt in [
+        archive_postwrite_id,
+        append_receipt_id,
+        reset_receipt_id,
+        session_binding_id,
+        session_terminal_receipt_id,
+    ] {
+        require_live_content_id(receipt)?;
+    }
+    require(
+        authenticated.is_writable()
+            && authenticated.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && authenticated.state().active_failure_sessions() == 1
+            && failure_session_transcript_before == session_binding_id
+            && binding.market_instance_id == market_instance_id
+            && binding.generation == generation
+            && binding.source_occurrence_id == source_occurrence_id
+            && archive_postwrite_id != append_receipt_id
+            && archive_postwrite_id != reset_receipt_id
+            && append_receipt_id != reset_receipt_id
+            && session_terminal_receipt_id != session_binding_id,
+        ClutchError::MismatchedState,
+    )?;
+    archive.authenticate_series_failure_archive_postwrite_v2(
+        archive_postwrite_id,
+        append_receipt_id,
+        reset_receipt_id,
+        market_instance_id,
+        generation,
+        source_occurrence_id,
+        session_binding_id,
+        session_terminal_receipt_id,
+    )?;
+    let successor = authenticated
+        .state()
+        .release_failure_session(session_terminal_receipt_id)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound = write_series_market_link_v1(
+        program_id,
+        account,
+        authenticated,
+        &successor,
+        rebound_output,
+    )?;
+    let semantic_after = rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let transition_sequence_after = rebound.state().transition_sequence();
+    let failure_session_transcript_after = rebound.state().failure_session_transcript_id();
+    require(
+        rebound.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && rebound.state().active_failure_sessions() == 0
+            && rebound.state().failure_sessions_started() == failure_sessions_started_before
+            && transition_sequence_after
+                == transition_sequence_before
+                    .checked_add(1)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+            && failure_session_transcript_after != failure_session_transcript_before,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V1,
+            account.key.as_ref(),
+            &authentication_before.bytes(),
+            &rebound.authentication_id().bytes(),
+            &semantic_before.bytes(),
+            &semantic_after.bytes(),
+            &transition_sequence_before.to_le_bytes(),
+            &transition_sequence_after.to_le_bytes(),
+            &failure_session_transcript_before.bytes(),
+            &failure_session_transcript_after.bytes(),
+            &session_terminal_receipt_id.bytes(),
+            &archive_postwrite_id.bytes(),
+            &append_receipt_id.bytes(),
+            &reset_receipt_id.bytes(),
+            &binding.series_plan_id.bytes(),
+            &binding.ordinal.to_le_bytes(),
+            &binding.market_instance_id.bytes(),
+            &binding.generation.to_le_bytes(),
+            &binding.source_occurrence_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(AuthenticatedSeriesFailureSessionReleaseV1 {
+        id,
+        link_account: *account.key,
+        link_authentication_before: authentication_before,
+        link_authentication_after: rebound.authentication_id(),
+        link_semantic_before: semantic_before,
+        link_semantic_after: semantic_after,
+        transition_sequence_before,
+        transition_sequence_after,
+        failure_session_transcript_before,
+        failure_session_transcript_after,
+        session_terminal_receipt_id,
+        archive_postwrite_id,
+        append_receipt_id,
+        reset_receipt_id,
+    })
 }
 
 fn require_live_content_id(id: ContentId) -> Outcome<()> {
