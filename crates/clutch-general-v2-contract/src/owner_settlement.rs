@@ -19,10 +19,13 @@ pub use clutch_owner_settlement::{
     VerifiedSettlementOrderV1, OWNER_SETTLEMENT_BODY_V1_BYTES, SETTLEMENT_CASH_POT_BODY_V1_BYTES,
 };
 pub use clutch_owner_settlement::{
-    build_owner_settlement_book_v2, derive_settlement_receipt_data_id_v2,
+    build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v2,
+    derive_owner_finalized_row_data_id_v2, derive_settlement_receipt_data_id_v2,
     AuthenticatedOwnerFragmentV2, AuthenticatedSettlementReceiptEndV2,
     AuthenticatedSettlementReceiptV2, CandidateSettlementTotalsV2, OwnerSettlementAccumulatorV2,
-    OwnerSettlementBookV2, OwnerSettlementExpectationV2, PresentConsiderationV2, PresentPriceV2,
+    OwnerFinalizedRowDataHashV2, OwnerSettlementBookV2, OwnerSettlementExpectationBasisBookV2,
+    OwnerSettlementExpectationBasisV2, OwnerSettlementExpectationV2,
+    OwnerSettlementTerminalProjectionV2, PresentConsiderationV2, PresentPriceV2,
     SettlementReceiptDataHashV2, SettlementReceiptRouteV2, VerifiedSettlementOrderV2,
     OWNER_SETTLEMENT_BODY_V2_BYTES, SETTLEMENT_RECEIPT_DATA_ID_DOMAIN_V2,
     SETTLEMENT_RECEIPT_DATA_TRANSCRIPT_V2_BYTES,

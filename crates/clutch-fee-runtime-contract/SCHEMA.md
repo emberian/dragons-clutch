@@ -78,6 +78,14 @@ separately. `DCFEEEND` binds that manifest plus the selected economic identities
 settled/released totals, recipient amounts, and external value-disposition and
 terminal-authority receipt identities.
 
+`project_pre_row_owner_fee_v2` consumes the owner-settlement-owned
+`OwnerSettlementExpectationBasisV2` before action 24 creates a V2 row. It
+reconstructs the exact payer allocation from signed Reservation envelopes and
+returns only `(owner, fee_atoms)`. `basis.with_selected_fee(row)` then seals the
+persisted expectation without a fee/row circular dependency. Buy-side presence
+comes from the basis mask and `PresentConsiderationV2`, so a present zero-price
+buy remains distinct from an absent buy. The terminal projection repeats this
+exact join before the payer account can become Replay evidence or be deleted.
 `GeneralOwnerFeeFinalizationProjectionV2` and
 `GeneralFeeTerminalProjectionV1` expose the authenticated owner and candidate
 facts without creating parallel semantic owners. `DealerFeeTerminalProjectionV1`
