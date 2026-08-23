@@ -792,6 +792,28 @@ impl SettlementRootV1AccountV1 {
         writer.finish()
     }
 
+    /// Content identity of the exact authenticated root prestate.
+    ///
+    /// This is the same account-key-bound transcript used by terminal
+    /// projection, but it makes no terminality claim. Read-only adapters use
+    /// it to bind a private page-set capability to the precise root bytes they
+    /// authenticated before an atomic successor write.
+    pub fn data_id<B: Sha256BackendV1>(
+        &self,
+        backend: &B,
+        root_account: Id32,
+    ) -> Result<Id32, CodecError> {
+        self.validate()?;
+        require_live(root_account)?;
+        let mut bytes = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
+        self.encode(&mut bytes)?;
+        Id32::new(backend.sha256(&[
+            SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
+            &root_account.bytes(),
+            &bytes,
+        ]))
+    }
+
     /// Decode one hostile root account and rerun every invariant.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::exact(input, SETTLEMENT_ROOT_ACCOUNT_BYTES)?;
@@ -1013,13 +1035,7 @@ impl SettlementRootV1AccountV1 {
         {
             return Err(CodecError::InvalidState);
         }
-        let mut bytes = [0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-        self.encode(&mut bytes)?;
-        let receipt = Id32::new(backend.sha256(&[
-            SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
-            &root_account.bytes(),
-            &bytes,
-        ]))?;
+        let receipt = self.data_id(backend, root_account)?;
         Ok(SettlementRootTerminalProjectionV1 {
             root_account,
             market_instance_v2_id: self.market_instance_v2_id,
