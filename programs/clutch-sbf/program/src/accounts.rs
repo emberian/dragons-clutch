@@ -804,6 +804,11 @@ pub fn read_resolution(data: &[u8]) -> Outcome<ResolutionFacts> {
 /// Decode an epoch/book-domain account.
 #[inline(never)]
 pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
+    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+    {
+        let _ = data;
+        return Err(ClutchError::UnsupportedInstruction.into());
+    }
     #[cfg(feature = "profile-full")]
     if data.len() == DIRECT_EPOCH_BYTES {
         let value = DirectEpochV3Account::decode(data)?;

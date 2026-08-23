@@ -11,6 +11,8 @@
 //! as a value fact. The only live consequence is finite independently prepaid
 //! evidence recovery followed by recoverable dormancy.
 
+pub mod external_v2;
+
 use clutch_evidence_recovery::{
     EvidenceDecision, FundingObservation, Identity as RecoveryIdentity, RecoveryAdmission,
     RecoveryClock, RecoveryError, RecoveryLedger, RecoveryPhase, RecoveryState, TransferPlan,
@@ -18,11 +20,10 @@ use clutch_evidence_recovery::{
 };
 use clutch_product_series::{
     compile_ordinal_v2, CompiledOrdinalV2, EvidenceOnlyRecoveryPolicyId,
-    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, MarketInstanceV2Id,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateId, ProductTemplateV4,
-    RegistryCapabilityProjectionV2, SeriesAttachmentPlanV1, SeriesFundingQuoteId,
-    SeriesFundingQuoteV1, SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5,
-    SeriesPlanV5Id,
+    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, MarketInstanceV2Id, NativeClaimBasisV1,
+    PriceMeasurePolicyV1, ProductTemplateId, ProductTemplateV4, RegistryCapabilityProjectionV2,
+    SeriesAttachmentPlanV1, SeriesFundingQuoteId, SeriesFundingQuoteV1, SeriesFundingTermsV2,
+    SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_source_plane_v3::{
     ContentId as SourceContentId, SourcePlaneProgramV3, StatisticKeyV3, StatisticResultStatusV3,
@@ -692,10 +693,8 @@ impl FailureRuntimeV1 {
             || statistic_key.statistic as u16 != template.statistic_registry_value
             || source_occurrence.series_plan_id().bytes() != compiled.series_plan_id.bytes()
             || source_occurrence.ordinal() != compiled.ordinal
-            || source_occurrence.market_instance_id().bytes()
-                != compiled.market_instance_id.bytes()
-            || source_occurrence.attachment_plan_id().bytes()
-                != compiled.attachment_plan_id.bytes()
+            || source_occurrence.market_instance_id().bytes() != compiled.market_instance_id.bytes()
+            || source_occurrence.attachment_plan_id().bytes() != compiled.attachment_plan_id.bytes()
             || source_occurrence.source_plane_contract_id() != source_plane_id
             || source_occurrence.source_spec_id() != primary_window.source_spec_id
             || source_occurrence.window_id() != primary_window_id
@@ -1141,7 +1140,9 @@ impl FailureRuntimeV1 {
         scheduled_ceiling_lamports: u64,
     ) -> Result<LivenessWorkReceiptJoinV1> {
         let expected = self.recovery_work_join(clock)?;
-        let prior = self.recovery.accepted_progress_units(expected.attempt_index)?;
+        let prior = self
+            .recovery
+            .accepted_progress_units(expected.attempt_index)?;
         let progress_delta = accepted_progress_total
             .checked_sub(prior)
             .ok_or(Error::BindingMismatch)?;
@@ -1188,7 +1189,8 @@ impl FailureRuntimeV1 {
         accepted_progress_total: u64,
     ) -> Result<FailureTransitionPlanV1> {
         let expected = self.recovery_work_join(clock)?;
-        if window.id()? != expected.window_id || window.repair_generation != expected.repair_generation
+        if window.id()? != expected.window_id
+            || window.repair_generation != expected.repair_generation
         {
             return Err(Error::WrongRecoveryWindow);
         }
@@ -1285,14 +1287,11 @@ impl FailureRuntimeV1 {
         accepted: AcceptedResolutionV1,
     ) -> Result<FailureTransitionPlanV1> {
         self.validate_accepted_resolution(accepted)?;
-        let evidence = EvidenceDecision::from_adapter(RecoveryIdentity::from_bytes(
-            accepted.id.bytes(),
-        ))?;
-        let recovery = self.recovery.plan_resolve_caller_funded(
-            clock,
-            actual_reserve_balance,
-            evidence,
-        )?;
+        let evidence =
+            EvidenceDecision::from_adapter(RecoveryIdentity::from_bytes(accepted.id.bytes()))?;
+        let recovery =
+            self.recovery
+                .plan_resolve_caller_funded(clock, actual_reserve_balance, evidence)?;
         self.wrap_plan(recovery, None)
     }
 
@@ -1309,7 +1308,8 @@ impl FailureRuntimeV1 {
         accepted: AcceptedResolutionV1,
     ) -> Result<FailureTransitionPlanV1> {
         let expected = self.recovery_work_join(clock)?;
-        if window.id()? != expected.window_id || window.repair_generation != expected.repair_generation
+        if window.id()? != expected.window_id
+            || window.repair_generation != expected.repair_generation
         {
             return Err(Error::WrongRecoveryWindow);
         }
@@ -1317,9 +1317,8 @@ impl FailureRuntimeV1 {
         if accepted.window_id != expected.window_id {
             return Err(Error::BindingMismatch);
         }
-        let evidence = EvidenceDecision::from_adapter(RecoveryIdentity::from_bytes(
-            accepted.id.bytes(),
-        ))?;
+        let evidence =
+            EvidenceDecision::from_adapter(RecoveryIdentity::from_bytes(accepted.id.bytes()))?;
         let recovery = self.recovery.plan_resolve_paid_progress(
             clock,
             actual_reserve_balance,
@@ -1364,7 +1363,9 @@ impl FailureRuntimeV1 {
         receipt: LivenessWorkReceiptJoinV1,
     ) -> Result<()> {
         let expected = self.recovery_work_join(clock)?;
-        let prior = self.recovery.accepted_progress_units(expected.attempt_index)?;
+        let prior = self
+            .recovery
+            .accepted_progress_units(expected.attempt_index)?;
         let progress_delta = receipt
             .accepted_progress_total
             .checked_sub(prior)
@@ -1462,11 +1463,7 @@ impl FailureRuntimeV1 {
         Err(Error::WrongRecoveryWindow)
     }
 
-    fn repair_window(
-        &self,
-        repair_generation: u64,
-        closes_at_bucket: u64,
-    ) -> Result<WindowSpecV3> {
+    fn repair_window(&self, repair_generation: u64, closes_at_bucket: u64) -> Result<WindowSpecV3> {
         let window = WindowSpecV3 {
             source_spec_id: self.binding.source_spec_id,
             source_plane_program_id: self.binding.source_plane_program_id,
@@ -1812,7 +1809,6 @@ impl FailureTerminalJoinV1 {
     pub const fn source_release_receipt_id(&self) -> [u8; 32] {
         self.source_release_receipt_id
     }
-
 }
 
 fn recovery_clock_from_snapshot(

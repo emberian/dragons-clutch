@@ -1,7 +1,11 @@
 # General V2 SBF vertical slice
 
-Status: implementation map synchronized to the frozen pure-contract snapshot;
-all General V2 runtime capabilities remain disabled.
+Status: source implementation in the isolated non-production profile. Actions
+2, 6, 7, 8, 9, 10, 14, 15, 16, 20, 21, and 32 have strict payload decoders, pure
+poststate owners, SBF dispatch/account handlers, and fresh PDA helpers. Current
+production profiles still disable every General V2 action. A real SBF build
+and committing local-bank campaign have not yet been run for this source
+checkpoint, so this status is not execution evidence.
 
 This document defines the smallest honest current-head path from the pure
 General V2 contracts to a committing local-validator execution. The first
@@ -20,17 +24,16 @@ vertical slices and must remain disabled until their own evidence gates pass.
 
 The General V2 extension family is centrally reserved at outer intent family
 tag 74 decimal (`0x4a`), family version 1. Its family-local actions are
-allocated at `1..=34`. Allocation does not authorize execution.
+allocated at `1..=38`. Allocation does not authorize execution.
 
-Every current SBF profile has an empty General V2 extension capability table.
+Every production SBF profile has an empty General V2 extension capability table.
 The existing `profile-general-source-v2-point` is the legacy General V1
 program, not a General V2 successor. Adding V2 success paths under that label
 or its existing profile identity would change release semantics without
 changing release identity.
 
-The first success-capable build therefore needs a mutually exclusive feature
-and a freshly frozen profile identity. The recommended deliberately awkward
-name is:
+The first success-capable source build uses the mutually exclusive feature and
+fresh profile identity:
 
 ```text
 profile-non-production-general-v2-empty-book-identity-lab
@@ -46,8 +49,8 @@ The current pure contract is `no_std`, allocator-free, safe Rust, and contains
 no Solana SDK, account memory, CPI, clock, rent, signature, or PDA code. Its
 account bytes are contracts for a future adapter, not live routes.
 
-`programs/solana-layout` remains the global wire-allocation owner. The
-dependency-free General crate's tag/version constants mirror its reserved
+`programs/solana-layout` remains the global wire-allocation owner. The General
+contract's tag/version constants mirror its reserved
 coordinates; `solana-layout` must not gain a dependency on the General crate
 merely to compare those constants. Actual activation instead requires explicit
 adapter parity assertions and frozen cross-crate vectors without perturbing
@@ -55,6 +58,8 @@ the pinned layout dependency graph.
 
 | Semantic owner | Tag/version | Exact active length |
 |---|---:|---:|
+| `MarketRuntimeV3AccountV1` | `3/3` | 148 |
+| `GeneralEpochV6AccountV1` | `11/6` | 321 |
 | `ClearWorkV2` | `17/2` | `672 + 16*O + 8*N*O`, maximum 9,120 |
 | sealed `CandidateFeedV2` | `18/2` | `538 + 8*O + 8*N + 24*A + 13*S`, maximum 6,970 |
 | `CandidateWindowV4` | `24/4` | 565 |
@@ -65,6 +70,13 @@ the pinned layout dependency graph.
 | counted-retirement Replay successor | `0x7a/1` | 132 |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
+| disabled selected fee-record envelope | `0x82/1` | 340 |
+| disabled owner fee-carry envelope | `0x83/1` | 132 |
+| disabled temporary payer-allocation envelope | `0x84/1` | 2,684 |
+| disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
+| disabled treasury-ledger envelope | `0x86/1` | 148 |
+| disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
 
 Here `O` is the active outcome count, `N` the active order count, `A` the
 active quantized-atom count, and `S` the active settlement-slice count. Feeds
@@ -81,14 +93,20 @@ state.
 
 The central collision ledger reserves these coordinates as
 `ReservedDisabled`, records retirement's provisional tombstones at `0x75/1`
-and `0x76/1`, and proves its recorded rows internally disjoint. A complete
+and `0x76/1` plus the permanent Position tombstone at `0x75/2`, and proves its
+recorded rows internally disjoint. Dealer owns `0x7d/1` and `0x7e/1`, while
+Source/Series owns `0x7f/1` and `0x80/1`; General does not reinterpret those
+coordinates. A complete
 legacy-account inventory cross-check remains an activation gate. The numeric
 constants in the standalone General crate describe matching codec bytes, not a
 second allocation authority; the eventual adapter must add an explicit parity
 gate against the central registry.
 
-Two further semantic accounts are required and must be centrally reserved
-before implementation:
+The same central block reserves the StructuredClaim descriptor at `0x88/1`
+and a fresh General FinalPot at `0x89/1`. Neither reservation supplies a live
+route or a FinalPot codec/retirement authority in this lab.
+
+The first implementation checkpoint additionally froze and centrally reserved:
 
 - Market semantic tag `3`, fresh version `3`: a RelationV2-native mutable
   Market runtime/cursor that points to the immutable `MarketBindingV1` and
@@ -97,9 +115,7 @@ before implementation:
   General Epoch with full MarketInstanceV2-derived semantics, phase,
   generation, frozen order-set identity, and exhaustive child counts.
 
-The exact codecs and lengths for `3/3` and `11/6` must be designed, hostile-byte
-tested, and frozen before adding their central-ledger rows. The retirement
-Market V2 and Epoch V5 are not substitutes: Market V2 inherits the legacy
+The retirement Market V2 and Epoch V5 are not substitutes: Market V2 inherits the legacy
 lowered Market identity, while Epoch V5 composes a legacy General Epoch whose
 relation version is one. No adapter may reinterpret either as RelationV2.
 
@@ -215,6 +231,7 @@ never authority.
 | Account | Canonical seeds |
 |---|---|
 | MarketBinding | `["general-market-binding:v1", MarketInstanceV2Id]` |
+| MarketRuntime | `["general-market-runtime:v1", MarketBinding_PDA]` |
 | Epoch | `["general-epoch:v2", MarketBinding_PDA, epoch_index_le]` |
 | EconomicDomain | `["economic-domain:v2", Epoch_PDA]` |
 | Window | `["general-window:v4", Epoch_PDA]` |
@@ -223,13 +240,19 @@ never authority.
 | Feed or FeedStage | `["candidate-feed:v2", AdmissionNode_PDA]` |
 | ClearWork | `["clear-work:v2", AdmissionNode_PDA]` |
 | SelectedCandidate | `["selected-candidate:v1", Epoch_PDA, settlement_candidate_id]` |
+| OwnerSettlement | `["owner-settlement:v1", Epoch_PDA, settlement_candidate_id, semantic_owner]` |
+| selected fee record | `["selected-fee-record:v1", SelectedCandidate_PDA]` |
+| owner fee carry | `["owner-fee-carry:v1", selected_fee_record_PDA, semantic_owner]` |
+| temporary payer allocation | `["owner-payer-allocation:v1", selected_fee_record_PDA, semantic_owner]` |
+| temporary recipient allocation | `["candidate-recipient-allocation:v1", selected_fee_record_PDA]` |
+| treasury ledger | `["fee-treasury-ledger:v1", selected_fee_record_PDA]` |
+| settlement cash pot | `["settlement-cash-pot:v1", Epoch_PDA, settlement_candidate_id]` |
 
-The missing Market `3/3` runtime/cursor still has no frozen pure-contract seed
-tuple. Its eventual codec and seed must land together; an adapter must not
-invent `general-market-runtime:v1` as if it were already frozen. Likewise, the
-exported order-page, reservation, receipt, and final-pot prefixes do not freeze
-their suffix tuples. Those remain unallocated until their complete successor
-handler contracts exist.
+The exported order-page, reservation, receipt, and final-pot prefixes do not
+freeze their suffix tuples. Those remain unallocated until their complete
+successor handler contracts exist. The OwnerSettlement tuple and account bytes
+are centrally reserved but runtime-disabled pending the complete authenticated
+order/fee projection described below.
 
 Window assigns the next one-based ordinal atomically before deriving the node.
 Feed and Work then inherit the node identity. This permits economically funded
@@ -277,9 +300,9 @@ The maximum action payload is 399 bytes. Every decoder rejects truncated
 input, trailing bytes, unknown variants, noncanonical padding, cursor mismatch,
 count/record-width mismatch, and arithmetic overflow.
 
-These payloads are the proposed adapter freeze target. No current SBF handler
-implements them. They become runtime contracts only after exact codecs, golden
-vectors, and capability-bound profile identity land together.
+These are frozen codec contracts. The live source handlers are exactly the
+capability set in section 7; payload facts for disabled actions 24 through 26
+and 36 through 38 do not create a success route.
 
 | Local action | Exact payload |
 |---:|---|
@@ -290,6 +313,16 @@ vectors, and capability-bound profile identity land together.
 | 10 `InitClearWork` | `epoch[32] || node[32]` |
 | 14 `CompleteCandidateVerification` | `epoch[32] || node[32]` |
 | 15 `FinalizeSelection` | `epoch[32]` |
+| 16 `ExpireCommittedCandidate` | `epoch[32] || node[32]` |
+| 20 `CleanupCandidate` | `epoch[32] || node[32] || selected_candidate[32]` |
+| 21 `ClaimSolver` | `selected_candidate[32]` |
+| 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner[32]` |
+| 25 `AccountReceiptEnd` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || receipt_accounting_id[32]` (160 bytes) |
+| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 32 `CloseClearWork` | `epoch[32] || node[32]` |
+| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
+| 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32] || owner_finalization_id[32]` (192 bytes) |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
 
@@ -342,8 +375,8 @@ cursor implied by its exact record count.
 The order below is part of each action contract. Every handler first checks the
 exact meta count, signer/writable/executable flags, owners, codec bytes,
 identities, PDAs, bumps, clocks, aliases, rent, and aggregate balances.
-These ordered lists are likewise the proposed adapter contract, not a claim
-that the current program accepts them.
+These ordered lists describe the current source handler contract. They do not
+claim that a built ELF or local-bank transaction has exercised it yet.
 
 ### 6.1 `InitEpoch`
 
@@ -355,13 +388,16 @@ that the current program accepts them.
 5. vacant Window PDA, writable
 6. vacant Budget PDA, writable
 7. authenticated NativeClaimBasis artifact, read-only and program-owned
-8. System program, read-only and executable
-9. Rent sysvar, read-only
-10. Clock sysvar, read-only
+8. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
+9. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
+10. System program, read-only and executable
+11. Rent sysvar, read-only
+12. Clock sysvar, read-only
 
 Authenticate the full MarketInstanceV2 join through the MarketBinding PDA and
-require the exact next Epoch index. The missing MarketRuntime codec and seed
-are a prerequisite for this handler. Derive the four frozen child PDAs,
+require the canonical RelationV2 and ScoreV2-Q policy identities, a smooth
+degree-two or degree-three basis, and the exact next Epoch index. Derive the
+four frozen child PDAs,
 calculate full rent principals without
 discounting hostile prefunds, route prefunds into donation compartments,
 prepay the fixed 789-byte SelectedCandidate rent principal into the Budget's
@@ -488,23 +524,50 @@ count atomically. Do not reinstate the legacy roughly 50 KiB staged-grow path.
 4. EconomicDomain, read-only
 5. AdmissionNode, writable
 6. sealed CandidateFeed, read-only
-7. authenticated NativeClaimBasis artifact, read-only
-8. ClearWork, writable
-9. Clock sysvar, read-only
+7. canonical PriceGrid PDA, read-only and program-owned
+8. authenticated ProductTemplateV4 artifact, read-only and program-owned
+9. authenticated NativeClaimBasis artifact, read-only and program-owned
+10. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
+11. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
+12. authenticated MarketInstancePreimageV2 artifact, read-only and program-owned
+13. ClearWork, writable
+14. Clock sysvar, read-only
 
-Only `[S,V)` admits ordinary completion. The identity-only lab uses the
-bounded zero-order/zero-slice RelationV2 path plus the exact PriceMeasure V3
-check. A well-formed, authenticated but economically invalid candidate returns
-success after terminalizing the node as `VerifiedRefused`. Malformed bytes,
-bad authority, broken binding, or corrupt persisted state return an error and
-roll back.
+Only `[S,V)` admits ordinary completion. The identity-only lab consumes
+`clutch-general-v2-runtime::verify_smooth_direct_candidate_v1` over the bounded
+zero-order/zero-slice RelationV2 book. That private-construction result joins
+the full Product/Genesis/MarketInstance/PriceGrid bodies, canonical policy IDs,
+the V3 quantized witness, owner-blind RelationV2, and ScoreV2-Q. A well-formed,
+authenticated but economically invalid candidate returns success after
+terminalizing the node as `VerifiedRefused`. Malformed bytes, bad authority,
+broken binding, or corrupt persisted state return an error and roll back.
 
-A valid completion recomputes the base and final identities, computes the score
-and 88-byte rank, terminalizes the node, updates Window counts and best node,
-and pays only present-funded checked-work rewards. The adapter never trusts the
-candidate's claimed final identity.
+A valid completion recomputes the base and final identities and obtains the
+88-byte rank from the private checked wrapper. The mutation owner independently
+re-encodes the score fields with the authenticated Node ordinal, and the
+adapter requires byte equality before writing. It then terminalizes the node,
+updates Window counts and best node, and pays only present-funded checked-work
+rewards. The adapter never trusts a candidate-supplied score, rank, ordinal, or
+final identity.
 
-### 6.8 `FinalizeSelection`
+### 6.8 `ExpireCommittedCandidate`
+
+0. Epoch, read-only
+1. Window, writable
+2. unrevealed committed AdmissionNode, writable
+3. Clock sysvar, read-only
+
+Expiry is permissionless and moves no lamports. At or after submission close,
+the adapter authenticates the exact Epoch, Window, and ordinal-derived Node
+PDAs, codecs, owners, generations, policy IDs, frozen and committed slots,
+count parity, and each account's complete present-funded balance. The pure
+owner accepts only a `Committed` node admitted before reveal-open, records the
+current slot as its terminal slot, changes its state to `ExpiredCommitment`,
+and increments only Window's checked expired-commitment count. Epoch candidate
+count and Window live-node count remain unchanged until action 20 unlinks the
+terminal reverse-list head.
+
+### 6.9 `FinalizeSelection`
 
 0. Epoch, writable
 1. Window, writable
@@ -533,9 +596,63 @@ SelectedCandidate pointer in the Window. Then pay the finalization reward and
 transition the Epoch to `CandidateSelected`.
 
 Finalization copies the authenticated solver reward destination from the node
-but does not pay it. The unique solver prize remains present-funded in Budget.
-Local action 21 `ClaimSolver` is its separately authenticated one-way claim and
-is disabled in this lab.
+but does not pay it. The unique solver prize remains present-funded in Budget
+until local action 21 consumes it.
+
+### 6.10 `ClaimSolver`
+
+0. Epoch, read-only
+1. Window, read-only
+2. Budget, writable
+3. SelectedCandidate, read-only
+4. the SelectedCandidate's solver reward destination, writable
+
+The claim is permissionless. It authenticates the finalized counted graph,
+every PDA and generation join, the Window's selected pointer, and the exact
+immutable destination copied into SelectedCandidate. It consumes only the
+Budget's present-funded solver compartment and marks its one-way state paid.
+No caller signature can redirect the prize.
+
+### 6.11 `CloseClearWork`
+
+0. Epoch, writable
+1. MarketBinding, read-only
+2. terminal AdmissionNode, read-only
+3. terminal ClearWork, writable
+4. keeper reward destination, writable
+5. recorded Work-rent payer, writable
+6. immutable neutral sink, writable
+
+Only the bounded zero-order/zero-slice terminal Work owned by a verified-valid
+or checked-refused node can close. The pure owner authenticates every graph,
+generation, policy, reward, and active-width join, decrements Epoch's counted
+Work, and returns destination-coalesced rent-principal, donation, and close-
+reward credits before the adapter releases the account.
+
+### 6.12 `CleanupCandidate`
+
+0. Epoch, writable
+1. Window, writable
+2. MarketBinding, read-only
+3. reverse-head AdmissionNode, writable
+4. derived sealed Feed, writable, or canonical absent account
+5. derived ClearWork, canonical absent account
+6. SelectedCandidate, read-only, or System-program sentinel
+7. keeper reward destination, writable
+8. recorded Node-rent payer, writable
+9. recorded candidate refund destination, writable
+10. immutable neutral sink, writable
+11. recorded Feed-rent payer, writable; aliases node payer when Feed is absent
+12. Clock sysvar, read-only
+
+Cleanup refuses the pre-finalization working best and any node with live Work.
+For the selected source it closes only Node and retains Feed under the counted
+SelectedCandidate. For a non-selected terminal head it closes Node plus Feed,
+or Node after canonical Feed absence. It atomically decrements the Epoch and
+Window live counts, advances the reverse head, increments the closed count, and
+applies only the pure owner's destination-coalesced principal, donation,
+keeper, bond-refund, invalidity, and abandonment credits. Expired-unverified
+cleanup remains disabled because its residual Work economics are not frozen.
 
 Before finalization, Window exclusively owns the working best node, final ID,
 rank, and ordinal. Afterwards, SelectedCandidate is the single downstream
@@ -547,7 +664,7 @@ token transfer is created by the identity-only lab.
 
 ## 7. Capability boundary
 
-The identity-only lab enables exactly these local actions:
+The lab enables exactly these local actions:
 
 ```text
 2  InitEpoch
@@ -558,6 +675,10 @@ The identity-only lab enables exactly these local actions:
 10 InitClearWork
 14 CompleteCandidateVerification
 15 FinalizeSelection
+16 ExpireCommittedCandidate
+20 CleanupCandidate
+21 ClaimSolver
+32 CloseClearWork
 ```
 
 All other General V2 actions remain disabled. In particular:
@@ -570,19 +691,104 @@ All other General V2 actions remain disabled. In particular:
   work fits under the one-creation ceiling;
 - actions 12-13 are not needed by the bounded empty-book lab; generic streaming
   RelationV2 progress needs its own contract before activation;
-- actions 16-34 remain disabled, including expiry, cleanup, claims,
-  entitlements, settlement, and retirement.
+- actions 17-19, 22-31, and 33-38 remain disabled, including the remaining
+  candidate terminal paths, entitlements, settlement, selected-artifact
+  retirement, root retirement, and the reserved Position asset-transfer
+  primitive.
 
-This lab therefore leaves the source node, retained feed, work,
+Actions 24 and 25 have strict capability-disabled payload and account-envelope
+codecs, including a centrally reserved `0x81/1` OwnerSettlement envelope, but
+no successful SBF transition. They cannot activate until an authenticated,
+complete filled-order projection, exactly one selected fee row per canonical
+owner, checked candidate totals, a canonically derived owner-order-set digest,
+and exact receipt, reservation, and SelectedCandidate joins exist.
+Action 25 is the accounting-only `AccountReceiptEnd`, not Egg delivery. Its
+persisted `receipt_accounting_id` is distinct from every later delivery
+transition identity. It adds the authenticated receipt end's price units to
+exactly one owner row; the receipt and selected-order projection, rather than
+caller bytes, own slice, order, side, price, and completion. Accounting and
+delivery therefore have independent, once-only latches.
+
+Action 38 `FinalizeOwnerSettlement` is separately reserved because the last
+receipt fragment cannot always realize an owner. It atomically joins an
+accounting-complete state-zero owner row, the same owner/Market/generation
+Position, the selected owner fee, and the directional candidate cash pot.
+Owner net debits are source-before-sink progress and always enter the pot;
+owner credits refuse without mutation when buyer or completed-merge liquidity
+is not yet present, and may be retried later without consuming replay or
+liveness funding. The owner row reaches state one and persists the distinct
+`owner_finalization_id` only after the exact Position-to-pot or pot-to-Position
+transfer succeeds. No Reservation DTO is copied into this transition: its
+terminal accounting is joined through the canonical row and Position facts.
+The 292-byte row outer stores no duplicate rent DTO. Its pre-fund-safe creation
+plan must atomically update the separate authenticated rent ledger that owns
+the payer principal, refund recipient, and donation sink.
+
+The centrally reserved `0x82/1` through `0x86/1` fee envelopes are likewise
+capability-disabled. Their inner codecs re-enter the typed fee constructors;
+the outer bytes add only tag/version, PDA bump, and zero flags. A separately
+authenticated runtime/rent ledger must own funding, refundable principal, and
+hostile-prefund disposition. Carry and payer allocation are keyed by
+`(selected fee record, owner)`, never by an order, reservation, or intent. No
+local action or ordered SBF meta contract has been allocated for these
+accounts, so they cannot relax the zero-fee boundary or move Position value.
+
+The `0x87/1` cash-pot envelope is also capability-disabled. Its exact
+256-byte semantic body enforces buyer-first candidate-wide allocation and
+segregates consideration, fees, rounding price units, and exactly one typed
+virtual-cash direction. `Split` names terminal cash that funds complete-set
+creation; `Merge` names opening proceeds contributed before seller
+realization; `None` requires zero virtual cash. The terminal conservation
+equation is `buyer debit + opening merge - seller credit = rounding + terminal
+split`.
+Receipt-end accounting is not value movement. No settlement action may consume
+its plan until an authenticated matching complete Egg/reservation transition
+is in the same atomic write set, and allocation completion does not authorize
+cash-pot, owner-row, or FinalPot retirement.
+
+Action 26 `ConsumeDirectReceiptEggs` is capability-disabled even though its
+96-byte selector and complete pure direct planner are frozen. The planner
+requires both real receipt ends already accounting-latched by action 25, then
+atomically stages the distinct delivery latch, two Position poststates, and
+two Reservation poststates while treating the owner rows as authenticated
+read-only accounting evidence. It moves only internal native Eggs and does not
+convert cash. An SBF meta contract cannot freeze until the
+receipt also authenticates the exact Settlement-compartment liveness receipt,
+call ordinal, quote ceiling, keeper payment, and payer refund; virtual
+split/merge receipts require distinct actions and contracts.
+
+Actions 36 and 37 reserve those distinct virtual contracts. Both use a strict
+96-byte selector, but they decode into different types and cannot be routed
+through action 26 or through one another. Action 36 must atomically join the
+selected virtual-split authority, its complete-set split inventory mutation,
+and the associated real buy receipt/Position/Reservation delivery while
+authenticating the already-accounted owner row without rewriting it.
+Action 37 must atomically join the selected virtual-merge authority, its real
+sell receipt/Position/Reservation delivery, and the complete-set merge while
+authenticating the already-accounted owner row without rewriting it. Every
+layer must name the same Epoch, selected candidate, checked
+relation witness, receipt, and settlement transition ID. The FinalPot, Hoard,
+aggregate claim ledger, inventory budget, receipt, Position, Reservation,
+delivery latch, and Settlement liveness compartment form one rollback
+boundary; the owner row/accounting latch is an immutable authorization join.
+The split route additionally requires every owner row finalized and the
+all-owner cash pot terminal with its exact split principal present. The merge
+route contributes its opening proceeds before credit-bearing owner
+finalizations may consume them.
+No separately callable inventory action is allocated. Exact ordered SBF metas
+remain an activation blocker until the receipt codec projects the complete
+selected witness and the liveness owner freezes the call ordinal, quote
+ceiling, keeper payment, payer refund, and unique receipt join.
+
+This lab can close completed Work and unlink terminal source nodes while
+retaining the selected Feed. It still leaves the retained Feed,
 SelectedCandidate, Window, Budget, EconomicDomain, and Epoch live. That is
-acceptable only under the explicit non-production label. The architecture
-permits the source node to close after SelectedCandidate owns the retained Feed
-and Work is absent. The retained Feed and SelectedCandidate may close only
+acceptable only under the explicit non-production label. The retained Feed and SelectedCandidate may close only
 after every selected slice has materialized into counted settlement state and
 settlement retirement authenticates the terminal. Those cleanup and settlement
 actions remain disabled in this lab.
 
-Before action 20 cleanup can activate, it must call the pure cleanup classifier
+Action 20 cleanup calls the pure cleanup classifier
 over an exhaustive authenticated partition. Cleanup is admitted only at or
 after submission close and at or after the node's terminal slot; Work must be
 canonically absent. Epoch generation/count must equal Window generation/live

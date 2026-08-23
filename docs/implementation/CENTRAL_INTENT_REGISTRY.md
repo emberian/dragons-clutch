@@ -31,7 +31,7 @@ family version creates a new namespace; it does not inherit capability.
 
 | family | decimal tag | hexadecimal tag | family version | runtime |
 | --- | ---: | ---: | ---: | --- |
-| General V2 | 74 | `0x4a` | 1 | disabled |
+| General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
 | Covered dealer | 76 | `0x4c` | 1 | disabled |
 | Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
@@ -40,7 +40,7 @@ family version creates a new namespace; it does not inherit capability.
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
 
-General V2 reserves local actions 1 through 34, in order:
+General V2 reserves local actions 1 through 38, in order:
 
 1. `CreateMarket`
 2. `InitEpoch`
@@ -66,8 +66,8 @@ General V2 reserves local actions 1 through 34, in order:
 22. `CloseCandidateIndexPage`
 23. `ClaimEpochUnused`
 24. `FreezeEntitlement`
-25. `EntitleSlice`
-26. `ReleaseTerminalReservation`
+25. `AccountReceiptEnd`
+26. `ConsumeDirectReceiptEggs`
 27. `CloseReceipt`
 28. `CloseReservation`
 29. `ClosePage`
@@ -76,10 +76,19 @@ General V2 reserves local actions 1 through 34, in order:
 32. `CloseClearWork`
 33. `CloseEpoch`
 34. `ClosePosition`
+35. `TransferPositionAssets`
+36. `ConsumeVirtualSplitReceiptEggs`
+37. `ConsumeVirtualMergeReceiptEggs`
+38. `FinalizeOwnerSettlement`
 
-These General V2 names allocate local tags only. They do not freeze payload
-bytes, account lists, account codecs, or transition semantics.
-
+These registry names allocate local tags only; this document does not freeze
+payload bytes, account lists, account codecs, transition semantics, or runtime
+capabilities. Action-specific contracts may do so separately. In particular,
+the non-production identity slice named below freezes a strict subset, and
+actions 35 through 38 have canonical payload contracts while remaining
+disabled. Actions 36 and 37 deliberately do not allocate separately callable
+virtual-inventory actions: each future route must join its inventory mutation
+and one real receipt end under one authenticated transition identity.
 Source/Series V2 partitions its action namespace without aliases. SourcePlane
 V3 exclusively owns local actions 1 through 12:
 
@@ -107,21 +116,24 @@ laboratory payload codecs live in `clutch_solana_layout::product_series`:
 18. `CloseFunding`
 
 Allocation still grants no execution capability. The program's executable
-extension set remains empty. In particular, a decoded registry release ID or
-capability-profile ID is not authority: registration stays disabled until the
-adapter can reconstruct `RegistryCapabilityProjectionV2` from an authenticated
-central release, and each value-bearing action stays disabled until its exact
-source, collateral, liveness, and failure receipts are authenticated.
+Source/Series set remains empty. In particular, a decoded registry release ID
+or capability-profile ID is not authority: registration stays disabled until
+the adapter authenticates the authoritative central release, and every
+value-bearing action stays disabled until its exact source, collateral,
+liveness, and failure receipts are authenticated.
 
-Covered Dealer owns `0x7d/1` for its funded facility stage and `0x7e/1` for its
-immutable policy. The Source/Series account namespace therefore reserves the
-disjoint `0x7f/1` for the persistent Series registration/replay anchor and
-`0x80/1` for the mutable Series-funding wrapper. Their exact 168-byte and
-376-byte codecs are fixed, but their allocation status is reserved-disabled.
-The funding wrapper adds tag/version/bump/flags, exact refundable account-rent
-principal, and five release-selected collateral-vault rent principals around
-the pure 324-byte `SeriesFundingStateV1`; it does not copy its cursor or
-component-balance facts.
+Dealer owns `0x7d/1` for its staged policy and `0x7e/1` for its immutable
+policy. The Source/Series account namespace reserves the disjoint `0x7f/1` for
+the persistent Series registration/replay anchor and `0x80/1` for the mutable
+Series-funding wrapper. Their exact 168-byte and 376-byte codecs are fixed but
+reserved-disabled. The funding wrapper adds tag/version/bump/flags, exact
+refundable account-rent principal, and five release-selected collateral-vault
+rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
+copy its cursor or component-balance facts.
+
+The Structured, Dealer, and Recovery family action spaces remain empty: every
+local action is unknown until an atomic design wave fixes its payload and
+capability contract.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -145,9 +157,13 @@ account-layout inventory.
 ## Capability and activation rule
 
 Capability membership is keyed by the exact triple `(family tag, family
-version, local action)`. The executable set is currently empty. The SBF
-dispatcher recognizes an allocated General V2 or Source/Series V2 triple only to return
-`UnsupportedInstruction` before reading accounts. Unknown family versions and
+version, local action)`. Production profiles retain an empty General V2 set.
+The source-only
+`profile-non-production-general-v2-empty-book-identity-lab` enables only the
+actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
+General actions return `UnsupportedInstruction` before their handlers read
+accounts. Every allocated Source/Series action also returns
+`UnsupportedInstruction` before account reads. Unknown family versions and
 unknown local actions fail strict decoding and cannot fall into a legacy
 handler.
 
@@ -161,10 +177,12 @@ A later activation must change the following atomically:
 5. update this registry and its collision tests without changing legacy golden
    bytes or packet limits.
 
-General V2 local actions 1 through 34 and Source/Series V2 local actions 1
-through 18 listed above are already
-**reserved-disabled allocations**: their numeric coordinates are in the
-registry, but they have no executable capability. A frozen laboratory payload
-codec does not change that status. Unlisted future local-action proposals, and
+General V2 local actions 1 through 38 are allocated numeric coordinates, not a
+blanket activation. Actions 2, 6, 7, 8, 9, 10, 14, 15, 20, 21, and 32 are
+confined to the named non-production profile. Actions 35 through 38 have
+frozen canonical payload contracts but remain `ReservedDisabled`. Every other
+General V2 action remains allocation-only. Unlisted future local-action proposals, and
 every proposed account shape, stay outside the central ledger until their
-atomic review is complete.
+atomic review is complete. Source/Series V2 local actions 1 through 18 are
+likewise reserved-disabled allocations; a frozen laboratory payload codec does
+not grant execution capability.

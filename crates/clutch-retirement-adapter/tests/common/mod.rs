@@ -7,6 +7,7 @@ use clutch_retirement::{
 use clutch_retirement_adapter::{
     DirectReservationAccountV6, DirectReservationAccountV8, GeneralEpochAccountV5,
     GeneralReservationAccountV5, GeneralReservationAccountV7, MarketAccountV2, PositionAccountV2,
+    ReplaySuccessorAccountV1,
 };
 use clutch_solana_layout::{
     canonical_epoch_id, canonical_order_id, canonical_outcome_id,
@@ -22,6 +23,7 @@ use clutch_solana_layout::{
     EpochAccount, Hash32, MarketAccount, PositionAccount, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
     EPOCH_PHASE_OPEN, EPOCH_PHASE_SETTLED, MAX_OUTCOMES, ORDER_KIND_SINGLE, RELATION_VERSION,
 };
+use clutch_solana_reference::ReplayAccount;
 
 pub fn h(byte: u8) -> Hash32 {
     Hash32::from_bytes([byte; 32])
@@ -60,6 +62,20 @@ pub fn position_v2() -> PositionAccountV2 {
             outstanding_reservations: 0,
             rent: rent(),
         },
+    }
+}
+
+pub fn replay_successor_v1() -> ReplaySuccessorAccountV1 {
+    ReplaySuccessorAccountV1 {
+        base: ReplayAccount {
+            market: h(1),
+            owner: h(2),
+            position_generation: 7,
+            sequence: 11,
+            stored_bump: 18,
+            flags: 0,
+        },
+        rent: deletable_rent(),
     }
 }
 

@@ -14,6 +14,7 @@ default = []
 
 [dependencies]
 clutch-evidence-recovery = { path = "../clutch-evidence-recovery" }
+clutch-liveness = { path = "../clutch-liveness" }
 clutch-product-series = { path = "../clutch-product-series" }
 clutch-source-plane-v3 = { path = "../clutch-source-plane-v3" }
 clutch-source-plane-v3-runtime = { path = "../clutch-source-plane-v3-runtime" }

@@ -11,4 +11,5 @@
 
 pub mod evidence;
 pub mod intent;
+pub mod owner_settlement;
 pub mod settlement;

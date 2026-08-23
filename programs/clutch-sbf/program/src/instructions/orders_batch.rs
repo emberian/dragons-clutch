@@ -2054,6 +2054,19 @@ fn place_order(
     max_fee_atoms: u64,
     slot: &OrderSlot,
 ) -> Outcome<()> {
+    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+    {
+        let _ = (
+            program_id,
+            accounts,
+            sequence,
+            intent_market,
+            intent_epoch,
+            max_fee_atoms,
+            slot,
+        );
+        return Err(ClutchError::UnsupportedInstruction.into());
+    }
     #[cfg(feature = "profile-direct-v3-source-v2-point")]
     {
         require(
@@ -4048,7 +4061,9 @@ mod tests {
                     max_fee_atoms: 0,
                     slot: OrderSlot::Single(order(0x20, 1, 5_000)),
                 }),
-                if cfg!(feature = "profile-direct-v3-source-v2-point") {
+                if cfg!(feature = "profile-direct-v3-source-v2-point")
+                    || cfg!(feature = "profile-non-production-general-v2-empty-book-identity-lab")
+                {
                     /* Direct placement selects its mandatory V4 epoch account
                      * before the fixed account-plane validator. With no epoch
                      * present, that exact version refusal is Unsupported. */

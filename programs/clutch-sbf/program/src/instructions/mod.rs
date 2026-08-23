@@ -45,6 +45,8 @@ pub mod construction;
 pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod external_exit;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_identity;
 pub mod genesis;
 pub mod market_init;
 pub mod merge_materialize;

@@ -7,6 +7,8 @@
 //! Account, authentication, intent, and mutation contract for the successor
 //! failure-policy runtime.
 
+pub mod external_v2;
+
 use clutch_evidence_recovery::{Identity as RecoveryIdentity, RecoveryClock, TransferPlan};
 use clutch_failure_policy_runtime::{
     AcceptedResolutionV1, AdapterAuthenticatedRelationRefusalV1, FailureAdmissionReceiptId,
@@ -238,11 +240,8 @@ impl FailureRootAccountV1 {
         if root_rent_payer.is_zero() {
             return Err(Error::ZeroIdentity);
         }
-        let root_rent_principal_lamports = u64::from_le_bytes(
-            input[44..52]
-                .try_into()
-                .map_err(|_| Error::WrongLength)?,
-        );
+        let root_rent_principal_lamports =
+            u64::from_le_bytes(input[44..52].try_into().map_err(|_| Error::WrongLength)?);
         if root_rent_principal_lamports == 0 {
             return Err(Error::RootRentMismatch);
         }
@@ -390,12 +389,8 @@ pub fn project_failure_initialization<'a>(
     {
         return Err(Error::AdmissionMismatch);
     }
-    let root_body = FailureRootAccountV1::new(
-        bump,
-        root_rent_payer,
-        required_root_rent_lamports,
-        runtime,
-    )?;
+    let root_body =
+        FailureRootAccountV1::new(bump, root_rent_payer, required_root_rent_lamports, runtime)?;
     Ok(FailureAccountInitializationV1 {
         root_key: root.key,
         reserve_key: reserve.key,
@@ -474,9 +469,8 @@ pub fn authenticate_failure_accounts<'a>(
         return Err(Error::ReserveDataNotEmpty);
     }
     let decoded = FailureRootAccountV1::decode(root.data)?;
-    let expected_reserve = AccountId::from_bytes(
-        decoded.runtime().binding().recovery_state_id().bytes(),
-    );
+    let expected_reserve =
+        AccountId::from_bytes(decoded.runtime().binding().recovery_state_id().bytes());
     if reserve.key != expected_reserve {
         return Err(Error::WrongKey);
     }
@@ -650,7 +644,11 @@ impl FailureIntentV1 {
     /// Validate action-specific identity presence and zero padding.
     pub fn validate(&self) -> Result<()> {
         if self.binding_id.bytes().iter().all(|byte| *byte == 0)
-            || self.market_instance_id.bytes().iter().all(|byte| *byte == 0)
+            || self
+                .market_instance_id
+                .bytes()
+                .iter()
+                .all(|byte| *byte == 0)
             || self.generation == 0
         {
             return Err(Error::ZeroIdentity);
@@ -680,8 +678,7 @@ impl FailureIntentV1 {
                     && self.accepted_progress_total == 0
                     && self.refusal_code == 0
             }
-            FailureActionV1::TriggerSourceRefusal
-            | FailureActionV1::TriggerRelationRefusal => {
+            FailureActionV1::TriggerSourceRefusal | FailureActionV1::TriggerRelationRefusal => {
                 !clock_is_zero
                     && has_window
                     && has_evidence
@@ -791,7 +788,11 @@ impl FailureIntentV1 {
         put(output, &mut at, &self.binding_id.bytes())?;
         put(output, &mut at, &self.market_instance_id.bytes())?;
         put(output, &mut at, &self.generation.to_le_bytes())?;
-        put(output, &mut at, &self.expected_transition_nonce.to_le_bytes())?;
+        put(
+            output,
+            &mut at,
+            &self.expected_transition_nonce.to_le_bytes(),
+        )?;
         put(output, &mut at, &self.clock.slot.to_le_bytes())?;
         put(output, &mut at, &self.clock.unix_timestamp.to_le_bytes())?;
         put(output, &mut at, &self.clock.current_bucket.to_le_bytes())?;
@@ -825,8 +826,7 @@ impl FailureIntentV1 {
         if u16::from_le_bytes([input[8], input[9]]) != INTENT_SCHEMA {
             return Err(Error::BadVersion);
         }
-        if input[11..16].iter().any(|byte| *byte != 0)
-            || input[332..].iter().any(|byte| *byte != 0)
+        if input[11..16].iter().any(|byte| *byte != 0) || input[332..].iter().any(|byte| *byte != 0)
         {
             return Err(Error::NonCanonicalPadding);
         }
@@ -878,11 +878,8 @@ pub fn project_maturity_transition(
     {
         return Err(Error::ArtifactMismatch);
     }
-    let plan = runtime.plan_trigger_source_handoff(
-        accounts.reserve_lamports,
-        handoff,
-        clock_policy,
-    )?;
+    let plan =
+        runtime.plan_trigger_source_handoff(accounts.reserve_lamports, handoff, clock_policy)?;
     project_failure_transition(accounts, plan, actual_reserve_post_balance)
 }
 
@@ -895,11 +892,7 @@ pub fn project_source_refusal_transition(
     clock_policy: &ClockPolicyV1,
     actual_reserve_post_balance: u64,
 ) -> Result<FailureAccountMutationV1> {
-    let runtime = intent_runtime(
-        &accounts,
-        &intent,
-        FailureActionV1::TriggerSourceRefusal,
-    )?;
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::TriggerSourceRefusal)?;
     let clock = runtime.recovery_clock_for_source_handoff(handoff, clock_policy)?;
     if handoff.kind() != SourceFailureKindV1::SourceEvaluationRefused
         || intent.clock != clock
@@ -909,11 +902,8 @@ pub fn project_source_refusal_transition(
     {
         return Err(Error::ArtifactMismatch);
     }
-    let plan = runtime.plan_trigger_source_handoff(
-        accounts.reserve_lamports,
-        handoff,
-        clock_policy,
-    )?;
+    let plan =
+        runtime.plan_trigger_source_handoff(accounts.reserve_lamports, handoff, clock_policy)?;
     project_failure_transition(accounts, plan, actual_reserve_post_balance)
 }
 
@@ -930,11 +920,7 @@ pub fn project_relation_refusal_transition(
     window: &WindowSpecV3,
     actual_reserve_post_balance: u64,
 ) -> Result<FailureAccountMutationV1> {
-    let runtime = intent_runtime(
-        &accounts,
-        &intent,
-        FailureActionV1::TriggerRelationRefusal,
-    )?;
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::TriggerRelationRefusal)?;
     if intent.window_id != window.id()?.bytes()
         || intent.evidence_id != result.id()?.bytes()
         || intent.refusal_code != refusal.refusal.code()
@@ -997,21 +983,14 @@ pub fn project_caller_funded_resolution_transition(
     accepted: AcceptedResolutionV1,
     actual_reserve_post_balance: u64,
 ) -> Result<FailureAccountMutationV1> {
-    let runtime = intent_runtime(
-        &accounts,
-        &intent,
-        FailureActionV1::ResolveCallerFunded,
-    )?;
+    let runtime = intent_runtime(&accounts, &intent, FailureActionV1::ResolveCallerFunded)?;
     if intent.window_id != accepted.window_id().bytes()
         || intent.evidence_id != accepted.id().bytes()
     {
         return Err(Error::ArtifactMismatch);
     }
-    let plan = runtime.plan_resolve_caller_funded(
-        intent.clock,
-        accounts.reserve_lamports,
-        accepted,
-    )?;
+    let plan =
+        runtime.plan_resolve_caller_funded(intent.clock, accounts.reserve_lamports, accepted)?;
     project_failure_transition(accounts, plan, actual_reserve_post_balance)
 }
 

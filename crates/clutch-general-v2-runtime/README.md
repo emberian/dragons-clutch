@@ -5,6 +5,16 @@ candidate join that was missing between Product V2, the General V2 feed
 contract, the quantized price-measure checker, owner-blind RelationV2, and
 ScoreV2-Q.
 
+The same crate now contains the first honest construction path. It streams a
+frozen OrderPage set into the single owner-blind `EconomicBookV2` truth,
+enumerates a caller-bounded deterministic family of exact singleton and
+primitive two-atom measures plus supplied wider measures, derives integer
+simplex prices without floats or rounding, enumerates zero/minimum/full fill
+coordinates plus maximal exact buy/sell ratio pairs, and retains the best
+candidate that the authoritative V3 and RelationV2 checkers actually accept.
+Its result reports whether all members of that named bounded heuristic family
+were visited. It never describes the result as an optimal clearing.
+
 It admits smooth degree-two and degree-three markets only. The caller supplies
 authenticated immutable Product bodies, the canonical PriceGrid, the revealed
 AdmissionNode, the EconomicDomain artifact, a sealed CandidateFeed account,
@@ -33,15 +43,28 @@ RelationV2 candidate identity and ScoreV2-Q rank. Selection is therefore over
 the best valid submitted candidate under the frozen rank, never an assertion
 of optimal clearing.
 
-This crate does not authenticate Solana owners or PDAs, project an order-set
-account into `EconomicBookV2`, check the settlement-slice decomposition,
-persist a verdict, authorize settlement, implement fees, or activate an SBF
-capability. Those are explicit adapter/integration dependencies rather than
-implicit success claims.
+The page projection validates frozen page commitments, exact market/epoch/
+order-set bindings, grid membership, widths, expiry, and RelationV2 admission.
+Owner and replay-generation labels do not enter the economic projection;
+single-Egg and portfolio records map to one coefficient-vector order type.
+The projection retains its exact MarketBinding, EconomicDomain digest, and
+PriceGrid/Realm identities behind private fields, so the solver cannot relabel
+the resulting book before feed construction.
+CandidateFeedV2 serialization then takes all economic fields only from the
+checked builder result and all rank/policy/lifecycle fields from authenticated
+General accounts. No caller-supplied score or rank is representable.
 
-The successful wrapper has private fields and no public constructor. Safe
-downstream code can inspect its checked economics and rank through getters but
-cannot fabricate the wrapper as a substitute for executing the full join.
+Settlement slices remain a separately named boundary. The feed serializer
+checks their exact active width and CandidateFeedV2 record syntax and binds the
+AdmissionNode's settlement-witness digest, but it does not invent or claim to
+verify their economic decomposition. This crate also does not authenticate
+Solana owners or PDAs, persist a verdict, authorize settlement, implement fees,
+or activate an SBF capability.
+
+The successful verifier wrapper and builder result have private fields and no
+public constructors. Safe downstream code can inspect checked economics,
+search coverage, and the verifier-derived rank through getters but cannot
+fabricate either wrapper as a substitute for executing the owned checkers.
 
 The default host build forwards the existing full layout profile. A future
 General adapter must disable defaults and select `layout-profile-general`, so
