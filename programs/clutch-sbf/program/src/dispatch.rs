@@ -1507,42 +1507,100 @@ mod profile_tests {
     use super::*;
     use solana_program_error::ProgramError;
 
-    fn canonical_tag_request(tag: u8) -> [u8; 15] {
+    fn canonical_tag_request(tag: u8, version: u8) -> [u8; 15] {
         let mut bytes = [0u8; 15];
         bytes[0] = 0xd1;
         bytes[1] = 1;
         bytes[10] = ACTION_LAYOUT_HINT;
         bytes[11..13].copy_from_slice(&2u16.to_le_bytes());
         bytes[13] = tag;
-        bytes[14] = clutch_solana_layout::INTENT_VERSION;
+        bytes[14] = version;
+        bytes
+    }
+
+    fn canonical_extension_request(tag: u8, version: u8, action: u8) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0] = 0xd1;
+        bytes[1] = 1;
+        bytes[10] = ACTION_LAYOUT_HINT;
+        bytes[11..13].copy_from_slice(&3u16.to_le_bytes());
+        bytes[13] = tag;
+        bytes[14] = version;
+        bytes[15] = action;
         bytes
     }
 
     #[test]
-    fn disabled_canonical_tags_refuse_before_accounts() {
-        let disabled: &[u8] = if cfg!(feature = "profile-direct-v3-source-v2-point") {
-            &[8, 23, 27, 32, 47, 69]
-        } else {
-            &[6, 22, 23, 27, 32, 36]
-        };
-        for tag in disabled {
-            let bytes = canonical_tag_request(*tag);
-            assert!(disabled_canonical_tag(&bytes), "tag {tag}");
-            let actual =
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
-            assert_eq!(
-                actual,
-                Err(ProgramError::Custom(
-                    ClutchError::UnsupportedInstruction as u32
-                )),
-                "tag {tag}"
-            );
+    fn every_disabled_canonical_coordinate_refuses_before_accounts() {
+        let mut disabled = 0usize;
+        for tag in u8::MIN..=u8::MAX {
+            for version in u8::MIN..=u8::MAX {
+                let Some(allocation) =
+                    clutch_solana_layout::registry::classify_intent(tag, version)
+                else {
+                    continue;
+                };
+                match allocation {
+                    clutch_solana_layout::registry::IntentAllocation::LegacyV3 => {
+                        let expected = !capabilities::legacy_intent_enabled(tag, version)
+                            && !capabilities::direct_v3_intent_enabled(tag, version);
+                        let bytes = canonical_tag_request(tag, version);
+                        assert_eq!(
+                            disabled_canonical_tag(&bytes),
+                            expected,
+                            "legacy {tag}/{version}"
+                        );
+                        if expected {
+                            disabled += 1;
+                            let actual = process(&Pubkey::new_from_array([9; 32]), &[], &bytes)
+                                .map_err(ProgramError::from);
+                            assert_eq!(
+                                actual,
+                                Err(ProgramError::Custom(
+                                    ClutchError::UnsupportedInstruction as u32
+                                )),
+                                "legacy {tag}/{version}"
+                            );
+                        }
+                    }
+                    clutch_solana_layout::registry::IntentAllocation::Extension(_) => {
+                        for action in u8::MIN..=u8::MAX {
+                            let allocated = capabilities::extension_intent_action_allocated(
+                                tag, version, action,
+                            );
+                            let expected = allocated
+                                && !capabilities::extension_intent_action_enabled(
+                                    tag, version, action,
+                                );
+                            let bytes = canonical_extension_request(tag, version, action);
+                            assert_eq!(
+                                disabled_canonical_tag(&bytes),
+                                expected,
+                                "extension {tag}/{version}/{action}"
+                            );
+                            if expected {
+                                disabled += 1;
+                                let actual = process(&Pubkey::new_from_array([9; 32]), &[], &bytes)
+                                    .map_err(ProgramError::from);
+                                assert_eq!(
+                                    actual,
+                                    Err(ProgramError::Custom(
+                                        ClutchError::UnsupportedInstruction as u32
+                                    )),
+                                    "extension {tag}/{version}/{action}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
+        assert!(disabled > 0);
     }
 
     #[test]
     fn malformed_envelopes_are_not_misclassified_as_disabled_tags() {
-        let mut bytes = canonical_tag_request(23);
+        let mut bytes = canonical_tag_request(23, clutch_solana_layout::INTENT_VERSION);
         bytes[0] ^= 1;
         assert!(!disabled_canonical_tag(&bytes));
         bytes[0] = 0xd1;

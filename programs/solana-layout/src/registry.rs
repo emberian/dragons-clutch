@@ -47,7 +47,46 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
 /// Existing Source Archive V2 account version.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
-
+/// General V2 active-width ClearWork successor account discriminator.
+pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
+/// General V2 active-width ClearWork successor account version.
+pub const GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION: u8 = 2;
+/// General V2 active-width sealed-feed successor account discriminator.
+pub const GENERAL_V2_FEED_ACCOUNT_TAG: u8 = 18;
+/// General V2 active-width sealed-feed successor account version.
+pub const GENERAL_V2_FEED_ACCOUNT_VERSION: u8 = 2;
+/// General V2 Window successor account discriminator.
+pub const GENERAL_V2_WINDOW_ACCOUNT_TAG: u8 = 24;
+/// General V2 Window successor account version.
+pub const GENERAL_V2_WINDOW_ACCOUNT_VERSION: u8 = 4;
+/// General V2 active-width feed-stage successor account discriminator.
+pub const GENERAL_V2_FEED_STAGE_ACCOUNT_TAG: u8 = 25;
+/// General V2 active-width feed-stage successor account version.
+pub const GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION: u8 = 2;
+/// Funded General V2 admission-node account discriminator.
+pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG: u8 = 0x77;
+/// Funded General V2 admission-node account version.
+pub const GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION: u8 = 1;
+/// General V2 epoch-budget account discriminator.
+pub const GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG: u8 = 0x78;
+/// General V2 epoch-budget account version.
+pub const GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION: u8 = 1;
+/// General V2 immutable Market-binding account discriminator.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG: u8 = 0x79;
+/// General V2 immutable Market-binding account version.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
+/// Counted-retirement Replay-successor account discriminator.
+pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
+/// Counted-retirement Replay-successor account version.
+pub const REPLAY_SUCCESSOR_ACCOUNT_VERSION: u8 = 1;
+/// General V2 canonical EconomicDomain artifact account discriminator.
+pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_TAG: u8 = 0x7b;
+/// General V2 canonical EconomicDomain artifact account version.
+pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
+/// General V2 selected-candidate settlement-authority account discriminator.
+pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
+/// General V2 selected-candidate settlement-authority account version.
+pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -106,7 +145,7 @@ pub enum AllocationCoordinates {
     },
 }
 
-/// One authoritative collision-sensitive allocation.
+/// One recorded collision-sensitive allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CollisionLedgerEntry {
     /// Occupied wire coordinates.
@@ -119,10 +158,10 @@ pub struct CollisionLedgerEntry {
 
 /// Collision-sensitive allocations for the extension seam.
 ///
-/// This is not an account-codec inventory.  Existing account modules remain
-/// the semantic owners of their bytes; the Source Archive V2 row is recorded
-/// here solely because its hexadecimal spelling was confused with decimal
-/// intent family 74 during successor allocation.
+/// This is not a complete account-codec inventory. Existing account modules
+/// remain the semantic owners of their bytes. Every newly allocated successor
+/// coordinate must be checked against this shared ledger and a complete legacy
+/// inventory before any runtime capability is enabled.
 pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Range {
@@ -187,6 +226,114 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::Frozen,
         name: "source-archive-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: 0x75,
+            version: 1,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-provisional-position-tombstone-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: 0x76,
+            version: 1,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "retirement-provisional-general-epoch-tombstone-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
+            version: GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-clear-work-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEED_ACCOUNT_TAG,
+            version: GENERAL_V2_FEED_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-feed-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_WINDOW_ACCOUNT_TAG,
+            version: GENERAL_V2_WINDOW_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-window-v4-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEED_STAGE_ACCOUNT_TAG,
+            version: GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-feed-stage-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG,
+            version: GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-admission-node-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG,
+            version: GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-epoch-budget-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-binding-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: REPLAY_SUCCESSOR_ACCOUNT_TAG,
+            version: REPLAY_SUCCESSOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "replay-successor-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_TAG,
+            version: GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-economic-domain-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG,
+            version: GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-selected-candidate-v1-account",
     },
 ];
 
@@ -623,6 +770,62 @@ mod tests {
                     assert!(occupants <= 1, "collision at {namespace:?}/{tag}/{version}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
+        let expected = [
+            (
+                GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
+                GENERAL_V2_CLEAR_WORK_ACCOUNT_VERSION,
+            ),
+            (GENERAL_V2_FEED_ACCOUNT_TAG, GENERAL_V2_FEED_ACCOUNT_VERSION),
+            (
+                GENERAL_V2_WINDOW_ACCOUNT_TAG,
+                GENERAL_V2_WINDOW_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_FEED_STAGE_ACCOUNT_TAG,
+                GENERAL_V2_FEED_STAGE_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_ADMISSION_NODE_ACCOUNT_TAG,
+                GENERAL_V2_ADMISSION_NODE_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_EPOCH_BUDGET_ACCOUNT_TAG,
+                GENERAL_V2_EPOCH_BUDGET_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION,
+            ),
+            (
+                REPLAY_SUCCESSOR_ACCOUNT_TAG,
+                REPLAY_SUCCESSOR_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_TAG,
+                GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG,
+                GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION,
+            ),
+        ];
+        for (tag, version) in expected {
+            let mut matches = 0u8;
+            let mut status = None;
+            for entry in CENTRAL_COLLISION_LEDGER {
+                if coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+                {
+                    matches += 1;
+                    status = Some(entry.status);
+                }
+            }
+            assert_eq!(matches, 1, "account {tag}/{version}");
+            assert_eq!(status, Some(AllocationStatus::ReservedDisabled));
         }
     }
 

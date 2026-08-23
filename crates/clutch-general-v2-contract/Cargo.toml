@@ -1,0 +1,17 @@
+[package]
+name = "clutch-general-v2-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Fail-closed fixed-layout contract for Dragon's Clutch General V2"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dev-dependencies]
+clutch-batch = { path = "../clutch-batch" }
+sha2 = "=0.10.9"
