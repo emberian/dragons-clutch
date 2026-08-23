@@ -21,6 +21,7 @@ U64_MAX = (1 << 64) - 1
 U128_MAX = (1 << 128) - 1
 NATIVE_BASIS_SEMANTICS = "native-open-clamped-bspline-v1"
 COMPATIBILITY_SEMANTICS = "categorical-compatibility-lowering-v1"
+NATIVE_PORTFOLIO_CLAIM_DOMAIN = b"dragons-clutch/native-portfolio-claim/v1"
 
 
 class Refusal(ValueError):
@@ -136,6 +137,30 @@ def _validate_underlyings(
         raise Refusal("backing must be the canonical ordered native basis Eggs")
 
 
+def canonical_native_portfolio_claim_digest(
+    basis: BasisIdentity, coefficients: Sequence[int]
+) -> bytes:
+    """Mirror the live `NativePortfolioClaimV1` digest byte for byte."""
+
+    basis.validate_native()
+    if len(coefficients) != basis.outcome_count:
+        raise Refusal("coefficient count does not match the basis")
+    checked = tuple(
+        _u64(value, f"coefficient[{index}]")
+        for index, value in enumerate(coefficients)
+    )
+    padded = checked + (0,) * (MAX_OUTCOMES - len(checked))
+    preimage = bytearray(NATIVE_PORTFOLIO_CLAIM_DOMAIN)
+    preimage.extend(basis.market)
+    preimage.extend(basis.terms_digest)
+    preimage.append(basis.degree)
+    preimage.extend(basis.denominator.to_bytes(8, "little"))
+    preimage.append(basis.outcome_count)
+    for coefficient in padded:
+        preimage.extend(coefficient.to_bytes(8, "little"))
+    return sha256(preimage).digest()
+
+
 @dataclass(frozen=True)
 class ClaimDescriptor:
     """Canonical primitive coefficient claim over one native basis.
@@ -177,11 +202,7 @@ class ClaimDescriptor:
             basis,
             canonical_underlyings(basis) if underlyings is None else underlyings,
         )
-        preimage = bytearray(b"dragons-clutch:structured-claim:v1\x00")
-        preimage.extend(basis.canonical_bytes())
-        for coefficient in primitive:
-            preimage.extend(coefficient.to_bytes(8, "little"))
-        digest = sha256(preimage).digest()
+        digest = canonical_native_portfolio_claim_digest(basis, primitive)
         return cls(basis, primitive, digest), divisor
 
     @property
@@ -541,12 +562,343 @@ class WrapperMachine:
         self.assert_invariants()
 
 
+class CompressedWrapperMachine(WrapperMachine):
+    """Wrapper vault using the live Position's cash plus residual Egg vector.
+
+    For primitive coefficients ``p``, the canonical backing of one wrapper is
+    ``k = min(p)`` free cash atoms and ``p[i] - k`` internal Eggs.  The cash is
+    exactly a merged complete-set floor: it is not a fee, reserve, or second
+    liability.  ``release_backing`` remains available after resolution and
+    returns that exact cash-plus-residual representation when recreating a
+    complete Egg vector through ``Split`` is no longer possible.
+    """
+
+    def __init__(
+        self,
+        descriptor: ClaimDescriptor,
+        basis_balances: Mapping[str, Sequence[int]],
+        hoard_atoms: int,
+        cash_balances: Mapping[str, int] | None = None,
+        other_basis: Sequence[int] | None = None,
+    ) -> None:
+        cash = {} if cash_balances is None else dict(cash_balances)
+        owners = set(basis_balances) | set(cash)
+        width = descriptor.basis.outcome_count
+        normalized_basis = {
+            owner: basis_balances.get(owner, (0,) * width) for owner in owners
+        }
+        self.cash_balances = {
+            owner: _u64(cash.get(owner, 0), f"{owner}.cash") for owner in owners
+        }
+        self.vault_cash = 0
+        super().__init__(descriptor, normalized_basis, hoard_atoms, other_basis)
+
+    @property
+    def complete_set_floor(self) -> int:
+        return min(self.descriptor.coefficients)
+
+    @property
+    def residual_coefficients(self) -> tuple[int, ...]:
+        floor = self.complete_set_floor
+        return tuple(value - floor for value in self.descriptor.coefficients)
+
+    def _owner(self, owner: str) -> None:
+        super()._owner(owner)
+        if owner not in self.cash_balances:
+            self.cash_balances[owner] = 0
+
+    def snapshot(self) -> tuple[object, ...]:
+        return super().snapshot() + (
+            tuple(sorted(self.cash_balances.items())),
+            self.vault_cash,
+        )
+
+    def assert_invariants(self) -> None:
+        n = self.descriptor.basis.outcome_count
+        if len(self.vault) != n:
+            raise AssertionError("vault width")
+        if any(value < 0 or value > U64_MAX for value in self.vault):
+            raise AssertionError("vault amount range")
+        if self.vault_cash < 0 or self.vault_cash > U64_MAX:
+            raise AssertionError("vault cash range")
+        if any(value < 0 or value > U64_MAX for value in self.cash_balances.values()):
+            raise AssertionError("owner cash range")
+        if self.wrapper_supply != sum(self.wrapper_balances.values()):
+            raise AssertionError("Token-2022 mint supply is not holder-balance sum")
+        if self.wrapper_supply < 0 or self.wrapper_supply > U64_MAX:
+            raise AssertionError("wrapper supply range")
+        required_cash = self.wrapper_supply * self.complete_set_floor
+        if required_cash > U64_MAX or self.vault_cash < required_cash:
+            raise AssertionError("wrapper cash floor is undercollateralized")
+        for index, coefficient in enumerate(self.residual_coefficients):
+            required = self.wrapper_supply * coefficient
+            if required > U64_MAX or self.vault[index] < required:
+                raise AssertionError("wrapper residual Eggs are undercollateralized")
+        totals = self.total_basis_supply
+        if self.resolved_weights is None:
+            if self.hoard_atoms < max(totals, default=0):
+                raise AssertionError("unresolved base market is insolvent")
+        else:
+            numerator = self._terminal_numerator(totals)
+            if self.hoard_atoms * self.descriptor.basis.denominator < numerator:
+                raise AssertionError("resolved base market is insolvent")
+        if self.retired and (
+            self.wrapper_supply != 0 or self.vault_cash != 0 or any(self.vault)
+        ):
+            raise AssertionError("retired wrapper retains backing")
+
+    def merge_components(self, owner: str, quantity: int) -> None:
+        """Consume the full Egg vector, merge its common floor, and mint."""
+
+        if self.retired:
+            raise Refusal("wrapper is retired")
+        if self.resolved_weights is not None:
+            raise Refusal("complete sets cannot merge after resolution")
+        quantity = _u64(quantity, "quantity")
+        if quantity == 0:
+            raise Refusal("zero quantity")
+        self._owner(owner)
+        required = [
+            _checked_mul(quantity, coefficient, "component quantity")
+            for coefficient in self.descriptor.coefficients
+        ]
+        if any(
+            self.basis_balances[owner][index] < amount
+            for index, amount in enumerate(required)
+        ):
+            raise Refusal("insufficient native basis Eggs")
+        floor_cash = _checked_mul(
+            quantity, self.complete_set_floor, "complete-set cash"
+        )
+        if self.hoard_atoms < floor_cash:
+            raise Refusal("insufficient Hoard collateral")
+        residual = [
+            _checked_mul(quantity, coefficient, "residual component quantity")
+            for coefficient in self.residual_coefficients
+        ]
+        new_vault = [
+            _checked_add(self.vault[index], amount, "vault balance")
+            for index, amount in enumerate(residual)
+        ]
+        new_vault_cash = _checked_add(
+            self.vault_cash, floor_cash, "vault complete-set cash"
+        )
+        new_supply = _checked_add(self.wrapper_supply, quantity, "wrapper supply")
+        new_wrapper_balance = _checked_add(
+            self.wrapper_balances[owner], quantity, "wrapper balance"
+        )
+        for index, amount in enumerate(required):
+            self.basis_balances[owner][index] -= amount
+        self.vault = new_vault
+        self.vault_cash = new_vault_cash
+        self.hoard_atoms -= floor_cash
+        self.wrapper_supply = new_supply
+        self.wrapper_balances[owner] = new_wrapper_balance
+        self.assert_invariants()
+
+    def merge_backing(self, owner: str, quantity: int) -> None:
+        """Consume canonical cash-plus-residual backing and mint wrappers."""
+
+        if self.retired:
+            raise Refusal("wrapper is retired")
+        if self.resolved_weights is not None:
+            raise Refusal("cannot mint wrappers after resolution")
+        quantity = _u64(quantity, "quantity")
+        if quantity == 0:
+            raise Refusal("zero quantity")
+        self._owner(owner)
+        cash = _checked_mul(quantity, self.complete_set_floor, "backing cash")
+        eggs = [
+            _checked_mul(quantity, coefficient, "backing Eggs")
+            for coefficient in self.residual_coefficients
+        ]
+        if self.cash_balances[owner] < cash or any(
+            self.basis_balances[owner][index] < amount
+            for index, amount in enumerate(eggs)
+        ):
+            raise Refusal("insufficient canonical backing")
+        new_vault_cash = _checked_add(self.vault_cash, cash, "vault cash")
+        new_vault = [
+            _checked_add(self.vault[index], amount, "vault balance")
+            for index, amount in enumerate(eggs)
+        ]
+        new_supply = _checked_add(self.wrapper_supply, quantity, "wrapper supply")
+        new_wrapper_balance = _checked_add(
+            self.wrapper_balances[owner], quantity, "wrapper balance"
+        )
+        self.cash_balances[owner] -= cash
+        for index, amount in enumerate(eggs):
+            self.basis_balances[owner][index] -= amount
+        self.vault_cash = new_vault_cash
+        self.vault = new_vault
+        self.wrapper_supply = new_supply
+        self.wrapper_balances[owner] = new_wrapper_balance
+        self.assert_invariants()
+
+    def split_components(self, owner: str, quantity: int) -> None:
+        """Burn wrappers and recreate the full Egg vector while Active."""
+
+        if self.retired:
+            raise Refusal("wrapper is retired")
+        if self.resolved_weights is not None:
+            raise Refusal("complete sets cannot split after resolution")
+        quantity = _u64(quantity, "quantity")
+        if quantity == 0:
+            raise Refusal("zero quantity")
+        self._owner(owner)
+        if self.wrapper_balances[owner] < quantity:
+            raise Refusal("insufficient wrapper balance")
+        cash = _checked_mul(quantity, self.complete_set_floor, "backing cash")
+        residual = [
+            _checked_mul(quantity, coefficient, "residual Eggs")
+            for coefficient in self.residual_coefficients
+        ]
+        released = [
+            _checked_mul(quantity, coefficient, "component quantity")
+            for coefficient in self.descriptor.coefficients
+        ]
+        if self.vault_cash < cash or any(
+            self.vault[index] < amount for index, amount in enumerate(residual)
+        ):
+            raise Refusal("vault coverage failure")
+        new_hoard = _checked_add(self.hoard_atoms, cash, "Hoard collateral")
+        new_basis = [
+            _checked_add(self.basis_balances[owner][index], amount, "owner basis balance")
+            for index, amount in enumerate(released)
+        ]
+        self.wrapper_balances[owner] -= quantity
+        self.wrapper_supply -= quantity
+        self.vault_cash -= cash
+        for index, amount in enumerate(residual):
+            self.vault[index] -= amount
+        self.hoard_atoms = new_hoard
+        self.basis_balances[owner] = new_basis
+        self.assert_invariants()
+
+    def release_backing(self, owner: str, quantity: int) -> None:
+        """Burn wrappers and return canonical cash plus residual Eggs.
+
+        This is phase-independent and is the always-available unwind.  Before
+        resolution the owner may turn the cash into a complete set separately;
+        after resolution the returned representation already has the identical
+        terminal payout and needs no unavailable Split.
+        """
+
+        if self.retired:
+            raise Refusal("wrapper is retired")
+        quantity = _u64(quantity, "quantity")
+        if quantity == 0:
+            raise Refusal("zero quantity")
+        self._owner(owner)
+        if self.wrapper_balances[owner] < quantity:
+            raise Refusal("insufficient wrapper balance")
+        cash = _checked_mul(quantity, self.complete_set_floor, "backing cash")
+        residual = [
+            _checked_mul(quantity, coefficient, "residual Eggs")
+            for coefficient in self.residual_coefficients
+        ]
+        if self.vault_cash < cash or any(
+            self.vault[index] < amount for index, amount in enumerate(residual)
+        ):
+            raise Refusal("vault coverage failure")
+        new_cash = _checked_add(self.cash_balances[owner], cash, "owner cash")
+        new_basis = [
+            _checked_add(self.basis_balances[owner][index], amount, "owner basis balance")
+            for index, amount in enumerate(residual)
+        ]
+        self.wrapper_balances[owner] -= quantity
+        self.wrapper_supply -= quantity
+        self.vault_cash -= cash
+        for index, amount in enumerate(residual):
+            self.vault[index] -= amount
+        self.cash_balances[owner] = new_cash
+        self.basis_balances[owner] = new_basis
+        self.assert_invariants()
+
+    def donate_cash(self, owner: str, quantity: int) -> None:
+        """Donate owner cash to wrapper backing without minting."""
+
+        quantity = _u64(quantity, "cash donation")
+        if quantity == 0:
+            raise Refusal("zero quantity")
+        self._owner(owner)
+        if self.cash_balances[owner] < quantity:
+            raise Refusal("insufficient cash donation balance")
+        next_vault = _checked_add(self.vault_cash, quantity, "vault cash")
+        self.cash_balances[owner] -= quantity
+        self.vault_cash = next_vault
+        self.assert_invariants()
+
+    def compact_surplus(self) -> tuple[int, tuple[int, ...]]:
+        """Donate surplus cash to Hoard and burn surplus residual Eggs."""
+
+        cash_surplus = self.vault_cash - self.wrapper_supply * self.complete_set_floor
+        egg_surplus = tuple(
+            self.vault[index] - self.wrapper_supply * coefficient
+            for index, coefficient in enumerate(self.residual_coefficients)
+        )
+        new_hoard = _checked_add(self.hoard_atoms, cash_surplus, "Hoard donation")
+        self.vault_cash -= cash_surplus
+        for index, amount in enumerate(egg_surplus):
+            self.vault[index] -= amount
+        self.hoard_atoms = new_hoard
+        self.assert_invariants()
+        return cash_surplus, egg_surplus
+
+    def redeem_terminal(self, owner: str, quantity: int) -> int:
+        """Burn wrappers and redeem cash plus residual Eggs exactly."""
+
+        if self.resolved_weights is None:
+            raise Refusal("market is unresolved")
+        quantity = _u64(quantity, "quantity")
+        if quantity == 0:
+            raise Refusal("zero quantity")
+        self._owner(owner)
+        if self.wrapper_balances[owner] < quantity:
+            raise Refusal("insufficient wrapper balance")
+        cash = _checked_mul(quantity, self.complete_set_floor, "backing cash")
+        consumed = [
+            _checked_mul(quantity, coefficient, "residual redemption")
+            for coefficient in self.residual_coefficients
+        ]
+        residual_numerator = sum(
+            amount * weight
+            for amount, weight in zip(consumed, self.resolved_weights)
+        )
+        if residual_numerator > U128_MAX:
+            raise Refusal("redemption numerator overflows u128")
+        denominator = self.descriptor.basis.denominator
+        if residual_numerator % denominator != 0:
+            raise Refusal("redemption quantity is not an exact lot")
+        residual_payout = residual_numerator // denominator
+        payout = _checked_add(cash, residual_payout, "terminal payout")
+        if self.vault_cash < cash or self.hoard_atoms < residual_payout:
+            raise Refusal("insufficient collateral")
+        if any(self.vault[index] < amount for index, amount in enumerate(consumed)):
+            raise Refusal("vault coverage failure")
+        self.wrapper_balances[owner] -= quantity
+        self.wrapper_supply -= quantity
+        self.vault_cash -= cash
+        for index, amount in enumerate(consumed):
+            self.vault[index] -= amount
+        self.hoard_atoms -= residual_payout
+        self.assert_invariants()
+        return payout
+
+    def retire(self) -> None:
+        if self.wrapper_supply != 0 or self.vault_cash != 0 or any(self.vault):
+            raise Refusal("nonempty wrapper cannot retire")
+        self.retired = True
+        self.assert_invariants()
+
+
 # Resource estimates use Solana's documented/default Rent parameters.  They are
 # design estimates, not measurements of a compiled instruction.
 ACCOUNT_STORAGE_OVERHEAD = 128
 DEFAULT_LAMPORTS_PER_BYTE_YEAR = 3_480
 DEFAULT_EXEMPTION_THRESHOLD = 2
 WRAPPER_DESCRIPTOR_BYTES = 272
+AUDITED_WRAPPER_DESCRIPTOR_BYTES = 384
 TOKEN_2022_MINT_BYTES = 82
 IMMUTABLE_OWNER_TOKEN_ACCOUNT_BYTES = 170
 BASE_POSITION_BYTES = 220
@@ -624,6 +976,35 @@ def internal_position_estimate(outcomes: int, support: int | None = None) -> Res
         # two programs, market, two Position/Replay pairs, and authority.
         wrap_accounts=12,
         # One base atomic-vector-transfer CPI plus one Token-2022 mint/burn CPI.
+        wrap_cpis=2,
+    )
+
+
+def compressed_internal_position_estimate(
+    outcomes: int, support: int | None = None
+) -> ResourceEstimate:
+    """Audited cash-plus-residual Position with deployment-bound descriptor."""
+
+    if outcomes < 2 or outcomes > MAX_OUTCOMES:
+        raise Refusal("outcomes must be in 2..=16")
+    support = outcomes if support is None else support
+    if support < 2 or support > outcomes:
+        raise Refusal("support must be in 2..=outcomes")
+    infrastructure = sum(
+        rent_exempt_lamports(space)
+        for space in (
+            AUDITED_WRAPPER_DESCRIPTOR_BYTES,
+            TOKEN_2022_MINT_BYTES,
+            BASE_POSITION_BYTES,
+            BASE_REPLAY_BYTES,
+        )
+    )
+    return ResourceEstimate(
+        outcomes=outcomes,
+        support=support,
+        infrastructure_lamports=infrastructure,
+        holder_lamports=rent_exempt_lamports(IMMUTABLE_OWNER_TOKEN_ACCOUNT_BYTES),
+        wrap_accounts=12,
         wrap_cpis=2,
     )
 

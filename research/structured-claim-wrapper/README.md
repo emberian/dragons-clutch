@@ -4,6 +4,24 @@ Status: **RESEARCH MODEL / V1 DECISION NOTE** (2026-08-19). This directory
 changes no consensus bytes, production program, account layout, market terms,
 deployment artifact, or release claim. It imports no code from another project.
 
+Integration update (2026-08-22): [ADAPTER_PLAN.md](ADAPTER_PLAN.md) audits this
+model against the live Terms, Position, reservation, portfolio-settlement,
+Split/Merge, redemption, and Token-2022 seams. It supersedes the earlier
+identity, custody, descriptor-layout, and CPI recommendations below where they
+conflict. In particular:
+
+- the Python model now mirrors the existing live `NativePortfolioClaimV1`,
+  wrapped in a separately deployment-bound product id;
+- exact rational compiler coefficients now have a minimal integral realization
+  with no silent rounding;
+- the preferred internal Position holds the common complete-set floor in its
+  existing `cash_atoms` and only the residual Egg vector; and
+- wrapper composition is flattened to native Eggs and can expose additional
+  complete sets without ever persisting a wrapper-under-wrapper edge.
+
+The original exact-Egg vault remains useful as the simpler comparative model.
+`CompressedWrapperMachine` exercises the stronger cash-plus-residual design.
+
 ## Decision
 
 Dragon's Clutch should keep three distinct things distinct:
@@ -30,7 +48,8 @@ The V1 recommendation is:
 - promote an opt-in Token-2022 wrapper only for a selected coefficient claim
   that has a concrete external consumer (spot venue, lending vault, escrow,
   index product, or generic wallet transfer). When promoted, back it with one
-  dedicated internal base Position rather than `n` external token vaults.
+  dedicated internal base Position, using its free cash plus residual Egg
+  vector, rather than `n` external token vaults.
 
 That is not a recommendation to replace native shaped claims with categorical
 baskets. The components here are the market's exact native degree-zero through
@@ -91,12 +110,13 @@ V1 wrapper admission refuses:
 - a different Market, basis digest, outcome order, or terms digest; and
 - any wrapper, LP receipt, vault share, or arbitrary mint as an underlying.
 
-The claim digest binds the base program, Market, immutable native-basis terms,
-degree, denominator, outcome count, and primitive coefficients. It deliberately
-does not bind a marketing name or analytic compiler label: two independently
-reproduced artifacts with the same exact basis and coefficients are the same
-fungible claim. Approximation certificates and human labels remain
-content-addressed metadata.
+The live native claim digest binds the Market, immutable Terms digest, degree,
+denominator, outcome count, and primitive coefficients. A wrapper-specific
+product id additionally binds base/wrapper ProgramData deployments, deployment
+slots, Token-2022, and backing-policy version. It deliberately does not bind a
+marketing name, analytic compiler label, approximation certificate, or display
+scale: two independently reproduced artifacts with the same exact basis,
+coefficients, and deployment boundary are the same fungible product.
 
 ## Native basis versus compatibility lowering
 
@@ -163,7 +183,7 @@ Transfers are ordinary Token-2022 transfers. They do not call Dragon's Clutch,
 touch the component vault, or serialize on a program Position. This is the one
 design that gives the named curve position a conventional bearer identity.
 
-## Recommended custody: one internal base Position
+## Baseline custody model and preferred complete-set compression
 
 The most literal wrapper uses one external Token-2022 escrow account for every
 nonzero coefficient. It is easy to inspect, but expensive and transaction-heavy:
@@ -171,7 +191,7 @@ wrapping a 16-component claim requires sixteen checked transfers plus one mint,
 and loads the source account, mint, and vault for every component.
 
 The base protocol already defines its fixed Position as the native claim
-representation. The recommended wrapper vault is therefore:
+representation. The baseline wrapper vault modeled first was therefore:
 
 ```text
 wrapper claim digest
@@ -184,29 +204,51 @@ This is not categorical lowering and not an IOU for Eggs. The Position contains
 the same native basis claims counted in the base SupplyLedger. It is readable
 onchain and controlled only by the wrapper authority PDA.
 
-This direction requires one small, separately reviewed base transition before
-implementation:
+The audited preferred representation now uses the same Position more fully.
+For primitive coefficients `a`, derive `k = min(a)` and `r_i = a_i-k`:
 
 ```text
-AtomicInternalVectorTransferV1 {
+wrapper claim digest
+        -> unique wrapper-vault authority PDA
+        -> unique base Position(market, vault authority)
+        -> k cash atoms + [r_i; 16] internal Eggs per wrapper
+```
+
+One cash atom is exactly one merged complete set, so this has the identical
+payout under every admitted simplex weight vector. It removes every redundant
+complete set from base supply and Hoard collateral while keeping both semantic
+facts in the existing Position account. See `ADAPTER_PLAN.md` for the exact
+transition, phase, direct-burn, fusion, and deployment rules.
+
+Both internal-Position designs require one small, separately reviewed base
+transition before implementation. The audited form also moves free cash:
+
+```text
+AtomicPositionAssetTransferV1 {
     source_position,
     destination_position,
+    cash_atoms,
     exact [u64; 16] delta,
 }
 ```
 
 It must authenticate the source owner, both canonical Position PDAs, identical
-Market/generation, zero padding, checked quantities, and the source signer; it
-changes no aggregate Egg supply. The wrapper invokes it with the unique vault
-authority PDA. A second donation transition is needed only to destroy direct-
-burn surplus during retirement; it debits internal Eggs and the base internal
-supply ledger without releasing collateral.
+Market and independent generations/replays, zero padding, free cash, checked
+quantities, and the source signer; it changes no aggregate Egg supply, Hoard,
+or token custody. The wrapper invokes it with the unique vault authority PDA.
+Separate donation transitions are needed only to compact direct-burn surplus;
+they credit nobody.
 
 If that base seam is not accepted, use external escrow accounts and treat the
 53-account/17-CPI worst case as a benchmark gate. Do not silently replace exact
 backing with a digest, price oracle, insurance pool, or discretionary keeper.
 
-## Exact transitions
+## Exact transitions in the baseline full-Egg model
+
+The transitions in this section describe the deliberately simpler full-Egg
+vault retained in `WrapperMachine`. The promotion design uses the
+cash-plus-residual transitions in `ADAPTER_PLAN.md` and
+`CompressedWrapperMachine`.
 
 Every transition validates all arithmetic, identities, balances, and account
 profiles before the first CPI. Solana transaction rollback is still relied upon
@@ -382,7 +424,11 @@ No TransferHook is needed to preserve atomicity. Adding one would make every
 otherwise ordinary transfer load another program and account set, and would
 reduce precisely the composability the wrapper is meant to buy.
 
-## Candidate fixed descriptor layout
+## Superseded candidate descriptor layout
+
+The 272-byte layout below predates deployment-slot binding and the decision to
+derive, rather than persist, redundant claim/product ids. Do not implement it.
+`ADAPTER_PLAN.md` specifies the current 384-byte candidate.
 
 The resource model uses this 272-byte proposal:
 
@@ -423,7 +469,7 @@ token accounts. A wrap loads five common accounts plus source account, native
 mint, and vault per component, and invokes `n` checked transfers plus one wrapper
 mint/burn.
 
-The internal-Position estimate is descriptor + wrapper mint + one current
+The historical internal-Position estimate is descriptor + wrapper mint + one current
 220-byte base Position + one current 84-byte Replay account. It estimates twelve
 accounts and two outer CPIs per merge/split: one base vector transfer and one
 Token-2022 mint/burn. It is independent of `n` up to the fixed sixteen-outcome
@@ -432,6 +478,10 @@ layout. A holder ordinarily needs one 170-byte wrapper token account either way.
 The position-only estimate omits the wrapper mint, uses the same dedicated base
 Position/Replay, and assigns a proposed 112-byte atomic claim account to each
 holder. It is not generic Token-2022 composability.
+
+With the audited 384-byte descriptor, the internal Position design is estimated
+at `0.008922720 SOL` rather than `0.008143200 SOL`. The extra bytes bind the
+checkable deployment boundary; no program rent estimate has been measured yet.
 
 At `n=16`, 53 loaded accounts may fit a runtime ceiling but the transaction
 message and compute still need a real SBF benchmark, likely with address lookup
@@ -497,15 +547,20 @@ python3 research/structured-claim-wrapper/run_lab.py
 The tests cover:
 
 - descriptor normalization and basis-identity separation;
+- exact rational-to-integral live claim realization and deployment-bound
+  wrapper identity in the Rust compiler bridge;
 - compatibility-lowering, nesting, foreign-basis, and redundant-wrapper
   refusals;
 - exact merge, split, transfer, direct burn, donation, and retirement behavior;
+- complete-set cash compression, canonical-backing mint/unwind, post-resolution
+  phase-independent release, surplus compaction, and payout equality with the
+  full-Egg vault;
 - actual supply versus holder balances and per-component coverage;
 - unbacked mint, vault drain, overflow, and validate-before-mutate attacks;
 - direct aggregate native B-spline payout rather than categorical selection;
 - exact resolved lots and exhaustive universal-lot minimality over small
   integer simplexes;
-- 5,000 deterministic mixed adversarial transitions; and
+- 5,000 deterministic mixed adversarial transitions in each backing model; and
 - the bounded rent/account/CPI arithmetic above.
 
 Passing tests are evidence about this model. They are not a proof about an SBF

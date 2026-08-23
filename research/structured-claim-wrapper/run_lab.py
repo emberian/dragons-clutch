@@ -1,6 +1,7 @@
 """Print the bounded wrapper resource comparison and lot example."""
 
 from model import (
+    compressed_internal_position_estimate,
     external_vault_estimate,
     internal_position_estimate,
     position_only_estimate,
@@ -13,14 +14,19 @@ def sol(lamports: int) -> str:
     return f"{lamports / 1_000_000_000:.9f}"
 
 
-print("outcomes external-vault-SOL internal-position-SOL position-only-SOL external-accts/CPIs")
+print(
+    "outcomes external-vault-SOL internal-position-SOL "
+    "compressed-position-SOL position-only-SOL external-accts/CPIs"
+)
 for outcomes in (2, 4, 8, 16):
     external = external_vault_estimate(outcomes)
     internal = internal_position_estimate(outcomes)
+    compressed = compressed_internal_position_estimate(outcomes)
     position = position_only_estimate(outcomes)
     print(
         f"{outcomes:>8} {sol(external.infrastructure_lamports):>18} "
         f"{sol(internal.infrastructure_lamports):>21} "
+        f"{sol(compressed.infrastructure_lamports):>23} "
         f"{sol(position.infrastructure_lamports):>17} "
         f"{external.wrap_accounts:>2}/{external.wrap_cpis:<2}"
     )

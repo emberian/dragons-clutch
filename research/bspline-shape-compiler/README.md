@@ -21,6 +21,22 @@ upload and CreateMarket intents. Rust decoding recompiles the certificate.
 Current Terms does not commit the certificate digest and the on-chain program
 does not parse it, so the certificate remains offline evidence.
 
+`src/wrapper.rs` now closes the next host boundary without creating a parallel
+claim truth. It converts exact rational compiler coefficients into their least
+integral primitive vector, proves the minimal exact display conversion, and
+passes that vector through the live
+`clutch_solana_layout::portfolio_settlement::NativePortfolioClaimV1` owner.
+The resulting transferable-product identity binds the base/wrapper deployment
+and Token-2022 program, but deliberately excludes the analytic certificate,
+label, and proportional display scale. Scalar descriptions therefore converge
+on one live portfolio claim and one wrapper product.
+
+The same module extracts `min_i a_i` as a complete-set cash floor and leaves
+the residual `a_i - min(a)` as native Eggs. This is an exact backing
+transformation over every simplex payout, not a pricing approximation. Its
+composition helper flattens multiple same-Market wrapper claims to native Eggs;
+it never emits or persists a wrapper-of-wrapper graph.
+
 ## Supported families
 
 | Family | Exact cases | Other cases |
@@ -118,12 +134,20 @@ canonical rationals/digests, Terms projection, the nine-write artifact upload,
 exact intent decoding, and the Rust-generated fixture consumed by the static
 client.
 
+`tests/transferable_wrapper.rs` covers rational-to-integer minimality, exact
+complete-set extraction, reuse of the live portfolio identity, deployment
+binding, certificate/display non-identity, flattened composition, overflow,
+foreign-Market, resolved-creation, and mutated-plan refusals.
+
 ## Deliberate limits
 
 - The canonical certificate is a host artifact, not an on-chain coefficient
   parser, account type, or Terms commitment.
-- It does not prove that a named transferable shaped position remains atomic.
-- It does not turn a coefficient vector into externally materialized Eggs.
+- It does not prove that the proposed SBF wrapper transition authenticates or
+  preserves a named transferable shaped position. The host bridge only makes
+  the required identity and accounting plan executable.
+- It does not turn a coefficient vector into externally materialized Eggs or a
+  Token-2022 wrapper mint.
 - It does not certify an arbitrary user-provided coefficient vector's claimed
   analytic meaning.
 - The fixed subdivision certificate is conservative, not a best approximation

@@ -16,12 +16,15 @@ from model import (  # noqa: E402
     AssetKind,
     BasisIdentity,
     ClaimDescriptor,
+    CompressedWrapperMachine,
     COMPATIBILITY_SEMANTICS,
     Refusal,
     UnderlyingAsset,
     U64_MAX,
     WrapperMachine,
     basis_digest,
+    canonical_native_portfolio_claim_digest,
+    compressed_internal_position_estimate,
     canonical_underlyings,
     external_vault_estimate,
     internal_position_estimate,
@@ -70,6 +73,34 @@ class DescriptorTests(unittest.TestCase):
         cubic, _ = ClaimDescriptor.compile(identity(marker=1, degree=3), (1, 2, 4))
         self.assertNotEqual(one.digest, other.digest)
         self.assertNotEqual(one.digest, cubic.digest)
+
+    def test_python_claim_identity_mirrors_the_live_owner(self):
+        basis = identity()
+        claim = descriptor()
+        self.assertEqual(
+            claim.digest,
+            canonical_native_portfolio_claim_digest(basis, (1, 2, 4)),
+        )
+        self.assertEqual(
+            claim.digest.hex(),
+            "41885f4a143807479f1e3fa00752c1ce4e1ca7e56834fae084204e3e63831261",
+        )
+
+        # The native claim owner binds the globally unique Market and Terms,
+        # while the wrapper product envelope separately binds deployments.
+        other_program = BasisIdentity(
+            bytes((99,)) * 32,
+            basis.market,
+            basis.terms_digest,
+            basis.degree,
+            basis.denominator,
+            basis.outcome_count,
+            basis.semantics,
+        )
+        self.assertEqual(
+            ClaimDescriptor.compile(other_program, (1, 2, 4))[0].digest,
+            claim.digest,
+        )
 
     def test_categorical_compatibility_lowering_cannot_pose_as_native(self):
         lowered = identity(semantics=COMPATIBILITY_SEMANTICS)
@@ -207,6 +238,136 @@ class WrapperTransitionTests(unittest.TestCase):
             machine.merge_components("alice", 1)
 
 
+class CompressedWrapperTransitionTests(unittest.TestCase):
+    def machine(self, amount=100) -> CompressedWrapperMachine:
+        return CompressedWrapperMachine(
+            descriptor((3, 4, 6)),
+            {"alice": (amount,) * 3, "bob": (amount // 2,) * 3},
+            hoard_atoms=amount + amount // 2,
+            cash_balances={"alice": amount, "bob": amount // 2},
+        )
+
+    def test_full_egg_merge_extracts_floor_and_active_split_reverses_it(self):
+        machine = self.machine()
+        before = machine.snapshot()
+        machine.merge_components("alice", 10)
+        self.assertEqual(machine.complete_set_floor, 3)
+        self.assertEqual(machine.residual_coefficients, (0, 1, 3))
+        self.assertEqual(machine.vault_cash, 30)
+        self.assertEqual(machine.vault, [0, 10, 30])
+        self.assertEqual(machine.hoard_atoms, 120)
+        machine.split_components("alice", 10)
+        self.assertEqual(machine.snapshot(), before)
+
+    def test_canonical_backing_can_mint_without_recreating_complete_sets(self):
+        machine = self.machine()
+        supply = machine.total_basis_supply
+        hoard = machine.hoard_atoms
+        machine.merge_backing("alice", 5)
+        self.assertEqual(machine.vault_cash, 15)
+        self.assertEqual(machine.vault, [0, 5, 15])
+        self.assertEqual(machine.cash_balances["alice"], 85)
+        self.assertEqual(machine.total_basis_supply, supply)
+        self.assertEqual(machine.hoard_atoms, hoard)
+
+    def test_phase_independent_release_returns_cash_plus_residual_eggs(self):
+        machine = self.machine()
+        machine.merge_components("alice", 6)
+        machine.transfer_wrapper("alice", "bob", 3)
+        machine.resolve((1, 4, 1))
+        bob_cash = machine.cash_balances["bob"]
+        bob_eggs = tuple(machine.basis_balances["bob"])
+        machine.release_backing("bob", 2)
+        self.assertEqual(machine.cash_balances["bob"], bob_cash + 6)
+        self.assertEqual(
+            tuple(machine.basis_balances["bob"]),
+            tuple(left + right for left, right in zip(bob_eggs, (0, 2, 6))),
+        )
+        with self.assertRaisesRegex(Refusal, "cannot split after resolution"):
+            machine.split_components("bob", 1)
+
+    def test_direct_burn_compacts_cash_to_hoard_and_residual_eggs_to_burns(self):
+        machine = self.machine()
+        machine.merge_components("alice", 10)
+        machine.direct_burn_wrapper("alice", 3)
+        self.assertEqual(machine.compact_surplus(), (9, (0, 3, 9)))
+        self.assertEqual(machine.vault_cash, 21)
+        self.assertEqual(machine.vault, [0, 7, 21])
+        self.assertEqual(machine.hoard_atoms, 129)
+
+    def test_compressed_and_full_vector_terminal_payouts_are_identical(self):
+        claim = descriptor((3, 4, 6))
+        full = WrapperMachine(claim, {"alice": (100, 100, 100)}, hoard_atoms=100)
+        compressed = CompressedWrapperMachine(
+            claim,
+            {"alice": (100, 100, 100)},
+            hoard_atoms=100,
+            cash_balances={"alice": 0},
+        )
+        full.merge_components("alice", 12)
+        compressed.merge_components("alice", 12)
+        full.resolve((1, 4, 1))
+        compressed.resolve((1, 4, 1))
+        self.assertEqual(full.redeem_terminal("alice", 6), 25)
+        self.assertEqual(compressed.redeem_terminal("alice", 6), 25)
+
+    def test_compressed_failed_transitions_are_validate_before_mutate(self):
+        machine = self.machine(amount=10)
+        for operation in (
+            lambda: machine.merge_components("alice", 11),
+            lambda: machine.merge_backing("alice", 4),
+            lambda: machine.split_components("alice", 1),
+            lambda: machine.release_backing("alice", 1),
+            lambda: machine.donate_cash("alice", 11),
+        ):
+            before = machine.snapshot()
+            with self.assertRaises(Refusal):
+                operation()
+            self.assertEqual(machine.snapshot(), before)
+
+    def test_deterministic_compressed_sequences_preserve_both_solvency_layers(self):
+        rng = random.Random(0xC05E7)
+        machine = CompressedWrapperMachine(
+            descriptor((3, 4, 6)),
+            {"alice": (5_000,) * 3, "bob": (5_000,) * 3},
+            hoard_atoms=10_000,
+            cash_balances={"alice": 5_000, "bob": 5_000},
+        )
+        owners = ("alice", "bob")
+        refusals = 0
+        for _ in range(5_000):
+            actor = owners[rng.randrange(2)]
+            other = owners[1 - owners.index(actor)]
+            choice = rng.randrange(9)
+            before = machine.snapshot()
+            try:
+                if choice == 0:
+                    machine.merge_components(actor, rng.randrange(1, 12))
+                elif choice == 1:
+                    machine.merge_backing(actor, rng.randrange(1, 12))
+                elif choice == 2:
+                    machine.split_components(actor, rng.randrange(1, 12))
+                elif choice == 3:
+                    machine.release_backing(actor, rng.randrange(1, 12))
+                elif choice == 4:
+                    machine.transfer_wrapper(actor, other, rng.randrange(1, 12))
+                elif choice == 5:
+                    machine.direct_burn_wrapper(actor, rng.randrange(1, 8))
+                elif choice == 6:
+                    machine.donate_components(
+                        actor, tuple(rng.randrange(3) for _ in range(3))
+                    )
+                elif choice == 7:
+                    machine.donate_cash(actor, rng.randrange(1, 3))
+                else:
+                    machine.compact_surplus()
+            except Refusal:
+                refusals += 1
+                self.assertEqual(machine.snapshot(), before)
+            machine.assert_invariants()
+        self.assertGreater(refusals, 0)
+
+
 class RedemptionTests(unittest.TestCase):
     def test_universal_lot_is_exact_and_minimal_over_small_simplexes(self):
         denominator = 6
@@ -278,6 +439,12 @@ class ResourceTests(unittest.TestCase):
                 self.assertEqual(
                     internal_position_estimate(outcomes).infrastructure_lamports,
                     8_143_200,
+                )
+                self.assertEqual(
+                    compressed_internal_position_estimate(
+                        outcomes
+                    ).infrastructure_lamports,
+                    8_922_720,
                 )
                 self.assertEqual(
                     position_only_estimate(outcomes).infrastructure_lamports,
