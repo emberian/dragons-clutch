@@ -67,7 +67,7 @@ General V2 reserves local actions 1 through 35, in order:
 23. `ClaimEpochUnused`
 24. `FreezeEntitlement`
 25. `EntitleSlice`
-26. `ReleaseTerminalReservation`
+26. `ConsumeDirectReceiptEggs`
 27. `CloseReceipt`
 28. `CloseReservation`
 29. `ClosePage`

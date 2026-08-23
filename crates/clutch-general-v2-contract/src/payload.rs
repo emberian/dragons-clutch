@@ -32,6 +32,8 @@ pub const CLAIM_SOLVER_PAYLOAD_BYTES: usize = 32;
 pub const FREEZE_ENTITLEMENT_PAYLOAD_BYTES: usize = 96;
 /// Exact action-25 claimed-fragment payload bytes.
 pub const ENTITLE_SLICE_PAYLOAD_BYTES: usize = 149;
+/// Exact action-26 disabled direct-receipt selector bytes.
+pub const CONSUME_DIRECT_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 96;
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -609,6 +611,40 @@ impl EntitleSlicePayloadV1 {
     }
 }
 
+/// Action-26 `ConsumeDirectReceiptEggs` immutable selector.
+///
+/// The transition ID is equality-bound to the authenticated direct receipt
+/// and its complete pure poststate plan. No economic field is caller-owned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsumeDirectReceiptEggsPayloadV1 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Canonical selected direct-receipt account PDA.
+    pub receipt: Id32,
+    /// Opaque identity of the complete atomic Egg/reservation/row transition.
+    pub settlement_transition_id: Id32,
+}
+
+impl ConsumeDirectReceiptEggsPayloadV1 {
+    /// Decode exactly 96 hostile selector bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, CONSUME_DIRECT_RECEIPT_EGGS_PAYLOAD_BYTES)?;
+        let value = Self {
+            epoch: live_id(&mut reader)?,
+            receipt: live_id(&mut reader)?,
+            settlement_transition_id: live_id(&mut reader)?,
+        };
+        reader.finish()?;
+        if value.epoch == value.receipt
+            || value.epoch == value.settlement_transition_id
+            || value.receipt == value.settlement_transition_id
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(value)
+    }
+}
+
 impl FinalizeSelectionPayloadV1 {
     /// Decode exactly 32 hostile bytes.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
@@ -628,6 +664,26 @@ pub enum OwnerSettlementPayloadV1 {
     FreezeEntitlement(FreezeEntitlementPayloadV1),
     /// Action 25 claimed receipt fragment only; mutation remains disabled.
     EntitleSlice(EntitleSlicePayloadV1),
+}
+
+/// Strict payload fact for the disabled real-ended direct Egg action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectSettlementPayloadV1 {
+    /// Action 26 selector only; the SBF route remains disabled.
+    ConsumeDirectReceiptEggs(ConsumeDirectReceiptEggsPayloadV1),
+}
+
+/// Decode action 26 without adding it to the live-lab union.
+pub fn decode_direct_settlement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<DirectSettlementPayloadV1, CodecError> {
+    match local_action {
+        26 => Ok(DirectSettlementPayloadV1::ConsumeDirectReceiptEggs(
+            ConsumeDirectReceiptEggsPayloadV1::decode(payload)?,
+        )),
+        _ => Err(CodecError::InvalidState),
+    }
 }
 
 /// Decode only actions 24 and 25 without adding them to the live-lab union.

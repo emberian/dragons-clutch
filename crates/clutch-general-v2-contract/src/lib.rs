@@ -265,43 +265,43 @@ pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
 /// First RelationV2-native counted General Epoch schema.
 pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
 /// Fresh disabled General V2 owner-settlement envelope tag.
-pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x7f;
+pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
 /// First exact owner-settlement envelope version.
 pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
 /// Exact outer owner-settlement account bytes.
 pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 292;
 /// Fresh disabled selected composite-fee record envelope tag.
-pub const SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x80;
+pub const SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// First selected composite-fee record envelope version.
 pub const SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected composite-fee record outer bytes.
 pub const SELECTED_FEE_RECORD_ACCOUNT_BYTES: usize = 340;
 /// Fresh disabled owner fee-carry envelope tag.
-pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x81;
+pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// First owner fee-carry envelope version.
 pub const OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
 /// Exact owner fee-carry outer bytes.
 pub const OWNER_FEE_CARRY_ACCOUNT_BYTES: usize = 132;
 /// Fresh disabled owner payer-allocation envelope tag.
-pub const PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x82;
+pub const PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
 /// First owner payer-allocation envelope version.
 pub const PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact owner payer-allocation outer bytes.
 pub const PAYER_ALLOCATION_ACCOUNT_BYTES: usize = 2_684;
 /// Fresh disabled candidate-wide recipient-allocation envelope tag.
-pub const RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x83;
+pub const RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x85;
 /// First candidate-wide recipient-allocation envelope version.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact candidate-wide recipient-allocation outer bytes.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES: usize = 2_644;
 /// Fresh disabled selected-record treasury-ledger envelope tag.
-pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x84;
+pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 /// First selected-record treasury-ledger envelope version.
 pub const TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
 /// Exact selected-record treasury-ledger outer bytes.
 pub const TREASURY_LEDGER_ACCOUNT_BYTES: usize = 148;
 /// Fresh disabled buyer-first settlement cash-pot envelope tag.
-pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x85;
+pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 /// First buyer-first settlement cash-pot envelope version.
 pub const SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
 /// Exact buyer-first settlement cash-pot outer bytes.

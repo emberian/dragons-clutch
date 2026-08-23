@@ -70,13 +70,13 @@ the pinned layout dependency graph.
 | counted-retirement Replay successor | `0x7a/1` | 132 |
 | immutable `EconomicDomainV2AccountV1` | `0x7b/1` | 297 |
 | `SelectedCandidateV1AccountV1` settlement authority | `0x7c/1` | 789 |
-| disabled `OwnerSettlementV1AccountV1` envelope | `0x7f/1` | 292 |
-| disabled selected fee-record envelope | `0x80/1` | 340 |
-| disabled owner fee-carry envelope | `0x81/1` | 132 |
-| disabled temporary payer-allocation envelope | `0x82/1` | 2,684 |
-| disabled temporary recipient-allocation envelope | `0x83/1` | 2,644 |
-| disabled treasury-ledger envelope | `0x84/1` | 148 |
-| disabled buyer-first settlement cash-pot envelope | `0x85/1` | 260 |
+| disabled `OwnerSettlementV1AccountV1` envelope | `0x81/1` | 292 |
+| disabled selected fee-record envelope | `0x82/1` | 340 |
+| disabled owner fee-carry envelope | `0x83/1` | 132 |
+| disabled temporary payer-allocation envelope | `0x84/1` | 2,684 |
+| disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
+| disabled treasury-ledger envelope | `0x86/1` | 148 |
+| disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
 
 Here `O` is the active outcome count, `N` the active order count, `A` the
 active quantized-atom count, and `S` the active settlement-slice count. Feeds
@@ -94,12 +94,17 @@ state.
 The central collision ledger reserves these coordinates as
 `ReservedDisabled`, records retirement's provisional tombstones at `0x75/1`
 and `0x76/1` plus the permanent Position tombstone at `0x75/2`, and proves its
-recorded rows internally disjoint. Source/Series owns `0x7d/1` and `0x7e/1`;
-General does not reinterpret either coordinate. A complete
+recorded rows internally disjoint. Dealer owns `0x7d/1` and `0x7e/1`, while
+Source/Series owns `0x7f/1` and `0x80/1`; General does not reinterpret those
+coordinates. A complete
 legacy-account inventory cross-check remains an activation gate. The numeric
 constants in the standalone General crate describe matching codec bytes, not a
 second allocation authority; the eventual adapter must add an explicit parity
 gate against the central registry.
+
+The same central block reserves the StructuredClaim descriptor at `0x88/1`
+and a fresh General FinalPot at `0x89/1`. Neither reservation supplies a live
+route or a FinalPot codec/retirement authority in this lab.
 
 The first implementation checkpoint additionally froze and centrally reserved:
 
@@ -296,8 +301,8 @@ input, trailing bytes, unknown variants, noncanonical padding, cursor mismatch,
 count/record-width mismatch, and arithmetic overflow.
 
 These are frozen codec contracts. The live source handlers are exactly the
-capability set in section 7; payload facts for disabled actions 24 and 25 do
-not create a success route.
+capability set in section 7; payload facts for disabled actions 24 through 26
+do not create a success route.
 
 | Local action | Exact payload |
 |---:|---|
@@ -313,6 +318,7 @@ not create a success route.
 | 21 `ClaimSolver` | `selected_candidate[32]` |
 | 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner[32]` |
 | 25 `EntitleSlice` (disabled claim) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || slice_index u16_le || order_index u8 || side u8 || consideration_price_units u128_le || completes_order u8` (149 bytes) |
+| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || settlement_transition_id[32]` |
 | 32 `CloseClearWork` | `epoch[32] || node[32]` |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
@@ -688,7 +694,7 @@ All other General V2 actions remain disabled. In particular:
   primitive.
 
 Actions 24 and 25 have strict capability-disabled payload and account-envelope
-codecs, including a centrally reserved `0x7f/1` OwnerSettlement envelope, but
+codecs, including a centrally reserved `0x81/1` OwnerSettlement envelope, but
 no successful SBF transition. They cannot activate until an authenticated,
 complete filled-order projection, exactly one selected fee row per canonical
 owner, checked candidate totals, a canonically derived owner-order-set digest,
@@ -697,7 +703,7 @@ The 292-byte row outer stores no duplicate rent DTO. Its pre-fund-safe creation
 plan must atomically update the separate authenticated rent ledger that owns
 the payer principal, refund recipient, and donation sink.
 
-The centrally reserved `0x80/1` through `0x84/1` fee envelopes are likewise
+The centrally reserved `0x82/1` through `0x86/1` fee envelopes are likewise
 capability-disabled. Their inner codecs re-enter the typed fee constructors;
 the outer bytes add only tag/version, PDA bump, and zero flags. A separately
 authenticated runtime/rent ledger must own funding, refundable principal, and
@@ -706,13 +712,22 @@ hostile-prefund disposition. Carry and payer allocation are keyed by
 local action or ordered SBF meta contract has been allocated for these
 accounts, so they cannot relax the zero-fee boundary or move Position value.
 
-The `0x85/1` cash-pot envelope is also capability-disabled. Its exact
+The `0x87/1` cash-pot envelope is also capability-disabled. Its exact
 256-byte semantic body enforces buyer-first candidate-wide allocation and
 segregates consideration, fees, rounding price units, and virtual-claim cash.
 Receipt-end accounting is not value movement. No settlement action may consume
 its plan until an authenticated matching complete Egg/reservation transition
 is in the same atomic write set, and allocation completion does not authorize
 cash-pot, owner-row, or FinalPot retirement.
+
+Action 26 `ConsumeDirectReceiptEggs` is capability-disabled even though its
+96-byte selector and complete pure direct planner are frozen. The planner
+atomically stages one direct receipt, two Position poststates, two Reservation
+poststates, and two owner-row accounting bodies, moving only internal native
+Eggs. It does not convert cash. An SBF meta contract cannot freeze until the
+receipt also authenticates the exact Settlement-compartment liveness receipt,
+call ordinal, quote ceiling, keeper payment, and payer refund; virtual
+split/merge receipts require distinct actions and contracts.
 
 This lab can close completed Work and unlink terminal source nodes while
 retaining the selected Feed. It still leaves the retained Feed,
