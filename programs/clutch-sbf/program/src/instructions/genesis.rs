@@ -1,10 +1,9 @@
 //! The genesis plane: the instructions that bring accounts into existence.
 //!
 //! This module owns public System-CPI constructors for foundational accounts
-//! outside the market constructor itself. It also owns [`Intent::Endow`], the
-//! backed collateral-deposit boundary: on a wallet's first deposit it creates
-//! that wallet's canonical Position and Replay accounts before transferring
-//! value and crediting cash.
+//! outside the market constructor itself. Full-width collateral deposits are
+//! owned exclusively by [`super::collateral_cash_v3`]; the former lowered
+//! Genesis Endow path is not part of the successor profile.
 //!
 //! | intent | creates | accounts |
 //! | --- | --- | ---: |
@@ -38,10 +37,6 @@
 //! `InitOrderPage` is current only for the exact DirectEpochV4 page-zero
 //! constructor. The historical General account-width fallback is a host-test
 //! fixture and cannot compile into the Solana program.
-//!
-//! `Endow` is permissionless self-service, not a third-party credit interface:
-//! the signer must equal the requested Position owner and may deposit only
-//! from a Token-2022 account whose owner authority is that signer.
 //!
 //! ## Immutable bytes come only from typed, sealed artifacts
 //!
@@ -109,7 +104,6 @@
 //! | the rent-sysvar role is not the rent sysvar | [`ClutchError::WrongRentSysvar`] | `0x0071` |
 //! | the `CreateAccount` CPI refused, or created nothing | [`ClutchError::AccountCreationFailed`] | `0x0072` |
 //! | an evidence buffer is not the artifact the intent names | [`ClutchError::EvidenceBufferMismatch`] | `0x0073` |
-//! | an Endow token account or exact delta is invalid | token admission / [`ClutchError::TokenDeltaMismatch`] | `0x0018..=0x001c` |
 //! | every other check | the [`ClutchError`] the check already has | `0x0001..=0x0017` |
 //!
 //! ## Frame discipline
@@ -130,6 +124,7 @@ use crate::collateral_release::{
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
 };
 use crate::error::{ClutchError, Refusal};
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
 use clutch_batch_policy_identity::revenue_policy_v1::{
@@ -557,6 +552,7 @@ const ENDOW_COMMON_STATE_ROLES: [StateRole; 4] = [
 ];
 
 /// The SourceSpec account lengths `Endow` admits, one per spec generation.
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 const ENDOW_SOURCE_SPEC_LENGTHS: [usize; 2] = [
     SOURCE_SPEC_ACCOUNT_V1_BYTES,
     crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES,
@@ -598,7 +594,8 @@ fn read_canonical_policy(
 /// Exactly [`super::market_init`]'s rule and for exactly its reason: the
 /// replay plane is per `(market, owner, generation)` and nothing in this
 /// module has one, so a nonzero sequence is a claim about a plane the
-/// instruction does not touch.  `Endow` is the exception and consumes one.
+/// instruction does not touch. Full-width Endow owns its GEN1 transition in
+/// [`super::collateral_cash_v3`] instead of passing through this helper.
 fn require_creation_sequence(sequence: u64) -> Outcome<()> {
     require(sequence == 0, ClutchError::Replay)
 }
@@ -716,6 +713,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
                 page_count,
             },
         ),
+        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
         Action::Layout(Intent::Endow {
             market,
             owner,
@@ -1373,6 +1371,7 @@ fn write_empty_page(target: &mut [u8], intent: &PageInit, bump: u8) -> Outcome<(
 
 /// One already-matched `Endow` intent plus its replay sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub struct EndowRequest {
     /// Exact replay sequence the request claims.
     pub sequence: u64,
@@ -1387,6 +1386,7 @@ pub struct EndowRequest {
 /// Create a missing generation-zero Position/Replay pair, or authenticate an
 /// existing pair. Mixed prestate is always a refusal.
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 fn ensure_endow_owner_plane(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -1457,6 +1457,7 @@ fn ensure_endow_owner_plane(
     Ok(())
 }
 
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) -> Outcome<()> {
     require_count(accounts, ENDOW_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_PAYER])?;
@@ -1504,12 +1505,8 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
         ClutchError::MismatchedState,
     )?;
 
-    /* Endow is the sole protocol-recognized inbound collateral boundary.
-     * Authenticate the immutable Terms and SourceSpec and ask the exact same
-     * closed registry used by source ingestion before allocating an owner
-     * plane or invoking Token-2022. The default ELF has no registered release
-     * and therefore cannot take custody even of a market left by an older ELF
-     * or installed as a local fixture. */
+    /* Historical profiles authenticate their immutable Terms and SourceSpec
+     * through the old closed source registry before taking custody. */
     super::source_ingest::require_registered_source_for_market(
         program_id,
         &accounts[IX_ENDOW_TERMS],
@@ -1645,6 +1642,7 @@ fn endow(program_id: &Pubkey, accounts: &[AccountInfo], request: &EndowRequest) 
 /// transition in this program uses: identity bindings, then phase, then
 /// replay, then arithmetic, then the cap, then the writes.
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub fn apply_endow(
     market_bytes: &[u8],
     position_bytes: &mut [u8],
@@ -1668,6 +1666,7 @@ pub fn apply_endow(
 /// refuse before value moves.  The returned values are encoded only after the
 /// exact token deltas have been observed.
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 fn validated_endow(
     market_bytes: &[u8],
     position_bytes: &[u8],
@@ -2044,6 +2043,7 @@ mod tests {
     /// The ledger half of Endow, checked against the layout codecs.  The SVM
     /// test drives the surrounding real Token-2022 transfer.
     #[test]
+    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     fn an_endowment_ledger_credits_cash_and_advances_replay() {
         let mut case = EndowCase::new();
         let hoard_before = case.hoard;
@@ -2114,6 +2114,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     fn an_endowment_refuses_every_hostile_caller_and_state() {
         let base = EndowCase::new();
         let request = EndowRequest {
@@ -2298,6 +2299,7 @@ mod tests {
     }
 
     /// One coherent `(market, hoard, position, replay)` plane for `Endow`.
+    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     struct EndowCase {
         market_id: MarketId,
         owner: Hash32,
@@ -2310,6 +2312,7 @@ mod tests {
         replay: [u8; REPLAY_ACCOUNT_LEN],
     }
 
+    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     impl EndowCase {
         fn new() -> Self {
             let realm = h(1);

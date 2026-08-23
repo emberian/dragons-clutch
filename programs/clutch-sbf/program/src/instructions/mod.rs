@@ -145,6 +145,7 @@ pub mod genesis;
 pub mod market_init;
 #[cfg(test)]
 pub mod merge_materialize;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
@@ -155,9 +156,12 @@ pub mod product_market;
 /// Always-compiled current Product/Series authority. Dispatcher tuples remain
 /// separately capability-gated, including in source-empty releases.
 pub mod product_series;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod resolution_work;
 pub mod series_failure_funding;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod source_series_successor;

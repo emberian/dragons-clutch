@@ -71,7 +71,7 @@ use crate::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_SLOT_OFFSET, PROGRAM_LINK_OFFSET,
     UPGRADEABLE_LOADER_ID,
 };
-use crate::source_identity::CLOCK_SYSVAR_ID;
+use crate::instructions::artifact::CLOCK_SYSVAR_ID;
 
 const CLOCK_SYSVAR_BYTES_V1: usize = 40;
 const CLOCK_UNIX_TIMESTAMP_OFFSET_V1: usize = 32;
@@ -1112,7 +1112,7 @@ pub fn authenticate_clock_bucket(
     release: AuthenticatedSourceReleaseV1,
     clock_account: &AccountInfo<'_>,
 ) -> SourceV3SbfResult<AuthenticatedClockBucketV1> {
-    if clock_account.key.to_bytes() != CLOCK_SYSVAR_ID
+    if *clock_account.key != CLOCK_SYSVAR_ID
         || clock_account.is_signer
         || clock_account.is_writable
     {
@@ -1135,7 +1135,7 @@ pub fn authenticate_route_clock_bucket(
     route: AuthenticatedSourceRouteV1,
     clock_account: &AccountInfo<'_>,
 ) -> SourceV3SbfResult<AuthenticatedClockBucketV1> {
-    if clock_account.key.to_bytes() != CLOCK_SYSVAR_ID
+    if *clock_account.key != CLOCK_SYSVAR_ID
         || clock_account.is_signer
         || clock_account.is_writable
     {

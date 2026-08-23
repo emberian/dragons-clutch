@@ -143,6 +143,15 @@ compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
     not(feature = "profile-full")
 ))]
 compile_error!("the Product/Series artifact-catalog laboratory requires profile-full");
+#[cfg(all(
+    feature = "profile-successor-chain-attached-v1",
+    any(
+        feature = "non-production-mock-source",
+        feature = "non-production-real-pyth-lab",
+        feature = "laboratory-fixtures"
+    )
+))]
+compile_error!("the checked chain-attached successor cannot compile Source laboratory authority");
 
 pub mod accounts;
 pub mod capabilities;
@@ -156,16 +165,22 @@ pub mod instructions_sysvar;
 pub mod loader_state;
 #[cfg(feature = "observed-positive-collateral-release-manifest")]
 mod observed_collateral_release_manifest_v2;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod native_window;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod pyth_receiver;
 pub mod seeds;
 pub mod source;
 pub mod source_archive;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_archive_v2;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_generation;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_identity;
 pub mod source_plane_v3;
 pub mod source_plane_v3_actions;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_v2;
 pub mod token;
 
