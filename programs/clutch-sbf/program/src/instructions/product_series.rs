@@ -199,6 +199,19 @@ pub struct AuthenticatedSeriesCollateralTerminalV1 {
     projection: SeriesFundingTerminalProjectionV1,
 }
 
+/// Exact accepted terminal movement from one Series lamport compartment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedSeriesLamportTerminalV1 {
+    /// One-shot terminal receipt authorizing this disposition.
+    pub terminal_receipt: ContentId,
+    /// Ordered Series funding component.
+    pub component: SeriesFundingComponentV1,
+    /// Exact payer principal returned to the FundingTerms account.
+    pub refunded_principal_lamports: u64,
+    /// Exact donation residue sent to the neutral lamport sink.
+    pub neutral_donation_lamports: u64,
+}
+
 impl AuthenticatedSeriesCollateralTerminalV1 {
     /// Exact authenticated funding graph retained by the terminal receipt.
     pub const fn funding(&self) -> AuthenticatedSeriesCollateralFundingV1 {
@@ -1459,6 +1472,82 @@ pub fn close_series_collateral_vault<'a>(
         runtime_lamport_account_view(neutral_lamport_sink, &sink_final_data),
     )
     .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))
+}
+
+/// Settle one component's remaining lamport principal and donation residue to
+/// their distinct immutable FundingTerms destinations.
+///
+/// This must follow collateral-vault closure for the component so the token
+/// account's extracted rent has already been split and the component vault has
+/// returned to its exact pre-close funding balance.
+#[allow(clippy::too_many_arguments)]
+pub fn settle_series_lamport_component<'a>(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedSeriesCollateralTerminalV1,
+    component: SeriesFundingComponentV1,
+    component_lamport_vault: &AccountInfo<'a>,
+    payer_lamport_refund: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<AcceptedSeriesLamportTerminalV1> {
+    let funding = authenticated.funding();
+    let series = SeriesPlanV5Id::from_bytes(funding.join().series_plan.bytes());
+    require(
+        CollateralId::from_bytes(series.bytes()) == funding.join().series_plan
+            && collateral_id(payer_lamport_refund.key) == funding.join().payer_lamport_refund
+            && collateral_id(neutral_lamport_sink.key) == funding.join().neutral_lamport_sink,
+        ClutchError::MismatchedState,
+    )?;
+    require_system_lamport_destination(
+        payer_lamport_refund,
+        authenticated.projection().lamport_principal_refund,
+    )?;
+    require_system_lamport_destination(
+        neutral_lamport_sink,
+        authenticated.projection().neutral_lamport_sink,
+    )?;
+    require_lamport_vault_metadata(
+        program_id,
+        series,
+        component.index(),
+        component_lamport_vault,
+    )?;
+    require_system_program(system_program)?;
+    let projection = authenticated.projection();
+    let principal = projection.refundable_principal[component.index()].lamports;
+    let donation = projection.donation_residue[component.index()].lamports;
+    require(
+        component_lamport_vault.lamports() == add(principal, donation)?,
+        ClutchError::MismatchedState,
+    )?;
+    transfer_from_lamport_custody(
+        program_id,
+        series,
+        component,
+        component_lamport_vault,
+        payer_lamport_refund,
+        system_program,
+        principal,
+    )?;
+    transfer_from_lamport_custody(
+        program_id,
+        series,
+        component,
+        component_lamport_vault,
+        neutral_lamport_sink,
+        system_program,
+        donation,
+    )?;
+    require(
+        component_lamport_vault.lamports() == 0,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    Ok(AcceptedSeriesLamportTerminalV1 {
+        terminal_receipt: ContentId::from_bytes(authenticated.join().terminal_receipt.bytes()),
+        component,
+        refunded_principal_lamports: principal,
+        neutral_donation_lamports: donation,
+    })
 }
 
 /// Authenticate the Realm-selected mint and all five release-selected Series
