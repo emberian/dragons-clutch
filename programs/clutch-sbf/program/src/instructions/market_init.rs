@@ -3008,9 +3008,15 @@ mod tests {
             terms.terms = terms.recomputed_terms_digest().unwrap();
             let mut bytes = vec![0_u8; account_len::TERMS];
             terms.encode(&mut bytes).unwrap();
+            #[cfg(feature = "profile-full")]
             assert_eq!(
                 resolution_account_len(&bytes),
                 Ok(OCCUPATION_RESOLUTION_LEN)
+            );
+            #[cfg(not(feature = "profile-full"))]
+            assert_eq!(
+                resolution_account_len(&bytes),
+                Err(ClutchError::UnsupportedInstruction.into())
             );
         }
         terms.statistic_id = 1;

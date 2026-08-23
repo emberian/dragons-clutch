@@ -1272,6 +1272,23 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
+    fn direct_epoch() -> DirectEpochV3Account {
+        DirectEpochV3Account::open(
+            h(1),
+            terms().terms,
+            grid().grid,
+            h(22),
+            4,
+            10_000,
+            0,
+            100,
+            110,
+            6,
+        )
+        .expect("direct epoch")
+    }
+
     /// One empty, unfrozen page.
     ///
     /// The slots are canonical padding rather than records on purpose: this
@@ -1369,10 +1386,18 @@ mod tests {
         grid(),
         read_price_grid
     );
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     header_case!(
         epoch_reader_refuses_hostile_headers,
         account_len::EPOCH,
         epoch(),
+        read_epoch
+    );
+    #[cfg(feature = "profile-direct-v3-source-v2-point")]
+    header_case!(
+        epoch_reader_refuses_hostile_headers,
+        DIRECT_EPOCH_BYTES,
+        direct_epoch(),
         read_epoch
     );
     header_case!(

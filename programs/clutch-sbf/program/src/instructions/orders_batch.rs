@@ -2990,6 +2990,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_writes_exactly_what_the_layout_encoder_would() {
         let d = domain();
         let first = order(0x20, 1, 5_000);
@@ -3147,6 +3148,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_writes_a_portfolio_record_the_same_way() {
         /* The v1 wire could not carry a portfolio record at all.  It can now,
          * and the placement path is the same one: the same writer, the same
@@ -3219,6 +3221,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn cancel_order_writes_exactly_what_the_layout_encoder_would() {
         let d = domain();
         let first = order(0x20, 1, 5_000);
@@ -3299,6 +3302,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn cancel_order_refuses_a_replayed_retirement() {
         let d = domain();
         let placed = order(0x20, 1, 5_000);
@@ -3330,6 +3334,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn cancel_order_refuses_a_stale_generation_a_foreign_owner_and_another_page() {
         let d = domain();
         /* A record whose own generation is 5, so a retirement must carry a
@@ -3416,6 +3421,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn cancel_order_refuses_a_closed_epoch_a_frozen_page_and_a_foreign_epoch() {
         let grid = grid_account();
         let placed = order(0x20, 1, 5_000);
@@ -3490,6 +3496,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_fills_a_page_and_then_refuses_a_seventeenth_record() {
         let d = domain();
         let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3518,6 +3525,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_refuses_every_page_the_streaming_decoder_refuses() {
         let d = domain();
         let existing = order(0x20, 1, 5_000);
@@ -3608,6 +3616,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_refuses_an_off_grid_limit_and_a_grid_the_epoch_does_not_name() {
         let d = domain();
         let mut page = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3659,6 +3668,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_refuses_a_closed_epoch_and_a_frozen_page() {
         let grid = grid_account();
         for phase in [EPOCH_PHASE_FROZEN, EPOCH_PHASE_CLEARED] {
@@ -3696,6 +3706,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_refuses_a_rank_that_is_not_the_one_the_page_fixes() {
         /* At v3 this was an ordering rule — an id had to be strictly above its
          * predecessor — and a caller could burn a page by claiming a huge one.
@@ -3757,6 +3768,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_refuses_an_unauthenticated_owner_and_a_replayed_sequence() {
         let d = domain();
         let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3790,6 +3802,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_refuses_a_page_or_an_intent_that_names_another_epoch() {
         let d = domain();
         let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3824,6 +3837,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn place_order_mirrors_the_record_codec_and_the_epochs_width_and_horizon() {
         let d = domain();
         let clean = encode_page(&page_account(&d.epoch, 0, 1, &[]));
@@ -3942,6 +3956,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     fn the_place_order_wire_carries_both_order_families() {
         /* `Intent::PlaceOrder` carries an `OrderSlot` and, at intent v3, an
          * exact fee ceiling.  The portfolio family is expressible: 182 bytes
@@ -4008,52 +4023,76 @@ mod tests {
     }
 
     #[test]
-    fn all_four_intents_reach_their_account_planes() {
+    fn enabled_order_intents_reach_accounts_and_disabled_intents_refuse_first() {
         let program_id = Pubkey::new_from_array([9; 32]);
         let market = h(1);
         let epoch = canonical_epoch_id(market, 4);
 
-        let request = Request {
-            sequence: 0,
-            action: Action::Layout(Intent::SettlePage {
-                market,
-                epoch,
-                page_index: 0,
-            }),
-        };
-        assert_eq!(
-            process(&program_id, &[], &request),
-            Err(adapter(ClutchError::AccountCount))
-        );
-
-        // The other three reach their account planes too.
-        for action in [
-            Action::Layout(Intent::PlaceOrder {
-                market,
-                epoch,
-                max_fee_atoms: 0,
-                slot: OrderSlot::Single(order(0x20, 1, 5_000)),
-            }),
-            Action::Layout(Intent::CancelOrder {
-                market,
-                epoch,
-                owner: h(0x20),
-                order_id: canonical_order_id(1),
-                generation: 7,
-            }),
-            Action::Layout(Intent::SubmitDirectPage {
-                market,
-                epoch,
-                page_index: 0,
-            }),
-        ] {
+        let cases = [
+            (
+                Action::Layout(Intent::SettlePage {
+                    market,
+                    epoch,
+                    page_index: 0,
+                }),
+                if crate::capabilities::GENERAL_CLEARING {
+                    ClutchError::AccountCount
+                } else {
+                    ClutchError::UnsupportedInstruction
+                },
+            ),
+            (
+                Action::Layout(Intent::PlaceOrder {
+                    market,
+                    epoch,
+                    max_fee_atoms: 0,
+                    slot: OrderSlot::Single(order(0x20, 1, 5_000)),
+                }),
+                if cfg!(feature = "profile-direct-v3-source-v2-point") {
+                    /* Direct placement selects its mandatory V4 epoch account
+                     * before the fixed account-plane validator. With no epoch
+                     * present, that exact version refusal is Unsupported. */
+                    ClutchError::UnsupportedInstruction
+                } else {
+                    ClutchError::AccountCount
+                },
+            ),
+            (
+                Action::Layout(Intent::CancelOrder {
+                    market,
+                    epoch,
+                    owner: h(0x20),
+                    order_id: canonical_order_id(1),
+                    generation: 7,
+                }),
+                if crate::capabilities::GENERAL_CLEARING {
+                    ClutchError::AccountCount
+                } else {
+                    ClutchError::UnsupportedInstruction
+                },
+            ),
+            (
+                Action::Layout(Intent::SubmitDirectPage {
+                    market,
+                    epoch,
+                    page_index: 0,
+                }),
+                if cfg!(feature = "profile-full") {
+                    ClutchError::AccountCount
+                } else {
+                    ClutchError::UnsupportedInstruction
+                },
+            ),
+        ];
+        for (action, expected_error) in cases {
             let request = Request {
                 sequence: 0,
                 action,
             };
             assert_eq!(
                 process(&program_id, &[], &request),
-                Err(adapter(ClutchError::AccountCount))
+                Err(adapter(expected_error)),
+                "{action:?} capability admission"
             );
         }
     }
