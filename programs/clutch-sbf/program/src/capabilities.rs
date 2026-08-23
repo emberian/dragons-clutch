@@ -137,10 +137,10 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 /// Return whether a family-local action has an allocation in the central registry.
 ///
 /// Allocation does not imply execution capability. General V2, SourcePlane V3
-/// actions 1 through 12, and recurring-Series actions 13 through 18 have
-/// registered local actions; every exact tuple remains separately disabled
-/// until its handler is admitted. The Series payload/account codecs are frozen
-/// only for the explicit laboratory; they do not activate any runtime tuple.
+/// actions 1 through 12, recurring-Series actions 13 through 18, and Recovery
+/// 78/v1 actions 1 through 9 have registered local actions; every exact tuple
+/// remains separately disabled until its handler is admitted. Frozen payload
+/// and account codecs do not activate any runtime tuple.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
@@ -156,6 +156,7 @@ pub const fn extension_intent_action_allocated(
             clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
                 | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
                 | clutch_solana_layout::registry::ExtensionAction::RecurringSeries(_)
+                | clutch_solana_layout::registry::ExtensionAction::Recovery(_)
         )
     )
 }
@@ -243,13 +244,31 @@ mod tests {
         for family_tag in u8::MIN..=u8::MAX {
             for family_version in u8::MIN..=3 {
                 for local_action in u8::MIN..=u8::MAX {
-                    let expected_allocated = family_tag
+                    let general = family_tag
                         == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
                         && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
                             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
                             .contains(&local_action);
+                    let source_or_series = family_tag
+                        == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION
+                        && ((clutch_solana_layout::registry::SourceSeriesAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::SourceSeriesAction::LAST_TAG)
+                            .contains(&local_action)
+                            || (clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
+                                ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG)
+                                .contains(&local_action));
+                    let recovery = family_tag
+                        == clutch_solana_layout::registry::RECOVERY_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general || source_or_series || recovery;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,
