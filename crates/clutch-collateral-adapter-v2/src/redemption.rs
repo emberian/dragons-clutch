@@ -108,9 +108,35 @@ pub struct PreparedZeroClaimRedemptionCollateralV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcceptedZeroClaimRedemptionCollateralV2 {
     /// Unchanged locked-principal state.
-    pub backing_after: CollateralBackingV2,
+    backing_after: CollateralBackingV2,
+    /// Exact authenticated zero-payout request.
+    request: ClaimRedemptionCollateralRequestV2,
+    /// Exact unchanged visible Hoard amount after reparsing.
+    visible_hoard_atoms_after: u64,
     /// Receipt binding the zero payout to unchanged admitted collateral state.
-    pub receipt_id: Id,
+    receipt_id: Id,
+}
+
+impl AcceptedZeroClaimRedemptionCollateralV2 {
+    /// Unchanged locked-principal state.
+    pub const fn backing_after(self) -> CollateralBackingV2 {
+        self.backing_after
+    }
+
+    /// Exact authenticated zero-payout request.
+    pub const fn request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.request
+    }
+
+    /// Exact unchanged visible Hoard amount after reparsing.
+    pub const fn visible_hoard_atoms_after(self) -> u64 {
+        self.visible_hoard_atoms_after
+    }
+
+    /// Receipt binding the zero payout to unchanged admitted collateral state.
+    pub const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
 }
 
 /// Prepare one nonzero claim payout without touching Token-2022 claim state.
@@ -273,6 +299,8 @@ pub fn accept_zero_claim_redemption_collateral_v2(
     )?;
     Ok(AcceptedZeroClaimRedemptionCollateralV2 {
         backing_after: prepared.request.backing_before,
+        request: prepared.request,
+        visible_hoard_atoms_after: hoard.amount_atoms,
         receipt_id,
     })
 }

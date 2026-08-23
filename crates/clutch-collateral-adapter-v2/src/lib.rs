@@ -26,6 +26,7 @@
 
 mod account;
 mod binding;
+mod bearer_redemption_v3;
 mod claim;
 mod close;
 mod codec;
@@ -35,10 +36,12 @@ mod position_v3;
 mod reclassification;
 mod redemption;
 mod release;
+mod resolution_v5;
 mod series;
 mod transfer;
 
 pub use account::*;
+pub use bearer_redemption_v3::*;
 pub use binding::*;
 pub use claim::*;
 pub use close::*;
@@ -48,6 +51,7 @@ pub use position_v3::*;
 pub use reclassification::*;
 pub use redemption::*;
 pub use release::*;
+pub use resolution_v5::*;
 pub use series::*;
 pub use transfer::*;
 
@@ -162,6 +166,8 @@ pub enum Error {
     SeriesJoinMismatch,
     /// An aggregate Market liability compartment could not cover a debit.
     AggregateLiabilityInsufficient,
+    /// A scaled native-claim payout was not an exact whole collateral atom.
+    PayoutRemainder,
 }
 
 /// Result alias for the V2 collateral contract.

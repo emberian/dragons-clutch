@@ -15,6 +15,8 @@
 //! | --- | --- |
 //! | [`construction`] | shared System-CPI construction of the seven-account market state plane |
 //! | [`collateral_cash_v3`] | `Intent::Endow`, `Intent::WithdrawCash` over full-width PositionV3/HoardV2/GEN1 |
+//! | [`claim_representation_v3`] | `Intent::Materialize`, `Intent::Dematerialize` over PositionV3/ClaimLedgerV3/GEN1 and the separate claim release |
+//! | [`external_redemption_v3`] | `Intent::RedeemExternal` over ResolutionV5/HoardV2/ClaimLedgerV3 and bearer Token-2022 claims |
 //! | [`genesis`] | `Intent::InitRealm`, `Intent::InitProfileV2`, `Intent::InitPriceGrid`, `Intent::InitTerms`, `Intent::InitOrderPage`, `Intent::CloseRevenuePolicyRecord` |
 //! | [`split`] | `Intent::Split` |
 //! | [`merge_materialize`] | `Intent::Merge`, `Intent::Materialize`, `Intent::Dematerialize` |
@@ -45,6 +47,7 @@
 
 pub mod artifact;
 pub mod cash_exit;
+pub mod claim_representation_v3;
 pub mod collateral_cash_v3;
 pub(crate) mod collateral_position_v3;
 pub mod complete_set_v3;
@@ -59,6 +62,7 @@ pub mod dealer_runtime;
 pub mod direct_selection;
 pub mod direct_selection_v3;
 pub mod external_exit;
+pub mod external_redemption_v3;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 #[cfg(feature = "non-production-failure-recovery-lab")]
