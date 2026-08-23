@@ -87,6 +87,7 @@ use crate::accounts::{
     self, apply_ledger_delta, expect_pda, require, require_distinct, require_signer,
     require_two_term_closure, MarketFacts, Outcome, StateRole,
 };
+use crate::claim_release::authenticate_claim_issuance_runtime_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
@@ -1660,7 +1661,10 @@ where
      * transaction, and snapshot the exact pre-CPI supply and balance.  All of
      * it before the first write, and all of it dropped back to a small snapshot
      * so nothing large crosses this frame. */
-    validate_token_program(&accounts[IX_TOKEN_PROGRAM])?;
+    if matches!(leg, TokenLeg::Outcome(_)) {
+        validate_token_program(&accounts[IX_TOKEN_PROGRAM])?;
+        authenticate_claim_issuance_runtime_v1(&accounts[IX_TOKEN_PROGRAM])?;
+    }
     let first_mint = match leg {
         TokenLeg::Outcome(_) => IX_OUTCOME_MINTS,
         TokenLeg::Collateral => IX_COLLATERAL_OUTCOME_MINTS,

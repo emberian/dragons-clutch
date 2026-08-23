@@ -132,6 +132,7 @@ compile_error!("the Product/Series artifact-catalog laboratory requires profile-
 
 pub mod accounts;
 pub mod capabilities;
+pub mod claim_release;
 pub mod claim_truth;
 pub mod collateral_release;
 pub mod dispatch;

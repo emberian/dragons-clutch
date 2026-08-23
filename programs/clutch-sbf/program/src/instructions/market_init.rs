@@ -173,6 +173,7 @@ use crate::accounts::{
     self, expect_pda, require, require_signer, require_two_term_closure, MarketFacts, Outcome,
     RealmFacts, StateRole, SupplyFacts, TermsFacts,
 };
+use crate::claim_release::authenticate_claim_issuance_v1;
 use crate::collateral_release::authenticate_realm_collateral_v2;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
@@ -396,6 +397,7 @@ fn admit_collateral(
         },
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    authenticate_claim_issuance_v1(bound, &accounts[IX_OUTCOME_TOKEN_PROGRAM])?;
     let mint = &accounts[IX_COLLATERAL_MINT];
     let mint_data = mint
         .try_borrow_data()

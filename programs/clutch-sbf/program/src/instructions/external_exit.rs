@@ -7,6 +7,7 @@
 //! Token-2022 mint supply is the aggregate external truth.
 
 use crate::accounts::{self, expect_pda, require, require_signer, Outcome, StateRole};
+use crate::claim_release::authenticate_claim_issuance_v1;
 use crate::claim_truth::{self, ObservedMintSupplies};
 use crate::collateral_release::authenticate_realm_collateral_v2;
 use crate::error::{ClutchError, Refusal};
@@ -596,6 +597,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         },
     )
     .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    authenticate_claim_issuance_v1(bound_collateral, &accounts[IX_OUTCOME_TOKEN_PROGRAM])?;
     /* Terms and Resolution were fully decoded (including the terms digest) by
      * the small-facts readers above.  Resolve already bound the frozen payout
      * set into the program-owned kernel; redemption preserves that inductive
