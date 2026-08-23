@@ -2301,7 +2301,7 @@ impl SourceSeriesAction {
 pub enum RecurringSeriesAction {
     /// Register one persistent V5 Series against an authenticated registry release.
     RegisterSeries = 13,
-    /// Capitalize the five Series funding compartments.
+    /// Capitalize six lamport compartments and five collateral vaults.
     ActivateFunding = 14,
     /// Create or converge the next eligible occurrence atomically.
     AdvanceOccurrence = 15,
