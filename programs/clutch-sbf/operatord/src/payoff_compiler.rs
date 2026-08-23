@@ -670,14 +670,14 @@ fn exact_market_json(
             "outcomeCount": output.manifest.outcome_count().to_string(),
             "payoutDenominator": output.manifest.payout_denominator().to_string(),
             "prices": output.manifest.prices()[..usize::from(output.manifest.outcome_count())]
-                .iter().map(u64::to_string).collect::<Vec<_>>(),
+                .iter().map(|price| price.to_string()).collect::<Vec<_>>(),
         },
         "search": {
             "coordinateDomainMin": output.manifest.coordinate_domain_min().to_string(),
             "coordinateDomainMax": output.manifest.coordinate_domain_max().to_string(),
             "coordinates": output.manifest.coordinates()
                 [..usize::from(output.manifest.coordinate_count())]
-                .iter().map(u128::to_string).collect::<Vec<_>>(),
+                .iter().map(|coordinate| coordinate.to_string()).collect::<Vec<_>>(),
             "maximumSubsetEvaluationsPerSupport": output.manifest
                 .maximum_subset_evaluations_per_support().to_string(),
             "exhaustedThroughSupport": output.manifest.exhausted_through_support().to_string(),
@@ -731,6 +731,9 @@ impl CompilerService {
         }
         let program_id = Address::from_str(&request.program_id)
             .map_err(|_| "programId is not a canonical Solana address".to_string())?;
+        if program_id.to_string() != request.program_id {
+            return Err("programId is not in canonical base58 form".to_string());
+        }
         let expected_compiler_release = decode_hex(
             &request.expected_compiler_release_sha256,
             32,
