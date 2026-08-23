@@ -14,6 +14,7 @@
 mod account_auth;
 mod composition;
 mod generation_migration;
+mod general_settlement_retirement;
 mod live_family_auth;
 mod position_v3_bridge;
 mod root_bundle;
@@ -22,13 +23,23 @@ mod runtime_commit;
 pub use account_auth::{
     authenticate_counted_child, authenticate_direct_epoch_v4, authenticate_direct_reservation_v6,
     authenticate_direct_reservation_v8, authenticate_epoch_budget_v1_exact,
+    authenticate_general_epoch_v6_exact, authenticate_general_final_pot_v1_exact,
     authenticate_general_epoch_tombstone_v1, authenticate_general_epoch_tombstone_v1_exact,
     authenticate_general_epoch_v5, authenticate_general_epoch_v5_exact,
+    authenticate_general_owner_fee_finalization_v2_exact,
+    authenticate_general_owner_fee_carry_v1_exact,
+    authenticate_general_owner_settlement_v1_exact,
+    authenticate_general_owner_settlement_v2_exact,
+    authenticate_general_payer_allocation_v1_exact,
     authenticate_general_reservation_v5, authenticate_general_reservation_v7,
+    authenticate_general_selected_candidate_v1_exact,
+    authenticate_general_selected_fee_record_v1_exact,
+    authenticate_general_settlement_cash_pot_v1_exact,
     authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
     authenticate_position_tombstone_v1_exact, authenticate_position_tombstone_v2_exact,
     authenticate_position_tombstone_v3_exact, authenticate_position_v2,
-    authenticate_position_v2_exact, authenticate_position_v3_exact, authenticate_replay_absence_v1_exact,
+    authenticate_position_v2_exact, authenticate_position_v3_exact,
+    authenticate_purpose_replay_v3_exact, authenticate_replay_absence_v1_exact,
     authenticate_replay_successor_v1_exact, authenticate_runtime_executable_v2,
     AbsentAccountViewV1, AccountAccessV2, AccountViewV1, AccountViewV2, AuthenticatedAccountV1,
     AuthenticatedAccountV2, CanonicalPdaV1, CountedChildSchemaV1,
@@ -49,6 +60,15 @@ pub use generation_migration::{
     PositionReplayRentMinimumsV1, PositionReplayReopenRuntimeRequestV2, RetirementRecipientViewV1,
     VacantPdaAccountViewV2,
 };
+pub use general_settlement_retirement::{
+    authenticate_general_epoch_terminal_counts_v1, authenticate_general_fee_abort_v1,
+    authenticate_general_fee_terminal_v1,
+    authenticate_general_final_pot_terminal_v1,
+    authenticate_general_owner_settlement_terminal_v2,
+    AuthenticatedGeneralEpochTerminalCountsV1, AuthenticatedGeneralFeeAbortV1,
+    AuthenticatedGeneralFeeTerminalV1,
+    AuthenticatedGeneralFinalPotTerminalV1, AuthenticatedGeneralOwnerSettlementTerminalV2,
+};
 pub use live_family_auth::{
     authenticate_epoch_child_final_absence_v2, authenticate_epoch_child_terminal_account_v2,
     authenticate_general_v2_budget_retirement_v2, authenticate_general_v2_neutral_sink_binding_v1,
@@ -63,8 +83,7 @@ pub use position_v3_bridge::{
     authenticate_and_prepare_position_replay_close_v4,
     authenticate_and_prepare_position_replay_reopen_v3, PositionReplayCloseRuntimeRequestV4,
     PositionReplayRentMinimumsV3, PositionReplayReopenRuntimeRequestV3,
-    PositionV3PurposeTerminalReceiptV1, PositionV3RetirementRealmV1,
-    PreparedPositionReplayCloseV3, PreparedPositionReplayReopenV3,
+    PositionV3RetirementRealmV1, PreparedPositionReplayCloseV3, PreparedPositionReplayReopenV3,
 };
 pub use root_bundle::{
     authenticate_terminal_epoch_root_bundle_v1, AuthenticatedEpochChildClassV1,

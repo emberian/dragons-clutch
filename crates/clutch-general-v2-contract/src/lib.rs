@@ -12,18 +12,22 @@
 
 mod codec;
 mod fee_accounts;
+mod fee_terminal;
 mod final_pot;
 mod owner_settlement;
 mod payload;
+mod position_replay;
 mod rank;
 mod state;
 mod transition;
 
 pub use codec::{CodecError, Reader, Writer};
 pub use fee_accounts::*;
+pub use fee_terminal::*;
 pub use final_pot::*;
 pub use owner_settlement::*;
 pub use payload::*;
+pub use position_replay::*;
 pub use rank::{
     encode_score_v2_q_first_admitted_tie_v1, FirstAdmittedTieV1, ScoreV2QComponentsV1,
     SCORE_V2_Q_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
@@ -118,6 +122,10 @@ pub const ECONOMIC_DOMAIN_SEED_DOMAIN_V1: &[u8] = b"economic-domain:v2";
 pub const SELECTED_CANDIDATE_SEED_DOMAIN_V1: &[u8] = b"selected-candidate:v1";
 /// Fresh disabled owner-settlement envelope PDA seed domain.
 pub const OWNER_SETTLEMENT_SEED_DOMAIN_V1: &[u8] = b"owner-settlement:v1";
+/// Presence-explicit owner-settlement successor PDA seed domain.
+pub const OWNER_SETTLEMENT_SEED_DOMAIN_V2: &[u8] = b"owner-settlement:v2";
+/// Cash-handoff-accounting owner-settlement successor PDA seed domain.
+pub const OWNER_SETTLEMENT_SEED_DOMAIN_V3: &[u8] = b"owner-settlement:v3";
 /// Fresh selected composite-fee record PDA seed domain.
 pub const SELECTED_FEE_RECORD_SEED_DOMAIN_V1: &[u8] = b"selected-fee-record:v1";
 /// Fresh owner-scoped fee carry PDA seed domain.
@@ -136,10 +144,132 @@ pub const EPOCH_SEED_DOMAIN_V1: &[u8] = b"general-epoch:v2";
 pub const ORDER_PAGE_SEED_DOMAIN_V1: &[u8] = b"general-order-page:v2";
 /// Fresh counted General V2 reservation PDA seed domain.
 pub const RESERVATION_SEED_DOMAIN_V1: &[u8] = b"general-reservation:v2";
-/// Fresh General V2 receipt PDA seed domain.
+/// Superseded provisional General V2 receipt seed domain.
 pub const RECEIPT_SEED_DOMAIN_V1: &[u8] = b"general-receipt:v2";
+/// Canonical General SettlementReceipt V3 PDA seed domain.
+pub const RECEIPT_SEED_DOMAIN_V3: &[u8] = b"general-receipt:v3";
 /// Fresh General V2 final-pot PDA seed domain.
 pub const FINAL_POT_SEED_DOMAIN_V1: &[u8] = b"general-final-pot:v2";
+
+/// Validated ordered seed tuple for one General OrderPage V5 PDA.
+///
+/// The page index is the only suffix because the authenticated Epoch already
+/// binds the MarketRuntime and frozen order-set lifecycle. The exact V5 body
+/// owns its page count, order count, and generation-bearing slot digest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderPageSeedTupleV5 {
+    epoch: [u8; ID_BYTES],
+    page_index_le: [u8; 2],
+}
+
+impl GeneralOrderPageSeedTupleV5 {
+    /// Construct the canonical page tuple.
+    pub fn new(epoch: Id32, page_index: u16) -> Result<Self, CodecError> {
+        if epoch.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            page_index_le: page_index.to_le_bytes(),
+        })
+    }
+
+    /// First seed: the fresh General page domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        ORDER_PAGE_SEED_DOMAIN_V1
+    }
+
+    /// Second seed: full authenticated Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: zero-based page index in little-endian order.
+    pub const fn page_index_le(&self) -> &[u8; 2] {
+        &self.page_index_le
+    }
+}
+
+/// Validated ordered seed tuple for one canonical General Reservation V3 PDA.
+///
+/// The semantic Reservation identity already commits MarketRuntime, Epoch,
+/// owner, Position generation, and order ID. Repeating any of those
+/// coordinates as a seed would create a second identity projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralReservationSeedTupleV3 {
+    reservation_id: [u8; ID_BYTES],
+}
+
+impl GeneralReservationSeedTupleV3 {
+    /// Construct the canonical Reservation tuple.
+    pub fn new(reservation_id: Id32) -> Result<Self, CodecError> {
+        if reservation_id.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Ok(Self {
+            reservation_id: reservation_id.bytes(),
+        })
+    }
+
+    /// First seed: the fresh General Reservation domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        RESERVATION_SEED_DOMAIN_V1
+    }
+
+    /// Second seed: canonical semantic Reservation identity.
+    pub const fn reservation_id(&self) -> &[u8; ID_BYTES] {
+        &self.reservation_id
+    }
+}
+
+/// Validated ordered seed tuple for the sole future OwnerSettlement V3 PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementSeedTupleV3 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    owner: [u8; ID_BYTES],
+}
+
+impl OwnerSettlementSeedTupleV3 {
+    /// Construct the canonical owner-row tuple.
+    pub fn new(
+        epoch: Id32,
+        settlement_candidate: Id32,
+        owner: Id32,
+    ) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() || owner.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate || epoch == owner || settlement_candidate == owner {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            owner: owner.bytes(),
+        })
+    }
+
+    /// First seed: fresh non-aliasing V3 owner-row domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        OWNER_SETTLEMENT_SEED_DOMAIN_V3
+    }
+
+    /// Second seed: full authenticated Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: final selected SettlementCandidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: semantic Position owner.
+    pub const fn owner(&self) -> &[u8; ID_BYTES] {
+        &self.owner
+    }
+}
 
 /// Validated ordered seed tuple for the genesis-assisted MarketRuntime PDA.
 ///
@@ -217,11 +347,71 @@ pub struct OwnerSettlementSeedTupleV1 {
     owner: [u8; ID_BYTES],
 }
 
+/// Validated ordered seed tuple for the sole future V2 owner-settlement row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementSeedTupleV2 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    owner: [u8; ID_BYTES],
+}
+
 /// Validated ordered seed tuple for the one-to-one General V2 FinalPot PDA.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinalPotSeedTupleV1 {
     epoch: [u8; ID_BYTES],
     settlement_candidate: [u8; ID_BYTES],
+}
+
+/// Validated ordered seed tuple for one General SettlementReceipt V3 PDA.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementReceiptSeedTupleV3 {
+    epoch: [u8; ID_BYTES],
+    settlement_candidate: [u8; ID_BYTES],
+    slice_index_le: [u8; 2],
+}
+
+impl SettlementReceiptSeedTupleV3 {
+    /// Construct the canonical tuple from authenticated selection facts.
+    pub fn new(
+        epoch: Id32,
+        settlement_candidate: Id32,
+        slice_index: u16,
+    ) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate {
+            return Err(CodecError::MismatchedBinding);
+        }
+        if slice_index >= MAX_SLICES_U16 {
+            return Err(CodecError::InvalidCount);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            slice_index_le: slice_index.to_le_bytes(),
+        })
+    }
+
+    /// First seed: the non-aliasing V3 receipt domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        RECEIPT_SEED_DOMAIN_V3
+    }
+
+    /// Second seed: full authenticated counted Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: stable final SettlementCandidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: exact selected slice index in little-endian order.
+    pub const fn slice_index_le(&self) -> &[u8; 2] {
+        &self.slice_index_le
+    }
 }
 
 impl FinalPotSeedTupleV1 {
@@ -293,6 +483,43 @@ impl OwnerSettlementSeedTupleV1 {
     }
 }
 
+impl OwnerSettlementSeedTupleV2 {
+    /// Construct the one-to-one tuple from Epoch, final candidate, and owner.
+    pub fn new(epoch: Id32, settlement_candidate: Id32, owner: Id32) -> Result<Self, CodecError> {
+        if epoch.is_zero() || settlement_candidate.is_zero() || owner.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if epoch == settlement_candidate || epoch == owner || settlement_candidate == owner {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(Self {
+            epoch: epoch.bytes(),
+            settlement_candidate: settlement_candidate.bytes(),
+            owner: owner.bytes(),
+        })
+    }
+
+    /// First seed: the non-aliasing presence-explicit V2 domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        OWNER_SETTLEMENT_SEED_DOMAIN_V2
+    }
+
+    /// Second seed: full authenticated parent Epoch PDA bytes.
+    pub const fn epoch(&self) -> &[u8; ID_BYTES] {
+        &self.epoch
+    }
+
+    /// Third seed: stable final RelationV2 settlement candidate identity.
+    pub const fn settlement_candidate(&self) -> &[u8; ID_BYTES] {
+        &self.settlement_candidate
+    }
+
+    /// Fourth seed: full semantic Position-owner identity bytes.
+    pub const fn owner(&self) -> &[u8; ID_BYTES] {
+        &self.owner
+    }
+}
+
 /// Existing semantic account tag, fresh successor version: Window.
 pub const WINDOW_ACCOUNT_TAG: u8 = 24;
 /// Codec version matching the disabled central Window reservation.
@@ -307,8 +534,10 @@ pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
 pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
 /// Fresh disabled General V2 owner-settlement envelope tag.
 pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
-/// First exact owner-settlement envelope version.
-pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn non-aliasing first owner-settlement envelope version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
+/// Sole future presence-explicit owner-settlement version.
+pub const OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 2;
 /// Exact outer owner-settlement account bytes.
 pub const OWNER_SETTLEMENT_ACCOUNT_BYTES: usize = 292;
 /// Fresh disabled selected composite-fee record envelope tag.
@@ -323,6 +552,10 @@ pub const OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 pub const OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
 /// Exact owner fee-carry outer bytes.
 pub const OWNER_FEE_CARRY_ACCOUNT_BYTES: usize = 132;
+/// In-place terminal successor version at the same owner fee-carry PDA.
+pub const OWNER_FEE_FINALIZATION_ACCOUNT_VERSION: u8 = 2;
+/// Exact terminal fee-finalization outer bytes.
+pub const OWNER_FEE_FINALIZATION_ACCOUNT_BYTES: usize = 500;
 /// Fresh disabled owner payer-allocation envelope tag.
 pub const PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
 /// First owner payer-allocation envelope version.
@@ -408,7 +641,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 21] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -421,8 +654,13 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
     },
     AccountAllocationV1 {
         tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
-        version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
         owner: "clutch-general-v2-contract/OwnerSettlementV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerSettlementV2AccountV1",
     },
     AccountAllocationV1 {
         tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,
@@ -433,6 +671,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 20] = [
         tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
         version: OWNER_FEE_CARRY_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/OwnerFeeCarryV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_FEE_CARRY_ACCOUNT_TAG,
+        version: OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/OwnerFeeFinalizationV2AccountV1",
     },
     AccountAllocationV1 {
         tag: PAYER_ALLOCATION_ACCOUNT_TAG,
@@ -542,6 +785,23 @@ mod seed_tests {
         assert_eq!(final_pot.domain(), b"general-final-pot:v2");
         assert_eq!(final_pot.epoch(), &[8; ID_BYTES]);
         assert_eq!(final_pot.settlement_candidate(), &[9; ID_BYTES]);
+        let receipt = SettlementReceiptSeedTupleV3::new(id(8), id(9), 0x0102).unwrap();
+        assert_eq!(receipt.domain(), b"general-receipt:v3");
+        assert_eq!(receipt.epoch(), &[8; ID_BYTES]);
+        assert_eq!(receipt.settlement_candidate(), &[9; ID_BYTES]);
+        assert_eq!(receipt.slice_index_le(), &[2, 1]);
+        let page = GeneralOrderPageSeedTupleV5::new(id(8), 0x0304).unwrap();
+        assert_eq!(page.domain(), b"general-order-page:v2");
+        assert_eq!(page.epoch(), &[8; ID_BYTES]);
+        assert_eq!(page.page_index_le(), &[4, 3]);
+        let reservation = GeneralReservationSeedTupleV3::new(id(10)).unwrap();
+        assert_eq!(reservation.domain(), b"general-reservation:v2");
+        assert_eq!(reservation.reservation_id(), &[10; ID_BYTES]);
+        let owner_row = OwnerSettlementSeedTupleV3::new(id(8), id(9), id(11)).unwrap();
+        assert_eq!(owner_row.domain(), b"owner-settlement:v3");
+        assert_eq!(owner_row.epoch(), &[8; ID_BYTES]);
+        assert_eq!(owner_row.settlement_candidate(), &[9; ID_BYTES]);
+        assert_eq!(owner_row.owner(), &[11; ID_BYTES]);
         assert_ne!(
             epoch,
             EpochSeedTupleV1::new(binding, 0x0102_0304_0506_0709).unwrap()
@@ -553,6 +813,22 @@ mod seed_tests {
         assert_eq!(
             EpochSeedTupleV1::new(Id32::ZERO, 1),
             Err(CodecError::ZeroIdentity)
+        );
+        assert_eq!(
+            SettlementReceiptSeedTupleV3::new(id(8), id(9), MAX_SLICES_U16),
+            Err(CodecError::InvalidCount)
+        );
+        assert_eq!(
+            GeneralOrderPageSeedTupleV5::new(Id32::ZERO, 0),
+            Err(CodecError::ZeroIdentity)
+        );
+        assert_eq!(
+            GeneralReservationSeedTupleV3::new(Id32::ZERO),
+            Err(CodecError::ZeroIdentity)
+        );
+        assert_eq!(
+            OwnerSettlementSeedTupleV3::new(id(8), id(8), id(11)),
+            Err(CodecError::MismatchedBinding)
         );
     }
 }

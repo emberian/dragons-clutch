@@ -47,6 +47,16 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
 /// Existing Source Archive V2 account version.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
+/// General SettlementReceipt successor discriminator. This deliberately
+/// reuses legacy receipt tag `0x0f` under a fresh version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG: u8 = 0x0f;
+/// General SettlementReceipt successor version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION: u8 = 3;
+/// General OrderPage successor discriminator. This deliberately reuses the
+/// historical OrderPage tag under a fresh version.
+pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG: u8 = 8;
+/// General OrderPage successor version.
+pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION: u8 = 5;
 /// General V2 genesis-assisted Market-runtime account discriminator.
 pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
 /// RelationV2-native General Market-runtime account version.
@@ -149,8 +159,10 @@ pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
 /// General V2 owner-aggregated settlement account discriminator.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
-/// General V2 owner-aggregated settlement account version.
-pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn non-aliasing General V2 owner-settlement V1 version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
+/// Sole future presence-explicit General V2 owner-settlement version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 2;
 /// General V2 selected composite-fee record envelope discriminator.
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// General V2 selected composite-fee record envelope version.
@@ -159,6 +171,8 @@ pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// General V2 owner fee-carry envelope version.
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
+/// General V2 in-place owner fee-finalization successor version.
+pub const GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION: u8 = 2;
 /// General V2 temporary owner payer-allocation envelope discriminator.
 pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
 /// General V2 temporary owner payer-allocation envelope version.
@@ -324,6 +338,16 @@ const _: () = assert!(LEGACY_INTENT_VERSION == super::INTENT_VERSION);
 const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 116);
 const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 0x74);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG != SOURCE_ARCHIVE_V2_ACCOUNT_TAG);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
+const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == 8);
+const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == 5);
+const _: () = assert!(
+    GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG
+);
+const _: () = assert!(
+    GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == super::order_page_v5::ORDER_PAGE_V5_VERSION
+);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG == 0x93);
 const _: () = assert!(DEALER_STATE_V2_ACCOUNT_TAG == 0x94);
@@ -464,6 +488,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::Frozen,
         name: "source-archive-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
+            version: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-settlement-receipt-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
+            version: GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-order-page-v5-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -685,10 +727,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-settlement-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-settlement-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -707,6 +758,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-fee-carry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-fee-finalization-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1867,6 +1927,14 @@ mod tests {
     fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
             (
+                GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
+                GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
             ),
@@ -1913,6 +1981,10 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
             ),
             (
@@ -1922,6 +1994,10 @@ mod tests {
             (
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
@@ -1977,6 +2053,10 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
             ),
             (
@@ -1986,6 +2066,10 @@ mod tests {
             (
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,

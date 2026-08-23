@@ -180,6 +180,38 @@ integrated runtime and adapter, while Recovery payload/account contracts are
 owned by its dedicated modules; this central allocation duplicates neither
 contract and activates none of those actions.
 
+## General SettlementReceipt V3 allocation
+
+The central collision ledger reserves main-account coordinate `0x0f/3` for the
+217-byte General SettlementReceipt successor. This is a fresh version of the
+existing receipt tag, not a reinterpretation of `0x0f/2`; the two hostile
+decoders refuse each other. Runtime capability remains disabled.
+
+V3 uses the fresh PDA seed tuple
+`["general-receipt:v3", Epoch_PDA, final SettlementCandidateId,
+slice_index_le]`. Its former reserved-zero final byte is the independent
+buy/sell accounting mask. The V2 `consumed_flags` byte keeps its meaning as
+delivered-buy, delivered-sell, and exhausted. Stable accounting and delivery
+transition IDs are derived from the authenticated receipt PDA under distinct
+contract domains; neither ID is accepted from a caller or persisted. The
+receipt data ID instead hashes the authenticated PDA plus the exact current
+217-byte prestate, so both mutable latch families are committed.
+
+## General OrderPage V5 allocation
+
+The central collision ledger reserves main-account coordinate `8/5` as
+`ReservedDisabled`. It is exactly 4,140 bytes: the complete historical V4
+4,012-byte semantic prefix and slot array followed by sixteen little-endian
+Position generations. Live single and portfolio slots require a nonzero
+same-index generation; empty and tombstone slots require zero. V5 and V4
+hostile decoders refuse each other.
+
+The page commitment uses `dragons-clutch/order-page/v5` and commits the exact
+slot sequence plus the complete generation tail. The ordered page-set fold uses
+`dragons-clutch/order-set/v5`, so neither a V4 leaf nor a V4 set can be silently
+reinterpreted. Position and Reservation identities are authenticated adapter
+joins and are not persisted in the page.
+
 ## Coordinated successor account block
 
 The central collision ledger is the sole allocation owner for the following
@@ -193,7 +225,8 @@ pure runtime elsewhere does not make a route executable.
 | `0x7e/1` | Dealer | immutable policy |
 | `0x7f/1` | Recurring Series | registry |
 | `0x80/1` | Recurring Series | present-funding compartments |
-| `0x81/1` | General V2 | owner settlement |
+| `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
+| `0x81/2` | General V2 | presence-explicit owner settlement V2; sole future row |
 | `0x82/1` | General V2 | selected fee record |
 | `0x83/1` | General V2 | owner fee carry |
 | `0x84/1` | General V2 | payer allocation |
