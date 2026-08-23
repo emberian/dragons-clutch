@@ -28,6 +28,11 @@ use crate::{digest, is_zero, registry, CodecError, Hash32, Result, HASH_BYTES};
 const SERIES_MARKET_LINK_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-account-authentication/v1";
 
+/// Canonical SeriesRegistry PDA prefix shared by SBF and untrusted indexers.
+/// V2 intentionally retains the address to make V1 presence a replay refusal,
+/// never an alias or an in-place schema rewrite.
+pub const SERIES_REGISTRY_PDA_PREFIX_V1: &[u8] = b"dc:series-registry:v1";
+
 /// Exact immutable registered-Series account width.
 pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
 /// Exact current registered-Series account width. There is no reserved tail:

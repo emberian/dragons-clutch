@@ -68,10 +68,20 @@ use clutch_liveness::{
     RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_ACCOUNT_MAGIC_V1,
     RUNTIME_LIVENESS_POLICY_BYTES_V1, RUNTIME_LIVENESS_POLICY_MAGIC_V1,
 };
+use clutch_product_series::{
+    CompiledProductSeriesBundleV5, EvidenceOnlyRecoveryPolicyV1,
+    FixedCodec as ProductFixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
+    PriceMeasurePolicyV1, ProductTemplateV4, SeriesFundingTermsV2, SeriesPlanV5,
+};
 use clutch_retirement::{
     PositionAccountV3, PositionLifecycleV3, PositionPurposeV3, ReplayV3Envelope,
     ReplayV3HashBackend, ReplayV3Lifecycle, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V3,
     PURPOSE_REPLAY_ACCOUNT_TAG, PURPOSE_REPLAY_ACCOUNT_VERSION_V3,
+};
+use clutch_solana_layout::artifact::{
+    decode_stage, validate_artifact, ArtifactBinding, ArtifactKind, ArtifactRegistrationStatus,
+    ARTIFACT_STAGE_PDA_PREFIX_V1, ARTIFACT_STAGE_TAG, ARTIFACT_STAGE_VERSION,
+    PRODUCT_ARTIFACT_PDA_PREFIX_V1,
 };
 use clutch_solana_layout::failure_interval_consensus::{
     FailureIntervalConsensusPhaseV1, FailureIntervalConsensusReplayAccountV1,
@@ -87,11 +97,12 @@ use clutch_solana_layout::failure_recovery::{
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV1, SeriesFundingAccountV1, SeriesMarketLinkAccountV1,
-    SeriesRegistryAccountV1,
+    SeriesRegistryAccountV2, SERIES_REGISTRY_PDA_PREFIX_V1,
 };
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
 use clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5;
+use clutch_solana_layout::Hash32;
 use clutch_source_plane_v3::{
     OpenRawPageV3, RawPageV3, SourceHeadV3, StatisticResultV3, WindowSealV3, WindowWorkV3,
     MAX_RAW_PAGE_RECORDS,
@@ -117,7 +128,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v2-product-current";
+    "dragons-clutch/canonical-account-decoders/v3-product-v5-current";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -187,8 +198,22 @@ pub enum CanonicalAccountKind {
     GeneralFinalPot,
     ProductMarketLifecycleRootV1,
     ProductSeriesMarketLinkV1,
-    SeriesRegistry,
+    SeriesRegistryV2,
     SeriesFunding,
+    ArtifactUploadStage,
+    ArtifactRegistryProgramReleaseV2,
+    ArtifactRegistryCapabilityProfileV4,
+    ArtifactSourceReleaseManifestV2,
+    ArtifactNativeClaimBasisV1,
+    ArtifactEvidenceOnlyRecoveryPolicyV1,
+    ArtifactProductTemplateV4,
+    ArtifactPriceMeasurePolicyV1,
+    ArtifactMarketGenesisProfileV2,
+    ArtifactSeriesFundingQuoteV4,
+    ArtifactSeriesAttachmentPlanV4,
+    ArtifactSeriesPlanV5,
+    ArtifactSeriesFundingTermsV2,
+    ArtifactCompiledProductSeriesBundleV5,
     SourceRelease,
     SourceHead,
     SourceOpenRawPage,
@@ -268,8 +293,28 @@ impl CanonicalAccountKind {
             Self::GeneralFinalPot => "general-final-pot",
             Self::ProductMarketLifecycleRootV1 => "product-market-lifecycle-root-v1",
             Self::ProductSeriesMarketLinkV1 => "product-series-market-link-v1",
-            Self::SeriesRegistry => "series-registry",
+            Self::SeriesRegistryV2 => "series-registry-v2",
             Self::SeriesFunding => "series-funding",
+            Self::ArtifactUploadStage => "artifact-upload-stage-v1",
+            Self::ArtifactRegistryProgramReleaseV2 => "artifact-registry-program-release-v2",
+            Self::ArtifactRegistryCapabilityProfileV4 => {
+                "artifact-registry-capability-profile-v4"
+            }
+            Self::ArtifactSourceReleaseManifestV2 => "artifact-source-release-manifest-v2",
+            Self::ArtifactNativeClaimBasisV1 => "artifact-native-claim-basis-v1",
+            Self::ArtifactEvidenceOnlyRecoveryPolicyV1 => {
+                "artifact-evidence-only-recovery-policy-v1"
+            }
+            Self::ArtifactProductTemplateV4 => "artifact-product-template-v4",
+            Self::ArtifactPriceMeasurePolicyV1 => "artifact-price-measure-policy-v1",
+            Self::ArtifactMarketGenesisProfileV2 => "artifact-market-genesis-profile-v2",
+            Self::ArtifactSeriesFundingQuoteV4 => "artifact-series-funding-quote-v4",
+            Self::ArtifactSeriesAttachmentPlanV4 => "artifact-series-attachment-plan-v4",
+            Self::ArtifactSeriesPlanV5 => "artifact-series-plan-v5",
+            Self::ArtifactSeriesFundingTermsV2 => "artifact-series-funding-terms-v2",
+            Self::ArtifactCompiledProductSeriesBundleV5 => {
+                "artifact-compiled-product-series-bundle-v5"
+            }
             Self::SourceRelease => "source-release",
             Self::SourceHead => "source-head",
             Self::SourceOpenRawPage => "source-open-raw-page",
@@ -375,15 +420,47 @@ pub struct CanonicalDecoderContext {
     pub source_neutral_sink: RuntimeKey,
 }
 
+/// A raw immutable Product artifact may enter the index only after a hostile
+/// SeriesRegistryV2 -> BundleV5 traversal supplied its exact kind, digest and
+/// owning bundle.  This is a derived cache, never a second authority record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductArtifactExpectation {
+    kind: ArtifactKind,
+    digest: [u8; 32],
+    /// Zero means the same immutable artifact is named by more than one
+    /// authenticated bundle in the scan.  The exact kind/digest remains
+    /// authoritative; callers must choose the owning Series context.
+    unique_bundle_id: [u8; 32],
+}
+
+type ProductArtifactExpectations = BTreeMap<(String, Address), ProductArtifactExpectation>;
+
 pub struct CanonicalAccountDecoderRegistry<'a> {
     plan: &'a RpcIndexPlan,
     context: CanonicalDecoderContext,
+    product_artifacts: &'a ProductArtifactExpectations,
 }
 
 impl<'a> CanonicalAccountDecoderRegistry<'a> {
     #[must_use]
     pub const fn new(plan: &'a RpcIndexPlan, context: CanonicalDecoderContext) -> Self {
-        Self { plan, context }
+        Self {
+            plan,
+            context,
+            product_artifacts: &EMPTY_PRODUCT_ARTIFACT_EXPECTATIONS,
+        }
+    }
+
+    const fn with_product_artifacts(
+        plan: &'a RpcIndexPlan,
+        context: CanonicalDecoderContext,
+        product_artifacts: &'a ProductArtifactExpectations,
+    ) -> Self {
+        Self {
+            plan,
+            context,
+            product_artifacts,
+        }
     }
 
     pub fn decode(&self, account: &ObservedRpcAccount) -> Result<CanonicalAccountProjection> {
@@ -401,6 +478,24 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
             .ok_or(AccountIndexError::UnknownRelease)?;
         if release.program_id != account.owner {
             return Err(AccountIndexError::WrongOwner);
+        }
+        if let Some(expectation) = self
+            .product_artifacts
+            .get(&(account.provenance.release_key.clone(), account.address))
+        {
+            return decode_product_artifact_final(account, *expectation);
+        }
+        if release.families.iter().any(|family| {
+            matches!(family, CanonicalFamily::Product | CanonicalFamily::Series)
+        }) {
+            if let Some(projection) = decode_artifact_stage(account)? {
+                return Ok(projection);
+            }
+        }
+        if release.families.contains(&CanonicalFamily::Series) {
+            if let Some(projection) = decode_series_registry_account(account)? {
+                return Ok(projection);
+            }
         }
         let mut decoded = None;
         for family in &release.families {
@@ -434,6 +529,199 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
             CanonicalFamily::Failure => decode_failure(&account.data),
         }
     }
+}
+
+static EMPTY_PRODUCT_ARTIFACT_EXPECTATIONS: ProductArtifactExpectations = BTreeMap::new();
+
+fn decode_artifact_stage(
+    account: &ObservedRpcAccount,
+) -> Result<Option<CanonicalAccountProjection>> {
+    if !tag_version(&account.data, ARTIFACT_STAGE_TAG, ARTIFACT_STAGE_VERSION) {
+        return Ok(None);
+    }
+    let header = decode_stage(&account.data)
+        .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+    if header.binding.kind.registration_status() != ArtifactRegistrationStatus::Current {
+        return Err(AccountIndexError::CanonicalDecodeRefused);
+    }
+    let kind = [header.binding.kind.byte()];
+    let (expected, bump) = Address::find_program_address(
+        &[
+            ARTIFACT_STAGE_PDA_PREFIX_V1,
+            &header.funder,
+            &kind,
+            &header.binding.context.0,
+            &header.binding.digest.0,
+        ],
+        &account.owner,
+    );
+    if expected != account.address || bump != header.stored_bump {
+        return Err(AccountIndexError::CanonicalDecodeRefused);
+    }
+    let mut projection = CanonicalAccountProjection::contextual(
+        CanonicalFamily::Series,
+        CanonicalAccountKind::ArtifactUploadStage,
+        "self-describing upload stage; never immutable artifact authority",
+    );
+    projection.primary_binding = Some(header.binding.digest.0);
+    projection.secondary_binding = Some(header.binding.context.0);
+    if !header.is_complete() {
+        projection.keeper_hint = Some(KeeperHint {
+            lane: Some(WorkflowLane::Creation),
+            position: WorkflowPosition {
+                phase: 1,
+                item: u64::from(header.cursor),
+            },
+            action: "continue-or-abort-artifact-upload",
+        });
+    }
+    Ok(Some(projection))
+}
+
+fn canonical_artifact_kind(kind: ArtifactKind) -> Result<CanonicalAccountKind> {
+    match kind {
+        ArtifactKind::RegistryProgramReleaseV2 => {
+            Ok(CanonicalAccountKind::ArtifactRegistryProgramReleaseV2)
+        }
+        ArtifactKind::RegistryCapabilityProfileV4 => {
+            Ok(CanonicalAccountKind::ArtifactRegistryCapabilityProfileV4)
+        }
+        ArtifactKind::SourceReleaseManifestV2 => {
+            Ok(CanonicalAccountKind::ArtifactSourceReleaseManifestV2)
+        }
+        ArtifactKind::NativeClaimBasisV1 => {
+            Ok(CanonicalAccountKind::ArtifactNativeClaimBasisV1)
+        }
+        ArtifactKind::EvidenceOnlyRecoveryPolicyV1 => {
+            Ok(CanonicalAccountKind::ArtifactEvidenceOnlyRecoveryPolicyV1)
+        }
+        ArtifactKind::ProductTemplateV4 => {
+            Ok(CanonicalAccountKind::ArtifactProductTemplateV4)
+        }
+        ArtifactKind::PriceMeasurePolicyV1 => {
+            Ok(CanonicalAccountKind::ArtifactPriceMeasurePolicyV1)
+        }
+        ArtifactKind::MarketGenesisProfileV2 => {
+            Ok(CanonicalAccountKind::ArtifactMarketGenesisProfileV2)
+        }
+        ArtifactKind::SeriesFundingQuoteV4 => {
+            Ok(CanonicalAccountKind::ArtifactSeriesFundingQuoteV4)
+        }
+        ArtifactKind::SeriesAttachmentPlanV4 => {
+            Ok(CanonicalAccountKind::ArtifactSeriesAttachmentPlanV4)
+        }
+        ArtifactKind::SeriesPlanV5 => Ok(CanonicalAccountKind::ArtifactSeriesPlanV5),
+        ArtifactKind::SeriesFundingTermsV2 => {
+            Ok(CanonicalAccountKind::ArtifactSeriesFundingTermsV2)
+        }
+        ArtifactKind::CompiledProductSeriesBundleV5 => {
+            Ok(CanonicalAccountKind::ArtifactCompiledProductSeriesBundleV5)
+        }
+        _ => Err(AccountIndexError::CanonicalDecodeRefused),
+    }
+}
+
+fn require_typed_product_artifact(
+    kind: ArtifactKind,
+    digest: [u8; 32],
+    body: &[u8],
+) -> Result<()> {
+    let actual = match kind {
+        ArtifactKind::NativeClaimBasisV1 => NativeClaimBasisV1::decode(body)
+            .and_then(|value| value.id())
+            .map(|id| id.bytes()),
+        ArtifactKind::EvidenceOnlyRecoveryPolicyV1 => {
+            EvidenceOnlyRecoveryPolicyV1::decode(body)
+                .and_then(|value| value.id())
+                .map(|id| id.bytes())
+        }
+        ArtifactKind::ProductTemplateV4 => ProductTemplateV4::decode(body)
+            .and_then(|value| value.id())
+            .map(|id| id.bytes()),
+        ArtifactKind::PriceMeasurePolicyV1 => PriceMeasurePolicyV1::decode(body)
+            .and_then(|value| value.id())
+            .map(|id| id.bytes()),
+        ArtifactKind::MarketGenesisProfileV2 => MarketGenesisProfileV2::decode(body)
+            .and_then(|value| value.id())
+            .map(|id| id.bytes()),
+        ArtifactKind::SeriesPlanV5 => SeriesPlanV5::decode(body)
+            .and_then(|value| value.id())
+            .map(|id| id.bytes()),
+        ArtifactKind::SeriesFundingTermsV2 => SeriesFundingTermsV2::decode(body)
+            .and_then(|value| value.id())
+            .map(|id| id.bytes()),
+        _ => {
+            let exact_len = u16::try_from(kind.exact_len())
+                .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+            validate_artifact(
+                ArtifactBinding {
+                    kind,
+                    context: Hash32::ZERO,
+                    digest: Hash32::from_bytes(digest),
+                    exact_len,
+                },
+                body,
+            )
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+            return Ok(());
+        }
+    }
+    .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+    if actual != digest {
+        return Err(AccountIndexError::CanonicalDecodeRefused);
+    }
+    Ok(())
+}
+
+fn decode_product_artifact_final(
+    account: &ObservedRpcAccount,
+    expectation: ProductArtifactExpectation,
+) -> Result<CanonicalAccountProjection> {
+    require_typed_product_artifact(expectation.kind, expectation.digest, &account.data)?;
+    let mut projection = CanonicalAccountProjection::canonical(
+        CanonicalFamily::Series,
+        canonical_artifact_kind(expectation.kind)?,
+    );
+    projection.primary_binding = Some(expectation.digest);
+    if expectation.unique_bundle_id != [0; 32] {
+        projection.secondary_binding = Some(expectation.unique_bundle_id);
+    } else {
+        projection.decode_state = DecodeState::RequiresContext(
+            "artifact is authenticated by multiple BundleV5 owners",
+        );
+    }
+    Ok(projection)
+}
+
+fn decode_series_registry_account(
+    account: &ObservedRpcAccount,
+) -> Result<Option<CanonicalAccountProjection>> {
+    if !tag_version(
+        &account.data,
+        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
+    ) {
+        return Ok(None);
+    }
+    let value = SeriesRegistryAccountV2::decode(&account.data)
+        .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+    let (expected, bump) = Address::find_program_address(
+        &[
+            SERIES_REGISTRY_PDA_PREFIX_V1,
+            &value.series_plan_id.bytes(),
+        ],
+        &account.owner,
+    );
+    if expected != account.address || bump != value.stored_bump {
+        return Err(AccountIndexError::CanonicalDecodeRefused);
+    }
+    let mut projection = CanonicalAccountProjection::canonical(
+        CanonicalFamily::Series,
+        CanonicalAccountKind::SeriesRegistryV2,
+    );
+    projection.primary_binding = Some(value.series_plan_id.bytes());
+    projection.secondary_binding = Some(value.compiler_bundle_id.bytes());
+    Ok(Some(projection))
 }
 
 fn decode_collateral(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
@@ -932,20 +1220,6 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         projection.generation = Some(binding.generation);
         projection.primary_binding = Some(binding.market_instance_id.bytes());
         projection.secondary_binding = Some(binding.series_plan_id.bytes());
-        Ok(Some(projection))
-    } else if tag_version(
-        data,
-        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-        registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
-    ) {
-        let value = SeriesRegistryAccountV1::decode(data)
-            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let mut projection = CanonicalAccountProjection::canonical(
-            CanonicalFamily::Series,
-            CanonicalAccountKind::SeriesRegistry,
-        );
-        projection.primary_binding = Some(value.series_plan_id.bytes());
-        projection.secondary_binding = Some(value.registry_release_id.bytes());
         Ok(Some(projection))
     } else if tag_version(
         data,
@@ -2138,6 +2412,185 @@ pub struct CanonicalAccountIndex {
     versions: BTreeMap<Address, Vec<IndexedAccountVersion>>,
     processed_removals: BTreeMap<Address, Vec<ProcessedAccountRemoval>>,
     finalized_absences: BTreeMap<Address, FinalizedAccountAbsence>,
+    product_artifacts: ProductArtifactExpectations,
+}
+
+fn insert_product_artifact_expectation(
+    expectations: &mut ProductArtifactExpectations,
+    release_key: &str,
+    program_id: Address,
+    kind: ArtifactKind,
+    digest: [u8; 32],
+    bundle_id: [u8; 32],
+) -> Result<Address> {
+    if kind.registration_status() != ArtifactRegistrationStatus::Current || digest == [0; 32] {
+        return Err(AccountIndexError::CanonicalDecodeRefused);
+    }
+    let kind_seed = [kind.byte()];
+    let address = Address::find_program_address(
+        &[PRODUCT_ARTIFACT_PDA_PREFIX_V1, &kind_seed, &digest],
+        &program_id,
+    )
+    .0;
+    let key = (release_key.to_string(), address);
+    match expectations.get_mut(&key) {
+        None => {
+            expectations.insert(
+                key,
+                ProductArtifactExpectation {
+                    kind,
+                    digest,
+                    unique_bundle_id: bundle_id,
+                },
+            );
+        }
+        Some(existing) => {
+            if existing.kind != kind || existing.digest != digest {
+                return Err(AccountIndexError::AmbiguousCodec);
+            }
+            if existing.unique_bundle_id != bundle_id {
+                existing.unique_bundle_id = [0; 32];
+            }
+        }
+    }
+    Ok(address)
+}
+
+fn product_artifact_expectations_for_scan(
+    plan: &RpcIndexPlan,
+    release_key: &str,
+    accounts: &[ObservedRpcAccount],
+) -> Result<ProductArtifactExpectations> {
+    let release = plan
+        .releases
+        .iter()
+        .find(|release| release.key() == release_key)
+        .ok_or(AccountIndexError::UnknownRelease)?;
+    let mut by_address = BTreeMap::new();
+    for account in accounts {
+        if account.provenance.release_key != release_key
+            || account.provenance.cluster_key != plan.cluster.key()
+            || account.owner != release.program_id
+            || account.executable
+        {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+        if by_address.insert(account.address, account).is_some() {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+    }
+
+    let mut expectations = BTreeMap::new();
+    for account in accounts {
+        if !tag_version(
+            &account.data,
+            registry::SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            registry::SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
+        ) {
+            continue;
+        }
+        let registration = SeriesRegistryAccountV2::decode(&account.data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let (registry_address, registry_bump) = Address::find_program_address(
+            &[
+                SERIES_REGISTRY_PDA_PREFIX_V1,
+                &registration.series_plan_id.bytes(),
+            ],
+            &release.program_id,
+        );
+        if registry_address != account.address || registry_bump != registration.stored_bump {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+
+        let bundle_id = registration.compiler_bundle_id.bytes();
+        let bundle_address = insert_product_artifact_expectation(
+            &mut expectations,
+            release_key,
+            release.program_id,
+            ArtifactKind::CompiledProductSeriesBundleV5,
+            bundle_id,
+            bundle_id,
+        )?;
+        let bundle_account = by_address
+            .get(&bundle_address)
+            .ok_or(AccountIndexError::CanonicalDecodeRefused)?;
+        let bundle = CompiledProductSeriesBundleV5::decode(&bundle_account.data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let decoded_bundle_id = bundle
+            .id()
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?
+            .bytes();
+        if decoded_bundle_id != bundle_id
+            || bundle.registry_release_id.bytes() != registration.registry_release_id.bytes()
+            || bundle.capability_profile_id.bytes()
+                != registration.capability_profile_id.bytes()
+            || bundle.series_plan_id.bytes() != registration.series_plan_id.bytes()
+            || bundle.funding_terms_id.bytes() != registration.funding_terms_id.bytes()
+        {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
+
+        for (kind, digest) in [
+            (
+                ArtifactKind::RegistryProgramReleaseV2,
+                bundle.registry_release_id.bytes(),
+            ),
+            (
+                ArtifactKind::RegistryCapabilityProfileV4,
+                bundle.capability_profile_id.bytes(),
+            ),
+            (
+                ArtifactKind::SourceReleaseManifestV2,
+                bundle.source_release_manifest_id.bytes(),
+            ),
+            (
+                ArtifactKind::NativeClaimBasisV1,
+                bundle.native_claim_basis_id.bytes(),
+            ),
+            (
+                ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
+                bundle.evidence_only_recovery_policy_id.bytes(),
+            ),
+            (
+                ArtifactKind::ProductTemplateV4,
+                bundle.product_template_id.bytes(),
+            ),
+            (
+                ArtifactKind::PriceMeasurePolicyV1,
+                bundle.price_measure_policy_id.bytes(),
+            ),
+            (
+                ArtifactKind::MarketGenesisProfileV2,
+                bundle.market_genesis_profile_id.bytes(),
+            ),
+            (
+                ArtifactKind::SeriesFundingQuoteV4,
+                bundle.funding_quote_id.bytes(),
+            ),
+            (
+                ArtifactKind::SeriesAttachmentPlanV4,
+                bundle.attachment_plan_id.bytes(),
+            ),
+            (ArtifactKind::SeriesPlanV5, bundle.series_plan_id.bytes()),
+            (
+                ArtifactKind::SeriesFundingTermsV2,
+                bundle.funding_terms_id.bytes(),
+            ),
+        ] {
+            let artifact_address = insert_product_artifact_expectation(
+                &mut expectations,
+                release_key,
+                release.program_id,
+                kind,
+                digest,
+                bundle_id,
+            )?;
+            if !by_address.contains_key(&artifact_address) {
+                return Err(AccountIndexError::CanonicalDecodeRefused);
+            }
+        }
+    }
+    Ok(expectations)
 }
 
 impl CanonicalAccountIndex {
@@ -2162,7 +2615,24 @@ impl CanonicalAccountIndex {
             versions: BTreeMap::new(),
             processed_removals: BTreeMap::new(),
             finalized_absences: BTreeMap::new(),
+            product_artifacts: BTreeMap::new(),
         })
+    }
+
+    /// Rebuild the derived Product-artifact authority cache from one complete
+    /// finalized program scan.  RegistryV2 and BundleV5 must both be present;
+    /// a partial graph is refused rather than carried forward from an older
+    /// scan.
+    pub fn prepare_complete_finalized_scan(
+        &mut self,
+        release_key: &str,
+        accounts: &[ObservedRpcAccount],
+    ) -> Result<()> {
+        let next = product_artifact_expectations_for_scan(&self.plan, release_key, accounts)?;
+        self.product_artifacts
+            .retain(|(known_release, _), _| known_release != release_key);
+        self.product_artifacts.extend(next);
+        Ok(())
     }
 
     pub fn observe_slot(&mut self, slot: ObservedSlot) -> Result<()> {
@@ -2377,8 +2847,12 @@ impl CanonicalAccountIndex {
                     .to_string(),
             },
         };
-        let projection =
-            CanonicalAccountDecoderRegistry::new(&self.plan, self.context).decode(&account)?;
+        let projection = CanonicalAccountDecoderRegistry::with_product_artifacts(
+            &self.plan,
+            self.context,
+            &self.product_artifacts,
+        )
+        .decode(&account)?;
         let data_sha256 = Sha256::digest(&account.data).into();
         if !self.versions.contains_key(&account.address)
             && self.versions.len() >= self.capacity.maximum_addresses
@@ -2560,6 +3034,61 @@ impl CanonicalAccountIndex {
 #[cfg(test)]
 mod current_decoder_tests {
     use super::*;
+
+    #[test]
+    fn product_artifact_final_typing_refuses_withdrawn_and_hostile_bodies() {
+        assert_eq!(
+            canonical_artifact_kind(ArtifactKind::CompiledProductSeriesBundleV4),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+        assert_eq!(
+            require_typed_product_artifact(
+                ArtifactKind::CompiledProductSeriesBundleV5,
+                [0x51; 32],
+                &[0; 8],
+            ),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+        assert_eq!(
+            require_typed_product_artifact(
+                ArtifactKind::NativeClaimBasisV1,
+                [0x52; 32],
+                &[0; 8],
+            ),
+            Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+    }
+
+    #[test]
+    fn shared_artifact_cache_drops_unique_bundle_claim() {
+        let program_id = Address::new_from_array([0x31; 32]);
+        let mut expectations = BTreeMap::new();
+        let address = insert_product_artifact_expectation(
+            &mut expectations,
+            "release",
+            program_id,
+            ArtifactKind::SourceReleaseManifestV2,
+            [0x32; 32],
+            [0x33; 32],
+        )
+        .unwrap();
+        insert_product_artifact_expectation(
+            &mut expectations,
+            "release",
+            program_id,
+            ArtifactKind::SourceReleaseManifestV2,
+            [0x32; 32],
+            [0x34; 32],
+        )
+        .unwrap();
+        assert_eq!(
+            expectations
+                .get(&(String::from("release"), address))
+                .unwrap()
+                .unique_bundle_id,
+            [0; 32]
+        );
+    }
 
     #[test]
     fn withdrawn_versions_do_not_enter_the_live_decoder_set() {

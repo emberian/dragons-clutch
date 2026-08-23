@@ -61,8 +61,16 @@ not merely their outer tag. Withdrawn versions do not silently enter the live
 projection.
 
 Product/Series discovery includes the exact `0xaa/1` MarketLifecycleRoot and
-`0xad/1` SeriesMarketLink account frames in addition to SeriesRegistry and
-SeriesFunding. Dealer discovery includes the exact `0xae/1`
+`0xad/1` SeriesMarketLink account frames in addition to the current
+`0x7f/2` SeriesRegistry and SeriesFunding. A registry is accepted only at its
+canonical PDA. Its exact BundleV5 final is then reopened at the kind-scoped
+content PDA; only that hostile-decoded bundle may supply the kinds and digests
+used to classify its RegistryReleaseV2, CapabilityProfileV4, Source release,
+Product policy, QuoteV4, AttachmentV4, SeriesPlanV5, and FundingTermsV2
+finals. Raw bytes outside this authenticated graph are never guessed into an
+artifact type. Current self-describing upload stages are visibly contextual
+transport state and never final authority; withdrawn stage kinds refuse.
+Dealer discovery includes the exact `0xae/1`
 CoveredDealerSelection body. The browser admits only the corresponding current
 Rust-emitted family/kind catalog; unknown, historical, cross-family, or
 placeholder labels fail closed.

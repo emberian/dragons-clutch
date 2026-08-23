@@ -112,7 +112,8 @@ pub const SEED_RECEIPT: &[u8] = b"dragons-clutch:receipt:v1";
 /// own address so one machinery account has exactly one recorded funding.
 pub const SEED_GENERAL_FUNDING: &[u8] = b"dc:gen-funding:v1";
 /// Uploader-keyed typed artifact staging account seed prefix.
-pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
+pub const SEED_ARTIFACT_STAGE: &[u8] =
+    clutch_solana_layout::artifact::ARTIFACT_STAGE_PDA_PREFIX_V1;
 /// Non-production uploader-keyed Dealer-policy stage prefix.
 pub const SEED_DEALER_POLICY_STAGE: &[u8] = b"dc-dealer-policy-stage-v1";
 /// Canonical immutable Dealer-policy prefix, frozen by the pure contract.
@@ -166,9 +167,11 @@ pub const SEED_DIRECT_BATCH_POLICY_V3: &[u8] = b"dc:direct-policy:v3";
 ///
 /// The kind byte is a seed so transparent 32-byte typed IDs are never cast
 /// across artifact meanings. Realm binding remains inside Genesis V2.
-pub const SEED_PRODUCT_ARTIFACT_V1: &[u8] = b"dc:product-artifact:v1";
+pub const SEED_PRODUCT_ARTIFACT_V1: &[u8] =
+    clutch_solana_layout::artifact::PRODUCT_ARTIFACT_PDA_PREFIX_V1;
 /// Persistent V5 Series registration/replay-anchor prefix.
-pub const SEED_SERIES_REGISTRY_V1: &[u8] = b"dc:series-registry:v1";
+pub const SEED_SERIES_REGISTRY_V1: &[u8] =
+    clutch_solana_layout::product_series::SERIES_REGISTRY_PDA_PREFIX_V1;
 /// Mutable V5 Series funding-state prefix.
 pub const SEED_SERIES_FUNDING_V1: &[u8] = b"dc:series-funding:v1";
 /// Zero-data, System-owned per-component lamport custody prefix.

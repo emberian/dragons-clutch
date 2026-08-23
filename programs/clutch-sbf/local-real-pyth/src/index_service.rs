@@ -285,6 +285,7 @@ impl RpcIndexEngine {
             .ok_or(RpcIndexEngineError::SequenceExhausted)?;
         let mut next_index = self.index.clone();
         let seen: BTreeSet<Address> = accounts.iter().map(|account| account.address).collect();
+        next_index.prepare_complete_finalized_scan(&request.release_key, &accounts)?;
         for account in accounts.iter().cloned() {
             next_index.ingest(account)?;
         }

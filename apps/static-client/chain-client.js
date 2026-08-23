@@ -14,7 +14,7 @@
   const HASH32 = /^[0-9a-f]{64}$/;
   const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
-  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v2-product-current";
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v3-product-v5-current";
   const SOURCE_PROFILE_RELEASE_COUNTS = Object.freeze({
     "production-inert": "0",
     "non-production-mock-source-lab": "1",
@@ -64,8 +64,22 @@
     "general-final-pot": kind("general", "settlement"),
     "product-market-lifecycle-root-v1": kind("product", "product"),
     "product-series-market-link-v1": kind("series", "series"),
-    "series-registry": kind("series", "product"),
+    "series-registry-v2": kind("series", "product"),
     "series-funding": kind("series", "series"),
+    "artifact-upload-stage-v1": kind("series", "product"),
+    "artifact-registry-program-release-v2": kind("series", "product"),
+    "artifact-registry-capability-profile-v4": kind("series", "product"),
+    "artifact-source-release-manifest-v2": kind("series", "source"),
+    "artifact-native-claim-basis-v1": kind("series", "product"),
+    "artifact-evidence-only-recovery-policy-v1": kind("series", "recovery"),
+    "artifact-product-template-v4": kind("series", "product"),
+    "artifact-price-measure-policy-v1": kind("series", "product"),
+    "artifact-market-genesis-profile-v2": kind("series", "product"),
+    "artifact-series-funding-quote-v4": kind("series", "product"),
+    "artifact-series-attachment-plan-v4": kind("series", "product"),
+    "artifact-series-plan-v5": kind("series", "series"),
+    "artifact-series-funding-terms-v2": kind("series", "series"),
+    "artifact-compiled-product-series-bundle-v5": kind("series", "product"),
     "source-release": kind("source", "source"),
     "source-head": kind("source", "source"),
     "source-open-raw-page": kind("source", "source"),

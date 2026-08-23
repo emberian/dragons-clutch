@@ -67,7 +67,10 @@ coordinates plus the checked release. The browser never receives the raw RPC
 URLs and refuses an inconsistent or changing daemon projection. See
 [`CHAIN_SERVE.md`](CHAIN_SERVE.md).
 
-The config must name the current `v2-product-current` canonical decoder set.
+The config must name the current `v3-product-v5-current` canonical decoder set.
+Raw immutable Product artifacts are accepted only at the exact kind-scoped PDA
+named by an authenticated `SeriesRegistryV2 -> BundleV5` graph. Bytes that look
+like an artifact without that owning graph are not classified by type.
 Withdrawn Source V1/V2, historical General account versions, and raw historical
 Dealer V1 bodies are not live fallbacks: a selected release containing those
 bytes fails closed instead of being reinterpreted or displayed as current

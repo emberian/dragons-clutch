@@ -135,6 +135,16 @@ pub const ARTIFACT_STAGE_HEADER_BYTES: usize = 2
 /// Largest artifact body admitted by this transport revision.
 pub const MAX_ARTIFACT_BYTES: usize = PRODUCT_BASIS_BYTES;
 
+/// Uploader-scoped staging PDA prefix shared by the SBF adapter and hostile
+/// offchain indexers.  The complete seed tuple is
+/// `(prefix, uploader, kind, context, digest)`.
+pub const ARTIFACT_STAGE_PDA_PREFIX_V1: &[u8] = b"dragons-clutch:upload:v1";
+
+/// Kind-scoped immutable Product artifact PDA prefix shared by the SBF
+/// adapter and hostile offchain indexers.  The complete seed tuple is
+/// `(prefix, kind, semantic_digest)`.
+pub const PRODUCT_ARTIFACT_PDA_PREFIX_V1: &[u8] = b"dc:product-artifact:v1";
+
 /// Whether an immutable artifact coordinate admits new registrations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArtifactRegistrationStatus {
