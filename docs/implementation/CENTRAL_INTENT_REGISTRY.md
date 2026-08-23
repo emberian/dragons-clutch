@@ -423,6 +423,12 @@ pure runtime elsewhere does not make a route executable.
 | `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
 | `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
 | `0xb0/1` | Product/replay | permanent compact MarketLifecycle replay receipt; replaces terminal `0xaa/1` |
+| `0xb1/1` | Direct | current counted Market root |
+| `0xb2/1` | Direct | current exact Selection owner |
+| `0xb3/1` | Direct/replay | permanent action replay and terminal receipt |
+| `0xb4/1` | Direct | current funded Reservation owner |
+| `0xb5/1` | General V2 | reserved-disabled exact active-width frozen-order locator (at most 920 bytes) |
+| `0xb6/1` | General V2 | reserved-disabled exact active-width selected-candidate adjacency (at most 16,024 bytes) |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local

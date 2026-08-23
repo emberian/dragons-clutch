@@ -123,9 +123,11 @@ rent owner. The bounded read authority is minted only by the complete
 owner/PDA/body-ID authentication projection.
 
 `EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. The indexed-root envelope
-uses the centrally reserved `0xa9/2` coordinate and canonical Root PDA. Each
-child has a fresh one-per-Root canonical PDA domain, while both child codecs
-still have review-only magic and no global account discriminator.
+uses the centrally reserved `0xa9/2` coordinate and canonical Root PDA. The
+locator is globally reserved at `0xb5/1` and adjacency at `0xb6/1`; each exact
+active-width codec begins with that tag/version followed by its disjoint
+six-byte domain suffix. Each child also has a fresh one-per-Root canonical PDA
+domain.
 There is no action, dispatch entry, or profile capability. Promotion must wire
 every existing root transition through its checked indexed-root transition,
 allocate the two child coordinates/PDAs, and wire atomic child create, read, and
