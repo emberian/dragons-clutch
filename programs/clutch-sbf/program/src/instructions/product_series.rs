@@ -21,10 +21,17 @@ use crate::instructions::genesis::{
 };
 use crate::seeds;
 use clutch_collateral_adapter_v2::{
-    admit_realm_collateral_account_v2, admit_realm_collateral_mint_v2, prepare_custody_creation_v2,
-    BoundRealmCollateralV2, CustodyBindingV2, CustodyCreationPlanV2, CustodyInitializationStepV2,
-    Id as CollateralId, RuntimeAccountViewV2, SeriesCollateralFundingJoinV2,
-    SeriesCollateralTerminalJoinV2, TokenAccountRoleV2, TransferAuthorityKindV2,
+    accept_collateral_transfer_v2, accept_series_collateral_vault_close_v2,
+    accept_series_vault_rent_disposition_v2, admit_realm_collateral_account_v2,
+    admit_realm_collateral_mint_v2, prepare_custody_creation_v2,
+    prepare_realm_collateral_transfer_v2, prepare_series_collateral_vault_close_v2,
+    prepare_series_vault_rent_disposition_v2, series_donation_disposition_request_v2,
+    series_principal_refund_request_v2, series_segregated_funding_request_v2,
+    AcceptedCollateralTransferV2, AcceptedSeriesVaultRentDispositionV2, BoundRealmCollateralV2,
+    CpiAccountMetaV2, CustodyBindingV2, CustodyCreationPlanV2, CustodyInitializationStepV2,
+    Id as CollateralId, PreparedCollateralTransferV2, RuntimeAccountViewV2,
+    RuntimeLamportAccountViewV2, SeriesCollateralFundingJoinV2, SeriesCollateralTerminalJoinV2,
+    SeriesCollateralVaultCloseRequestV2, TokenAccountRoleV2, TransferAuthorityKindV2,
     TransferAuthorityV2,
 };
 use clutch_product_series::{
@@ -159,6 +166,7 @@ pub struct AuthenticatedSeriesCollateralFundingV1 {
     bound: BoundRealmCollateralV2,
     join: SeriesCollateralFundingJoinV2,
     authority: TransferAuthorityV2,
+    funding_account: AuthenticatedSeriesFundingAccountV1,
 }
 
 impl AuthenticatedSeriesCollateralFundingV1 {
@@ -176,6 +184,11 @@ impl AuthenticatedSeriesCollateralFundingV1 {
     pub const fn authority(&self) -> TransferAuthorityV2 {
         self.authority
     }
+
+    /// Exact funding wrapper whose state owns component balances and vault rent.
+    pub const fn funding_account(&self) -> AuthenticatedSeriesFundingAccountV1 {
+        self.funding_account
+    }
 }
 
 /// One-shot terminal authorization refined by the exact collateral graph.
@@ -183,6 +196,7 @@ impl AuthenticatedSeriesCollateralFundingV1 {
 pub struct AuthenticatedSeriesCollateralTerminalV1 {
     funding: AuthenticatedSeriesCollateralFundingV1,
     join: SeriesCollateralTerminalJoinV2,
+    projection: SeriesFundingTerminalProjectionV1,
 }
 
 impl AuthenticatedSeriesCollateralTerminalV1 {
@@ -194,6 +208,11 @@ impl AuthenticatedSeriesCollateralTerminalV1 {
     /// Exact collateral terminal join bound to the SBF one-shot receipt.
     pub const fn join(&self) -> SeriesCollateralTerminalJoinV2 {
         self.join
+    }
+
+    /// State-derived principal and donation terminal amounts.
+    pub const fn projection(&self) -> SeriesFundingTerminalProjectionV1 {
+        self.projection
     }
 }
 
@@ -687,6 +706,16 @@ fn runtime_account_view<'a>(account: &AccountInfo<'_>, data: &'a [u8]) -> Runtim
     }
 }
 
+fn runtime_lamport_account_view<'a>(
+    account: &AccountInfo<'_>,
+    data: &'a [u8],
+) -> RuntimeLamportAccountViewV2<'a> {
+    RuntimeLamportAccountViewV2 {
+        account: runtime_account_view(account, data),
+        lamports: account.lamports(),
+    }
+}
+
 fn require_system_lamport_destination(account: &AccountInfo<'_>, exact: ContentId) -> Outcome<()> {
     require(
         account.key.to_bytes() == exact.bytes(),
@@ -884,6 +913,7 @@ pub fn authenticate_series_collateral_funding(
         bound,
         join,
         authority: transfer_authority,
+        funding_account: funding,
     })
 }
 
@@ -919,7 +949,516 @@ pub fn authenticate_series_collateral_terminal(
     };
     join.validate(funding.bound())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(AuthenticatedSeriesCollateralTerminalV1 { funding, join })
+    Ok(AuthenticatedSeriesCollateralTerminalV1 {
+        funding,
+        join,
+        projection,
+    })
+}
+
+fn cpi_account_meta(value: CpiAccountMetaV2) -> AccountMeta {
+    AccountMeta {
+        pubkey: Pubkey::new_from_array(value.address.bytes()),
+        is_signer: value.signer,
+        is_writable: value.writable,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn invoke_series_collateral_transfer<'a>(
+    prepared: PreparedCollateralTransferV2,
+    mint: &AccountInfo<'a>,
+    source: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    signer_seeds: Option<&[&[u8]]>,
+) -> Outcome<AcceptedCollateralTransferV2> {
+    let cpi = prepared.cpi();
+    require(
+        cpi.token_program == collateral_id(token_program.key)
+            && cpi.accounts[0].address == collateral_id(source.key)
+            && cpi.accounts[1].address == collateral_id(mint.key)
+            && cpi.accounts[2].address == collateral_id(destination.key)
+            && cpi.accounts[3].address == collateral_id(authority.key)
+            && cpi.program_signed == signer_seeds.is_some(),
+        ClutchError::MismatchedState,
+    )?;
+    let instruction = Instruction::new_with_bytes(
+        *token_program.key,
+        &cpi.data,
+        cpi.accounts.into_iter().map(cpi_account_meta).collect(),
+    );
+    let account_infos = [
+        source.clone(),
+        mint.clone(),
+        destination.clone(),
+        authority.clone(),
+        token_program.clone(),
+    ];
+    match signer_seeds {
+        Some(seeds) => invoke_signed(&instruction, &account_infos, &[seeds]),
+        None => invoke(&instruction, &account_infos),
+    }
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+
+    let mint_after = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let source_after = source
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let destination_after = destination
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    accept_collateral_transfer_v2(
+        prepared,
+        runtime_account_view(mint, &mint_after),
+        runtime_account_view(source, &source_after),
+        runtime_account_view(destination, &destination_after),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))
+}
+
+/// Fund one Series collateral compartment by its exact authenticated
+/// principal-plus-donation balance and postcheck the raw-atom delta.
+///
+/// A zero collateral requirement emits no token invocation. The caller must
+/// still authenticate the zero-balance vault through
+/// [`authenticate_series_collateral_custody`] before activation commits.
+#[allow(clippy::too_many_arguments)]
+pub fn fund_series_collateral_component<'a>(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedSeriesCollateralFundingV1,
+    component: SeriesFundingComponentV1,
+    mint: &AccountInfo<'a>,
+    payer_token_account: &AccountInfo<'a>,
+    vault: &AccountInfo<'a>,
+    payer_token_authority: &AccountInfo<'a>,
+    canonical_authority: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+) -> Outcome<Option<AcceptedCollateralTransferV2>> {
+    require_collateral_program(token_program, authenticated.bound())?;
+    require_series_collateral_authority(
+        program_id,
+        SeriesPlanV5Id::from_bytes(authenticated.join().series_plan.bytes()),
+        canonical_authority,
+    )?;
+    let state = authenticated.funding_account().value().state;
+    require(
+        CollateralId::from_bytes(state.series_plan_id.bytes()) == authenticated.join().series_plan
+            && collateral_id(canonical_authority.key) == authenticated.join().funding_authority,
+        ClutchError::MismatchedState,
+    )?;
+    let capital = state.components[component.index()];
+    let amount_atoms = add(
+        capital.remaining_principal.collateral_atoms,
+        capital.donations.collateral_atoms,
+    )?;
+    if amount_atoms == 0 {
+        return Ok(None);
+    }
+    let authority = TransferAuthorityV2 {
+        address: collateral_id(payer_token_authority.key),
+        kind: TransferAuthorityKindV2::TransactionSigner,
+        is_transaction_signer: payer_token_authority.is_signer,
+        program_address_authenticated: false,
+        is_writable: payer_token_authority.is_writable,
+        executable: payer_token_authority.executable,
+        data_is_empty: payer_token_authority.data_is_empty(),
+    };
+    let binding = series_collateral_binding(
+        program_id,
+        authenticated.bound(),
+        state.series_plan_id,
+        component,
+        vault,
+        canonical_authority,
+    )?;
+    let request = series_segregated_funding_request_v2(
+        authenticated.bound(),
+        authenticated.join(),
+        u16::from(component as u8) + 1,
+        binding,
+        collateral_id(payer_token_authority.key),
+        authority,
+        amount_atoms,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let source_data = payer_token_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let destination_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared = prepare_realm_collateral_transfer_v2(
+        authenticated.bound(),
+        request,
+        runtime_account_view(mint, &mint_data),
+        runtime_account_view(payer_token_account, &source_data),
+        runtime_account_view(vault, &destination_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(mint_data);
+    drop(source_data);
+    drop(destination_data);
+    invoke_series_collateral_transfer(
+        prepared,
+        mint,
+        payer_token_account,
+        vault,
+        payer_token_authority,
+        token_program,
+        None,
+    )
+    .map(Some)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeriesCollateralTerminalMovementV1 {
+    PrincipalRefund,
+    DonationDisposition,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transfer_series_terminal_collateral<'a>(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedSeriesCollateralTerminalV1,
+    component: SeriesFundingComponentV1,
+    movement: SeriesCollateralTerminalMovementV1,
+    mint: &AccountInfo<'a>,
+    vault: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+) -> Outcome<Option<AcceptedCollateralTransferV2>> {
+    let funding = authenticated.funding();
+    require_collateral_program(token_program, funding.bound())?;
+    let series = SeriesPlanV5Id::from_bytes(funding.join().series_plan.bytes());
+    require_series_collateral_authority(program_id, series, authority)?;
+    require(
+        collateral_id(authority.key) == funding.join().funding_authority,
+        ClutchError::MismatchedState,
+    )?;
+    let index = component.index();
+    let projection = authenticated.projection();
+    let amount_atoms = match movement {
+        SeriesCollateralTerminalMovementV1::PrincipalRefund => {
+            projection.refundable_principal[index].collateral_atoms
+        }
+        SeriesCollateralTerminalMovementV1::DonationDisposition => {
+            projection.donation_residue[index].collateral_atoms
+        }
+    };
+    if amount_atoms == 0 {
+        return Ok(None);
+    }
+    let binding = series_collateral_binding(
+        program_id,
+        funding.bound(),
+        series,
+        component,
+        vault,
+        authority,
+    )?;
+    let request = match movement {
+        SeriesCollateralTerminalMovementV1::PrincipalRefund => series_principal_refund_request_v2(
+            funding.bound(),
+            authenticated.join(),
+            u16::from(component as u8) + 1,
+            binding,
+            funding.authority(),
+            amount_atoms,
+        ),
+        SeriesCollateralTerminalMovementV1::DonationDisposition => {
+            series_donation_disposition_request_v2(
+                funding.bound(),
+                authenticated.join(),
+                u16::from(component as u8) + 1,
+                binding,
+                funding.authority(),
+                amount_atoms,
+            )
+        }
+    }
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let source_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let destination_data = destination
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared = prepare_realm_collateral_transfer_v2(
+        funding.bound(),
+        request,
+        runtime_account_view(mint, &mint_data),
+        runtime_account_view(vault, &source_data),
+        runtime_account_view(destination, &destination_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(mint_data);
+    drop(source_data);
+    drop(destination_data);
+
+    let series_seed = series.bytes();
+    let (_, bump) = seeds::series_collateral_authority_pda(program_id, &series_seed);
+    let bump_seed = [bump];
+    let signer_seeds: &[&[u8]] = &[
+        seeds::SEED_SERIES_COLLATERAL_AUTHORITY_V1,
+        &series_seed,
+        &bump_seed,
+    ];
+    invoke_series_collateral_transfer(
+        prepared,
+        mint,
+        vault,
+        destination,
+        authority,
+        token_program,
+        Some(signer_seeds),
+    )
+    .map(Some)
+}
+
+/// Refund one component's exact unspent collateral principal to the immutable
+/// FundingTerms V2 token account and postcheck both balances and mint supply.
+#[allow(clippy::too_many_arguments)]
+pub fn refund_series_collateral_principal<'a>(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedSeriesCollateralTerminalV1,
+    component: SeriesFundingComponentV1,
+    mint: &AccountInfo<'a>,
+    vault: &AccountInfo<'a>,
+    collateral_principal_refund: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+) -> Outcome<Option<AcceptedCollateralTransferV2>> {
+    transfer_series_terminal_collateral(
+        program_id,
+        authenticated,
+        component,
+        SeriesCollateralTerminalMovementV1::PrincipalRefund,
+        mint,
+        vault,
+        collateral_principal_refund,
+        authority,
+        token_program,
+    )
+}
+
+/// Dispose one component's exact collateral donation residue to the immutable
+/// receive-only neutral token account and postcheck the exact raw-atom delta.
+#[allow(clippy::too_many_arguments)]
+pub fn dispose_series_collateral_donation<'a>(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedSeriesCollateralTerminalV1,
+    component: SeriesFundingComponentV1,
+    mint: &AccountInfo<'a>,
+    vault: &AccountInfo<'a>,
+    neutral_collateral_disposition: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+) -> Outcome<Option<AcceptedCollateralTransferV2>> {
+    transfer_series_terminal_collateral(
+        program_id,
+        authenticated,
+        component,
+        SeriesCollateralTerminalMovementV1::DonationDisposition,
+        mint,
+        vault,
+        neutral_collateral_disposition,
+        authority,
+        token_program,
+    )
+}
+
+/// Close one empty Series collateral vault, refund only its stored payer rent
+/// principal, send only close surplus to the System-owned neutral lamport sink,
+/// and restore the component lamport vault's pre-close funding balance.
+///
+/// Principal and donation collateral transfers must have completed first; a
+/// nonempty token vault refuses before the external close invocation.
+#[allow(clippy::too_many_arguments)]
+pub fn close_series_collateral_vault<'a>(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedSeriesCollateralTerminalV1,
+    component: SeriesFundingComponentV1,
+    vault: &AccountInfo<'a>,
+    component_lamport_vault: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    payer_lamport_refund: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<AcceptedSeriesVaultRentDispositionV2> {
+    let funding = authenticated.funding();
+    let series = SeriesPlanV5Id::from_bytes(funding.join().series_plan.bytes());
+    require_collateral_program(token_program, funding.bound())?;
+    require_system_program(system_program)?;
+    require_series_collateral_authority(program_id, series, authority)?;
+    require(
+        collateral_id(authority.key) == funding.join().funding_authority
+            && collateral_id(payer_lamport_refund.key) == funding.join().payer_lamport_refund
+            && collateral_id(neutral_lamport_sink.key) == funding.join().neutral_lamport_sink,
+        ClutchError::MismatchedState,
+    )?;
+    require_lamport_vault_metadata(
+        program_id,
+        series,
+        component.index(),
+        component_lamport_vault,
+    )?;
+    let binding = series_collateral_binding(
+        program_id,
+        funding.bound(),
+        series,
+        component,
+        vault,
+        authority,
+    )?;
+    let stored_rent_principal = funding
+        .funding_account()
+        .value()
+        .collateral_vault_rent_principal_lamports[component.index()];
+    let request = SeriesCollateralVaultCloseRequestV2 {
+        terminal: authenticated.join(),
+        component: u16::from(component as u8) + 1,
+        vault: binding,
+        component_lamport_vault: collateral_id(component_lamport_vault.key),
+        stored_vault_rent_principal_lamports: stored_rent_principal,
+        authority: funding.authority(),
+    };
+    let vault_before_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let component_before_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared_close = prepare_series_collateral_vault_close_v2(
+        funding.bound(),
+        request,
+        runtime_lamport_account_view(vault, &vault_before_data),
+        runtime_lamport_account_view(component_lamport_vault, &component_before_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(vault_before_data);
+    drop(component_before_data);
+
+    let cpi = prepared_close.cpi();
+    require(
+        cpi.token_program == collateral_id(token_program.key)
+            && cpi.accounts[0].address == collateral_id(vault.key)
+            && cpi.accounts[1].address == collateral_id(component_lamport_vault.key)
+            && cpi.accounts[2].address == collateral_id(authority.key)
+            && cpi.program_signed,
+        ClutchError::MismatchedState,
+    )?;
+    let instruction = Instruction::new_with_bytes(
+        *token_program.key,
+        &cpi.data,
+        cpi.accounts.into_iter().map(cpi_account_meta).collect(),
+    );
+    let series_seed = series.bytes();
+    let (_, authority_bump) = seeds::series_collateral_authority_pda(program_id, &series_seed);
+    let authority_bump_seed = [authority_bump];
+    invoke_signed(
+        &instruction,
+        &[
+            vault.clone(),
+            component_lamport_vault.clone(),
+            authority.clone(),
+            token_program.clone(),
+        ],
+        &[&[
+            seeds::SEED_SERIES_COLLATERAL_AUTHORITY_V1,
+            &series_seed,
+            &authority_bump_seed,
+        ]],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+
+    let vault_after_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let component_after_close_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let closed = accept_series_collateral_vault_close_v2(
+        prepared_close,
+        runtime_lamport_account_view(vault, &vault_after_data),
+        runtime_lamport_account_view(component_lamport_vault, &component_after_close_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    drop(vault_after_data);
+    drop(component_after_close_data);
+
+    let component_before_split_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let refund_before_data = payer_lamport_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let sink_before_data = neutral_lamport_sink
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared_disposition = prepare_series_vault_rent_disposition_v2(
+        closed,
+        runtime_lamport_account_view(component_lamport_vault, &component_before_split_data),
+        runtime_lamport_account_view(payer_lamport_refund, &refund_before_data),
+        runtime_lamport_account_view(neutral_lamport_sink, &sink_before_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(component_before_split_data);
+    drop(refund_before_data);
+    drop(sink_before_data);
+
+    let credits = prepared_disposition.credits();
+    require(
+        credits[0].destination == collateral_id(payer_lamport_refund.key)
+            && credits[1].destination == collateral_id(neutral_lamport_sink.key),
+        ClutchError::MismatchedState,
+    )?;
+    transfer_from_lamport_custody(
+        program_id,
+        series,
+        component,
+        component_lamport_vault,
+        payer_lamport_refund,
+        system_program,
+        credits[0].lamports,
+    )?;
+    transfer_from_lamport_custody(
+        program_id,
+        series,
+        component,
+        component_lamport_vault,
+        neutral_lamport_sink,
+        system_program,
+        credits[1].lamports,
+    )?;
+
+    let component_final_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let refund_final_data = payer_lamport_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let sink_final_data = neutral_lamport_sink
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    accept_series_vault_rent_disposition_v2(
+        prepared_disposition,
+        runtime_lamport_account_view(component_lamport_vault, &component_final_data),
+        runtime_lamport_account_view(payer_lamport_refund, &refund_final_data),
+        runtime_lamport_account_view(neutral_lamport_sink, &sink_final_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))
 }
 
 /// Authenticate the Realm-selected mint and all five release-selected Series
