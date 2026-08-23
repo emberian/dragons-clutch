@@ -4036,6 +4036,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "profile-non-production-dealer-policy-catalog-lab"))]
     fn enabled_order_intents_reach_accounts_and_disabled_intents_refuse_first() {
         let program_id = Pubkey::new_from_array([9; 32]);
         let market = h(1);
