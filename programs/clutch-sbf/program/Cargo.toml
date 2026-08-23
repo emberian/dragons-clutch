@@ -38,6 +38,14 @@ non-production-real-pyth-lab = []
 # that can only read one. The builders exist so a bank campaign exercises the
 # real decoders at the real offsets instead of a convenient parallel encoding.
 laboratory-fixtures = []
+# Enables the non-activating Product/Series artifact-catalog laboratory. It can
+# publish exact successor artifacts, including immutable funding-requirement
+# bodies, but deliberately cannot register a Series or create an occurrence.
+non-production-product-series-lab = [
+    "dep:clutch-collateral-adapter-v2",
+    "dep:clutch-source-plane-v3-runtime",
+    "clutch-solana-layout/non-production-product-series-lab",
+]
 # Mutually exclusive deployable products. Each forwards the same identity to
 # both hostile wire crates so a narrow SBF cannot accidentally link the full
 # Intent decoder through a dependency's default features.
@@ -53,6 +61,16 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# A deliberately non-production product whose only successes are the twelve
+# General V2 empty-book identity actions.  The dependency profiles provide the
+# narrow legacy codec substrate; this crate's capability table still rejects
+# every legacy action before account inspection.
+profile-non-production-general-v2-empty-book-identity-lab = [
+    "dep:clutch-general-v2-runtime",
+    "clutch-general-v2-runtime/layout-profile-general",
+    "clutch-solana-layout/profile-general-source-v2-point",
+    "clutch-solana-reference/profile-general-source-v2-point",
+]
 
 [dependencies]
 # The window/summary algebra the observation and resolution plane folds
@@ -65,13 +83,25 @@ clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-bspline = { path = "../../../crates/clutch-bspline" }
 clutch-bspline-accumulator = { path = "../../../crates/clutch-bspline-accumulator" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
+clutch-collateral-adapter-v2 = {
+    path = "../../../crates/clutch-collateral-adapter-v2",
+    optional = true,
+}
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
+clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
+clutch-general-v2-runtime = { path = "../../../crates/clutch-general-v2-runtime", default-features = false, optional = true }
+clutch-price-measure = { path = "../../../crates/clutch-price-measure" }
+clutch-product-series = { path = "../../../crates/clutch-product-series" }
 # The liveness kernel's `TreasuryServiceLedger` — the B4b mid-epoch-close
 # grief rider as fixed-memory bookkeeping.  Already in the graph through
 # `clutch-batch-policy-identity`; naming it here is what lets
 # `orders_batch::terminal_closure` drive the ledger's begin/settle/close
 # transitions from the Position close route instead of restating them.
 clutch-liveness = { path = "../../../crates/clutch-liveness" }
+clutch-source-plane-v3-runtime = {
+    path = "../../../crates/clutch-source-plane-v3-runtime",
+    optional = true,
+}
 clutch-solana-layout = { path = "../../solana-layout", default-features = false }
 clutch-solana-reference = { path = "../../solana-reference", default-features = false }
 solana-account-info = "=3.1.1"

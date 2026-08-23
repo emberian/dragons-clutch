@@ -163,12 +163,12 @@ mod tests {
         let linked = ObservedExtensionAction::classify(
             GENERAL_V2_FAMILY_TAG,
             GENERAL_V2_FAMILY_VERSION,
-            GeneralV2Action::EntitleSlice.tag(),
+            GeneralV2Action::AccountReceiptEnd.tag(),
         )
         .expect("the action is allocated, though every extension remains disabled");
         assert_eq!(
             linked.action(),
-            ExtensionAction::GeneralV2(GeneralV2Action::EntitleSlice)
+            ExtensionAction::GeneralV2(GeneralV2Action::AccountReceiptEnd)
         );
         assert_eq!(
             ObservedExtensionAction::classify(GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, 0,),

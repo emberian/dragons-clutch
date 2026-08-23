@@ -12,8 +12,9 @@
 //! `operatord replay` byte-diffs that claim.
 //!
 //! Nothing this daemon produces is evidence about a deployment, devnet, or
-//! mainnet.  The ELF it builds carries `--features non-production-mock-source`
-//! and the bench says so in a header strip that cannot be dismissed.
+//! mainnet. Watch and Friday Trade carry the explicit mock-source profile;
+//! `pyth-live` separately supervises the real router/receiver local laboratory
+//! without reading a retained transcript or giving the browser key material.
 
 mod bot;
 mod builders;
@@ -25,6 +26,7 @@ mod http;
 mod integer;
 mod plan;
 mod pyth;
+mod pyth_live;
 mod quantize;
 mod replay;
 mod rpc;
@@ -57,7 +59,7 @@ pub(crate) fn repo_path(relative: &str) -> PathBuf {
 fn usage() -> ! {
     eprintln!(
         "usage:\n  \
-         operatord serve [--mode watch|trade|pyth-local] [--port N] [--rpc-port N] [--faucet-port N] \
+         operatord serve [--mode watch|trade|pyth-local|pyth-live] [--port N] [--rpc-port N] [--faucet-port N] \
          [--gossip-port N] [--dynamic-port-range START-END] [--work DIR] [--static DIR] \
          [--freeze-window SLOTS] [--transcript DIR] [--exit-when-done]\n  \
          operatord emit <plan-dir>\n  \
@@ -155,9 +157,27 @@ fn dispatch(options: Options) -> Result<()> {
             statics: options.statics,
             exit_when_done: options.exit_when_done,
         }),
-        other => {
-            Err(format!("unknown session mode {other}; try watch, trade, or pyth-local").into())
+        "pyth-live" => {
+            if options.transcript.is_some() {
+                return Err(
+                    "pyth-live refuses --transcript; use pyth-local for retained evidence".into(),
+                );
+            }
+            pyth_live::serve(pyth_live::Options {
+                port: options.port,
+                rpc_port: options.rpc_port,
+                faucet_port: options.faucet_port,
+                gossip_port: options.gossip_port,
+                dynamic_port_range: options.dynamic_port_range,
+                work: options.work,
+                statics: options.statics,
+                exit_when_done: options.exit_when_done,
+            })
         }
+        other => Err(format!(
+            "unknown session mode {other}; try watch, trade, pyth-local, or pyth-live"
+        )
+        .into()),
     }
 }
 
@@ -461,5 +481,19 @@ mod option_tests {
             &options.dynamic_port_range,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn live_pyth_mode_is_explicit_and_does_not_imply_a_transcript() {
+        let options = parse(
+            ["--mode", "pyth-live", "--exit-when-done"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(options.mode, "pyth-live");
+        assert!(options.exit_when_done);
+        assert!(options.transcript.is_none());
+        assert!(options.work.is_none());
     }
 }

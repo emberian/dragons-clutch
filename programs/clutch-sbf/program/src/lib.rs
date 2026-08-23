@@ -43,12 +43,11 @@
 //!
 //! ## Layering
 //!
-//! Economic and transition semantics live in `clutch-kernel`.  Byte ownership
-//! lives in `clutch-solana-layout` and in the reference-only codecs of
-//! `clutch-solana-reference`.  This crate adds only what those crates cannot
-//! have: runtime account authentication, program-address derivation, and
-//! write-back.  Neither the kernel nor the layout crate is modified by this
-//! lane.
+//! Economic and transition semantics live in `clutch-kernel` and the owning
+//! pure-core crates. Byte ownership lives in `clutch-solana-layout` and in the
+//! reference-only codecs of `clutch-solana-reference`. This crate adds only
+//! what those crates cannot have: runtime account authentication,
+//! program-address derivation, and write-back.
 //!
 //! ## Module map
 //!
@@ -84,7 +83,8 @@
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",
-    feature = "profile-general-source-v2-point"
+    feature = "profile-general-source-v2-point",
+    feature = "profile-non-production-general-v2-empty-book-identity-lab"
 )))]
 compile_error!("select exactly one Dragon's Clutch capability profile");
 #[cfg(any(
@@ -96,9 +96,26 @@ compile_error!("select exactly one Dragon's Clutch capability profile");
     all(
         feature = "profile-direct-v3-source-v2-point",
         feature = "profile-general-source-v2-point"
+    ),
+    all(
+        feature = "profile-full",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ),
+    all(
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    ),
+    all(
+        feature = "profile-general-source-v2-point",
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
     )
 ))]
 compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
+#[cfg(all(
+    feature = "non-production-product-series-lab",
+    not(feature = "profile-full")
+))]
+compile_error!("the Product/Series artifact-catalog laboratory requires profile-full");
 
 pub mod accounts;
 pub mod capabilities;

@@ -5,11 +5,13 @@ use crate::{
     ADMISSION_NODE_ACCOUNT_VERSION, CANDIDATE_FEED_ACCOUNT_TAG, CANDIDATE_FEED_ACCOUNT_VERSION,
     CANDIDATE_FEED_STAGE_ACCOUNT_TAG, CANDIDATE_FEED_STAGE_ACCOUNT_VERSION, CLEAR_WORK_ACCOUNT_TAG,
     CLEAR_WORK_ACCOUNT_VERSION, ECONOMIC_DOMAIN_ACCOUNT_TAG, ECONOMIC_DOMAIN_ACCOUNT_VERSION,
-    EPOCH_BUDGET_ACCOUNT_TAG, EPOCH_BUDGET_ACCOUNT_VERSION, ID_BYTES, MARKET_BINDING_ACCOUNT_TAG,
-    MARKET_BINDING_ACCOUNT_VERSION, MAX_ORDERS, MAX_ORDERS_U8, MAX_OUTCOMES, MAX_OUTCOMES_U8,
-    MAX_QUANTIZED_ATOMS, MAX_QUANTIZED_ATOMS_U8, MAX_SLICES, MAX_SLICES_U16,
-    SCORE_V2_Q_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY, SELECTED_CANDIDATE_ACCOUNT_TAG,
-    SELECTED_CANDIDATE_ACCOUNT_VERSION, WINDOW_ACCOUNT_TAG, WINDOW_ACCOUNT_VERSION,
+    EPOCH_BUDGET_ACCOUNT_TAG, EPOCH_BUDGET_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG,
+    GENERAL_EPOCH_ACCOUNT_VERSION, ID_BYTES, MARKET_BINDING_ACCOUNT_TAG,
+    MARKET_BINDING_ACCOUNT_VERSION, MARKET_RUNTIME_ACCOUNT_TAG, MARKET_RUNTIME_ACCOUNT_VERSION,
+    MAX_ORDERS, MAX_ORDERS_U8, MAX_OUTCOMES, MAX_OUTCOMES_U8, MAX_QUANTIZED_ATOMS,
+    MAX_QUANTIZED_ATOMS_U8, MAX_SLICES, MAX_SLICES_U16, SCORE_V2_Q_ACTIVE_RANK_BYTES,
+    SCORE_V2_Q_RANK_CAPACITY, SELECTED_CANDIDATE_ACCOUNT_TAG, SELECTED_CANDIDATE_ACCOUNT_VERSION,
+    WINDOW_ACCOUNT_TAG, WINDOW_ACCOUNT_VERSION,
 };
 
 /// Domain prepended before hashing canonical [`EconomicDomainV2Transcript`]
@@ -17,8 +19,23 @@ use crate::{
 pub const ECONOMIC_DOMAIN_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/economic-domain/v2\0";
 /// Domain prepended before hashing exact price semantics.
 pub const PRICE_SEMANTICS_DIGEST_DOMAIN_V2: &[u8] = b"dragons-clutch/price-semantics/v2\0";
+/// Domain prepended before hashing canonical General V2 Epoch semantics.
+pub const EPOCH_SEMANTICS_DIGEST_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-v2/epoch-semantics/v1\0";
+/// Domain prepended before hashing a General V2 frozen order set.
+pub const ORDER_SET_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/general-v2/order-set/v1\0";
+/// Domain prepended before hashing a canonical quantized V3 witness body.
+pub const QUANTIZED_WITNESS_BODY_DIGEST_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/price-measure-witness-body/v3\0";
+/// Domain prepended before hashing exact settlement-slice witnesses.
+pub const SETTLEMENT_WITNESS_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/settlement-witness/v1\0";
+/// Domain prepended before hashing one complete General V2 candidate bundle.
+pub const CANDIDATE_BUNDLE_DIGEST_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-v2/candidate-bundle/v1\0";
 /// Exact canonical EconomicDomainV2 transcript length, excluding the domain.
 pub const ECONOMIC_DOMAIN_V2_TRANSCRIPT_BYTES: usize = 4 + (5 * ID_BYTES) + 8 + 1 + 8 + 16 + 16;
+/// Exact canonical General V2 Epoch-semantics transcript bytes.
+pub const EPOCH_SEMANTICS_V1_TRANSCRIPT_BYTES: usize = ID_BYTES + (3 * 8);
 /// Exact RelationV2 price-semantics body before the fixed-width price vector.
 pub const RELATION_V2_PRICE_SEMANTICS_FIXED_BYTES: usize = 4 + (3 * ID_BYTES) + 8 + 1 + 8;
 /// Exact canonical EconomicDomainV2 artifact-account bytes.
@@ -51,6 +68,14 @@ pub const CLEAR_WORK_HEADER_BYTES: usize = 672;
 pub const EPOCH_BUDGET_ACCOUNT_BYTES: usize = 272;
 /// Exact immutable Market-binding account bytes.
 pub const MARKET_BINDING_ACCOUNT_BYTES: usize = 540;
+/// Exact genesis-assisted MarketRuntime account bytes.
+pub const MARKET_RUNTIME_ACCOUNT_BYTES: usize = 148;
+/// Exact counted General V2 Epoch account bytes.
+pub const GENERAL_EPOCH_ACCOUNT_BYTES: usize = 321;
+/// Exact fixed header bytes in the quantized V3 witness-body transcript.
+pub const QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES: usize = (4 * ID_BYTES) + (2 * 8) + 5;
+/// Exact fixed header bytes in the General V2 candidate-bundle transcript.
+pub const CANDIDATE_BUNDLE_V1_FIXED_BYTES: usize = (10 * ID_BYTES) + (5 * 8) + 2 + 7;
 /// Existing settlement slice width: two two-byte legs, outcome, quantity.
 pub const SETTLEMENT_SLICE_BYTES: usize = 13;
 /// Exact quantized atom width: coordinate `u128`, mass `u64`.
@@ -118,6 +143,346 @@ impl DeletableRentOwnerV1 {
             return Err(CodecError::InvalidState);
         }
         Ok(())
+    }
+}
+
+/// Genesis-assisted mutable cursor for one immutable General V2 MarketBinding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketRuntimeV3AccountV1 {
+    /// Immutable MarketBinding PDA anchoring this runtime.
+    pub market_binding: Id32,
+    /// Full Product successor MarketInstanceV2 identity.
+    pub market_instance_v2_id: Id32,
+    /// Exact next Epoch index admitted by `InitEpoch`.
+    pub next_epoch_index: u64,
+    /// Exact nonzero generation assigned to the next Epoch.
+    pub next_epoch_generation: u64,
+    /// Number of Epochs created through this runtime.
+    pub created_epoch_count: u64,
+    /// Number of those Epochs atomically retired.
+    pub retired_epoch_count: u64,
+    /// Disjoint runtime rent owner.
+    pub rent: DeletableRentOwnerV1,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved zero flags.
+    pub flags: u8,
+}
+
+impl MarketRuntimeV3AccountV1 {
+    /// Validate the complete cursor and counted-retirement state.
+    pub fn validate(self) -> Result<(), CodecError> {
+        live(self.market_binding)?;
+        live(self.market_instance_v2_id)?;
+        self.rent.validate()?;
+        if self.next_epoch_generation == 0
+            || self.retired_epoch_count > self.created_epoch_count
+            || self.flags != 0
+        {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(())
+    }
+
+    /// Return the authoritative live Epoch count.
+    pub fn live_epoch_count(self) -> Result<u64, CodecError> {
+        self.validate()?;
+        self.created_epoch_count
+            .checked_sub(self.retired_epoch_count)
+            .ok_or(CodecError::ArithmeticOverflow)
+    }
+
+    /// Encode exactly [`MARKET_RUNTIME_ACCOUNT_BYTES`] bytes.
+    pub fn encode(self, out: &mut [u8]) -> Result<(), CodecError> {
+        self.validate()?;
+        let mut w = Writer::exact(out, MARKET_RUNTIME_ACCOUNT_BYTES)?;
+        header(
+            &mut w,
+            MARKET_RUNTIME_ACCOUNT_TAG,
+            MARKET_RUNTIME_ACCOUNT_VERSION,
+        )?;
+        w.bytes(&self.market_binding.bytes())?;
+        w.bytes(&self.market_instance_v2_id.bytes())?;
+        w.u64(self.next_epoch_index)?;
+        w.u64(self.next_epoch_generation)?;
+        w.u64(self.created_epoch_count)?;
+        w.u64(self.retired_epoch_count)?;
+        write_rent(&mut w, self.rent)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        w.finish()
+    }
+
+    /// Decode and validate exactly [`MARKET_RUNTIME_ACCOUNT_BYTES`] hostile
+    /// bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::exact(input, MARKET_RUNTIME_ACCOUNT_BYTES)?;
+        check_header(
+            &mut r,
+            MARKET_RUNTIME_ACCOUNT_TAG,
+            MARKET_RUNTIME_ACCOUNT_VERSION,
+        )?;
+        let value = Self {
+            market_binding: read_id(&mut r)?,
+            market_instance_v2_id: read_id(&mut r)?,
+            next_epoch_index: r.u64()?,
+            next_epoch_generation: r.u64()?,
+            created_epoch_count: r.u64()?,
+            retired_epoch_count: r.u64()?,
+            rent: read_rent(&mut r)?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Canonical lifecycle phase of one counted General V2 Epoch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum GeneralEpochPhaseV1 {
+    /// Orders may exist in later profiles; the frozen order-set identity is absent.
+    Open = 0,
+    /// Order set and all submission boundaries are frozen.
+    Frozen = 1,
+    /// Candidate selection is terminal, with zero or one live selected artifact.
+    Finalized = 2,
+}
+
+impl GeneralEpochPhaseV1 {
+    const fn to_byte(self) -> u8 {
+        match self {
+            Self::Open => 0,
+            Self::Frozen => 1,
+            Self::Finalized => 2,
+        }
+    }
+
+    fn from_byte(value: u8) -> Result<Self, CodecError> {
+        match value {
+            0 => Ok(Self::Open),
+            1 => Ok(Self::Frozen),
+            2 => Ok(Self::Finalized),
+            _ => Err(CodecError::InvalidState),
+        }
+    }
+}
+
+/// RelationV2-native counted General Epoch.
+///
+/// Each persisted fact has one owner: policy terms remain in MarketBinding,
+/// schedule details remain in Window, and EconomicDomain owns its transcript.
+/// This root stores only the exact joins, immutable Epoch inputs, phase, and
+/// authoritative child counts required for atomic lifecycle transitions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralEpochV6AccountV1 {
+    /// Immutable MarketBinding PDA.
+    pub market_binding: Id32,
+    /// Mutable genesis-assisted MarketRuntime PDA.
+    pub market_runtime: Id32,
+    /// Full Product successor MarketInstanceV2 identity.
+    pub market_instance_v2_id: Id32,
+    /// Canonical EconomicDomainV2 artifact PDA.
+    pub economic_domain: Id32,
+    /// Canonical candidate Window PDA.
+    pub window: Id32,
+    /// Canonical root Budget PDA.
+    pub budget: Id32,
+    /// Frozen order-set identity; absent only while Open.
+    pub order_set: Id32,
+    /// Runtime-owned monotone Epoch index.
+    pub epoch_index: u64,
+    /// Runtime-owned nonzero retirement generation.
+    pub generation: u64,
+    /// Earliest slot at which FreezeEpoch may succeed.
+    pub freeze_deadline_slot: u64,
+    /// Actual freeze slot; absent as zero only while Open.
+    pub frozen_slot: u64,
+    /// Authoritative count of live AdmissionNodes.
+    pub candidate_bundle_count: u32,
+    /// Authoritative count of live ClearWork accounts.
+    pub work_count: u32,
+    /// Authoritative count of live SelectedCandidate artifacts.
+    pub selected_candidate_count: u32,
+    /// Disjoint Epoch rent owner.
+    pub rent: DeletableRentOwnerV1,
+    /// Canonical lifecycle phase.
+    pub phase: GeneralEpochPhaseV1,
+    /// Stored PDA bump.
+    pub stored_bump: u8,
+    /// Reserved zero flags.
+    pub flags: u8,
+}
+
+impl GeneralEpochV6AccountV1 {
+    /// Validate joins, phase partition, generation, and exhaustive counts.
+    pub fn validate(self) -> Result<(), CodecError> {
+        for id in [
+            self.market_binding,
+            self.market_runtime,
+            self.market_instance_v2_id,
+            self.economic_domain,
+            self.window,
+            self.budget,
+        ] {
+            live(id)?;
+        }
+        self.rent.validate()?;
+        if self.generation == 0
+            || self.freeze_deadline_slot == 0
+            || self.work_count > self.candidate_bundle_count
+            || self.selected_candidate_count > 1
+            || self.flags != 0
+        {
+            return Err(CodecError::InvalidState);
+        }
+        match self.phase {
+            GeneralEpochPhaseV1::Open => {
+                absent(self.order_set)?;
+                if self.frozen_slot != 0
+                    || self.candidate_bundle_count != 0
+                    || self.work_count != 0
+                    || self.selected_candidate_count != 0
+                {
+                    return Err(CodecError::InvalidState);
+                }
+            }
+            GeneralEpochPhaseV1::Frozen => {
+                live(self.order_set)?;
+                if self.frozen_slot < self.freeze_deadline_slot
+                    || self.selected_candidate_count != 0
+                {
+                    return Err(CodecError::InvalidState);
+                }
+            }
+            GeneralEpochPhaseV1::Finalized => {
+                live(self.order_set)?;
+                if self.frozen_slot < self.freeze_deadline_slot {
+                    return Err(CodecError::InvalidState);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Canonically derive this Epoch's semantic identity.
+    pub fn semantics_digest<B: Sha256BackendV1>(&self, backend: &B) -> Result<Id32, CodecError> {
+        epoch_semantics_digest_v1(
+            backend,
+            EpochSemanticsV1 {
+                market_instance_v2_id: self.market_instance_v2_id,
+                epoch_index: self.epoch_index,
+                generation: self.generation,
+                freeze_deadline_slot: self.freeze_deadline_slot,
+            },
+        )
+    }
+
+    /// Encode exactly [`GENERAL_EPOCH_ACCOUNT_BYTES`] bytes.
+    pub fn encode(self, out: &mut [u8]) -> Result<(), CodecError> {
+        self.validate()?;
+        let mut w = Writer::exact(out, GENERAL_EPOCH_ACCOUNT_BYTES)?;
+        header(
+            &mut w,
+            GENERAL_EPOCH_ACCOUNT_TAG,
+            GENERAL_EPOCH_ACCOUNT_VERSION,
+        )?;
+        for id in [
+            self.market_binding,
+            self.market_runtime,
+            self.market_instance_v2_id,
+            self.economic_domain,
+            self.window,
+            self.budget,
+            self.order_set,
+        ] {
+            w.bytes(&id.bytes())?;
+        }
+        w.u64(self.epoch_index)?;
+        w.u64(self.generation)?;
+        w.u64(self.freeze_deadline_slot)?;
+        w.u64(self.frozen_slot)?;
+        w.u32(self.candidate_bundle_count)?;
+        w.u32(self.work_count)?;
+        w.u32(self.selected_candidate_count)?;
+        write_rent(&mut w, self.rent)?;
+        w.u8(self.phase.to_byte())?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        w.finish()
+    }
+
+    /// Decode and validate exactly [`GENERAL_EPOCH_ACCOUNT_BYTES`] hostile
+    /// bytes.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::exact(input, GENERAL_EPOCH_ACCOUNT_BYTES)?;
+        check_header(
+            &mut r,
+            GENERAL_EPOCH_ACCOUNT_TAG,
+            GENERAL_EPOCH_ACCOUNT_VERSION,
+        )?;
+        let value = Self {
+            market_binding: read_id(&mut r)?,
+            market_runtime: read_id(&mut r)?,
+            market_instance_v2_id: read_id(&mut r)?,
+            economic_domain: read_id(&mut r)?,
+            window: read_id(&mut r)?,
+            budget: read_id(&mut r)?,
+            order_set: Id32::from_bytes(r.array()?),
+            epoch_index: r.u64()?,
+            generation: r.u64()?,
+            freeze_deadline_slot: r.u64()?,
+            frozen_slot: r.u64()?,
+            candidate_bundle_count: r.u32()?,
+            work_count: r.u32()?,
+            selected_candidate_count: r.u32()?,
+            rent: read_rent(&mut r)?,
+            phase: GeneralEpochPhaseV1::from_byte(r.u8()?)?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        r.finish()?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Canonical typed inputs to one General V2 Epoch semantic identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochSemanticsV1 {
+    /// Full Product successor MarketInstanceV2 identity.
+    pub market_instance_v2_id: Id32,
+    /// Runtime-owned monotone index.
+    pub epoch_index: u64,
+    /// Runtime-owned nonzero retirement generation.
+    pub generation: u64,
+    /// Immutable earliest freeze slot.
+    pub freeze_deadline_slot: u64,
+}
+
+impl EpochSemanticsV1 {
+    /// Validate the semantic inputs.
+    pub fn validate(self) -> Result<(), CodecError> {
+        live(self.market_instance_v2_id)?;
+        if self.generation == 0 || self.freeze_deadline_slot == 0 {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(())
+    }
+
+    /// Encode the exact canonical hash transcript.
+    pub fn encode(self) -> Result<[u8; EPOCH_SEMANTICS_V1_TRANSCRIPT_BYTES], CodecError> {
+        self.validate()?;
+        let mut out = [0u8; EPOCH_SEMANTICS_V1_TRANSCRIPT_BYTES];
+        let mut w = Writer::exact(&mut out, EPOCH_SEMANTICS_V1_TRANSCRIPT_BYTES)?;
+        w.bytes(&self.market_instance_v2_id.bytes())?;
+        w.u64(self.epoch_index)?;
+        w.u64(self.generation)?;
+        w.u64(self.freeze_deadline_slot)?;
+        w.finish()?;
+        Ok(out)
     }
 }
 
@@ -211,6 +576,102 @@ pub trait Sha256BackendV1 {
     /// Hash byte slices in order without inserting a length, separator, or
     /// other framing.
     fn sha256(&self, parts: &[&[u8]]) -> [u8; ID_BYTES];
+}
+
+/// Derive the canonical nonzero General V2 Epoch semantic identity.
+pub fn epoch_semantics_digest_v1<B: Sha256BackendV1>(
+    backend: &B,
+    semantics: EpochSemanticsV1,
+) -> Result<Id32, CodecError> {
+    let encoded = semantics.encode()?;
+    Id32::new(backend.sha256(&[EPOCH_SEMANTICS_DIGEST_DOMAIN_V1, &encoded]))
+}
+
+/// Derive the canonical nonzero identity of the frozen empty General V2 book.
+///
+/// The two-byte zero count is part of the transcript. Later nonempty order-set
+/// work must extend this owner over exact canonical records rather than define
+/// a second empty-book convention.
+pub fn empty_order_set_digest_v1<B: Sha256BackendV1>(
+    backend: &B,
+    economic_domain_digest: Id32,
+) -> Result<Id32, CodecError> {
+    live(economic_domain_digest)?;
+    let empty_count = 0u16.to_le_bytes();
+    Id32::new(backend.sha256(&[
+        ORDER_SET_DIGEST_DOMAIN_V1,
+        &economic_domain_digest.bytes(),
+        &empty_count,
+    ]))
+}
+
+/// Exact typed opening of one funded-candidate commitment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateCommitmentOpeningV1 {
+    /// Parent Epoch PDA.
+    pub epoch: Id32,
+    /// General V2 MarketRuntime PDA, exactly equal to `MarketBindingV1.market`.
+    pub market: Id32,
+    /// Frozen RelationV2 policy identity.
+    pub relation_policy_id: Id32,
+    /// Frozen admission-policy identity.
+    pub admission_policy_id: Id32,
+    /// Frozen score-policy identity.
+    pub score_policy_id: Id32,
+    /// Window's actual frozen slot.
+    pub frozen_slot: u64,
+    /// Authority that must sign the reveal.
+    pub submitter_authority: Id32,
+    /// Immutable destination of the unique solver prize.
+    pub solver_reward_destination: Id32,
+    /// Exact candidate-bundle identity opened by the reveal.
+    pub candidate_bundle_digest: Id32,
+    /// Caller-chosen 32-byte commitment secret.
+    pub secret: [u8; ID_BYTES],
+}
+
+impl CandidateCommitmentOpeningV1 {
+    /// Validate every authenticated identity and the nonzero frozen slot.
+    pub fn validate(self) -> Result<(), CodecError> {
+        for id in [
+            self.epoch,
+            self.market,
+            self.relation_policy_id,
+            self.admission_policy_id,
+            self.score_policy_id,
+            self.submitter_authority,
+            self.solver_reward_destination,
+            self.candidate_bundle_digest,
+        ] {
+            live(id)?;
+        }
+        if self.frozen_slot == 0 {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(())
+    }
+}
+
+/// Recompute the exact ADR-0008 commitment without using it as a PDA seed.
+pub fn candidate_commitment_v1<B: Sha256BackendV1>(
+    backend: &B,
+    opening: CandidateCommitmentOpeningV1,
+) -> Result<Id32, CodecError> {
+    opening.validate()?;
+    let frozen_slot = opening.frozen_slot.to_le_bytes();
+    Id32::new(backend.sha256(&[
+        crate::CANDIDATE_COMMITMENT_DOMAIN_V1,
+        &opening.epoch.bytes(),
+        &opening.market.bytes(),
+        &opening.relation_policy_id.bytes(),
+        &opening.admission_policy_id.bytes(),
+        &opening.score_policy_id.bytes(),
+        &frozen_slot,
+        &opening.submitter_authority.bytes(),
+        &opening.solver_reward_destination.bytes(),
+        &opening.candidate_bundle_digest.bytes(),
+        &opening.secret,
+    ]))
 }
 
 /// Derive the canonical EconomicDomainV2 identity from typed fields.
@@ -379,14 +840,16 @@ pub enum SettlementCandidateKindV1 {
 }
 
 impl SettlementCandidateKindV1 {
-    const fn to_byte(self) -> u8 {
+    /// Return the exact one-byte wire value.
+    pub const fn to_byte(self) -> u8 {
         match self {
             Self::Direct => 0,
             Self::CoveredDealer => 1,
         }
     }
 
-    fn from_byte(value: u8) -> Result<Self, CodecError> {
+    /// Decode one exact one-byte wire value.
+    pub fn from_byte(value: u8) -> Result<Self, CodecError> {
         match value {
             0 => Ok(Self::Direct),
             1 => Ok(Self::CoveredDealer),
@@ -399,7 +862,7 @@ impl SettlementCandidateKindV1 {
 /// epoch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MarketBindingV1 {
-    /// General V2 Market account identity.
+    /// General V2 MarketRuntime PDA; never the Product MarketInstanceV2 ID.
     pub market: Id32,
     /// Full `MarketGenesisProfileV2Id`; never a V1 profile reinterpretation.
     pub market_genesis_profile_v2_id: Id32,
@@ -768,7 +1231,7 @@ pub fn required_candidate_funding_v1(
 pub struct CandidateWindowV4AccountV1 {
     /// Parent Epoch.
     pub epoch: Id32,
-    /// Parent Market.
+    /// Actual General V2 MarketRuntime PDA.
     pub market: Id32,
     /// Relation policy.
     pub relation_policy_id: Id32,
@@ -826,6 +1289,62 @@ pub struct CandidateWindowV4AccountV1 {
     pub stored_bump: u8,
     /// Reserved zero flags.
     pub flags: u8,
+}
+
+/// Semantic-owner proof that a General V2 Window has finalized its one-way
+/// selection and that every reverse-linked AdmissionNode has been deleted.
+///
+/// This proof deliberately retains the historical selected-artifact identity:
+/// a separate authenticated selected-family close proves that account absent
+/// and decrements its Epoch count exactly once. A Window alone cannot
+/// authorize root retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateWindowRetirementDispositionV1 {
+    market: Id32,
+    epoch_account: Id32,
+    epoch_generation: u64,
+    rent: DeletableRentOwnerV1,
+    admitted_count: u64,
+    closed_node_count: u64,
+    selected_candidate_artifact: Id32,
+}
+
+impl CandidateWindowRetirementDispositionV1 {
+    /// Parent Market authenticated by the Window codec.
+    pub const fn market(self) -> Id32 {
+        self.market
+    }
+
+    /// Parent Epoch account identity authenticated by the Window codec.
+    pub const fn epoch_account(self) -> Id32 {
+        self.epoch_account
+    }
+
+    /// Exact parent generation authenticated by the Window codec.
+    pub const fn epoch_generation(self) -> u64 {
+        self.epoch_generation
+    }
+
+    /// Independently owned Window rent principal and donation floor.
+    pub const fn rent(self) -> DeletableRentOwnerV1 {
+        self.rent
+    }
+
+    /// Total number of nodes ever admitted by this Window.
+    pub const fn admitted_count(self) -> u64 {
+        self.admitted_count
+    }
+
+    /// Total number of nodes deleted through the reverse-linked close path.
+    pub const fn closed_node_count(self) -> u64 {
+        self.closed_node_count
+    }
+
+    /// Historical selected-artifact identity, or the all-zero sentinel when
+    /// this Window finalized without a valid submitted candidate.
+    pub const fn selected_candidate_artifact(self) -> Id32 {
+        self.selected_candidate_artifact
+    }
 }
 
 impl CandidateWindowV4AccountV1 {
@@ -945,6 +1464,35 @@ impl CandidateWindowV4AccountV1 {
         Ok(())
     }
 
+    /// Consume the semantic Window terminality check for atomic root close.
+    ///
+    /// Finalization is one-way, the reverse-linked head must be absent, and
+    /// every admitted node must already have traversed its authoritative close
+    /// transition. The selected artifact is only a historical pointer here;
+    /// its independently counted account family still requires exact absence
+    /// evidence before the Epoch root may retire.
+    pub fn retirement_disposition(
+        self,
+    ) -> Result<CandidateWindowRetirementDispositionV1, CodecError> {
+        self.validate()?;
+        if self.finalized_slot == 0
+            || self.live_node_count != 0
+            || !self.admission_head.is_zero()
+            || self.closed_node_count != self.admitted_count
+        {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(CandidateWindowRetirementDispositionV1 {
+            market: self.market,
+            epoch_account: self.epoch,
+            epoch_generation: self.epoch_generation,
+            rent: self.rent,
+            admitted_count: self.admitted_count,
+            closed_node_count: self.closed_node_count,
+            selected_candidate_artifact: self.selected_candidate_artifact,
+        })
+    }
+
     /// Encode exactly [`WINDOW_ACCOUNT_BYTES`] bytes.
     pub fn encode(self, out: &mut [u8]) -> Result<(), CodecError> {
         self.validate()?;
@@ -1051,7 +1599,7 @@ impl CandidateWindowV4AccountV1 {
 pub struct SelectedCandidateV1AccountV1 {
     /// Parent Epoch.
     pub epoch: Id32,
-    /// Parent Market.
+    /// Actual General V2 MarketRuntime PDA.
     pub market: Id32,
     /// Source Window.
     pub window: Id32,
@@ -1154,6 +1702,7 @@ impl SelectedCandidateV1AccountV1 {
             || self.slice_count > MAX_SLICES_U16
             || self.next_slice_index > self.slice_count
             || self.entitlement_state > 2
+            || (self.slice_count == 0 && self.entitlement_state != 2)
             || (self.entitlement_state == 0 && self.next_slice_index != 0)
             || (self.entitlement_state == 1 && self.next_slice_index == self.slice_count)
             || (self.entitlement_state == 2 && self.next_slice_index != self.slice_count)
@@ -1320,7 +1869,7 @@ impl AdmissionNodeStatusV1 {
 pub struct AdmissionNodeV3AccountV1 {
     /// Parent Epoch.
     pub epoch: Id32,
-    /// Parent Market.
+    /// Actual General V2 MarketRuntime PDA.
     pub market: Id32,
     /// Relation policy.
     pub relation_policy_id: Id32,
@@ -1630,7 +2179,7 @@ pub struct CandidateFeedHeaderV2 {
     pub epoch: Id32,
     /// Admission node.
     pub node: Id32,
-    /// Parent Market.
+    /// Actual General V2 MarketRuntime PDA.
     pub market: Id32,
     /// Frozen order-set identity.
     pub order_set: Id32,
@@ -1925,6 +2474,276 @@ pub fn candidate_feed_account_len(
         .ok_or(CodecError::ArithmeticOverflow)
 }
 
+/// Borrowed active-width tails of one CandidateFeed or FeedStage.
+///
+/// This is an offset projection, not an authenticated account capability. It
+/// can be obtained only after exact frame geometry is checked, so adapters do
+/// not need to restate active-tail offsets or record widths.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateFeedTailV2<'a> {
+    prices_le: &'a [u8],
+    fills_le: &'a [u8],
+    atoms_le: &'a [u8],
+    slices_le: &'a [u8],
+}
+
+/// Exact byte boundaries of every active-width CandidateFeed tail.
+///
+/// Keeping this projection beside the frame codec prevents adapters from
+/// independently reconstructing tail offsets when copying segment records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateFeedTailOffsetsV2 {
+    prices_at: usize,
+    fills_at: usize,
+    atoms_at: usize,
+    slices_at: usize,
+    end: usize,
+}
+
+impl CandidateFeedTailOffsetsV2 {
+    /// First active price byte.
+    pub const fn prices_at(self) -> usize {
+        self.prices_at
+    }
+
+    /// First active fill byte.
+    pub const fn fills_at(self) -> usize {
+        self.fills_at
+    }
+
+    /// First active quantized-atom byte.
+    pub const fn atoms_at(self) -> usize {
+        self.atoms_at
+    }
+
+    /// First active settlement-slice byte.
+    pub const fn slices_at(self) -> usize {
+        self.slices_at
+    }
+
+    /// Exact end of the active frame.
+    pub const fn end(self) -> usize {
+        self.end
+    }
+}
+
+impl<'a> CandidateFeedTailV2<'a> {
+    /// Exact active price records, each one little-endian `u64`.
+    pub const fn prices_le(self) -> &'a [u8] {
+        self.prices_le
+    }
+
+    /// Exact active fill records, each one little-endian `u64`.
+    pub const fn fills_le(self) -> &'a [u8] {
+        self.fills_le
+    }
+
+    /// Exact active atom records, each `u128 coordinate || u64 mass`, LE.
+    pub const fn atoms_le(self) -> &'a [u8] {
+        self.atoms_le
+    }
+
+    /// Exact active 13-byte settlement-slice records.
+    pub const fn slices_le(self) -> &'a [u8] {
+        self.slices_le
+    }
+}
+
+/// Project exact active-tail byte boundaries from a validated header.
+pub fn candidate_feed_tail_offsets_v2(
+    header: CandidateFeedHeaderV2,
+) -> Result<CandidateFeedTailOffsetsV2, CodecError> {
+    header.validate(false)?;
+    let prices_bytes = usize::from(header.outcome_count)
+        .checked_mul(8)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let fills_bytes = usize::from(header.order_count)
+        .checked_mul(8)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let atoms_bytes = usize::from(header.atom_count)
+        .checked_mul(QUANTIZED_ATOM_BYTES)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let prices_at = CANDIDATE_FEED_HEADER_BYTES;
+    let fills_at = prices_at
+        .checked_add(prices_bytes)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let atoms_at = fills_at
+        .checked_add(fills_bytes)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let slices_at = atoms_at
+        .checked_add(atoms_bytes)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let slices_bytes = usize::from(header.slice_count)
+        .checked_mul(SETTLEMENT_SLICE_BYTES)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let end = slices_at
+        .checked_add(slices_bytes)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    Ok(CandidateFeedTailOffsetsV2 {
+        prices_at,
+        fills_at,
+        atoms_at,
+        slices_at,
+        end,
+    })
+}
+
+/// Project exact active tails after checking complete frame geometry.
+pub fn candidate_feed_tail_v2<'a>(
+    input: &'a [u8],
+    header: CandidateFeedHeaderV2,
+) -> Result<CandidateFeedTailV2<'a>, CodecError> {
+    let exact = candidate_feed_account_len(
+        header.outcome_count,
+        header.order_count,
+        header.atom_count,
+        header.slice_count,
+    )?;
+    if input.len() != exact {
+        return Err(CodecError::WrongLength);
+    }
+    let offsets = candidate_feed_tail_offsets_v2(header)?;
+    Ok(CandidateFeedTailV2 {
+        prices_le: input
+            .get(offsets.prices_at()..offsets.fills_at())
+            .ok_or(CodecError::WrongLength)?,
+        fills_le: input
+            .get(offsets.fills_at()..offsets.atoms_at())
+            .ok_or(CodecError::WrongLength)?,
+        atoms_le: input
+            .get(offsets.atoms_at()..offsets.slices_at())
+            .ok_or(CodecError::WrongLength)?,
+        slices_le: input
+            .get(offsets.slices_at()..offsets.end())
+            .ok_or(CodecError::WrongLength)?,
+    })
+}
+
+/// Decode an exact Feed/Stage, require every active cursor complete, and apply
+/// sealed simplex/atom/slice semantics even before an atomic Stage tag flip.
+pub fn complete_candidate_feed_v2(
+    input: &[u8],
+    sealed: bool,
+) -> Result<(CandidateFeedHeaderV2, CandidateFeedTailV2<'_>), CodecError> {
+    let header = CandidateFeedHeaderV2::decode_account(input, sealed)?;
+    if header.prices_written != header.outcome_count
+        || header.fills_written != header.order_count
+        || header.atoms_written != header.atom_count
+        || header.slices_written != header.slice_count
+    {
+        return Err(CodecError::InvalidState);
+    }
+    // Apply sealed semantic validation even when the bytes still carry the
+    // stage discriminator immediately before an atomic seal transition.
+    header.validate(true)?;
+    validate_candidate_feed_tail(input, header, true)?;
+    let tail = candidate_feed_tail_v2(input, header)?;
+    Ok((header, tail))
+}
+
+/// Recompute the canonical V3 quantized witness-body digest from a complete
+/// active-width Feed/Stage. The stored claimed body digest is excluded.
+pub fn quantized_witness_body_digest_v3<B: Sha256BackendV1>(
+    backend: &B,
+    candidate_feed: Id32,
+    input: &[u8],
+    sealed: bool,
+) -> Result<Id32, CodecError> {
+    live(candidate_feed)?;
+    let (header, tail) = complete_candidate_feed_v2(input, sealed)?;
+    let mut fixed = [0u8; QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES];
+    let mut w = Writer::exact(&mut fixed, QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES)?;
+    for id in [
+        candidate_feed,
+        header.economic_domain_digest,
+        header.native_claim_basis_id,
+        header.candidate_price_digest,
+    ] {
+        w.bytes(&id.bytes())?;
+    }
+    w.u64(header.price_scale)?;
+    w.u64(header.common_denominator)?;
+    w.u8(header.price_witness_schema)?;
+    w.u8(header.quantized_semantics_version)?;
+    w.u8(header.basis_degree)?;
+    w.u8(header.outcome_count)?;
+    w.u8(header.atom_count)?;
+    w.finish()?;
+    Id32::new(backend.sha256(&[
+        QUANTIZED_WITNESS_BODY_DIGEST_DOMAIN_V3,
+        &fixed,
+        tail.prices_le(),
+        tail.atoms_le(),
+    ]))
+}
+
+/// Recompute the canonical nonzero empty settlement-witness identity.
+pub fn empty_settlement_witness_digest_v1<B: Sha256BackendV1>(
+    backend: &B,
+    base_relation_candidate_id: Id32,
+) -> Result<Id32, CodecError> {
+    live(base_relation_candidate_id)?;
+    let empty_count = 0u16.to_le_bytes();
+    Id32::new(backend.sha256(&[
+        SETTLEMENT_WITNESS_DIGEST_DOMAIN_V1,
+        &base_relation_candidate_id.bytes(),
+        &empty_count,
+    ]))
+}
+
+/// Recompute one complete General V2 candidate-bundle identity from typed
+/// header fields and exact active tails. RelationV2 remains the sole owner of
+/// `base_relation_candidate_id`; this transcript only binds that checked ID.
+pub fn candidate_bundle_digest_v1<B: Sha256BackendV1>(
+    backend: &B,
+    input: &[u8],
+    sealed: bool,
+) -> Result<Id32, CodecError> {
+    let (header, tail) = complete_candidate_feed_v2(input, sealed)?;
+    let mut fixed = [0u8; CANDIDATE_BUNDLE_V1_FIXED_BYTES];
+    let mut w = Writer::exact(&mut fixed, CANDIDATE_BUNDLE_V1_FIXED_BYTES)?;
+    for id in [
+        header.order_set,
+        header.relation_policy_id,
+        header.economic_domain_digest,
+        header.native_claim_basis_id,
+        header.candidate_price_digest,
+        header.price_measure_policy_v1_id,
+        header.settlement_candidate_id,
+        header.base_relation_candidate_id,
+        header.settlement_witness_digest,
+        header.price_body_digest,
+    ] {
+        w.bytes(&id.bytes())?;
+    }
+    for value in [
+        header.virtual_split,
+        header.virtual_merge,
+        header.honored_aon_mask,
+        header.price_scale,
+        header.common_denominator,
+    ] {
+        w.u64(value)?;
+    }
+    w.u16(header.slice_count)?;
+    w.u8(header.basis_degree)?;
+    w.u8(header.outcome_count)?;
+    w.u8(header.order_count)?;
+    w.u8(header.atom_count)?;
+    w.u8(header.candidate_kind.to_byte())?;
+    w.u8(header.price_witness_schema)?;
+    w.u8(header.quantized_semantics_version)?;
+    w.finish()?;
+    Id32::new(backend.sha256(&[
+        CANDIDATE_BUNDLE_DIGEST_DOMAIN_V1,
+        &fixed,
+        tail.prices_le(),
+        tail.fills_le(),
+        tail.atoms_le(),
+        tail.slices_le(),
+    ]))
+}
+
 fn validate_candidate_feed_tail(
     input: &[u8],
     header: CandidateFeedHeaderV2,
@@ -2122,7 +2941,7 @@ pub struct ClearWorkHeaderV2 {
     pub epoch: Id32,
     /// Admission node.
     pub node: Id32,
-    /// Parent Market.
+    /// Actual General V2 MarketRuntime PDA.
     pub market: Id32,
     /// Frozen order set.
     pub order_set: Id32,
@@ -2382,7 +3201,7 @@ fn validate_clear_work_tail(input: &[u8], header: ClearWorkHeaderV2) -> Result<(
 pub struct EpochBudgetV2AccountV1 {
     /// Parent Epoch.
     pub epoch: Id32,
-    /// Parent Market.
+    /// Actual General V2 MarketRuntime PDA.
     pub market: Id32,
     /// Immutable liveness/admission policy.
     pub admission_policy_id: Id32,
@@ -2424,6 +3243,50 @@ pub struct EpochBudgetV2AccountV1 {
     pub stored_bump: u8,
     /// Reserved flags.
     pub flags: u8,
+}
+
+/// Semantic-owner proof that an Epoch Budget has no unpaid obligation except
+/// the root-close reward consumed by the same atomic retirement transaction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EpochBudgetRetirementDispositionV1 {
+    market: Id32,
+    epoch_account: Id32,
+    epoch_generation: u64,
+    funding_payer: Id32,
+    root_close_reward: u64,
+    rent: DeletableRentOwnerV1,
+}
+
+impl EpochBudgetRetirementDispositionV1 {
+    /// Parent Market authenticated by the Budget codec.
+    pub const fn market(self) -> Id32 {
+        self.market
+    }
+
+    /// Parent General V2 Epoch account authenticated by the Budget codec.
+    pub const fn epoch_account(self) -> Id32 {
+        self.epoch_account
+    }
+
+    /// Exact parent generation authenticated by the Budget codec.
+    pub const fn epoch_generation(self) -> u64 {
+        self.epoch_generation
+    }
+
+    /// Original root-funding payer.
+    pub const fn funding_payer(self) -> Id32 {
+        self.funding_payer
+    }
+
+    /// Permissionless root-close reward that must be paid before deletion.
+    pub const fn root_close_reward(self) -> u64 {
+        self.root_close_reward
+    }
+
+    /// Independently owned Budget rent principal and donation floor.
+    pub const fn rent(self) -> DeletableRentOwnerV1 {
+        self.rent
+    }
 }
 
 impl EpochBudgetV2AccountV1 {
@@ -2472,6 +3335,36 @@ impl EpochBudgetV2AccountV1 {
             .and_then(|value| value.checked_add(self.selected_rent_initial))
             .ok_or(CodecError::ArithmeticOverflow)?;
         Ok(())
+    }
+
+    /// Consume the semantic Budget terminality check for atomic root close.
+    ///
+    /// Freeze/finalize rewards must be paid, solver liability must be paid or
+    /// explicitly neutralized, and selected-artifact rent must be materialized
+    /// or reclaimed. The root-close reward deliberately remains present: the
+    /// root-close transaction pays it once and deletes the Budget atomically.
+    pub fn retirement_disposition(self) -> Result<EpochBudgetRetirementDispositionV1, CodecError> {
+        self.validate()?;
+        if self.freeze_paid != 1
+            || self.freeze_remaining != 0
+            || self.finalize_paid != 1
+            || self.finalize_remaining != 0
+            || !(1..=2).contains(&self.solver_state)
+            || self.solver_remaining != 0
+            || !(1..=2).contains(&self.selected_rent_state)
+            || self.selected_rent_remaining != 0
+            || self.root_close_remaining != self.root_close_initial
+        {
+            return Err(CodecError::InvalidState);
+        }
+        Ok(EpochBudgetRetirementDispositionV1 {
+            market: self.market,
+            epoch_account: self.epoch,
+            epoch_generation: self.epoch_generation,
+            funding_payer: self.funding_payer,
+            root_close_reward: self.root_close_remaining,
+            rent: self.rent,
+        })
     }
 
     /// Encode exactly [`EPOCH_BUDGET_ACCOUNT_BYTES`] bytes.
@@ -2882,6 +3775,7 @@ impl SelectedCandidateRetirementContractV1 {
             || self.slice_count > MAX_SLICES_U16
             || self.next_slice_index > self.slice_count
             || self.entitlement_state > 2
+            || (self.slice_count == 0 && self.entitlement_state != 2)
             || !(1..=2).contains(&self.budget_solver_state)
         {
             return Err(CodecError::InvalidState);
@@ -3110,6 +4004,11 @@ fn write_sha(w: &mut Writer<'_>, value: Sha256CheckpointV1) -> Result<(), CodecE
 }
 
 const _: () = assert!(ECONOMIC_DOMAIN_V2_TRANSCRIPT_BYTES == 213);
+const _: () = assert!(EPOCH_SEMANTICS_V1_TRANSCRIPT_BYTES == 56);
+const _: () = assert!(MARKET_RUNTIME_ACCOUNT_BYTES == 2 + (2 * 32) + (4 * 8) + 48 + 2);
+const _: () = assert!(GENERAL_EPOCH_ACCOUNT_BYTES == 2 + (7 * 32) + (4 * 8) + (3 * 4) + 48 + 3);
+const _: () = assert!(QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES == 149);
+const _: () = assert!(CANDIDATE_BUNDLE_V1_FIXED_BYTES == 369);
 const _: () = assert!(ECONOMIC_DOMAIN_ACCOUNT_BYTES == 297);
 const _: () =
     assert!(SELECTED_CANDIDATE_ACCOUNT_BYTES == 2 + (19 * 32) + 96 + (3 * 8) + 4 + 48 + 7);
@@ -3519,6 +4418,8 @@ mod tests {
 
     #[test]
     fn exact_lengths_are_pinned_and_stay_below_one_cpi_creation_ceiling() {
+        assert_eq!(MARKET_RUNTIME_ACCOUNT_BYTES, 148);
+        assert_eq!(GENERAL_EPOCH_ACCOUNT_BYTES, 321);
         assert_eq!(WINDOW_ACCOUNT_BYTES, 565);
         assert_eq!(ADMISSION_NODE_ACCOUNT_BYTES, 743);
         assert_eq!(CANDIDATE_FEED_HEADER_BYTES, 538);
@@ -3559,6 +4460,152 @@ mod tests {
     }
 
     #[test]
+    fn runtime_and_general_epoch_round_trip_and_refuse_hostile_state() {
+        let runtime = MarketRuntimeV3AccountV1 {
+            market_binding: id(1),
+            market_instance_v2_id: id(2),
+            next_epoch_index: 7,
+            next_epoch_generation: 8,
+            created_epoch_count: 7,
+            retired_epoch_count: 2,
+            rent: rent(),
+            stored_bump: 3,
+            flags: 0,
+        };
+        assert_eq!(runtime.live_epoch_count(), Ok(5));
+        let mut runtime_bytes = [0u8; MARKET_RUNTIME_ACCOUNT_BYTES];
+        runtime.encode(&mut runtime_bytes).unwrap();
+        assert_eq!(
+            MarketRuntimeV3AccountV1::decode(&runtime_bytes),
+            Ok(runtime)
+        );
+        assert_eq!(
+            MarketRuntimeV3AccountV1::decode(&runtime_bytes[..runtime_bytes.len() - 1]),
+            Err(CodecError::WrongLength)
+        );
+        let mut wrong = runtime_bytes;
+        wrong[1] = 2;
+        assert_eq!(
+            MarketRuntimeV3AccountV1::decode(&wrong),
+            Err(CodecError::WrongVersion)
+        );
+        let mut bad_runtime = runtime;
+        bad_runtime.retired_epoch_count = 8;
+        assert_eq!(bad_runtime.validate(), Err(CodecError::InvalidState));
+
+        let open = GeneralEpochV6AccountV1 {
+            market_binding: runtime.market_binding,
+            market_runtime: id(3),
+            market_instance_v2_id: runtime.market_instance_v2_id,
+            economic_domain: id(4),
+            window: id(5),
+            budget: id(6),
+            order_set: Id32::ZERO,
+            epoch_index: 7,
+            generation: 8,
+            freeze_deadline_slot: 100,
+            frozen_slot: 0,
+            candidate_bundle_count: 0,
+            work_count: 0,
+            selected_candidate_count: 0,
+            rent: rent(),
+            phase: GeneralEpochPhaseV1::Open,
+            stored_bump: 4,
+            flags: 0,
+        };
+        let mut epoch_bytes = [0u8; GENERAL_EPOCH_ACCOUNT_BYTES];
+        open.encode(&mut epoch_bytes).unwrap();
+        assert_eq!(GeneralEpochV6AccountV1::decode(&epoch_bytes), Ok(open));
+        epoch_bytes[2 + (6 * ID_BYTES)] = 9;
+        assert_eq!(
+            GeneralEpochV6AccountV1::decode(&epoch_bytes),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        let mut frozen = open;
+        frozen.order_set = id(7);
+        frozen.frozen_slot = 100;
+        frozen.phase = GeneralEpochPhaseV1::Frozen;
+        frozen.candidate_bundle_count = 1;
+        frozen.work_count = 2;
+        assert_eq!(frozen.validate(), Err(CodecError::InvalidState));
+        frozen.work_count = 0;
+        frozen.candidate_bundle_count = 0;
+        frozen.selected_candidate_count = 1;
+        frozen.phase = GeneralEpochPhaseV1::Finalized;
+        assert_eq!(
+            frozen.validate(),
+            Ok(()),
+            "selected settlement authority may outlive its source node"
+        );
+    }
+
+    #[test]
+    fn semantic_digests_are_typed_nonzero_and_field_sensitive() {
+        let semantics = EpochSemanticsV1 {
+            market_instance_v2_id: id(1),
+            epoch_index: 7,
+            generation: 8,
+            freeze_deadline_slot: 100,
+        };
+        let digest = epoch_semantics_digest_v1(&Sha2Backend, semantics).unwrap();
+        assert!(!digest.is_zero());
+        assert_ne!(
+            digest,
+            epoch_semantics_digest_v1(
+                &Sha2Backend,
+                EpochSemanticsV1 {
+                    epoch_index: 8,
+                    ..semantics
+                }
+            )
+            .unwrap()
+        );
+        let economic = id(9);
+        let empty_orders = empty_order_set_digest_v1(&Sha2Backend, economic).unwrap();
+        assert!(!empty_orders.is_zero());
+        assert_ne!(
+            empty_orders,
+            empty_order_set_digest_v1(&Sha2Backend, id(10)).unwrap()
+        );
+        struct ZeroSha;
+        impl Sha256BackendV1 for ZeroSha {
+            fn sha256(&self, _parts: &[&[u8]]) -> [u8; ID_BYTES] {
+                [0; ID_BYTES]
+            }
+        }
+        assert_eq!(
+            epoch_semantics_digest_v1(&ZeroSha, semantics),
+            Err(CodecError::ZeroIdentity),
+            "the backend seam may never smuggle an all-zero live identity"
+        );
+
+        let opening = CandidateCommitmentOpeningV1 {
+            epoch: id(1),
+            market: id(2),
+            relation_policy_id: id(3),
+            admission_policy_id: id(4),
+            score_policy_id: id(5),
+            frozen_slot: 6,
+            submitter_authority: id(7),
+            solver_reward_destination: id(8),
+            candidate_bundle_digest: id(9),
+            secret: [10; 32],
+        };
+        let commitment = candidate_commitment_v1(&Sha2Backend, opening).unwrap();
+        assert_ne!(
+            commitment,
+            candidate_commitment_v1(
+                &Sha2Backend,
+                CandidateCommitmentOpeningV1 {
+                    secret: [11; 32],
+                    ..opening
+                }
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn window_node_and_budget_round_trip_exact_frames() {
         let window = empty_window();
         let mut window_bytes = [0u8; WINDOW_ACCOUNT_BYTES];
@@ -3595,6 +4642,30 @@ mod tests {
         let mut budget_bytes = [0u8; EPOCH_BUDGET_ACCOUNT_BYTES];
         budget.encode(&mut budget_bytes).unwrap();
         assert_eq!(EpochBudgetV2AccountV1::decode(&budget_bytes), Ok(budget));
+        let terminal_budget = EpochBudgetV2AccountV1 {
+            freeze_remaining: 0,
+            finalize_remaining: 0,
+            solver_remaining: 0,
+            selected_rent_remaining: 0,
+            freeze_paid: 1,
+            finalize_paid: 1,
+            solver_state: 1,
+            selected_rent_state: 1,
+            ..budget
+        };
+        let terminal = terminal_budget.retirement_disposition().unwrap();
+        assert_eq!(terminal.market(), terminal_budget.market);
+        assert_eq!(terminal.epoch_account(), terminal_budget.epoch);
+        assert_eq!(
+            terminal.epoch_generation(),
+            terminal_budget.epoch_generation
+        );
+        assert_eq!(terminal.funding_payer(), terminal_budget.funding_payer);
+        assert_eq!(
+            terminal.root_close_reward(),
+            terminal_budget.root_close_initial
+        );
+        assert_eq!(terminal.rent(), terminal_budget.rent);
         budget_bytes[EPOCH_BUDGET_ACCOUNT_BYTES - 1] = 1;
         assert_eq!(
             EpochBudgetV2AccountV1::decode(&budget_bytes),
@@ -3606,6 +4677,33 @@ mod tests {
             depleted_root_close.validate(),
             Err(CodecError::InvalidState)
         );
+        for hostile in [
+            EpochBudgetV2AccountV1 {
+                freeze_paid: 0,
+                freeze_remaining: budget.freeze_initial,
+                ..terminal_budget
+            },
+            EpochBudgetV2AccountV1 {
+                finalize_paid: 0,
+                finalize_remaining: budget.finalize_initial,
+                ..terminal_budget
+            },
+            EpochBudgetV2AccountV1 {
+                solver_state: 0,
+                solver_remaining: budget.solver_initial,
+                ..terminal_budget
+            },
+            EpochBudgetV2AccountV1 {
+                selected_rent_state: 0,
+                selected_rent_remaining: budget.selected_rent_initial,
+                ..terminal_budget
+            },
+        ] {
+            assert_eq!(
+                hostile.retirement_disposition(),
+                Err(CodecError::InvalidState)
+            );
+        }
 
         let selected = selected_candidate();
         let mut selected_bytes = [0u8; SELECTED_CANDIDATE_ACCOUNT_BYTES];
@@ -3618,6 +4716,19 @@ mod tests {
         assert_eq!(
             SelectedCandidateV1AccountV1::decode(&selected_bytes),
             Err(CodecError::MismatchedBinding)
+        );
+        let empty_open = SelectedCandidateV1AccountV1 {
+            slice_count: 0,
+            ..selected
+        };
+        assert_eq!(empty_open.validate(), Err(CodecError::InvalidState));
+        assert_eq!(
+            SelectedCandidateV1AccountV1 {
+                entitlement_state: 2,
+                ..empty_open
+            }
+            .validate(),
+            Ok(())
         );
     }
 
@@ -3972,6 +5083,69 @@ mod tests {
     }
 
     #[test]
+    fn feed_digest_owners_bind_exact_active_tails_without_cycles() {
+        const FEED_LEN: usize = CANDIDATE_FEED_HEADER_BYTES + (3 * 8) + 8 + 24;
+        let feed = feed_header();
+        let mut bytes = [0u8; FEED_LEN];
+        feed.encode(&mut bytes[..CANDIDATE_FEED_HEADER_BYTES], true)
+            .unwrap();
+        let prices_at = CANDIDATE_FEED_HEADER_BYTES;
+        bytes[prices_at..prices_at + 8].copy_from_slice(&20u64.to_le_bytes());
+        bytes[prices_at + 8..prices_at + 16].copy_from_slice(&30u64.to_le_bytes());
+        bytes[prices_at + 16..prices_at + 24].copy_from_slice(&50u64.to_le_bytes());
+        let fills_at = prices_at + 24;
+        let atoms_at = fills_at + 8;
+        bytes[atoms_at..atoms_at + 16].copy_from_slice(&5u128.to_le_bytes());
+        bytes[atoms_at + 16..atoms_at + 24].copy_from_slice(&1u64.to_le_bytes());
+
+        let tail = candidate_feed_tail_v2(&bytes, feed).unwrap();
+        let offsets = candidate_feed_tail_offsets_v2(feed).unwrap();
+        assert_eq!(offsets.prices_at(), prices_at);
+        assert_eq!(offsets.fills_at(), fills_at);
+        assert_eq!(offsets.atoms_at(), atoms_at);
+        assert_eq!(offsets.slices_at(), atoms_at + 24);
+        assert_eq!(offsets.end(), FEED_LEN);
+        assert_eq!(tail.prices_le().len(), 24);
+        assert_eq!(tail.fills_le().len(), 8);
+        assert_eq!(tail.atoms_le().len(), 24);
+        assert!(tail.slices_le().is_empty());
+        let witness = quantized_witness_body_digest_v3(&Sha2Backend, id(30), &bytes, true).unwrap();
+        let bundle = candidate_bundle_digest_v1(&Sha2Backend, &bytes, true).unwrap();
+
+        let mut changed_price = bytes;
+        changed_price[prices_at..prices_at + 8].copy_from_slice(&21u64.to_le_bytes());
+        changed_price[prices_at + 8..prices_at + 16].copy_from_slice(&29u64.to_le_bytes());
+        assert_ne!(
+            witness,
+            quantized_witness_body_digest_v3(&Sha2Backend, id(30), &changed_price, true).unwrap()
+        );
+        assert_ne!(
+            bundle,
+            candidate_bundle_digest_v1(&Sha2Backend, &changed_price, true).unwrap()
+        );
+
+        let mut changed_fill = bytes;
+        changed_fill[fills_at..fills_at + 8].copy_from_slice(&7u64.to_le_bytes());
+        assert_eq!(
+            witness,
+            quantized_witness_body_digest_v3(&Sha2Backend, id(30), &changed_fill, true).unwrap(),
+            "the V3 witness body excludes relation fills"
+        );
+        assert_ne!(
+            bundle,
+            candidate_bundle_digest_v1(&Sha2Backend, &changed_fill, true).unwrap()
+        );
+        assert_ne!(
+            empty_settlement_witness_digest_v1(&Sha2Backend, id(40)).unwrap(),
+            empty_settlement_witness_digest_v1(&Sha2Backend, id(41)).unwrap()
+        );
+        assert_eq!(
+            candidate_bundle_digest_v1(&Sha2Backend, &bytes[..FEED_LEN - 1], true),
+            Err(CodecError::WrongLength)
+        );
+    }
+
+    #[test]
     fn active_width_formulas_refuse_every_out_of_range_coordinate() {
         assert_eq!(
             candidate_feed_account_len(1, 1, 1, 0),
@@ -4283,6 +5457,28 @@ mod tests {
             ..materializing
         };
         assert_eq!(materialized.retirable(), Ok(true));
+        assert_eq!(
+            SelectedCandidateRetirementContractV1 {
+                feed_slice_count: 0,
+                slice_count: 0,
+                next_slice_index: 0,
+                entitlement_state: 0,
+                ..materializing
+            }
+            .retirable(),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            SelectedCandidateRetirementContractV1 {
+                feed_slice_count: 0,
+                slice_count: 0,
+                next_slice_index: 0,
+                entitlement_state: 2,
+                ..materializing
+            }
+            .retirable(),
+            Ok(true)
+        );
         let wrong_feed = SelectedCandidateRetirementContractV1 {
             authenticated_feed: id(4),
             ..materialized

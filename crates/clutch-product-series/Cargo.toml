@@ -15,4 +15,5 @@ default = []
 [dependencies]
 clutch-bspline = { path = "../clutch-bspline" }
 clutch-price-measure = { path = "../clutch-price-measure" }
+clutch-source-plane-v3 = { path = "../clutch-source-plane-v3" }
 sha2 = { version = "=0.10.9", default-features = false }

@@ -3,13 +3,14 @@
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 
-//! Registry-independent recurring product and Series identity core.
+//! Allocation-free recurring Product and Series identity and transition core.
 //!
 //! This crate freezes exact artifact bytes, typed SHA-256 identities, immutable
-//! joins, recurrence arithmetic, and a per-component funding projection. It is
-//! deliberately below every account and SBF adapter: it allocates no account
-//! tags or instruction intents and imports no Solana, token, oracle, CPI, or
-//! account-memory type.
+//! joins, recurrence arithmetic, authenticated-adapter seams, canonical
+//! SourcePlane V3 occurrence identities, and segregated funding transitions.
+//! It is deliberately below every account and SBF adapter: it allocates no
+//! account tags or instruction intents and imports no Solana, token, oracle,
+//! CPI, or account-memory type.
 //!
 //! The selected recovery semantics are evidence-only. No type in this crate
 //! contains a data-failure payout index or vector. Legacy V3 numeric-fallback
@@ -19,7 +20,9 @@ mod artifacts;
 mod codec;
 mod compile;
 mod funding;
+mod funding_state;
 mod registry;
+mod source_series;
 mod successor;
 
 pub use artifacts::{
@@ -43,8 +46,18 @@ pub use funding::{
     FundingBalancesV1, RecoveryAttemptFundingV1, SeriesFundingQuoteV1, SERIES_FUNDING_QUOTE_BYTES,
     SERIES_FUNDING_QUOTE_DOMAIN,
 };
+pub use funding_state::{
+    AuthenticatedSeriesFundingAuthorityV1, SeriesActivationContextV1, SeriesComponentCapitalV1,
+    SeriesFundingComponentV1, SeriesFundingPhaseV1, SeriesFundingRequirementsV1,
+    SeriesFundingStateV1, SeriesFundingTerminalProjectionV1, SERIES_FUNDING_COMPONENT_COUNT,
+    SERIES_FUNDING_STATE_BYTES,
+};
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
+};
+pub use source_series::{
+    compile_source_occurrence_v3, AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
+    SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use successor::{
     compile_ordinal_v2, project_component_debits_v2, AdapterFulfillmentProjectionV2,
@@ -173,6 +186,10 @@ typed_id!(
     SeriesFundingTermsV2Id,
     "Typed identity of one `SeriesFundingTermsV2`."
 );
+typed_id!(
+    SourceOccurrenceV1Id,
+    "Typed provenance identity of one compiled SourcePlane V3 occurrence record."
+);
 
 /// A deterministic refusal from a fixed codec or pure projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -210,6 +227,14 @@ pub enum Error {
     InsufficientPrepayment,
     /// The selected capability profile does not admit the requested semantics.
     UnsupportedCapability,
+    /// No adapter-authenticated source/registry authority was supplied.
+    UnauthenticatedAuthority,
+    /// The mutable Series has no ordinal remaining to create or lapse.
+    SeriesNotActive,
+    /// The authenticated Clock lies outside this ordinal's required interval.
+    OutsideCreationWindow,
+    /// A terminal projection was requested before every ordinal advanced.
+    SeriesNotClosed,
 }
 
 /// Result alias for this allocation-free core.

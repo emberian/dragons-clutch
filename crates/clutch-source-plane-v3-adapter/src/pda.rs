@@ -78,6 +78,8 @@ pub enum PdaFamilyV3 {
     Instance = 11,
     /// Resumable drawdown fold paired with a StatisticKey.
     DrawdownWork = 12,
+    /// Immutable reviewed Source release manifest addressed by its content.
+    SourceRelease = 13,
 }
 
 /// Canonical fixed-capacity PDA seed recipe proposal.
@@ -90,6 +92,16 @@ pub struct PdaRecipeV3 {
 }
 
 impl PdaRecipeV3 {
+    /// Immutable reviewed Source release manifest content address.
+    pub fn source_release(release_id: ContentId) -> Result<Self> {
+        live(release_id)?;
+        Self::two(
+            PdaFamilyV3::SourceRelease,
+            b"dc-sp3-release",
+            &release_id.bytes(),
+        )
+    }
+
     /// Existing V2 SourceSpec PDA: `[b"source-spec-v1", feed_id]`.
     pub fn v2_source_spec(feed_id: ContentId) -> Result<Self> {
         live(feed_id)?;
