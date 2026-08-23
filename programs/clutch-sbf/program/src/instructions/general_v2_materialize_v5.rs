@@ -8,6 +8,9 @@
 
 use core::cell::Ref;
 
+use clutch_batch::portfolio_execution_v2::{
+    AuthenticatedPortfolioReceiptSiblingSetV2, PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
+};
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, RevenuePolicyV1, REVENUE_POLICY_BYTES,
 };
@@ -17,10 +20,12 @@ use clutch_general_v2_contract::{
 };
 use clutch_general_v2_runtime::{
     derive_candidate_entitlement_projection_v4, prepare_materialize_entitlement_slice_v5,
-    CandidateEntitlementProjectionV4, EntitlementEndpointInputV5,
-    MaterializationReservationInputV9, MaterializeEntitlementSliceInputV5,
-    MaterializeEntitlementSlicePlanV5, OwnerRowMaterializationDispositionV5,
-    OwnerRowMaterializationInputV5, PositionAccountInputV3, RentOwnedSettlementCreateFundingV5,
+    prepare_materialize_portfolio_pair_v5, CandidateEntitlementProjectionV4,
+    EntitlementEndpointInputV5, MaterializationReservationInputV9,
+    MaterializeEntitlementSliceInputV5, MaterializeEntitlementSlicePlanV5,
+    MaterializePortfolioPairInputV5, MaterializePortfolioPairPlanV5,
+    OwnerRowMaterializationDispositionV5, OwnerRowMaterializationInputV5,
+    PortfolioPairReceiptCreateInputV5, PositionAccountInputV3, RentOwnedSettlementCreateFundingV5,
     SettlementLegV1, SettlementRouteV1,
 };
 use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
@@ -44,8 +49,9 @@ use super::general_v2_fee_v5::{
 };
 use super::general_v2_settlement_producer_v5::{create_from_payer, encode_account, rent_owner};
 use super::general_v2_settlement_traversal_v5::{
-    authenticate_settlement_traversal_v5, authenticate_writable_root_settlement_traversal_v5,
-    AuthenticatedSettlementTraversalV5, SettlementTraversalAccountFrameV5,
+    authenticate_portfolio_materialization_sibling_set_v5, authenticate_settlement_traversal_v5,
+    authenticate_writable_root_settlement_traversal_v5, AuthenticatedSettlementTraversalV5,
+    SettlementTraversalAccountFrameV5,
 };
 
 /// Shared immutable traversal roles before the final PageV5 suffix.
@@ -58,6 +64,8 @@ pub const ACTION24_ENDPOINT_ACCOUNTS: usize = 3;
 pub const ACTION24_FEE_COMMON_ACCOUNTS: usize = 4;
 /// Owner carry and payer snapshot for one newly created fee-bearing row.
 pub const ACTION24_FEE_OWNER_ACCOUNTS: usize = 2;
+/// Receipt targets after the first fixed receipt role for a Portfolio pair.
+pub const ACTION24_PORTFOLIO_EXTRA_RECEIPTS_MAX: usize = PORTFOLIO_PAIR_MAX_RECEIPTS_V2 - 1;
 
 const IX_ROOT: usize = 0;
 const IX_FEED: usize = 1;
@@ -125,6 +133,41 @@ fn endpoint_order_indices(
     }
 }
 
+fn current_slice_is_portfolio_pair(
+    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_>,
+) -> Outcome<bool> {
+    let entitlement = derive_candidate_entitlement_projection_v4(
+        root_traversal.root().account(),
+        root_traversal.root().root(),
+        root_traversal.traversal().traversal(),
+    )?;
+    let (order_indices, endpoint_count) = endpoint_order_indices(&entitlement)?;
+    let first = entitlement
+        .settlement_membership(order_indices[0])
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    if endpoint_count == 1 {
+        require(
+            first.order_kind == clutch_general_v2_runtime::OrderKindV1::Single,
+            ClutchError::MismatchedState,
+        )?;
+        return Ok(false);
+    }
+    let second = entitlement
+        .settlement_membership(order_indices[1])
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    match (first.order_kind, second.order_kind) {
+        (
+            clutch_general_v2_runtime::OrderKindV1::Single,
+            clutch_general_v2_runtime::OrderKindV1::Single,
+        ) => Ok(false),
+        (
+            clutch_general_v2_runtime::OrderKindV1::Portfolio,
+            clutch_general_v2_runtime::OrderKindV1::Portfolio,
+        ) => Ok(true),
+        _ => Err(Refusal::Adapter(ClutchError::MismatchedState)),
+    }
+}
+
 fn endpoint_base(ordinal: usize) -> Outcome<usize> {
     IX_FIRST_ENDPOINT
         .checked_add(
@@ -167,6 +210,45 @@ fn non_page_account_count(
         .and_then(|value| value.checked_add(endpoint_accounts))
         .and_then(|value| value.checked_add(fee_accounts))
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+}
+
+fn portfolio_non_page_account_count(receipt_count: u8, fee_present: bool) -> Outcome<usize> {
+    let receipt_count = usize::from(receipt_count);
+    require(
+        (1..=PORTFOLIO_PAIR_MAX_RECEIPTS_V2).contains(&receipt_count),
+        ClutchError::WrongAccountCount,
+    )?;
+    let fee_accounts = if fee_present {
+        ACTION24_FEE_COMMON_ACCOUNTS
+            .checked_add(
+                2usize
+                    .checked_mul(ACTION24_FEE_OWNER_ACCOUNTS)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+            )
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+    } else {
+        0
+    };
+    ACTION24_TRAVERSAL_PREFIX_ACCOUNTS
+        .checked_add(ACTION24_CREATION_HEADER_ACCOUNTS)
+        .and_then(|value| value.checked_add(2 * ACTION24_ENDPOINT_ACCOUNTS))
+        .and_then(|value| value.checked_add(fee_accounts))
+        .and_then(|value| value.checked_add(receipt_count - 1))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+}
+
+fn portfolio_receipt_account_index(receipt_index: usize, fee_end: usize) -> Outcome<usize> {
+    require(
+        receipt_index <= ACTION24_PORTFOLIO_EXTRA_RECEIPTS_MAX,
+        ClutchError::WrongAccountCount,
+    )?;
+    if receipt_index == 0 {
+        Ok(IX_RECEIPT)
+    } else {
+        fee_end
+            .checked_add(receipt_index - 1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+    }
 }
 
 fn is_fresh_target(account: &AccountInfo<'_>) -> bool {
@@ -585,6 +667,141 @@ fn prepare_generic_plan(
     Ok(Box::new(plan))
 }
 
+#[inline(never)]
+fn prepare_portfolio_plan(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_>,
+    page_count: usize,
+    rent: &RentParameters,
+    sibling_set: AuthenticatedPortfolioReceiptSiblingSetV2,
+) -> Outcome<(Box<MaterializePortfolioPairPlanV5>, usize)> {
+    let root = root_traversal.root();
+    let entitlement = Box::new(derive_candidate_entitlement_projection_v4(
+        root.account(),
+        root.root(),
+        root_traversal.traversal().traversal(),
+    )?);
+    let pair = sibling_set.pair();
+    let order_indices = [
+        pair.buyer().record().order_index,
+        pair.seller().record().order_index,
+    ];
+    let fresh = [
+        require_endpoint_accounts(program_id, accounts, 0)?,
+        require_endpoint_accounts(program_id, accounts, 1)?,
+    ];
+    require(fresh == [true, true], ClutchError::MismatchedState)?;
+    let fee_at = IX_FIRST_ENDPOINT
+        .checked_add(
+            2usize
+                .checked_mul(ACTION24_ENDPOINT_ACCOUNTS)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        )
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let (fee, fee_end) = prepare_owner_fee_evidence(
+        program_id,
+        accounts,
+        root,
+        &entitlement,
+        order_indices,
+        2,
+        fresh,
+        fee_at,
+    )?;
+    let receipt_count = sibling_set.sibling_count();
+    let non_page = portfolio_non_page_account_count(
+        receipt_count,
+        root.root().fee_record_state() == SettlementRootChildStateV1::Live,
+    )?;
+    let extra_receipts = usize::from(receipt_count)
+        .checked_sub(1)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        non_page
+            .checked_add(page_count)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+            == accounts.len()
+            && fee_end
+                .checked_add(extra_receipts)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+                == non_page,
+        ClutchError::WrongAccountCount,
+    )?;
+
+    let reservation0 = borrow_data(&accounts[endpoint_base(0)? + 1])?;
+    let position0 = borrow_data(&accounts[endpoint_base(0)? + 2])?;
+    let reservation1 = borrow_data(&accounts[endpoint_base(1)? + 1])?;
+    let position1 = borrow_data(&accounts[endpoint_base(1)? + 2])?;
+    let endpoint0 = make_endpoint_input(
+        program_id,
+        root,
+        accounts,
+        0,
+        order_indices[0],
+        true,
+        fee[0],
+        &accounts[IX_RENT_PAYER],
+        rent,
+        None,
+        &reservation0,
+        &position0,
+    )?;
+    let endpoint1 = make_endpoint_input(
+        program_id,
+        root,
+        accounts,
+        1,
+        order_indices[1],
+        true,
+        fee[1],
+        &accounts[IX_RENT_PAYER],
+        rent,
+        None,
+        &reservation1,
+        &position1,
+    )?;
+
+    let mut receipts = [None; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+    let mut receipt_index = 0usize;
+    while receipt_index < usize::from(receipt_count) {
+        let sibling = sibling_set
+            .sibling(
+                u8::try_from(receipt_index)
+                    .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+            )
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let account_index = portfolio_receipt_account_index(receipt_index, fee_end)?;
+        let receipt_pda = seeds::general_v2_receipt_v5_pda(
+            program_id,
+            &root.root().epoch().bytes(),
+            &root.root().settlement_candidate_id().bytes(),
+            sibling.slice_index,
+        );
+        expect_pda(accounts[account_index].key, receipt_pda, None)?;
+        require_creatable(&accounts[account_index])?;
+        receipts[receipt_index] = Some(PortfolioPairReceiptCreateInputV5 {
+            account: id(accounts[account_index].key),
+            bump: receipt_pda.1,
+            funding: creation_funding(
+                program_id,
+                &accounts[IX_RENT_PAYER],
+                &accounts[account_index],
+                rent,
+                contract::SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
+            )?,
+        });
+        receipt_index += 1;
+    }
+    let plan = prepare_materialize_portfolio_pair_v5(MaterializePortfolioPairInputV5 {
+        entitlement: &entitlement,
+        sibling_set,
+        receipts,
+        endpoints: [endpoint0, endpoint1],
+    })?;
+    Ok((Box::new(plan), fee_end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,6 +819,24 @@ mod tests {
         assert!(non_page_account_count(0, 0, false).is_err());
         assert!(non_page_account_count(3, 0, false).is_err());
         assert!(non_page_account_count(1, 2, true).is_err());
+    }
+
+    #[test]
+    fn portfolio_partition_is_capability_counted_and_bounded() {
+        assert_eq!(portfolio_non_page_account_count(1, false).unwrap(), 22);
+        assert_eq!(portfolio_non_page_account_count(16, false).unwrap(), 37);
+        assert_eq!(portfolio_non_page_account_count(1, true).unwrap(), 30);
+        assert_eq!(portfolio_non_page_account_count(16, true).unwrap(), 45);
+        assert!(portfolio_non_page_account_count(0, false).is_err());
+        assert!(portfolio_non_page_account_count(17, true).is_err());
+    }
+
+    #[test]
+    fn portfolio_receipt_roles_keep_the_first_receipt_fixed() {
+        assert_eq!(portfolio_receipt_account_index(0, 30).unwrap(), IX_RECEIPT);
+        assert_eq!(portfolio_receipt_account_index(1, 30).unwrap(), 30);
+        assert_eq!(portfolio_receipt_account_index(15, 30).unwrap(), 44);
+        assert!(portfolio_receipt_account_index(16, 30).is_err());
     }
 }
 
@@ -627,6 +862,78 @@ fn authenticate_plan_accounts(
     )?;
     let mut ordinal = 0u8;
     while ordinal < plan.endpoint_count() {
+        let endpoint = plan
+            .endpoint(ordinal)
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let at = endpoint_base(usize::from(ordinal))?;
+        let reservation = endpoint.reservation();
+        let reservation_body = ReservationAccountV9::decode(&borrow_data(&accounts[at + 1])?)?;
+        expect_pda(
+            accounts[at + 1].key,
+            seeds::general_v2_reservation_v9_pda(program_id, &reservation.semantic_id().bytes()),
+            Some(reservation_body.body().stored_bump),
+        )?;
+        let position = endpoint.position().position();
+        let membership = endpoint.membership();
+        expect_pda(
+            accounts[at + 2].key,
+            seeds::position_v3_pda(
+                program_id,
+                &plan
+                    .settlement_root_poststate()
+                    .market_instance_v2_id()
+                    .bytes(),
+                &membership.owner,
+                PositionPurposeV3::General,
+                &accounts[IX_RUNTIME].key.to_bytes(),
+            ),
+            Some(position.stored_bump()),
+        )?;
+        require(
+            id(accounts[at].key) == endpoint.owner_row().account(),
+            ClutchError::MismatchedState,
+        )?;
+        ordinal += 1;
+    }
+    Ok(())
+}
+
+fn authenticate_portfolio_plan_accounts(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    fee_end: usize,
+    plan: &MaterializePortfolioPairPlanV5,
+) -> Outcome<()> {
+    let mut receipt_index = 0u8;
+    while receipt_index < plan.receipt_count() {
+        let receipt = plan
+            .receipt(receipt_index)
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let account_index = portfolio_receipt_account_index(usize::from(receipt_index), fee_end)?;
+        let seed = receipt.seed();
+        expect_pda(
+            accounts[account_index].key,
+            seeds::find(
+                program_id,
+                &[
+                    seed.domain(),
+                    seed.epoch(),
+                    seed.settlement_candidate(),
+                    seed.slice_index_le(),
+                ],
+            ),
+            Some(receipt.bump()),
+        )?;
+        require(
+            id(accounts[account_index].key) == receipt.account(),
+            ClutchError::MismatchedState,
+        )?;
+        receipt_index = receipt_index
+            .checked_add(1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    }
+    let mut ordinal = 0u8;
+    while ordinal < 2 {
         let endpoint = plan
             .endpoint(ordinal)
             .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -748,7 +1055,109 @@ fn apply_plan<'a>(
     })
 }
 
-/// Prepare and atomically apply one non-Portfolio action-24 slice.
+fn apply_portfolio_plan<'a>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'a>],
+    rent: &RentParameters,
+    fee_end: usize,
+    plan: &MaterializePortfolioPairPlanV5,
+) -> Outcome<()> {
+    let payer = &accounts[IX_RENT_PAYER];
+    let system = &accounts[IX_SYSTEM];
+    let mut receipt_index = 0u8;
+    while receipt_index < plan.receipt_count() {
+        let receipt = plan
+            .receipt(receipt_index)
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let account_index = portfolio_receipt_account_index(usize::from(receipt_index), fee_end)?;
+        let seed = receipt.seed();
+        let bump = [receipt.bump()];
+        let signer_seeds: [&[u8]; 5] = [
+            seed.domain(),
+            seed.epoch(),
+            seed.settlement_candidate(),
+            seed.slice_index_le(),
+            &bump,
+        ];
+        let receipt_rent = rent_owner(
+            payer,
+            &accounts[account_index],
+            rent,
+            contract::SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
+        )?;
+        create_from_payer(
+            program_id,
+            payer,
+            &accounts[account_index],
+            system,
+            rent,
+            contract::SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
+            receipt_rent,
+            &signer_seeds,
+        )?;
+        encode_account(&accounts[account_index], |out| {
+            receipt.receipt().encode(out)
+        })?;
+        receipt_index = receipt_index
+            .checked_add(1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    }
+
+    let mut ordinal = 0u8;
+    while ordinal < 2 {
+        let endpoint = plan
+            .endpoint(ordinal)
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let at = endpoint_base(usize::from(ordinal))?;
+        let OwnerRowMaterializationDispositionV5::Create { plan: row, .. } = endpoint.owner_row()
+        else {
+            return Err(Refusal::Adapter(ClutchError::MismatchedState));
+        };
+        let seed = row.seed();
+        let bump = [row.bump()];
+        let signer_seeds: [&[u8]; 5] = [
+            seed.domain(),
+            seed.epoch(),
+            seed.settlement_candidate(),
+            seed.owner(),
+            &bump,
+        ];
+        let owner = rent_owner(
+            payer,
+            &accounts[at],
+            rent,
+            contract::OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
+        )?;
+        create_from_payer(
+            program_id,
+            payer,
+            &accounts[at],
+            system,
+            rent,
+            contract::OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
+            owner,
+            &signer_seeds,
+        )?;
+        encode_account(&accounts[at], |out| {
+            out.copy_from_slice(row.exact_body());
+            Ok(())
+        })?;
+        encode_account(&accounts[at + 1], |out| {
+            out.copy_from_slice(endpoint.reservation().poststate_body());
+            Ok(())
+        })?;
+        ordinal += 1;
+    }
+    encode_account(&accounts[IX_ROOT], |out| {
+        plan.settlement_root_poststate().encode(out)
+    })
+}
+
+/// Prepare and atomically apply one canonical action-24 materialization unit.
+///
+/// Scalar orders create one receipt. An exclusive Portfolio pair instead
+/// creates the complete capability-derived ReceiptV5 sibling set in one
+/// rollback domain; no packet count or anchor-only path selects that branch.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -790,7 +1199,36 @@ pub fn process(
             && request.settlement_root == root_traversal.root().account(),
         ClutchError::MismatchedState,
     )?;
-    let plan = prepare_generic_plan(program_id, accounts, &root_traversal, page_count, &rent)?;
-    authenticate_plan_accounts(program_id, accounts, &plan)?;
-    apply_plan(program_id, accounts, &rent, &plan)
+    if current_slice_is_portfolio_pair(&root_traversal)? {
+        require(
+            accounts.len()
+                >= ACTION24_TRAVERSAL_PREFIX_ACCOUNTS
+                    + ACTION24_CREATION_HEADER_ACCOUNTS
+                    + 2 * ACTION24_ENDPOINT_ACCOUNTS
+                    + 1,
+            ClutchError::WrongAccountCount,
+        )?;
+        let sibling_set = authenticate_portfolio_materialization_sibling_set_v5(
+            program_id,
+            &root_traversal,
+            &accounts[endpoint_base(0)? + 1],
+            &accounts[endpoint_base(0)? + 2],
+            &accounts[endpoint_base(1)? + 1],
+            &accounts[endpoint_base(1)? + 2],
+        )?;
+        let (plan, fee_end) = prepare_portfolio_plan(
+            program_id,
+            accounts,
+            &root_traversal,
+            page_count,
+            &rent,
+            sibling_set,
+        )?;
+        authenticate_portfolio_plan_accounts(program_id, accounts, fee_end, &plan)?;
+        apply_portfolio_plan(program_id, accounts, &rent, fee_end, &plan)
+    } else {
+        let plan = prepare_generic_plan(program_id, accounts, &root_traversal, page_count, &rent)?;
+        authenticate_plan_accounts(program_id, accounts, &plan)?;
+        apply_plan(program_id, accounts, &rent, &plan)
+    }
 }
