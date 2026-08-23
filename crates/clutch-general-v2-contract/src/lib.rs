@@ -154,8 +154,10 @@ pub const SETTLEMENT_CASH_POT_SEED_DOMAIN_V1: &[u8] = b"settlement-cash-pot:v1";
 pub const EPOCH_SEED_DOMAIN_V1: &[u8] = b"general-epoch:v2";
 /// Fresh counted General V2 order-page PDA seed domain.
 pub const ORDER_PAGE_SEED_DOMAIN_V1: &[u8] = b"general-order-page:v2";
-/// Fresh counted General V2 reservation PDA seed domain.
+/// Withdrawn General V2 Reservation V3 PDA seed domain.
 pub const RESERVATION_SEED_DOMAIN_V1: &[u8] = b"general-reservation:v2";
+/// Sole future rent-owned General Reservation V9 PDA seed domain.
+pub const RESERVATION_SEED_DOMAIN_V9: &[u8] = b"general-reservation:v9";
 /// Superseded provisional General V2 receipt seed domain.
 pub const RECEIPT_SEED_DOMAIN_V1: &[u8] = b"general-receipt:v2";
 /// Canonical General SettlementReceipt V3 PDA seed domain.
@@ -232,6 +234,38 @@ impl GeneralReservationSeedTupleV3 {
     }
 
     /// Second seed: canonical semantic Reservation identity.
+    pub const fn reservation_id(&self) -> &[u8; ID_BYTES] {
+        &self.reservation_id
+    }
+}
+
+/// Validated ordered seed tuple for one rent-owned General Reservation V9 PDA.
+///
+/// The V9 semantic identity uses a fresh domain and already commits every
+/// order/owner/generation coordinate. The PDA therefore needs only that exact
+/// identity and the fresh non-aliasing address domain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralReservationSeedTupleV9 {
+    reservation_id: [u8; ID_BYTES],
+}
+
+impl GeneralReservationSeedTupleV9 {
+    /// Construct the sole future General Reservation tuple.
+    pub fn new(reservation_id: Id32) -> Result<Self, CodecError> {
+        if reservation_id.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Ok(Self {
+            reservation_id: reservation_id.bytes(),
+        })
+    }
+
+    /// First seed: the fresh V9 Reservation domain.
+    pub const fn domain(&self) -> &'static [u8] {
+        RESERVATION_SEED_DOMAIN_V9
+    }
+
+    /// Second seed: canonical V9 semantic Reservation identity.
     pub const fn reservation_id(&self) -> &[u8; ID_BYTES] {
         &self.reservation_id
     }
@@ -696,6 +730,12 @@ pub const MARKET_RUNTIME_ACCOUNT_VERSION: u8 = 3;
 pub const GENERAL_EPOCH_ACCOUNT_TAG: u8 = 11;
 /// First RelationV2-native counted General Epoch schema.
 pub const GENERAL_EPOCH_ACCOUNT_VERSION: u8 = 6;
+/// Existing Reservation semantic tag, fresh rent-owned General version.
+pub const GENERAL_RESERVATION_ACCOUNT_TAG_V9: u8 = 0x13;
+/// Sole future rent-owned General Reservation version.
+pub const GENERAL_RESERVATION_ACCOUNT_VERSION_V9: u8 = 9;
+/// Exact rent-owned General Reservation bytes.
+pub const GENERAL_RESERVATION_ACCOUNT_BYTES_V9: usize = 666;
 /// Fresh disabled General V2 owner-settlement envelope tag.
 pub const OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
 /// Withdrawn non-aliasing first owner-settlement envelope version.
@@ -821,7 +861,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 27] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 30] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -831,6 +871,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 27] = [
         tag: GENERAL_EPOCH_ACCOUNT_TAG,
         version: GENERAL_EPOCH_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/GeneralEpochV6AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: GENERAL_RESERVATION_ACCOUNT_TAG_V9,
+        version: GENERAL_RESERVATION_ACCOUNT_VERSION_V9,
+        owner: "clutch-solana-layout/ReservationAccountV9",
     },
     AccountAllocationV1 {
         tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
@@ -846,6 +891,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 27] = [
         tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
         version: OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
         owner: "clutch-general-v2-contract/OwnerSettlementV3AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: OWNER_SETTLEMENT_ACCOUNT_TAG,
+        version: OWNER_SETTLEMENT_ACCOUNT_VERSION_V4,
+        owner: "clutch-general-v2-contract/OwnerSettlementV4AccountV1",
     },
     AccountAllocationV1 {
         tag: SELECTED_FEE_RECORD_ACCOUNT_TAG,
@@ -1013,6 +1063,10 @@ mod seed_tests {
         let reservation = GeneralReservationSeedTupleV3::new(id(10)).unwrap();
         assert_eq!(reservation.domain(), b"general-reservation:v2");
         assert_eq!(reservation.reservation_id(), &[10; ID_BYTES]);
+        let reservation_v9 = GeneralReservationSeedTupleV9::new(id(10)).unwrap();
+        assert_eq!(reservation_v9.domain(), b"general-reservation:v9");
+        assert_eq!(reservation_v9.reservation_id(), &[10; ID_BYTES]);
+        assert_ne!(reservation.domain(), reservation_v9.domain());
         let owner_row = OwnerSettlementSeedTupleV3::new(id(8), id(9), id(11)).unwrap();
         assert_eq!(owner_row.domain(), b"owner-settlement:v3");
         assert_eq!(owner_row.epoch(), &[8; ID_BYTES]);
@@ -1044,6 +1098,10 @@ mod seed_tests {
         );
         assert_eq!(
             GeneralReservationSeedTupleV3::new(Id32::ZERO),
+            Err(CodecError::ZeroIdentity)
+        );
+        assert_eq!(
+            GeneralReservationSeedTupleV9::new(Id32::ZERO),
             Err(CodecError::ZeroIdentity)
         );
         assert_eq!(

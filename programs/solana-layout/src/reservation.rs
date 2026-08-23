@@ -381,6 +381,20 @@ impl ReservationAccount {
 
     /// Validate identity, phase, side, padding, and remaining-asset bounds.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_identity(canonical_reservation_id(
+            self.market,
+            self.epoch,
+            self.owner,
+            self.position_generation,
+            self.order_id,
+        ))
+    }
+
+    /// Validate every body invariant against one schema-owned identity.
+    ///
+    /// Kept crate-visible so a fresh account version can reuse the economic
+    /// state machine while refusing this historical schema's identity domain.
+    pub(crate) fn validate_with_identity(&self, expected_reservation: Hash32) -> Result<()> {
         for identity in [
             self.market,
             self.epoch,
@@ -392,15 +406,7 @@ impl ReservationAccount {
         ] {
             check_hash(identity)?;
         }
-        if self.reservation
-            != canonical_reservation_id(
-                self.market,
-                self.epoch,
-                self.owner,
-                self.position_generation,
-                self.order_id,
-            )
-        {
+        if self.reservation != expected_reservation {
             return Err(CodecError::NonCanonicalIdentity);
         }
         let rank = order_id_rank(self.order_id)?;
