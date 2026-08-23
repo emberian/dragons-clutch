@@ -46,7 +46,7 @@ const TRADE_SCREENS = Object.freeze([
 ]);
 
 const PYTH_SCREENS = Object.freeze([
-  { id: "pyth", label: "Campaign", render: renderPyth }
+  { id: "pyth", label: "Retained campaign", render: renderPyth }
 ]);
 
 const store = createStore();
@@ -75,6 +75,7 @@ const renderBanner = (state) => {
     el("code", "digest", identity ? identity.elf_sha256 : "sha256 pending"),
     el("span", "honesty-sep", "·"),
     el("span", null, pyth ? "LOCAL VALIDATOR ONLY" : "LOCAL 127.0.0.1 ONLY"),
+    ...(pyth ? [el("span", "honesty-sep", "·"), el("span", null, "READ-ONLY RETAINED TRANSCRIPT")] : []),
     el("span", "honesty-sep", "·"),
     el("span", null, "no value"),
     el("span", "honesty-sep", "·"),
@@ -115,7 +116,7 @@ const render = (state) => {
   const brand = document.getElementById("brand-sub");
   if (brand) {
     brand.textContent = state.identity && state.identity.mode === "pyth-local"
-      ? "retained real-provider campaign — synthetic, local"
+      ? "read-only retained campaign — synthetic, local"
       : state.market
         ? "Friday clutch — trade mode, committed, local"
         : "general clearing, committed, local";
@@ -125,7 +126,7 @@ const render = (state) => {
   const label = state.fault
     ? "faulted"
     : state.pyth
-      ? state.done ? `campaign ${state.done.verdict}` : "campaign loaded"
+      ? state.done ? `retained campaign ${state.done.verdict}` : "retained campaign loaded"
     : state.session
       ? `clutch ${state.session.phase}`
       : state.done

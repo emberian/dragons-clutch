@@ -28,7 +28,9 @@ against a fixed-belief automaton. The market is created by a signed
 local-real Pyth campaign transcript. It does not start a validator, contact
 RPC or a provider API, load a wallet or key file, or build a browser
 transaction. Its permanent boundary is **NON-PRODUCTION / SYNTHETIC
-OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE**.
+OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE**. The screen also says
+**READ-ONLY RETAINED TRANSCRIPT**: it cannot trade, extend, replay, refresh, or
+re-read the chain behind the recorded campaign.
 
 ```sh
 # watch mode: the sealed lane's plan, step by step
@@ -187,15 +189,27 @@ projection.
 | --- | --- |
 | **Clutch** | the founded market's identity — terms digest, basis degree, the eight knots, the frozen limit ladder — the two actors and their positions, the epoch phase, and the Freeze control |
 | **Ticket** | four tabs. *Single hat*: the hat row, a side, a size and a ladder limit. *Belief*: eight sliders, quantized by the daemon, previewing the orders that belief implies against the automaton's resting quotes, with one button to place them all. *Portfolio*: a coefficient vector, lots, and a per-lot collateral bound. *Funding*: Endow more collateral into pooled custody, Split more cash into complete sets. Below them, your resting orders with their reservations and a retire button |
-| **Book** | the automaton's own disclosure — what it believes, what it can quote, and the two rules it quotes by — the two beliefs and the cleared vector drawn over the eight hats, and the order page slot by slot |
-| **Settlement** | positions across all eight outcomes, the value plane's identities re-derived from observed bytes, and every reservation's entitled/consumed counters |
+| **Book** | the automaton's fixture disclosure, the two daemon-held beliefs, the daemon's pre-submit candidate-trial vector drawn over the eight hats with a MODEL-ONLY boundary, and the role-decoded order page slot by slot |
+| **Settlement** | positions and reservation counters from sequential role-decoded RPC data, plus a value-plane invariant that mixes those reads with daemon-held endowed and split totals |
 | **Steps** | one row per transaction the session actually submitted, with its family, its confirmed slot, its compute units against the 1 400 000-unit ceiling, and its signature. Not a rail with pending rows: a trade session has no plan, so a row exists only because something was built, signed and confirmed. A refusal is a first-class row carrying the bank's own `Custom(0x….)` |
 | **Bench** | validator health, the ELF identity block, the roster, and the genesis-assistance disclosure — the same cards as watch mode, minus the lifecycle rail, which a session with no plan simply does not have |
 
-Every cell is the latest account image the daemon reloaded from the bank,
-decoded through the frozen `clutch_solana_layout` codecs. A role that has not
-been observed yet says `NOT YET OBSERVED` rather than showing a zero, and a
-number nobody has submitted carries a `MODEL-ONLY` chip.
+Trade mode deliberately has more than one field source. Account fields are
+decoded through the frozen `clutch_solana_layout` codecs from sequential RPC
+data responses, but the current daemon discards account owner, executable bit,
+response context, and same-slot consistency, and it selects codecs by its own
+role labels. They therefore say **ROLE-DECODED RPC DATA**, not
+`chain-derived`. Market configuration, actor/address declarations, order
+roster, and session phase come from fixture or daemon memory and say so.
+Beliefs and candidate-trial coordinates are MODEL-ONLY. Transaction rows are
+daemon-reported RPC receipts. A role that has not been observed says
+`NOT YET OBSERVED` rather than showing a zero.
+
+In particular, the daemon publishes its candidate coordinates before it
+submits the candidate. The Book never calls those coordinates bank-stamped,
+verified, selected, or cleared. Later transaction rows and account projections
+remain separate sources until a future authenticated client performs the exact
+candidate/epoch/release join.
 
 ## The verbs
 
@@ -234,13 +248,18 @@ that never changes — the disagreement exhibit's Model E,
 Both rules, the belief, and the belief put on the limit ladder are on the Book
 screen. Every order it will ever place can be worked out before it places one.
 
-## The cleared price
+## Candidate submission and selection
 
 The auto-crank is **not a solver** and claims no optimality. It tries four
 *stated* coordinates in a fixed published order and reports which the relation
 admitted and exactly how it refused the ones before: the midpoint of the two
 published beliefs, the automaton's belief, your painted belief, and the flat
 prior. Each attempt is published to the stream with its refusal.
+
+The browser's candidate-trial drawing is the daemon's pre-submit model output,
+not the admitted result. Selection evidence lives in later transaction receipts
+and role-decoded account records, which this client does not authenticate or
+join into a same-slot snapshot.
 
 The midpoint is first because it has the property the frozen allocation policy
 needs: at a knot where the two beliefs disagree it sits strictly between the

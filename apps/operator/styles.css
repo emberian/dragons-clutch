@@ -178,6 +178,13 @@ p { margin: 0.5rem 0; }
   background: var(--bg);
   font-size: 0.82rem;
 }
+.provenance { border-left-color: var(--accent); }
+.provenance-label {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.035em;
+}
 .callout strong { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em; }
 .callout-warn { border-left-color: var(--accent-2); }
 .pyth-boundary { border-top: 0.35rem solid var(--accent-2); }
@@ -316,7 +323,7 @@ td.role { color: var(--ink-2); }
 .hat-knot { font-weight: 700; color: var(--ink); font-size: 0.74rem; }
 .hat-quote { color: var(--accent); }
 .hat-mine { color: var(--ink-3); }
-.hat-cleared { color: var(--accent-3); }
+.hat-candidate { color: var(--lane-degen); }
 
 .ticket-form {
   display: grid;
@@ -370,7 +377,7 @@ td.role { color: var(--ink-2); }
   font-size: 11px;
   text-anchor: middle;
 }
-.overlay .cleared-bar { fill: var(--chart-s); opacity: 0.35; }
+.overlay .candidate-bar { fill: var(--chart-s); opacity: 0.35; }
 .overlay .belief-them {
   fill: none;
   stroke: var(--accent-2);
@@ -402,7 +409,7 @@ td.role { color: var(--ink-2); }
 }
 .legend-them::before { background: var(--accent-2); }
 .legend-you::before { background: var(--accent); }
-.legend-cleared::before { background: var(--chart-s); opacity: 0.6; }
+.legend-candidate::before { background: var(--chart-s); opacity: 0.6; }
 
 @media (max-width: 720px) {
   .hat-row, .painter { grid-template-columns: repeat(4, minmax(0, 1fr)); }

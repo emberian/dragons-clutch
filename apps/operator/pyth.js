@@ -37,6 +37,11 @@ const boundary = () => {
   card.append(
     heading,
     row(
+      "callout",
+      el("strong", null, "READ-ONLY RETAINED TRANSCRIPT"),
+      el("span", null, "No live validator or RPC is attached. This screen cannot trade, extend, replay, refresh, or re-read the recorded campaign.")
+    ),
+    row(
       "callout callout-warn",
       el("strong", null, "NON-PRODUCTION"),
       el("span", null, "SYNTHETIC OBSERVATION · LOCAL VALIDATOR ONLY · NO VALUE")
@@ -49,7 +54,7 @@ const boundary = () => {
     el(
       "p",
       "muted",
-      "The display is an untrusted projection of retained campaign.json, result.json, and probe-evidence.json. The daemon requires their exact truth label, signed step order, well-formed retained identities, rollback closures, seal, and resolution before publishing this screen."
+      "The display is an untrusted, read-only projection of retained campaign.json, result.json, and probe-evidence.json. The daemon requires their exact truth label, signed step order, well-formed retained identities, rollback closures, seal, and resolution before publishing this screen. It does not re-read the chain."
     )
   );
   return card;

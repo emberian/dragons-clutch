@@ -1,11 +1,12 @@
 /* Trade mode: the Clutch, the Ticket, the Book, the Settlement.
  *
- * The rule that governs every number on these four screens is the same one
- * the honesty strip states: a value is either something the daemon *decoded
- * out of an account image the bank wrote*, or it is a proposal, and a proposal
- * carries a MODEL-ONLY chip. There is no third category. The painter, the
- * order preview, the implied forward and the resolution weights are all
- * proposals until a step row says the bank took them.
+ * This surface has several inputs, and collapsing them into one generic
+ * "observed" category would be a lie. Account fields are role-decoded by the
+ * daemon from sequential RPC data reads. Market configuration, the order
+ * roster, and the session phase are daemon memory. Beliefs and candidate
+ * coordinates are model output. Transaction rows are daemon-reported RPC
+ * receipts. Each card names its source; none is an independently authenticated
+ * browser observation.
  *
  * The opponent is a fixed-belief automaton. It is called that here, in those
  * words, wherever it appears, because it is not a model and not an AI and the
@@ -36,6 +37,35 @@ const decodedOf = (state, role) => {
 
 const pending = (what) =>
   row("callout", el("strong", null, "NOT YET OBSERVED"), el("span", null, what));
+
+/* A field-source label, deliberately separate from the frozen evidence chips.
+ * These labels describe where the daemon/browser value came from; they do not
+ * promote it to chain-derived evidence. In particular, current RPC reads do
+ * not retain account owner, executable bit, response context, or a same-slot
+ * snapshot, and the daemon selects a codec by its own role label. */
+const provenance = (label, explanation) => {
+  const strip = el("div", "callout provenance");
+  strip.append(
+    el("strong", "provenance-label", label),
+    el("span", null, explanation)
+  );
+  return strip;
+};
+
+const roleDecodedRpc = (what) => provenance(
+  "ROLE-DECODED RPC DATA",
+  `${what} The daemon selected the address and codec by role. The browser has not independently checked owner, PDA, release identity, or same-slot consistency.`
+);
+
+const daemonMemory = (what) => provenance(
+  "DAEMON SESSION MEMORY",
+  `${what} This is not decoded from an account image.`
+);
+
+const fixtureDeclaration = (what) => provenance(
+  "DAEMON FIXTURE DECLARATION",
+  `${what} The account execution is visible separately; this declaration is not itself RPC-observed state.`
+);
 
 /* A table with a header row. Built as elements rather than as markup, like
  * everything else here, so a role name or a refusal can only ever be text. */
@@ -113,7 +143,7 @@ const restingAt = (state, knot) => {
 };
 
 /* One cell per knot: the automaton's resting quote, the person's own resting
- * orders, and — once the bank has selected a candidate — the cleared price.
+ * orders, and the daemon's candidate-trial coordinate when one exists.
  *
  * This is the degree-1 basis made clickable. Each knot is one hat, the ticket
  * points at exactly one of them, and the row is the same eight columns the
@@ -121,7 +151,7 @@ const restingAt = (state, knot) => {
  * the same object seen three ways. */
 const hatRow = (state, onPick) => {
   const grid = el("div", "hat-row");
-  const cleared = state.clearing ? state.clearing.prices : null;
+  const trial = state.clearing ? state.clearing.prices : null;
   for (let knot = 0; knot < 8; knot += 1) {
     const cell = el("button", knot === ticket.knot ? "hat hat-on" : "hat");
     cell.type = "button";
@@ -137,7 +167,7 @@ const hatRow = (state, onPick) => {
       )
     );
     cell.append(el("span", "hat-mine", mine.length ? `${mine.length} of yours` : "—"));
-    if (cleared) cell.append(el("span", "hat-cleared", `cleared ${numeric(cleared[knot])}`));
+    if (trial) cell.append(el("span", "hat-candidate", `candidate trial ${numeric(trial[knot])}`));
     cell.addEventListener("click", () => onPick(knot));
     grid.append(cell);
   }
@@ -160,12 +190,17 @@ export const renderClutch = (state) => {
     el(
       "p",
       "muted",
-      "Eight hats on a $100–$240 knot grid, degree 1, cleared under the frozen general-clearing policy. The market was founded here by a signed CreateMarket against a fresh local ledger; nothing about it is injected bank state except the Realm prerequisites the banner enumerates."
+      "Eight hats on a $100–$240 knot grid, degree 1, using the frozen general-clearing policy. The market was founded here by a signed CreateMarket against a fresh local ledger; nothing about it is injected bank state except the Realm prerequisites the banner enumerates."
     )
   );
   if (!market) {
     head.append(pending("the founded market"));
   } else {
+    head.append(
+      fixtureDeclaration(
+        "Market, Terms, knot, ladder, statistic, actor, and address fields below come from the Friday fixture held by the daemon."
+      )
+    );
     head.append(
       fields("", [
         ["market", digest(market.market)],
@@ -188,6 +223,11 @@ export const renderClutch = (state) => {
   if (!market) {
     who.append(pending("the actor roster"));
   } else {
+    who.append(
+      fixtureDeclaration(
+        "Role, label, wallet public key, and Position address come from daemon fixture memory. Cash and reserved balances are role-decoded RPC data."
+      )
+    );
     who.append(
       table(
         ["role", "who", "wallet", "position", "cash", "reserved"],
@@ -212,12 +252,17 @@ export const renderClutch = (state) => {
   const phase = el("section", "card");
   phase.append(el("h2", null, "Epoch"));
   phase.append(
+    daemonMemory("Session phase and control enablement come from the daemon state machine."),
+    roleDecodedRpc("Epoch phase, counts, and Window deadlines below come from decoded account data when present."),
+    provenance("DAEMON RPC OBSERVATION", "The clock countdown is reported by the daemon's loopback RPC client, not an account field.")
+  );
+  phase.append(
     fields("", [
       ["session phase", state.session ? state.session.phase : "—"],
       ["epoch phase", epoch ? EPOCH_PHASE[epoch.phase] || `phase ${epoch.phase}` : "—"],
       ["live orders", numeric(epoch ? epoch.order_count : null)],
       ["distinct owners", numeric(epoch ? epoch.owner_count : null)],
-      ["freeze deadline slot", numeric(window ? window.freeze_deadline_slot : (state.session ? state.session.freeze_deadline_slot : null))],
+      ["freeze deadline slot", numeric(window ? window.freeze_deadline_slot : null)],
       ["selection deadline slot", numeric(window ? window.selection_deadline_slot : null)],
       ["bank clock", state.clock ? `${numeric(state.clock.slot)} → ${numeric(state.clock.target)} (${state.clock.reason})` : "—"]
     ])
@@ -467,6 +512,11 @@ const fundingTicket = (state) => {
   const position = decodedOf(state, "human.position");
   const wallet = decodedOf(state, "human.collateral");
   card.append(
+    roleDecodedRpc(
+      "Custody, Hoard, Position, and collateral-token amounts below are decoded from sequential daemon RPC reads."
+    )
+  );
+  card.append(
     fields("", [
       ["your wallet (outside custody)", numeric(wallet ? wallet.amount : null)],
       ["your position cash", numeric(position ? position.cash_atoms : null)],
@@ -575,6 +625,11 @@ const portfolioTicket = () => {
 const yourOrders = (state) => {
   const card = el("section", "card");
   card.append(el("h2", null, "Your resting orders"));
+  card.append(
+    daemonMemory(
+      "Ranks, owners, order terms, and retired flags come from the daemon's submitted-order roster; reservation counters are joined from role-decoded RPC data."
+    )
+  );
   const orders = (state.session ? state.session.orders : []).filter(
     (order) => order.owner === "human"
   );
@@ -648,10 +703,9 @@ export const renderTicket = (state) => {
 /* The Book                                                            */
 /* ------------------------------------------------------------------ */
 
-/* Two beliefs and one price, drawn the way the disagreement exhibit draws
- * them: the two stated vectors as outlines, the cleared vector as the solid
- * bars between them. Nothing is drawn for the cleared vector until the bank
- * has verified a candidate carrying it. */
+/* Two beliefs and one candidate trial, drawn the way the disagreement exhibit
+ * draws them. The daemon publishes this model output before SubmitCandidate;
+ * this projection is never promoted merely because later steps execute. */
 /* The SVG namespace, read off a real node in the document rather than written
  * here as a URL. Nothing under apps/operator/ names an address, on or off this
  * machine, and the grep that gates that is exact. */
@@ -665,7 +719,7 @@ const overlay = (state) => {
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("class", "overlay");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Automaton belief, user belief, and bank-stamped cleared prices by outcome");
+  svg.setAttribute("aria-label", "Automaton belief, user belief, and model-only candidate-trial coordinates by outcome");
   const theirs = state.bot ? state.bot.quoted_belief : null;
   const mine = state.belief ? state.belief.belief : null;
   const cleared = state.clearing ? state.clearing.prices : null;
@@ -694,7 +748,7 @@ const overlay = (state) => {
           y: top,
           width: 24,
           height: Math.max(0, height - pad - top),
-          class: "cleared-bar"
+          class: "candidate-bar"
         })
       );
     });
@@ -729,6 +783,7 @@ const automaton = (state) => {
     return card;
   }
   const bot = state.bot;
+  card.append(modelOnly("The opponent belief and quote rules are daemon fixture/model output, not account state."));
   card.append(
     el(
       "p",
@@ -754,33 +809,34 @@ export const renderBook = (state) => {
   const cards = [automaton(state)];
 
   const shape = el("section", "card");
-  shape.append(el("h2", null, "Two beliefs, one price"));
+  shape.append(el("h2", null, "Two beliefs, one candidate trial"));
   shape.append(
     el(
       "p",
       "muted",
-      "The outlines are the two stated beliefs on the eight hats. The bars are the cleared vector the bank stamped onto the selected candidate — absent until it has."
+      "The outlines are daemon-held beliefs. The bars are candidate coordinates the daemon constructed before submission. Their appearance does not establish that the bank accepted, verified, or selected that candidate."
     )
   );
+  shape.append(modelOnly("Candidate-trial coordinates are pre-submit model output. Consult transaction rows and role-decoded account records separately; this screen does not join them into a selection claim."));
   shape.append(overlay(state));
   const legend = el("div", "controls");
   legend.append(
     el("span", "legend legend-them", "the automaton"),
     el("span", "legend legend-you", "your painted belief"),
-    el("span", "legend legend-cleared", "cleared")
+    el("span", "legend legend-candidate", "candidate trial")
   );
   shape.append(legend);
   if (state.clearing) {
     shape.append(
       fields("", [
-        ["cleared vector", state.clearing.prices.join(" · ")],
-        ["taken as", state.clearing.price_basis],
-        ["paired slices", numeric(state.clearing.slices)],
-        ["virtual split / merge", `${numeric(state.clearing.virtual_split)} / ${numeric(state.clearing.virtual_merge)}`]
+        ["candidate-trial vector", state.clearing.prices.join(" · ")],
+        ["daemon trial basis", state.clearing.price_basis],
+        ["model pairing slices", numeric(state.clearing.slices)],
+        ["model virtual split / merge", `${numeric(state.clearing.virtual_split)} / ${numeric(state.clearing.virtual_merge)}`]
       ])
     );
   } else {
-    shape.append(pending("a cleared vector"));
+    shape.append(pending("a candidate trial"));
   }
   cards.push(shape);
 
@@ -793,6 +849,7 @@ export const renderBook = (state) => {
   if (!page) {
     book.append(pending("the order page"));
   } else {
+    book.append(roleDecodedRpc("The OrderPage fields and slots below are decoded from one daemon-selected RPC data response."));
     const lines = page.orders.map((order) => {
       const line = el("tr");
       const detail =
@@ -864,6 +921,12 @@ export const renderSteps = (state) => {
       `Each row is one signed, submitted, confirmed transaction, built by the repository's own harness builders. Compute units are measured against the ${numeric(COMPUTE_UNIT_CEILING)}-unit transaction ceiling.`
     )
   );
+  card.append(
+    provenance(
+      "DAEMON-REPORTED TRANSACTION RECEIPTS",
+      "Signatures, confirmation states, slots, compute units, and errors come from the daemon's RPC client. The browser neither retains signed wire nor independently authenticates transaction history."
+    )
+  );
   if (!rows.length) {
     card.append(pending("any submission"));
     return [card];
@@ -915,7 +978,12 @@ export const renderSettlement = (state) => {
     el(
       "p",
       "muted",
-      "Every number below was decoded out of a Position image the bank wrote, reloaded after the transaction that changed it."
+      "Every number below was decoded by the daemon from a Position-role data response reloaded after a transaction."
+    )
+  );
+  positions.append(
+    roleDecodedRpc(
+      "Position rows below are decoded from daemon-selected sequential RPC data responses."
     )
   );
   if (!strip || !strip.rows.length) {
@@ -945,7 +1013,13 @@ export const renderSettlement = (state) => {
     el(
       "p",
       "muted",
-      "Re-derived on every tick from the account images this session observed, never read from a plan's expected block."
+      "Derived by the daemon from sequential role-decoded RPC data plus its in-memory endowed and split totals. It is a useful local invariant check, not an authenticated same-slot browser snapshot."
+    )
+  );
+  conservation.append(
+    provenance(
+      "MIXED PROJECTION",
+      "Observed balances are role-decoded RPC data; endowed and complete-set totals are daemon session memory."
     )
   );
   if (!strip) {
@@ -980,6 +1054,7 @@ export const renderSettlement = (state) => {
 
   const receipts = el("section", "card");
   receipts.append(el("h2", null, "Reservations at rest"));
+  receipts.append(roleDecodedRpc("Reservation counters below are decoded from daemon-selected RPC data responses."));
   const roles = [...state.latest.keys()].filter((role) => role.includes("reservation-")).sort();
   if (!roles.length) {
     receipts.append(pending("any reservation"));

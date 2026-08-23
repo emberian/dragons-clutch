@@ -154,6 +154,30 @@ test("belief dragging updates in place and freeze is phase-disabled", async () =
   assert.match(trade, /freeze\.disabled = !open/);
 });
 
+test("trade fields preserve source boundaries and pre-submit coordinates stay model-only", async () => {
+  const trade = await source("trade.js");
+  for (const phrase of [
+    "DAEMON FIXTURE DECLARATION",
+    "DAEMON SESSION MEMORY",
+    "ROLE-DECODED RPC DATA",
+    "DAEMON RPC OBSERVATION",
+    "DAEMON-REPORTED TRANSACTION RECEIPTS",
+    "MIXED PROJECTION",
+    "candidate-trial coordinates",
+    "pre-submit model output",
+    "does not establish that the bank accepted, verified, or selected",
+  ]) {
+    assert.match(trade, new RegExp(phrase));
+  }
+  for (const falsePromotion of [
+    "bank-stamped cleared prices",
+    "cleared vector the bank stamped",
+    "once the bank has selected a candidate",
+  ]) {
+    assert.doesNotMatch(trade, new RegExp(falsePromotion));
+  }
+});
+
 test("the retained Pyth surface is truth-labelled and has no campaign action", async () => {
   const [app, pyth, stream] = await Promise.all([
     source("app.js"),
@@ -161,6 +185,7 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
     source("stream.js"),
   ]);
   assert.match(app, /identity\.mode === "pyth-local"/);
+  assert.match(app, /READ-ONLY RETAINED TRANSCRIPT/);
   assert.match(stream, /case "pyth-campaign"/);
   for (const phrase of [
     "NON-PRODUCTION",
@@ -178,6 +203,8 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
     "best valid submitted candidate",
     "not a claim of optimal clearing",
     "Terminal exact two-owner conservation",
+    "READ-ONLY RETAINED TRANSCRIPT",
+    "does not re-read the chain",
   ]) {
     assert.match(pyth, new RegExp(phrase));
   }
