@@ -1,7 +1,7 @@
 # Structured-claim SBF successor adapter
 
-Status: **complete disabled runtime seam; not routed, built, measured, deployed,
-or validated** (2026-08-23).
+Status: **implemented disabled source seam; not routed, built, measured,
+deployed, or validated** (2026-08-23).
 
 This crate consumes `clutch-structured-claim-runtime-contract` as the only
 owner of structured-claim descriptor bytes, family-local payload codecs, and
@@ -10,8 +10,15 @@ wrapper-replay, route planner, backing reconstruction, and post-state DTOs were
 deleted. There is no compatibility decoder: a historical parallel-adapter
 image cannot be mistaken for the canonical descriptor.
 
+The former legacy `solana-layout::PositionAccount` plus
+`solana-reference::ReplayAccount` authentication path is also gone. Mutation
+inputs now authenticate the canonical 480-byte Position V3, the shared
+purpose-owned Replay V3 envelope, and the exact `GEN1` or `SCV1` extension
+before projecting the runtime contract's small economic view.
+
 The canonical persisted descriptor is exactly 384 bytes at account coordinate
-`0x88/1`. It contains deployment identity, Market/Terms identity, primitive
+`0x88/1`. It contains deployment identity, MarketInstanceV2/NativeClaimBasis
+identity, primitive
 native-Egg coefficients, lifecycle, and PDA bumps. Actual wrapper supply is
 always the extension-free Token-2022 mint. Backing is always the dedicated
 base Position. Hoard, native supply, Market phase, and payouts remain base
@@ -37,12 +44,12 @@ contracts, not an execution capability.
 
 Activation must be atomic with all of the following:
 
-- central registry allocation of the eight family-local actions and descriptor
-  account `0x88/1`;
+- central capability activation for the already allocated eight family-local
+  actions and descriptor account `0x88/1`;
 - an exact capability-profile tuple and new profile/release identity;
 - main-dispatcher routing to this crate;
-- concrete base CPI instructions named below;
-- a pinned Token-2022 byte parser and CPI encoder;
+- a live base handler for the concrete Position V3 action-35 CPI below;
+- the supplied parser plans wired into the pinned Token-2022 byte parser;
 - linked ELF, stack, heap, compute, CPI-depth, account-count, rollback, rent,
   SVM, and local-validator evidence; and
 - a checked release manifest.
@@ -70,6 +77,78 @@ or uninitialized mint. Holder accounts must reject frozen, native, delegated,
 close-authority, wrong-mint state, and every extension except
 `ImmutableOwner`. Runtime-contract projections are accepted only after that
 parser returns them, and the runtime rechecks the fields it owns.
+
+`wrapper_mint_parser_plan_v1` and `wrapper_token_parser_plan_v1` make those
+requirements exact. `plan_token_2022_cpi_v1` emits the real Token-2022 byte
+layouts and metas for `InitializeMint2`, `MintToChecked`, `BurnChecked`, and
+`SetAuthority(MintTokens, None)`; it is not a mock execution result.
+
+## Ephemeral structured custody
+
+Canonical wrap/unwind uses General V2 family `74/v1`, local action 35, with
+the canonical 298-byte payload owned by
+`clutch-structured-claim-runtime-contract`. The 314-byte CPI instruction is
+encoded by the base program's sole canonical `ExtensionRequest` codec with
+sequence zero; it is not a raw family/action prefix. `authority_id` is a
+SHA-256 digest over domain
+`dragons-clutch/authenticated-structured-custody-call/v1\0` and the exact
+1,352-byte authority-neutral projection. It binds action 35, the exact local
+wrapper action, descriptor/product/deployments, MarketBinding and Product
+artifacts, the complete canonical base Market prestate and current lifecycle,
+Realm collateral-policy/release identities, user actor, vault PDA, both
+complete Position V3 semantic prestates, both complete Replay prestates, and
+the exact transfer delta.
+
+There is no generic capability account and no wildcard signer. The wrapper
+prepares the call and the base reconstructs it through the same function. The
+frozen action-35 CPI metas are:
+
+0. vault-owner PDA, signer, read-only;
+1. immutable General V2 MarketBinding, read-only;
+2. source Position V3, writable;
+3. source purpose-owned Replay V3, writable;
+4. destination Position V3, writable;
+5. destination purpose-owned Replay V3, writable;
+6. user Position controller, signer, read-only;
+7. immutable `0x88/1` descriptor, read-only;
+8. pinned wrapper executable, read-only;
+9. pinned wrapper ProgramData, read-only;
+10. pinned base executable, read-only;
+11. pinned base ProgramData, read-only;
+12. pinned Token-2022 executable for the wrapper plane, read-only;
+13. pinned Token-2022 ProgramData, read-only;
+14. exact NativeClaimBasisV1 Product artifact, read-only; and
+15. exact MarketInstanceV2 preimage account, read-only; and
+16. canonical base Market carrying current lifecycle, read-only.
+
+The vault signer proves that only the pinned wrapper program could have
+produced `invoke_signed`; the digest prevents that signer from becoming
+authority for any other action, deployment, product, account pair, generation,
+sequence, or delta. The Realm-selected collateral adapter is consumed as a
+private-field `BoundCollateralProfileV2`; this module neither reparses
+collateral tokens nor invents a second collateral release truth.
+
+Both Position mutations stage exact 480-byte Position V3 successors and must
+atomically advance their canonical purpose-owned Replay V3 envelopes. The
+General endpoint uses the single General `GEN1` extension shared by settlement
+and custody actions. The vault endpoint uses StructuredClaim schema `SCV1`,
+whose immutable descriptor/product/vault join and current Position semantic ID
+cannot be detached from its last transition and delta digests. The structured
+delta commits both consumed ordinals, both Position accounts, and both exact
+pre/post Position semantic IDs; the transition digest already commits the full
+action-35 payload and complete authenticated account projection.
+`GEN1.transition_id` is that authenticated custody digest and its
+`transition_evidence_id` is the rederived `SCV1` structured delta. The General
+owner then derives its own endpoint delta over that evidence, its exact Position
+pre/post IDs and generation, the consumed ordinal, and the exhaustive
+StructuredGeneral/action-35 tuple.
+
+`StructuredCustodyScratchV1` owns the 2,352-byte NativeClaimBasis decode target
+and 1,352-byte authority transcript. A live SBF entrypoint must place this
+scratch on requestable heap storage and pass it to preparation/reconstruction;
+the bridge does not return those large values through the 4-KiB stack. The
+adapter hashes the exact canonical Product and MarketBinding account bytes after
+their hostile decoders accept them, avoiding redundant large re-encoding.
 
 ## Exact route staging
 
@@ -113,14 +192,12 @@ capability from caller-authored fields.
 
 The adapter implementation is intentionally honest about work owned elsewhere:
 
-- the central registry currently reserves the structured family but must still
-  allocate its eight local actions and descriptor `0x88/1`;
-- the base program does not yet expose the authenticated empty-vault creation,
-  atomic Position asset transfer, atomic full-vector wrap/unwind,
+- the base program does not yet route the authenticated Position V3 action-35
+  handler, empty-vault creation, atomic full-vector wrap/unwind,
   beneficiary-free compaction, exact terminal redemption, and close receipt
   interfaces staged here;
-- the main SBF program's pinned Token-2022 parser/CPI helpers must be extracted
-  or exposed without creating a second Token-2022 truth;
+- the main SBF program must consume the exact Token-2022 parser and CPI plans
+  without creating a second Token-2022 truth;
 - the main dispatcher has no structured-claim account loader or route arm; and
 - no successor build, measurement, bank, SVM, local-validator, or rollback
   campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.

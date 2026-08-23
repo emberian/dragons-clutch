@@ -47,6 +47,16 @@ pub const RECOVERY_FAMILY_VERSION: u8 = 1;
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_TAG: u8 = 0x74;
 /// Existing Source Archive V2 account version.
 pub const SOURCE_ARCHIVE_V2_ACCOUNT_VERSION: u8 = 1;
+/// General SettlementReceipt successor discriminator. This deliberately
+/// reuses legacy receipt tag `0x0f` under a fresh version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG: u8 = 0x0f;
+/// General SettlementReceipt successor version.
+pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION: u8 = 3;
+/// General OrderPage successor discriminator. This deliberately reuses the
+/// historical OrderPage tag under a fresh version.
+pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG: u8 = 8;
+/// General OrderPage successor version.
+pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION: u8 = 5;
 /// General V2 genesis-assisted Market-runtime account discriminator.
 pub const GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG: u8 = 3;
 /// RelationV2-native General Market-runtime account version.
@@ -153,8 +163,15 @@ pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
 /// General V2 owner-aggregated settlement account discriminator.
 pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG: u8 = 0x81;
-/// General V2 owner-aggregated settlement account version.
-pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 = 1;
+/// Withdrawn non-aliasing General V2 owner-settlement V1 version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1: u8 = 1;
+/// Withdrawn presence-explicit General V2 owner-settlement V2 version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2: u8 = 2;
+/// Sole future Reservation-handoff General owner-settlement version.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3: u8 = 3;
+/// Current General owner-settlement version; an alias only for V3.
+pub const GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION: u8 =
+    GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3;
 /// General V2 selected composite-fee record envelope discriminator.
 pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG: u8 = 0x82;
 /// General V2 selected composite-fee record envelope version.
@@ -163,6 +180,8 @@ pub const GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG: u8 = 0x83;
 /// General V2 owner fee-carry envelope version.
 pub const GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION: u8 = 1;
+/// General V2 in-place owner fee-finalization successor version.
+pub const GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION: u8 = 2;
 /// General V2 temporary owner payer-allocation envelope discriminator.
 pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG: u8 = 0x84;
 /// General V2 temporary owner payer-allocation envelope version.
@@ -236,7 +255,7 @@ pub const DEALER_STATE_V2_ACCOUNT_TAG: u8 = 0x94;
 /// Authoritative Dealer State V2 account version.
 pub const DEALER_STATE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer State V2 account bytes.
-pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 840;
+pub const DEALER_STATE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 972;
 /// Counted funded-dependencies account discriminator.
 pub const DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG: u8 = 0x95;
 /// Counted funded-dependencies account version.
@@ -249,13 +268,13 @@ pub const DEALER_LP_PAGE_V2_ACCOUNT_TAG: u8 = 0x98;
 /// Dealer LP page V2 account version.
 pub const DEALER_LP_PAGE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer LP page V2 account bytes.
-pub const DEALER_LP_PAGE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_020;
+pub const DEALER_LP_PAGE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 972;
 /// One-generation Dealer Lease V2 discriminator.
 pub const DEALER_LEASE_V2_ACCOUNT_TAG: u8 = 0x99;
 /// Dealer Lease V2 account version.
 pub const DEALER_LEASE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer Lease V2 account bytes.
-pub const DEALER_LEASE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_036;
+pub const DEALER_LEASE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 1_068;
 /// Three-stage Dealer SettlementPot V2 discriminator.
 pub const DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG: u8 = 0x9a;
 /// Dealer SettlementPot V2 account version.
@@ -268,7 +287,7 @@ pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG: u8 = 0x9b;
 /// Dealer Epoch-binding V2 account version.
 pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact Dealer Epoch-binding V2 account bytes.
-pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 764;
+pub const DEALER_EPOCH_BINDING_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 772;
 /// Page-scoped Dealer terminal-allocation discriminator.
 pub const DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG: u8 = 0x9c;
 /// Dealer terminal-allocation account version.
@@ -288,6 +307,12 @@ pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG: u8 = 0x9e;
 pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_VERSION: u8 = 1;
 /// Exact current Dealer root-tombstone V2 account bytes.
 pub const DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 468;
+/// Owner-scoped Dealer exit-ticket discriminator.
+pub const DEALER_EXIT_TICKET_ACCOUNT_TAG: u8 = 0x9f;
+/// Dealer exit-ticket account version.
+pub const DEALER_EXIT_TICKET_ACCOUNT_VERSION: u8 = 1;
+/// Exact Dealer exit-ticket account bytes.
+pub const DEALER_EXIT_TICKET_ACCOUNT_BYTES: usize = DEALER_RUNTIME_ACCOUNT_HEADER_BYTES + 356;
 /// Single-custody failure semantic root account discriminator.
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG: u8 = 0xa0;
 /// Single-custody failure semantic root account version.
@@ -317,6 +342,13 @@ const _: () = assert!(LEGACY_INTENT_VERSION == super::INTENT_VERSION);
 const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 116);
 const _: () = assert!(SOURCE_ARCHIVE_V2_ACCOUNT_TAG == 0x74);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG != SOURCE_ARCHIVE_V2_ACCOUNT_TAG);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
+const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
+const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == 8);
+const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == 5);
+const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG);
+const _: () =
+    assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == super::order_page_v5::ORDER_PAGE_V5_VERSION);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG == 0x93);
 const _: () = assert!(DEALER_STATE_V2_ACCOUNT_TAG == 0x94);
@@ -328,6 +360,7 @@ const _: () = assert!(DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG == 0x9b);
 const _: () = assert!(DEALER_TERMINAL_ALLOCATION_ACCOUNT_TAG == 0x9c);
 const _: () = assert!(DEALER_CLAIM_WORK_ACCOUNT_TAG == 0x9d);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
+const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -456,6 +489,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::Frozen,
         name: "source-archive-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
+            version: GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-settlement-receipt-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
+            version: GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-order-page-v5-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -686,10 +737,28 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-settlement-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-settlement-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-owner-settlement-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -708,6 +777,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-owner-fee-carry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+            version: GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-owner-fee-finalization-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -933,6 +1011,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "dealer-root-tombstone-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DEALER_EXIT_TICKET_ACCOUNT_TAG,
+            version: DEALER_EXIT_TICKET_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "dealer-exit-ticket-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1619,12 +1706,12 @@ impl RecoveryAction {
 pub enum ExtensionAction {
     /// One General V2 local action.
     GeneralV2(GeneralV2Action),
-    /// One StructuredClaim local action.
-    StructuredClaim(StructuredClaimAction),
     /// One Dealer policy-catalog transport action.
     DealerPolicy(DealerPolicyAction),
     /// One capability-disabled Dealer facility action.
     DealerFacility(DealerFacilityAction),
+    /// One StructuredClaim local action.
+    StructuredClaim(StructuredClaimAction),
     /// One SourcePlane V3 action in the shared SourceSeries family.
     SourceV3(SourceSeriesAction),
     /// One recurring-Series action in the shared SourceSeries family.
@@ -1638,8 +1725,8 @@ impl ExtensionAction {
     pub const fn family(self) -> ExtensionFamily {
         match self {
             Self::GeneralV2(_) => ExtensionFamily::GeneralV2,
-            Self::StructuredClaim(_) => ExtensionFamily::StructuredClaim,
             Self::DealerPolicy(_) | Self::DealerFacility(_) => ExtensionFamily::Dealer,
+            Self::StructuredClaim(_) => ExtensionFamily::StructuredClaim,
             Self::SourceV3(_) | Self::RecurringSeries(_) => ExtensionFamily::SourceSeries,
             Self::Recovery(_) => ExtensionFamily::Recovery,
         }
@@ -1649,9 +1736,9 @@ impl ExtensionAction {
     pub const fn local_tag(self) -> u8 {
         match self {
             Self::GeneralV2(action) => action.tag(),
-            Self::StructuredClaim(action) => action.tag(),
             Self::DealerPolicy(action) => action.tag(),
             Self::DealerFacility(action) => action.tag(),
+            Self::StructuredClaim(action) => action.tag(),
             Self::SourceV3(action) => action.tag(),
             Self::RecurringSeries(action) => action.tag(),
             Self::Recovery(action) => action.tag(),
@@ -1859,6 +1946,14 @@ mod tests {
     fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
             (
+                GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
+                GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG,
+                GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_RUNTIME_ACCOUNT_VERSION,
             ),
@@ -1909,7 +2004,15 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
             ),
             (
                 GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
@@ -1918,6 +2021,10 @@ mod tests {
             (
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
@@ -1973,7 +2080,15 @@ mod tests {
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
-                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V1,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_VERSION_V3,
             ),
             (
                 GENERAL_V2_SELECTED_FEE_RECORD_ACCOUNT_TAG,
@@ -1982,6 +2097,10 @@ mod tests {
             (
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
                 GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_OWNER_FEE_CARRY_ACCOUNT_TAG,
+                GENERAL_V2_OWNER_FEE_FINALIZATION_ACCOUNT_VERSION,
             ),
             (
                 GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_TAG,
@@ -2182,13 +2301,6 @@ mod tests {
                 (RecoveryAction::FIRST_TAG..=RecoveryAction::LAST_TAG).contains(&local_action),
                 "recovery action {local_action}"
             );
-            for (tag, version) in [(76, 2), (75, 2), (78, 2)] {
-                assert_eq!(
-                    decode_extension_action(tag, version, local_action),
-                    Err(RegistryError::UnknownLocalAction),
-                    "{tag}/{version}/{local_action}"
-                );
-            }
         }
     }
 

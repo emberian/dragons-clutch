@@ -11,7 +11,7 @@ const SCHEMA_V1: u16 = 1;
 /// SHA-256 domain for [`SeriesFundingQuoteV1`].
 pub const SERIES_FUNDING_QUOTE_DOMAIN: &[u8] = b"dragons-clutch/series-funding-quote/v1";
 /// Exact canonical byte length of [`SeriesFundingQuoteV1`].
-pub const SERIES_FUNDING_QUOTE_BYTES: usize = 264;
+pub const SERIES_FUNDING_QUOTE_BYTES: usize = 280;
 
 /// One component's exact lamport and collateral-atom requirements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +74,10 @@ pub struct SeriesFundingQuoteV1 {
     pub evidence_only_recovery_policy_id: EvidenceOnlyRecoveryPolicyId,
     /// Market root, child-plane, mint, and custody-account creation principal.
     pub market_core: ComponentDebitV1,
+    /// Exact refundable rent principal for the occurrence's failure root.
+    pub failure_root_rent_principal_lamports: u64,
+    /// Exact refundable rent principal for its permanent replay tombstone.
+    pub failure_replay_tombstone_rent_principal_lamports: u64,
     /// Independently prepaid finite evidence-recovery reserve.
     pub recovery_reserve: ComponentDebitV1,
     /// Source ingestion, archive, window, and evaluation work.
@@ -123,6 +127,18 @@ impl SeriesFundingQuoteV1 {
             || count > MAX_RECOVERY_ATTEMPTS
             || self.recovery_rent_principal_lamports == 0
             || self.recovery_reserve.collateral_atoms != 0
+        {
+            return Err(Error::InvalidParameter);
+        }
+        let failure_rent = self
+            .failure_root_rent_principal_lamports
+            .checked_add(self.failure_replay_tombstone_rent_principal_lamports)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if (self.market_core.lamports == 0 && failure_rent != 0)
+            || (self.market_core.lamports != 0
+                && (self.failure_root_rent_principal_lamports == 0
+                    || self.failure_replay_tombstone_rent_principal_lamports == 0
+                    || failure_rent > self.market_core.lamports))
         {
             return Err(Error::InvalidParameter);
         }
@@ -194,6 +210,8 @@ impl FixedCodec for SeriesFundingQuoteV1 {
             writer.u64(component.lamports);
             writer.u64(component.collateral_atoms);
         }
+        writer.u64(self.failure_root_rent_principal_lamports);
+        writer.u64(self.failure_replay_tombstone_rent_principal_lamports);
         writer.u64(self.recovery_rent_principal_lamports);
         for terms in self.recovery_attempt_funding {
             writer.u64(terms.max_progress_units);
@@ -223,6 +241,8 @@ impl FixedCodec for SeriesFundingQuoteV1 {
             source_work: component(),
             liquidity_facility: component(),
             wrapper_set: component(),
+            failure_root_rent_principal_lamports: reader.u64(),
+            failure_replay_tombstone_rent_principal_lamports: reader.u64(),
             recovery_attempt_count,
             recovery_rent_principal_lamports: reader.u64(),
             recovery_attempt_funding: {

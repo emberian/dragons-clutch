@@ -38,7 +38,7 @@ not a local policy choice.
 ## Version discipline
 
 Each account carries its **own** schema version (`account_version::*`).
-`LAYOUT_VERSION` is the largest of them (`4`), not one wire version shared by
+`LAYOUT_VERSION` is the largest of them (`5`), not one wire version shared by
 every account. An account keeps the version its current bytes were introduced
 at; an account whose bytes change moves to the next version and refuses every
 earlier one explicitly with `WrongVersion`, so the pair `(tag, version)` never
@@ -50,6 +50,7 @@ names two different shapes.
 | Profile | 2 | gained the 32-byte collateral-policy digest |
 | Supply ledger, Terms, Epoch, Price grid, Candidate, Final pot, Receipt, Resolution | 2 | introduced at 2 |
 | Dense order page | 4 | version 2 gained the page-set commitment fields; version 3 replaced its bare 99-byte records with tagged fixed-width order slots; version 4 made order ids positional, added the retirement slot kind and its header count, and gave every record a persisted expiry. It refuses 1, 2, and 3 |
+| General order page successor | 5 | retains the exact 4,012-byte V4 semantic prefix and slots, then appends sixteen positional Position generations; its hostile decoder refuses V4 |
 
 Intent bytes are versioned separately and moved to `INTENT_VERSION = 2` with the
 same revision: a placement now carries an `OrderSlot` rather than a bare
@@ -76,13 +77,15 @@ All integers are little-endian. The first two bytes are `(tag, version)`.
 | Position | 6 | 220 | market/owner, generation, 16 `u64` balances, cash/reserved cash |
 | Feed head | 7 | 124 | feed/realm, cursor/boundary/pages, summary digest, bump |
 | Dense order page | 8 | 4012 | market/epoch, 5 page-set commitments, page metadata + retirement count, 16 × 236-byte tagged order slots |
+| General order page V5 | `8/v5` | 4140 | exact V4 semantic prefix/slots followed by `[u64; 16]` Position generations |
 | Supply ledger | 9 | 333 | market/realm, generation, 16 internal + 16 external `u64` |
 | Immutable terms | 10 | 1656 | terms digest, realm/profile/feed/price-grid, 8 × payout vector, window policy, failure policy |
 | Epoch (book domain) | 11 | 328 | epoch/market/book/terms/grid/policy/order-set IDs, order range, shape, seed, phase |
 | Price grid | 12 | 589 | grid identity, realm, price scale, 64 `u64` ticks |
 | Candidate record | 13 | 305 | candidate digest, epoch/market, 16 prices, sigma/mu, AON mask, score, status |
 | Final pot | 14 | 262 | epoch/market/candidate, 16 pot balances, pot cash, rounding pot, phase |
-| Settlement receipt | 15 | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
+| Settlement receipt V2 | `15/v2` | 217 | epoch/market/candidate, buy/sell order ids, slice, quantity, price, consideration, consumed flags |
+| General settlement receipt V3 | `15/v3` | 217 | same economic body; independent accounted-end mask replaces the former reserved byte while consumed flags remain delivery/exhaustion latches |
 | Resolution | 16 | 165 | market/terms/feed, sealed window digest, cursor, repair generation, payout index |
 | Clearing checkpoint | 17 | 48004 | 158-byte header (market/epoch/candidate, order-set binding, consumed fold, walk cursor) + 47,846-byte codec body |
 | Candidate feed | 18 | 6266 | 346-byte header (candidate/epoch/market/order-set, prices, sigma/mu, mask, claimed score) + 64 fills + 416 slices |
@@ -125,7 +128,8 @@ bytes instead of scanning positions, which is not an onchain option.
 | One portfolio order's coefficient vector and cash bound | `PortfolioRecord` inside an `OrderSlot` | `validate`, `validate_on_scale`, `binds_page_set` |
 | One candidate's free coordinates | `CandidateRecord` | `binds_epoch` |
 | Settlement pot | `FinalPotAccount` | `binds_candidate` |
-| One settled slice | `SettlementReceiptAccount` | `binds_candidate` |
+| One legacy settled slice | `SettlementReceiptAccount` (V2) | `binds_candidate` |
+| One General settled slice | `SettlementReceiptAccountV3` | hostile body/latch validation only; the General adapter joins exact authenticated `0x7c` SelectedCandidate plus retained CandidateFeedV2 and then projects deterministic action IDs |
 | Resolution | `ResolutionAccount.payout_index` | `binds_terms` |
 
 `SupplyLedgerAccount` persists the aggregate as the **two terms whose sum it
@@ -882,7 +886,7 @@ decoder.
 
 Named here so they are debt rather than oversight:
 
-* `SettlementReceiptAccount.buy_order_id` / `.sell_order_id` are still opaque
+* V2 `SettlementReceiptAccount.buy_order_id` / `.sell_order_id` are still opaque
   32-byte identities that may also be zero (the virtual split/merge legs). Under
   v4 they should be canonical ranks. That is a receipt-side tightening on an
   account this revision does not otherwise touch, and it was left out to keep
@@ -1165,7 +1169,7 @@ allocate in one CPI**. (The absolute account ceiling,
 
 | account | bytes | one CPI creation? |
 | --- | ---: | --- |
-| every protocol account, order page included | ≤ 4,012 | yes |
+| every protocol account through General OrderPage V5 | ≤ 4,140 | yes |
 | candidate feed | 6,266 | yes |
 | **clearing checkpoint** | **50,054** | **no** |
 

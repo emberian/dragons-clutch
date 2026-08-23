@@ -48,13 +48,13 @@ pub struct SettlementPotV2 {
     pub epoch_id: Id,
     /// Final SettlementCandidateId.
     pub settlement_candidate_id: Id,
-    /// Checked aggregate dealer-leg verdict.
+    /// Checked CoveredDealer final economic identity; exactly the SettlementCandidateId.
     pub aggregate_verdict_id: Id,
     /// Exact quantized curve-price certificate.
     pub curve_price_certificate_id: Id,
     /// Pre-generation Facility Position semantic identity.
     pub facility_position_pre_id: Id,
-    /// Current leased Facility Position semantic identity after Begin deposits.
+    /// Current leased Position identity after Begin, equal to pre-ID only for zero deposit.
     pub facility_position_leased_id: Id,
     /// Expected post-generation Facility Position semantic identity.
     pub facility_position_post_id: Id,

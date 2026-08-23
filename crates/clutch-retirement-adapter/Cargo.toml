@@ -30,7 +30,6 @@ clutch-general-v2-contract = { path = "../clutch-general-v2-contract" }
 clutch-retirement = { path = "../clutch-retirement" }
 clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }
 clutch-solana-reference = { path = "../../programs/solana-reference", default-features = false }
-sha2 = { version = "=0.10.9", default-features = false }
 
 [dev-dependencies]
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }

@@ -102,6 +102,39 @@ pub const SEED_ARTIFACT_STAGE: &[u8] = b"dragons-clutch:upload:v1";
 pub const SEED_DEALER_POLICY_STAGE: &[u8] = b"dc-dealer-policy-stage-v1";
 /// Canonical immutable Dealer-policy prefix, frozen by the pure contract.
 pub const SEED_DEALER_POLICY: &[u8] = clutch_dealer_runtime_contract::DEALER_POLICY_PDA_DOMAIN_V1;
+/// Immutable Dealer liveness schedule.
+pub const SEED_DEALER_LIVENESS_SCHEDULE: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1;
+/// Authoritative Dealer StateV2.
+pub const SEED_DEALER_STATE_V2: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_STATE_PDA_DOMAIN_V2;
+/// Counted Dealer funded-dependency child.
+pub const SEED_DEALER_FUNDED_V2: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2;
+/// Dealer LP ownership page V2.
+pub const SEED_DEALER_LP_PAGE_V2: &[u8] =
+    clutch_dealer_runtime_contract::LP_PAGE_PDA_DOMAIN_V2;
+/// Dealer LeaseV2.
+pub const SEED_DEALER_LEASE_V2: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_LEASE_PDA_DOMAIN_V2;
+/// Dealer SettlementPotV2.
+pub const SEED_DEALER_POT_V2: &[u8] =
+    clutch_dealer_runtime_contract::SETTLEMENT_POT_PDA_DOMAIN_V2;
+/// Dealer counted Epoch-binding V2.
+pub const SEED_DEALER_EPOCH_V2: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_EPOCH_BINDING_PDA_DOMAIN_V2;
+/// Dealer page-scoped terminal allocation.
+pub const SEED_DEALER_TERMINAL_ALLOCATION: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_TERMINAL_ALLOCATION_PDA_DOMAIN_V1;
+/// Dealer singleton claim work.
+pub const SEED_DEALER_CLAIM_WORK: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_CLAIM_WORK_PDA_DOMAIN_V1;
+/// Dealer permanent root tombstone.
+pub const SEED_DEALER_ROOT_V2: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2;
+/// Dealer owner-scoped exit ticket.
+pub const SEED_DEALER_EXIT_TICKET: &[u8] =
+    clutch_dealer_runtime_contract::DEALER_EXIT_TICKET_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
 pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
 /// Canonical full-width batch-policy artifact seed prefix.
@@ -179,9 +212,17 @@ pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_S
 /// General V2 selected settlement-authority seed prefix.
 pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
+/// Disabled General V2 OrderPage V5 seed prefix.
+pub const SEED_GENERAL_V2_ORDER_PAGE_V5: &[u8] =
+    clutch_general_v2_contract::ORDER_PAGE_SEED_DOMAIN_V1;
+/// Disabled General V2 Reservation V3 seed prefix.
+pub const SEED_GENERAL_V2_RESERVATION_V3: &[u8] =
+    clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V1;
+/// Disabled General SettlementReceipt V3 seed prefix.
+pub const SEED_GENERAL_V2_RECEIPT: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
 pub const SEED_GENERAL_V2_OWNER_SETTLEMENT: &[u8] =
-    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V1;
+    clutch_general_v2_contract::OWNER_SETTLEMENT_SEED_DOMAIN_V2;
 /// Disabled selected composite-fee record seed prefix.
 pub const SEED_GENERAL_V2_SELECTED_FEE_RECORD: &[u8] =
     clutch_general_v2_contract::SELECTED_FEE_RECORD_SEED_DOMAIN_V1;
@@ -441,7 +482,62 @@ pub fn general_v2_selected_pda(
     )
 }
 
-/// Canonical disabled owner-settlement address for one selected owner row.
+/// Canonical disabled General V2 OrderPage V5 PDA.
+///
+/// The authenticated Epoch owns the MarketRuntime and page-set lifecycle, so
+/// the zero-based page index is the only suffix.
+pub fn general_v2_order_page_v5_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    page_index: u16,
+) -> (Pubkey, u8) {
+    let page_index_le = page_index.to_le_bytes();
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_ORDER_PAGE_V5, epoch, &page_index_le],
+    )
+}
+
+/// Canonical disabled General V2 Reservation V3 PDA.
+///
+/// The semantic identity already commits MarketRuntime, Epoch, owner,
+/// Position generation, and order ID; none is repeated as a second address
+/// projection.
+pub fn general_v2_reservation_v3_pda(
+    program_id: &Pubkey,
+    reservation_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RESERVATION_V3, reservation_id],
+    )
+}
+
+/// Canonical disabled General SettlementReceipt V3 PDA.
+pub fn general_v2_receipt_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+    slice_index: u16,
+) -> (Pubkey, u8) {
+    let slice_index_le = slice_index.to_le_bytes();
+    find(
+        program_id,
+        &[
+            SEED_GENERAL_V2_RECEIPT,
+            epoch,
+            settlement_candidate,
+            &slice_index_le,
+        ],
+    )
+}
+
+/// Canonical disabled presence-explicit owner-settlement address for one
+/// selected owner row.
+///
+/// The withdrawn V1 row used a different seed domain. Keeping V2 on its own
+/// address prevents a prefunded or historical V1 account from being promoted
+/// into the zero-price-safe successor by changing only its outer version.
 pub fn general_v2_owner_settlement_pda(
     program_id: &Pubkey,
     epoch: &[u8; 32],
@@ -455,6 +551,48 @@ pub fn general_v2_owner_settlement_pda(
             epoch,
             settlement_candidate,
             owner,
+        ],
+    )
+}
+
+/// Canonical global Position V3 address for one General owner.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn position_v3_pda(
+    program_id: &Pubkey,
+    market_instance: &[u8; 32],
+    owner: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::POSITION_V3_PDA_PREFIX,
+            market_instance,
+            owner,
+            &purpose_seed,
+            purpose_binding,
+        ],
+    )
+}
+
+/// Canonical purpose-owned Replay V3 address paired with one Position.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub fn purpose_replay_v3_pda(
+    program_id: &Pubkey,
+    position: &[u8; 32],
+    purpose: clutch_retirement::PositionPurposeV3,
+    purpose_binding: &[u8; 32],
+) -> (Pubkey, u8) {
+    let purpose_seed = [u8::from(purpose)];
+    find(
+        program_id,
+        &[
+            clutch_retirement::PURPOSE_REPLAY_V3_PDA_PREFIX,
+            position,
+            &purpose_seed,
+            purpose_binding,
         ],
     )
 }
@@ -565,6 +703,107 @@ pub fn dealer_policy_stage_pda(
 /// Canonical immutable Dealer policy address from the pure-contract recipe.
 pub fn dealer_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_DEALER_POLICY, policy_id])
+}
+
+/// Canonical immutable Dealer liveness-schedule address.
+pub fn dealer_liveness_schedule_pda(
+    program_id: &Pubkey,
+    schedule_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_LIVENESS_SCHEDULE, schedule_id])
+}
+
+/// Canonical authoritative Dealer StateV2 address.
+pub fn dealer_state_v2_pda(program_id: &Pubkey, facility_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_STATE_V2, facility_id])
+}
+
+/// Canonical counted funded-dependency address.
+pub fn dealer_funded_v2_pda(program_id: &Pubkey, facility_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_FUNDED_V2, facility_id])
+}
+
+/// Canonical Dealer LP page V2 address.
+pub fn dealer_lp_page_v2_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+    page_ordinal: u32,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DEALER_LP_PAGE_V2, facility_id, &page_ordinal.to_le_bytes()],
+    )
+}
+
+/// Canonical Dealer LeaseV2 address.
+pub fn dealer_lease_v2_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DEALER_LEASE_V2, facility_id, &generation.to_le_bytes()],
+    )
+}
+
+/// Canonical Dealer SettlementPotV2 address.
+pub fn dealer_pot_v2_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DEALER_POT_V2, facility_id, &generation.to_le_bytes()],
+    )
+}
+
+/// Canonical Dealer Epoch-binding V2 address.
+pub fn dealer_epoch_v2_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_DEALER_EPOCH_V2, facility_id, &generation.to_le_bytes()],
+    )
+}
+
+/// Canonical Dealer page-scoped terminal-allocation address.
+pub fn dealer_terminal_allocation_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+    page_ordinal: u32,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_DEALER_TERMINAL_ALLOCATION,
+            facility_id,
+            &page_ordinal.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical Dealer singleton ClaimWork address.
+pub fn dealer_claim_work_pda(program_id: &Pubkey, facility_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_CLAIM_WORK, facility_id])
+}
+
+/// Canonical Dealer permanent root-tombstone address.
+pub fn dealer_root_v2_pda(program_id: &Pubkey, facility_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_ROOT_V2, facility_id])
+}
+
+/// Canonical Dealer owner-scoped ExitTicket address.
+pub fn dealer_exit_ticket_pda(
+    program_id: &Pubkey,
+    facility_id: &[u8; 32],
+    owner: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[SEED_DEALER_EXIT_TICKET, facility_id, owner])
 }
 
 /// Canonical full-width batch-policy artifact address.

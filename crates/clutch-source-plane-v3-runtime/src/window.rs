@@ -633,12 +633,13 @@ pub fn authenticate_statistic_result_absence(
         return Err(Error::InvalidLineage);
     }
     let lineage_id = lineage.id()?;
-    let mut bytes = [0; 136];
+    let mut bytes = [0; 168];
     bytes[..32].copy_from_slice(&route.route_id().bytes());
     bytes[32..64].copy_from_slice(&key_id.bytes());
     bytes[64..96].copy_from_slice(&account.key.bytes());
     bytes[96..128].copy_from_slice(&lineage_id.bytes());
-    bytes[128] = derived_pda.bump;
+    bytes[128..160].copy_from_slice(&authenticated_lineage.id().bytes());
+    bytes[160] = derived_pda.bump;
     Ok(AuthenticatedStatisticResultAbsenceV1 {
         statistic_key_id: key_id,
         result_account: account.key,
@@ -779,15 +780,16 @@ pub fn authenticate_statistic_result_account(
     {
         return Err(Error::InvalidLineage);
     }
-    let mut bytes = [0_u8; 208];
+    let mut bytes = [0_u8; 240];
     bytes[..32].copy_from_slice(&route.route_id().bytes());
     bytes[32..64].copy_from_slice(&account.key.bytes());
     bytes[64..96].copy_from_slice(&account_data_id.bytes());
     bytes[96..128].copy_from_slice(&result.id()?.bytes());
     bytes[128..160].copy_from_slice(&summary_program_id.bytes());
-    bytes[160..192].copy_from_slice(&authenticated_lineage.id().bytes());
-    bytes[192..200].copy_from_slice(&header.generation.to_le_bytes());
-    bytes[200] = header.bump;
+    bytes[160..192].copy_from_slice(&evidence.id().bytes());
+    bytes[192..224].copy_from_slice(&authenticated_lineage.id().bytes());
+    bytes[224..232].copy_from_slice(&header.generation.to_le_bytes());
+    bytes[232] = header.bump;
     Ok(AuthenticatedStatisticResultAccountV1 {
         route_id: route.route_id(),
         account: account.key,
@@ -827,6 +829,7 @@ pub struct OccurrenceSourceReceiptV1 {
     statistic_key_id: ContentId,
     repair_generation: u64,
     disposition: OccurrenceDispositionV1,
+    occurrence_account: RuntimeKey,
     occurrence_account_authentication_id: ContentId,
     join_id: ContentId,
 }
@@ -895,6 +898,11 @@ impl OccurrenceSourceReceiptV1 {
     /// Created versus exact-existing disposition.
     pub const fn disposition(self) -> OccurrenceDispositionV1 {
         self.disposition
+    }
+
+    /// Physical Product/Series occurrence account authenticated by this join.
+    pub const fn occurrence_account(self) -> RuntimeKey {
+        self.occurrence_account
     }
 
     /// Exact created/existing occurrence-account authentication receipt.
@@ -997,6 +1005,7 @@ pub fn join_source_occurrence(
         statistic_key_id,
         repair_generation: window.repair_generation,
         disposition,
+        occurrence_account: occurrence_account.key,
         occurrence_account_authentication_id,
         join_id: domain_id(OCCURRENCE_JOIN_DOMAIN, &bytes),
     })

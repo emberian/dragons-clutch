@@ -333,13 +333,13 @@ and 36 through 38 do not create a success route.
 | 16 `ExpireCommittedCandidate` | `epoch[32] || node[32]` |
 | 20 `CleanupCandidate` | `epoch[32] || node[32] || selected_candidate[32]` |
 | 21 `ClaimSolver` | `selected_candidate[32]` |
-| 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner[32]` |
-| 25 `AccountReceiptEnd` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32] || receipt_accounting_id[32]` (160 bytes) |
-| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
+| 24 `FreezeEntitlement` (disabled selector) | `epoch[32] || selected_candidate[32]` (64 bytes) |
+| 25 `AccountReceiptEnd` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || receipt[32]` (128 bytes) |
+| 26 `ConsumeDirectReceiptEggs` (disabled selector) | `epoch[32] || receipt[32]` (64 bytes) |
 | 32 `CloseClearWork` | `epoch[32] || node[32]` |
-| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
-| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32] || delivery_transition_id[32]` |
-| 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32] || owner_finalization_id[32]` (192 bytes) |
+| 36 `ConsumeVirtualSplitReceiptEggs` (disabled selector) | `epoch[32] || receipt[32]` (64 bytes) |
+| 37 `ConsumeVirtualMergeReceiptEggs` (disabled selector) | `epoch[32] || receipt[32]` (64 bytes) |
+| 38 `FinalizeOwnerSettlement` (disabled selector) | `epoch[32] || selected_candidate[32] || owner_settlement[32] || position[32] || settlement_cash_pot[32]` (160 bytes) |
 
 Local action 8, `WriteCandidateFeed`, is a strict tagged union.
 
@@ -714,13 +714,19 @@ All other General V2 actions remain disabled. In particular:
   primitive.
 
 Actions 24 and 25 have strict capability-disabled payload and account-envelope
-codecs, including a centrally reserved `0x81/1` OwnerSettlement envelope, but
+codecs, including the sole future `0x81/2` OwnerSettlement envelope, but
 no successful SBF transition. They cannot activate until an authenticated,
 complete filled-order projection, exactly one selected fee row per canonical
 owner, checked candidate totals, a canonically derived owner-order-set digest,
-and exact receipt, reservation, and SelectedCandidate joins exist.
+and exact receipt, reservation, and SelectedCandidate joins exist. Action 24
+is strictly next-slice: it derives one receipt plus its one or two real ends,
+creates a pristine row or entitlement stamp only on that owner's/order's first
+canonical selected slice, requires the exact existing state later, and advances
+the Selected slice cursor only after the receipt and all needed rows/stamps are
+materialized. Thus the terminal slice cursor proves every participating owner
+and selected order has materialized without a second manifest or cursor.
 Action 25 is the accounting-only `AccountReceiptEnd`, not Egg delivery. Its
-persisted `receipt_accounting_id` is distinct from every later delivery
+receipt-derived accounting identity is distinct from every later delivery
 transition identity. It adds the authenticated receipt end's price units to
 exactly one owner row; the receipt and selected-order projection, rather than
 caller bytes, own slice, order, side, price, and completion. Accounting and
@@ -735,8 +741,8 @@ owner credits refuse without mutation when buyer or completed-merge liquidity
 is not yet present, and may be retried later without consuming replay or
 liveness funding. The owner row reaches state one only after the exact
 Position-to-pot or pot-to-Position transfer succeeds. The request-scoped
-`owner_finalization_id` must equal the adapter-authenticated data ID of that
-canonical finalized 288-byte row; it is not copied into every row. The in-place
+finalized owner-row data ID is adapter-derived from that canonical 288-byte
+successor; it is not accepted from the caller or copied into every row. The in-place
 fee finalization receipt and row state own persistent replay safety. No
 Reservation DTO is copied into this transition: its
 terminal accounting is joined through the canonical row and Position facts.

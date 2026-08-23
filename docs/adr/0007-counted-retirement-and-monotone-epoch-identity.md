@@ -308,8 +308,16 @@ canonical PDA checks. Required bumps are:
   persist the same `epoch_generation: u64` in their first counted versions;
 - ClearWork V2 (growing and complete headers): append
   `epoch_generation: u64`;
-- OrderPage V5, deletable Reservation V7, SettlementReceipt V3, and FinalPot V3: append
+- Deletable Reservation V7 and FinalPot V3: append
   `epoch_generation: u64`.
+- OrderPage V5 is exactly 4,140 bytes and instead appends one Position
+  generation for each of its sixteen slots. Its existing epoch identity and
+  PDA bind the counted Epoch; a parallel epoch-generation field is not stored.
+- SettlementReceipt V3 instead stays at the frozen 217-byte receipt footprint.
+  It binds the counted Epoch PDA directly in both its body and fresh
+  `["general-receipt:v3", Epoch_PDA, final SettlementCandidateId,
+  slice_index_le]` seed tuple; `0x0f/2` bytes are refused rather than migrated
+  or reinterpreted.
 
 One `candidate_bundle` is CandidateRecord + CandidateFeed + their funding
 identity. `SubmitCandidate`/`BeginCandidate` creates the entire bundle and

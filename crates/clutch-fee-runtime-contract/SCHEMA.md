@@ -78,11 +78,30 @@ separately. `DCFEEEND` binds that manifest plus the selected economic identities
 settled/released totals, recipient amounts, and external value-disposition and
 terminal-authority receipt identities.
 
+`project_pre_row_owner_fee_v2` consumes the owner-settlement-owned
+`OwnerSettlementExpectationBasisV2` before action 24 creates a V2 row. It
+reconstructs the exact payer allocation from signed Reservation envelopes and
+returns only `(owner, fee_atoms)`. `basis.with_selected_fee(row)` then seals the
+persisted expectation without a fee/row circular dependency. Buy-side presence
+comes from the basis mask and `PresentConsiderationV2`, so a present zero-price
+buy remains distinct from an absent buy. The terminal projection repeats this
+exact join before the payer account can become Replay evidence or be deleted.
 `GeneralOwnerFeeFinalizationProjectionV2` and
 `GeneralFeeTerminalProjectionV1` expose the authenticated owner and candidate
 facts without creating parallel semantic owners. `DealerFeeTerminalProjectionV1`
 exposes only fee policy/candidate/outcome identity and returns zero for fee,
 Hoard, or liveness funding availability.
+
+The V3 action-24 path does not reread every Reservation. Snapshot creation is
+the unique point that rederives all signed envelopes, proves cumulative
+post-debit equals the closed carry's `paid_atoms`, and persists the canonical
+`DCFEEPAY` outer. Later `project_pre_row_owner_fee_v3` reauthenticates those
+unchanged bytes, exposes their complete-data ID, binds the same fee record,
+candidate, policy, owner, denominator, terminal boundary, fresh `0x81/3` row
+PDA, and exact owner-order count, then returns `(owner, fee_atoms)`. This is
+allocation evidence only. Action 25 accumulates actual buy Reservation cash
+handoffs in the V3 owner row; action 38 alone checks that cash covers exact
+consideration plus the selected fee.
 
 ## Typed identity joins
 

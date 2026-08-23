@@ -19,6 +19,10 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, create_pda_account, read_rent, require_creatable,
     require_system_program, transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::series_failure_funding::{
+    mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
+};
+use crate::loader_state::{decode_loader_pair_v1, LoaderAccountViewV1};
 use crate::seeds;
 use clutch_collateral_adapter_v2::{
     accept_collateral_transfer_v2, accept_series_collateral_vault_close_v2,
@@ -36,13 +40,15 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_product_series::{
     compile_source_occurrence_v3, AuthenticatedSeriesFundingAuthorityV1,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
+    AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV1,
+    CompiledProductSeriesBundleV1Id, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProjectionV2,
-    SeriesActivationContextV1, SeriesAttachmentPlanV1, SeriesFundingComponentV1,
-    SeriesFundingQuoteV1, SeriesFundingRequirementsV1, SeriesFundingStateV1,
-    SeriesFundingTerminalProjectionV1, SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5,
-    SeriesPlanV5Id, SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT,
+    PriceMeasurePolicyV1, ProductCapabilityRegistryV2, ProductTemplateV4,
+    RegistryCapabilityProjectionV2, SeriesActivationContextV1, SeriesAttachmentPlanV1,
+    SeriesFundingComponentV1, SeriesFundingQuoteV1, SeriesFundingRequirementsV1,
+    SeriesFundingStateV1, SeriesFundingTerminalProjectionV1, SeriesFundingTermsV2,
+    SeriesFundingTermsV2Id, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
+    SERIES_FUNDING_COMPONENT_COUNT,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
@@ -52,6 +58,7 @@ use clutch_solana_layout::product_series::{
     SERIES_FUNDING_ACCOUNT_BYTES_V1, SERIES_REGISTRY_ACCOUNT_BYTES_V1,
 };
 use clutch_solana_layout::registry::RecurringSeriesAction;
+use clutch_source_plane_v3::{SourcePlaneProgramV3, StatisticKindV3, SummaryProgramV3};
 use clutch_source_plane_v3_runtime::{
     AuthenticatedClockBucketV1, AuthenticatedSourceReleaseV1, ClockSnapshotV1,
     OccurrenceSourceReceiptV1,
@@ -139,12 +146,72 @@ pub fn process(
     }
 }
 
+/// Registration account contract: payer, Series registry PDA, neutral lamport
+/// sink, System, Rent, executing program, linked ProgramData, shared Product
+/// capability-registry artifact, Source release, exact compiler-output bundle,
+/// then the nine Series artifacts referenced by that bundle.
+const REGISTER_SERIES_ACCOUNT_COUNT_V1: usize = 10 + SERIES_ARTIFACT_ACCOUNT_COUNT_V1;
+const IX_REGISTER_PAYER: usize = 0;
+const IX_REGISTER_TARGET: usize = 1;
+const IX_REGISTER_NEUTRAL_LAMPORT_SINK: usize = 2;
+const IX_REGISTER_SYSTEM: usize = 3;
+const IX_REGISTER_RENT: usize = 4;
+const IX_REGISTER_PROGRAM: usize = 5;
+const IX_REGISTER_PROGRAMDATA: usize = 6;
+const IX_REGISTER_PRODUCT_REGISTRY: usize = 7;
+const IX_REGISTER_SOURCE_RELEASE: usize = 8;
+const IX_REGISTER_COMPILER_OUTPUT: usize = 9;
+const IX_REGISTER_ARTIFACTS: usize = 10;
+
 fn process_register_series(
-    _program_id: &Pubkey,
-    _accounts: &[AccountInfo<'_>],
-    _request: RegisterSeriesIntentV1,
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: RegisterSeriesIntentV1,
 ) -> Outcome<()> {
-    Err(ClutchError::AuthorizationUnavailable.into())
+    require_count(accounts, REGISTER_SERIES_ACCOUNT_COUNT_V1)?;
+    let rent = read_rent(&accounts[IX_REGISTER_RENT])?;
+    let artifacts = authenticate_series_artifact_accounts(
+        program_id,
+        &accounts[IX_REGISTER_ARTIFACTS..],
+        request.series_plan_id,
+        request.funding_terms_id,
+    )?;
+    let registry = authenticate_product_capability_registry_v2(
+        program_id,
+        &accounts[IX_REGISTER_PRODUCT_REGISTRY],
+        request.registry_release_id,
+        &accounts[IX_REGISTER_PROGRAM],
+        &accounts[IX_REGISTER_PROGRAMDATA],
+    )?;
+    require(
+        registry.projection().capability_profile_id == request.capability_profile_id,
+        ClutchError::MismatchedState,
+    )?;
+    let source_release = crate::source_plane_v3::authenticate_release(
+        program_id,
+        &accounts[IX_REGISTER_SOURCE_RELEASE],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    authenticate_compiled_product_series_bundle_v1(
+        program_id,
+        &accounts[IX_REGISTER_COMPILER_OUTPUT],
+        registry,
+        source_release,
+        &artifacts,
+    )?;
+    let authority = AuthenticatedProductSourceAuthorityV1::new(registry, source_release)?;
+    let registration =
+        authenticate_series_registration(&authority, &artifacts, &registry.projection(), request)?;
+    register_series_replay_anchor(
+        program_id,
+        registration,
+        &accounts[IX_REGISTER_PAYER],
+        &accounts[IX_REGISTER_TARGET],
+        &accounts[IX_REGISTER_NEUTRAL_LAMPORT_SINK],
+        &accounts[IX_REGISTER_SYSTEM],
+        &rent,
+    )?;
+    Ok(())
 }
 
 fn process_activate_funding(
@@ -163,12 +230,76 @@ fn process_advance_occurrence(
     Err(ClutchError::AuthorizationUnavailable.into())
 }
 
+/// Free-lapse account contract: Series registry, funding state, Rent,
+/// executing program, linked ProgramData, Product registry artifact, Source
+/// release, Clock, then the nine immutable Series artifacts.
+const LAPSE_SERIES_ACCOUNT_COUNT_V1: usize = 8 + SERIES_ARTIFACT_ACCOUNT_COUNT_V1;
+const IX_LAPSE_REGISTRY: usize = 0;
+const IX_LAPSE_FUNDING: usize = 1;
+const IX_LAPSE_RENT: usize = 2;
+const IX_LAPSE_PROGRAM: usize = 3;
+const IX_LAPSE_PROGRAMDATA: usize = 4;
+const IX_LAPSE_PRODUCT_REGISTRY: usize = 5;
+const IX_LAPSE_SOURCE_RELEASE: usize = 6;
+const IX_LAPSE_CLOCK: usize = 7;
+const IX_LAPSE_ARTIFACTS: usize = 8;
+
 fn process_lapse_occurrence(
-    _program_id: &Pubkey,
-    _accounts: &[AccountInfo<'_>],
-    _request: LapseSeriesOccurrenceIntentV1,
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: LapseSeriesOccurrenceIntentV1,
 ) -> Outcome<()> {
-    Err(ClutchError::AuthorizationUnavailable.into())
+    require_count(accounts, LAPSE_SERIES_ACCOUNT_COUNT_V1)?;
+    let rent = read_rent(&accounts[IX_LAPSE_RENT])?;
+    let registry_account = read_series_registry_account(
+        program_id,
+        &accounts[IX_LAPSE_REGISTRY],
+        request.series_plan_id,
+        &rent,
+    )?;
+    require(registry_account.activation_consumed(), ClutchError::Replay)?;
+    let artifacts = authenticate_series_artifact_accounts(
+        program_id,
+        &accounts[IX_LAPSE_ARTIFACTS..],
+        request.series_plan_id,
+        registry_account.value().funding_terms_id,
+    )?;
+    let product_registry = authenticate_product_capability_registry_v2(
+        program_id,
+        &accounts[IX_LAPSE_PRODUCT_REGISTRY],
+        registry_account.value().registry_release_id,
+        &accounts[IX_LAPSE_PROGRAM],
+        &accounts[IX_LAPSE_PROGRAMDATA],
+    )?;
+    require(
+        product_registry.projection().capability_profile_id
+            == registry_account.value().capability_profile_id,
+        ClutchError::MismatchedState,
+    )?;
+    artifacts.validate_registry_projection(&product_registry.projection())?;
+    let funding = read_series_funding_account(
+        program_id,
+        &accounts[IX_LAPSE_FUNDING],
+        request.series_plan_id,
+        &artifacts.quote,
+        &rent,
+    )?;
+    let source_release = crate::source_plane_v3::authenticate_release(
+        program_id,
+        &accounts[IX_LAPSE_SOURCE_RELEASE],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let _authority = AuthenticatedProductSourceAuthorityV1::new(product_registry, source_release)?;
+    lapse_series_occurrence(
+        &accounts[IX_LAPSE_FUNDING],
+        funding,
+        registry_account,
+        &artifacts,
+        source_release,
+        &accounts[IX_LAPSE_CLOCK],
+        request.ordinal,
+    )?;
+    Ok(())
 }
 
 /// Current local account contract for the lamport donation route:
@@ -261,6 +392,188 @@ pub struct AuthenticatedSeriesArtifactsV1 {
     pub quote: Box<SeriesFundingQuoteV1>,
     /// Operational attachment identities excluded from Market identity.
     pub attachment: Box<SeriesAttachmentPlanV1>,
+}
+
+/// Authoritative shared Product capability registry artifact and exact ELF release.
+///
+/// Construction authenticates the content-addressed Product artifact, the
+/// executing program account, its linked ProgramData account, the complete
+/// ProgramData byte digest, deployment slot, and this ELF's compile-time
+/// capability identity. No per-Series registry projection can be supplied by
+/// an instruction payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedProductCapabilityRegistryV2 {
+    artifact_account: Pubkey,
+    registry: ProductCapabilityRegistryV2,
+    projection: RegistryCapabilityProjectionV2,
+}
+
+impl AuthenticatedProductCapabilityRegistryV2 {
+    /// Exact content-addressed registry artifact account.
+    pub const fn artifact_account(self) -> Pubkey {
+        self.artifact_account
+    }
+
+    /// Sole immutable Product capability payload.
+    pub const fn registry(self) -> ProductCapabilityRegistryV2 {
+        self.registry
+    }
+
+    /// Registry-owned compiler projection derived from the artifact identity.
+    pub const fn projection(self) -> RegistryCapabilityProjectionV2 {
+        self.projection
+    }
+}
+
+/// Authenticated typed compiler output for one exact Product/Series artifact graph.
+///
+/// Private fields ensure callers cannot turn a proposed manifest into
+/// authority. Construction recomputes every identity from the authenticated
+/// registry release, Source release, and reopened Product/Series artifacts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedCompiledProductSeriesBundleV1 {
+    artifact_account: Pubkey,
+    bundle: CompiledProductSeriesBundleV1,
+    bundle_id: CompiledProductSeriesBundleV1Id,
+}
+
+impl AuthenticatedCompiledProductSeriesBundleV1 {
+    /// Exact content-addressed compiler-output artifact account.
+    pub const fn artifact_account(self) -> Pubkey {
+        self.artifact_account
+    }
+
+    /// Complete typed graph reconstructed from authenticated semantic owners.
+    pub const fn bundle(self) -> CompiledProductSeriesBundleV1 {
+        self.bundle
+    }
+
+    /// Content identity of the exact reconstructed compiler output.
+    pub const fn bundle_id(self) -> CompiledProductSeriesBundleV1Id {
+        self.bundle_id
+    }
+}
+
+/// Concrete Product/Source compilation authority over registry and Source release receipts.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthenticatedProductSourceAuthorityV1 {
+    registry: AuthenticatedProductCapabilityRegistryV2,
+    source_release: AuthenticatedSourceReleaseV1,
+}
+
+impl AuthenticatedProductSourceAuthorityV1 {
+    /// Join one exact Product registry artifact to one exact Source release.
+    pub fn new(
+        registry: AuthenticatedProductCapabilityRegistryV2,
+        source_release: AuthenticatedSourceReleaseV1,
+    ) -> Outcome<Self> {
+        let projection = registry.projection();
+        let source_plane_id = source_release
+            .source_plane()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            source_plane_id.bytes() == projection.semantic_owners.source_plane_contract_id.bytes()
+                && source_release.source_spec_id().bytes()
+                    == projection.semantic_owners.source_spec_id.bytes(),
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            registry,
+            source_release,
+        })
+    }
+
+    /// Exact authenticated Source release used for occurrence compilation.
+    pub const fn source_release(self) -> AuthenticatedSourceReleaseV1 {
+        self.source_release
+    }
+}
+
+impl AuthenticatedSourceSeriesAuthorityV3 for AuthenticatedProductSourceAuthorityV1 {
+    fn authenticate_registry_projection(
+        &self,
+        projection: &RegistryCapabilityProjectionV2,
+    ) -> clutch_product_series::Result<()> {
+        if *projection != self.registry.projection {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticated_source_plane(
+        &self,
+        expected_contract_id: ContentId,
+    ) -> clutch_product_series::Result<SourcePlaneProgramV3> {
+        let source_plane = self.source_release.source_plane();
+        if source_plane
+            .id()
+            .map_err(|_| clutch_product_series::Error::MismatchedArtifact)?
+            .bytes()
+            != expected_contract_id.bytes()
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(source_plane)
+    }
+
+    fn authenticate_source_spec(
+        &self,
+        expected_source_spec_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if self.source_release.source_spec_id().bytes() != expected_source_spec_id.bytes() {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticated_summary_program(
+        &self,
+        expected_summary_program_id: ContentId,
+    ) -> clutch_product_series::Result<SummaryProgramV3> {
+        let summary = self.registry.registry.summary_program;
+        if summary
+            .id()
+            .map_err(|_| clutch_product_series::Error::MismatchedArtifact)?
+            .bytes()
+            != expected_summary_program_id.bytes()
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(summary)
+    }
+
+    fn resolve_statistic(
+        &self,
+        registry_release_id: ContentId,
+        capability_profile_id: ContentId,
+        statistic_registry_value: u16,
+    ) -> clutch_product_series::Result<StatisticKindV3> {
+        let projection = self.registry.projection;
+        if registry_release_id != projection.registry_release_id
+            || capability_profile_id != projection.capability_profile_id
+            || statistic_registry_value != projection.statistic_registry_value
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(self.registry.registry.resolved_statistic)
+    }
+
+    fn resolve_coverage_policy(
+        &self,
+        registry_release_id: ContentId,
+        capability_profile_id: ContentId,
+        coverage_policy_registry_value: u16,
+    ) -> clutch_product_series::Result<u16> {
+        let projection = self.registry.projection;
+        if registry_release_id != projection.registry_release_id
+            || capability_profile_id != projection.capability_profile_id
+            || coverage_policy_registry_value != projection.coverage_policy_registry_value
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(self.registry.registry.resolved_coverage_policy_value)
+    }
 }
 
 /// Private-field registry authorization minted only after the complete
@@ -624,6 +937,161 @@ fn decode_product_artifact<T: FixedCodec>(
     T::decode(&data)
         .map(Box::new)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+/// Authenticate the single shared Product capability registry artifact and
+/// the exact executing ProgramData release it permits.
+pub fn authenticate_product_capability_registry_v2(
+    program_id: &Pubkey,
+    registry_artifact: &AccountInfo<'_>,
+    expected_registry_release_id: ContentId,
+    program_account: &AccountInfo<'_>,
+    programdata_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedProductCapabilityRegistryV2> {
+    let registry = decode_product_artifact::<ProductCapabilityRegistryV2>(
+        program_id,
+        registry_artifact,
+        ArtifactKind::ProductCapabilityRegistryV2,
+        expected_registry_release_id,
+    )?;
+    let registry_id = registry
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        registry_id == expected_registry_release_id,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        program_account.key == program_id
+            && !program_account.is_signer
+            && !program_account.is_writable
+            && program_account.executable
+            && !programdata_account.is_signer
+            && !programdata_account.is_writable
+            && !programdata_account.executable,
+        ClutchError::MismatchedState,
+    )?;
+    let program_data = program_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let programdata_data = programdata_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let loader = decode_loader_pair_v1(
+        LoaderAccountViewV1::new(
+            program_account.key.to_bytes(),
+            program_account.owner.to_bytes(),
+            program_account.executable,
+            &program_data,
+        ),
+        LoaderAccountViewV1::new(
+            programdata_account.key.to_bytes(),
+            programdata_account.owner.to_bytes(),
+            programdata_account.executable,
+            &programdata_data,
+        ),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let release = registry.program_release;
+    let profile_id = ContentId::from_bytes(capabilities::PROFILE_ID);
+    require(
+        release.program.bytes() == program_id.to_bytes()
+            && release.programdata.bytes() == programdata_account.key.to_bytes()
+            && release.deployment_slot == loader.state.deployment_slot
+            && release.programdata_sha256.bytes()
+                == solana_sha256_hasher::hashv(&[&programdata_data]).to_bytes()
+            && registry.capability_profile_id == profile_id
+            && release.capability_manifest_id == profile_id,
+        ClutchError::MismatchedState,
+    )?;
+    let projection = registry
+        .projection()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedProductCapabilityRegistryV2 {
+        artifact_account: *registry_artifact.key,
+        registry: *registry,
+        projection,
+    })
+}
+
+fn reconstruct_compiled_product_series_bundle_v1(
+    registry: AuthenticatedProductCapabilityRegistryV2,
+    source_release: AuthenticatedSourceReleaseV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+) -> Outcome<CompiledProductSeriesBundleV1> {
+    Ok(CompiledProductSeriesBundleV1 {
+        registry_release_id: registry.projection().registry_release_id,
+        capability_profile_id: registry.projection().capability_profile_id,
+        source_release_manifest_id: source_release.manifest_id(),
+        source_plane_contract_id: artifacts.template.source_plane_contract_id,
+        source_spec_id: artifacts.template.source_spec_id,
+        summary_program_id: artifacts.template.summary_program_id,
+        product_compiler_release_id: artifacts.template.compiler_release_id,
+        native_claim_basis_id: artifacts
+            .basis
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        evidence_only_recovery_policy_id: artifacts
+            .recovery
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        product_template_id: artifacts
+            .template
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        price_measure_policy_id: artifacts
+            .price_policy
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        market_genesis_profile_id: artifacts
+            .genesis
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        funding_quote_id: artifacts
+            .quote
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        attachment_plan_id: artifacts
+            .attachment
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        series_plan_id: artifacts
+            .series
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        funding_terms_id: artifacts
+            .funding_terms
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    })
+}
+
+/// Authenticate an untrusted compiler-output artifact against the exact
+/// registry, Source release, and Product/Series bodies admitted in this call.
+pub fn authenticate_compiled_product_series_bundle_v1(
+    program_id: &Pubkey,
+    bundle_artifact: &AccountInfo<'_>,
+    registry: AuthenticatedProductCapabilityRegistryV2,
+    source_release: AuthenticatedSourceReleaseV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+) -> Outcome<AuthenticatedCompiledProductSeriesBundleV1> {
+    let expected =
+        reconstruct_compiled_product_series_bundle_v1(registry, source_release, artifacts)?;
+    let expected_id = expected
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let decoded = decode_product_artifact::<CompiledProductSeriesBundleV1>(
+        program_id,
+        bundle_artifact,
+        ArtifactKind::CompiledProductSeriesBundleV1,
+        expected_id.content_id(),
+    )?;
+    require(*decoded == expected, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedCompiledProductSeriesBundleV1 {
+        artifact_account: *bundle_artifact.key,
+        bundle: expected,
+        bundle_id: expected_id,
+    })
 }
 
 fn decode_basis_artifact(
@@ -2782,7 +3250,9 @@ pub fn lapse_series_occurrence(
 /// crosses this boundary.
 #[allow(clippy::too_many_arguments)]
 pub fn advance_series_occurrence_from_source<A: AuthenticatedSeriesFundingAuthorityV1 + ?Sized>(
+    program_id: &Pubkey,
     funding_account: &AccountInfo<'_>,
+    market_core_lamport_vault: &AccountInfo<'_>,
     funding: AuthenticatedSeriesFundingAccountV1,
     registry: AuthenticatedSeriesRegistryAccountV1,
     artifacts: &AuthenticatedSeriesArtifactsV1,
@@ -2792,7 +3262,10 @@ pub fn advance_series_occurrence_from_source<A: AuthenticatedSeriesFundingAuthor
     expected_source_occurrence_id: SourceOccurrenceV1Id,
     expected_market_instance_id: clutch_product_series::MarketInstanceV2Id,
     expected_ordinal: u32,
-) -> Outcome<clutch_product_series::DebitProjectionV1> {
+) -> Outcome<(
+    clutch_product_series::DebitProjectionV1,
+    Option<SeriesMarketCoreFundingReceiptV1>,
+)> {
     require(registry.activation_consumed(), ClutchError::Replay)?;
     let series_plan_id = artifacts
         .series
@@ -2844,8 +3317,84 @@ pub fn advance_series_occurrence_from_source<A: AuthenticatedSeriesFundingAuthor
         )
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     require(ordinal == expected_ordinal, ClutchError::Replay)?;
+    let market_core_receipt = authenticate_market_core_funding_receipt(
+        program_id,
+        funding,
+        artifacts,
+        expected_ordinal,
+        expected_market_instance_id,
+        debit,
+        market_core_lamport_vault,
+    )?;
     write_series_funding_state(funding_account, funding, next)?;
-    Ok(debit)
+    Ok((debit, market_core_receipt))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_market_core_funding_receipt(
+    program_id: &Pubkey,
+    funding: AuthenticatedSeriesFundingAccountV1,
+    artifacts: &AuthenticatedSeriesArtifactsV1,
+    ordinal: u32,
+    market_instance_id: clutch_product_series::MarketInstanceV2Id,
+    debit: clutch_product_series::DebitProjectionV1,
+    market_core_lamport_vault: &AccountInfo<'_>,
+) -> Outcome<Option<SeriesMarketCoreFundingReceiptV1>> {
+    if debit.market_core == ComponentDebitV1::ZERO {
+        return Ok(None);
+    }
+    require(
+        debit.market_core == artifacts.quote.market_core,
+        ClutchError::MismatchedState,
+    )?;
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_quote_id = artifacts
+        .quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_lamport_vault_metadata(
+        program_id,
+        series_plan_id,
+        SeriesFundingComponentV1::MarketCore.index(),
+        market_core_lamport_vault,
+    )?;
+    let vault_balance_before = accounted_custody_balances(&funding.value().state)?.lamports
+        [SeriesFundingComponentV1::MarketCore.index()];
+    require(
+        market_core_lamport_vault.lamports() == vault_balance_before,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let vault_balance_after = sub(vault_balance_before, debit.market_core.lamports)?;
+    let failure_account_rent = add(
+        artifacts.quote.failure_root_rent_principal_lamports,
+        artifacts
+            .quote
+            .failure_replay_tombstone_rent_principal_lamports,
+    )?;
+    let vault_balance_after_failure_accounts = sub(vault_balance_before, failure_account_rent)?;
+    let generation = SERIES_ACTIVATION_GENERATION_V1;
+    Ok(Some(mint_series_market_core_funding_receipt_v1(
+        series_plan_id,
+        ordinal,
+        market_instance_id,
+        funding_quote_id,
+        funding.account(),
+        *market_core_lamport_vault.key,
+        artifacts.funding_terms.lamport_principal_refund,
+        artifacts.funding_terms.neutral_lamport_sink,
+        generation,
+        debit.market_core.lamports,
+        artifacts.quote.failure_root_rent_principal_lamports,
+        artifacts
+            .quote
+            .failure_replay_tombstone_rent_principal_lamports,
+        vault_balance_before,
+        vault_balance_after_failure_accounts,
+        vault_balance_after,
+    )))
 }
 
 fn require_lamport_vault_metadata(

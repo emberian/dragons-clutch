@@ -32,7 +32,7 @@ pub enum StructuredClaimActionV1 {
     /// Burn an exact terminal lot and redeem its aggregate native value.
     RedeemTerminal = 7,
     /// Permanently retire a zero-supply, zero-backing descriptor tombstone.
-    Retire = 8,
+    RetireDescriptor = 8,
 }
 
 impl StructuredClaimActionV1 {
@@ -51,7 +51,7 @@ impl StructuredClaimActionV1 {
             5 => Ok(Self::UnwrapFull),
             6 => Ok(Self::CompactDonation),
             7 => Ok(Self::RedeemTerminal),
-            8 => Ok(Self::Retire),
+            8 => Ok(Self::RetireDescriptor),
             _ => Err(Error::UnknownAction),
         }
     }
@@ -267,7 +267,7 @@ pub enum StructuredClaimPayloadV1 {
     /// Exact terminal aggregate redemption.
     RedeemTerminal(WrapperQuantityPayloadV1),
     /// Permanent descriptor retirement.
-    Retire(VaultMutationPayloadV1),
+    RetireDescriptor(VaultMutationPayloadV1),
 }
 
 /// Decode only the exact payload width belonging to one allocated action.
@@ -297,9 +297,9 @@ pub fn decode_structured_claim_payload_v1(
         StructuredClaimActionV1::RedeemTerminal => Ok(StructuredClaimPayloadV1::RedeemTerminal(
             WrapperQuantityPayloadV1::decode(input)?,
         )),
-        StructuredClaimActionV1::Retire => Ok(StructuredClaimPayloadV1::Retire(
-            VaultMutationPayloadV1::decode(input)?,
-        )),
+        StructuredClaimActionV1::RetireDescriptor => Ok(
+            StructuredClaimPayloadV1::RetireDescriptor(VaultMutationPayloadV1::decode(input)?),
+        ),
     }
 }
 

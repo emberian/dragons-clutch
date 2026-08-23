@@ -98,24 +98,28 @@ pub const DEALER_POLICY_CATALOG_LAB: bool =
     cfg!(feature = "profile-non-production-dealer-policy-catalog-lab");
 
 /// Whether the profile contains legacy Source V1 ingestion and resolution.
-pub const SOURCE_V1: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
+pub const SOURCE_V1: bool = cfg!(feature = "profile-full")
+    && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Source V2 ingestion and resolution.
 pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB;
 /// Whether the profile contains legacy Direct V2 clearing.
-pub const DIRECT_V2: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
+pub const DIRECT_V2: bool = cfg!(feature = "profile-full")
+    && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Direct V3 clearing.
-pub const DIRECT_V3: bool = cfg!(any(
-    feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
-)) && !DEALER_POLICY_CATALOG_LAB;
+pub const DIRECT_V3: bool =
+    cfg!(any(
+        feature = "profile-full",
+        feature = "profile-direct-v3-source-v2-point"
+    )) && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains general clearing.
-pub const GENERAL_CLEARING: bool = cfg!(any(
-    feature = "profile-full",
-    feature = "profile-general-source-v2-point"
-)) && !DEALER_POLICY_CATALOG_LAB;
+pub const GENERAL_CLEARING: bool =
+    cfg!(any(
+        feature = "profile-full",
+        feature = "profile-general-source-v2-point"
+    )) && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains occupation and resumable resolution.
-pub const OCCUPATION_RESOLUTION: bool =
-    cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
+pub const OCCUPATION_RESOLUTION: bool = cfg!(feature = "profile-full")
+    && !DEALER_POLICY_CATALOG_LAB;
 
 /// Return whether one canonical legacy Intent tag belongs to this product.
 ///
@@ -237,14 +241,8 @@ mod tests {
             solana_sha256_hasher::hash(PROFILE_LABEL.as_bytes()).to_bytes(),
             PROFILE_ID
         );
-        assert_eq!(
-            legacy_intent_tag_enabled(1),
-            !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB
-        );
-        assert_eq!(
-            legacy_intent_tag_enabled(70),
-            !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB
-        );
+        assert_eq!(legacy_intent_tag_enabled(1), !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB);
+        assert_eq!(legacy_intent_tag_enabled(70), !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB);
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
         assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
@@ -285,6 +283,16 @@ mod tests {
                         && (clutch_solana_layout::registry::GeneralV2Action::FIRST_TAG
                             ..=clutch_solana_layout::registry::GeneralV2Action::LAST_TAG)
                             .contains(&local_action);
+                    let dealer = family_tag
+                        == clutch_solana_layout::registry::DEALER_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
+                        && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
+                            .contains(&local_action)
+                            || (clutch_solana_layout::registry::DealerFacilityAction::FIRST_TAG
+                                ..=clutch_solana_layout::registry::DealerFacilityAction::LAST_TAG)
+                                .contains(&local_action));
                     let source_or_series = family_tag
                         == clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG
                         && family_version
@@ -309,14 +317,6 @@ mod tests {
                         && (clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG)
                             .contains(&local_action);
-                    let dealer = family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
-                        && family_version == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
-                        && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
-                            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
-                            .contains(&local_action)
-                            || (clutch_solana_layout::registry::DealerFacilityAction::FIRST_TAG
-                                ..=clutch_solana_layout::registry::DealerFacilityAction::LAST_TAG)
-                                .contains(&local_action));
                     let expected_allocated =
                         general || dealer || structured || source_or_series || recovery;
                     assert_eq!(
@@ -326,7 +326,8 @@ mod tests {
                     );
                     let dealer_enabled = DEALER_POLICY_CATALOG_LAB
                         && family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
-                        && family_version == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
+                        && family_version
+                            == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
                         && (clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
                             .contains(&local_action);

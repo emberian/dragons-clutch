@@ -40,12 +40,14 @@ pub mod direct_selection_v3;
 pub mod failure_recovery;
 pub mod native_resolution;
 pub mod occupation_resolution;
+pub mod order_page_v5;
 pub mod portfolio_settlement;
 #[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
 pub mod projection;
 pub mod registry;
 pub mod reservation;
+pub mod settlement_receipt_v3;
 pub mod resolution_work;
 pub mod revenue;
 pub mod stream;
@@ -861,6 +863,9 @@ pub fn validate_outcome_id(market: MarketId, index: u8, id: OutcomeId) -> Result
 /// fixed-width slots at `3`, and then made order ids positional, added the
 /// retirement slot kind and its header count, and gave every record a persisted
 /// expiry, so it encodes `4` and refuses `1`, `2`, and `3`.
+/// `SETTLEMENT_RECEIPT_V3` keeps version 2's width but gives its final
+/// reserved-zero byte independent accounting-latch semantics; its dedicated
+/// decoder refuses version 2 rather than reinterpreting it.
 /// The pair `(tag, version)` therefore never names two shapes.
 pub mod account_version {
     /// Realm account, unchanged since the first prototype.
@@ -879,6 +884,9 @@ pub mod account_version {
     /// 2 held bare [`super::ORDER_RECORD_BYTES`] single-Egg records with no kind
     /// discriminator and no portfolio family.
     pub const ORDER_PAGE: u8 = 4;
+    /// General OrderPage successor with one Position generation per slot.
+    /// Version 4 bytes are deliberately not reinterpreted.
+    pub const ORDER_PAGE_V5: u8 = 5;
     /// Supply ledger account.
     pub const SUPPLY_LEDGER: u8 = 2;
     /// Immutable terms account.
@@ -908,6 +916,9 @@ pub mod account_version {
     pub const FINAL_POT: u8 = 2;
     /// Settlement receipt account.
     pub const SETTLEMENT_RECEIPT: u8 = 2;
+    /// General settlement receipt successor with independent accounting and
+    /// delivery latches. Version 2 bytes are deliberately not reinterpreted.
+    pub const SETTLEMENT_RECEIPT_V3: u8 = 3;
     /// Resolution account.
     pub const RESOLUTION: u8 = 2;
     /// Streaming-checkpoint account; introduced by the clearing plane.
@@ -946,6 +957,9 @@ pub mod account_len {
     /// Dense order page account bytes.
     pub const ORDER_PAGE: usize =
         2 + (7 * 32) + 2 + 2 + 2 + 1 + 1 + 1 + 1 + (MAX_ORDERS_PER_PAGE * ORDER_SLOT_BYTES);
+    /// General OrderPage successor bytes: the exact V4 semantic prefix and
+    /// slots followed by one little-endian Position generation per slot.
+    pub const ORDER_PAGE_V5: usize = ORDER_PAGE + (MAX_ORDERS_PER_PAGE * 8);
     /// Supply ledger account bytes.
     pub const SUPPLY_LEDGER: usize = 2 + 32 + 32 + 8 + 1 + (2 * MAX_OUTCOMES * 8) + 1 + 1;
     /// Immutable terms account bytes.
@@ -1017,6 +1031,9 @@ pub mod account_len {
     pub const FINAL_POT: usize = 2 + (3 * 32) + (MAX_OUTCOMES * 8) + 16 + 16 + 1 + 1 + 1 + 1;
     /// Settlement receipt account bytes.
     pub const SETTLEMENT_RECEIPT: usize = 2 + (5 * 32) + 16 + 8 + 8 + 8 + 8 + 2 + 1 + 1 + 1 + 1 + 1;
+    /// General settlement receipt successor bytes. Version 3 reuses the one
+    /// formerly-reserved final byte without changing the rent footprint.
+    pub const SETTLEMENT_RECEIPT_V3: usize = SETTLEMENT_RECEIPT;
     /// Resolution account bytes.
     pub const RESOLUTION: usize = 2 + (4 * 32) + 8 + 8 + 8 + 8 + 1 + 1 + 1;
     /// Streaming-checkpoint account bytes: the header, the layout-owned
@@ -4221,12 +4238,15 @@ impl FinalPotAccount {
     }
 }
 
-/// One settlement receipt against one frozen slice of the selected candidate.
+/// One legacy V2 settlement receipt against one frozen slice of the selected
+/// candidate.
 ///
 /// The receipt is the single sequential authority for "how much of this slice
 /// has settled"; nothing reconstructs it by combining per-party or per-page
 /// views.  Consideration is bound to the frozen price by exact multiplication,
 /// so a receipt cannot quietly re-price a slice.
+/// General settlement uses the separate hostile
+/// [`settlement_receipt_v3::SettlementReceiptAccountV3`] decoder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SettlementReceiptAccount {
     /// Epoch identity.
@@ -7793,6 +7813,7 @@ mod tests {
         assert_eq!(account_len::CANDIDATE, 337);
         assert_eq!(account_len::FINAL_POT, 262);
         assert_eq!(account_len::SETTLEMENT_RECEIPT, 217);
+        assert_eq!(account_len::SETTLEMENT_RECEIPT_V3, 217);
         assert_eq!(account_len::RESOLUTION, 165);
         assert_eq!(ORDER_RECORD_BYTES, 107);
         assert_eq!(PORTFOLIO_RECORD_BYTES, 235);

@@ -9,45 +9,26 @@
 
 use clutch_collateral_adapter_v2::BoundCollateralProfileV2;
 use clutch_retirement::{
-    admit_deletable_rent, admit_reopen_rent_split, plan_position_replay_retirement_v2,
-    plan_position_v3_replay_v3_retirement_v1, reopen_position_with_replay_v2,
-    AdapterNeutralSinkBindingProjectionV1, AdapterPositionAccountProjectionV1,
-    AdapterPositionMarketBindingV3, AdapterReplayAbsenceProjectionV1,
-    AdapterReplayAccountProjectionV1, CoalescedRecipientCreditsV1, Identity32V1, LivePositionV2,
-    LiveReplaySuccessorV1, PositionEconomicStateV1, PositionLifecycleStateV2,
-    PositionReplayAccountsV1, PositionReplayReopenAccountsV1, PositionReplayReopenPlanV2,
-    PositionReplayReopenRequestV1, PositionReplayReopenRequestV2,
-    PositionReplayRetirementRequestV1, PositionReplayRetirementRequestV2, PositionRetirementTailV1,
-    PositionTombstoneV1, PositionTombstoneV3, PositionV3Fields, PositionV3ReplayV3AccountsV1,
-    PositionV3ReplayV3RetirementRequestV1, RecipientBalanceBookV1, RecipientBalanceV1,
-    ReplayLifecycleStateV1, ReplayV3Envelope, ReplayV3HashBackend, RetirementErrorV2, MAX_OUTCOMES,
-    MAX_RETIREMENT_RECIPIENTS, POSITION_TOMBSTONE_V3_BYTES, POSITION_V3_BYTES,
+    admit_deletable_rent, admit_reopen_rent_split, plan_position_v3_replay_v3_retirement_v1,
+    reopen_position_with_replay_v2, AdapterNeutralSinkBindingProjectionV1,
+    AdapterPositionAccountProjectionV1, AdapterPositionMarketBindingV3,
+    AdapterReplayAbsenceProjectionV1, AdapterReplayAccountProjectionV1,
+    CoalescedRecipientCreditsV1, Identity32V1, PositionLifecycleStateV2,
+    PositionReplayReopenAccountsV1, PositionReplayReopenPlanV2, PositionReplayReopenRequestV1,
+    PositionReplayReopenRequestV2, PositionTombstoneV1, PositionTombstoneV3, PositionV3Fields,
+    PositionV3ReplayV3AccountsV1, PositionV3ReplayV3RetirementRequestV1, RecipientBalanceBookV1,
+    RecipientBalanceV1, ReplayV3Envelope, ReplayV3HashBackend, ReplayV3Lifecycle,
+    RetirementErrorV2, MAX_OUTCOMES, MAX_RETIREMENT_RECIPIENTS, POSITION_TOMBSTONE_V3_BYTES,
+    POSITION_V3_BYTES,
 };
-use sha2::{Digest, Sha256};
 
-use crate::{
-    authenticate_replay_absence_v1_exact, FundingPayerViewV1, NeutralSinkBalanceViewV1,
-    ReplaySuccessorAccountV1, RetirementAdapterErrorV2, RetirementRecipientViewV1,
-    VacantPdaAccountViewV2,
-};
 use crate::{AuthenticatedAccountV2, CanonicalPdaV1};
+use crate::{
+    FundingPayerViewV1, NeutralSinkBalanceViewV1, RetirementAdapterErrorV2,
+    RetirementRecipientViewV1, VacantPdaAccountViewV2,
+};
 
 const SYSTEM_PROGRAM_OWNER: [u8; 32] = [0; 32];
-
-#[derive(Clone, Copy, Debug)]
-struct RetirementReplaySha256V3;
-
-impl ReplayV3HashBackend for RetirementReplaySha256V3 {
-    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        let mut index = 0usize;
-        while index < parts.len() {
-            hasher.update(parts[index]);
-            index += 1;
-        }
-        hasher.finalize().into()
-    }
-}
 
 fn identity(bytes: [u8; 32]) -> Result<Identity32V1, RetirementAdapterErrorV2> {
     Ok(Identity32V1::new(bytes)?)
@@ -67,77 +48,6 @@ pub struct PositionV3RetirementRealmV1 {
     collateral_policy_id: Identity32V1,
     collateral_release_id: Identity32V1,
     neutral_sink: Identity32V1,
-}
-
-/// Opaque exact-generation terminal receipt from the Position purpose owner.
-///
-/// General settlement, Dealer, Series, and structured-claim adapters remain
-/// semantic owners of their own child graphs. Their authenticated terminal
-/// adapters construct this value only after those graphs are exhausted; the
-/// Position bridge neither reconstructs nor duplicates those facts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PositionV3PurposeTerminalReceiptV1 {
-    receipt_account: Identity32V1,
-    position_account: Identity32V1,
-    purpose: clutch_retirement::PositionPurposeV3,
-    owner: Identity32V1,
-    controller: Identity32V1,
-    purpose_binding_id: Identity32V1,
-    generation: u64,
-}
-
-impl PositionV3PurposeTerminalReceiptV1 {
-    /// Mint the retirement-side join only after the named purpose adapter has
-    /// authenticated its immutable terminal receipt account and exact body.
-    #[allow(clippy::too_many_arguments)]
-    pub fn after_external_terminal_receipt_authentication(
-        receipt_account: Identity32V1,
-        position_account: Identity32V1,
-        purpose: clutch_retirement::PositionPurposeV3,
-        owner: Identity32V1,
-        controller: Identity32V1,
-        purpose_binding_id: Identity32V1,
-        generation: u64,
-    ) -> Result<Self, RetirementAdapterErrorV2> {
-        if generation == 0
-            || receipt_account == position_account
-            || receipt_account == owner
-            || receipt_account == controller
-        {
-            return Err(RetirementErrorV2::AccountAlias.into());
-        }
-        Ok(Self {
-            receipt_account,
-            position_account,
-            purpose,
-            owner,
-            controller,
-            purpose_binding_id,
-            generation,
-        })
-    }
-
-    /// Exact terminal receipt account retained by the purpose owner.
-    pub const fn receipt_account(self) -> Identity32V1 {
-        self.receipt_account
-    }
-
-    fn authenticate_position(
-        self,
-        position_account: Identity32V1,
-        position: clutch_retirement::PositionAccountV3,
-    ) -> Result<(), RetirementAdapterErrorV2> {
-        if self.position_account != position_account
-            || self.purpose != position.purpose()
-            || self.owner != position.owner()
-            || self.controller != position.controller()
-            || self.purpose_binding_id != position.purpose_binding_id()
-            || self.generation != position.generation()
-        {
-            return Err(RetirementErrorV2::WrongParent.into());
-        }
-        Ok(())
-    }
 }
 
 impl PositionV3RetirementRealmV1 {
@@ -210,33 +120,8 @@ pub struct PositionReplayCloseRuntimeRequestV4<'a> {
     pub replay: AuthenticatedAccountV2<'a>,
     /// Authenticated immutable Realm/collateral retirement binding.
     pub realm: PositionV3RetirementRealmV1,
-    /// Authenticated exact-generation terminal receipt from the purpose owner.
-    pub purpose_terminal: PositionV3PurposeTerminalReceiptV1,
-    /// Sequence authenticated from the signed instruction envelope.
-    pub signed_sequence: u64,
-    /// Actual Position lamports before retirement.
-    pub position_lamports: u64,
-    /// Actual Replay lamports before deletion.
-    pub replay_lamports: u64,
-    /// Runtime recipient balances for both persisted payers and neutral sink.
-    pub recipients: [Option<RetirementRecipientViewV1>; MAX_RETIREMENT_RECIPIENTS],
-}
-
-/// Complete authenticated inputs for one Position V3 plus purpose Replay V3 close.
-///
-/// `replay` must come from [`crate::authenticate_purpose_replay_v3_exact`];
-/// its purpose extension remains opaque to this common retirement boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PositionReplayCloseRuntimeRequestV5<'a> {
-    /// Exact writable Position V3 account authentication result.
-    pub position: AuthenticatedAccountV2<'a>,
-    /// Exact writable purpose-owned Replay V3 authentication result.
-    pub replay: AuthenticatedAccountV2<'a>,
-    /// Authenticated immutable Realm/collateral retirement binding.
-    pub realm: PositionV3RetirementRealmV1,
-    /// Authenticated exact-generation terminal receipt from the purpose owner.
-    pub purpose_terminal: PositionV3PurposeTerminalReceiptV1,
-    /// Sequence authenticated from the signed close instruction.
+    /// Sequence authenticated from the signed close instruction envelope.
+    /// It must equal the terminal Replay's next expected ordinal.
     pub signed_sequence: u64,
     /// Actual Position lamports before retirement.
     pub position_lamports: u64,
@@ -251,7 +136,7 @@ pub struct PositionReplayCloseRuntimeRequestV5<'a> {
 pub struct PreparedPositionReplayCloseV3 {
     position_account: Identity32V1,
     replay_account: Identity32V1,
-    purpose_terminal_receipt: Identity32V1,
+    replay_terminal_semantic_id: Identity32V1,
     position_tombstone_bytes: [u8; POSITION_TOMBSTONE_V3_BYTES],
     recipient_credits: CoalescedRecipientCreditsV1,
     position_lamports_after: u64,
@@ -269,64 +154,11 @@ impl PreparedPositionReplayCloseV3 {
         self.replay_account
     }
 
-    /// Read-only purpose-owner terminal receipt retained as close evidence.
-    pub const fn purpose_terminal_receipt(self) -> Identity32V1 {
-        self.purpose_terminal_receipt
-    }
-
-    /// Exact canonical Position V3 tombstone bytes.
-    pub const fn position_tombstone_bytes(self) -> [u8; POSITION_TOMBSTONE_V3_BYTES] {
-        self.position_tombstone_bytes
-    }
-
-    /// Alias-coalesced payer and neutral-sink credits.
-    pub const fn recipient_credits(self) -> CoalescedRecipientCreditsV1 {
-        self.recipient_credits
-    }
-
-    /// Exact permanent tombstone balance retained after close.
-    pub const fn position_lamports_after(self) -> u64 {
-        self.position_lamports_after
-    }
-
-    /// Replay must be physically absent after the same commit.
-    pub const fn replay_lamports_after(self) -> u64 {
-        self.replay_lamports_after
-    }
-}
-
-/// Complete prospective V3 close image for a purpose-owned Replay V3 sibling.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedPositionReplayCloseV4 {
-    position_account: Identity32V1,
-    replay_account: Identity32V1,
-    purpose_terminal_receipt: Identity32V1,
-    terminal_replay_semantic_id: Identity32V1,
-    position_tombstone_bytes: [u8; POSITION_TOMBSTONE_V3_BYTES],
-    recipient_credits: CoalescedRecipientCreditsV1,
-    position_lamports_after: u64,
-    replay_lamports_after: u64,
-}
-
-impl PreparedPositionReplayCloseV4 {
-    /// Position PDA rewritten to the permanent V3 tombstone image.
-    pub const fn position_account(self) -> Identity32V1 {
-        self.position_account
-    }
-
-    /// Exact purpose-owned Replay V3 account deleted atomically.
-    pub const fn replay_account(self) -> Identity32V1 {
-        self.replay_account
-    }
-
-    /// Read-only purpose-owner terminal receipt retained as close evidence.
-    pub const fn purpose_terminal_receipt(self) -> Identity32V1 {
-        self.purpose_terminal_receipt
-    }
-
-    /// Semantic identity of the exact terminal Replay prefix and extension.
-    pub const fn terminal_replay_semantic_id(self) -> Identity32V1 {
-        self.terminal_replay_semantic_id
+    /// Semantic ID of the exact terminal Replay bytes authenticated before
+    /// deletion. The permanent Position tombstone retains the deleted Replay
+    /// address and generation for replay refusal.
+    pub const fn replay_terminal_semantic_id(self) -> Identity32V1 {
+        self.replay_terminal_semantic_id
     }
 
     /// Exact canonical Position V3 tombstone bytes.
@@ -379,8 +211,9 @@ fn recipient_book(
 /// consumes the exact persisted Replay sibling, binds the signed sequence,
 /// authenticates the full Realm/collateral identity, coalesces payer credits,
 /// and retains only the V3 tombstone principal.
-pub fn authenticate_and_prepare_position_replay_close_v4(
+pub fn authenticate_and_prepare_position_replay_close_v4<B: ReplayV3HashBackend>(
     request: PositionReplayCloseRuntimeRequestV4<'_>,
+    hash_backend: &B,
 ) -> Result<PreparedPositionReplayCloseV3, RetirementAdapterErrorV2> {
     if !request.position.is_writable() || !request.replay.is_writable() {
         return Err(RetirementAdapterErrorV2::NotWritable);
@@ -394,135 +227,28 @@ pub fn authenticate_and_prepare_position_replay_close_v4(
 
     let position = clutch_retirement::PositionAccountV3::decode(request.position.data())?;
     request.realm.authenticate_position(position)?;
-    request
-        .purpose_terminal
-        .authenticate_position(request.position.address(), position)?;
-    if request.purpose_terminal.receipt_account == request.replay.address()
-        || request.purpose_terminal.receipt_account == request.realm.neutral_sink
-    {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
     let terminal = position.terminal_projection()?;
     if position.replay_account() != request.replay.address() {
         return Err(RetirementErrorV2::ReplayMismatch.into());
     }
 
-    let replay = ReplaySuccessorAccountV1::decode(request.replay.data())?;
-    let market = position.market_instance_id();
-    let owner = position.owner();
-    if replay.base.market.bytes() != market.bytes()
-        || replay.base.owner.bytes() != owner.bytes()
-        || replay.base.position_generation != position.generation()
-        || replay.base.sequence != request.signed_sequence
+    let replay = ReplayV3Envelope::decode(request.replay.data(), hash_backend)?;
+    let replay_terminal = replay.terminal_projection()?;
+    let replay_header = replay_terminal.header();
+    if replay_header.position_account() != request.position.address()
+        || replay_header.replay_account() != request.replay.address()
+        || replay_header.purpose() != position.purpose()
+        || replay_header.purpose_binding_id() != position.purpose_binding_id()
+        || replay_header.position_generation() != position.generation()
+        || replay_header.next_sequence() != request.signed_sequence
+        || replay_header.stored_bump() != request.replay.bump()
     {
         return Err(RetirementErrorV2::ReplayMismatch.into());
     }
-
-    let lifecycle_position = PositionLifecycleStateV2::Live(LivePositionV2 {
-        market,
-        owner,
-        generation: position.generation(),
-        stored_bump: position.stored_bump(),
-        retirement: PositionRetirementTailV1 {
-            outstanding_reservations: 0,
-            rent: position.rent(),
-        },
-    });
-    let lifecycle_replay = ReplayLifecycleStateV1::Live(LiveReplaySuccessorV1 {
-        market,
-        owner,
-        position_generation: replay.base.position_generation,
-        sequence: replay.base.sequence,
-        stored_bump: replay.base.stored_bump,
-        rent: replay.rent,
-    });
     let book = recipient_book(request.recipients)?;
-    let plan = plan_position_replay_retirement_v2(PositionReplayRetirementRequestV2 {
-        retirement: PositionReplayRetirementRequestV1 {
-            position: lifecycle_position,
-            replay: lifecycle_replay,
-            economic: PositionEconomicStateV1::ZERO,
-            position_balance: request.position_lamports,
-            replay_balance: request.replay_lamports,
-            neutral_sink: request.realm.neutral_sink,
-            neutral_sink_binding: AdapterNeutralSinkBindingProjectionV1 {
-                market,
-                neutral_sink: request.realm.neutral_sink,
-            },
-            accounts: PositionReplayAccountsV1 {
-                position: AdapterPositionAccountProjectionV1 {
-                    account: request.position.address(),
-                    market,
-                    owner,
-                },
-                replay: AdapterReplayAccountProjectionV1 {
-                    account: request.replay.address(),
-                    market,
-                    owner,
-                    position_generation: position.generation(),
-                },
-            },
-            recipient_balances: book,
-        },
-        signed_sequence: request.signed_sequence,
-    })?;
-    let tombstone = terminal.tombstone()?;
-    if plan.position_balance_after != tombstone.fields().permanent_tombstone_principal
-        || plan.replay_balance_after != 0
-    {
-        return Err(RetirementErrorV2::NonCanonicalState.into());
-    }
-    Ok(PreparedPositionReplayCloseV3 {
-        position_account: request.position.address(),
-        replay_account: request.replay.address(),
-        purpose_terminal_receipt: request.purpose_terminal.receipt_account,
-        position_tombstone_bytes: tombstone.encode()?,
-        recipient_credits: plan.recipient_credits,
-        position_lamports_after: plan.position_balance_after,
-        replay_lamports_after: plan.replay_balance_after,
-    })
-}
-
-/// Authenticate and prepare a Position V3 close against its canonical
-/// purpose-owned Replay V3 sibling.
-///
-/// The exact purpose extension is hash-authenticated but remains opaque here.
-/// Its semantic owner must first authenticate the purpose terminal receipt;
-/// this boundary then requires the program-owned Replay bytes themselves to be
-/// terminal and to match the Position account, purpose, binding, generation,
-/// and signed sequence before planning any lamport mutation.
-pub fn authenticate_and_prepare_position_replay_close_v5(
-    request: PositionReplayCloseRuntimeRequestV5<'_>,
-) -> Result<PreparedPositionReplayCloseV4, RetirementAdapterErrorV2> {
-    if !request.position.is_writable() || !request.replay.is_writable() {
-        return Err(RetirementAdapterErrorV2::NotWritable);
-    }
-    if request.position.program_id() != request.replay.program_id() {
-        return Err(RetirementAdapterErrorV2::WrongOwner);
-    }
-    if request.position.address() == request.replay.address() {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
-
-    let position = clutch_retirement::PositionAccountV3::decode(request.position.data())?;
-    request.realm.authenticate_position(position)?;
-    request
-        .purpose_terminal
-        .authenticate_position(request.position.address(), position)?;
-    if request.purpose_terminal.receipt_account == request.replay.address()
-        || request.purpose_terminal.receipt_account == request.realm.neutral_sink
-    {
-        return Err(RetirementErrorV2::AccountAlias.into());
-    }
-    let position_terminal = position.terminal_projection()?;
-    let replay = ReplayV3Envelope::decode(request.replay.data(), &RetirementReplaySha256V3)?;
-    if replay.header().stored_bump() != request.replay.bump() {
-        return Err(RetirementAdapterErrorV2::WrongBump);
-    }
-    let replay_terminal = replay.terminal_projection()?;
     let plan = plan_position_v3_replay_v3_retirement_v1(
         PositionV3ReplayV3RetirementRequestV1 {
-            position: position_terminal,
+            position: terminal,
             replay: replay_terminal,
             position_balance: request.position_lamports,
             replay_balance: request.replay_lamports,
@@ -531,10 +257,10 @@ pub fn authenticate_and_prepare_position_replay_close_v5(
                 position: request.position.address(),
                 replay: request.replay.address(),
             },
-            recipient_balances: recipient_book(request.recipients)?,
+            recipient_balances: book,
             signed_sequence: request.signed_sequence,
         },
-        &RetirementReplaySha256V3,
+        hash_backend,
     )?;
     if plan.position_balance_after
         != plan
@@ -545,11 +271,10 @@ pub fn authenticate_and_prepare_position_replay_close_v5(
     {
         return Err(RetirementErrorV2::NonCanonicalState.into());
     }
-    Ok(PreparedPositionReplayCloseV4 {
+    Ok(PreparedPositionReplayCloseV3 {
         position_account: request.position.address(),
         replay_account: request.replay.address(),
-        purpose_terminal_receipt: request.purpose_terminal.receipt_account,
-        terminal_replay_semantic_id: plan.terminal_replay_semantic_id,
+        replay_terminal_semantic_id: plan.terminal_replay_semantic_id,
         position_tombstone_bytes: plan.position_tombstone.encode()?,
         recipient_credits: plan.recipient_credits,
         position_lamports_after: plan.position_balance_after,
@@ -620,7 +345,7 @@ pub struct PositionReplayRentMinimumsV3 {
     pub position_live: u64,
     /// Rent minimum permanently retained by the 280-byte V3 tombstone.
     pub position_tombstone: u64,
-    /// Rent minimum for the exact 132-byte Replay successor.
+    /// Rent minimum for this purpose's exact Replay V3 envelope and extension.
     pub replay: u64,
 }
 
@@ -653,22 +378,27 @@ pub struct PositionReplayReopenRuntimeRequestV3<'a> {
     pub rent_minimums: PositionReplayRentMinimumsV3,
     /// Complete prospective next-generation Position V3 body.
     pub position_after: clutch_retirement::PositionAccountV3,
-    /// Complete prospective next-generation Replay body and rent owner.
-    pub replay_after: ReplaySuccessorAccountV1,
+    /// Complete purpose-owned next-generation Replay V3 envelope.
+    ///
+    /// Its purpose handler owns and has already validated the extension. This
+    /// bridge authenticates the common Position/replay/binding/generation/rent
+    /// joins and full extension hash without interpreting those bytes.
+    pub replay_after: ReplayV3Envelope<'a>,
 }
 
 /// Complete prospective Position V3 reopen images and checked funding plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedPositionReplayReopenV3 {
+pub struct PreparedPositionReplayReopenV3<'a> {
     position_account: Identity32V1,
     prior_replay: Identity32V1,
     next_replay: Identity32V1,
     position_bytes_after: [u8; POSITION_V3_BYTES],
-    replay_bytes_after: [u8; clutch_retirement::PROJECTED_REPLAY_SUCCESSOR_BYTES],
+    replay_after: ReplayV3Envelope<'a>,
+    replay_semantic_id: Identity32V1,
     plan: PositionReplayReopenPlanV2,
 }
 
-impl PreparedPositionReplayReopenV3 {
+impl PreparedPositionReplayReopenV3<'_> {
     /// Permanent Position PDA rewritten from tombstone to live V3 bytes.
     pub const fn position_account(self) -> Identity32V1 {
         self.position_account
@@ -689,11 +419,24 @@ impl PreparedPositionReplayReopenV3 {
         self.position_bytes_after
     }
 
-    /// Complete canonical next Replay successor image.
-    pub const fn replay_bytes_after(
+    /// Exact total byte width of the next purpose-owned Replay.
+    pub fn replay_bytes_after_len(self) -> Result<usize, RetirementErrorV2> {
+        self.replay_after.encoded_len()
+    }
+
+    /// Semantic ID of the complete next Replay envelope and extension.
+    pub const fn replay_semantic_id(self) -> Identity32V1 {
+        self.replay_semantic_id
+    }
+
+    /// Encode the complete prospective Replay image into an exact scratch
+    /// buffer before any account mutation starts.
+    pub fn encode_replay_after<B: ReplayV3HashBackend>(
         self,
-    ) -> [u8; clutch_retirement::PROJECTED_REPLAY_SUCCESSOR_BYTES] {
-        self.replay_bytes_after
+        output: &mut [u8],
+        hash_backend: &B,
+    ) -> Result<(), RetirementErrorV2> {
+        self.replay_after.encode_into(output, hash_backend)
     }
 
     /// Checked full-principal, prefund, payer-coalescing, and sink plan.
@@ -716,9 +459,10 @@ fn same_retained_identity(tombstone: PositionTombstoneV3, next: PositionV3Fields
 }
 
 /// Authenticate and prepare a generation-safe Position V3 tombstone reopen.
-pub fn authenticate_and_prepare_position_replay_reopen_v3(
-    request: PositionReplayReopenRuntimeRequestV3<'_>,
-) -> Result<PreparedPositionReplayReopenV3, RetirementAdapterErrorV2> {
+pub fn authenticate_and_prepare_position_replay_reopen_v3<'a, B: ReplayV3HashBackend>(
+    request: PositionReplayReopenRuntimeRequestV3<'a>,
+    hash_backend: &B,
+) -> Result<PreparedPositionReplayReopenV3<'a>, RetirementAdapterErrorV2> {
     if !request.position_tombstone.is_writable() {
         return Err(RetirementAdapterErrorV2::NotWritable);
     }
@@ -751,22 +495,21 @@ pub fn authenticate_and_prepare_position_replay_reopen_v3(
 
     let market = tombstone_fields.market_instance_id;
     let owner = tombstone_fields.owner;
-    let prior_projection = authenticate_replay_absence_v1_exact(
-        request.prior_replay,
-        request.prior_replay_pda,
-        market,
-        owner,
-        tombstone_fields.generation,
-    )?;
-    if prior_projection.account != tombstone_fields.replay_account
+    if request.prior_replay.address != request.prior_replay_pda.address()
+        || request.prior_replay.address != tombstone_fields.replay_account
+        || request.prior_replay.is_writable
+        || request.prior_replay.owner != SYSTEM_PROGRAM_OWNER
+        || request.prior_replay.data_len != 0
+        || request.prior_replay.is_executable
         || request.prior_replay_lamports != 0
     {
         return Err(RetirementErrorV2::ReplayMismatch.into());
     }
+    let prior_replay = request.prior_replay.address;
     let next_vacant = vacant(request.next_replay, request.next_replay_pda)?;
     if next_vacant.address != next_fields.replay_account
         || next_vacant.address == request.position_tombstone.address()
-        || next_vacant.address == prior_projection.account
+        || next_vacant.address == prior_replay
     {
         return Err(RetirementErrorV2::AccountAlias.into());
     }
@@ -806,20 +549,24 @@ pub fn authenticate_and_prepare_position_replay_reopen_v3(
         replay_payer.lamports,
         request.realm.neutral_sink,
     )?;
-    if next_fields.rent != position_funding.rent()
-        || request.replay_after.rent != replay_funding.rent()
-    {
+    if next_fields.rent != position_funding.rent() {
         return Err(RetirementErrorV2::NonCanonicalState.into());
     }
     let replay = request.replay_after;
-    if replay.base.market.bytes() != market.bytes()
-        || replay.base.owner.bytes() != owner.bytes()
-        || replay.base.position_generation != next_generation
-        || replay.base.sequence != 0
-        || replay.base.stored_bump != next_vacant.bump
+    let replay_header = replay.header();
+    if replay_header.lifecycle() != ReplayV3Lifecycle::Live
+        || replay_header.position_account() != request.position_tombstone.address()
+        || replay_header.replay_account() != next_vacant.address
+        || replay_header.purpose() != next_fields.purpose
+        || replay_header.purpose_binding_id() != next_fields.purpose_binding_id
+        || replay_header.position_generation() != next_generation
+        || replay_header.next_sequence() != 0
+        || replay_header.stored_bump() != next_vacant.bump
+        || replay_header.rent() != replay_funding.rent()
     {
         return Err(RetirementErrorV2::ReplayMismatch.into());
     }
+    let replay_semantic_id = replay.semantic_id(hash_backend)?;
 
     let reopen = PositionReplayReopenRequestV1 {
         position: PositionLifecycleStateV2::Tombstone(PositionTombstoneV1 {
@@ -829,7 +576,7 @@ pub fn authenticate_and_prepare_position_replay_reopen_v3(
             stored_bump: tombstone_fields.stored_bump,
         }),
         prior_replay: AdapterReplayAbsenceProjectionV1 {
-            account: prior_projection.account,
+            account: prior_replay,
             market,
             owner,
             position_generation: tombstone_fields.generation,
@@ -863,10 +610,11 @@ pub fn authenticate_and_prepare_position_replay_reopen_v3(
     })?;
     Ok(PreparedPositionReplayReopenV3 {
         position_account: request.position_tombstone.address(),
-        prior_replay: prior_projection.account,
+        prior_replay,
         next_replay: next_vacant.address,
         position_bytes_after: next.encode()?,
-        replay_bytes_after: replay.encode()?,
+        replay_after: replay,
+        replay_semantic_id,
         plan,
     })
 }

@@ -11,8 +11,8 @@ use crate::{
     direct::{advance_reservation_accounting, advance_reservation_delivery},
     prepare_account_receipt_end_v1, Amount,
     AuthenticatedOrderMembershipV1, AuthenticatedOwnerSettlementAccountV1,
-    AuthenticatedPositionV1, AuthenticatedReservationV1, AuthenticatedSettlementReceiptEndV1,
-    Error, OrderKindV1, OwnerSettlementAccumulatorV1,
+    AuthenticatedPositionV3, AuthenticatedReservationV1, AuthenticatedSettlementReceiptEndV1,
+    Error, OrderKindV1, OwnerSettlementAccumulatorV1, PositionSettlementPoststateV3,
     OwnerSettlementReceiptAccountingPlanV1, ReservationStateV1, Result,
     SettlementCashPotExpectationV1, SettlementCashPotV1, SettlementSideV1,
     VirtualCashDirectionV1, MAX_OUTCOMES,
@@ -141,6 +141,86 @@ pub struct AuthenticatedFinalPotV1 {
     pub selected_budget_authenticated: bool,
 }
 
+/// Semantic-owner proof that a FinalPot has no remaining principal, native
+/// claim, or unprocessed virtual-inventory liability.
+///
+/// This is an ephemeral capability, not a replacement account format. The
+/// General adapter must still authenticate the 0x89 outer envelope, the
+/// SelectedCandidate join, the terminal fee receipt, and the atomic root
+/// close before deleting the account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct FinalPotRetirementProjectionV1 {
+    account: [u8; 32],
+    market: [u8; 32],
+    epoch: [u8; 32],
+    candidate: [u8; 32],
+    owner_order_set_digest: [u8; 32],
+    relation_witness_digest: [u8; 32],
+    inventory_kind: VirtualReceiptKindV1,
+    authorized_complete_set_atoms: Amount,
+    processed_complete_set_atoms: Amount,
+    inventory_transition_sequence: u64,
+    outcome_count: u8,
+}
+
+impl FinalPotRetirementProjectionV1 {
+    /// Canonical FinalPot account.
+    pub const fn account(self) -> [u8; 32] {
+        self.account
+    }
+
+    /// Canonical General Market identity.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Parent counted Epoch PDA.
+    pub const fn epoch(self) -> [u8; 32] {
+        self.epoch
+    }
+
+    /// Selected settlement-candidate identity.
+    pub const fn candidate(self) -> [u8; 32] {
+        self.candidate
+    }
+
+    /// Complete owner/order-set digest whose obligations were settled.
+    pub const fn owner_order_set_digest(self) -> [u8; 32] {
+        self.owner_order_set_digest
+    }
+
+    /// Checked-relation witness digest, zero only for no virtual inventory.
+    pub const fn relation_witness_digest(self) -> [u8; 32] {
+        self.relation_witness_digest
+    }
+
+    /// Frozen virtual inventory kind.
+    pub const fn inventory_kind(self) -> VirtualReceiptKindV1 {
+        self.inventory_kind
+    }
+
+    /// Exact selected complete-set quantity.
+    pub const fn authorized_complete_set_atoms(self) -> Amount {
+        self.authorized_complete_set_atoms
+    }
+
+    /// Exact processed complete-set quantity, equal to the authorization.
+    pub const fn processed_complete_set_atoms(self) -> Amount {
+        self.processed_complete_set_atoms
+    }
+
+    /// Final monotone inventory transition sequence.
+    pub const fn inventory_transition_sequence(self) -> u64 {
+        self.inventory_transition_sequence
+    }
+
+    /// Active market outcome width.
+    pub const fn outcome_count(self) -> u8 {
+        self.outcome_count
+    }
+}
+
 impl AuthenticatedFinalPotV1 {
     fn validate(self) -> Result<()> {
         for key in [
@@ -177,6 +257,31 @@ impl AuthenticatedFinalPotV1 {
             transition_sequence: self.inventory_transition_sequence,
             state: self.inventory_state,
         }
+    }
+
+    /// Project terminal deletion authority from the exact semantic owner.
+    pub fn retirement_projection(self) -> Result<FinalPotRetirementProjectionV1> {
+        self.validate()?;
+        if self.cash_principal_atoms != 0
+            || self.internal_claims != [0; MAX_OUTCOMES]
+            || self.inventory_state != VirtualInventoryStateV1::Complete
+            || self.processed_complete_set_atoms != self.authorized_complete_set_atoms
+        {
+            return Err(Error::InvariantViolation);
+        }
+        Ok(FinalPotRetirementProjectionV1 {
+            account: self.account,
+            market: self.market,
+            epoch: self.epoch,
+            candidate: self.candidate,
+            owner_order_set_digest: self.owner_order_set_digest,
+            relation_witness_digest: self.relation_witness_digest,
+            inventory_kind: self.inventory_kind,
+            authorized_complete_set_atoms: self.authorized_complete_set_atoms,
+            processed_complete_set_atoms: self.processed_complete_set_atoms,
+            inventory_transition_sequence: self.inventory_transition_sequence,
+            outcome_count: self.outcome_count,
+        })
     }
 
     /// Encode persisted semantics, excluding account address and writability.
@@ -656,7 +761,7 @@ pub struct VirtualSplitReceiptAccountingInputV1 {
     /// Frozen real-order membership.
     pub order: AuthenticatedOrderMembershipV1,
     /// Buyer Position projection authenticating owner and generation.
-    pub position: AuthenticatedPositionV1,
+    pub position: AuthenticatedPositionV3,
     /// Buy Reservation accounting prestate.
     pub reservation: AuthenticatedReservationV1,
     /// Buyer owner-row accounting prestate.
@@ -674,7 +779,7 @@ pub struct VirtualMergeReceiptAccountingInputV1 {
     /// Frozen real-order membership.
     pub order: AuthenticatedOrderMembershipV1,
     /// Seller Position projection authenticating owner and generation.
-    pub position: AuthenticatedPositionV1,
+    pub position: AuthenticatedPositionV3,
     /// Sell Reservation accounting prestate.
     pub reservation: AuthenticatedReservationV1,
     /// Seller owner-row accounting prestate.
@@ -738,7 +843,7 @@ pub struct VirtualSplitReceiptInputV1 {
     /// Frozen real-order membership.
     pub order: AuthenticatedOrderMembershipV1,
     /// Buyer Position.
-    pub position: AuthenticatedPositionV1,
+    pub position: AuthenticatedPositionV3,
     /// Buy Reservation.
     pub reservation: AuthenticatedReservationV1,
     /// Buyer owner row, already finalized by action 38.
@@ -758,7 +863,7 @@ pub struct VirtualMergeReceiptInputV1 {
     /// Frozen real-order membership.
     pub order: AuthenticatedOrderMembershipV1,
     /// Seller Position.
-    pub position: AuthenticatedPositionV1,
+    pub position: AuthenticatedPositionV3,
     /// Sell Reservation.
     pub reservation: AuthenticatedReservationV1,
     /// Accounting-complete seller row; merge proceeds must exist before action 38.
@@ -782,7 +887,7 @@ pub struct VirtualSplitReceiptPlanV1 {
     /// Buy-end delivery latch poststate.
     pub receipt_delivered_end_mask: u8,
     /// Buyer Position poststate.
-    pub position: AuthenticatedPositionV1,
+    pub position: PositionSettlementPoststateV3,
     /// Buy Reservation poststate.
     pub reservation: AuthenticatedReservationV1,
     /// FinalPot poststate after Egg delivery.
@@ -806,7 +911,7 @@ pub struct VirtualMergeReceiptPlanV1 {
     /// Sell-end delivery latch poststate.
     pub receipt_delivered_end_mask: u8,
     /// Seller Position poststate.
-    pub position: AuthenticatedPositionV1,
+    pub position: PositionSettlementPoststateV3,
     /// Sell Reservation poststate.
     pub reservation: AuthenticatedReservationV1,
     /// FinalPot poststate after Egg delivery.
@@ -853,9 +958,10 @@ pub fn prepare_virtual_split_receipt_accounting_v1(
     input.order.validate()?;
     input.position.validate()?;
     input.reservation.validate()?;
+    let position_fields = input.position.semantic.fields();
     validate_split_receipt(
         input.receipt,
-        input.position.outcome_count,
+        position_fields.outcome_count,
         ReceiptPhaseV1::Accounting,
     )?;
     validate_virtual_accounting_binding(
@@ -885,7 +991,7 @@ pub fn prepare_virtual_split_receipt_accounting_v1(
         || input.reservation.remaining_internal != [0; MAX_OUTCOMES]
         || (input.order.order_kind == OrderKindV1::Single
             && input.order.single_outcome != input.receipt.outcome)
-        || input.position.reserved_cash_atoms
+        || position_fields.reserved_cash_atoms
             < input.owner_row.accumulator.expectation.reserved_cash_atoms
         || input.reservation.initial_cash_atoms
             > input.owner_row.accumulator.expectation.reserved_cash_atoms
@@ -943,9 +1049,10 @@ pub fn prepare_virtual_merge_receipt_accounting_v1(
     input.order.validate()?;
     input.position.validate()?;
     input.reservation.validate()?;
+    let position_fields = input.position.semantic.fields();
     validate_merge_receipt(
         input.receipt,
-        input.position.outcome_count,
+        position_fields.outcome_count,
         ReceiptPhaseV1::Accounting,
     )?;
     validate_virtual_accounting_binding(
@@ -1266,9 +1373,10 @@ pub(crate) fn prepare_virtual_split_receipt_v1(
     input.position.validate()?;
     input.reservation.validate()?;
     input.final_pot.validate()?;
+    let position_fields = input.position.semantic.fields();
     validate_split_receipt(
         input.receipt,
-        input.position.outcome_count,
+        position_fields.outcome_count,
         ReceiptPhaseV1::Delivery,
     )?;
     validate_virtual_binding(
@@ -1307,14 +1415,18 @@ pub(crate) fn prepare_virtual_split_receipt_v1(
     next_pot.internal_claims[outcome] = next_pot.internal_claims[outcome]
         .checked_sub(input.receipt.quantity)
         .ok_or(Error::InsufficientCash)?;
-    let mut next_position = input.position;
-    next_position.internal[outcome] = next_position.internal[outcome]
+    let mut next_internal = position_fields.native_eggs;
+    next_internal[outcome] = next_internal[outcome]
         .checked_add(input.receipt.quantity)
         .ok_or(Error::ArithmeticOverflow)?;
     let (next_reservation, completes) =
         advance_reservation_delivery(input.reservation, input.receipt.quantity)?;
     next_pot.validate()?;
-    next_position.validate()?;
+    let next_position = input.position.settlement_poststate(
+        position_fields.cash_atoms,
+        position_fields.reserved_cash_atoms,
+        next_internal,
+    )?;
     next_reservation.validate()?;
     Ok(VirtualSplitReceiptPlanV1 {
         delivery_transition_id: input.receipt.delivery_transition_id,
@@ -1338,9 +1450,10 @@ pub(crate) fn prepare_virtual_merge_receipt_v1(
     input.position.validate()?;
     input.reservation.validate()?;
     input.final_pot.validate()?;
+    let position_fields = input.position.semantic.fields();
     validate_merge_receipt(
         input.receipt,
-        input.position.outcome_count,
+        position_fields.outcome_count,
         ReceiptPhaseV1::Delivery,
     )?;
     validate_virtual_binding(
@@ -1389,13 +1502,13 @@ pub(crate) fn prepare_virtual_merge_receipt_v1(
     next_pot.internal_claims[outcome] = next_pot.internal_claims[outcome]
         .checked_add(input.receipt.quantity)
         .ok_or(Error::ArithmeticOverflow)?;
-    let mut next_position = input.position;
+    let mut next_internal = position_fields.native_eggs;
     let mut returned = [0_u64; MAX_OUTCOMES];
     if completes {
         returned = next_reservation.remaining_internal;
         let mut at = 0_usize;
         while at < MAX_OUTCOMES {
-            next_position.internal[at] = next_position.internal[at]
+            next_internal[at] = next_internal[at]
                 .checked_add(returned[at])
                 .ok_or(Error::ArithmeticOverflow)?;
             next_reservation.remaining_internal[at] = 0;
@@ -1403,7 +1516,11 @@ pub(crate) fn prepare_virtual_merge_receipt_v1(
         }
     }
     next_pot.validate()?;
-    next_position.validate()?;
+    let next_position = input.position.settlement_poststate(
+        position_fields.cash_atoms,
+        position_fields.reserved_cash_atoms,
+        next_internal,
+    )?;
     next_reservation.validate()?;
     Ok(VirtualMergeReceiptPlanV1 {
         delivery_transition_id: input.receipt.delivery_transition_id,
@@ -1436,7 +1553,7 @@ fn validate_virtual_binding(
     slice_index: u16,
     expected_kind: VirtualReceiptKindV1,
     order: AuthenticatedOrderMembershipV1,
-    position: AuthenticatedPositionV1,
+    position: AuthenticatedPositionV3,
     reservation: AuthenticatedReservationV1,
     owner_row: AuthenticatedOwnerSettlementAccountV1,
     final_pot: AuthenticatedFinalPotV1,
@@ -1467,10 +1584,10 @@ fn validate_virtual_binding(
         || final_pot.epoch != epoch
         || final_pot.candidate != candidate
         || final_pot.owner_order_set_digest != owner_order_set_digest
-        || final_pot.outcome_count != position.outcome_count
+        || final_pot.outcome_count != position.semantic.fields().outcome_count
         || receipt == final_pot.account
         || authority.account == final_pot.account
-        || final_pot.account == position.position
+        || final_pot.account == position.account
         || final_pot.account == reservation.account
         || final_pot.account == owner_row.address
     {
@@ -1496,12 +1613,14 @@ fn validate_virtual_accounting_binding(
     slice_index: u16,
     expected_kind: VirtualReceiptKindV1,
     order: AuthenticatedOrderMembershipV1,
-    position: AuthenticatedPositionV1,
+    position: AuthenticatedPositionV3,
     reservation: AuthenticatedReservationV1,
     owner_row: AuthenticatedOwnerSettlementAccountV1,
     required_owner_state: u8,
 ) -> Result<()> {
     owner_row.accumulator.validate()?;
+    position.validate()?;
+    let position_fields = position.semantic.fields();
     let expectation = owner_row.accumulator.expectation;
     if owner_row.address == [0; 32]
         || owner_row.accumulator.state != required_owner_state
@@ -1523,9 +1642,9 @@ fn validate_virtual_accounting_binding(
         || order.candidate != candidate
         || order.owner_order_set_digest != owner_order_set_digest
         || order.order_id != order_id
-        || order.owner != position.owner
+        || order.owner != position_fields.owner.bytes()
         || order.reservation != reservation.reservation
-        || order.position_generation != position.generation
+        || order.position_generation != position_fields.generation
         || order.position_generation != reservation.position_generation
         || order.order_generation != reservation.order_generation
         || order.order_kind != reservation.order_kind
@@ -1533,23 +1652,23 @@ fn validate_virtual_accounting_binding(
         || order.entitled_units != reservation.entitled_units
         || order.entitled_consideration_price_units
             != reservation.entitled_consideration_price_units
-        || position.market != market
+        || position.general_market_runtime != market
         || reservation.market != market
         || reservation.epoch != epoch
-        || reservation.owner != position.owner
-        || reservation.position != position.position
+        || reservation.owner != position_fields.owner.bytes()
+        || reservation.position != position.account
         || expectation.market != market
         || expectation.epoch != epoch
         || expectation.candidate != candidate
         || expectation.owner_order_set_digest != owner_order_set_digest
-        || expectation.owner != position.owner
-        || order.outcome_count != position.outcome_count
-        || reservation.outcome_count != position.outcome_count
-        || receipt == position.position
+        || expectation.owner != position_fields.owner.bytes()
+        || order.outcome_count != position_fields.outcome_count
+        || reservation.outcome_count != position_fields.outcome_count
+        || receipt == position.account
         || receipt == reservation.account
         || receipt == owner_row.address
         || authority.account == receipt
-        || authority.account == position.position
+        || authority.account == position.account
         || authority.account == reservation.account
         || authority.account == owner_row.address
     {

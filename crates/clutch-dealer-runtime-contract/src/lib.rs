@@ -20,12 +20,18 @@
 mod budget;
 mod codec;
 mod epoch_v2;
+mod exit_ticket;
 mod facility;
 mod fee_bindings;
+mod fee_terminal;
 mod funding_dependencies;
 mod lease;
+mod lease_close_v3;
 mod lease_v2;
+mod lease_pot_v3;
+mod lease_selection_v3;
 mod lp_funding;
+mod lp_funding_v2;
 mod lp_page;
 mod lp_page_v2;
 mod pda;
@@ -42,15 +48,22 @@ mod state_v2;
 mod terminal_claims;
 mod terminal_state;
 mod transitions;
+mod transitions_v3;
 
 pub use budget::*;
 pub use epoch_v2::*;
+pub use exit_ticket::*;
 pub use facility::*;
 pub use fee_bindings::*;
+pub use fee_terminal::*;
 pub use funding_dependencies::*;
 pub use lease::*;
+pub use lease_close_v3::*;
 pub use lease_v2::*;
+pub use lease_pot_v3::*;
+pub use lease_selection_v3::*;
 pub use lp_funding::*;
+pub use lp_funding_v2::*;
 pub use lp_page::*;
 pub use lp_page_v2::*;
 pub use pda::*;
@@ -67,6 +80,7 @@ pub use state_v2::*;
 pub use terminal_claims::*;
 pub use terminal_state::*;
 pub use transitions::*;
+pub use transitions_v3::*;
 
 use sha2::{Digest, Sha256};
 
@@ -122,6 +136,9 @@ pub const DEALER_ACTION_LIVENESS_RECEIPT_CONTENT_DOMAIN_V1: &[u8] =
 /// Initial domain for the canonical sealed LP page-set fold.
 pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/lp-page-set/init/v1\0";
+/// Initial transcript domain for the PositionV3-bound V2 LP prefix chain.
+pub const DEALER_LP_PAGE_SET_INIT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/lp-page-set/init/v2\0";
 /// Per-page domain for the canonical sealed LP page-set fold.
 pub const DEALER_LP_PAGE_SET_STEP_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/lp-page-set/step/v1\0";
@@ -145,6 +162,9 @@ pub const DEALER_TERMINAL_ALLOCATION_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for streamed terminal claim work.
 pub const DEALER_CLAIM_WORK_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/claim-work/v1\0";
+/// Exact content domain for one owner-scoped mutable exit ticket.
+pub const DEALER_EXIT_TICKET_CONTENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/dealer-runtime/exit-ticket/v1\0";
 /// Exact content domain for one State-owned Replay-terminalization receipt.
 pub const DEALER_TERMINAL_STATE_RECEIPT_CONTENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-runtime/terminal-state-receipt/v2\0";

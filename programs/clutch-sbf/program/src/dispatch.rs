@@ -354,12 +354,12 @@ pub fn process(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> Outcome<()> {
-    if let Some(action) = disabled_source_v3_action(instruction_data) {
-        return crate::source_plane_v3::process_reserved_disabled(action);
-    }
     #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
     if route_hint(instruction_data) != Route::DealerPolicy {
         return Err(ClutchError::UnsupportedInstruction.into());
+    }
+    if let Some(action) = disabled_source_v3_action(instruction_data) {
+        return crate::source_plane_v3::process_reserved_disabled(action);
     }
     if disabled_canonical_tag(instruction_data) {
         return Err(ClutchError::UnsupportedInstruction.into());
@@ -400,6 +400,32 @@ pub fn process(
     }
 }
 
+#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[inline(never)]
+fn process_dealer_policy(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request = ExtensionRequest::decode(instruction_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::UnsupportedInstruction))?;
+    match request.envelope.action {
+        ExtensionAction::DealerPolicy(action) => dealer_policy::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
+    }
+}
+
 /// Decode the strict successor envelope and enter only the recurring-Series
 /// half of the shared SourceSeries family. The central capability check runs
 /// before this route and keeps all six actions unreachable in current builds.
@@ -420,28 +446,12 @@ fn process_recurring_series(
             action,
             request.envelope.payload,
         ),
-        _ => unexpected_route(),
-    }
-}
-
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
-#[inline(never)]
-fn process_dealer_policy(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> Outcome<()> {
-    let request = ExtensionRequest::decode(instruction_data)
-        .map_err(|_| Refusal::Adapter(ClutchError::UnsupportedInstruction))?;
-    match request.envelope.action {
-        ExtensionAction::DealerPolicy(action) => dealer_policy::process(
-            program_id,
-            accounts,
-            request.sequence,
-            action,
-            request.envelope.payload,
-        ),
-        _ => unexpected_route(),
+        ExtensionAction::GeneralV2(_)
+        | ExtensionAction::DealerPolicy(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
     }
 }
 
@@ -481,7 +491,12 @@ fn process_general_v2(
             action,
             request.envelope.payload,
         ),
-        _ => unexpected_route(),
+        ExtensionAction::DealerPolicy(_)
+        | ExtensionAction::DealerFacility(_)
+        | ExtensionAction::StructuredClaim(_)
+        | ExtensionAction::SourceV3(_)
+        | ExtensionAction::RecurringSeries(_)
+        | ExtensionAction::Recovery(_) => unexpected_route(),
     }
 }
 

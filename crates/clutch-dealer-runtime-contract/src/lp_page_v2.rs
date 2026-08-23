@@ -14,12 +14,12 @@ use crate::{
 pub const LP_PAGE_MAGIC_V2: [u8; 8] = *b"DCLPPGV2";
 /// Exact local semantic version.
 pub const LP_PAGE_VERSION_V2: u16 = 2;
-/// Exact bytes in one V2 LP entry.
-pub const LP_ENTRY_BYTES_V2: usize = 48;
+/// Exact bytes in one immutable V2 LP entry.
+pub const LP_ENTRY_BYTES_V2: usize = 40;
 /// Exact canonical V2 page bytes.
 pub const LP_PAGE_BYTES_V2: usize = HEADER_BYTES
-    + (4 * 32)
-    + 32
+    + (6 * 32)
+    + 48
     + (LP_ENTRIES_PER_PAGE * LP_ENTRY_BYTES_V2)
     + DELETABLE_RENT_OWNER_BYTES;
 
@@ -30,8 +30,6 @@ pub struct LpEntryV2 {
     pub owner: Id,
     /// Exact capital-unit shares.
     pub shares: u64,
-    /// Irrevocably queued shares.
-    pub queued_shares: u64,
 }
 
 impl LpEntryV2 {
@@ -39,12 +37,11 @@ impl LpEntryV2 {
     pub const EMPTY: Self = Self {
         owner: Id::ZERO,
         shares: 0,
-        queued_shares: 0,
     };
 
     fn validate_live(&self) -> Result<()> {
         self.owner.validate_live()?;
-        if self.shares == 0 || self.shares > MAX_ATOMS || self.queued_shares > self.shares {
+        if self.shares == 0 || self.shares > MAX_ATOMS {
             return Err(Error::InvalidLpPage);
         }
         Ok(())
@@ -53,14 +50,12 @@ impl LpEntryV2 {
     fn encode_body(&self, writer: &mut Writer<'_>) {
         writer.id(self.owner);
         writer.u64(self.shares);
-        writer.u64(self.queued_shares);
     }
 
     fn decode_body(reader: &mut Reader<'_>) -> Self {
         Self {
             owner: reader.id(),
             shares: reader.u64(),
-            queued_shares: reader.u64(),
         }
     }
 }
@@ -76,6 +71,16 @@ pub struct LpPageV2 {
     pub facility_position_binding_id: Id,
     /// Authoritative DealerState account.
     pub dealer_state_account_id: Id,
+    /// Exact immutable fold prefix before this page.
+    pub page_set_prefix_root: Id,
+    /// Greatest owner in the immutable prefix, or zero for the first page.
+    pub prefix_last_owner: Id,
+    /// Exact live-entry count committed by the immutable prefix.
+    pub prefix_live_positions: u32,
+    /// Exact share total committed by the immutable prefix.
+    pub prefix_total_shares: u64,
+    /// Canonical zero padding for the prefix aggregate block.
+    pub prefix_reserved: u32,
     /// Parent generation at admission.
     pub counted_generation: u64,
     /// Zero-based page ordinal.
@@ -102,13 +107,21 @@ impl LpPageV2 {
             self.facility_id,
             self.facility_position_binding_id,
             self.dealer_state_account_id,
+            self.page_set_prefix_root,
         ] {
             identity.validate_live()?;
         }
         let count = usize::from(self.entry_count);
         if self.page_ordinal >= MAX_LP_PAGES
-            || count == 0
             || count > LP_ENTRIES_PER_PAGE
+            || (self.page_ordinal == 0 && !self.prefix_last_owner.is_zero())
+            || (self.page_ordinal != 0 && self.prefix_last_owner.is_zero())
+            || (self.page_ordinal == 0
+                && (self.prefix_live_positions != 0 || self.prefix_total_shares != 0))
+            || (self.page_ordinal != 0
+                && (self.prefix_live_positions == 0 || self.prefix_total_shares == 0))
+            || self.prefix_reserved != 0
+            || (count == 0 && self.sealed)
             || (self.next_page_ordinal != NO_NEXT_LP_PAGE
                 && (self.next_page_ordinal != self.page_ordinal + 1
                     || self.next_page_ordinal >= MAX_LP_PAGES
@@ -129,6 +142,12 @@ impl LpPageV2 {
                 return Err(Error::NonCanonicalPadding);
             }
             index += 1;
+        }
+        if count != 0
+            && !self.prefix_last_owner.is_zero()
+            && self.prefix_last_owner >= self.entries[0].owner
+        {
+            return Err(Error::InvalidLpPage);
         }
         self.rent.validate()
     }
@@ -161,18 +180,28 @@ impl LpPageV2 {
     pub fn share_totals(&self) -> Result<(u64, u64)> {
         self.validate()?;
         let mut total = 0u64;
-        let mut queued = 0u64;
         let mut index = 0usize;
         while index < usize::from(self.entry_count) {
             total = total
                 .checked_add(self.entries[index].shares)
                 .ok_or(Error::ArithmeticOverflow)?;
-            queued = queued
-                .checked_add(self.entries[index].queued_shares)
-                .ok_or(Error::ArithmeticOverflow)?;
             index += 1;
         }
-        Ok((total, queued))
+        Ok((total, 0))
+    }
+
+    /// Sum the immutable prefix and this page without reading older pages.
+    pub fn aggregate_totals(&self) -> Result<(u32, u64)> {
+        let (total, _) = self.share_totals()?;
+        let live = self
+            .prefix_live_positions
+            .checked_add(u32::from(self.entry_count))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let total = self
+            .prefix_total_shares
+            .checked_add(total)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok((live, total))
     }
 
     /// Counted V2 child edge.
@@ -203,6 +232,8 @@ impl FixedCodec for LpPageV2 {
             self.facility_id,
             self.facility_position_binding_id,
             self.dealer_state_account_id,
+            self.page_set_prefix_root,
+            self.prefix_last_owner,
         ] {
             writer.id(identity);
         }
@@ -213,6 +244,9 @@ impl FixedCodec for LpPageV2 {
         writer.bool(self.sealed);
         writer.reserved(6);
         writer.u64(self.revision);
+        writer.u32(self.prefix_live_positions);
+        writer.u32(self.prefix_reserved);
+        writer.u64(self.prefix_total_shares);
         let mut index = 0usize;
         while index < LP_ENTRIES_PER_PAGE {
             self.entries[index].encode_body(&mut writer);
@@ -229,6 +263,8 @@ impl FixedCodec for LpPageV2 {
         let facility_id = reader.id();
         let facility_position_binding_id = reader.id();
         let dealer_state_account_id = reader.id();
+        let page_set_prefix_root = reader.id();
+        let prefix_last_owner = reader.id();
         let counted_generation = reader.u64();
         let page_ordinal = reader.u32();
         let next_page_ordinal = reader.u32();
@@ -236,6 +272,9 @@ impl FixedCodec for LpPageV2 {
         let sealed = reader.bool()?;
         reader.reserved(6)?;
         let revision = reader.u64();
+        let prefix_live_positions = reader.u32();
+        let prefix_reserved = reader.u32();
+        let prefix_total_shares = reader.u64();
         let mut entries = [LpEntryV2::EMPTY; LP_ENTRIES_PER_PAGE];
         let mut index = 0usize;
         while index < LP_ENTRIES_PER_PAGE {
@@ -247,6 +286,11 @@ impl FixedCodec for LpPageV2 {
             facility_id,
             facility_position_binding_id,
             dealer_state_account_id,
+            page_set_prefix_root,
+            prefix_last_owner,
+            prefix_live_positions,
+            prefix_total_shares,
+            prefix_reserved,
             counted_generation,
             page_ordinal,
             next_page_ordinal,
@@ -262,6 +306,6 @@ impl FixedCodec for LpPageV2 {
     }
 }
 
-const _: () = assert!(LP_ENTRY_BYTES_V2 == 48);
-const _: () = assert!(LP_PAGE_BYTES_V2 == 1_020);
+const _: () = assert!(LP_ENTRY_BYTES_V2 == 40);
+const _: () = assert!(LP_PAGE_BYTES_V2 == 972);
 const _: () = assert!(LP_PAGE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

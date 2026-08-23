@@ -5,13 +5,117 @@
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
     CountedDealerChildV2, DealerActionLivenessAuthorizationV1, DealerChildKindV2,
-    DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1, DealerPhaseV2,
-    DealerPolicyV1, DealerPositionObservationV3, DealerRuntimeActionV1,
-    DealerRuntimeLivenessBindingV1, DealerStateV2, DeletableRentOwnerV1, Error,
-    FacilityPositionBindingV2, FixedCodec, Id, Result, DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2,
-    DELETABLE_RENT_OWNER_BYTES,
+    DealerEmptyAssetTransferBundleV1, DealerFacilityReplayV1, DealerFundedDependenciesV2,
+    DealerLeaseV2, DealerLivenessScheduleV1, DealerPhaseV2, DealerPolicyV1,
+    DealerPositionObservationV3, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
+    DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransitionIntentV1,
+    DealerTransitionLivenessModeV1, DeletableRentOwnerV1, Error, FacilityPositionBindingV2,
+    FixedCodec, Id, PreparedDealerReplayTransitionV1, Result,
+    DEALER_EPOCH_BINDING_CONTENT_DOMAIN_V2, DELETABLE_RENT_OWNER_BYTES,
+};
+use clutch_general_v2_contract::{
+    economic_domain_digest_v2, EconomicDomainV2AccountV1, GeneralEpochPhaseV1,
+    GeneralEpochV6AccountV1, Sha256BackendV1,
 };
 use clutch_retirement::PositionLifecycleV3;
+use sha2::{Digest, Sha256};
+
+pub(crate) struct DealerSha256V1;
+
+impl Sha256BackendV1 for DealerSha256V1 {
+    fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for part in parts {
+            hasher.update(part);
+        }
+        hasher.finalize().into()
+    }
+}
+
+/// In-memory proof that a Dealer Epoch projection was authenticated from the
+/// exact General V2 Epoch and EconomicDomain accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerGeneralEpochEvidenceV3 {
+    epoch_account_id: Id,
+    market_runtime_account_id: Id,
+    epoch_semantics_id: Id,
+    economic_domain_digest: Id,
+    generation: u64,
+    phase: GeneralEpochPhaseV1,
+    selected_candidate_count: u32,
+}
+
+impl DealerGeneralEpochEvidenceV3 {
+    /// Authenticate the immutable General/Product/Relation/price projection.
+    pub fn new(
+        epoch_account_id: Id,
+        epoch: GeneralEpochV6AccountV1,
+        economic_domain_account_id: Id,
+        domain: EconomicDomainV2AccountV1,
+        policy: &DealerPolicyV1,
+    ) -> Result<Self> {
+        epoch_account_id.validate_live()?;
+        economic_domain_account_id.validate_live()?;
+        epoch.validate().map_err(|_| Error::MismatchedBinding)?;
+        domain.validate().map_err(|_| Error::MismatchedBinding)?;
+        policy.validate()?;
+        let epoch_semantics = epoch
+            .semantics_digest(&DealerSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?;
+        let domain_digest = economic_domain_digest_v2(&DealerSha256V1, domain.transcript)
+            .map_err(|_| Error::MismatchedBinding)?;
+        if Id::from_bytes(epoch.market_instance_v2_id.bytes()) != policy.market_instance_v2_id
+            || Id::from_bytes(epoch.economic_domain.bytes()) != economic_domain_account_id
+            || Id::from_bytes(domain.epoch.bytes()) != epoch_account_id
+            || domain.transcript.market_instance_v2_id != epoch.market_instance_v2_id
+            || domain.transcript.epoch_semantics_digest != epoch_semantics
+            || domain.transcript.epoch_index != epoch.epoch_index
+            || Id::from_bytes(domain.transcript.relation_policy_id.bytes()) != policy.relation_v2_id
+            || Id::from_bytes(domain.transcript.price_measure_policy_v1_id.bytes())
+                != policy.price_measure_policy_id
+            || Id::from_bytes(domain.transcript.native_claim_basis_id.bytes())
+                != policy.claim_basis_id
+            || domain.transcript.outcome_count != policy.outcome_count
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        Ok(Self {
+            epoch_account_id,
+            market_runtime_account_id: Id::from_bytes(epoch.market_runtime.bytes()),
+            epoch_semantics_id: Id::from_bytes(epoch_semantics.bytes()),
+            economic_domain_digest: Id::from_bytes(domain_digest.bytes()),
+            generation: epoch.generation,
+            phase: epoch.phase,
+            selected_candidate_count: epoch.selected_candidate_count,
+        })
+    }
+
+    /// Require one Dealer binding to be the exact retained projection.
+    pub fn validate_epoch(&self, epoch: &DealerEpochBindingV2) -> Result<()> {
+        epoch.validate()?;
+        if epoch.epoch_account_id != self.epoch_account_id
+            || epoch.epoch_id != self.epoch_semantics_id
+            || epoch.economic_domain_id != self.economic_domain_digest
+            || epoch.general_epoch_generation != self.generation
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Require a finalized General Epoch with its unique selected artifact.
+    pub fn validate_selected_epoch(&self) -> Result<()> {
+        if self.phase != GeneralEpochPhaseV1::Finalized || self.selected_candidate_count != 1 {
+            return Err(Error::InvalidPhase);
+        }
+        Ok(())
+    }
+
+    /// Exact General V2 MarketRuntime account retained by the authenticated Epoch.
+    pub const fn market_runtime_account_id(&self) -> Id {
+        self.market_runtime_account_id
+    }
+}
 
 /// Local semantic magic for the V2 Epoch binding.
 pub const DEALER_EPOCH_BINDING_MAGIC_V2: [u8; 8] = *b"DCDEPOV2";
@@ -19,7 +123,7 @@ pub const DEALER_EPOCH_BINDING_MAGIC_V2: [u8; 8] = *b"DCDEPOV2";
 pub const DEALER_EPOCH_BINDING_VERSION_V2: u16 = 2;
 /// Exact canonical body bytes.
 pub const DEALER_EPOCH_BINDING_BYTES_V2: usize =
-    HEADER_BYTES + (20 * 32) + (3 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
+    HEADER_BYTES + (20 * 32) + (4 * 8) + 8 + DELETABLE_RENT_OWNER_BYTES;
 
 /// Exhaustive Epoch-binding phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +190,8 @@ pub struct DealerEpochBindingV2 {
     pub settlement_candidate_id: Id,
     /// Exact Dealer generation consumed by this Epoch.
     pub counted_generation: u64,
+    /// Exact authenticated General V2 Epoch generation.
+    pub general_epoch_generation: u64,
     /// Slot at which binding occurred.
     pub bound_slot: u64,
     /// First slot at which an unused binding may lapse.
@@ -122,6 +228,7 @@ impl DealerEpochBindingV2 {
             identity.validate_live()?;
         }
         if self.counted_generation == 0
+            || self.general_epoch_generation == 0
             || self.bound_slot == 0
             || self.bound_slot >= self.lapse_after_slot
             || self.epoch_account_id == self.epoch_binding_account_id
@@ -179,7 +286,10 @@ impl DealerEpochBindingV2 {
         runtime.validate()?;
         bind.validate_against(schedule, runtime)?;
         if self.phase != DealerEpochBindingPhaseV2::Bound
-            || !matches!(state.phase, DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly)
+            || !matches!(
+                state.phase,
+                DealerPhaseV2::Trading | DealerPhaseV2::UnwindOnly
+            )
             || self.policy_id != policy.policy_id()?
             || self.facility_id != state.facility_id
             || self.facility_position_binding_id != state.facility_position_binding_id
@@ -192,8 +302,7 @@ impl DealerEpochBindingV2 {
             || self.funded_dependencies_id != state.funded_dependencies_id
             || self.funded_dependencies_id != dependency.dependency_id()?
             || self.runtime_liveness_policy_id != runtime.runtime_policy_id
-            || self.runtime_liveness_policy_id
-                != dependency.bindings.runtime_liveness_policy_id
+            || self.runtime_liveness_policy_id != dependency.bindings.runtime_liveness_policy_id
             || self.runtime_liveness_binding_digest != runtime.binding_digest()?
             || self.runtime_liveness_binding_digest
                 != dependency.bindings.runtime_liveness_binding_digest
@@ -222,7 +331,10 @@ impl FixedCodec for DealerEpochBindingV2 {
     fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.validate()?;
         let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
-        writer.header(&DEALER_EPOCH_BINDING_MAGIC_V2, DEALER_EPOCH_BINDING_VERSION_V2);
+        writer.header(
+            &DEALER_EPOCH_BINDING_MAGIC_V2,
+            DEALER_EPOCH_BINDING_VERSION_V2,
+        );
         for identity in [
             self.policy_id,
             self.facility_id,
@@ -248,6 +360,7 @@ impl FixedCodec for DealerEpochBindingV2 {
             writer.id(identity);
         }
         writer.u64(self.counted_generation);
+        writer.u64(self.general_epoch_generation);
         writer.u64(self.bound_slot);
         writer.u64(self.lapse_after_slot);
         writer.u8(self.phase as u8);
@@ -258,7 +371,10 @@ impl FixedCodec for DealerEpochBindingV2 {
 
     fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.header(&DEALER_EPOCH_BINDING_MAGIC_V2, DEALER_EPOCH_BINDING_VERSION_V2)?;
+        reader.header(
+            &DEALER_EPOCH_BINDING_MAGIC_V2,
+            DEALER_EPOCH_BINDING_VERSION_V2,
+        )?;
         let value = Self {
             policy_id: reader.id(),
             facility_id: reader.id(),
@@ -281,6 +397,7 @@ impl FixedCodec for DealerEpochBindingV2 {
             active_lease_account_id: reader.id(),
             settlement_candidate_id: reader.id(),
             counted_generation: reader.u64(),
+            general_epoch_generation: reader.u64(),
             bound_slot: reader.u64(),
             lapse_after_slot: reader.u64(),
             phase: DealerEpochBindingPhaseV2::decode(reader.u8())?,
@@ -297,7 +414,7 @@ impl FixedCodec for DealerEpochBindingV2 {
 
 /// Admit one authenticated Epoch binding as the sole active Epoch child.
 #[allow(clippy::too_many_arguments)]
-pub fn bind_epoch_v2(
+fn bind_epoch_v2(
     policy: &DealerPolicyV1,
     state: &DealerStateV2,
     state_account_id: Id,
@@ -306,6 +423,7 @@ pub fn bind_epoch_v2(
     runtime: &DealerRuntimeLivenessBindingV1,
     bind: &DealerActionLivenessAuthorizationV1,
     epoch: &DealerEpochBindingV2,
+    general: &DealerGeneralEpochEvidenceV3,
 ) -> Result<DealerStateV2> {
     state.validate_against_policy(policy)?;
     if state.children.epoch_bindings != 0
@@ -317,6 +435,7 @@ pub fn bind_epoch_v2(
     {
         return Err(Error::InvalidChildGraph);
     }
+    general.validate_epoch(epoch)?;
     let mut next = *state;
     next.active_epoch_id = epoch.epoch_id;
     next.active_epoch_binding_account_id = epoch.epoch_binding_account_id;
@@ -325,8 +444,80 @@ pub fn bind_epoch_v2(
         .child_sequence
         .checked_add(1)
         .ok_or(Error::ArithmeticOverflow)?;
-    epoch.validate_bound(policy, &next, state_account_id, dependency, schedule, runtime, bind)?;
+    epoch.validate_bound(
+        policy,
+        &next,
+        state_account_id,
+        dependency,
+        schedule,
+        runtime,
+        bind,
+    )?;
     Ok(next)
+}
+
+/// Atomic State/Replay result of one funded Epoch admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerEpochBindV3 {
+    /// State after counting the exact Epoch binding.
+    pub state_after: DealerStateV2,
+    /// Replay advance binding State and funded receipt.
+    pub replay: PreparedDealerReplayTransitionV1,
+}
+
+/// Bind an Epoch and the exact funded receipt into one Replay transition.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_bind_epoch_v3(
+    policy: &DealerPolicyV1,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    dependency: &DealerFundedDependenciesV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    bind: &DealerActionLivenessAuthorizationV1,
+    epoch: &DealerEpochBindingV2,
+    general: &DealerGeneralEpochEvidenceV3,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+) -> Result<PreparedDealerEpochBindV3> {
+    let state_after = bind_epoch_v2(
+        policy,
+        state,
+        state_account_id,
+        dependency,
+        schedule,
+        runtime,
+        bind,
+        epoch,
+        general,
+    )?;
+    validate_live_replay(state, replay)?;
+    let empty = DealerEmptyAssetTransferBundleV1 {
+        action: DealerRuntimeActionV1::BindEpoch,
+    };
+    let prepared = replay.prepare_transition(
+        replay_binding,
+        DealerTransitionIntentV1 {
+            replay_account_id: replay.replay_account_id(),
+            replay_pre_id: replay.replay_id()?,
+            state_pre_content_id: state.state_content_id()?,
+            state_post_content_id: state_after.state_content_id()?,
+            position_pre_semantic_id: state.facility_position_id,
+            position_post_semantic_id: state.facility_position_id,
+            liveness_receipt_semantic_id: bind.receipt_semantic_id,
+            fee_evidence_id: Id::ZERO,
+            asset_transfer_bundle_id: empty.bundle_id()?,
+            position_generation_before: state.generation,
+            position_generation_after: state.generation,
+            expected_ordinal: replay.next_transition_ordinal(),
+            action: DealerRuntimeActionV1::BindEpoch,
+            liveness_mode: DealerTransitionLivenessModeV1::ExternalReceipt,
+        },
+    )?;
+    Ok(PreparedDealerEpochBindV3 {
+        state_after,
+        replay: prepared,
+    })
 }
 
 /// Bind the exact admitted Lease and candidate into the mutable Epoch child.
@@ -416,9 +607,9 @@ fn validate_epoch_close_rent(
     Ok(())
 }
 
-/// Lapse an unused Epoch, advance canonical Position/Replay generation, and close rent.
+/// Legacy internal projection retained only while the stable-Replay successor is integrated.
 #[allow(clippy::too_many_arguments)]
-pub fn lapse_epoch_v2(
+pub(crate) fn lapse_epoch_v2(
     policy: &DealerPolicyV1,
     state: &DealerStateV2,
     state_account_id: Id,
@@ -452,14 +643,17 @@ pub fn lapse_epoch_v2(
         || lapse.owner != state_account_id
         || lapse.lifecycle_id != state.facility_id
         || lapse.facility_generation != state.generation
-        || after.generation() != state.generation.checked_add(1).ok_or(Error::ArithmeticOverflow)?
+        || after.generation()
+            != state
+                .generation
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?
         || after.lifecycle() != PositionLifecycleV3::Open
         || before.cash_atoms() != after.cash_atoms()
         || before.reserved_cash_atoms() != after.reserved_cash_atoms()
         || before.native_eggs() != after.native_eggs()
         || before.outstanding_reservations() != after.outstanding_reservations()
-        || Id::from_bytes(after.replay_account().bytes())
-            == state.facility_replay_account_id
+        || Id::from_bytes(after.replay_account().bytes()) == state.facility_replay_account_id
     {
         return Err(Error::MismatchedBinding);
     }
@@ -479,27 +673,164 @@ pub fn lapse_epoch_v2(
     Ok(next)
 }
 
+/// Atomic successor for Epoch lapse over one stable ReplayV3 account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerEpochLapseV3 {
+    /// State after closing the binding and consuming one generation.
+    pub state_after: DealerStateV2,
+    /// Replay after the same generation advance.
+    pub replay: PreparedDealerReplayTransitionV1,
+}
+
+/// Lapse an unused Epoch without rotating or lowering the canonical Replay identity.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_lapse_epoch_v3(
+    policy: &DealerPolicyV1,
+    state: &DealerStateV2,
+    state_account_id: Id,
+    binding: &FacilityPositionBindingV2,
+    epoch: &DealerEpochBindingV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    lapse: &DealerActionLivenessAuthorizationV1,
+    position_before: &DealerPositionObservationV3,
+    position_after: &DealerPositionObservationV3,
+    replay: &DealerFacilityReplayV1,
+    replay_binding: DealerReplayAccountBindingV1,
+    current_slot: u64,
+    rent: DealerEpochCloseRentV2,
+) -> Result<PreparedDealerEpochLapseV3> {
+    state.validate_against_policy(policy)?;
+    epoch.validate()?;
+    lapse.validate_against(schedule, runtime)?;
+    let binding_id = binding.binding_id()?;
+    position_before.validate_current(state, binding, policy)?;
+    position_after.validate_against(binding, binding_id, policy)?;
+    validate_live_replay(state, replay)?;
+    let before = position_before.projection.position();
+    let after = position_after.projection.position();
+    let next_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if epoch.phase != DealerEpochBindingPhaseV2::Bound
+        || epoch.epoch_binding_account_id != state.active_epoch_binding_account_id
+        || epoch.epoch_id != state.active_epoch_id
+        || state.children.epoch_bindings != 1
+        || state.children.leases != 0
+        || state.children.settlement_pots != 0
+        || state_account_id != epoch.dealer_state_account_id
+        || current_slot < epoch.lapse_after_slot
+        || lapse.action != DealerRuntimeActionV1::LapseEpoch
+        || lapse.owner != state_account_id
+        || lapse.lifecycle_id != state.facility_id
+        || lapse.facility_generation != state.generation
+        || after.generation() != next_generation
+        || after.lifecycle() != PositionLifecycleV3::Open
+        || before.cash_atoms() != after.cash_atoms()
+        || before.reserved_cash_atoms() != after.reserved_cash_atoms()
+        || before.native_eggs() != after.native_eggs()
+        || before.outstanding_reservations() != after.outstanding_reservations()
+        || Id::from_bytes(after.replay_account().bytes()) != state.facility_replay_account_id
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    validate_epoch_close_rent(epoch, rent)?;
+    let mut state_after = *state;
+    state_after.active_epoch_id = Id::ZERO;
+    state_after.active_epoch_binding_account_id = Id::ZERO;
+    state_after.children.epoch_bindings = 0;
+    state_after.facility_position_id = position_after.semantic_id;
+    state_after.generation = next_generation;
+    state_after.child_sequence = state_after
+        .child_sequence
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    state_after.validate_against_policy(policy)?;
+    let empty = DealerEmptyAssetTransferBundleV1 {
+        action: DealerRuntimeActionV1::LapseEpoch,
+    };
+    let prepared = replay.prepare_transition(
+        replay_binding,
+        DealerTransitionIntentV1 {
+            replay_account_id: replay.replay_account_id(),
+            replay_pre_id: replay.replay_id()?,
+            state_pre_content_id: state.state_content_id()?,
+            state_post_content_id: state_after.state_content_id()?,
+            position_pre_semantic_id: position_before.semantic_id,
+            position_post_semantic_id: position_after.semantic_id,
+            liveness_receipt_semantic_id: lapse.receipt_semantic_id,
+            fee_evidence_id: Id::ZERO,
+            asset_transfer_bundle_id: empty.bundle_id()?,
+            position_generation_before: state.generation,
+            position_generation_after: next_generation,
+            expected_ordinal: replay.next_transition_ordinal(),
+            action: DealerRuntimeActionV1::LapseEpoch,
+            liveness_mode: DealerTransitionLivenessModeV1::ExternalReceipt,
+        },
+    )?;
+    Ok(PreparedDealerEpochLapseV3 {
+        state_after,
+        replay: prepared,
+    })
+}
+
+fn validate_live_replay(state: &DealerStateV2, replay: &DealerFacilityReplayV1) -> Result<()> {
+    replay.validate()?;
+    if replay.facility_position_account_id() != state.facility_position_account_id
+        || replay.replay_account_id() != state.facility_replay_account_id
+        || replay.facility_position_binding_id() != state.facility_position_binding_id
+        || replay.position_generation() != state.generation
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(())
+}
+
 /// Close a leased Epoch after the Lease/Pot pair has atomically terminated.
+///
+/// The Epoch binding itself retains the historical Lease account and selected
+/// candidate. State proves that Lease and Pot are gone, while the mandatory
+/// Retirement receipt funds this separately executable cleanup without
+/// requiring deleted Lease bytes to be supplied again.
+#[allow(clippy::too_many_arguments)]
 pub fn retire_epoch_after_lease_v2(
     policy: &DealerPolicyV1,
     state_after_lease: &DealerStateV2,
+    state_account_id: Id,
     epoch: &DealerEpochBindingV2,
-    lease: &DealerLeaseV2,
+    schedule: &DealerLivenessScheduleV1,
+    runtime: &DealerRuntimeLivenessBindingV1,
+    retire: &DealerActionLivenessAuthorizationV1,
     rent: DealerEpochCloseRentV2,
 ) -> Result<DealerStateV2> {
     state_after_lease.validate_against_policy(policy)?;
     epoch.validate()?;
-    lease.validate()?;
+    retire.validate_against(schedule, runtime)?;
+    let post_generation = epoch
+        .counted_generation
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
     if epoch.phase != DealerEpochBindingPhaseV2::Leased
         || epoch.epoch_binding_account_id != state_after_lease.active_epoch_binding_account_id
         || epoch.epoch_id != state_after_lease.active_epoch_id
-        || epoch.active_lease_account_id != lease.lease_account_id
-        || epoch.settlement_candidate_id != lease.settlement_candidate_id
+        || epoch.dealer_state_account_id != state_account_id
+        || epoch.policy_id != state_after_lease.policy_id
+        || epoch.facility_id != state_after_lease.facility_id
+        || epoch.facility_position_binding_id != state_after_lease.facility_position_binding_id
+        || epoch.funded_dependencies_id != state_after_lease.funded_dependencies_id
+        || epoch.runtime_liveness_policy_id != runtime.runtime_policy_id
+        || epoch.runtime_liveness_binding_digest != runtime.binding_digest()?
+        || epoch.dealer_liveness_schedule_id != schedule.schedule_id()?.untyped()
         || state_after_lease.children.epoch_bindings != 1
         || state_after_lease.children.leases != 0
         || state_after_lease.children.settlement_pots != 0
         || !state_after_lease.active_lease_id.is_zero()
-        || state_after_lease.generation != lease.post_generation
+        || state_after_lease.generation != post_generation
+        || retire.action != DealerRuntimeActionV1::Retire
+        || retire.owner != state_account_id
+        || retire.lifecycle_id != state_after_lease.facility_id
+        || retire.facility_generation != state_after_lease.generation
     {
         return Err(Error::InvalidChildGraph);
     }
@@ -516,5 +847,5 @@ pub fn retire_epoch_after_lease_v2(
     Ok(next)
 }
 
-const _: () = assert!(DEALER_EPOCH_BINDING_BYTES_V2 == 764);
+const _: () = assert!(DEALER_EPOCH_BINDING_BYTES_V2 == 772);
 const _: () = assert!(DEALER_EPOCH_BINDING_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);

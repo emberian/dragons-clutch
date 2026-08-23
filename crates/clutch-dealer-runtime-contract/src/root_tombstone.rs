@@ -3,8 +3,8 @@
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
     DealerFacilityGenesisV1, DealerPhaseV1, DealerPhaseV2, DealerPolicyV1,
-    DealerReplayClosePlanV1, DealerStateV1, DealerStateV2, DealerTerminalStateReceiptV2, Error,
-    FacilityPositionBindingV1, FacilityPositionBindingV2, FixedCodec, Id, Result,
+    DealerStateV1, DealerStateV2, Error, FacilityPositionBindingV1, FacilityPositionBindingV2,
+    FixedCodec, Id, Result,
 };
 use clutch_retirement::{
     PositionPurposeV3, PositionTombstoneV3, PositionV3Sha256Backend,
@@ -258,24 +258,23 @@ impl DealerRootTombstoneV2 {
         Ok(())
     }
 
-    /// Require the closed V2 root and exact immutable facility/rent joins.
-    #[allow(clippy::too_many_arguments)]
+    /// Require the closed V2 root and exact persisted terminal evidence.
+    ///
+    /// Replay is already deleted and external liveness already terminal when
+    /// this check runs. Their exact terminal identities therefore come only
+    /// from the authoritative State fields written atomically by the earlier
+    /// Position/Replay close, never from caller-recreated historical DTOs.
     pub fn validate_retirement(
         &self,
         genesis: &DealerFacilityGenesisV1,
         binding: &FacilityPositionBindingV2,
         policy: &DealerPolicyV1,
-        terminalizing_state: &DealerStateV2,
-        terminal_receipt: &DealerTerminalStateReceiptV2,
         closed_state: &DealerStateV2,
         position_tombstone: PositionTombstoneV3,
-        replay_close: DealerReplayClosePlanV1,
     ) -> Result<()> {
         self.validate()?;
         let facility_id = genesis.facility_id_for_policy(policy)?.untyped();
         let binding_id = binding.binding_id_for(genesis, policy)?;
-        terminalizing_state.validate_against_policy(policy)?;
-        terminal_receipt.validate()?;
         closed_state.validate_against_policy(policy)?;
         position_tombstone
             .validate()
@@ -287,47 +286,24 @@ impl DealerRootTombstoneV2 {
                 .map_err(|_| Error::MismatchedBinding)?
                 .bytes(),
         );
-        if terminalizing_state.phase != DealerPhaseV2::Retiring
-            || terminalizing_state.children.facility_positions != 1
-            || terminalizing_state.children.facility_replays != 1
-            || terminalizing_state.children.lp_pages != 0
-            || terminalizing_state.children.live_lp_positions != 0
-            || terminalizing_state.children.unclaimed_lp_positions != 0
-            || terminalizing_state.children.funded_dependencies != 0
-            || terminalizing_state.children.epoch_bindings != 0
-            || terminalizing_state.children.leases != 0
-            || terminalizing_state.children.settlement_pots != 0
-            || terminalizing_state.children.terminal_allocations != 0
-            || terminalizing_state.children.claim_work != 0
-            || closed_state.phase != DealerPhaseV2::Closed
+        if closed_state.phase != DealerPhaseV2::Closed
             || closed_state.children != crate::DealerChildCountsV2::default()
             || !closed_state.funded_dependencies_account_id.is_zero()
             || self.policy_id != policy.policy_id()?
             || self.facility_id != facility_id
             || self.facility_position_binding_id != binding_id
             || self.funded_dependencies_id != closed_state.funded_dependencies_id
-            || self.terminal_facility_position_id != terminal_receipt.terminal_position_semantic_id
+            || self.terminal_facility_position_id != closed_state.facility_position_id
             || self.position_tombstone_id != position_tombstone_id
-            || self.terminal_replay_semantic_id != replay_close.terminal_replay_semantic_id()
-            || self.terminal_replay_intent_id != replay_close.last_transition_intent_id()
-            || self.terminal_state_receipt_id != terminal_receipt.receipt_id()?
-            || self.terminal_state_receipt_id != replay_close.terminal_state_receipt_id()
+            || self.position_tombstone_id != closed_state.terminal_position_tombstone_id
+            || self.terminal_replay_semantic_id != closed_state.terminal_replay_semantic_id
+            || self.terminal_replay_intent_id != closed_state.terminal_replay_intent_id
+            || self.terminal_state_receipt_id != closed_state.terminal_state_receipt_id
             || self.terminal_state_id != closed_state.state_content_id()?
             || self.dealer_state_account_id != binding.dealer_state_account_id
-            || terminal_receipt.terminal_state_content_id
-                != terminalizing_state.state_content_id()?
-            || terminal_receipt.policy_id != self.policy_id
-            || terminal_receipt.facility_id != self.facility_id
-            || terminal_receipt.facility_position_binding_id != binding_id
-            || terminal_receipt.dealer_state_account_id != self.dealer_state_account_id
-            || terminal_receipt.replay_account_id != replay_close.replay_account_id()
             || self.facility_id != closed_state.facility_id
-            || self.facility_id != terminalizing_state.facility_id
             || closed_state.facility_position_account_id != binding.facility_position_account_id
-            || terminalizing_state.facility_position_account_id
-                != binding.facility_position_account_id
-            || closed_state.facility_replay_account_id != replay_close.replay_account_id()
-            || terminalizing_state.facility_replay_account_id != replay_close.replay_account_id()
+            || closed_state.facility_replay_account_id != binding.facility_replay_account_id
             || position_fields.purpose != PositionPurposeV3::DealerFacility
             || Id::from_bytes(position_fields.market_instance_id.bytes())
                 != policy.market_instance_v2_id
@@ -339,19 +315,11 @@ impl DealerRootTombstoneV2 {
             || Id::from_bytes(position_fields.owner.bytes()) != self.facility_id
             || Id::from_bytes(position_fields.controller.bytes()) != self.dealer_state_account_id
             || Id::from_bytes(position_fields.replay_account.bytes())
-                != replay_close.replay_account_id()
+                != closed_state.facility_replay_account_id
             || Id::from_bytes(position_fields.purpose_binding_id.bytes()) != binding_id
             || self.terminal_generation != closed_state.generation
-            || self.terminal_generation != terminalizing_state.generation
             || self.terminal_generation != position_fields.generation
-            || self.terminal_generation != terminal_receipt.terminal_generation
             || self.terminal_child_sequence != closed_state.child_sequence
-            || self.terminal_child_sequence
-                != terminalizing_state
-                    .child_sequence
-                    .checked_add(2)
-                    .ok_or(Error::ArithmeticOverflow)?
-            || terminal_receipt.terminal_child_sequence != terminalizing_state.child_sequence
             || self.rent_payer != closed_state.rent.payer
             || self.neutral_sink != closed_state.rent.neutral_sink
             || self.refunded_live_principal

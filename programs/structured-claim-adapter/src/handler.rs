@@ -13,7 +13,7 @@ use crate::runtime_contract::{
 };
 
 use crate::{
-    is_zero, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV1, AuthenticatedTokenMintV1,
+    is_zero, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV3, AuthenticatedTokenMintV1,
     AuthenticatedTokenV1, BoundDescriptorV1, Error, Key, Result,
 };
 
@@ -194,9 +194,9 @@ pub struct MutationContextV1<'a> {
     /// Actual extension-free Token-2022 mint.
     pub mint: AuthenticatedTokenMintV1,
     /// Actual wrapper-vault Position and current-generation Replay.
-    pub vault: AuthenticatedBasePositionV1,
+    pub vault: AuthenticatedBasePositionV3,
     /// Optional user Position/Replay for quantity routes.
-    pub user: Option<AuthenticatedBasePositionV1>,
+    pub user: Option<AuthenticatedBasePositionV3>,
     /// Optional actual holder token account for quantity routes.
     pub holder: Option<AuthenticatedTokenV1>,
     /// Transaction signer; quantity routes bind it to both user authorities.
@@ -353,7 +353,7 @@ pub enum PreparedStructuredClaimSemanticV1 {
     /// Exact terminal redemption.
     RedeemTerminal(TerminalRedemptionPlanV1),
     /// Permanent descriptor retirement.
-    Retire(DescriptorRetirementPlanV1),
+    RetireDescriptor(DescriptorRetirementPlanV1),
 }
 
 /// Completely staged action with canonical empty step padding.
@@ -649,7 +649,7 @@ pub fn prepare_mutation_v1(
                 PreparedStructuredClaimSemanticV1::RedeemTerminal(plan),
             ))
         }
-        StructuredClaimPayloadV1::Retire(request) => {
+        StructuredClaimPayloadV1::RetireDescriptor(request) => {
             require_vault_only(context, request.wrapper_product_id)?;
             let retirement = context
                 .vault_retirement
@@ -683,8 +683,8 @@ pub fn prepare_mutation_v1(
                 after: plan.descriptor,
             }))?;
             Ok(builder.finish(
-                StructuredClaimActionV1::Retire,
-                PreparedStructuredClaimSemanticV1::Retire(plan),
+                StructuredClaimActionV1::RetireDescriptor,
+                PreparedStructuredClaimSemanticV1::RetireDescriptor(plan),
             ))
         }
     }

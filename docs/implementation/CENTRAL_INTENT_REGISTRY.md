@@ -81,17 +81,6 @@ General V2 reserves local actions 1 through 38, in order:
 37. `ConsumeVirtualMergeReceiptEggs`
 38. `FinalizeOwnerSettlement`
 
-StructuredClaim `75/1` reserves actions 1 through 8:
-
-1. `CreateDescriptor`
-2. `WrapCanonical`
-3. `WrapFull`
-4. `UnwrapCanonical`
-5. `UnwrapFull`
-6. `CompactDonation`
-7. `RedeemTerminal`
-8. `RetireDescriptor`
-
 These names allocate local tags only. They do not freeze payload bytes, account
 lists, account codecs, or transition semantics. Dealer now allocates the
 following bounded policy transport without enabling any facility/economic
@@ -108,6 +97,17 @@ The exact payload widths are 72, 228, 32, and 32 bytes. `WritePolicy` carries a
 same atomic allocation. The local action values do not reuse the pure Dealer
 runtime enum's zero-based representation. `SealPolicy` persists an unadmitted
 catalog artifact; it does not initialize liquidity.
+
+StructuredClaim `75/1` reserves actions 1 through 8:
+
+1. `CreateDescriptor`
+2. `WrapCanonical`
+3. `WrapFull`
+4. `UnwrapCanonical`
+5. `UnwrapFull`
+6. `CompactDonation`
+7. `RedeemTerminal`
+8. `RetireDescriptor`
 
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:
@@ -172,19 +172,65 @@ Recovery 78/v1 reserves these local actions, all disabled:
 8. `CloseRecoveryFunding`
 9. `CloseFailureRoot`
 
-StructuredClaim payload codecs are owned by its separately integrated runtime
-and adapter, while Recovery payload/account contracts are owned by its dedicated
-modules; this central allocation duplicates neither contract and activates none
-of these actions. Dealer facility
-actions `5..=25` are allocated in runtime order `Initialize..=Retire`, while
-only policy transport `1..=4` is executable in the existing non-production
-catalog profile. Every facility action remains capability-disabled.
+Dealer facility actions `5..=25` are allocated in runtime order
+`Initialize..=Retire`, while only policy transport `1..=4` is executable in the
+existing non-production catalog profile. Every facility action remains
+capability-disabled. StructuredClaim payload codecs are owned by its separately
+integrated runtime and adapter, while Recovery payload/account contracts are
+owned by its dedicated modules; this central allocation duplicates neither
+contract and activates none of those actions.
+
+## General SettlementReceipt V3 allocation
+
+The central collision ledger reserves main-account coordinate `0x0f/3` for the
+217-byte General SettlementReceipt successor. This is a fresh version of the
+existing receipt tag, not a reinterpretation of `0x0f/2`; the two hostile
+decoders refuse each other. Runtime capability remains disabled.
+
+V3 uses the fresh PDA seed tuple
+`["general-receipt:v3", Epoch_PDA, final SettlementCandidateId,
+slice_index_le]`. Its former reserved-zero final byte is the independent
+buy/sell accounting mask. The V2 `consumed_flags` byte keeps its meaning as
+delivered-buy, delivered-sell, and exhausted. Stable accounting and delivery
+transition IDs are derived from the authenticated receipt PDA under distinct
+contract domains; neither ID is accepted from a caller or persisted. The
+receipt data ID instead hashes the authenticated PDA plus the exact current
+217-byte prestate, so both mutable latch families are committed.
+
+## General OwnerSettlement V3 allocation
+
+The central ledger reserves `0x81/3` as `ReservedDisabled` for the canonical
+General owner row. Its exact 292 bytes are tag `0x81`, version `3`, the
+authoritative 288-byte `clutch-owner-settlement` V3 semantic body, stored bump,
+and one reserved-zero flags byte. The strict outer decoder authenticates the
+V3 envelope before invoking the V3 body decoder.
+
+Coordinates `0x81/1` and `0x81/2` remain separately reserved but withdrawn.
+Future routes recognize neither as V3 and perform no migration or
+reinterpretation. The canonical PDA tuple is `owner-settlement:v3`, counted
+Epoch PDA, final `SettlementCandidateId`, and semantic owner.
+
+## General OrderPage V5 allocation
+
+The central collision ledger reserves main-account coordinate `8/5` as
+`ReservedDisabled`. It is exactly 4,140 bytes: the complete historical V4
+4,012-byte semantic prefix and slot array followed by sixteen little-endian
+Position generations. Live single and portfolio slots require a nonzero
+same-index generation; empty and tombstone slots require zero. V5 and V4
+hostile decoders refuse each other.
+
+The page commitment uses `dragons-clutch/order-page/v5` and commits the exact
+slot sequence plus the complete generation tail. The ordered page-set fold uses
+`dragons-clutch/order-set/v5`, so neither a V4 leaf nor a V4 set can be silently
+reinterpreted. Position and Reservation identities are authenticated adapter
+joins and are not persisted in the page.
 
 ## Coordinated successor account block
 
 The central collision ledger is the sole allocation owner for the following
-contiguous successor block. Every row is `ReservedDisabled`; an account codec
-or pure runtime elsewhere does not make a route executable.
+coordinated successor block. Dealer policy transport rows are
+`NonProductionLab`; every other row is `ReservedDisabled`. An account codec or
+pure runtime elsewhere does not make a route executable.
 
 | tag/version | owner | account |
 |---:|---|---|
@@ -192,7 +238,9 @@ or pure runtime elsewhere does not make a route executable.
 | `0x7e/1` | Dealer | immutable policy |
 | `0x7f/1` | Recurring Series | registry |
 | `0x80/1` | Recurring Series | present-funding compartments |
-| `0x81/1` | General V2 | owner settlement |
+| `0x81/1` | General V2 | withdrawn owner settlement V1; never a live alias |
+| `0x81/2` | General V2 | withdrawn presence-explicit owner settlement V2; never a live alias |
+| `0x81/3` | General V2 | canonical Reservation-handoff owner settlement V3 |
 | `0x82/1` | General V2 | selected fee record |
 | `0x83/1` | General V2 | owner fee carry |
 | `0x84/1` | General V2 | payer allocation |
@@ -211,15 +259,16 @@ or pure runtime elsewhere does not make a route executable.
 | `0x91/1` | SourcePlane V3 | statistic result |
 | `0x92/1` | SourcePlane V3 | liveness work receipt |
 | `0x93/1` | Dealer | immutable liveness schedule (380 bytes) |
-| `0x94/1` | Dealer | authoritative State V2 (848 bytes) |
+| `0x94/1` | Dealer | authoritative State V2 with persisted terminal evidence (980 bytes) |
 | `0x95/1` | Dealer | counted funded dependencies V2 (480 bytes) |
-| `0x98/1` | Dealer | immutable-after-activation LP page V2 (1,028 bytes) |
-| `0x99/1` | Dealer | one-generation Lease V2 (1,044 bytes) |
+| `0x98/1` | Dealer | immutable-after-activation LP page V2 (980 bytes) |
+| `0x99/1` | Dealer | selected-artifact-bound one-generation Lease V2 (1,076 bytes) |
 | `0x9a/1` | Dealer | SettlementPot V2 (1,236 bytes) |
-| `0x9b/1` | Dealer | counted Epoch binding V2 (772 bytes) |
+| `0x9b/1` | Dealer | counted General-generation-bound Epoch V2 (780 bytes) |
 | `0x9c/1` | Dealer | page terminal allocation (756 bytes) |
 | `0x9d/1` | Dealer | streamed terminal ClaimWork (1,148 bytes) |
 | `0x9e/1` | Dealer | permanent root tombstone V2 (476 bytes) |
+| `0x9f/1` | Dealer | owner-scoped exit ticket V1 (364 bytes) |
 | `0xa0/1` | Failure | external semantic root; root rent only |
 | `0xa1/1` | Liveness | immutable runtime policy |
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
@@ -227,11 +276,12 @@ or pure runtime elsewhere does not make a route executable.
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local
-account-body duplicates at those coordinates. `0x9f` deliberately remains
-unallocated. The failure root never aliases `0xa2`, holds recovery work
-principal, or emits a keeper transfer. Accepted work rewrites the failure root
-and Recovery compartment atomically; only the latter is debited for the keeper
-payment and payer headroom refund.
+account-body duplicates at those coordinates.
+
+The failure root never aliases `0xa2`, holds recovery work principal, or emits a
+keeper transfer. Accepted work rewrites the failure root and Recovery
+compartment atomically; only the latter is debited for the keeper payment and
+payer headroom refund.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
