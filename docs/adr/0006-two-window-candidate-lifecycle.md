@@ -85,6 +85,17 @@ older proposal prose below conflicts:
 This refinement is intentionally not wired into the live SBF dispatcher. It is
 not deployment or release evidence.
 
+### Third-cycle admission successor (2026-08-23)
+
+[ADR-0008](0008-individually-funded-candidate-admission.md) and the pure
+`CandidateWindowV4` / `CandidateAdmissionNodeV3` kernel supersede only this
+record's unresolved V2 admission-capacity proposal for a future account family.
+They do not reinterpret V2 accounts or intents. V2's four sponsor-funded pages
+remain historical executable evidence and retain their explicit promotion
+blockers. The successor uses individually funded reverse-linked nodes and a
+commit/reveal subdivision of `[F,S)`; `[S,V)` verification and deterministic
+best-valid-submitted selection are unchanged at the semantic boundary.
+
 Introduce a new general candidate lifecycle for **new epochs only**. It has two
 exclusive slot boundaries after the book freezes:
 

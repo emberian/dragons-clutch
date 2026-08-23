@@ -10,10 +10,12 @@
 
 mod codec;
 mod state;
+mod successor;
 mod transition;
 mod wire;
 
 pub use codec::CodecError;
 pub use state::*;
+pub use successor::*;
 pub use transition::*;
 pub use wire::*;

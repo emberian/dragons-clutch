@@ -18,12 +18,25 @@ It owns:
 - monotone routing of unsolicited lamport surplus to the immutable neutral sink;
 - atomic pure transitions that validate copies before publishing output.
 
+It also contains the registry-independent `CandidateWindowV4` /
+`CandidateAdmissionNodeV3` successor seam. That seam leaves every V2 byte
+unchanged, splits submission into commit and reveal subintervals, removes the
+shared finite sponsor-funded candidate page, and enumerates individually funded
+nodes through a reverse-linked head plus exact live/closed counts. One
+instruction creates, reveals, terminalizes, or closes one node. The checked
+best rank remains independent of append order.
+
 It does not own hashing, PDAs, Solana account memory, Clock authentication,
 relation execution, score computation, lamport movement, CPI, or transaction
 atomicity. The adapter obligations are listed in
 [`../../docs/implementation/CANDIDATE_LIFECYCLE_V2_KERNEL.md`](../../docs/implementation/CANDIDATE_LIFECYCLE_V2_KERNEL.md).
-Copy-resistant admission, capacity-quality denial of service, the SBF adapter,
-and epoch-root retirement remain explicit promotion blockers.
+For V2, copy-resistant admission and the fixed-capacity quality denial remain
+explicit blockers. The successor prevents simple post-reveal witness copying
+from redirecting the reward and removes the fixed shared admission slot, but it
+does not claim private order flow, proposer-censorship resistance, general MEV
+resistance, or unlimited verification throughput. Its hash/account adapter,
+live tags, candidate-bundle join, SVM evidence, and counted Epoch integration
+remain unimplemented.
 
 Run independently:
 

@@ -34,3 +34,7 @@ Initial records:
   exact-once reservation and epoch-child accounting, monotone epoch allocation,
   and permanent compact tombstones required before Position or general Epoch
   deletion can be re-enabled for new account versions.
+- [0008](0008-individually-funded-candidate-admission.md): experimental pure
+  successor for individually funded reverse-linked candidate nodes and
+  commit/reveal admission inside the two-window lifecycle; no live account or
+  instruction tags are allocated.

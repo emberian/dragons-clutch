@@ -316,3 +316,14 @@ padding, premature and cross-account solver compartments, surplus
 injection/routing, codec versions/lengths, score-policy mixing, arithmetic
 overflow, and typed unresolved blockers. The remaining evidence must be supplied
 by the adapter and SVM integration tests named above.
+
+## Registry-independent admission successor
+
+The same crate now contains an experimental, pure successor described by
+[`../adr/0008-individually-funded-candidate-admission.md`](../adr/0008-individually-funded-candidate-admission.md).
+It does not modify the V2 codecs above and allocates no live account or intent
+tag. Its host tests exercise 80 admissions, commit/reveal binding, both exact
+submission sub-boundaries, the verification close, equal economic-score ties,
+abandonment, replay, underfunding, selected-settlement evidence, reverse close,
+and complete retirement counts. Those tests are kernel evidence only, not SBF,
+CU, rent, cryptographic-hash, deployment, or mainnet evidence.
