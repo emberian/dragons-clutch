@@ -1,24 +1,25 @@
 # Dealer catalog and facility-foundation SBF vertical slice
 
-Status: **EXPLICITLY NON-PRODUCTION / IMMUTABLE CATALOG PLUS INITIALIZE,
-BOUNDED LP FUNDING, AND BIND-EPOCH / NO TRADING CAPABILITY**.
+Status: **EXPLICITLY NON-PRODUCTION / SELF-HOSTED LIVENESS, BOUNDED LP FUNDING,
+ACTIVATION/CANCELLED REFUND, AND BIND-EPOCH / NO ORDER OR SETTLEMENT CAPABILITY**.
 
 The signed resumable catalog persists exactly one typed `DealerPolicyV1`,
 `DealerLivenessScheduleV1`, or generic `RuntimeLivenessPolicyV1` body. The
 separate facility adapter owns exact Initialize, bounded LP-page creation,
-contribution, pre-activation withdrawal, and BindEpoch transitions. It does not
-enable activation, selection, trading, settlement, claims, or retirement.
+contribution, pre-activation withdrawal, activation, stale-funding cancellation,
+exhaustive cancelled-sponsor refund, and BindEpoch transitions. It does not
+enable order admission, selection, settlement, claims, or ordinary retirement.
 
 The separate profile identity is:
 
 ```text
-dragons-clutch/capability-profile/non-production-dealer-self-hosted-liveness-init-lp-funding-bind-lab/v3
-ff8cd9b29e61da7cb35ad9f0b86a275d238ac4fa9fdd859ea5feb572ba382584
+dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lab/v6
+2c780c81718949b65cdc54822a9e3039a13d664d5709faa9495593d4546ae442
 ```
 
 Every production profile rejects these Dealer coordinates before account
 inspection. The laboratory profile rejects every legacy intent and enables
-only Dealer family 76, version 1, local actions `1..=8` and `12`.
+only Dealer family 76, version 1, local actions `1..=12`.
 
 ## Wire and account contract
 
@@ -103,10 +104,11 @@ No mock-source account, feature, parser, fixture, or dependency participates
 in this route.
 
 The laboratory now has exact Initialize, `CreateLpPage`, `Contribute`,
-`WithdrawFunding`, and BindEpoch handlers over canonical PositionV3, ReplayV3,
-Dealer StateV2, funded-dependency, action-receipt, LP-page, General Epoch, and
-runtime-liveness owners. The immutable schedule and generic runtime policy can
-be published through this same catalog rather than injected as fixture DTOs.
+`WithdrawFunding`, `Activate`, `CancelFunding`, `RefundCancelledSponsor`, and
+BindEpoch handlers over canonical PositionV3, ReplayV3, Dealer StateV2,
+funded-dependency, action-receipt, LP-page, General Epoch, and runtime-liveness
+owners. The immutable schedule and generic runtime policy can be published
+through this same catalog rather than injected as fixture DTOs.
 Initialize atomically creates all seven canonical runtime compartment PDAs from
 exact present native-lamport work and rent debits. Hostile prefunds remain
 neutral-sink donations and never discount the liveness payer.
@@ -133,8 +135,34 @@ page owns sorted LP entries while State owns aggregate shares, live-owner count,
 current facility Position semantic ID, and page-set root. Both Position bodies,
 the page, State, and Replay advance atomically.
 
+Activation consumes a typed Clearing receipt only while Clock is inside the
+immutable trading window. It authenticates the last mutable tail and requires
+the exact facility Position cash/Egg vector to equal sponsor capital plus every
+admitted capital unit. It then seals the tail, moves State from Funding to
+Trading, makes sponsor capital non-refundable under the selected policy, and
+advances Replay atomically with the donation-safe Clearing spend. A partial
+page set, insufficient shares, reserved cash, excess/short collateral, a stale
+Clock, or a substituted liveness payer cannot activate the facility.
+
+Stale-funding cancellation consumes the Recovery compartment and moves only a
+still-Funding State into Cancelled. Clock must prove either the trading window
+has ended or the opening slot arrived without the immutable minimum LP shares.
+It does not move sponsor/LP collateral, close a page, or treat the Recovery
+payment as a refund: LP owners first withdraw their exact capital units through
+the ordinary caller-funded route, and sponsor-principal return remains a
+separate typed transition after exhaustive LP/page cleanup.
+
+Cancelled sponsor refund is permissionless keeper work but its destination is
+not caller-selected: the ordinary PositionV3 owner must equal State's immutable
+sponsor-refund recipient. Only the exact recorded sponsor principal moves from
+the facility Position, and the pure transition additionally requires zero LP
+shares, zero live LP owners/pages, zero Eggs/reserved cash, and a zero facility
+Position post-balance before State can become Retiring. Recovery keeper payment,
+receipt/page rent, hostile donations, Hoard principal, and fees are disjoint
+from this collateral-atom transfer.
+
 Every other Dealer facility action remains capability-disabled, including
-activation, selection, collection, delivery, resolution, claims, and retirement.
+selection, collection, delivery, resolution, claims, and retirement.
 
 Run the real-bank laboratory with:
 
