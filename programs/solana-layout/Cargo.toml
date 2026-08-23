@@ -22,6 +22,10 @@ profile-general-source-v2-point = []
 # local-bank vertical slice.  The discriminants remain centrally allocated in
 # every build, but ordinary deployable profiles refuse their bytes.
 non-production-product-series-lab = ["dep:clutch-product-series"]
+# Makes the immutable Failure relation-policy artifact decodable for the
+# disabled Recovery78/v1 SBF seam. The discriminant remains reserved in every
+# build; ordinary deployable profiles reject it.
+non-production-failure-recovery-lab = ["dep:clutch-failure-policy-runtime"]
 
 [dependencies]
 # The relation whose order types the page→order projection maps onto.  Both
@@ -29,6 +33,7 @@ non-production-product-series-lab = ["dep:clutch-product-series"]
 clutch-batch = { path = "../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }
 clutch-product-series = { path = "../../crates/clutch-product-series", optional = true }
+clutch-failure-policy-runtime = { path = "../../crates/clutch-failure-policy-runtime", optional = true }
 
 [target.'cfg(target_os = "solana")'.dependencies]
 # Safe wrapper around Solana's native SHA-256 syscall.  Order-page verification
