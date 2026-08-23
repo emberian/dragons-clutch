@@ -199,6 +199,22 @@ pub const SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION: u8 = 1;
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG: u8 = 0x92;
 /// SourcePlane V3 liveness-work receipt account version.
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION: u8 = 1;
+/// Single-custody failure semantic root account discriminator.
+pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG: u8 = 0xa0;
+/// Single-custody failure semantic root account version.
+pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Immutable runtime-liveness policy account discriminator.
+pub const FAILURE_LIVENESS_POLICY_ACCOUNT_TAG: u8 = 0xa1;
+/// Immutable runtime-liveness policy account version.
+pub const FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION: u8 = 1;
+/// Sole persisted Recovery work/rent custody account discriminator.
+pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG: u8 = 0xa2;
+/// Sole persisted Recovery work/rent custody account version.
+pub const FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION: u8 = 1;
+/// Permanent failure-generation replay tombstone discriminator.
+pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG: u8 = 0xa3;
+/// Permanent failure-generation replay tombstone version.
+pub const FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -699,6 +715,42 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         status: AllocationStatus::ReservedDisabled,
         name: "source-v3-work-receipt-v1-account",
     },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
+            version: FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-external-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_LIVENESS_POLICY_ACCOUNT_TAG,
+            version: FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-liveness-policy-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
+            version: FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-external-recovery-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG,
+            version: FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "failure-replay-tombstone-v1-account",
+    },
 ];
 
 /// One reserved successor intent family.
@@ -1023,6 +1075,61 @@ impl SourceSeriesAction {
     }
 }
 
+/// Evidence-only Recovery family-local action allocations inside 78/v1.
+///
+/// These coordinates freeze payload/account contracts only. Every capability
+/// remains disabled until an atomic release review promotes the whole family.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveryAction {
+    /// Create the semantic root after exact liveness funding is present.
+    InitializeFailureRoot = 1,
+    /// Record one authenticated source-owned failure trigger.
+    TriggerSourceFailure = 2,
+    /// Record the frozen evidence relation's deterministic refusal.
+    TriggerRelationRefusal = 3,
+    /// Advance the finite immutable repair schedule.
+    AdvanceRecoverySchedule = 4,
+    /// Accept one source-authenticated repair unit and spend liveness work.
+    AcceptRecoveryWork = 5,
+    /// Resolve from caller-funded accepted evidence.
+    ResolveCallerFunded = 6,
+    /// Resolve while paying one final source-authenticated repair unit.
+    ResolvePaidRecovery = 7,
+    /// Close only the external liveness Recovery compartment.
+    CloseRecoveryFunding = 8,
+    /// Close the resolved semantic root after retirement/source/replay joins.
+    CloseFailureRoot = 9,
+}
+
+impl RecoveryAction {
+    /// First Recovery-owned local action tag.
+    pub const FIRST_TAG: u8 = 1;
+    /// Last Recovery-owned local action tag.
+    pub const LAST_TAG: u8 = 9;
+
+    /// Return the family-local action tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one Recovery-owned action tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::InitializeFailureRoot),
+            2 => Some(Self::TriggerSourceFailure),
+            3 => Some(Self::TriggerRelationRefusal),
+            4 => Some(Self::AdvanceRecoverySchedule),
+            5 => Some(Self::AcceptRecoveryWork),
+            6 => Some(Self::ResolveCallerFunded),
+            7 => Some(Self::ResolvePaidRecovery),
+            8 => Some(Self::CloseRecoveryFunding),
+            9 => Some(Self::CloseFailureRoot),
+            _ => None,
+        }
+    }
+}
+
 /// One allocated successor family-local action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
@@ -1030,6 +1137,8 @@ pub enum ExtensionAction {
     GeneralV2(GeneralV2Action),
     /// One SourcePlane V3 action in the shared SourceSeries family.
     SourceV3(SourceSeriesAction),
+    /// One evidence-only Recovery action.
+    Recovery(RecoveryAction),
 }
 
 impl ExtensionAction {
@@ -1038,6 +1147,7 @@ impl ExtensionAction {
         match self {
             Self::GeneralV2(action) => action.tag(),
             Self::SourceV3(action) => action.tag(),
+            Self::Recovery(action) => action.tag(),
         }
     }
 }
@@ -1072,9 +1182,13 @@ pub const fn decode_extension_action(
             Some(action) => Ok(ExtensionAction::SourceV3(action)),
             None => Err(RegistryError::UnknownLocalAction),
         },
-        Some(
-            ExtensionFamily::StructuredClaim | ExtensionFamily::Dealer | ExtensionFamily::Recovery,
-        ) => Err(RegistryError::UnknownLocalAction),
+        Some(ExtensionFamily::Recovery) => match RecoveryAction::from_tag(local_action) {
+            Some(action) => Ok(ExtensionAction::Recovery(action)),
+            None => Err(RegistryError::UnknownLocalAction),
+        },
+        Some(ExtensionFamily::StructuredClaim | ExtensionFamily::Dealer) => {
+            Err(RegistryError::UnknownLocalAction)
+        }
         None => Err(RegistryError::UnknownFamilyVersion),
     }
 }
@@ -1430,6 +1544,61 @@ mod tests {
     }
 
     #[test]
+    fn failure_recovery_account_block_is_complete_and_disabled() {
+        let expected = [
+            (
+                FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
+                FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION,
+            ),
+            (
+                FAILURE_LIVENESS_POLICY_ACCOUNT_TAG,
+                FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION,
+            ),
+            (
+                FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
+                FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
+            ),
+            (
+                FAILURE_REPLAY_TOMBSTONE_ACCOUNT_TAG,
+                FAILURE_REPLAY_TOMBSTONE_ACCOUNT_VERSION,
+            ),
+        ];
+        for (offset, (tag, version)) in expected.into_iter().enumerate() {
+            assert_eq!(tag, 0xa0 + u8::try_from(offset).expect("small block"));
+            let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+                coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+            });
+            assert_eq!(
+                matching.next().map(|entry| entry.status),
+                Some(AllocationStatus::ReservedDisabled),
+                "account {tag}/{version}"
+            );
+            assert!(
+                matching.next().is_none(),
+                "duplicate account {tag}/{version}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_actions_are_exact_and_disabled_allocations() {
+        for local_action in u8::MIN..=u8::MAX {
+            let expected =
+                (RecoveryAction::FIRST_TAG..=RecoveryAction::LAST_TAG).contains(&local_action);
+            assert_eq!(
+                decode_extension_action(
+                    RECOVERY_FAMILY_TAG,
+                    RECOVERY_FAMILY_VERSION,
+                    local_action,
+                )
+                .is_ok(),
+                expected,
+                "recovery action {local_action}"
+            );
+        }
+    }
+
+    #[test]
     fn counted_retirement_wrapper_coordinates_are_reserved_but_disabled() {
         let expected = [
             (
@@ -1468,7 +1637,7 @@ mod tests {
     }
 
     #[test]
-    fn general_and_source_actions_are_exhaustive_and_other_families_allocate_none() {
+    fn implemented_family_actions_are_exhaustive_and_unimplemented_families_allocate_none() {
         for local_action in u8::MIN..=u8::MAX {
             let general = decode_extension_action(74, 1, local_action);
             assert_eq!(
@@ -1483,7 +1652,13 @@ mod tests {
                     .contains(&local_action),
                 "source action {local_action}"
             );
-            for (tag, version) in [(75, 1), (76, 1), (78, 1)] {
+            let recovery = decode_extension_action(78, 1, local_action);
+            assert_eq!(
+                recovery.is_ok(),
+                (RecoveryAction::FIRST_TAG..=RecoveryAction::LAST_TAG).contains(&local_action),
+                "recovery action {local_action}"
+            );
+            for (tag, version) in [(75, 1), (76, 1)] {
                 assert_eq!(
                     decode_extension_action(tag, version, local_action),
                     Err(RegistryError::UnknownLocalAction),

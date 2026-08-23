@@ -89,8 +89,38 @@ actions 35 through 38 have canonical payload contracts while remaining
 disabled. Actions 36 and 37 deliberately do not allocate separately callable
 virtual-inventory actions: each future route must join its inventory mutation
 and one real receipt end under one authenticated transition identity.
-The other four family action spaces are empty: every local action is unknown
-until an atomic design wave fixes its payload and capability contract.
+Recovery 78/v1 reserves these local actions, all disabled:
+
+1. `InitializeFailureRoot`
+2. `TriggerSourceFailure`
+3. `TriggerRelationRefusal`
+4. `AdvanceRecoverySchedule`
+5. `AcceptRecoveryWork`
+6. `ResolveCallerFunded`
+7. `ResolvePaidRecovery`
+8. `CloseRecoveryFunding`
+9. `CloseFailureRoot`
+
+The Structured-claim and Covered-dealer family action spaces remain empty:
+every local action is unknown until an atomic design wave fixes its payload and
+capability contract.
+
+## Disabled failure/recovery account block
+
+The main-account namespace reserves one contiguous block after the tentative
+Dealer range `0x93..=0x9e`; `0x9f` deliberately remains unallocated:
+
+| account family | tag | version | semantic codec owner |
+| --- | ---: | ---: | --- |
+| Failure external semantic root | `0xa0` | 1 | failure adapter; root rent only |
+| Immutable runtime-liveness policy | `0xa1` | 1 | liveness runtime |
+| External Recovery compartment | `0xa2` | 1 | liveness runtime; sole work/rent custody |
+| Failure replay tombstone | `0xa3` | 1 | terminal/replay owner |
+
+The failure root never aliases `0xa2`, never holds recovery work principal, and
+never emits a keeper transfer. An accepted-work instruction must rewrite the
+failure root and the external Recovery compartment atomically; the latter is
+the sole account debited for the keeper payment and payer headroom refund.
 
 ## Decimal 74 is not hexadecimal `0x74`
 

@@ -131,6 +131,7 @@ pub const fn extension_intent_action_allocated(
         Ok(
             clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
                 | clutch_solana_layout::registry::ExtensionAction::SourceV3(_)
+                | clutch_solana_layout::registry::ExtensionAction::Recovery(_)
         )
     )
 }
@@ -232,7 +233,14 @@ mod tests {
                         && (clutch_solana_layout::registry::SourceSeriesAction::FIRST_TAG
                             ..=clutch_solana_layout::registry::SourceSeriesAction::LAST_TAG)
                             .contains(&local_action);
-                    let expected_allocated = general || source;
+                    let recovery = family_tag
+                        == clutch_solana_layout::registry::RECOVERY_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION
+                        && (clutch_solana_layout::registry::RecoveryAction::FIRST_TAG
+                            ..=clutch_solana_layout::registry::RecoveryAction::LAST_TAG)
+                            .contains(&local_action);
+                    let expected_allocated = general || source || recovery;
                     assert_eq!(
                         extension_intent_action_allocated(family_tag, family_version, local_action,),
                         expected_allocated,

@@ -180,6 +180,15 @@ pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
 pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
 
+/// Single-custody failure semantic root, keyed by V2 market and generation.
+pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
+/// Immutable runtime-liveness policy account.
+pub const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
+/// Sole external Recovery work/rent custody account.
+pub const SEED_FAILURE_EXTERNAL_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
+/// Permanent failure-generation replay tombstone.
+pub const SEED_FAILURE_REPLAY_TOMBSTONE: &[u8] = b"dc:failure-replay:v1";
+
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_REALM, realm])
@@ -233,6 +242,59 @@ pub fn replay_pda(
     find(
         program_id,
         &[SEED_REPLAY, market, owner, &generation.to_le_bytes()],
+    )
+}
+
+/// Canonical single-custody failure semantic root.
+pub fn failure_external_root_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_EXTERNAL_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical immutable runtime-liveness policy account.
+pub fn failure_liveness_policy_pda(program_id: &Pubkey, policy_id: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_FAILURE_LIVENESS_POLICY, policy_id])
+}
+
+/// Canonical sole Recovery work/rent custody account.
+pub fn failure_external_recovery_pda(
+    program_id: &Pubkey,
+    lifecycle_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_EXTERNAL_RECOVERY,
+            lifecycle_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical permanent replay tombstone for one failure generation.
+pub fn failure_replay_tombstone_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_FAILURE_REPLAY_TOMBSTONE,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
     )
 }
 
