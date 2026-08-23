@@ -122,9 +122,11 @@ pub const fn direct_v3_intent_enabled(tag: u8, version: u8) -> bool {
 
 /// Return whether a family-local action has an allocation in the central registry.
 ///
-/// Allocation does not imply execution capability.  Currently only General V2
-/// local actions 1 through 34 are allocated; the other family action spaces
-/// remain intentionally empty until their payload contracts are fixed.
+/// Allocation does not imply execution capability. General V2 local actions
+/// 1 through 34 and Source/Series V2 actions 1 through 6 are allocated. The
+/// Source/Series payload/account codecs are frozen only for the explicit
+/// laboratory, while all six runtime tuples remain disabled until their
+/// authenticated adapter joins exist.
 pub const fn extension_intent_action_allocated(
     family_tag: u8,
     family_version: u8,
@@ -136,9 +138,10 @@ pub const fn extension_intent_action_allocated(
             family_version,
             local_action,
         ),
-        Ok(clutch_solana_layout::registry::ExtensionAction::GeneralV2(
-            _
-        ))
+        Ok(
+            clutch_solana_layout::registry::ExtensionAction::GeneralV2(_)
+                | clutch_solana_layout::registry::ExtensionAction::SourceSeries(_)
+        )
     )
 }
 

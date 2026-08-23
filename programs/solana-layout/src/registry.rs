@@ -87,6 +87,14 @@ pub const GENERAL_V2_ECONOMIC_DOMAIN_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG: u8 = 0x7c;
 /// General V2 selected-candidate settlement-authority account version.
 pub const GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION: u8 = 1;
+/// Immutable registered-Series account discriminator.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7d;
+/// Immutable registered-Series account version.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 = 1;
+/// Mutable segregated Series-funding state account discriminator.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x7e;
+/// Mutable segregated Series-funding state account version.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -365,6 +373,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-selected-candidate-v1-account",
     },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-series-registry-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-series-funding-v1-account",
+    },
 ];
 
 /// One reserved successor intent family.
@@ -609,11 +635,62 @@ impl GeneralV2Action {
     }
 }
 
+/// Source/Series V2 family-local action allocations.
+///
+/// These tags have exact payload codecs in [`crate::product_series`] when the
+/// non-production laboratory is compiled. Allocation remains separate from
+/// executable capability; the SBF product keeps every tuple disabled until
+/// the authenticated registry, source, collateral, liveness, and failure
+/// receipt joins required by that action exist together.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceSeriesAction {
+    /// Register one immutable V5 Series against an authenticated registry release.
+    RegisterSeries = 1,
+    /// Capitalize the five Series funding compartments.
+    ActivateFunding = 2,
+    /// Create or converge the next eligible occurrence atomically.
+    AdvanceOccurrence = 3,
+    /// Advance one elapsed ordinal without spending its allocation.
+    LapseOccurrence = 4,
+    /// Observe balance surplus as separately owned donation residue.
+    ObserveDonation = 5,
+    /// Refund remaining payer principal and dispose donation residue.
+    CloseFunding = 6,
+}
+
+impl SourceSeriesAction {
+    /// First allocated Source/Series V2 local action tag.
+    pub const FIRST_TAG: u8 = 1;
+    /// Last allocated Source/Series V2 local action tag.
+    pub const LAST_TAG: u8 = 6;
+
+    /// Return the local action tag.
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one allocated Source/Series V2 local action tag.
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::RegisterSeries),
+            2 => Some(Self::ActivateFunding),
+            3 => Some(Self::AdvanceOccurrence),
+            4 => Some(Self::LapseOccurrence),
+            5 => Some(Self::ObserveDonation),
+            6 => Some(Self::CloseFunding),
+            _ => None,
+        }
+    }
+}
+
 /// One allocated successor family-local action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
     /// One General V2 local action.
     GeneralV2(GeneralV2Action),
+    /// One Source/Series V2 local action.
+    SourceSeries(SourceSeriesAction),
 }
 
 impl ExtensionAction {
@@ -621,6 +698,7 @@ impl ExtensionAction {
     pub const fn local_tag(self) -> u8 {
         match self {
             Self::GeneralV2(action) => action.tag(),
+            Self::SourceSeries(action) => action.tag(),
         }
     }
 }
@@ -651,11 +729,12 @@ pub const fn decode_extension_action(
             Some(action) => Ok(ExtensionAction::GeneralV2(action)),
             None => Err(RegistryError::UnknownLocalAction),
         },
+        Some(ExtensionFamily::SourceSeries) => match SourceSeriesAction::from_tag(local_action) {
+            Some(action) => Ok(ExtensionAction::SourceSeries(action)),
+            None => Err(RegistryError::UnknownLocalAction),
+        },
         Some(
-            ExtensionFamily::StructuredClaim
-            | ExtensionFamily::Dealer
-            | ExtensionFamily::SourceSeries
-            | ExtensionFamily::Recovery,
+            ExtensionFamily::StructuredClaim | ExtensionFamily::Dealer | ExtensionFamily::Recovery,
         ) => Err(RegistryError::UnknownLocalAction),
         None => Err(RegistryError::UnknownFamilyVersion),
     }
@@ -840,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
+    fn every_successor_account_coordinate_is_reserved_but_disabled() {
         let expected = [
             (
                 GENERAL_V2_CLEAR_WORK_ACCOUNT_TAG,
@@ -879,6 +958,14 @@ mod tests {
                 GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_TAG,
                 GENERAL_V2_SELECTED_CANDIDATE_ACCOUNT_VERSION,
             ),
+            (
+                SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION,
+            ),
         ];
         for (tag, version) in expected {
             let mut matches = 0u8;
@@ -905,7 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn general_actions_are_exhaustive_and_other_families_allocate_none() {
+    fn allocated_actions_are_exhaustive_and_other_families_allocate_none() {
         for local_action in u8::MIN..=u8::MAX {
             let general = decode_extension_action(74, 1, local_action);
             assert_eq!(
@@ -913,7 +1000,14 @@ mod tests {
                 (GeneralV2Action::FIRST_TAG..=GeneralV2Action::LAST_TAG).contains(&local_action),
                 "general action {local_action}"
             );
-            for (tag, version) in [(75, 1), (76, 1), (77, 2), (78, 1)] {
+            let source_series = decode_extension_action(77, 2, local_action);
+            assert_eq!(
+                source_series.is_ok(),
+                (SourceSeriesAction::FIRST_TAG..=SourceSeriesAction::LAST_TAG)
+                    .contains(&local_action),
+                "source-series action {local_action}"
+            );
+            for (tag, version) in [(75, 1), (76, 1), (78, 1)] {
                 assert_eq!(
                     decode_extension_action(tag, version, local_action),
                     Err(RegistryError::UnknownLocalAction),

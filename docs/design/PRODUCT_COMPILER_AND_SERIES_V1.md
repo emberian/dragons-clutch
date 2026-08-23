@@ -1,6 +1,6 @@
 # Product compiler and recurring Series V1
 
-Status: **PROPOSED / EXECUTABLE HOST + ALLOCATION-FREE SUCCESSOR CORE / NON-PRODUCTION SBF ARTIFACT CATALOG ONLY** (2026-08-23)
+Status: **PROPOSED / EXECUTABLE HOST + ALLOCATION-FREE SUCCESSOR CORE / FROZEN NON-PRODUCTION SBF ABI, RUNTIME DISABLED** (2026-08-23)
 
 Executable model: [`research/product-compiler-v1`](../../research/product-compiler-v1)
 
@@ -32,7 +32,11 @@ derived rather than persisted twice. Its transitions require adapter-authenticat
 Clock, registry/collateral binding, custody, exact-existing component state,
 and donation transfers. No concrete SBF adapter implements that authority yet,
 so these are executable pure transition contracts, not evidence of live account
-mutation.
+mutation. The first Source/Series V2 action payloads, registry/funding account
+wrappers, and custody PDA schema are now frozen in
+[`SERIES_SBF_ABI_V1.md`](./SERIES_SBF_ABI_V1.md). Their runtime capability set
+remains empty: fixing bytes is not registry, source, collateral, failure, or
+funding authentication.
 
 The laboratory artifact ABI is exact:
 
@@ -315,9 +319,10 @@ child counters, and exact runtime account widths do not exist yet.
    compact persisted Instance. Product Template, basis, price policy, Genesis,
    Series Plan, attachment, quote, and funding-terms codecs now have a
    non-production immutable SBF publication path. The pure successor now has a
-   hostile funding-state codec and authenticated-authority transition seam, but
-   there is still no SBF Series registry, funding PDA/custody ABI, or adapter
-   implementing that seam.
+   hostile funding-state codec and authenticated-authority transition seam. The
+   non-production SBF registry/funding payloads, account wrappers, and custody
+   PDA ABI are frozen but runtime-disabled; the concrete adapter implementing
+   every receipt join is still missing.
 3. Bind the full InstanceId in Market identity and add a monotone market epoch
    cursor; do not retain caller-chosen market or epoch identities.
 4. Give every Series compartment payer-principal/donation/terminal ownership

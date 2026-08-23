@@ -34,7 +34,7 @@ family version creates a new namespace; it does not inherit capability.
 | General V2 | 74 | `0x4a` | 1 | disabled |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
 | Covered dealer | 76 | `0x4c` | 1 | disabled |
-| Source plane / Series | 77 | `0x4d` | 2 | disabled |
+| Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
@@ -77,10 +77,32 @@ General V2 reserves local actions 1 through 34, in order:
 33. `CloseEpoch`
 34. `ClosePosition`
 
-These names allocate local tags only. They do not freeze payload bytes, account
-lists, account codecs, or transition semantics. The other four family action
-spaces are empty: every local action is unknown until an atomic design wave
-fixes its payload and capability contract.
+These General V2 names allocate local tags only. They do not freeze payload
+bytes, account lists, account codecs, or transition semantics.
+
+Source/Series V2 now allocates six action tags with exact laboratory payload
+codecs in `clutch_solana_layout::product_series`:
+
+1. `RegisterSeries`
+2. `ActivateFunding`
+3. `AdvanceOccurrence`
+4. `LapseOccurrence`
+5. `ObserveDonation`
+6. `CloseFunding`
+
+Allocation still grants no execution capability. The program's executable
+extension set remains empty. In particular, a decoded registry release ID or
+capability-profile ID is not authority: registration stays disabled until the
+adapter can reconstruct `RegistryCapabilityProjectionV2` from an authenticated
+central release, and each value-bearing action stays disabled until its exact
+source, collateral, liveness, and failure receipts are authenticated.
+
+The Source/Series account namespace reserves `0x7d/1` for the immutable Series
+registration and `0x7e/1` for the mutable Series-funding wrapper. Their exact
+160-byte and 328-byte codecs are fixed, but their allocation status is
+reserved-disabled. The funding wrapper adds only tag/version/bump/flags around
+the pure 324-byte `SeriesFundingStateV1`; it does not copy its cursor or balance
+facts.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -105,7 +127,7 @@ account-layout inventory.
 
 Capability membership is keyed by the exact triple `(family tag, family
 version, local action)`. The executable set is currently empty. The SBF
-dispatcher recognizes an allocated General V2 triple only to return
+dispatcher recognizes an allocated General V2 or Source/Series V2 triple only to return
 `UnsupportedInstruction` before reading accounts. Unknown family versions and
 unknown local actions fail strict decoding and cannot fall into a legacy
 handler.
@@ -120,7 +142,8 @@ A later activation must change the following atomically:
 5. update this registry and its collision tests without changing legacy golden
    bytes or packet limits.
 
-General V2 local actions 1 through 34 listed above are already
+General V2 local actions 1 through 34 and Source/Series V2 local actions 1
+through 6 listed above are already
 **reserved-disabled allocations**: their numeric coordinates are in the
 registry, but they have no payload codec or executable capability. Unlisted
 future local-action proposals, and every proposed account shape, stay outside
