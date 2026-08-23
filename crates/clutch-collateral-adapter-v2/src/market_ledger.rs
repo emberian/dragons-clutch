@@ -16,8 +16,9 @@ use clutch_retirement::{
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    digest, AcceptedClaimRedemptionCollateralV2, AcceptedPositionCollateralTransferV3,
-    CustodyTransferKindV2, Error, Id, Result,
+    admit_collateral_account_v2, digest, AcceptedClaimRedemptionCollateralV2,
+    AcceptedPositionCollateralTransferV3, BoundCollateralProfileV2, CustodyTransferKindV2, Error,
+    Id, Result, RuntimeAccountViewV2, TokenAccountRoleV2,
 };
 
 /// Reused historical Hoard discriminator under the full-width V2 layout.
@@ -61,6 +62,9 @@ pub const FRACTIONAL_CLAIM_LEDGER_RETIREMENT_DOMAIN_V3: &[u8] =
 /// Exact absent-account Market-liability founding plan domain.
 pub const MARKET_LIABILITY_FOUNDING_DOMAIN_V3: &[u8] =
     b"dragons-clutch/market-liability/founding/v3\0";
+/// Accepted exact postwrite Market-liability founding receipt domain.
+pub const ACCEPTED_MARKET_LIABILITY_FOUNDING_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/market-liability/founding-accepted/v3\0";
 
 const HEADER_BYTES: usize = 16;
 const HOARD_ID_COUNT: usize = 7;
@@ -456,6 +460,50 @@ pub struct MarketLiabilityFoundingPlanV3 {
     founding_id: Id,
 }
 
+/// Hostile runtime observations after the liability/custody founding step.
+///
+/// The SBF adapter supplies these directly from reloaded accounts. This public
+/// view is not authority; only an exact private-field founding plan can be
+/// accepted against it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MarketLiabilityFoundingPostwriteV3<'a> {
+    /// Exact program-owned HoardV2 account address.
+    pub hoard_account: Id,
+    /// Reloaded HoardV2 bytes.
+    pub hoard_data: &'a [u8],
+    /// Exact program-owned ClaimLedgerV3 account address.
+    pub claim_ledger_account: Id,
+    /// Reloaded ClaimLedgerV3 bytes.
+    pub claim_ledger_data: &'a [u8],
+    /// Reloaded release-selected Hoard collateral token account.
+    pub hoard_token: RuntimeAccountViewV2<'a>,
+}
+
+/// Accepted zero-liability/custody founding capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedMarketLiabilityFoundingV3 {
+    plan: MarketLiabilityFoundingPlanV3,
+    visible_hoard_atoms: u64,
+    receipt_id: Id,
+}
+
+impl AcceptedMarketLiabilityFoundingV3 {
+    /// Complete exact founding plan whose poststate was observed.
+    pub const fn plan(self) -> MarketLiabilityFoundingPlanV3 {
+        self.plan
+    }
+
+    /// Reloaded Hoard token amount; founding requires exact zero.
+    pub const fn visible_hoard_atoms(self) -> u64 {
+        self.visible_hoard_atoms
+    }
+
+    /// Exact receipt Product can count for the bounded core-liability step.
+    pub const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
+}
+
 impl MarketLiabilityFoundingPlanV3 {
     /// Exact absent HoardV2 account the runtime must create.
     pub const fn hoard_account(self) -> Id {
@@ -597,6 +645,56 @@ pub fn prepare_market_liability_founding_v3<B: PositionV3Sha256Backend>(
         hoard_id,
         claim_ledger_id,
         founding_id,
+    })
+}
+
+/// Accept the liability/custody founding step only after exact account reloads.
+///
+/// The SBF adapter must additionally authenticate program ownership, canonical
+/// PDAs, FoundationVault rent deltas, and its private Product founding
+/// authority. This contract checks the semantic bytes and external custody
+/// poststate owned by the collateral plane.
+pub fn accept_market_liability_founding_v3(
+    bound: BoundCollateralProfileV2,
+    plan: MarketLiabilityFoundingPlanV3,
+    postwrite: MarketLiabilityFoundingPostwriteV3<'_>,
+) -> Result<AcceptedMarketLiabilityFoundingV3> {
+    if postwrite.hoard_account != plan.hoard_account
+        || postwrite.claim_ledger_account != plan.claim_ledger_account
+        || HoardV2::decode(postwrite.hoard_data)? != plan.hoard
+        || ClaimLedgerV3::decode(postwrite.claim_ledger_data)? != plan.claim_ledger
+        || postwrite.hoard_token.key != plan.hoard.token_account
+    {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let observation =
+        admit_collateral_account_v2(bound, postwrite.hoard_token, TokenAccountRoleV2::Hoard)?;
+    if observation.address != plan.hoard.token_account
+        || observation.owner_authority != plan.hoard.authority
+        || observation.semantic_owner != plan.hoard.market_instance_id
+        || observation.compartment != 1
+        || observation.amount_atoms != 0
+        || plan.hoard.required_custody_atoms()? != 0
+    {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let receipt_id = digest(
+        ACCEPTED_MARKET_LIABILITY_FOUNDING_DOMAIN_V3,
+        &[
+            &plan.founding_id.bytes(),
+            &postwrite.hoard_account.bytes(),
+            &plan.hoard_id.bytes(),
+            &postwrite.claim_ledger_account.bytes(),
+            &plan.claim_ledger_id.bytes(),
+            &observation.address.bytes(),
+            &observation.amount_atoms.to_le_bytes(),
+        ],
+    );
+    receipt_id.require_live()?;
+    Ok(AcceptedMarketLiabilityFoundingV3 {
+        plan,
+        visible_hoard_atoms: observation.amount_atoms,
+        receipt_id,
     })
 }
 
@@ -1551,6 +1649,36 @@ mod tests {
         }
     }
 
+    fn token_bytes(amount: u64) -> [u8; 165] {
+        let mut bytes = [0u8; 165];
+        bytes[0..32].copy_from_slice(&id(22).bytes());
+        bytes[32..64].copy_from_slice(&id(4).bytes());
+        bytes[64..72].copy_from_slice(&amount.to_le_bytes());
+        bytes[108] = 1;
+        bytes
+    }
+
+    fn postwrite<'a>(
+        hoard_data: &'a [u8],
+        claim_ledger_data: &'a [u8],
+        token_data: &'a [u8],
+    ) -> MarketLiabilityFoundingPostwriteV3<'a> {
+        MarketLiabilityFoundingPostwriteV3 {
+            hoard_account: id(6),
+            hoard_data,
+            claim_ledger_account: id(7),
+            claim_ledger_data,
+            hoard_token: RuntimeAccountViewV2 {
+                key: id(5),
+                owner_program: LEGACY_SPL_TOKEN_PROGRAM,
+                data: token_data,
+                is_signer: false,
+                is_writable: true,
+                executable: false,
+            },
+        }
+    }
+
     #[test]
     fn founding_plan_starts_every_liability_and_supply_at_zero() {
         let plan = prepare_market_liability_founding_v3(bound(), request(), &TestSha256).unwrap();
@@ -1587,6 +1715,46 @@ mod tests {
         assert_eq!(
             prepare_market_liability_founding_v3(bound(), zero_outcomes, &TestSha256),
             Err(Error::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn founding_acceptance_requires_exact_reloaded_zero_poststate() {
+        let bound = bound();
+        let plan = prepare_market_liability_founding_v3(bound, request(), &TestSha256).unwrap();
+        let mut hoard_data = [0u8; HOARD_V2_BYTES];
+        let mut claim_ledger_data = [0u8; CLAIM_LEDGER_V3_BYTES];
+        plan.hoard().encode(&mut hoard_data).unwrap();
+        plan.claim_ledger().encode(&mut claim_ledger_data).unwrap();
+        let empty_token = token_bytes(0);
+        let accepted = accept_market_liability_founding_v3(
+            bound,
+            plan,
+            postwrite(&hoard_data, &claim_ledger_data, &empty_token),
+        )
+        .unwrap();
+        assert_eq!(accepted.plan(), plan);
+        assert_eq!(accepted.visible_hoard_atoms(), 0);
+        assert!(!accepted.receipt_id().is_zero());
+
+        let nonempty_token = token_bytes(1);
+        assert_eq!(
+            accept_market_liability_founding_v3(
+                bound,
+                plan,
+                postwrite(&hoard_data, &claim_ledger_data, &nonempty_token),
+            ),
+            Err(Error::PostAdmissionFailed)
+        );
+
+        hoard_data[248] = 1;
+        assert_eq!(
+            accept_market_liability_founding_v3(
+                bound,
+                plan,
+                postwrite(&hoard_data, &claim_ledger_data, &empty_token),
+            ),
+            Err(Error::PostAdmissionFailed)
         );
     }
 }
