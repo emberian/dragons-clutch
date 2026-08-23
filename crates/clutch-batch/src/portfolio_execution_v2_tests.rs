@@ -57,11 +57,15 @@ impl PortfolioAdapterV2 for TestAdapter {
         self.reject_transition != Some(expected.role)
     }
 
-    fn authenticate_settlement_receipt_v5_transition(
+    fn derive_settlement_receipt_v5_post_data_id(
         &self,
         _expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
-    ) -> bool {
-        self.reject_transition != Some(PortfolioAccountRoleV2::SettlementReceipt)
+    ) -> Option<[u8; 32]> {
+        if self.reject_transition == Some(PortfolioAccountRoleV2::SettlementReceipt) {
+            None
+        } else {
+            Some(id(66))
+        }
     }
 }
 
@@ -87,10 +91,10 @@ impl PortfolioAdapterV2 for CapturingAdapter {
         true
     }
 
-    fn authenticate_settlement_receipt_v5_transition(
+    fn derive_settlement_receipt_v5_post_data_id(
         &self,
         expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
-    ) -> bool {
+    ) -> Option<[u8; 32]> {
         if expected.prestate.transition_kind
             != SettlementReceiptTransitionKindV2::PortfolioPairV2
             || expected.prestate.transition_commitment != [0; 32]
@@ -100,10 +104,10 @@ impl PortfolioAdapterV2 for CapturingAdapter {
                 != SettlementReceiptTransitionKindV2::PortfolioPairV2
             || expected.transition_commitment == [0; 32]
         {
-            return false;
+            return None;
         }
         self.commitment.set(expected.transition_commitment);
-        true
+        Some(id(66))
     }
 }
 
@@ -377,7 +381,7 @@ fn execution_input(fixture: &PairFixture) -> PortfolioPairExecutionInputV2 {
             seller_position: id(63),
             buyer_replay: id(64),
             seller_replay: id(65),
-            settlement_receipt: id(66),
+            settlement_receipt: [0; 32],
         },
     }
 }
@@ -430,6 +434,19 @@ fn receipt_v5_sets_one_typed_commitment_in_the_authenticated_postimage() {
     )
     .unwrap();
     assert_eq!(adapter.commitment.get(), prepared.transition_commitment());
+    assert_eq!(prepared.post_semantic_ids().settlement_receipt, id(66));
+}
+
+#[test]
+fn receipt_v5_post_data_identity_is_never_a_caller_fact() {
+    let fixture = pair_fixture(20);
+    let pair = authenticated_pair(&fixture);
+    let mut input = execution_input(&fixture);
+    input.post_semantic_ids.settlement_receipt = id(66);
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, input),
+        Err(PortfolioExecutionErrorV2::PostSemanticMismatch)
+    );
 }
 
 #[test]

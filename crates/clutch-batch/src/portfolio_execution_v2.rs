@@ -333,9 +333,9 @@ pub struct PortfolioTransitionExpectationV2 {
 /// Private authenticated-adapter seam.
 ///
 /// Implementations live in the SBF adapter and must check actual owner/PDA,
-/// exact canonical bytes, current generation, and privileges. The
-/// second method additionally proves that the account owner's canonical codec
-/// maps the exact preimage to the requested postimage and semantic identity.
+/// exact canonical bytes, current generation, and privileges. Transition
+/// methods additionally prove that each account owner's canonical codec maps
+/// the exact preimage to the requested postimage and semantic identity.
 pub trait PortfolioAdapterV2 {
     fn authenticate_account(&self, expected: &PortfolioAccountExpectationV2) -> bool;
     fn authenticate_selection_membership(
@@ -348,10 +348,10 @@ pub trait PortfolioAdapterV2 {
     /// Decode the exact V5 pre-data identity, reproduce canonical
     /// `commit_portfolio_pair_delivery`, and authenticate the resulting
     /// post-data identity and typed commitment.
-    fn authenticate_settlement_receipt_v5_transition(
+    fn derive_settlement_receipt_v5_post_data_id(
         &self,
         expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
-    ) -> bool;
+    ) -> Option<PortfolioIdentityV2>;
 }
 
 /// Capability proving selected page membership was joined to one RelationV2 row.
@@ -691,6 +691,9 @@ pub struct PortfolioPairPostSemanticIdsV2 {
     pub buyer_replay: PortfolioIdentityV2,
     pub seller_replay: PortfolioIdentityV2,
     /// Canonical rent-owned SettlementReceipt V5 postimage/data identity.
+    /// Hostile execution input must leave this zero because the layout owner
+    /// can derive it only after the portfolio commitment is known. The
+    /// prepared output replaces zero with that adapter-derived exact identity.
     pub settlement_receipt: PortfolioIdentityV2,
 }
 
@@ -722,7 +725,6 @@ pub struct PortfolioSettlementReceiptV5Prestate {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioSettlementReceiptV5TransitionExpectationV2 {
     pub prestate: PortfolioSettlementReceiptV5Prestate,
-    pub post_data_id: PortfolioIdentityV2,
     pub post_transition_kind: SettlementReceiptTransitionKindV2,
     pub transition_commitment: PortfolioIdentityV2,
 }
@@ -1219,22 +1221,30 @@ pub fn prepare_portfolio_pair_execution_v2<A: PortfolioAdapterV2>(
     }
     let receipt_transition = PortfolioSettlementReceiptV5TransitionExpectationV2 {
         prestate: input.settlement_receipt,
-        post_data_id: input.post_semantic_ids.settlement_receipt,
         post_transition_kind: SettlementReceiptTransitionKindV2::PortfolioPairV2,
         transition_commitment,
     };
-    if !adapter.authenticate_settlement_receipt_v5_transition(&receipt_transition) {
-        return Err(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
+    let settlement_receipt_post_data_id = adapter
+        .derive_settlement_receipt_v5_post_data_id(&receipt_transition)
+        .ok_or(PortfolioExecutionErrorV2::TransitionAuthenticationFailed {
             role: PortfolioAccountRoleV2::SettlementReceipt,
-        });
+        })?;
+    if is_zero_identity(&settlement_receipt_post_data_id)
+        || settlement_receipt_post_data_id == input.settlement_receipt.pre_data_id
+    {
+        return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
     }
+    let post_semantic_ids = PortfolioPairPostSemanticIdsV2 {
+        settlement_receipt: settlement_receipt_post_data_id,
+        ..input.post_semantic_ids
+    };
     Ok(PreparedPortfolioPairExecutionV2 {
         receipt,
         transition_commitment,
         effects,
         buyer_position_after,
         seller_position_after,
-        post_semantic_ids: input.post_semantic_ids,
+        post_semantic_ids,
     })
 }
 
@@ -1424,14 +1434,13 @@ fn validate_post_ids(
         post.seller_position,
         post.buyer_replay,
         post.seller_replay,
-        post.settlement_receipt,
     ];
     if ids.iter().any(is_zero_identity)
         || post.buyer_reservation == input.buyer_reservation.semantic_id
         || post.seller_reservation == input.seller_reservation.semantic_id
         || post.buyer_replay == input.buyer_replay.semantic_id
         || post.seller_replay == input.seller_replay.semantic_id
-        || post.settlement_receipt == input.settlement_receipt.pre_data_id
+        || !is_zero_identity(&post.settlement_receipt)
     {
         return Err(PortfolioExecutionErrorV2::PostSemanticMismatch);
     }

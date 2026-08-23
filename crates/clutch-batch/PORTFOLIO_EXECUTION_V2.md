@@ -35,8 +35,11 @@ replay evidence.
 The adapter is an explicitly unverified boundary. Its implementation of
 `PortfolioAdapterV2` must check actual program owner, canonical PDA/bump,
 complete hostile body decode, semantic body identity, generation, privileges,
-and exact canonical postimage derivation. A mock implementation is test
-scaffolding, not runtime evidence.
+and exact canonical postimage derivation. The hostile input leaves the Receipt
+V5 post-data ID zero: only after the pair commitment is derived does the layout
+owner build the committed postimage and return its exact data ID. This avoids a
+self-referential or caller-selected receipt identity. A mock implementation is
+test scaffolding, not runtime evidence.
 
 The adjacent `portfolio_book_v2` module owns the complete-book consumption
 boundary requested by Dealer. Its 568-byte fixed record binds the same
