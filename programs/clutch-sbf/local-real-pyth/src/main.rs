@@ -2706,7 +2706,10 @@ fn run(
         &rpc,
         &payer,
         &[],
-        &[compute_budget(), plane::seal(&correct)],
+        &[
+            compute_budget(),
+            plane::seal(&correct, u64::try_from(observations.len())?),
+        ],
     )?;
     require_accepted("SealSourceArchiveV2", &status)?;
     record_step(

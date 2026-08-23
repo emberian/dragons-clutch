@@ -1455,11 +1455,11 @@ pub fn append(lab: &LabPlane, sequence: u64, update: Address, config: Address) -
     )
 }
 
-pub fn seal(lab: &LabPlane) -> Instruction {
+pub fn seal(lab: &LabPlane, sequence: u64) -> Instruction {
     Instruction::new_with_bytes(
         PROGRAM_ID,
         &layout_request(
-            1,
+            sequence,
             Intent::SealSourceArchiveV2 {
                 terms: lab.plane.terms_id,
             },
@@ -1729,6 +1729,20 @@ mod tests {
         assert!(matches!(
             request.action,
             clutch_solana_reference::Action::Layout(Intent::AppendSourceArchiveV2 { .. })
+        ));
+    }
+
+    #[test]
+    fn source_seal_carries_the_final_archive_record_count() {
+        let actor = Address::new_from_array([0xa2; 32]);
+        let lab = signed_plane(actor);
+        let instruction = seal(&lab, 2);
+        let request = clutch_solana_reference::Request::decode(&instruction.data)
+            .expect("seal request decodes");
+        assert_eq!(request.sequence, 2);
+        assert!(matches!(
+            request.action,
+            clutch_solana_reference::Action::Layout(Intent::SealSourceArchiveV2 { .. })
         ));
     }
 
