@@ -225,6 +225,9 @@ pub const SEED_GENERAL_V2_ORDER_PAGE_V5: &[u8] =
 /// Disabled General V2 Reservation V3 seed prefix.
 pub const SEED_GENERAL_V2_RESERVATION_V3: &[u8] =
     clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V1;
+/// Disabled sole-future rent-owned General Reservation V9 seed prefix.
+pub const SEED_GENERAL_V2_RESERVATION_V9: &[u8] =
+    clutch_general_v2_contract::RESERVATION_SEED_DOMAIN_V9;
 /// Disabled General SettlementReceipt V3 seed prefix.
 pub const SEED_GENERAL_V2_RECEIPT: &[u8] = clutch_general_v2_contract::RECEIPT_SEED_DOMAIN_V3;
 /// Disabled General V2 owner-aggregated settlement seed prefix.
@@ -571,6 +574,21 @@ pub fn general_v2_reservation_v3_pda(
     find(
         program_id,
         &[SEED_GENERAL_V2_RESERVATION_V3, reservation_id],
+    )
+}
+
+/// Canonical disabled rent-owned General V2 Reservation V9 PDA.
+///
+/// The fresh V9 semantic identity already commits MarketRuntime, Epoch,
+/// owner, Position generation, and order ID. Versions 5 and 7 retain their
+/// historical meanings and cannot alias this address family.
+pub fn general_v2_reservation_v9_pda(
+    program_id: &Pubkey,
+    reservation_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_RESERVATION_V9, reservation_id],
     )
 }
 

@@ -61,6 +61,24 @@ pub const GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION: u8 = 3;
 pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG: u8 = 0x0f;
 /// General SettlementReceipt V4 version.
 pub const GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION: u8 = 4;
+/// Historical counted General Reservation discriminator.
+pub const GENERAL_RESERVATION_V5_ACCOUNT_TAG: u8 = 0x13;
+/// Historical counted General Reservation version.
+pub const GENERAL_RESERVATION_V5_ACCOUNT_VERSION: u8 = 5;
+/// Exact historical counted General Reservation width.
+pub const GENERAL_RESERVATION_V5_ACCOUNT_BYTES: usize = 627;
+/// Withdrawn deletable General Reservation discriminator.
+pub const GENERAL_RESERVATION_V7_ACCOUNT_TAG: u8 = 0x13;
+/// Withdrawn deletable General Reservation version.
+pub const GENERAL_RESERVATION_V7_ACCOUNT_VERSION: u8 = 7;
+/// Exact withdrawn deletable General Reservation width.
+pub const GENERAL_RESERVATION_V7_ACCOUNT_BYTES: usize = 675;
+/// Rent-owned General Reservation successor discriminator.
+pub const GENERAL_RESERVATION_V9_ACCOUNT_TAG: u8 = 0x13;
+/// Sole future rent-owned General Reservation version.
+pub const GENERAL_RESERVATION_V9_ACCOUNT_VERSION: u8 = 9;
+/// Exact rent-owned General Reservation width.
+pub const GENERAL_RESERVATION_V9_ACCOUNT_BYTES: usize = 666;
 /// General OrderPage successor discriminator. This deliberately reuses the
 /// historical OrderPage tag under a fresh version.
 pub const GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG: u8 = 8;
@@ -427,6 +445,20 @@ const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_TAG == 15);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V3_ACCOUNT_VERSION == 3);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_TAG == 15);
 const _: () = assert!(GENERAL_SETTLEMENT_RECEIPT_V4_ACCOUNT_VERSION == 4);
+const _: () = assert!(GENERAL_RESERVATION_V5_ACCOUNT_TAG == 0x13);
+const _: () = assert!(GENERAL_RESERVATION_V5_ACCOUNT_VERSION == 5);
+const _: () = assert!(GENERAL_RESERVATION_V5_ACCOUNT_BYTES == 627);
+const _: () = assert!(GENERAL_RESERVATION_V7_ACCOUNT_TAG == 0x13);
+const _: () = assert!(GENERAL_RESERVATION_V7_ACCOUNT_VERSION == 7);
+const _: () = assert!(GENERAL_RESERVATION_V7_ACCOUNT_BYTES == 675);
+const _: () =
+    assert!(GENERAL_RESERVATION_V9_ACCOUNT_TAG == super::reservation::RESERVATION_ACCOUNT_TAG);
+const _: () = assert!(
+    GENERAL_RESERVATION_V9_ACCOUNT_VERSION == super::reservation_v9::RESERVATION_ACCOUNT_VERSION_V9
+);
+const _: () = assert!(
+    GENERAL_RESERVATION_V9_ACCOUNT_BYTES == super::reservation_v9::RESERVATION_ACCOUNT_BYTES_V9
+);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == 8);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == 5);
 const _: () = assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG == super::order_page_v5::ORDER_PAGE_V5_TAG);
@@ -532,6 +564,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_RESERVATION_V5_ACCOUNT_TAG,
+            version: GENERAL_RESERVATION_V5_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::Frozen,
+        name: "withdrawn-counted-general-reservation-v5-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_RESERVATION_V7_ACCOUNT_TAG,
+            version: GENERAL_RESERVATION_V7_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "withdrawn-deletable-general-reservation-v7-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_RESERVATION_V9_ACCOUNT_TAG,
+            version: GENERAL_RESERVATION_V9_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-reservation-v9-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2311,6 +2370,10 @@ mod tests {
     fn every_general_v2_account_coordinate_is_reserved_but_disabled() {
         let expected = [
             (
+                GENERAL_RESERVATION_V9_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V9_ACCOUNT_VERSION,
+            ),
+            (
                 GENERAL_ORDER_PAGE_V5_ACCOUNT_TAG,
                 GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION,
             ),
@@ -2452,6 +2515,37 @@ mod tests {
             }
             assert_eq!(matches, 1, "account {tag}/{version}");
             assert_eq!(status, Some(AllocationStatus::ReservedDisabled));
+        }
+    }
+
+    #[test]
+    fn reservation_history_is_not_reinterpreted_by_the_rent_owned_successor() {
+        let expected = [
+            (
+                GENERAL_RESERVATION_V5_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V5_ACCOUNT_VERSION,
+                AllocationStatus::Frozen,
+            ),
+            (
+                GENERAL_RESERVATION_V7_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V7_ACCOUNT_VERSION,
+                AllocationStatus::ReservedDisabled,
+            ),
+            (
+                GENERAL_RESERVATION_V9_ACCOUNT_TAG,
+                GENERAL_RESERVATION_V9_ACCOUNT_VERSION,
+                AllocationStatus::ReservedDisabled,
+            ),
+        ];
+        for (tag, version, expected_status) in expected {
+            let matches: Vec<_> = CENTRAL_COLLISION_LEDGER
+                .iter()
+                .filter(|entry| {
+                    coordinates_include(entry.coordinates, WireNamespace::MainAccount, tag, version)
+                })
+                .collect();
+            assert_eq!(matches.len(), 1, "reservation {tag}/{version}");
+            assert_eq!(matches[0].status, expected_status);
         }
     }
 
