@@ -329,9 +329,9 @@ price artifacts, and present-funded liveness before capability admission.
 The central collision ledger is the sole allocation owner for the following
 coordinated successor block. Dealer policy transport rows are
 `NonProductionLab`; current unactivated rows are `ReservedDisabled`; and
-historical Reservation/receipt/owner-row coordinates remain occupied as
-`Withdrawn`. An account codec or pure runtime elsewhere does not make a route
-executable.
+historical General Reservation/receipt/owner-row coordinates and withdrawn
+Fractional V1 coordinates remain occupied as `Withdrawn`. An account codec or
+pure runtime elsewhere does not make a route executable.
 
 | tag/version | owner | account |
 |---:|---|---|
