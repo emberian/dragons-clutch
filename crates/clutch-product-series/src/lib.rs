@@ -43,7 +43,8 @@ pub use compile::{
     compile_ordinal, AbsoluteRecoveryAttemptV1, CompiledOrdinalV1, CompiledScheduleV1,
 };
 pub use compiler_output::{
-    CompiledProductSeriesBundleV1, COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
+    assemble_compiled_product_series_bundle_v1, CompiledProductSeriesBundleV1,
+    ProductSeriesBundleInputsV1, COMPILED_PRODUCT_SERIES_BUNDLE_V1_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V1_DOMAIN,
 };
 pub use funding::{
@@ -59,8 +60,9 @@ pub use funding_state::{
     SERIES_FUNDING_STATE_BYTES,
 };
 pub use product_registry::{
-    ProductCapabilityRegistryV2, ProductProgramReleaseV1, PRODUCT_CAPABILITY_REGISTRY_V2_BYTES,
-    PRODUCT_CAPABILITY_REGISTRY_V2_DOMAIN,
+    RegistryCapabilityProfileV2, RegistryProgramReleaseV1, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
+    REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
+    REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
 };
 pub use registry::{
     CapabilitySemanticOwnersV1, RealmCollateralProjectionV1, RegistryCapabilityProjectionV1,
@@ -196,6 +198,14 @@ typed_id!(
     "Typed identity of one economic `MarketInstancePreimageV2`."
 );
 typed_id!(SeriesPlanV5Id, "Typed identity of one `SeriesPlanV5`.");
+typed_id!(
+    RegistryProgramReleaseV1Id,
+    "Typed identity of one immutable `RegistryProgramReleaseV1`."
+);
+typed_id!(
+    RegistryCapabilityProfileV2Id,
+    "Typed identity of one immutable `RegistryCapabilityProfileV2`."
+);
 typed_id!(
     SeriesFundingTermsV2Id,
     "Typed identity of one `SeriesFundingTermsV2`."

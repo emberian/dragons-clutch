@@ -714,7 +714,7 @@ fn encode_intent(intent: &Intent, expected: usize) -> Result<Vec<u8>, ArtifactEr
     Ok(scratch[..written].to_vec())
 }
 
-fn domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
+pub(crate) fn domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update(bytes);
@@ -861,7 +861,10 @@ fn decode_shape_v1(bytes: &[u8]) -> Result<Shape, ArtifactError> {
     Ok(shape)
 }
 
-fn encode_rational_v1(value: &BigRational, out: &mut Vec<u8>) -> Result<(), ArtifactError> {
+pub(crate) fn encode_rational_v1(
+    value: &BigRational,
+    out: &mut Vec<u8>,
+) -> Result<(), ArtifactError> {
     if value.is_negative() || value.denom().is_negative() || value.denom().is_zero() {
         return Err(ArtifactError::NonCanonicalRational);
     }
@@ -886,7 +889,7 @@ fn encode_rational_v1(value: &BigRational, out: &mut Vec<u8>) -> Result<(), Arti
     Ok(())
 }
 
-fn decode_rational_v1(reader: &mut Reader<'_>) -> Result<BigRational, ArtifactError> {
+pub(crate) fn decode_rational_v1(reader: &mut Reader<'_>) -> Result<BigRational, ArtifactError> {
     let numerator_len = usize::from(reader.u16()?);
     let denominator_len = usize::from(reader.u16()?);
     if numerator_len > MAX_RATIONAL_INTEGER_BYTES_V1
@@ -940,17 +943,17 @@ fn write<const N: usize>(out: &mut [u8], at: &mut usize, bytes: &[u8; N]) {
     *at += N;
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, at: 0 }
     }
 
-    fn take(&mut self, len: usize) -> Result<&'a [u8], ArtifactError> {
+    pub(crate) fn take(&mut self, len: usize) -> Result<&'a [u8], ArtifactError> {
         let end = self
             .at
             .checked_add(len)
@@ -963,11 +966,11 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
 
-    fn u8(&mut self) -> Result<u8, ArtifactError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, ArtifactError> {
         Ok(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, ArtifactError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, ArtifactError> {
         Ok(u16::from_le_bytes(
             self.take(2)?
                 .try_into()
@@ -975,7 +978,7 @@ impl<'a> Reader<'a> {
         ))
     }
 
-    fn u64(&mut self) -> Result<u64, ArtifactError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, ArtifactError> {
         Ok(u64::from_le_bytes(
             self.take(8)?
                 .try_into()
@@ -983,7 +986,7 @@ impl<'a> Reader<'a> {
         ))
     }
 
-    fn u128(&mut self) -> Result<u128, ArtifactError> {
+    pub(crate) fn u128(&mut self) -> Result<u128, ArtifactError> {
         Ok(u128::from_le_bytes(
             self.take(16)?
                 .try_into()
@@ -991,13 +994,13 @@ impl<'a> Reader<'a> {
         ))
     }
 
-    fn array32(&mut self) -> Result<[u8; 32], ArtifactError> {
+    pub(crate) fn array32(&mut self) -> Result<[u8; 32], ArtifactError> {
         self.take(32)?
             .try_into()
             .map_err(|_| ArtifactError::Truncated)
     }
 
-    fn done(&self) -> bool {
+    pub(crate) fn done(&self) -> bool {
         self.at == self.bytes.len()
     }
 }
