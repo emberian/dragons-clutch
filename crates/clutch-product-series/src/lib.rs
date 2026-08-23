@@ -23,6 +23,8 @@ mod compiler_output;
 mod funding;
 mod funding_state;
 mod interval_consensus;
+mod market_family_aggregator;
+mod market_lifecycle;
 mod product_registry;
 mod registry;
 mod source_series;
@@ -74,6 +76,34 @@ pub use interval_consensus::{
     QUANTIZED_INTERVAL_CONSENSUS_PROFILE_BYTES_V1,
     QUANTIZED_INTERVAL_CONSENSUS_RUNTIME_CAPABILITY_ENABLED_V1,
     QUANTIZED_INTERVAL_CONSENSUS_WORK_BYTES_V1, QUANTIZED_INTERVAL_ROUNDING_POLICY_DOMAIN_V1,
+};
+pub use market_family_aggregator::{
+    AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorBindingV1,
+    MarketFamilyAggregatorBindingV1Id, MarketFamilyAggregatorPhaseV1,
+    MarketFamilyAggregatorTerminalProjectionV1, MarketFamilyAggregatorTerminalProjectionV1Id,
+    MarketFamilyAggregatorV1, MarketFamilyAggregatorV1Id, MarketFamilyCountsV1,
+    MarketFamilyExhaustiveSummaryV1, MarketFamilyExhaustiveSummaryV1Id, MarketFamilySlotV1,
+    MarketFamilyStatusV1, MarketFamilyV1, NoMarketFamilyAuthorityV1, MARKET_FAMILIES_V1,
+    MARKET_FAMILY_ADMISSION_DOMAIN_V1, MARKET_FAMILY_AGGREGATOR_BINDING_DOMAIN_V1,
+    MARKET_FAMILY_AGGREGATOR_BYTES_V1, MARKET_FAMILY_AGGREGATOR_DOMAIN_V1, MARKET_FAMILY_COUNT_V1,
+    MARKET_FAMILY_EXHAUSTIVE_SUMMARY_BYTES_V1, MARKET_FAMILY_EXHAUSTIVE_SUMMARY_DOMAIN_V1,
+    MARKET_FAMILY_TERMINAL_DOMAIN_V1, MARKET_FAMILY_TERMINAL_PROJECTION_BYTES_V1,
+    MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
+};
+pub use market_lifecycle::{
+    MarketFoundationCapitalV1, MarketFoundationProgressV1, MarketFoundationSlotV1,
+    MarketFoundationStepProjectionV1, MarketFoundingAbortProjectionV1,
+    MarketInstanceTerminalProjectionV1, MarketLifecycleBindingV1, MarketLifecyclePhaseV1,
+    MarketLifecycleRootV1, MarketResolutionActivationV1, MarketSharedCoreTerminalProjectionV1,
+    MarketSharedCoreV1, SeriesLinkObligationConfigurationV1, SeriesLinkObligationConfigurationV1Id,
+    SeriesLinkObligationDispositionV1, SeriesLinkObligationStatusV1,
+    SeriesLinkObligationTerminalProjectionV1, SeriesLinkObligationV1,
+    SeriesMarketAdmissionProjectionV1, SeriesMarketLinkBindingV1, SeriesMarketLinkPhaseV1,
+    SeriesMarketLinkRetirementProjectionV1, SeriesMarketLinkV1,
+    MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1, MARKET_LIFECYCLE_BINDING_DOMAIN_V1,
+    MARKET_LIFECYCLE_ROOT_BYTES_V1, MARKET_LIFECYCLE_ROOT_DOMAIN_V1,
+    MARKET_RESOLUTION_ACTIVATION_DOMAIN_V1, MARKET_SHARED_CORE_COUNT_V1,
+    SERIES_LINK_OBLIGATION_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_DOMAIN_V1,
 };
 pub use product_registry::{
     RegistryCapabilityProfileV2, RegistryProgramReleaseV1, REGISTRY_CAPABILITY_PROFILE_V2_BYTES,
