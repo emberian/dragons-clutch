@@ -21,12 +21,16 @@
 pub use clutch_kernel::{MAX_OUTCOMES, MIN_OUTCOMES};
 
 mod payoff_shape;
+mod simplex_disagreement;
 
 pub use payoff_shape::{
     certify_compiled_payoff_compression_v1, compare_compiled_payoffs_v1,
     compile_payoff_shape_v1, CappedLinearDirectionV1, CompiledPayoffCompressionV1,
     CompiledPayoffV1, ExactPayoffComparisonV1, ExhaustivePartitionV1, PayoffRelationV1,
     PayoffShapeV1, TailDirectionV1, MAX_PARTITION_BOUNDARIES,
+};
+pub use simplex_disagreement::{
+    compare_exact_simplex_prices_v1, ExactSimplexDisagreementV1,
 };
 
 /// Refusals produced while validating or evaluating an economic certificate.
