@@ -139,6 +139,10 @@ pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x85;
 /// General V2 buyer-first settlement cash-pot envelope version.
 pub const GENERAL_V2_SETTLEMENT_CASH_POT_ACCOUNT_VERSION: u8 = 1;
+/// StructuredClaim immutable descriptor envelope discriminator.
+pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG: u8 = 0x86;
+/// StructuredClaim immutable descriptor envelope version.
+pub const STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -503,6 +507,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-settlement-cash-pot-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_TAG,
+            version: STRUCTURED_CLAIM_DESCRIPTOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "structured-claim-descriptor-v1-account",
     },
 ];
 
