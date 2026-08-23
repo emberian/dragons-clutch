@@ -111,6 +111,35 @@ archive-symbol sums, not an ELF delta, and include compiler outlining. The
 it is a promotion warning, not SBF evidence. The SBF adapter must measure and,
 if necessary, split that frame before enabling a dispatcher route.
 
+## Pinned SBF compile probe
+
+After the engine checkpoint, `cargo-build-sbf 4.0.0` (platform-tools v1.53,
+SBF rustc 1.89.0) compiled the existing `clutch-sbf` program offline with
+`RUSTFLAGS=-Zemit-stack-sizes`. The generated `clutch-batch` SBF rlib digest
+was:
+
+```text
+027f2a83417d7d5df5857aaa68fbbb6748c2c034090e459a6c6ff1bc49a4d0e6
+```
+
+The compiler emitted no frame-overflow or frame-overwrite diagnostic naming
+`relation_v1_stream_v2` or `ClearWorkFeedV2`. This is useful target-specific
+evidence that the compiled dependency functions remain below the diagnostic
+threshold. It is not end-to-end V2 route evidence: the current dispatcher does
+not call this engine, and the whole program build still reported 28 overflow
+and 69 overwrite diagnostics in unrelated legacy/dependency functions. The
+host LLVM reader could not resolve SBF relocations well enough to assign exact
+per-symbol frame sizes, so the absence of a V2 diagnostic is the bounded claim.
+
+Command shape:
+
+```text
+CARGO_NET_OFFLINE=true RUSTFLAGS='-Zemit-stack-sizes' \
+  cargo-build-sbf --offline \
+  --manifest-path programs/clutch-sbf/program/Cargo.toml \
+  --sbf-out-dir <temporary-output>
+```
+
 ## Test evidence
 
 The focused corpus covers 37 exact V1 lifecycle snapshots: idle, begin, every
@@ -159,6 +188,6 @@ bytes, including admission, all allocation folds, explicit pairing slices,
 settlement, composite fee hooks, score reconstruction, resumability, poisoning,
 and canonical verdict persistence. V1 remains the migration/differential
 oracle only. The remaining boundary is adapter promotion: authenticate widths
-from frozen state, bind the outer codec version, measure SBF frames and compute
-units, and enable a separately reviewed route. No V2 dispatcher or account
-migration has been enabled by this lane.
+from frozen state, bind the outer codec version, measure compute units and
+call-path frames, and enable a separately reviewed route. No V2 dispatcher or
+account migration has been enabled by this lane.
