@@ -176,9 +176,11 @@ TemplateId + MarketGenesisProfileV2Id + AttachmentPlanId + finite recurrence/cap
 The current V1 Genesis lacks `PriceMeasurePolicyV1Id` and cannot authorize a
 RelationV2 price-coherence route. It remains frozen rather than gaining a field
 under the same 352-byte codec. The V2 Genesis accepts only the typed first
-quantized policy, which covers Product degrees zero through three. A future
-continuous/unquantized checker requires its own typed policy and another Genesis
-successor; transparent 32-byte wrappers must never be cast across those
+quantized policy. That policy selects any nonempty degree subrange within the
+checker release's true `0..=3` bound, independently caps atom count at or below
+its selected outcome bound, and rejects bodies outside those immutable limits.
+A future continuous/unquantized checker requires its own typed policy and
+another Genesis successor; transparent 32-byte wrappers must never be cast across those
 meanings. `NativeClaimBasisV1` owns the payout body and exact ambiguity/edge
 registry selectors. Genesis V2 owns the closed coordinate minimum and maximum,
 so `MarketInstanceV2Id` commits them transitively and no Epoch may choose a
