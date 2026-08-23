@@ -42,7 +42,6 @@ pub mod native_resolution;
 pub mod occupation_resolution;
 pub mod order_page_v5;
 pub mod portfolio_settlement;
-#[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
 pub mod projection;
 pub mod registry;
