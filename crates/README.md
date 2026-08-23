@@ -35,6 +35,9 @@ This directory contains offline `no_std` crates
 - `clutch-structured-claim` — exact rational coefficient realization,
   complete-set-compressed native backing, flat wrapper composition, and
   transactional transferable-claim custody/lifecycle semantics.
+- `clutch-owner-settlement` — exact owner-aggregated General V2 receipt/cash
+  realization across several single or portfolio orders at one named rounding
+  boundary.
 - `clutch-client-contract` — shared untrusted client provenance, intent-registry
   linkage, and fail-closed settlement-shape classification. It owns no
   persisted protocol fact.
