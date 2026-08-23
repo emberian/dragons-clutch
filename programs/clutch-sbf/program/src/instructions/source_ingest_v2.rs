@@ -608,40 +608,10 @@ fn apply_sealed_feed_v2(feed: &mut FeedAccount, receipt: SealedArchiveReceiptV2)
 mod tests {
     use super::*;
     use crate::source_identity::fixture;
-    use crate::source_v2::crossing::SELECTION_CROSSING_V1;
-    use crate::source_v2::spec::{
-        SourceSpecFieldsV2, GRID_ORIGIN_UNIX_SECONDS_V1, ORIENTATION_QUOTE_PER_BASE,
-    };
+    use crate::source_v2::spec::SourceSpecFieldsV2;
 
     fn fields() -> SourceSpecFieldsV2 {
-        SourceSpecFieldsV2 {
-            source_adapter_id: fixture::SOURCE_ADAPTER_ID,
-            source_adapter_version: fixture::SOURCE_ADAPTER_VERSION,
-            parser_id: fixture::PARSER_ID,
-            parser_version: fixture::PARSER_VERSION,
-            receiver_program: fixture::RECEIVER_PROGRAM,
-            receiver_programdata: fixture::RECEIVER_PROGRAMDATA,
-            receiver_config: fixture::RECEIVER_CONFIG,
-            config_digest: [0x7c; 32],
-            provider_feed_id: fixture::PROVIDER_FEED_ID,
-            programdata_deployment_slot: fixture::PROGRAMDATA_DEPLOYMENT_SLOT,
-            base_asset_id: fixture::BASE_ASSET_ID,
-            quote_asset_id: fixture::QUOTE_ASSET_ID,
-            orientation: ORIENTATION_QUOTE_PER_BASE,
-            normalized_decimals: 8,
-            grid_family_id: 7,
-            grid_version: 1,
-            grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
-            bucket_seconds: 60,
-            boundary_grace_seconds: 5,
-            max_staleness_slots: 500,
-            max_staleness_seconds: 600,
-            max_future_seconds: 15,
-            max_confidence_atoms: 1_000_000_000_000,
-            max_confidence_bps: 500,
-            confidence_multiplier: 3,
-            selection_rule: SELECTION_CROSSING_V1,
-        }
+        fixture::REGISTERED_SPEC_FIELDS
     }
 
     #[test]

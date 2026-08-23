@@ -262,7 +262,8 @@ pub fn authenticate_pull_update_v2(
     /* The compiled release and the immutable spec must name one identity. A
      * spec that names a release this ELF does not carry is not an error to be
      * adapted around: the registry is inert data and this is its match. */
-    if auth.release.source_adapter_id != fields.source_adapter_id
+    if auth.release.registered_spec_id != auth.spec.feed_id()
+        || auth.release.source_adapter_id != fields.source_adapter_id
         || auth.release.source_adapter_version != fields.source_adapter_version
         || auth.release.parser_id != fields.parser_id
         || auth.release.parser_version != fields.parser_version
@@ -642,8 +643,10 @@ mod tests {
     }
 
     fn auth<'a>(b: &'a Bytes) -> PullAuthenticationV2<'a> {
+        let mut release = fixture::RELEASE;
+        release.registered_spec_id = spec().feed_id();
         PullAuthenticationV2 {
-            release: fixture::RELEASE,
+            release,
             spec: spec(),
             receiver_program: LoaderAccountViewV1::new(
                 fixture::RECEIVER_PROGRAM,
@@ -1117,7 +1120,8 @@ mod tests {
     fn a_release_this_elf_does_not_carry_refuses() {
         let b = bytes();
         for mutate in [
-            (|r: &mut PullReleaseV2| r.parser_version += 1) as fn(&mut PullReleaseV2),
+            (|r: &mut PullReleaseV2| r.registered_spec_id[0] ^= 1) as fn(&mut PullReleaseV2),
+            |r| r.parser_version += 1,
             |r| r.parser_id += 1,
             |r| r.source_adapter_version += 1,
             |r| r.source_adapter_id[0] ^= 1,
@@ -1136,6 +1140,18 @@ mod tests {
         assert_eq!(
             authenticate_pull_update_v2(case),
             Err(AuthV2Error::UnsupportedLoader)
+        );
+
+        // A caller-selected spec can be internally valid and can name the
+        // same adapter/parser/program while still not being the complete spec the
+        // release approved.  This refusal precedes all live account evidence.
+        let mut changed_fields = spec_fields();
+        changed_fields.provider_feed_id[0] ^= 1;
+        let mut case = auth(&b);
+        case.spec = SourceSpecV2::new(changed_fields).unwrap();
+        assert_eq!(
+            authenticate_pull_update_v2(case),
+            Err(AuthV2Error::ReleaseMismatch)
         );
     }
 
@@ -1171,6 +1187,7 @@ mod tests {
         let mut fields = spec_fields();
         fields.max_confidence_bps = 1;
         case.spec = SourceSpecV2::new(fields).unwrap();
+        case.release.registered_spec_id = case.spec.feed_id();
         assert_eq!(
             authenticate_pull_update_v2(case),
             Err(AuthV2Error::ConfidenceCapExceeded)
@@ -1180,6 +1197,7 @@ mod tests {
         fields = spec_fields();
         fields.max_confidence_atoms = 1;
         case.spec = SourceSpecV2::new(fields).unwrap();
+        case.release.registered_spec_id = case.spec.feed_id();
         assert_eq!(
             authenticate_pull_update_v2(case),
             Err(AuthV2Error::ConfidenceCapExceeded)

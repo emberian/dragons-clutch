@@ -61,6 +61,9 @@ pub struct ClockViewV1 {
 /// post-cutover bytes and the exact loader/post parsers are frozen.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PullReleaseV2 {
+    /// SHA-256 identity of the complete canonical SourceSpec v2 body approved
+    /// by this compiled row.
+    pub registered_spec_id: [u8; 32],
     pub source_adapter_id: [u8; 32],
     pub source_adapter_version: u32,
     pub parser_id: u16,
@@ -142,7 +145,8 @@ pub fn authenticate_pull_update_v2(
     auth: PullAuthenticationV2<'_>,
 ) -> Result<AuthenticatedPullUpdateV2, AuthV2Error> {
     let fields = auth.spec.fields();
-    if auth.release.source_adapter_id != fields.source_adapter_id
+    if auth.release.registered_spec_id != auth.spec.feed_id()
+        || auth.release.source_adapter_id != fields.source_adapter_id
         || auth.release.source_adapter_version != fields.source_adapter_version
         || auth.release.parser_id != fields.parser_id
         || auth.release.parser_version != fields.parser_version
@@ -416,6 +420,7 @@ mod tests {
 
     fn release() -> PullReleaseV2 {
         PullReleaseV2 {
+            registered_spec_id: spec().feed_id(),
             source_adapter_id: ADAPTER,
             source_adapter_version: 3,
             parser_id: 6,
@@ -516,7 +521,22 @@ mod tests {
             Err(AuthV2Error::ConfigDigestMismatch)
         );
         case = auth(&bytes);
+        case.release.registered_spec_id[0] ^= 1;
+        assert_eq!(
+            authenticate_pull_update_v2(case),
+            Err(AuthV2Error::ReleaseMismatch)
+        );
+        case = auth(&bytes);
         case.release.parser_version += 1;
+        assert_eq!(
+            authenticate_pull_update_v2(case),
+            Err(AuthV2Error::ReleaseMismatch)
+        );
+
+        let mut changed_fields = spec().fields();
+        changed_fields.provider_feed_id[0] ^= 1;
+        case = auth(&bytes);
+        case.spec = SourceSpecV2::new(changed_fields).unwrap();
         assert_eq!(
             authenticate_pull_update_v2(case),
             Err(AuthV2Error::ReleaseMismatch)

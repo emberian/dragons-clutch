@@ -1047,6 +1047,12 @@ mod tests {
         SourceSpecV2::new(spec_fields()).expect("valid fixture spec")
     }
 
+    fn release() -> PullReleaseV2 {
+        let mut release = fixture::RELEASE;
+        release.registered_spec_id = spec().feed_id();
+        release
+    }
+
     fn window() -> WindowDomain {
         let feed = FeedIdentity::new(
             fixture::SOURCE_ADAPTER_ID,
@@ -1148,7 +1154,7 @@ mod tests {
         ))
         .expect("canonical clock");
         PullAuthenticationV2 {
-            release: fixture::RELEASE,
+            release: release(),
             spec: spec(),
             receiver_program: LoaderAccountViewV1::new(
                 fixture::RECEIVER_PROGRAM,
@@ -1190,18 +1196,12 @@ mod tests {
     fn walk_the_window() -> (Vec<u8>, VerifiedSourceSpecV2) {
         let (_, verified) = verified_spec_account();
         let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V2_BYTES];
-        initialize_genesis_archive_v2(
-            &mut archive,
-            verified,
-            fixture::RELEASE,
-            window(),
-            ARCHIVE_BUMP,
-        )
-        .expect("genesis page");
+        initialize_genesis_archive_v2(&mut archive, verified, release(), window(), ARCHIVE_BUMP)
+            .expect("genesis page");
 
         for step in 0..WINDOW_BUCKETS {
             let bucket = START_BUCKET + step;
-            let sequence = open_archive_v2_sequence(&archive, verified, fixture::RELEASE, window())
+            let sequence = open_archive_v2_sequence(&archive, verified, release(), window())
                 .expect("open page reports its own cursor");
             assert_eq!(sequence, step, "the append nonce is state-owned");
 
@@ -1211,7 +1211,7 @@ mod tests {
             let admitted = append_authenticated_v2(
                 &mut archive,
                 verified,
-                fixture::RELEASE,
+                release(),
                 window(),
                 authentication(&p),
             )
@@ -1220,7 +1220,7 @@ mod tests {
             assert_eq!(admitted.update_account, update_key);
         }
 
-        seal_archive_v2(&mut archive, verified, fixture::RELEASE, window()).expect("page seals");
+        seal_archive_v2(&mut archive, verified, release(), window()).expect("page seals");
         (archive, verified)
     }
 
@@ -1232,7 +1232,7 @@ mod tests {
             ARCHIVE_KEY,
             AccountViewV2::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &archive),
             verified,
-            fixture::RELEASE,
+            release(),
             window(),
         )
         .expect("sealed page authenticates");
@@ -1280,7 +1280,7 @@ mod tests {
             append_authenticated_v2(
                 &mut archive,
                 verified,
-                fixture::RELEASE,
+                release(),
                 window(),
                 authentication(&p),
             )
@@ -1288,7 +1288,7 @@ mod tests {
             Some(ArchiveV2Error::AlreadySealed)
         );
         assert_eq!(
-            seal_archive_v2(&mut archive, verified, fixture::RELEASE, window()),
+            seal_archive_v2(&mut archive, verified, release(), window()),
             Err(ArchiveV2Error::AlreadySealed)
         );
     }
@@ -1297,19 +1297,13 @@ mod tests {
     fn an_incomplete_page_cannot_be_sealed() {
         let (_, verified) = verified_spec_account();
         let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V2_BYTES];
-        initialize_genesis_archive_v2(
-            &mut archive,
-            verified,
-            fixture::RELEASE,
-            window(),
-            ARCHIVE_BUMP,
-        )
-        .unwrap();
+        initialize_genesis_archive_v2(&mut archive, verified, release(), window(), ARCHIVE_BUMP)
+            .unwrap();
         let p = presented(START_BUCKET, [0x60; 32]);
         append_authenticated_v2(
             &mut archive,
             verified,
-            fixture::RELEASE,
+            release(),
             window(),
             authentication(&p),
         )
@@ -1317,7 +1311,7 @@ mod tests {
         // One of four buckets covered: sealing here would silently narrow the
         // window a market resolves against.
         assert_eq!(
-            seal_archive_v2(&mut archive, verified, fixture::RELEASE, window()),
+            seal_archive_v2(&mut archive, verified, release(), window()),
             Err(ArchiveV2Error::WindowIncomplete)
         );
         assert_eq!(
@@ -1326,7 +1320,7 @@ mod tests {
                 ARCHIVE_KEY,
                 AccountViewV2::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &archive),
                 verified,
-                fixture::RELEASE,
+                release(),
                 window(),
             ),
             Err(ArchiveV2Error::NotSealed)
@@ -1338,21 +1332,15 @@ mod tests {
     fn refuse_first_append(mutate: impl FnOnce(&mut Presented)) -> ArchiveV2Error {
         let (_, verified) = verified_spec_account();
         let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V2_BYTES];
-        initialize_genesis_archive_v2(
-            &mut archive,
-            verified,
-            fixture::RELEASE,
-            window(),
-            ARCHIVE_BUMP,
-        )
-        .unwrap();
+        initialize_genesis_archive_v2(&mut archive, verified, release(), window(), ARCHIVE_BUMP)
+            .unwrap();
         let before = archive.clone();
         let mut p = presented(START_BUCKET, [0x60; 32]);
         mutate(&mut p);
         let error = append_authenticated_v2(
             &mut archive,
             verified,
-            fixture::RELEASE,
+            release(),
             window(),
             authentication(&p),
         )
@@ -1471,19 +1459,13 @@ mod tests {
     fn a_wrong_owner_update_account_refuses() {
         let (_, verified) = verified_spec_account();
         let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V2_BYTES];
-        initialize_genesis_archive_v2(
-            &mut archive,
-            verified,
-            fixture::RELEASE,
-            window(),
-            ARCHIVE_BUMP,
-        )
-        .unwrap();
+        initialize_genesis_archive_v2(&mut archive, verified, release(), window(), ARCHIVE_BUMP)
+            .unwrap();
         let p = presented(START_BUCKET, [0x60; 32]);
         let mut auth = authentication(&p);
         auth.update = PriceUpdateAccountViewV1::new(p.update_key, [0xbe; 32], false, &p.update);
         assert_eq!(
-            append_authenticated_v2(&mut archive, verified, fixture::RELEASE, window(), auth),
+            append_authenticated_v2(&mut archive, verified, release(), window(), auth),
             Err(ArchiveV2Error::Auth(AuthV2Error::Parser(
                 crate::pyth_receiver::PythReceiverError::WrongOwner
             )))
@@ -1595,19 +1577,13 @@ mod tests {
         // rather than credited twice.
         let (_, verified) = verified_spec_account();
         let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V2_BYTES];
-        initialize_genesis_archive_v2(
-            &mut archive,
-            verified,
-            fixture::RELEASE,
-            window(),
-            ARCHIVE_BUMP,
-        )
-        .unwrap();
+        initialize_genesis_archive_v2(&mut archive, verified, release(), window(), ARCHIVE_BUMP)
+            .unwrap();
         let first = presented(START_BUCKET, [0x60; 32]);
         append_authenticated_v2(
             &mut archive,
             verified,
-            fixture::RELEASE,
+            release(),
             window(),
             authentication(&first),
         )
@@ -1628,7 +1604,7 @@ mod tests {
             append_authenticated_v2(
                 &mut archive,
                 verified,
-                fixture::RELEASE,
+                release(),
                 window(),
                 authentication(&replayed),
             )
@@ -1661,7 +1637,7 @@ mod tests {
                 ARCHIVE_KEY,
                 AccountViewV2::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &archive),
                 other_verified,
-                fixture::RELEASE,
+                release(),
                 window(),
             ),
             Err(ArchiveV2Error::BindingMismatch)
@@ -1679,7 +1655,7 @@ mod tests {
             ARCHIVE_KEY,
             view(&archive),
             verified,
-            fixture::RELEASE,
+            release(),
             window(),
         )
         .expect("baseline authenticates");
@@ -1710,7 +1686,7 @@ mod tests {
                     ARCHIVE_KEY,
                     view(&hostile),
                     verified,
-                    fixture::RELEASE,
+                    release(),
                     window(),
                 )
                 .is_err(),
@@ -1729,7 +1705,7 @@ mod tests {
             ARCHIVE_KEY,
             view(&archive),
             verified,
-            fixture::RELEASE,
+            release(),
             window(),
         )
         .unwrap();
@@ -1741,7 +1717,7 @@ mod tests {
             ARCHIVE_KEY,
             view(&restamped),
             verified,
-            fixture::RELEASE,
+            release(),
             window(),
         )
         .expect("a restamped page is internally consistent");
@@ -1773,7 +1749,7 @@ mod tests {
                 ARCHIVE_KEY,
                 AccountViewV2::new(ARCHIVE_KEY, CLUTCH_PROGRAM, false, &archive),
                 verified,
-                fixture::RELEASE,
+                release(),
                 window(),
             ),
             Err(ArchiveV2Error::WrongTag)
@@ -1840,13 +1816,7 @@ mod tests {
         .unwrap();
         let mut archive = vec![0_u8; SOURCE_ARCHIVE_ACCOUNT_V2_BYTES];
         assert_eq!(
-            initialize_genesis_archive_v2(
-                &mut archive,
-                verified,
-                fixture::RELEASE,
-                hostile,
-                ARCHIVE_BUMP,
-            ),
+            initialize_genesis_archive_v2(&mut archive, verified, release(), hostile, ARCHIVE_BUMP,),
             Err(ArchiveV2Error::InvalidWindow)
         );
     }

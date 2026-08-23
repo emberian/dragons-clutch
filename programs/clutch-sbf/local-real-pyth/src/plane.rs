@@ -13,13 +13,7 @@ use clutch_sbf::{
     instructions::{cash_exit, genesis, market_init, observe_resolve, split as seam},
     seeds, source_archive_v2,
     source_identity::real_pyth_lab,
-    source_v2::{
-        crossing::SELECTION_CROSSING_V1,
-        spec::{
-            SourceSpecFieldsV2, SourceSpecV2, GRID_ORIGIN_UNIX_SECONDS_V1,
-            ORIENTATION_QUOTE_PER_BASE,
-        },
-    },
+    source_v2::spec::SourceSpecV2,
 };
 use clutch_solana_layout::artifact::{ArtifactBinding, ArtifactKind, ARTIFACT_CHUNK_BYTES};
 use clutch_solana_layout::clearing::{LegRef, PairingSlice};
@@ -122,35 +116,14 @@ fn one_hot_payouts() -> ([PayoutVectorBytes; MAX_PAYOUTS], PayoutSet) {
 
 pub fn real_spec(feed_id: [u8; 32]) -> Result<SourceSpecV2, Box<dyn std::error::Error>> {
     let config = provider::fixture("receiver-config.account")?;
-    SourceSpecV2::new(SourceSpecFieldsV2 {
-        source_adapter_id: real_pyth_lab::RELEASE.source_adapter_id,
-        source_adapter_version: real_pyth_lab::RELEASE.source_adapter_version,
-        parser_id: real_pyth_lab::RELEASE.parser_id,
-        parser_version: real_pyth_lab::RELEASE.parser_version,
-        receiver_program: real_pyth_lab::RECEIVER_PROGRAM,
-        receiver_programdata: real_pyth_lab::RECEIVER_PROGRAMDATA,
-        receiver_config: real_pyth_lab::RECEIVER_CONFIG,
-        config_digest: clutch_sbf::pyth_receiver::config_byte_digest(&config),
-        provider_feed_id: feed_id,
-        programdata_deployment_slot: real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT,
-        base_asset_id: real_pyth_lab::BASE_ASSET_ID,
-        quote_asset_id: real_pyth_lab::QUOTE_ASSET_ID,
-        orientation: ORIENTATION_QUOTE_PER_BASE,
-        normalized_decimals: 8,
-        grid_family_id: 7,
-        grid_version: 1,
-        grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
-        bucket_seconds: 60,
-        boundary_grace_seconds: 5,
-        max_staleness_slots: 500,
-        max_staleness_seconds: 600,
-        max_future_seconds: 15,
-        max_confidence_atoms: 1_000_000_000_000,
-        max_confidence_bps: 500,
-        confidence_multiplier: 3,
-        selection_rule: SELECTION_CROSSING_V1,
-    })
-    .map_err(|error| format!("local-real SourceSpec is invalid: {error:?}").into())
+    let digest = clutch_sbf::pyth_receiver::config_byte_digest(&config);
+    if digest != real_pyth_lab::CONFIG_DIGEST {
+        return Err("local-real receiver Config does not match the compiled release".into());
+    }
+    let mut fields = real_pyth_lab::REGISTERED_SPEC_FIELDS;
+    fields.provider_feed_id = feed_id;
+    SourceSpecV2::new(fields)
+        .map_err(|error| format!("local-real SourceSpec is invalid: {error:?}").into())
 }
 
 fn window_identity(terms: &TermsAccount, feed: Hash32) -> Hash32 {

@@ -77,6 +77,10 @@ pub const CLOCK_SYSVAR_ID: [u8; 32] = [
 /// any state is written; none is ever read from caller instruction data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PullReleaseV2 {
+    /// SHA-256 identity of the complete canonical SourceSpec v2 body approved
+    /// for this compiled release row.  A caller-selected spec that merely
+    /// names the same adapter/parser/program is not a registered release.
+    pub registered_spec_id: [u8; 32],
     /// Digest naming the reviewed adapter implementation.
     pub source_adapter_id: [u8; 32],
     /// Version of that adapter, bound by Terms as `source_version`.
@@ -143,6 +147,10 @@ pub mod fixture {
     use super::{
         PostAbiPositionsV1, PostAbiV2, PullReleaseV2, CLOCK_SYSVAR_ID, META_FLAG_IS_SIGNER,
         META_FLAG_IS_WRITABLE, UPGRADEABLE_LOADER_ID,
+    };
+    use crate::source_v2::crossing::SELECTION_CROSSING_V1;
+    use crate::source_v2::spec::{
+        SourceSpecFieldsV2, GRID_ORIGIN_UNIX_SECONDS_V1, ORIENTATION_QUOTE_PER_BASE,
     };
 
     /// `find_program_address(&[b"dc-r2-fixture-receiver"], &UPGRADEABLE_LOADER_ID)`
@@ -229,6 +237,53 @@ pub mod fixture {
     /// zero-filled ProgramData account would present.
     pub const PROGRAMDATA_DEPLOYMENT_SLOT: u64 = 8_421_504;
 
+    /// SHA-256 of the complete fabricated `Config` body installed by the SVM
+    /// campaign.  The campaign independently rebuilds and re-hashes that body.
+    pub const CONFIG_DIGEST: [u8; 32] = [
+        235, 242, 162, 135, 171, 94, 79, 133, 24, 167, 105, 92, 111, 190, 251, 217, 186, 155, 16,
+        15, 176, 166, 50, 204, 36, 26, 202, 123, 233, 2, 83, 163,
+    ];
+
+    /// The one complete immutable spec approved by the fixture release row.
+    /// This is the semantic preimage of [`REGISTERED_SPEC_ID`]; tests recompute
+    /// the digest with the runtime codec so a hand-transcription cannot widen
+    /// the registry silently.
+    pub const REGISTERED_SPEC_FIELDS: SourceSpecFieldsV2 = SourceSpecFieldsV2 {
+        source_adapter_id: SOURCE_ADAPTER_ID,
+        source_adapter_version: SOURCE_ADAPTER_VERSION,
+        parser_id: PARSER_ID,
+        parser_version: PARSER_VERSION,
+        receiver_program: RECEIVER_PROGRAM,
+        receiver_programdata: RECEIVER_PROGRAMDATA,
+        receiver_config: RECEIVER_CONFIG,
+        config_digest: CONFIG_DIGEST,
+        provider_feed_id: PROVIDER_FEED_ID,
+        programdata_deployment_slot: PROGRAMDATA_DEPLOYMENT_SLOT,
+        base_asset_id: BASE_ASSET_ID,
+        quote_asset_id: QUOTE_ASSET_ID,
+        orientation: ORIENTATION_QUOTE_PER_BASE,
+        normalized_decimals: 8,
+        grid_family_id: 7,
+        grid_version: 1,
+        grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
+        bucket_seconds: 60,
+        boundary_grace_seconds: 5,
+        max_staleness_slots: 500,
+        max_staleness_seconds: 600,
+        max_future_seconds: 15,
+        max_confidence_atoms: 1_000_000_000_000,
+        max_confidence_bps: 500,
+        confidence_multiplier: 3,
+        selection_rule: SELECTION_CROSSING_V1,
+    };
+
+    /// `SourceSpecV2::feed_id(REGISTERED_SPEC_FIELDS)`, frozen as inert
+    /// compiled data.  It is deliberately not derived from caller bytes.
+    pub const REGISTERED_SPEC_ID: [u8; 32] = [
+        60, 239, 23, 76, 104, 88, 14, 183, 129, 35, 96, 223, 112, 106, 180, 102, 27, 46, 243, 213,
+        119, 104, 90, 184, 156, 96, 166, 214, 79, 199, 25, 168,
+    ];
+
     /// Earliest Clock time at which the fixture release may be consumed.
     ///
     /// 2023-11-14T22:13:20Z. The archive campaign drives the Clock well past
@@ -276,6 +331,7 @@ pub mod fixture {
 
     /// The compiled fixture release triple's identity.
     pub const RELEASE: PullReleaseV2 = PullReleaseV2 {
+        registered_spec_id: REGISTERED_SPEC_ID,
         source_adapter_id: SOURCE_ADAPTER_ID,
         source_adapter_version: SOURCE_ADAPTER_VERSION,
         parser_id: PARSER_ID,
@@ -303,6 +359,10 @@ pub mod real_pyth_lab {
     use super::{
         PostAbiPositionsV1, PostAbiV2, PullReleaseV2, CLOCK_SYSVAR_ID, META_FLAG_IS_SIGNER,
         META_FLAG_IS_WRITABLE, UPGRADEABLE_LOADER_ID,
+    };
+    use crate::source_v2::crossing::SELECTION_CROSSING_V1;
+    use crate::source_v2::spec::{
+        SourceSpecFieldsV2, GRID_ORIGIN_UNIX_SECONDS_V1, ORIENTATION_QUOTE_PER_BASE,
     };
 
     /// Pyth Solana Receiver program `rec2HH...` from the captured devnet deployment.
@@ -346,6 +406,12 @@ pub mod real_pyth_lab {
     /// Router deployment slot decoded from the original devnet ProgramData body.
     pub const ROUTER_DEPLOYMENT_SLOT: u64 = 460_336_290;
 
+    /// SHA-256 of the pinned `receiver-config.account` fixture.
+    pub const CONFIG_DIGEST: [u8; 32] = [
+        5, 3, 140, 247, 7, 175, 206, 172, 61, 241, 170, 231, 53, 176, 150, 52, 74, 214, 57, 80,
+        107, 0, 241, 219, 10, 193, 192, 132, 214, 182, 69, 170,
+    ];
+
     /// Synthetic-local feed id embedded in the deterministic signed test VAA.
     pub const PROVIDER_FEED_ID: [u8; 32] = [0x2a; 32];
     /// SHA-256 domain identities used only by the laboratory market.
@@ -359,6 +425,43 @@ pub mod real_pyth_lab {
         0x8c, 0xc8, 0xa5, 0x2c, 0x68, 0x42, 0xe3, 0xd7, 0x45, 0x23, 0xce, 0xa7, 0xd9, 0x03, 0x9f,
         0x9b, 0x41, 0x50, 0x16, 0x09, 0x87, 0x8f, 0x20, 0x78, 0x69, 0x7e, 0xff, 0x05, 0x67, 0x6d,
         0xaf, 0xe4,
+    ];
+
+    /// The one complete immutable spec approved by the local-real laboratory
+    /// row.  This row remains absent from the default ELF.
+    pub const REGISTERED_SPEC_FIELDS: SourceSpecFieldsV2 = SourceSpecFieldsV2 {
+        source_adapter_id: super::fixture::SOURCE_ADAPTER_ID,
+        source_adapter_version: super::fixture::SOURCE_ADAPTER_VERSION,
+        parser_id: super::fixture::PARSER_ID,
+        parser_version: super::fixture::PARSER_VERSION,
+        receiver_program: RECEIVER_PROGRAM,
+        receiver_programdata: RECEIVER_PROGRAMDATA,
+        receiver_config: RECEIVER_CONFIG,
+        config_digest: CONFIG_DIGEST,
+        provider_feed_id: PROVIDER_FEED_ID,
+        programdata_deployment_slot: RECEIVER_DEPLOYMENT_SLOT,
+        base_asset_id: BASE_ASSET_ID,
+        quote_asset_id: QUOTE_ASSET_ID,
+        orientation: ORIENTATION_QUOTE_PER_BASE,
+        normalized_decimals: 8,
+        grid_family_id: 7,
+        grid_version: 1,
+        grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
+        bucket_seconds: 60,
+        boundary_grace_seconds: 5,
+        max_staleness_slots: 500,
+        max_staleness_seconds: 600,
+        max_future_seconds: 15,
+        max_confidence_atoms: 1_000_000_000_000,
+        max_confidence_bps: 500,
+        confidence_multiplier: 3,
+        selection_rule: SELECTION_CROSSING_V1,
+    };
+
+    /// `SourceSpecV2::feed_id(REGISTERED_SPEC_FIELDS)`.
+    pub const REGISTERED_SPEC_ID: [u8; 32] = [
+        124, 84, 184, 220, 56, 90, 148, 252, 210, 121, 131, 22, 54, 169, 151, 81, 69, 50, 6, 135,
+        236, 107, 31, 204, 31, 212, 74, 117, 179, 89, 106, 241,
     ];
 
     /// `post_update` discriminator executed against the pinned receiver ELF.
@@ -389,6 +492,7 @@ pub mod real_pyth_lab {
 
     /// The adapter/parser release compiled only into the local-real test ELF.
     pub const RELEASE: PullReleaseV2 = PullReleaseV2 {
+        registered_spec_id: REGISTERED_SPEC_ID,
         source_adapter_id: super::fixture::SOURCE_ADAPTER_ID,
         source_adapter_version: super::fixture::SOURCE_ADAPTER_VERSION,
         parser_id: super::fixture::PARSER_ID,
@@ -507,27 +611,27 @@ pub mod mainnet {
 /// data. Nothing is negotiated, nothing is derived from caller bytes, and no
 /// field is matched loosely:
 ///
-/// * `source_adapter_id` / `source_adapter_version` — which reviewed adapter;
-/// * `parser_id` / `parser_version` — which reviewed parser release;
-/// * `receiver_program` — which provider deployment.
+/// * `registered_spec_id` — the digest of every canonical SourceSpec byte;
+/// * adapter/parser/program fields — redundant operational hardening against
+///   an incorrectly transcribed release row.
 ///
-/// The remaining pins (ProgramData key, deployment slot, `Config` digest,
-/// provider feed id) are **not** matched here on purpose: they live in the
-/// immutable spec and are enforced against the presented accounts by
-/// [`crate::source_v2::auth::authenticate_pull_update_v2`], which is where
-/// evidence exists. Matching them twice would create a second owner of the same
-/// fact, and matching them *only* here would accept a spec whose accounts say
-/// something else.
+/// The compiled approval and the live account join are distinct checks against
+/// one immutable SourceSpec identity.  The registry decides which complete
+/// spec this ELF approves; [`crate::source_v2::auth::authenticate_pull_update_v2`]
+/// independently proves that the presented ProgramData, Config, provider feed,
+/// and update evidence satisfy that approved spec.
 ///
 /// A `Some` here narrows the refusal boundary; it never removes it. Every spec
 /// that is not this exact release still refuses, which is the shape
 /// `R2_PULL_PROMOTION_PLAN.md` §4 item 2 requires of the flip.
 pub fn select_release(spec: crate::source_v2::spec::SourceSpecV2) -> Option<PullReleaseV2> {
     let fields = spec.fields();
+    let spec_id = spec.feed_id();
     REGISTERED_RELEASES
         .iter()
         .find(|release| {
-            release.source_adapter_id == fields.source_adapter_id
+            release.registered_spec_id == spec_id
+                && release.source_adapter_id == fields.source_adapter_id
                 && release.source_adapter_version == fields.source_adapter_version
                 && release.parser_id == fields.parser_id
                 && release.parser_version == fields.parser_version
@@ -600,9 +704,11 @@ mod tests {
             fixture::RECEIVER_PROGRAMDATA,
             fixture::RECEIVER_CONFIG,
             fixture::SOURCE_ADAPTER_ID,
+            fixture::CONFIG_DIGEST,
             fixture::PROVIDER_FEED_ID,
             fixture::BASE_ASSET_ID,
             fixture::QUOTE_ASSET_ID,
+            fixture::REGISTERED_SPEC_ID,
         ];
         for (at, left) in identities.iter().enumerate() {
             assert_ne!(*left, [0_u8; 32], "identity {at} is zero");
@@ -612,40 +718,26 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "non-production-real-pyth-lab")]
+    #[test]
+    fn laboratory_release_spec_ids_are_nonzero_unique_and_recomputed() {
+        use crate::source_v2::spec::SourceSpecV2;
+
+        let fixture_spec = SourceSpecV2::new(fixture::REGISTERED_SPEC_FIELDS).unwrap();
+        let real_spec = SourceSpecV2::new(real_pyth_lab::REGISTERED_SPEC_FIELDS).unwrap();
+        assert_eq!(fixture_spec.feed_id(), fixture::REGISTERED_SPEC_ID);
+        assert_eq!(real_spec.feed_id(), real_pyth_lab::REGISTERED_SPEC_ID);
+        assert_ne!(fixture::REGISTERED_SPEC_ID, [0_u8; 32]);
+        assert_ne!(real_pyth_lab::REGISTERED_SPEC_ID, [0_u8; 32]);
+        assert_ne!(
+            fixture::REGISTERED_SPEC_ID,
+            real_pyth_lab::REGISTERED_SPEC_ID
+        );
+    }
+
     /// A spec naming the fixture release exactly.
     fn fixture_spec_fields() -> crate::source_v2::spec::SourceSpecFieldsV2 {
-        use crate::source_v2::crossing::SELECTION_CROSSING_V1;
-        use crate::source_v2::spec::{
-            SourceSpecFieldsV2, GRID_ORIGIN_UNIX_SECONDS_V1, ORIENTATION_QUOTE_PER_BASE,
-        };
-        SourceSpecFieldsV2 {
-            source_adapter_id: fixture::SOURCE_ADAPTER_ID,
-            source_adapter_version: fixture::SOURCE_ADAPTER_VERSION,
-            parser_id: fixture::PARSER_ID,
-            parser_version: fixture::PARSER_VERSION,
-            receiver_program: fixture::RECEIVER_PROGRAM,
-            receiver_programdata: fixture::RECEIVER_PROGRAMDATA,
-            receiver_config: fixture::RECEIVER_CONFIG,
-            config_digest: [0x7c; 32],
-            provider_feed_id: fixture::PROVIDER_FEED_ID,
-            programdata_deployment_slot: fixture::PROGRAMDATA_DEPLOYMENT_SLOT,
-            base_asset_id: fixture::BASE_ASSET_ID,
-            quote_asset_id: fixture::QUOTE_ASSET_ID,
-            orientation: ORIENTATION_QUOTE_PER_BASE,
-            normalized_decimals: 8,
-            grid_family_id: 4,
-            grid_version: 9,
-            grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
-            bucket_seconds: 10,
-            boundary_grace_seconds: 5,
-            max_staleness_slots: 500,
-            max_staleness_seconds: 600,
-            max_future_seconds: 15,
-            max_confidence_atoms: 1_000_000_000_000,
-            max_confidence_bps: 500,
-            confidence_multiplier: 3,
-            selection_rule: SELECTION_CROSSING_V1,
-        }
+        fixture::REGISTERED_SPEC_FIELDS
     }
 
     #[test]
@@ -653,10 +745,11 @@ mod tests {
         use crate::source_v2::spec::{SourceSpecFieldsV2, SourceSpecV2};
 
         let admitted = SourceSpecV2::new(fixture_spec_fields()).expect("valid spec");
+        assert_eq!(admitted.feed_id(), fixture::REGISTERED_SPEC_ID);
         assert_eq!(select_release(admitted), Some(fixture::RELEASE));
 
-        // Every matched field is load-bearing: change any one and the spec
-        // names a release this ELF does not carry, so `0x79` stands.
+        // Every structurally flexible field is load-bearing: change any one
+        // while preserving a valid canonical SourceSpec and `0x79` stands.
         for mutate in [
             (|c: &mut SourceSpecFieldsV2| c.source_adapter_id[0] ^= 1)
                 as fn(&mut SourceSpecFieldsV2),
@@ -664,34 +757,30 @@ mod tests {
             |c| c.parser_id += 1,
             |c| c.parser_version += 1,
             |c| c.receiver_program[0] ^= 1,
-        ] {
-            let mut case = fixture_spec_fields();
-            mutate(&mut case);
-            let spec = SourceSpecV2::new(case).expect("still structurally valid");
-            assert_eq!(select_release(spec), None);
-        }
-    }
-
-    #[test]
-    fn the_registry_does_not_second_guess_the_account_level_pins() {
-        use crate::source_v2::spec::{SourceSpecFieldsV2, SourceSpecV2};
-
-        // ProgramData key, deployment slot, config digest, and provider feed
-        // id are enforced against the presented accounts by the authentication
-        // join, which is the only place evidence for them exists.  The registry
-        // deliberately does not re-decide them, so these specs still select the
-        // release -- and then fail at the join if their accounts disagree.
-        for mutate in [
-            (|c: &mut SourceSpecFieldsV2| c.receiver_programdata[0] ^= 1)
-                as fn(&mut SourceSpecFieldsV2),
-            |c| c.programdata_deployment_slot += 1,
+            |c| c.receiver_programdata[0] ^= 1,
+            |c| c.receiver_config[0] ^= 1,
             |c| c.config_digest[0] ^= 1,
             |c| c.provider_feed_id[0] ^= 1,
+            |c| c.programdata_deployment_slot += 1,
+            |c| c.base_asset_id[0] ^= 1,
+            |c| c.quote_asset_id[0] ^= 1,
+            |c| c.normalized_decimals += 1,
+            |c| c.grid_family_id += 1,
+            |c| c.grid_version += 1,
+            |c| c.bucket_seconds += 1,
+            |c| c.boundary_grace_seconds += 1,
+            |c| c.max_staleness_slots += 1,
+            |c| c.max_staleness_seconds += 1,
+            |c| c.max_future_seconds += 1,
+            |c| c.max_confidence_atoms += 1,
+            |c| c.max_confidence_bps += 1,
+            |c| c.confidence_multiplier += 1,
         ] {
             let mut case = fixture_spec_fields();
             mutate(&mut case);
             let spec = SourceSpecV2::new(case).expect("still structurally valid");
-            assert_eq!(select_release(spec), Some(fixture::RELEASE));
+            assert_ne!(spec.feed_id(), fixture::REGISTERED_SPEC_ID);
+            assert_eq!(select_release(spec), None);
         }
     }
 

@@ -94,6 +94,13 @@ fn the_default_elf_registers_exactly_one_laboratory_release() {
     assert_eq!(REGISTERED_RELEASES.len(), 1);
     let release: PullReleaseV2 = REGISTERED_RELEASES[0];
     assert_eq!(release, fixture::RELEASE);
+    assert_eq!(release.registered_spec_id, fixture::REGISTERED_SPEC_ID);
+    assert_eq!(
+        clutch_sbf::source_v2::spec::SourceSpecV2::new(fixture::REGISTERED_SPEC_FIELDS)
+            .unwrap()
+            .feed_id(),
+        release.registered_spec_id
+    );
     assert_eq!(release.receiver_program, fixture::RECEIVER_PROGRAM);
     assert_eq!(release.upgradeable_loader, UPGRADEABLE_LOADER_ID);
 }

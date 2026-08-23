@@ -70,15 +70,11 @@ use {
         },
         source_identity::fixture,
         source_v2::{
-            crossing::SELECTION_CROSSING_V1,
             fixtures::{
                 config_body, price_update_body, programdata_body, receiver_program_body,
                 PriceUpdateFixture,
             },
-            spec::{
-                SourceSpecFieldsV2, SourceSpecV2, GRID_ORIGIN_UNIX_SECONDS_V1,
-                ORIENTATION_QUOTE_PER_BASE,
-            },
+            spec::{SourceSpecFieldsV2, SourceSpecV2},
         },
     },
     clutch_solana_layout::{
@@ -257,34 +253,7 @@ fn one_hot_payouts() -> ([PayoutVectorBytes; MAX_PAYOUTS], PayoutSet) {
 /* ------------------------------------------------------------------------ */
 
 fn pull_spec_fields() -> SourceSpecFieldsV2 {
-    SourceSpecFieldsV2 {
-        source_adapter_id: fixture::SOURCE_ADAPTER_ID,
-        source_adapter_version: fixture::SOURCE_ADAPTER_VERSION,
-        parser_id: fixture::PARSER_ID,
-        parser_version: fixture::PARSER_VERSION,
-        receiver_program: fixture::RECEIVER_PROGRAM,
-        receiver_programdata: fixture::RECEIVER_PROGRAMDATA,
-        receiver_config: fixture::RECEIVER_CONFIG,
-        config_digest: config_digest(),
-        provider_feed_id: fixture::PROVIDER_FEED_ID,
-        programdata_deployment_slot: DEPLOYMENT_SLOT,
-        base_asset_id: fixture::BASE_ASSET_ID,
-        quote_asset_id: fixture::QUOTE_ASSET_ID,
-        orientation: ORIENTATION_QUOTE_PER_BASE,
-        normalized_decimals: 8,
-        grid_family_id: 7,
-        grid_version: 1,
-        grid_origin_unix_seconds: GRID_ORIGIN_UNIX_SECONDS_V1,
-        bucket_seconds: 60,
-        boundary_grace_seconds: 5,
-        max_staleness_slots: 500,
-        max_staleness_seconds: 600,
-        max_future_seconds: 15,
-        max_confidence_atoms: 1_000_000_000_000,
-        max_confidence_bps: 500,
-        confidence_multiplier: 3,
-        selection_rule: SELECTION_CROSSING_V1,
-    }
+    fixture::REGISTERED_SPEC_FIELDS
 }
 
 fn registered_spec() -> SourceSpecV2 {
@@ -296,6 +265,16 @@ fn unregistered_spec() -> SourceSpecV2 {
     let mut fields = pull_spec_fields();
     fields.parser_version += 1;
     SourceSpecV2::new(fields).expect("still a valid v2 spec")
+}
+
+/// A structurally valid, internally self-consistent spec that names the same
+/// adapter/parser/program but changes a formerly under-bound account-level
+/// pin.  Its Terms, feed identity, and PDAs are all derived from the changed
+/// body by [`Campaign::start`].
+fn unregistered_provider_feed_spec() -> SourceSpecV2 {
+    let mut fields = pull_spec_fields();
+    fields.provider_feed_id[0] ^= 1;
+    SourceSpecV2::new(fields).expect("changed provider feed remains a valid v2 spec")
 }
 
 /* ------------------------------------------------------------------------ */
@@ -316,6 +295,15 @@ fn receiver_config_bytes() -> Vec<u8> {
 
 fn config_digest() -> [u8; 32] {
     clutch_sbf::pyth_receiver::config_byte_digest(&receiver_config_bytes())
+}
+
+#[test]
+fn compiled_fixture_spec_id_recomputes_from_the_installed_config_body() {
+    assert_eq!(config_digest(), fixture::CONFIG_DIGEST);
+    let spec = registered_spec();
+    assert_eq!(spec.fields(), fixture::REGISTERED_SPEC_FIELDS);
+    assert_eq!(spec.feed_id(), fixture::REGISTERED_SPEC_ID);
+    assert_eq!(fixture::RELEASE.registered_spec_id, spec.feed_id());
 }
 
 #[cfg(feature = "non-production-real-pyth-lab")]
@@ -357,17 +345,8 @@ fn real_pyth_fixture(name: &str) -> Vec<u8> {
 
 #[cfg(feature = "non-production-real-pyth-lab")]
 fn real_pyth_spec(feed_id: [u8; 32]) -> SourceSpecV2 {
-    let mut fields = pull_spec_fields();
-    fields.receiver_program = real_pyth_lab::RECEIVER_PROGRAM;
-    fields.receiver_programdata = real_pyth_lab::RECEIVER_PROGRAMDATA;
-    fields.receiver_config = real_pyth_lab::RECEIVER_CONFIG;
-    fields.config_digest = clutch_sbf::pyth_receiver::config_byte_digest(&real_pyth_fixture(
-        "receiver-config.account",
-    ));
+    let mut fields = real_pyth_lab::REGISTERED_SPEC_FIELDS;
     fields.provider_feed_id = feed_id;
-    fields.programdata_deployment_slot = real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT;
-    fields.base_asset_id = real_pyth_lab::BASE_ASSET_ID;
-    fields.quote_asset_id = real_pyth_lab::QUOTE_ASSET_ID;
     SourceSpecV2::new(fields).expect("local-real Pyth spec is structurally valid")
 }
 
@@ -2289,27 +2268,32 @@ async fn a_release_this_elf_does_not_carry_cannot_found_its_source_at_all() {
      * is the one the promotion plan actually cares about — a market whose Terms
      * were frozen around a release this ELF does not carry — and it is what
      * this campaign builds. */
-    let mut campaign = Campaign::start(unregistered_spec()).await;
-    let (result, _) = campaign.send(campaign.init_spec()).await;
-    assert_eq!(
-        custom(&result),
-        SOURCE_RELEASE_UNAVAILABLE,
-        "0x79 stands for a market whose release is not compiled in"
-    );
-    assert!(
-        campaign
-            .maybe_account(campaign.plane.source_spec.address)
-            .await
-            .is_none(),
-        "a refused founding creates nothing"
-    );
-    assert!(
-        campaign
-            .maybe_account(campaign.plane.feed.address)
-            .await
-            .is_none(),
-        "and founds no feed head either"
-    );
+    for (label, spec) in [
+        ("parser release", unregistered_spec()),
+        ("provider feed pin", unregistered_provider_feed_spec()),
+    ] {
+        let mut campaign = Campaign::start(spec).await;
+        let (result, _) = campaign.send(campaign.init_spec()).await;
+        assert_eq!(
+            custom(&result),
+            SOURCE_RELEASE_UNAVAILABLE,
+            "0x79 stands for a {label} this ELF did not compile"
+        );
+        assert!(
+            campaign
+                .maybe_account(campaign.plane.source_spec.address)
+                .await
+                .is_none(),
+            "a refused {label} founding creates no SourceSpec"
+        );
+        assert!(
+            campaign
+                .maybe_account(campaign.plane.feed.address)
+                .await
+                .is_none(),
+            "a refused {label} founding creates no Feed head"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2501,30 +2485,26 @@ async fn real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic
         MarketAccount::decode(&campaign.data(campaign.plane.market.address).await).expect("market");
     assert_eq!(market.lifecycle, 1, "the one-bucket market is resolved");
 
-    // A spec pinning another feed still selects the same reviewed release, but
-    // the real proof writes 0x2a... and the account-level feed join refuses.
+    // A spec pinning another feed is not the complete spec approved by the
+    // laboratory row.  Even with self-consistent Terms/feed/PDA derivations it
+    // refuses at founding, before any provider account can be consumed.
     let mut wrong_feed = Campaign::start(real_pyth_spec([0x2b; 32])).await;
     wrong_feed.initialize_real_pyth().await;
-    assert_eq!(wrong_feed.send(wrong_feed.init_spec()).await.0, Ok(()));
-    assert_eq!(wrong_feed.send(wrong_feed.init_archive()).await.0, Ok(()));
-    let wrong_page = wrong_feed
-        .data(wrong_feed.plane.source_archive.address)
-        .await;
-    let wrong_update = wrong_feed.update.pubkey();
-    let (result, _) = wrong_feed
-        .send_many(&[
-            wrong_feed.real_pyth_post(wrong_update),
-            wrong_feed.append(0, wrong_update),
-        ])
-        .await;
-    assert_eq!(custom(&result), SOURCE_ADMISSION_FAILED);
-    assert!(wrong_feed.maybe_account(wrong_update).await.is_none());
+    let (result, _) = wrong_feed.send(wrong_feed.init_spec()).await;
+    assert_eq!(custom(&result), SOURCE_RELEASE_UNAVAILABLE);
     assert_eq!(
         wrong_feed
-            .data(wrong_feed.plane.source_archive.address)
+            .maybe_account(wrong_feed.plane.source_spec.address)
             .await,
-        wrong_page,
-        "wrong-feed refusal rolls back provider and Clutch writes"
+        None,
+        "wrong-feed founding creates no SourceSpec"
+    );
+    assert_eq!(
+        wrong_feed
+            .maybe_account(wrong_feed.plane.feed.address)
+            .await,
+        None,
+        "wrong-feed founding creates no Feed head"
     );
 
     println!(
