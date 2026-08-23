@@ -321,6 +321,11 @@ impl AcceptedResolutionV2 {
     pub const fn resolution_evidence_id(self) -> [u8; 32] {
         self.resolution_evidence_id
     }
+
+    /// Exact authenticated Clock at which this evidence was accepted.
+    pub const fn clock(self) -> RecoveryClock {
+        self.clock
+    }
 }
 
 /// Single-custody failure runtime for one V5 occurrence.
@@ -612,6 +617,12 @@ impl FailureRuntimeExternalV2 {
 
     /// Immutable liveness payer and unused-ceiling refund recipient.
     pub fn recovery_payer(self) -> LivenessId {
+        LivenessId::from_bytes(self.recovery.funding().payer.bytes())
+    }
+
+    /// Immutable refund owner for unused Recovery work and rent principal.
+    /// Funding may originate from prepaid custody; this identity need not sign.
+    pub fn recovery_refund_owner(self) -> LivenessId {
         LivenessId::from_bytes(self.recovery.funding().payer.bytes())
     }
 

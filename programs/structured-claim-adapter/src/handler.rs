@@ -13,8 +13,9 @@ use crate::runtime_contract::{
 };
 
 use crate::{
-    is_zero, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV3, AuthenticatedTokenMintV1,
-    AuthenticatedTokenV1, BoundDescriptorV1, Error, Key, Result,
+    is_zero, AuthenticatedBaseMarketV1, AuthenticatedBasePositionV3,
+    AuthenticatedStructuredCustodyCallV1, AuthenticatedTokenMintV1, AuthenticatedTokenV1,
+    BasePositionTransferCpiV1, BoundDescriptorV1, Error, Key, Result,
 };
 
 /// Maximum staged outer operations in any version-one route.
@@ -201,6 +202,8 @@ pub struct MutationContextV1<'a> {
     pub holder: Option<AuthenticatedTokenV1>,
     /// Transaction signer; quantity routes bind it to both user authorities.
     pub actor: Key,
+    /// Exact typed General action-35 bridge, required only by canonical wrap/unwind.
+    pub canonical_custody: Option<AuthenticatedStructuredCustodyCallV1>,
     /// Authenticated base close capability, present only for retirement.
     pub vault_retirement: Option<BoundBaseVaultRetirementV1>,
 }
@@ -287,16 +290,18 @@ pub enum Token2022CpiV1 {
 
 /// Exact base-program CPI operation.
 ///
-/// Each variant carries the canonical runtime-contract plan rather than an
-/// adapter-owned restatement of its post-state.
+/// Every canonical custody variant carries the exact outer ExtensionRequest
+/// and 23-account contract. Runtime-owned semantics remain in the route's
+/// separate [`PreparedStructuredClaimSemanticV1`] and are checked against the
+/// private-field custody authority before either step can be staged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BaseCpiV1 {
     /// Create the dedicated empty Position/Replay pair under the base program.
     CreateVault(BaseVaultCreationEvidenceV1),
     /// Execute the supply-neutral canonical backing transfer.
-    CanonicalWrap(WrapperTransitionPlanV1),
+    CanonicalWrap(BasePositionTransferCpiV1),
     /// Execute the supply-neutral canonical backing return.
-    CanonicalUnwrap(WrapperTransitionPlanV1),
+    CanonicalUnwrap(BasePositionTransferCpiV1),
     /// Execute full-vector custody and exact complete-set compression.
     FullWrap(MarketChangingWrapperTransitionPlanV1),
     /// Execute exact complete-set expansion and full-vector return.
@@ -522,6 +527,7 @@ pub fn prepare_mutation_v1(
             stage_wrap(context, plan, false)
         }
         StructuredClaimPayloadV1::WrapFull(request) => {
+            require_no_canonical_custody(context)?;
             require_product(context, request.wrapper_product_id)?;
             let (holder, user) = quantity_accounts(context)?;
             require_quantity_actor(context.actor, holder, user)?;
@@ -570,6 +576,7 @@ pub fn prepare_mutation_v1(
             stage_wrap(context, plan, true)
         }
         StructuredClaimPayloadV1::UnwrapFull(request) => {
+            require_no_canonical_custody(context)?;
             require_product(context, request.wrapper_product_id)?;
             let (holder, user) = quantity_accounts(context)?;
             require_quantity_actor(context.actor, holder, user)?;
@@ -615,6 +622,7 @@ pub fn prepare_mutation_v1(
             ))
         }
         StructuredClaimPayloadV1::RedeemTerminal(request) => {
+            require_no_canonical_custody(context)?;
             require_product(context, request.wrapper_product_id)?;
             let (holder, user) = quantity_accounts(context)?;
             require_quantity_actor(context.actor, holder, user)?;
@@ -695,6 +703,7 @@ fn stage_wrap(
     plan: WrapperTransitionPlanV1,
     unwind: bool,
 ) -> Result<PreparedStructuredClaimRouteV1> {
+    let custody = canonical_custody_cpi(context, plan, unwind)?;
     let mut builder = StepBuilder::new();
     if unwind {
         builder.push(burn_step(
@@ -703,13 +712,13 @@ fn stage_wrap(
             plan.mint_supply,
             plan.holder_wrapper_atoms,
         )?)?;
-        builder.push(ExecutionStepV1::Base(BaseCpiV1::CanonicalUnwrap(plan)))?;
+        builder.push(ExecutionStepV1::Base(BaseCpiV1::CanonicalUnwrap(custody)))?;
         Ok(builder.finish(
             StructuredClaimActionV1::UnwrapCanonical,
             PreparedStructuredClaimSemanticV1::UnwrapCanonical(plan),
         ))
     } else {
-        builder.push(ExecutionStepV1::Base(BaseCpiV1::CanonicalWrap(plan)))?;
+        builder.push(ExecutionStepV1::Base(BaseCpiV1::CanonicalWrap(custody)))?;
         builder.push(mint_step(
             context,
             plan.wrapper_quantity,
@@ -721,6 +730,74 @@ fn stage_wrap(
             PreparedStructuredClaimSemanticV1::WrapCanonical(plan),
         ))
     }
+}
+
+fn canonical_custody_cpi(
+    context: &MutationContextV1<'_>,
+    plan: WrapperTransitionPlanV1,
+    unwind: bool,
+) -> Result<BasePositionTransferCpiV1> {
+    let custody = context
+        .canonical_custody
+        .ok_or(Error::CustodyAuthorityMismatch)?;
+    if context.vault_retirement.is_some() {
+        return Err(Error::InvalidAccounts);
+    }
+    let user = context.user.ok_or(Error::BaseClosureMismatch)?;
+    let transfer = custody.transfer();
+    let poststate = custody.poststate();
+    let (action, source, destination, source_after, destination_after) = if unwind {
+        (
+            StructuredClaimActionV1::UnwrapCanonical,
+            context.vault,
+            user,
+            plan.vault_position,
+            plan.user_position,
+        )
+    } else {
+        (
+            StructuredClaimActionV1::WrapCanonical,
+            user,
+            context.vault,
+            plan.user_position,
+            plan.vault_position,
+        )
+    };
+    let source_projection = source.projection();
+    let destination_projection = destination.projection();
+    if custody.local_action() != action
+        || transfer.authority_kind
+            != crate::runtime_contract::PositionAssetTransferAuthorityKindV1::StructuredCustody
+        || transfer.phase_policy
+            != crate::runtime_contract::AssetTransferPhasePolicyV1::ActiveOrResolved
+        || custody.authority_id() != transfer.authority_id
+        || custody.cpi().program_id != context.descriptor.identity().deployment.base_program
+        || transfer.market != context.descriptor.descriptor().market
+        || transfer.source_owner != source_projection.owner
+        || transfer.destination_owner != destination_projection.owner
+        || transfer.source_generation != source_projection.generation
+        || transfer.destination_generation != destination_projection.generation
+        || transfer.source_replay_sequence != source_projection.replay_sequence
+        || transfer.destination_replay_sequence != destination_projection.replay_sequence
+        || transfer.cash_atoms != plan.backing_cash_atoms
+        || transfer.internal != plan.backing_internal
+        || custody.source_after() != source_after
+        || custody.destination_after() != destination_after
+        || poststate.source_position.address != source.position_address()
+        || poststate.source_replay.address != source.replay_address()
+        || poststate.destination_position.address != destination.position_address()
+        || poststate.destination_replay.address != destination.replay_address()
+    {
+        return Err(Error::CustodyAuthorityMismatch);
+    }
+    Ok(custody.cpi())
+}
+
+fn require_no_canonical_custody(context: &MutationContextV1<'_>) -> Result<()> {
+    if context.canonical_custody.is_some() {
+        return Err(Error::InvalidAccounts);
+    }
+    Ok(())
 }
 
 fn stage_market_wrap(
@@ -831,7 +908,7 @@ fn require_product(context: &MutationContextV1<'_>, product: Key) -> Result<()> 
 
 fn require_vault_only(context: &MutationContextV1<'_>, product: Key) -> Result<()> {
     require_product(context, product)?;
-    if context.user.is_some() || context.holder.is_some() {
+    if context.user.is_some() || context.holder.is_some() || context.canonical_custody.is_some() {
         return Err(Error::InvalidAccounts);
     }
     Ok(())

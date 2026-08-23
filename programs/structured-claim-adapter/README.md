@@ -56,6 +56,17 @@ Activation must be atomic with all of the following:
 
 ## Trust-boundary responsibilities
 
+This adapter stays separate from `programs/clutch-sbf` deliberately. The
+descriptor, wrapper mint, mint-authority PDA, wrapper executable, and
+Token-2022 post-CPI observations belong to the wrapper deployment, while the
+base program alone owns Position V3 and Replay writes. Linking the adapter as
+a shared `no_std` library lets both entrypoints reconstruct one identical
+typed custody call without moving wrapper authority into the base ELF or
+inventing a second account DTO. It does **not** authorize either side to trust
+the other's projection: the wrapper prepares the private-field call, and the
+base must reconstruct it again from its own `AccountInfo` observations before
+publishing all four successors atomically.
+
 The adapter owns only facts that cannot live in the pure runtime contract:
 
 - exact wrapper/base/Token-2022 Program and ProgramData ownership, linkage,
@@ -64,14 +75,16 @@ The adapter owns only facts that cannot live in the pure runtime contract:
 - descriptor, mint, mint-authority, and vault-owner PDA authentication;
 - exact account-role ordering, access, program ownership, and pairwise
   nonaliasing;
-- hostile decoding of canonical base Market, Terms, Hoard, SupplyLedger,
-  Position, and current-generation Replay accounts;
+- hostile decoding of the current Realm/Profile/policy, MarketBinding/runtime,
+  MarketInstance, Hoard V2, ClaimLedger V3, Position V3, and purpose-owned
+  Replay accounts on canonical custody routes (the still-disabled full-vector
+  and terminal planners retain their explicitly named legacy closure blocker);
 - projection through a named base-PDA verifier;
 - projection through a named pinned Token-2022 parser; and
 - exact ordered outer CPI/write plans plus receipt reconciliation.
 
-`Token2022DecoderV1` is deliberately a trust boundary, not a convenient mock
-codec. Its implementation must use the pinned Token-2022 layout and reject
+`CanonicalToken2022DecoderV1` is the concrete hostile-byte implementation of
+the `Token2022DecoderV1` trust boundary. It uses the pinned Token-2022 layout and rejects
 every mint extension, nonzero decimals, freeze authority, wrong mint authority,
 or uninitialized mint. Holder accounts must reject frozen, native, delegated,
 close-authority, wrong-mint state, and every extension except
@@ -92,9 +105,9 @@ encoded by the base program's sole canonical `ExtensionRequest` codec with
 sequence zero; it is not a raw family/action prefix. `authority_id` is a
 SHA-256 digest over domain
 `dragons-clutch/authenticated-structured-custody-call/v1\0` and the exact
-1,352-byte authority-neutral projection. It binds action 35, the exact local
+1,480-byte authority-neutral projection. It binds action 35, the exact local
 wrapper action, descriptor/product/deployments, MarketBinding and Product
-artifacts, the complete canonical base Market prestate and current lifecycle,
+artifacts, the full-width Hoard/ClaimLedger prestates and current lifecycle,
 Realm collateral-policy/release identities, user actor, vault PDA, both
 complete Position V3 semantic prestates, both complete Replay prestates, and
 the exact transfer delta.
@@ -104,22 +117,32 @@ prepares the call and the base reconstructs it through the same function. The
 frozen action-35 CPI metas are:
 
 0. vault-owner PDA, signer, read-only;
-1. immutable General V2 MarketBinding, read-only;
-2. source Position V3, writable;
-3. source purpose-owned Replay V3, writable;
-4. destination Position V3, writable;
-5. destination purpose-owned Replay V3, writable;
-6. user Position controller, signer, read-only;
-7. immutable `0x88/1` descriptor, read-only;
-8. pinned wrapper executable, read-only;
-9. pinned wrapper ProgramData, read-only;
-10. pinned base executable, read-only;
-11. pinned base ProgramData, read-only;
-12. pinned Token-2022 executable for the wrapper plane, read-only;
-13. pinned Token-2022 ProgramData, read-only;
-14. exact NativeClaimBasisV1 Product artifact, read-only; and
-15. exact MarketInstanceV2 preimage account, read-only; and
-16. canonical base Market carrying current lifecycle, read-only.
+1. immutable Realm, read-only;
+2. immutable Profile V2, read-only;
+3. exact sealed CollateralPolicy V2 artifact, read-only;
+4. Realm-selected collateral token executable, read-only;
+5. immutable General V2 MarketBinding, read-only;
+6. stable General V2 MarketRuntime, read-only;
+7. source Position V3, writable;
+8. source purpose-owned Replay V3, writable;
+9. destination Position V3, writable;
+10. destination purpose-owned Replay V3, writable;
+11. user Position controller, signer, read-only;
+12. immutable `0x88/1` descriptor, read-only;
+13. pinned wrapper executable, read-only;
+14. pinned wrapper ProgramData, read-only;
+15. pinned base executable, read-only;
+16. pinned base ProgramData, read-only;
+17. pinned Token-2022 executable for the wrapper plane, read-only;
+18. pinned Token-2022 ProgramData, read-only;
+19. exact NativeClaimBasisV1 Product artifact, read-only;
+20. exact MarketInstanceV2 preimage account, read-only;
+21. canonical full-width Hoard V2 carrying current liability lifecycle, read-only; and
+22. canonical full-width ClaimLedger V3 aggregate owner, read-only.
+
+No legacy Market, Kernel, Terms, Hoard, SupplyLedger, or lowered Position DTO
+participates in this custody authority. The Profile chain chooses collateral;
+the wrapper deployment independently chooses Token-2022 for wrapper supply.
 
 The vault signer proves that only the pinned wrapper program could have
 produced `invoke_signed`; the digest prevents that signer from becoming
@@ -144,7 +167,7 @@ pre/post IDs and generation, the consumed ordinal, and the exhaustive
 StructuredGeneral/action-35 tuple.
 
 `StructuredCustodyScratchV1` owns the 2,352-byte NativeClaimBasis decode target
-and 1,352-byte authority transcript. A live SBF entrypoint must place this
+and 1,480-byte authority transcript. A live SBF entrypoint must place this
 scratch on requestable heap storage and pass it to preparation/reconstruction;
 the bridge does not return those large values through the 4-KiB stack. The
 adapter hashes the exact canonical Product and MarketBinding account bytes after
@@ -196,8 +219,6 @@ The adapter implementation is intentionally honest about work owned elsewhere:
   handler, empty-vault creation, atomic full-vector wrap/unwind,
   beneficiary-free compaction, exact terminal redemption, and close receipt
   interfaces staged here;
-- the main SBF program must consume the exact Token-2022 parser and CPI plans
-  without creating a second Token-2022 truth;
 - the main dispatcher has no structured-claim account loader or route arm; and
 - no successor build, measurement, bank, SVM, local-validator, or rollback
   campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.

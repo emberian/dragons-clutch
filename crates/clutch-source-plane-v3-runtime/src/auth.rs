@@ -14,6 +14,8 @@ const SOURCE_RELEASE_DOMAIN: &[u8] = b"dragons-clutch/source-release-manifest/v1
 const SOURCE_RELEASE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-release/v1";
 const SOURCE_ROUTE_AUTH_DOMAIN: &[u8] = b"dragons-clutch/authenticated-source-route/v1";
 const PARSER_OUTPUT_DOMAIN: &[u8] = b"dragons-clutch/source-parser-output/v1";
+/// Exact canonical byte width returned by every reviewed Source V3 parser.
+pub const PARSER_OUTPUT_BYTES: usize = 120;
 const INVOCATION_DOMAIN: &[u8] = b"dragons-clutch/runtime-invocation/v1";
 const BOUNDARY_DOMAIN: &[u8] = b"dragons-clutch/source-boundary-receipt/v1";
 const CLOCK_BUCKET_DOMAIN: &[u8] = b"dragons-clutch/authenticated-clock-bucket/v1";
@@ -910,8 +912,14 @@ impl ParserOutputV1 {
 
     /// Canonical return-data digest.
     pub fn id(&self) -> Result<ContentId> {
+        let bytes = self.encode()?;
+        Ok(domain_id(PARSER_OUTPUT_DOMAIN, &bytes))
+    }
+
+    /// Encode the exact fixed-width parser return-data body.
+    pub fn encode(&self) -> Result<[u8; PARSER_OUTPUT_BYTES]> {
         self.validate()?;
-        let mut bytes = [0; 120];
+        let mut bytes = [0; PARSER_OUTPUT_BYTES];
         bytes[..32].copy_from_slice(&self.source_spec_id.bytes());
         bytes[32..48].copy_from_slice(&self.low.to_le_bytes());
         bytes[48..64].copy_from_slice(&self.high.to_le_bytes());
@@ -919,7 +927,33 @@ impl ParserOutputV1 {
         bytes[72..80].copy_from_slice(&self.publish_slot.to_le_bytes());
         bytes[80..88].copy_from_slice(&self.publish_time.to_le_bytes());
         bytes[88..].copy_from_slice(&self.feed_account_data_id.bytes());
-        Ok(domain_id(PARSER_OUTPUT_DOMAIN, &bytes))
+        Ok(bytes)
+    }
+
+    /// Decode exact parser return data; extra, missing, or invalid bytes refuse.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        if input.len() != PARSER_OUTPUT_BYTES {
+            return Err(Error::InvalidCodec);
+        }
+        let mut source_spec_id = [0_u8; 32];
+        source_spec_id.copy_from_slice(&input[..32]);
+        let mut low = [0_u8; 16];
+        low.copy_from_slice(&input[32..48]);
+        let mut high = [0_u8; 16];
+        high.copy_from_slice(&input[48..64]);
+        let mut feed_account_data_id = [0_u8; 32];
+        feed_account_data_id.copy_from_slice(&input[88..120]);
+        let value = Self {
+            source_spec_id: ContentId::from_bytes(source_spec_id),
+            low: u128::from_le_bytes(low),
+            high: u128::from_le_bytes(high),
+            source_sequence: le_u64(&input[64..72]),
+            publish_slot: le_u64(&input[72..80]),
+            publish_time: le_u64(&input[80..88]),
+            feed_account_data_id: ContentId::from_bytes(feed_account_data_id),
+        };
+        value.validate()?;
+        Ok(value)
     }
 }
 

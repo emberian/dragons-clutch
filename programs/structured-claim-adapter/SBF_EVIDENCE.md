@@ -15,8 +15,9 @@ bind all of the following to one exact source digest and linked ELF identity:
 - the eight exact `75/v1` family-local actions;
 - descriptor account coordinate `0x88/1`;
 - the exact capability profile and central collision ledger;
-- concrete base CPI instruction bytes and owner-side handlers;
-- the pinned Token-2022 parser and emitted instruction bytes;
+- the exact 23-account canonical-custody contract, canonical
+  `ExtensionRequest` bytes, and a routed owner-side action-35 handler;
+- the concrete hostile Token-2022 parser and emitted instruction bytes;
 - maximum adapter and dependency frame sizes plus requested heap;
 - compute, CPI depth, exact account counts, and current-bank rent;
 - adversarial account alias/owner/signer/writable/executable cases;

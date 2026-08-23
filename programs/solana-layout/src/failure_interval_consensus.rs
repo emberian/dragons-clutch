@@ -70,7 +70,7 @@ pub struct FailureIntervalConsensusWorkAccountV1 {
     /// Canonical permanent `0xac/v1` account.
     pub replay_account: [u8; HASH_BYTES],
     /// Immutable rent-principal refund recipient.
-    pub rent_payer: [u8; HASH_BYTES],
+    pub rent_refund_owner: [u8; HASH_BYTES],
     /// Immutable donation sink.
     pub neutral_sink: [u8; HASH_BYTES],
     /// Last bounded Failure transition receipt, zero only before first advance.
@@ -108,7 +108,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
             self.failure_policy_binding_id,
             self.funding_receipt_id,
             self.replay_account,
-            self.rent_payer,
+            self.rent_refund_owner,
             self.neutral_sink,
             self.last_transition_receipt_id,
             self.last_liveness_receipt_id,
@@ -148,7 +148,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
         let failure_policy_binding_id = take_id(input, &mut cursor);
         let funding_receipt_id = take_id(input, &mut cursor);
         let replay_account = take_id(input, &mut cursor);
-        let rent_payer = take_id(input, &mut cursor);
+        let rent_refund_owner = take_id(input, &mut cursor);
         let neutral_sink = take_id(input, &mut cursor);
         let last_transition_receipt_id = take_id(input, &mut cursor);
         let last_liveness_receipt_id = take_id(input, &mut cursor);
@@ -173,7 +173,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
             failure_policy_binding_id,
             funding_receipt_id,
             replay_account,
-            rent_payer,
+            rent_refund_owner,
             neutral_sink,
             last_transition_receipt_id,
             last_liveness_receipt_id,
@@ -191,7 +191,7 @@ impl FailureIntervalConsensusWorkAccountV1 {
             self.failure_policy_binding_id,
             self.funding_receipt_id,
             self.replay_account,
-            self.rent_payer,
+            self.rent_refund_owner,
             self.neutral_sink,
         ] {
             require_live(id)?;
@@ -199,9 +199,9 @@ impl FailureIntervalConsensusWorkAccountV1 {
         if self.generation == 0
             || self.work_rent_principal_lamports == 0
             || self.replay_rent_principal_lamports == 0
-            || self.replay_account == self.rent_payer
+            || self.replay_account == self.rent_refund_owner
             || self.replay_account == self.neutral_sink
-            || self.rent_payer == self.neutral_sink
+            || self.rent_refund_owner == self.neutral_sink
             || self.product_work_body.iter().all(|byte| *byte == 0)
         {
             return Err(CodecError::ZeroValue);

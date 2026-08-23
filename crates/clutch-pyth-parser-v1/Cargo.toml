@@ -1,0 +1,16 @@
+[package]
+name = "clutch-pyth-parser-v1"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Fixed-wire contract for the reviewed Dragon's Clutch Pyth Source V3 parser"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -1,10 +1,12 @@
 #![no_std]
 #![forbid(unsafe_code)]
-//! Offline model of a Pyth `PriceUpdateV2` boundary-price source profile.
+//! Reviewed pure semantics for a Pyth `PriceUpdateV2` boundary-price profile.
 //!
-//! This crate is not wired into the Dragon's Clutch runtime.  It establishes
-//! two narrow facts against the account/message layout reviewed in
-//! `PROVENANCE.md`:
+//! The first-party Source V3 Pyth parser SBF consumes this crate's hostile-byte
+//! decoder, crossing rule, and exact normalization. The older [`auth_v2`]
+//! module remains an offline model for the separate R2 immediate-post design.
+//! These primitives establish two narrow facts against the account/message
+//! layout reviewed in `PROVENANCE.md`:
 //!
 //! 1. hostile bytes can be parsed without an oracle SDK or unchecked layout
 //!    projection; and
