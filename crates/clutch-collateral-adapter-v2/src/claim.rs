@@ -9,6 +9,8 @@ const CLAIM_VERSION: u16 = 1;
 const CLAIM_DOMAIN: &[u8] = b"dragons-clutch/claim-issuance-binding/v1\0";
 const CLAIM_MINT_FOUNDING_DOMAIN_V2: &[u8] = b"dragons-clutch/claim-mint/founding/v2\0";
 const CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2: &[u8] = b"dragons-clutch/claim-mint/founding-step/v2\0";
+const ACCEPTED_CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/claim-mint/founding-step-accepted/v2\0";
 const CLAIM_RESERVED_BYTES: usize = 3;
 
 /// Exact canonical claim-issuance binding width.
@@ -253,6 +255,7 @@ pub struct ClaimMintFoundingPlanV2 {
 /// exhaustive step counter and final activation transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimMintFoundingStepV2 {
+    binding_id: Id,
     founding_id: Id,
     market_instance_id: Id,
     mint_authority: Id,
@@ -261,7 +264,64 @@ pub struct ClaimMintFoundingStepV2 {
     step_id: Id,
 }
 
+/// Reloaded runtime facts for one newly created OutcomeMintV2.
+///
+/// The SBF adapter derives this view from the actual account and its hostile
+/// Token-2022 parser. It is not authority by itself; acceptance also consumes
+/// a private-field founding step and the compiled claim-release binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimMintFoundingPostwriteV2 {
+    /// Exact mint account address.
+    pub mint: Id,
+    /// Runtime owner of the mint account.
+    pub owner_program: Id,
+    /// Runtime writable bit.
+    pub writable: bool,
+    /// Runtime signer bit.
+    pub signer: bool,
+    /// Runtime executable bit.
+    pub executable: bool,
+    /// Exact observed data width.
+    pub account_bytes: u16,
+    /// Whether the Token-2022 base state is initialized.
+    pub initialized: bool,
+    /// Observed raw-atom exponent.
+    pub decimals: u8,
+    /// Observed mint supply.
+    pub supply_atoms: u64,
+    /// Exact observed mint authority; founding requires the General runtime.
+    pub mint_authority: Option<Id>,
+    /// Exact observed freeze authority; founding requires none.
+    pub freeze_authority: Option<Id>,
+    /// Observed extension mask; claim release V1 requires zero.
+    pub extensions: u64,
+}
+
+/// Accepted exact OutcomeMintV2 creation step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcceptedClaimMintFoundingStepV2 {
+    step: ClaimMintFoundingStepV2,
+    receipt_id: Id,
+}
+
+impl AcceptedClaimMintFoundingStepV2 {
+    /// Exact bounded step whose postwrite state was observed.
+    pub const fn step(self) -> ClaimMintFoundingStepV2 {
+        self.step
+    }
+
+    /// Receipt Product can consume to advance the ordered mint counter.
+    pub const fn receipt_id(self) -> Id {
+        self.receipt_id
+    }
+}
+
 impl ClaimMintFoundingStepV2 {
+    /// Exact independently authenticated claim release.
+    pub const fn binding_id(self) -> Id {
+        self.binding_id
+    }
+
     /// Complete claim-plane founding plan identity.
     pub const fn founding_id(self) -> Id {
         self.founding_id
@@ -345,6 +405,7 @@ impl ClaimMintFoundingPlanV2 {
         let step_id = digest(
             CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2,
             &[
+                &self.binding_id.bytes(),
                 &self.founding_id.bytes(),
                 &self.market_instance_id.bytes(),
                 &self.mint_authority.bytes(),
@@ -354,6 +415,7 @@ impl ClaimMintFoundingPlanV2 {
         );
         step_id.require_live()?;
         Ok(ClaimMintFoundingStepV2 {
+            binding_id: self.binding_id,
             founding_id: self.founding_id,
             market_instance_id: self.market_instance_id,
             mint_authority: self.mint_authority,
@@ -447,6 +509,49 @@ pub fn prepare_claim_mint_founding_v2(
     })
 }
 
+/// Accept one bounded mint-creation step only after an exact runtime reload.
+pub fn accept_claim_mint_founding_step_v2(
+    claim: BoundClaimIssuanceV1,
+    step: ClaimMintFoundingStepV2,
+    postwrite: ClaimMintFoundingPostwriteV2,
+) -> Result<AcceptedClaimMintFoundingStepV2> {
+    let binding = claim.binding();
+    binding.validate()?;
+    if claim.binding_id() != step.binding_id
+        || postwrite.mint != step.mint
+        || postwrite.owner_program != binding.token_program
+        || !postwrite.writable
+        || postwrite.signer
+        || postwrite.executable
+        || postwrite.account_bytes != CLAIM_MINT_ACCOUNT_BYTES_V2_WIRE
+        || !postwrite.initialized
+        || postwrite.decimals != binding.decimals
+        || postwrite.supply_atoms != 0
+        || postwrite.mint_authority != Some(step.mint_authority)
+        || postwrite.freeze_authority.is_some()
+        || postwrite.extensions != binding.mint_extensions
+    {
+        return Err(Error::PostAdmissionFailed);
+    }
+    let outcome = [step.outcome];
+    let receipt_id = digest(
+        ACCEPTED_CLAIM_MINT_FOUNDING_STEP_DOMAIN_V2,
+        &[
+            &step.step_id.bytes(),
+            &step.binding_id.bytes(),
+            &step.founding_id.bytes(),
+            &step.market_instance_id.bytes(),
+            &step.mint_authority.bytes(),
+            &outcome,
+            &step.mint.bytes(),
+            &postwrite.account_bytes.to_le_bytes(),
+            &postwrite.supply_atoms.to_le_bytes(),
+        ],
+    );
+    receipt_id.require_live()?;
+    Ok(AcceptedClaimMintFoundingStepV2 { step, receipt_id })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,6 +600,23 @@ mod tests {
         }
     }
 
+    fn postwrite(authority: Id, supply_atoms: u64) -> ClaimMintFoundingPostwriteV2 {
+        ClaimMintFoundingPostwriteV2 {
+            mint: id(20),
+            owner_program: TOKEN_2022_PROGRAM,
+            writable: true,
+            signer: false,
+            executable: false,
+            account_bytes: CLAIM_MINT_ACCOUNT_BYTES_V2_WIRE,
+            initialized: true,
+            decimals: 0,
+            supply_atoms,
+            mint_authority: Some(authority),
+            freeze_authority: None,
+            extensions: 0,
+        }
+    }
+
     #[test]
     fn founding_plan_commits_ordered_mints_and_bounded_steps() {
         let plan = prepare_claim_mint_founding_v2(bound_claim(), request()).unwrap();
@@ -524,6 +646,29 @@ mod tests {
         assert_eq!(
             prepare_claim_mint_founding_v2(bound_claim(), dirty_tail),
             Err(Error::NonCanonicalPadding)
+        );
+    }
+
+    #[test]
+    fn founding_step_accepts_only_exact_zero_supply_reload() {
+        let claim = bound_claim();
+        let step = prepare_claim_mint_founding_v2(claim, request())
+            .unwrap()
+            .step(0)
+            .unwrap();
+        let accepted =
+            accept_claim_mint_founding_step_v2(claim, step, postwrite(id(11), 0)).unwrap();
+        assert_eq!(accepted.step(), step);
+        assert_eq!(accepted.step().binding_id(), claim.binding_id());
+        assert!(!accepted.receipt_id().is_zero());
+
+        assert_eq!(
+            accept_claim_mint_founding_step_v2(claim, step, postwrite(id(12), 0)),
+            Err(Error::PostAdmissionFailed)
+        );
+        assert_eq!(
+            accept_claim_mint_founding_step_v2(claim, step, postwrite(id(11), 1)),
+            Err(Error::PostAdmissionFailed)
         );
     }
 }
