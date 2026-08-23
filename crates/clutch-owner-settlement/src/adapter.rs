@@ -6,8 +6,9 @@
 //! poststate, and commit a complete plan atomically.
 
 use crate::{
-    Amount, AuthenticatedOwnerFragmentV1, Error, OwnerSettlementAccumulatorV1,
-    OwnerSettlementDispositionV1, OwnerSettlementExpectationV1, Result, SettlementSideV1,
+    Amount, AuthenticatedOwnerFragmentV1, AuthenticatedPositionV3, Error,
+    OwnerSettlementAccumulatorV1, OwnerSettlementDispositionV1,
+    OwnerSettlementExpectationV1, PositionSettlementPoststateV3, Result, SettlementSideV1,
     OWNER_SETTLEMENT_BODY_V1_BYTES,
 };
 
@@ -730,27 +731,6 @@ impl SettlementCashPotV1 {
     }
 }
 
-/// Position cash facts after owner, market, generation, PDA, and program-owner
-/// authentication by the General adapter.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(C)]
-pub struct AuthenticatedPositionCashV1 {
-    /// Canonical Position account.
-    pub position: [u8; 32],
-    /// Market identity.
-    pub market: [u8; 32],
-    /// Semantic owner.
-    pub owner: [u8; 32],
-    /// Nonzero Position generation.
-    pub generation: u64,
-    /// Total cash atoms, including reservations.
-    pub cash_atoms: Amount,
-    /// Exact reserved cash atoms.
-    pub reserved_cash_atoms: Amount,
-    /// Whether the Position account meta is writable.
-    pub writable: bool,
-}
-
 /// Owner-scoped fee debit authenticated under the selected fee record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
@@ -807,12 +787,8 @@ pub struct OwnerCashRealizationPlanV1 {
     pub owner_settlement_account: [u8; 32],
     /// Finalized owner-row body.
     pub owner_settlement_body: [u8; OWNER_SETTLEMENT_BODY_V1_BYTES],
-    /// Position to write.
-    pub position: [u8; 32],
-    /// Prospective Position cash.
-    pub position_cash_atoms: Amount,
-    /// Prospective Position reserved cash.
-    pub position_reserved_cash_atoms: Amount,
+    /// Exact canonical Position V3 poststate to write.
+    pub position: PositionSettlementPoststateV3,
     /// Prospective candidate-wide cash pot.
     pub settlement_cash_pot: SettlementCashPotV1,
     /// Exact disposition used to form every poststate.
@@ -837,18 +813,17 @@ pub struct BoundOwnerCashRealizationPlanV1 {
 /// that whole-book terminal capability remains intentionally absent.
 pub fn prepare_realize_owner_cash_v1(
     account: AuthenticatedOwnerSettlementAccountV1,
-    position: AuthenticatedPositionCashV1,
+    position: AuthenticatedPositionV3,
     fee: AuthenticatedOwnerFeeDebitV1,
     pot: SettlementCashPotV1,
 ) -> Result<OwnerCashRealizationPlanV1> {
     pot.validate()?;
+    position.validate()?;
     let expected = account.accumulator.expectation;
+    let position_fields = position.semantic.fields();
     if pot.state != 0
-        || !position.writable
-        || position.position == [0; 32]
-        || position.generation == 0
-        || position.market != expected.market
-        || position.owner != expected.owner
+        || position.general_market_runtime != expected.market
+        || position_fields.owner.bytes() != expected.owner
         || pot.expectation.market != expected.market
         || pot.expectation.epoch != expected.epoch
         || pot.expectation.candidate != expected.candidate
@@ -864,7 +839,10 @@ pub fn prepare_realize_owner_cash_v1(
         return Err(Error::AuthorityUnavailable);
     }
     let mut next_row = account.accumulator;
-    let disposition = next_row.finalize(position.cash_atoms, position.reserved_cash_atoms)?;
+    let disposition = next_row.finalize(
+        position_fields.cash_atoms,
+        position_fields.reserved_cash_atoms,
+    )?;
     let consideration_debit = disposition
         .debit_atoms
         .checked_sub(disposition.selected_fee_atoms)
@@ -893,12 +871,15 @@ pub fn prepare_realize_owner_cash_v1(
         next_pot.state = 1;
     }
     next_pot.validate()?;
+    let next_position = position.settlement_poststate(
+        disposition.position_cash_atoms,
+        disposition.position_reserved_cash_atoms,
+        position_fields.native_eggs,
+    )?;
     Ok(OwnerCashRealizationPlanV1 {
         owner_settlement_account: account.address,
         owner_settlement_body: next_row.encode_body()?,
-        position: position.position,
-        position_cash_atoms: disposition.position_cash_atoms,
-        position_reserved_cash_atoms: disposition.position_reserved_cash_atoms,
+        position: next_position,
         settlement_cash_pot: next_pot,
         disposition,
     })
@@ -921,7 +902,7 @@ pub fn bind_owner_cash_realization_id_v1(
         || finalization.owner_finalization_id == [0; 32]
         || finalization.owner_finalization_id != finalization.finalized_row_data_id
         || finalization.owner_settlement_account != realization.owner_settlement_account
-        || finalization.position != realization.position
+        || finalization.position != realization.position.account
         || finalization.market != expected.market
         || finalization.epoch != expected.epoch
         || finalization.candidate != expected.candidate
@@ -988,6 +969,10 @@ fn read_u128(input: &[u8], cursor: &mut usize) -> Result<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_retirement::{
+        Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
+        PositionV3Fields, RentSplitV2,
+    };
 
     fn key(byte: u8) -> [u8; 32] {
         [byte; 32]
@@ -1050,14 +1035,45 @@ mod tests {
         .unwrap()
     }
 
-    fn position(owner: u8, cash: u64, reserved: u64) -> AuthenticatedPositionCashV1 {
-        AuthenticatedPositionCashV1 {
-            position: key(owner + 32),
-            market: key(1),
-            owner: key(owner),
-            generation: 1,
-            cash_atoms: cash,
-            reserved_cash_atoms: reserved,
+    fn identity(byte: u8) -> Identity32V1 {
+        Identity32V1::new(key(byte)).unwrap()
+    }
+
+    fn position(owner: u8, cash: u64, reserved: u64) -> AuthenticatedPositionV3 {
+        AuthenticatedPositionV3 {
+            account: key(owner + 32),
+            general_market_runtime: key(1),
+            semantic: PositionAccountV3::new(PositionV3Fields {
+                purpose: PositionPurposeV3::General,
+                lifecycle: PositionLifecycleV3::Open,
+                outcome_count: 2,
+                stored_bump: 254,
+                generation: 1,
+                market_instance_id: identity(60),
+                realm_id: identity(61),
+                collateral_policy_id: identity(62),
+                collateral_release_id: identity(63),
+                owner: identity(owner),
+                controller: identity(owner + 8),
+                replay_account: identity(owner + 40),
+                purpose_binding_id: identity(64),
+                cash_atoms: cash,
+                reserved_cash_atoms: reserved,
+                native_eggs: [0; crate::MAX_OUTCOMES],
+                outstanding_reservations: 1,
+                rent: RentSplitV2 {
+                    payer: identity(owner + 48),
+                    refundable_live_principal: 1,
+                    permanent_tombstone_principal: 1,
+                    donation_floor: 0,
+                },
+            })
+            .unwrap(),
+            semantic_id: key(owner + 80),
+            replay_sequence: 0,
+            account_authenticated: true,
+            semantic_id_authenticated: true,
+            market_binding_authenticated: true,
             writable: true,
         }
     }

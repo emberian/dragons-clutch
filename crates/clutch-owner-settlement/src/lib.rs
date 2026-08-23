@@ -14,6 +14,7 @@
 mod adapter;
 mod builder;
 mod direct;
+mod position;
 mod virtual_claim;
 
 pub use adapter::{
@@ -21,7 +22,7 @@ pub use adapter::{
     prepare_account_receipt_end_v1,
     prepare_create_owner_settlement_account_v1, prepare_realize_owner_cash_v1, AdapterDerivedPdaV1,
     AuthenticatedOwnerFeeDebitV1, AuthenticatedOwnerFinalizationIdV1,
-    AuthenticatedOwnerSettlementAccountV1, AuthenticatedPositionCashV1,
+    AuthenticatedOwnerSettlementAccountV1,
     AuthenticatedSettlementReceiptEndV1, BoundOwnerCashRealizationPlanV1,
     OwnerCashRealizationPlanV1,
     OwnerSettlementAccountViewV1, OwnerSettlementCreateFundingV1, OwnerSettlementCreatePlanV1,
@@ -35,10 +36,12 @@ pub use builder::{
     SelectedOwnerFeeV1, VerifiedSettlementOrderV1,
 };
 
+pub use position::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
+
 pub use direct::{
     prepare_direct_egg_settlement_v1, prepare_direct_receipt_end_accounting_v1,
     AuthenticatedDirectSettlementReceiptV1, AuthenticatedOrderMembershipV1,
-    AuthenticatedPositionV1, AuthenticatedReservationV1, DirectEggSettlementInputV1,
+    AuthenticatedReservationV1, DirectEggSettlementInputV1,
     DirectEggSettlementPlanV1, DirectEggTransferAuditV1, DirectReceiptEndAccountingInputV1,
     DirectReceiptEndAccountingPlanV1, OrderKindV1, ReservationStateV1,
     DIRECT_RECEIPT_EXPECTED_END_MASK_V1, MAX_OUTCOMES,
