@@ -58,6 +58,15 @@ advances delivery totals, returns a completing portfolio seller's entire
 unfilled vector, and sets independent buy/sell delivery latches. It cannot
 repeat price accounting or rounding.
 
+All owner cash and Egg transitions consume the canonical 480-byte
+`PositionAccountV3`, not a settlement-local balance projection. The input
+therefore retains the full MarketInstanceV2, Realm, collateral-policy,
+collateral-release, purpose binding, controller, Replay, rent, generation, and
+outstanding-Reservation identities while binding the separate General runtime
+Market PDA. Every plan returns the exact canonical successor plus the
+authenticated prestate semantic ID; the adapter must compare-and-write that
+prestate and derive the successor semantic ID from the final body.
+
 Virtual split and merge use separate typed contracts and cannot pass through
 the paired-direct API. Their default-deny authority records bind a checked
 relation witness, selected candidate, exact amount or receipt, direction, and
