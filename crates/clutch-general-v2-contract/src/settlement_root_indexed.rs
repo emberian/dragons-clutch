@@ -9,9 +9,8 @@
 //! reviewable pure-codec envelope, not a deployable route allocation.
 
 use crate::{
-    prepare_activate_merge_cash_pot_v1, CodecError, Id32, Reader, SettlementRootPhaseV1,
-    SettlementRootTerminalProjectionV1, SettlementRootV1AccountV1, Sha256BackendV1, Writer,
-    SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    CodecError, Id32, Reader, SettlementRootPhaseV1, SettlementRootTerminalProjectionV1,
+    SettlementRootV1AccountV1, Sha256BackendV1, Writer, SETTLEMENT_ROOT_ACCOUNT_BYTES,
 };
 
 /// Exact disabled successor magic. This is not a live Solana discriminator.
@@ -122,8 +121,6 @@ pub enum IndexedSettlementBaseTransitionV1 {
         /// Exact presence of the fee finalization child.
         fee_receipt_created: bool,
     },
-    /// Activate the expected merge cash pot.
-    ActivateMergeCashPot,
     /// Complete one exact merge payment latch.
     CompleteMergePayment,
     /// Retire the complete archive set for one portfolio pair.
@@ -361,9 +358,6 @@ impl IndexedSettlementRootV1AccountV1 {
             } => self
                 .base
                 .complete_owner_finalization(fee_receipt_created)?,
-            IndexedSettlementBaseTransitionV1::ActivateMergeCashPot => {
-                *prepare_activate_merge_cash_pot_v1(&self.base)?.root()
-            }
             IndexedSettlementBaseTransitionV1::CompleteMergePayment => {
                 self.base.complete_merge_payment()?
             }

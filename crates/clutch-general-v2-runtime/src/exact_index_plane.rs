@@ -884,6 +884,24 @@ impl ExactIndexCreateAccountInputV1 {
     }
 }
 
+fn validate_create_pair_identities(
+    locator: ExactIndexCreateAccountInputV1,
+    adjacency: ExactIndexCreateAccountInputV1,
+    neutral_sink: Id32,
+) -> Result<(), ExactIndexPlaneErrorV1> {
+    if locator.account == adjacency.account
+        || locator.program_id != adjacency.program_id
+        || locator.system_program != adjacency.system_program
+        || locator.payer == neutral_sink
+        || adjacency.payer == neutral_sink
+        || locator.payer == adjacency.account
+        || adjacency.payer == locator.account
+    {
+        return Err(ExactIndexPlaneErrorV1::InvalidCreateAccount);
+    }
+    Ok(())
+}
+
 /// Complete hostile construction input for the disabled exact index pair.
 ///
 /// `pages`, `selected_feed_body`, and every immutable artifact must be account
@@ -1422,13 +1440,13 @@ pub fn construct_exact_index_plane_v1(
         input.settlement_root_account,
         input.selected_feed_account,
         input.market_binding_account,
+        binding.neutral_sink,
     ];
-    if input.locator_create.account == input.adjacency_create.account
-        || input.locator_create.program_id != input.adjacency_create.program_id
-        || input.locator_create.system_program != input.adjacency_create.system_program
-    {
-        return Err(ExactIndexPlaneErrorV1::InvalidCreateAccount);
-    }
+    validate_create_pair_identities(
+        input.locator_create,
+        input.adjacency_create,
+        binding.neutral_sink,
+    )?;
     let locator_len = locator_encoded_len(feed.order_count)?;
     let adjacency_len = adjacency_encoded_len(feed.order_count, expected_edge_count)?;
     let locator_rent = input
@@ -2465,77 +2483,6 @@ pub fn retire_counted_exact_index_root_v1(
     })
 }
 
-/// Mint the bounded immutable read authority from a counted live root and exact headers.
-///
-/// The later adapter remains responsible for authenticating the two account
-/// owners, canonical PDAs, read-only metas, and the root account before this
-/// pure join. Since no program transition may mutate a sealed index, reads do
-/// not rehash or rescan unrelated active rows.
-#[allow(clippy::too_many_arguments)]
-pub fn authorize_counted_exact_index_read_v1<'a>(
-    indexed_root_account: Id32,
-    indexed_root: &IndexedSettlementRootV1AccountV1,
-    locator_account: Id32,
-    locator_body: &'a [u8],
-    adjacency_account: Id32,
-    adjacency_body: &'a [u8],
-) -> Result<SealedExactIndexPairInputV1<'a>, ExactIndexPlaneErrorV1> {
-    indexed_root
-        .validate()
-        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
-    if indexed_root_account.is_zero()
-        || indexed_root.index_state() != ExactIndexChildrenStateV1::Live
-        || locator_account != indexed_root.locator_account()
-        || adjacency_account != indexed_root.adjacency_account()
-        || locator_body.len() < EXACT_INDEX_COMMON_HEADER_BYTES_V1
-        || adjacency_body.len() < EXACT_INDEX_COMMON_HEADER_BYTES_V1
-    {
-        return Err(ExactIndexPlaneErrorV1::RootBinding);
-    }
-    let mut locator_reader = ExactReader::new(locator_body);
-    let locator_common = decode_common(&mut locator_reader, FROZEN_ORDER_LOCATOR_MAGIC_V1)?;
-    let mut adjacency_reader = ExactReader::new(adjacency_body);
-    let adjacency_common = decode_common(
-        &mut adjacency_reader,
-        CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1,
-    )?;
-    let base = indexed_root.base();
-    if locator_body.len() != locator_encoded_len(locator_common.order_count)?
-        || adjacency_body.len()
-            != adjacency_encoded_len(adjacency_common.order_count, adjacency_common.edge_count)?
-        || !locator_common.semantic_eq(&adjacency_common)
-        || locator_common.settlement_root_account != indexed_root_account
-        || locator_common.market != base.market()
-        || locator_common.epoch != base.epoch()
-        || locator_common.order_set != base.order_set()
-        || locator_common.settlement_candidate != base.settlement_candidate_id()
-        || locator_common.selected_feed != base.retained_feed()
-        || locator_common.candidate_bundle_digest != base.candidate_bundle_digest()
-        || locator_common.owner_order_set_digest != base.owner_order_set_digest()
-        || locator_common.market_binding_account != base.market_binding()
-        || locator_common.epoch_generation != base.epoch_generation()
-        || locator_common.order_count != base.order_count()
-        || locator_common.outcome_count != base.outcome_count()
-        || locator_common.slice_count != base.counts().expected_receipts
-        || locator_common.plane_id != indexed_root.plane_id()
-        || locator_common.capability_profile != indexed_root.capability_profile_id()
-        || locator_common.sibling_account != adjacency_account
-        || adjacency_common.sibling_account != locator_account
-    {
-        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
-    }
-    Ok(SealedExactIndexPairInputV1 {
-        authority: CountedExactIndexReadAuthorityV1 {
-            plane_id: indexed_root.plane_id(),
-            locator_account,
-            adjacency_account,
-            _private: (),
-        },
-        locator_body,
-        adjacency_body,
-    })
-}
-
 fn close_credits(
     rent: DeletableRentOwnerV1,
     lamports: u64,
@@ -3209,6 +3156,42 @@ mod tests {
         assert_eq!(
             close_credits(rent, 111, id(50)),
             Err(ExactIndexPlaneErrorV1::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn create_pair_refuses_closing_account_and_neutral_sink_as_rent_payers() {
+        let account = |account, payer| ExactIndexCreateAccountInputV1 {
+            account,
+            program_id: id(60),
+            system_program: id(61),
+            payer,
+            payer_lamports: 100,
+            target_lamports: 0,
+            target_owner: id(61),
+            target_data_len: 0,
+            target_writable: true,
+            target_executable: false,
+            rent_exempt_minimum: 100,
+            stored_bump: 1,
+        };
+        let locator = account(id(62), id(64));
+        let adjacency = account(id(63), id(65));
+        assert_eq!(
+            validate_create_pair_identities(
+                account(id(62), id(63)),
+                adjacency,
+                id(66),
+            ),
+            Err(ExactIndexPlaneErrorV1::InvalidCreateAccount)
+        );
+        assert_eq!(
+            validate_create_pair_identities(locator, account(id(63), id(66)), id(66)),
+            Err(ExactIndexPlaneErrorV1::InvalidCreateAccount)
+        );
+        assert_eq!(
+            validate_create_pair_identities(locator, adjacency, id(66)),
+            Ok(())
         );
     }
 }

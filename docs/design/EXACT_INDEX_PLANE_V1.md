@@ -106,14 +106,18 @@ create and partial close are refused.
 Raw construction still requires an unforgeable `CountedExactIndexAdmissionV1`
 and raw closure requires an unforgeable `CountedExactIndexRetirementV1`. The
 only constructors are higher-level pure plans that return the matching indexed
-root write in the same rollback domain as both child writes. A bounded read
-authority is minted only from an authenticated live indexed root and its exact
-sibling headers.
+root write in the same rollback domain as both child writes. The bounded read
+authority remains unminted until the adapter can authenticate the live indexed
+root, both program owners, both canonical PDAs, read-only metas, and the exact
+sibling headers in one route.
 
 `EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. The indexed-root envelope
 has review-only magic, not a Solana account discriminator. There is no PDA
 prefix, action, dispatch entry, or profile capability. Promotion must allocate
 a breaking root discriminator/seed and wire every existing root transition
 through its checked indexed-root transition, then wire atomic child create,
-read, and retire routes. It must not reuse receipt or Dealer counters. Until
-those joins exist, the private typed postwrites remain unreachable from SBF.
+read, and retire routes. The merge-cash-pot activation must retain its existing
+atomic account-creation/rent plan instead of exposing a root-only successor, and
+the larger root allocation must have an exact rent/reallocation plan. It must
+not reuse receipt or Dealer counters. Until those joins exist, the private typed
+postwrites remain unreachable from SBF.
