@@ -34,6 +34,30 @@ at most `outcome_count`. This proves membership in the convex hull of the
 actual finite quantized atom set. It neither uses nor accepts the continuous
 moment-cone witness and makes no uniqueness or optimality claim.
 
+### Exact singleton/two-atom construction
+
+`solve_quantized_atom_pair_hull_v1` constructs a canonical V1 certificate when
+the target is exactly one production atom or an exact rational interpolation
+of two atoms in a caller-declared coordinate set. It evaluates the immutable
+Basis at each integer coordinate, searches pairs in lexicographic order,
+derives a primitive weight from the first differing payout component, checks
+every component equation with checked integers, and then calls
+`verify_quantized_atom_mixture_v1` on its own result.
+
+There is no new rounding boundary: atom evaluation uses the frozen production
+largest-remainder/lowest-index-tie rule selected by V1, and the inverse solve
+itself never rounds or approximates. The caller supplies a positive pair-work
+limit, and the result distinguishes a found certificate, a complete negative
+result for all singleton/pair mixtures in the declared coordinate set, and an
+explicitly truncated search. A report separately states whether that set was
+every integer in the complete Terms domain.
+
+This constructor does not authenticate the repeated Market, Terms, Basis, or
+price identities. An owning adapter must authenticate those bodies before
+using its certificate. It also makes no claim about representations requiring
+three or more atoms, and its deterministic first solution is not an economic
+optimum or a unique representation.
+
 ## Continuous exact profile
 
 `verify_continuous_price_measure_v2` implements the per-span Bernstein/Hausdorff witness

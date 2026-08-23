@@ -260,6 +260,21 @@ fn external_context(
         claim_ledger_account
     );
     assert_ne!(founding.family_admission.receipt_id().bytes(), [0; 32]);
+    let verified_admission = verify_fractional_family_admission_postwrite_v1(
+        founding,
+        policy_account,
+        policy,
+        ledger_account,
+        founding.ledger_after,
+        claim_ledger_account,
+        founding.claim_ledger.claim_ledger_after(),
+    )
+    .unwrap();
+    assert_eq!(
+        verified_admission.family_admission(),
+        founding.family_admission
+    );
+    assert_ne!(verified_admission.verification_id().bytes(), [0; 32]);
     let ledger = FractionalLedgerV1 {
         aggregate_credit_numerator: aggregate_credit,
         active_credit_accounts: active_credits,
@@ -280,6 +295,57 @@ fn external_context(
     )
     .unwrap();
     (context, policy, ledger)
+}
+
+#[test]
+fn fractional_family_admission_postwrite_refuses_substituted_physical_or_latch() {
+    let mut supply = [0; MAX_OUTCOMES];
+    supply[0] = 1;
+    supply[1] = 1;
+    let (context, policy, _ledger) =
+        external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
+    let open_claim_ledger = ClaimLedgerV3 {
+        fractional_policy_id: Id::ZERO,
+        fractional_ledger_account: Id::ZERO,
+        next_fractional_sequence: 0,
+        last_fractional_transition_id: Id::ZERO,
+        fractional_binding: FractionalBindingStateV1::OpenUnlatched,
+        ..context.claim_ledger()
+    };
+    let founding = initialize_fractional_ledger_v1(
+        rid(41),
+        policy,
+        rid(42),
+        rid(44),
+        open_claim_ledger,
+        5,
+        deletable_rent(43),
+    )
+    .unwrap();
+    assert_eq!(
+        verify_fractional_family_admission_postwrite_v1(
+            founding,
+            rid(43),
+            policy,
+            rid(42),
+            founding.ledger_after,
+            rid(44),
+            founding.claim_ledger.claim_ledger_after(),
+        ),
+        Err(Error::MismatchedBinding)
+    );
+    assert_eq!(
+        verify_fractional_family_admission_postwrite_v1(
+            founding,
+            rid(41),
+            policy,
+            rid(42),
+            founding.ledger_after,
+            rid(44),
+            open_claim_ledger,
+        ),
+        Err(Error::MismatchedBinding)
+    );
 }
 
 fn rid_from_collateral(value: Id) -> Identity32V1 {
@@ -958,6 +1024,51 @@ fn exact_terminal_retirement_splits_only_policy_and_ledger_rent() {
     );
     assert_ne!(terminal.rent_disposition_id().bytes(), [0; 32]);
     assert_ne!(terminal.receipt_id().bytes(), [0; 32]);
+    let verified_terminal = verify_fractional_family_terminal_postwrite_v1(
+        close,
+        terminal,
+        rid(41),
+        terminal_context.policy(),
+        rid(42),
+        terminal_context.ledger(),
+        rid(44),
+        close.claim_ledger_after().claim_ledger_after(),
+        103,
+        103,
+    )
+    .unwrap();
+    assert_eq!(verified_terminal.family_terminal(), terminal);
+    assert_ne!(verified_terminal.verification_id().bytes(), [0; 32]);
+    assert_eq!(
+        verify_fractional_family_terminal_postwrite_v1(
+            close,
+            terminal,
+            rid(41),
+            terminal_context.policy(),
+            rid(42),
+            terminal_context.ledger(),
+            rid(44),
+            close.claim_ledger_after().claim_ledger_after(),
+            104,
+            103,
+        ),
+        Err(Error::RentRefused)
+    );
+    assert_eq!(
+        verify_fractional_family_terminal_postwrite_v1(
+            close,
+            terminal,
+            rid(41),
+            terminal_context.policy(),
+            rid(42),
+            terminal_context.ledger(),
+            rid(44),
+            terminal_context.claim_ledger(),
+            103,
+            103,
+        ),
+        Err(Error::MismatchedBinding)
+    );
     assert_ne!(
         terminal.receipt_id(),
         project_fractional_family_terminal_receipt_v1(close, rid(71))

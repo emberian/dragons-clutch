@@ -23,6 +23,7 @@
 use clutch_bspline::{BasisSpec, ValidatedBasisSpec};
 
 mod atom_mixture_v1;
+mod atom_solver_v1;
 mod quantized_v3;
 
 pub use atom_mixture_v1::{
@@ -32,6 +33,13 @@ pub use atom_mixture_v1::{
     QUANTIZED_ATOM_CARATHEODORY_PROFILE_V1, QUANTIZED_ATOM_MIXTURE_CERTIFICATE_BYTES_V1,
     QUANTIZED_ATOM_MIXTURE_CERTIFICATE_VERSION_V1, QUANTIZED_ATOM_MIXTURE_MAGIC_V1,
     QUANTIZED_ATOM_MIXTURE_SEMANTICS_VERSION_V1,
+};
+pub use atom_solver_v1::{
+    solve_quantized_atom_pair_hull_v1, ExactQuantizedAtomSolutionV1,
+    QuantizedAtomPairSolverErrorV1, QuantizedAtomPairSolverOutcomeV1,
+    QuantizedAtomPairSolverPlanV1, QuantizedAtomPairSolverReportV1,
+    QuantizedAtomSearchCoordinatesV1, ResultPairSolverV1,
+    MAX_QUANTIZED_ATOM_SOLVER_COORDINATES_V1,
 };
 pub use quantized_v3::{
     verify_quantized_price_measure_v3_degree_zero, verify_quantized_price_measure_v3_smooth,

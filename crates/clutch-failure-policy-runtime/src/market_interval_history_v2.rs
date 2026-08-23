@@ -11,10 +11,10 @@
 use clutch_product_series::{ContentId as ProductContentId, MarketInstanceV2Id};
 use sha2::{Digest, Sha256};
 
-use crate::market_policy_v2::{
+use crate::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateV1, FailureMarketFamilyTerminalReceiptIdV1,
 };
-use crate::market_quote_v2::FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use crate::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
 use crate::{Error, FailurePolicyBindingId, Result};
 
 const FUNDING_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-interval-funding/v2";
@@ -31,8 +31,9 @@ const IMMUTABLE_ID_COUNT_V2: usize = 8;
 const DYNAMIC_ID_COUNT_V2: usize = 5;
 const AMOUNT_COUNT_V2: usize = 6;
 
-/// Canonical semantic width of the permanent Market interval-history body.
-pub const FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2: usize = 512;
+/// Canonical semantic width inside the 512-byte permanent history account.
+/// The Solana adapter owns the four-byte tag/version/bump frame.
+pub const FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2: usize = 508;
 
 macro_rules! history_id {
     ($name:ident, $docs:literal) => {
@@ -178,6 +179,9 @@ pub struct FailureMarketIntervalTerminalFactsV2 {
     pub session_terminal_receipt_id: ProductContentId,
     /// Complete terminal reusable-cell postimage.
     pub terminal_state_commitment: ProductContentId,
+    /// Canonical Idle reusable-cell postimage written after this terminal is
+    /// folded into history in the same atomic batch.
+    pub idle_state_commitment: ProductContentId,
     /// Last exact liveness work receipt, or zero for a zero-work terminal.
     pub last_liveness_work_receipt_id: ProductContentId,
     /// Session classification.
@@ -247,6 +251,21 @@ impl FailureMarketIntervalHistoryV2 {
         self.market_instance_id
     }
 
+    /// Exact capitalization receipt frozen into this history.
+    pub const fn funding_receipt_id(self) -> FailureMarketIntervalFundingReceiptIdV2 {
+        self.funding_receipt_id
+    }
+
+    /// Shared Failure/liveness generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Exact authenticated Market quote admission.
+    pub const fn quote_admission_receipt_id(self) -> ProductContentId {
+        self.quote_admission_receipt_id
+    }
+
     /// Reusable Market interval cell.
     pub const fn work_account(self) -> FailureMarketAccountIdV1 {
         self.work_account
@@ -280,6 +299,11 @@ impl FailureMarketIntervalHistoryV2 {
     /// Latest folded session terminal receipt, or zero when empty.
     pub const fn latest_terminal_receipt_id(self) -> ProductContentId {
         self.latest_terminal_receipt_id
+    }
+
+    /// Complete latest terminal reusable-cell postimage.
+    pub const fn latest_terminal_state_commitment(self) -> ProductContentId {
+        self.latest_terminal_state_commitment
     }
 
     /// Exhaustive Failure-family receipt, if history has been sealed.
@@ -459,6 +483,13 @@ impl FailureMarketIntervalHistoryV2 {
         Ok(())
     }
 
+    /// Validate the complete self-contained history shape without claiming
+    /// account authenticity. Crate-local transition owners use this before a
+    /// private adapter authenticates the persisted account.
+    pub(crate) fn validate_internal(self) -> Result<()> {
+        self.validate()
+    }
+
     fn validate_against(
         self,
         admission: FailureMarketAdmissionStateV1,
@@ -499,11 +530,20 @@ impl FailureMarketIntervalHistoryPlanV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureMarketIntervalHistoryAppendReceiptV2 {
     id: FailureMarketIntervalHistoryAppendReceiptIdV2,
+    failure_policy_binding_id: FailurePolicyBindingId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    funding_receipt_id: FailureMarketIntervalFundingReceiptIdV2,
+    work_account: FailureMarketAccountIdV1,
+    history_account: FailureMarketAccountIdV1,
     history_before: FailureMarketIntervalHistoryStateIdV2,
     history_after: FailureMarketIntervalHistoryStateIdV2,
     previous_root: FailureMarketIntervalHistoryRootV2,
     resulting_root: FailureMarketIntervalHistoryRootV2,
+    session_binding_id: ProductContentId,
     session_terminal_receipt_id: ProductContentId,
+    terminal_state_commitment: ProductContentId,
+    idle_state_commitment: ProductContentId,
     completed_session_count: u64,
 }
 
@@ -511,6 +551,36 @@ impl FailureMarketIntervalHistoryAppendReceiptV2 {
     /// Complete append receipt identity.
     pub const fn id(self) -> FailureMarketIntervalHistoryAppendReceiptIdV2 {
         self.id
+    }
+
+    /// Exact shared Failure policy.
+    pub const fn failure_policy_binding_id(self) -> FailurePolicyBindingId {
+        self.failure_policy_binding_id
+    }
+
+    /// Full-width economic Market.
+    pub const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    /// Shared Failure/liveness generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Product-authenticated reusable-cell/history capitalization.
+    pub const fn funding_receipt_id(self) -> FailureMarketIntervalFundingReceiptIdV2 {
+        self.funding_receipt_id
+    }
+
+    /// Exact reusable `0xab/v2` cell.
+    pub const fn work_account(self) -> FailureMarketAccountIdV1 {
+        self.work_account
+    }
+
+    /// Exact append-only `0xac/v2` history.
+    pub const fn history_account(self) -> FailureMarketAccountIdV1 {
+        self.history_account
     }
 
     /// Exact history prestate.
@@ -533,9 +603,24 @@ impl FailureMarketIntervalHistoryAppendReceiptV2 {
         self.resulting_root
     }
 
+    /// Exact subordinate session folded by this append.
+    pub const fn session_binding_id(self) -> ProductContentId {
+        self.session_binding_id
+    }
+
     /// Exact terminal folded by this append.
     pub const fn session_terminal_receipt_id(self) -> ProductContentId {
         self.session_terminal_receipt_id
+    }
+
+    /// Complete terminal reusable-cell postimage folded by this append.
+    pub const fn terminal_state_commitment(self) -> ProductContentId {
+        self.terminal_state_commitment
+    }
+
+    /// Canonical Idle reusable-cell postimage written by this append/reset.
+    pub const fn idle_state_commitment(self) -> ProductContentId {
+        self.idle_state_commitment
     }
 
     /// Resulting one-based completed-session count.
@@ -681,11 +766,20 @@ pub fn plan_append_failure_market_interval_history_v2<
         },
         FailureMarketIntervalHistoryAppendReceiptV2 {
             id,
+            failure_policy_binding_id: history.failure_policy_binding_id,
+            market_instance_id: history.market_instance_id,
+            generation: history.generation,
+            funding_receipt_id: history.funding_receipt_id,
+            work_account: history.work_account,
+            history_account: history.history_account,
             history_before,
             history_after,
             previous_root: history.history_root,
             resulting_root,
+            session_binding_id: terminal.session_binding_id,
             session_terminal_receipt_id: terminal.session_terminal_receipt_id,
+            terminal_state_commitment: terminal.terminal_state_commitment,
+            idle_state_commitment: terminal.idle_state_commitment,
             completed_session_count: next_count,
         },
     ))
@@ -931,12 +1025,16 @@ fn validate_terminal_facts(
         terminal.session_binding_id.bytes(),
         terminal.session_terminal_receipt_id.bytes(),
         terminal.terminal_state_commitment.bytes(),
+        terminal.idle_state_commitment.bytes(),
     ] {
         require_live(id)?;
     }
     if terminal.session_terminal_receipt_id == history.latest_terminal_receipt_id
         || terminal.session_binding_id == terminal.session_terminal_receipt_id
         || terminal.terminal_state_commitment == terminal.session_terminal_receipt_id
+        || terminal.idle_state_commitment.is_zero()
+        || terminal.idle_state_commitment == terminal.terminal_state_commitment
+        || terminal.idle_state_commitment == terminal.session_terminal_receipt_id
         || (terminal.completed_work_calls == 0
             && (!terminal.last_liveness_work_receipt_id.is_zero()
                 || terminal.exact_reward_lamports != 0))
@@ -971,6 +1069,7 @@ fn hash_terminal_facts(hasher: &mut Sha256, terminal: FailureMarketIntervalTermi
     hasher.update(terminal.session_binding_id.bytes());
     hasher.update(terminal.session_terminal_receipt_id.bytes());
     hasher.update(terminal.terminal_state_commitment.bytes());
+    hasher.update(terminal.idle_state_commitment.bytes());
     hasher.update(terminal.last_liveness_work_receipt_id.bytes());
     hasher.update([terminal.disposition.byte()]);
     hasher.update(terminal.completed_work_calls.to_le_bytes());
@@ -1050,6 +1149,100 @@ const _: () = assert!(
 );
 
 #[cfg(test)]
+pub(crate) fn runtime_test_fixture(
+    admission: FailureMarketAdmissionStateV1,
+) -> (
+    FailureMarketIntervalFundingReceiptV2,
+    FailureMarketIntervalHistoryV2,
+) {
+    let policy = admission.binding().facts();
+    let facts = FailureMarketIntervalFundingFactsV2 {
+        failure_policy_binding_id: admission.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        prepaid_funding_receipt_id: ProductContentId::from_bytes([201; 32]),
+        work_account: FailureMarketAccountIdV1::from_bytes([202; 32]),
+        history_account: FailureMarketAccountIdV1::from_bytes([203; 32]),
+        rent_refund_owner: FailureMarketAccountIdV1::from_bytes([204; 32]),
+        neutral_sink: FailureMarketAccountIdV1::from_bytes([205; 32]),
+        work_rent_principal_lamports: 100,
+        history_rent_principal_lamports: 200,
+        work_donation_floor_lamports: 3,
+        work_observed_balance_lamports: 103,
+        history_donation_floor_lamports: 5,
+        history_observed_balance_lamports: 205,
+    };
+    let funding = FailureMarketIntervalFundingReceiptV2 {
+        id: FailureMarketIntervalFundingReceiptIdV2::from_bytes([206; 32]),
+        facts,
+    };
+    let history = FailureMarketIntervalHistoryV2 {
+        failure_policy_binding_id: admission.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        funding_receipt_id: funding.id,
+        work_account: facts.work_account,
+        history_account: facts.history_account,
+        rent_refund_owner: facts.rent_refund_owner,
+        neutral_sink: facts.neutral_sink,
+        quote_admission_receipt_id: ProductContentId::from_bytes([207; 32]),
+        generation: policy.generation,
+        work_rent_principal_lamports: facts.work_rent_principal_lamports,
+        history_rent_principal_lamports: facts.history_rent_principal_lamports,
+        completed_session_count: 0,
+        completed_work_calls: 0,
+        exact_reward_lamports: 0,
+        history_root: FailureMarketIntervalHistoryRootV2::from_bytes([0; 32]),
+        latest_session_binding_id: ProductContentId::ZERO,
+        latest_terminal_receipt_id: ProductContentId::ZERO,
+        latest_terminal_state_commitment: ProductContentId::ZERO,
+        family_terminal_receipt_id: FailureMarketFamilyTerminalReceiptIdV1::from_bytes([0; 32]),
+    };
+    (funding, history)
+}
+
+#[cfg(test)]
+pub(crate) fn runtime_test_append(
+    history: FailureMarketIntervalHistoryV2,
+    session_binding_id: ProductContentId,
+    terminal_state_commitment: ProductContentId,
+    idle_state_commitment: ProductContentId,
+    session_terminal_receipt_id: ProductContentId,
+    seed: u8,
+) -> (
+    FailureMarketIntervalHistoryV2,
+    FailureMarketIntervalHistoryAppendReceiptV2,
+) {
+    let history_before = history.id().unwrap();
+    let resulting_root = FailureMarketIntervalHistoryRootV2::from_bytes([seed; 32]);
+    let mut after = history;
+    after.completed_session_count = history.completed_session_count.checked_add(1).unwrap();
+    after.history_root = resulting_root;
+    after.latest_session_binding_id = session_binding_id;
+    after.latest_terminal_receipt_id = session_terminal_receipt_id;
+    after.latest_terminal_state_commitment = terminal_state_commitment;
+    let history_after = after.id().unwrap();
+    let receipt = FailureMarketIntervalHistoryAppendReceiptV2 {
+        id: FailureMarketIntervalHistoryAppendReceiptIdV2::from_bytes([seed.wrapping_add(2); 32]),
+        failure_policy_binding_id: history.failure_policy_binding_id,
+        market_instance_id: history.market_instance_id,
+        generation: history.generation,
+        funding_receipt_id: history.funding_receipt_id,
+        work_account: history.work_account,
+        history_account: history.history_account,
+        history_before,
+        history_after,
+        previous_root: history.history_root,
+        resulting_root,
+        session_binding_id,
+        session_terminal_receipt_id,
+        terminal_state_commitment,
+        idle_state_commitment,
+        completed_session_count: after.completed_session_count,
+    };
+    (after, receipt)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1115,6 +1308,7 @@ mod tests {
             session_binding_id: ProductContentId::from_bytes([20; 32]),
             session_terminal_receipt_id: ProductContentId::from_bytes([21; 32]),
             terminal_state_commitment: ProductContentId::from_bytes([22; 32]),
+            idle_state_commitment: ProductContentId::from_bytes([24; 32]),
             last_liveness_work_receipt_id: ProductContentId::from_bytes([23; 32]),
             disposition: FailureMarketIntervalTerminalDispositionV2::Resolved,
             completed_work_calls: 0,
@@ -1129,9 +1323,9 @@ mod tests {
 
         let mut sealed = history;
         sealed.family_terminal_receipt_id =
-            FailureMarketFamilyTerminalReceiptIdV1::from_bytes([24; 32]);
+            FailureMarketFamilyTerminalReceiptIdV1::from_bytes([25; 32]);
         let seal = FailureMarketIntervalFamilySealReceiptV2 {
-            id: FailureMarketIntervalFamilySealReceiptIdV2::from_bytes([25; 32]),
+            id: FailureMarketIntervalFamilySealReceiptIdV2::from_bytes([26; 32]),
             facts: FailureMarketIntervalFamilySealFactsV2 {
                 history_before: history.id().unwrap(),
                 history_root: history.history_root,

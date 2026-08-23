@@ -32,6 +32,9 @@ use crate::{
 /// Product five-family Market aggregator.
 pub const FRACTIONAL_FAMILY_ADMISSION_RECEIPT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fractional/family-admission/v1\0";
+/// Semantic domain proving exact a4/a5/ClaimLedger founding postimages.
+pub const FRACTIONAL_FAMILY_ADMISSION_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-admission-postwrite/v1\0";
 /// Semantic domain for the exact terminal Fractional child receipt consumed by
 /// the Product market-family aggregator.
 pub const FRACTIONAL_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] =
@@ -39,6 +42,9 @@ pub const FRACTIONAL_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] =
 /// Semantic domain committing the two independent rent-return dispositions.
 pub const FRACTIONAL_FAMILY_RENT_DISPOSITION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fractional/family-rent-disposition/v1\0";
+/// Semantic domain proving exact a4/a5/ClaimLedger terminal postimages before deletion.
+pub const FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional/family-terminal-postwrite/v1\0";
 
 #[derive(Clone, Copy, Debug)]
 struct FractionalSha256V1;
@@ -432,6 +438,104 @@ impl FractionalFamilyAdmissionReceiptV1 {
     pub const fn receipt_id(self) -> Identity32V1 {
         self.receipt_id
     }
+}
+
+/// Structurally verified a4/a5/ClaimLedger founding postimages.
+///
+/// This pure value is not Solana account authority. The adapter must decode
+/// the three exact program-owned postwrite accounts and keep its authenticated
+/// wrapper private before Product may consume the embedded family receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedFractionalFamilyAdmissionPostwriteV1 {
+    family_admission: FractionalFamilyAdmissionReceiptV1,
+    verification_id: Identity32V1,
+}
+
+impl VerifiedFractionalFamilyAdmissionPostwriteV1 {
+    /// Exact Fractional-owned receipt consumed by Product family admission.
+    pub const fn family_admission(self) -> FractionalFamilyAdmissionReceiptV1 {
+        self.family_admission
+    }
+
+    /// Commitment to the three exact canonical postimages.
+    pub const fn verification_id(self) -> Identity32V1 {
+        self.verification_id
+    }
+}
+
+/// Verify the exact founding postimages before Product admits the Fractional child.
+///
+/// Physical owner, PDA, writable, allocation, rent, and framed-byte checks
+/// remain the SBF adapter's responsibility. This function prevents that
+/// adapter from promoting caller-shaped decoded values or a mismatched latch.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_fractional_family_admission_postwrite_v1(
+    plan: FractionalInitializationPlanV1,
+    policy_account: Identity32V1,
+    policy: FractionalPolicyV2,
+    ledger_account: Identity32V1,
+    ledger: FractionalLedgerV1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger: ClaimLedgerV3,
+) -> Result<VerifiedFractionalFamilyAdmissionPostwriteV1> {
+    policy.validate()?;
+    ledger.validate_with_policy(policy_account, policy)?;
+    map_collateral(claim_ledger.validate())?;
+    let receipt = plan.family_admission;
+    let policy_state_id = policy.state_id()?;
+    let ledger_state_id = ledger.state_id()?;
+    let claim_ledger_after_id = runtime_identity(
+        claim_ledger
+            .semantic_id(&FractionalSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    if ledger != plan.ledger_after
+        || claim_ledger != plan.claim_ledger.claim_ledger_after()
+        || policy_account != receipt.policy_account
+        || policy.market_instance != receipt.market_instance
+        || policy.domain_generation != receipt.domain_generation
+        || policy.claim_issuance_binding != receipt.claim_issuance_binding
+        || policy_state_id != receipt.policy_state_id
+        || ledger_account != receipt.ledger_account
+        || ledger_state_id != receipt.ledger_state_id
+        || claim_ledger_account != receipt.claim_ledger_account
+        || claim_ledger_after_id != receipt.claim_ledger_after_id
+        || claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
+        || claim_ledger.fractional_policy_id != collateral_id(policy_account)
+        || claim_ledger.fractional_ledger_account != collateral_id(ledger_account)
+        || claim_ledger.last_fractional_transition_id
+            != collateral_id(receipt.latch_transition_id)
+        || plan.claim_ledger.claim_ledger_before_id()
+            != collateral_id(receipt.claim_ledger_before_id)
+        || plan.claim_ledger.fractional_policy_id() != collateral_id(policy_account)
+        || plan.claim_ledger.fractional_ledger_account() != collateral_id(ledger_account)
+        || plan.claim_ledger.fractional_ledger_after_id() != collateral_id(ledger_state_id)
+        || plan.claim_ledger.claim_ledger_after_id() != collateral_id(claim_ledger_after_id)
+        || plan.claim_ledger.transition_id() != collateral_id(receipt.latch_transition_id)
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_ADMISSION_POSTWRITE_DOMAIN_V1);
+    for identity in [
+        receipt.receipt_id,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        claim_ledger_account,
+        receipt.claim_ledger_before_id,
+        claim_ledger_after_id,
+        receipt.latch_transition_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    let verification_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    Ok(VerifiedFractionalFamilyAdmissionPostwriteV1 {
+        family_admission: receipt,
+        verification_id,
+    })
 }
 
 /// Initialize the sole aggregate-credit owner beside an authenticated policy.
@@ -2375,5 +2479,135 @@ pub fn project_fractional_family_terminal_receipt_v1(
         fractional_release_id,
         rent_disposition_id,
         receipt_id,
+    })
+}
+
+/// Structurally verified terminal postimages and exact pre-deletion rent balances.
+///
+/// This value is not Product authorization and cannot authorize either account
+/// deletion. The SBF adapter must authenticate the physical accounts, the
+/// separately selected Fractional release, and Product's private terminal
+/// consumer in one instruction before applying the checked rent dispositions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedFractionalFamilyTerminalPostwriteV1 {
+    family_terminal: FractionalFamilyTerminalReceiptV1,
+    verification_id: Identity32V1,
+}
+
+impl VerifiedFractionalFamilyTerminalPostwriteV1 {
+    /// Exact Fractional-owned receipt consumed by Product family terminality.
+    pub const fn family_terminal(self) -> FractionalFamilyTerminalReceiptV1 {
+        self.family_terminal
+    }
+
+    /// Commitment to the exact terminal postwrite and pre-deletion balances.
+    pub const fn verification_id(self) -> Identity32V1 {
+        self.verification_id
+    }
+}
+
+/// Verify exact terminal postimages before Product consumes the Fractional child.
+///
+/// The observed a5 body is intentionally the last persisted ClaimsExhausted
+/// preimage. Its one-step retirement identity is committed by the Retiring
+/// ClaimLedger postimage and the terminal receipt, then a5 is deleted without
+/// ever presenting a caller-authored transient account body.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_fractional_family_terminal_postwrite_v1(
+    close: EmptyLedgerClosePlanV1,
+    terminal: FractionalFamilyTerminalReceiptV1,
+    policy_account: Identity32V1,
+    policy: FractionalPolicyV2,
+    ledger_account: Identity32V1,
+    ledger: FractionalLedgerV1,
+    claim_ledger_account: Identity32V1,
+    claim_ledger: ClaimLedgerV3,
+    observed_policy_lamports: u64,
+    observed_ledger_lamports: u64,
+) -> Result<VerifiedFractionalFamilyTerminalPostwriteV1> {
+    policy.validate()?;
+    ledger.validate_with_policy(policy_account, policy)?;
+    map_collateral(claim_ledger.validate())?;
+    let requirement = close.terminal_requirement;
+    let expected_terminal =
+        project_fractional_family_terminal_receipt_v1(close, terminal.fractional_release_id)?;
+    let policy_state_id = policy.state_id()?;
+    let ledger_state_id = ledger.state_id()?;
+    let claim_ledger_post_state_id = runtime_identity(
+        claim_ledger
+            .semantic_id(&FractionalSha256V1)
+            .map_err(|_| Error::MismatchedBinding)?,
+    )?;
+    let expected_policy_lamports = close
+        .policy_funding
+        .payer_refund_lamports
+        .checked_add(close.policy_funding.neutral_lamports)
+        .ok_or(Error::Arithmetic)?;
+    let expected_ledger_lamports = close
+        .ledger_funding
+        .payer_refund_lamports
+        .checked_add(close.ledger_funding.neutral_lamports)
+        .ok_or(Error::Arithmetic)?;
+    if terminal != expected_terminal
+        || policy_account != requirement.policy_account
+        || policy_account != terminal.policy_account
+        || policy_state_id != requirement.policy_terminal_state_id
+        || policy_state_id != terminal.policy_terminal_state_id
+        || ledger_account != requirement.ledger_account
+        || ledger_account != terminal.ledger_account
+        || ledger_state_id != requirement.ledger_before_state_id
+        || claim_ledger_account != requirement.claim_ledger_account
+        || claim_ledger_account != terminal.claim_ledger_account
+        || claim_ledger != close.claim_ledger_after.claim_ledger_after()
+        || claim_ledger_post_state_id != requirement.claim_ledger_post_state_id
+        || claim_ledger_post_state_id != terminal.claim_ledger_post_state_id
+        || close.claim_ledger_after.fractional_ledger_before_id()
+            != collateral_id(ledger_state_id)
+        || close.claim_ledger_after.fractional_ledger_retirement_id()
+            != collateral_id(terminal.ledger_terminal_state_id)
+        || close.claim_ledger_after.transition_id()
+            != collateral_id(terminal.claim_ledger_transition_id)
+        || claim_ledger.last_fractional_transition_id
+            != collateral_id(terminal.claim_ledger_transition_id)
+        || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Retiring
+        || claim_ledger.fractional_binding != FractionalBindingStateV1::Latched
+        || claim_ledger.fractional_policy_id != collateral_id(policy_account)
+        || claim_ledger.fractional_ledger_account != collateral_id(ledger_account)
+        || close.policy_funding.account != policy_account
+        || close.ledger_funding.account != ledger_account
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    if observed_policy_lamports != expected_policy_lamports
+        || observed_ledger_lamports != expected_ledger_lamports
+    {
+        return Err(Error::RentRefused);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V1);
+    hasher.update(terminal.market_instance_id.bytes());
+    hasher.update(terminal.domain_generation.to_le_bytes());
+    for identity in [
+        terminal.receipt_id,
+        policy_account,
+        policy_state_id,
+        ledger_account,
+        ledger_state_id,
+        terminal.ledger_terminal_state_id,
+        claim_ledger_account,
+        claim_ledger_post_state_id,
+        terminal.claim_ledger_transition_id,
+        terminal.fractional_release_id,
+        terminal.rent_disposition_id,
+    ] {
+        hasher.update(identity.bytes());
+    }
+    hasher.update(observed_policy_lamports.to_le_bytes());
+    hasher.update(observed_ledger_lamports.to_le_bytes());
+    let verification_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
+    Ok(VerifiedFractionalFamilyTerminalPostwriteV1 {
+        family_terminal: terminal,
+        verification_id,
     })
 }
