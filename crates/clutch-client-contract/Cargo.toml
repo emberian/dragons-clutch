@@ -1,0 +1,24 @@
+[package]
+name = "clutch-client-contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Shared untrusted client projections and fail-closed settlement-shape classification for Dragon's Clutch"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+clutch-batch = { path = "../clutch-batch" }
+clutch-solana-layout = { path = "../../programs/solana-layout" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"

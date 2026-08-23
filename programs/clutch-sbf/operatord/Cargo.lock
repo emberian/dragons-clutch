@@ -65,6 +65,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-client-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-solana-layout",
+]
+
+[[package]]
 name = "clutch-kernel"
 version = "0.1.0"
 
@@ -118,6 +126,7 @@ dependencies = [
  "base64",
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-client-contract",
  "clutch-sbf",
  "clutch-sbf-harness",
  "clutch-solana-layout",

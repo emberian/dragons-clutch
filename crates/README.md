@@ -25,6 +25,9 @@ This directory contains offline `no_std` crates
 - `clutch-structured-claim` — exact rational coefficient realization,
   complete-set-compressed native backing, flat wrapper composition, and
   transactional transferable-claim custody/lifecycle semantics.
+- `clutch-client-contract` — shared untrusted client provenance, intent-registry
+  linkage, and fail-closed settlement-shape classification. It owns no
+  persisted protocol fact.
 - `clutch-product-series` — strict fixed-layout product/basis/evidence-recovery,
   MarketInstance, recurring Series, attachment, and funding identities plus
   pure schedule/debit projections. It depends only on reviewed no-default-feature

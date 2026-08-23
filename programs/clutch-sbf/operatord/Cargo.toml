@@ -42,6 +42,9 @@ clutch-sbf = { path = "../program" }
 # these coordinates", never "which coordinates are best".
 clutch-batch = { path = "../../../crates/clutch-batch" }
 clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity" }
+# Shared untrusted projection vocabulary and the fail-closed settlement-shape
+# classifier. This crate owns no account bytes and submits no transactions.
+clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
 # Hashing the ELF the validator is actually about to load, in process, so the
 # banner cannot show a digest a stale manifest remembers.  Same pin and same
 # host-only `sha2` selection the harness uses.

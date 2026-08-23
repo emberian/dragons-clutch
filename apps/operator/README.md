@@ -250,6 +250,15 @@ strict order nobody can fill. `PricePriorityMarginalProRata` fills every strict
 order in full, so an eligible order with no counterparty refuses the whole
 candidate. `session.rs`'s tests pin both halves of that.
 
+Before it submits that candidate, the daemon passes the projected page, book,
+candidate, and witness through `crates/clutch-client-contract`. The shared gate
+currently admits only an exhaustive, exact-conversion, one-page direct
+single-Egg plan. Multi-page or churned books, virtual legs, pot-required
+conversion, duplicate pair receipts, and every portfolio shape refuse before
+submission; the shared crate owns the adversarial matrix. That client result is
+only a statement that Operator can construct the complete account shape. It is
+not a candidate-validity verdict or evidence that settlement executed.
+
 ## Evidence scope
 
 Signed, confirmed, committed sequential execution on a local
@@ -265,6 +274,12 @@ vocabulary in `evidence.js` is a verbatim copy of the frozen `EVIDENCE` map in
 second. A candidate may be labeled `verified` only when that exact status was
 decoded from the bank-written record; it is never presented as verification of
 the client, adapter, runtime, or protocol as a whole.
+
+The shared client contract separately freezes provenance labels
+(`chain-derived`, `chain-history-derived`, `transaction-derived`,
+`producer-attested`, `model-only`, `unavailable`). Those labels are not the
+claim-strength chips above. In particular, a fresh chain snapshot cannot be
+promoted into retained historical evidence or a completion claim.
 
 ## No dependencies
 
