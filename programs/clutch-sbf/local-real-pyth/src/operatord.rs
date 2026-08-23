@@ -457,10 +457,21 @@ impl<'index> OperatorJsonApi<'index> {
     fn account(&self, address: Address, commitment: RpcCommitment) -> OperatorJsonResponse {
         match self.index.current(address, commitment) {
             Some(version) => response(200, account_json(version, commitment)),
-            None => response(
-                404,
-                json!({"error": "account not present at requested commitment"}),
-            ),
+            None => match self.index.finalized_absence(address) {
+                Some(absence) => response(
+                    404,
+                    json!({
+                        "error": "account absent from a later finalized release scan",
+                        "releaseKey": absence.release_key.as_str(),
+                        "finalizedAbsenceSlot": absence.slot.to_string(),
+                        "receiveSequence": absence.receive_sequence.to_string()
+                    }),
+                ),
+                None => response(
+                    404,
+                    json!({"error": "account not present at requested commitment"}),
+                ),
+            },
         }
     }
 

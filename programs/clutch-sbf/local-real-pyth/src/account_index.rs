@@ -1159,6 +1159,16 @@ impl ForkLedger {
             }
             return Ok(());
         }
+        if self
+            .nodes
+            .get(&slot.previous_blockhash)
+            .is_some_and(|parent| parent.slot != slot.parent_slot)
+            || self.nodes.values().any(|child| {
+                child.previous_blockhash == slot.blockhash && child.parent_slot != slot.slot
+            })
+        {
+            return Err(AccountIndexError::InvalidFork);
+        }
         self.hashes_by_slot
             .entry(slot.slot)
             .or_default()
@@ -1197,11 +1207,12 @@ impl ForkLedger {
                 self.frozen_slots.insert(update.slot);
             }
             ObservedSlotUpdateKind::Dead => {
-                if self
-                    .finalized_root
-                    .as_ref()
-                    .is_some_and(|(slot, _)| *slot == update.slot)
-                {
+                let conflicts_with_root = self.finalized_root.as_ref().is_some_and(|(_, root)| {
+                    self.hashes_by_slot.get(&update.slot).is_some_and(|hashes| {
+                        hashes.iter().any(|hash| self.is_ancestor(hash, root))
+                    })
+                });
+                if conflicts_with_root {
                     return Err(AccountIndexError::InvalidFork);
                 }
                 self.frozen_slots.remove(&update.slot);
@@ -1259,8 +1270,33 @@ impl ForkLedger {
     }
 
     #[must_use]
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    #[must_use]
+    pub fn contains_hash(&self, blockhash: &str) -> bool {
+        self.nodes.contains_key(blockhash)
+    }
+
+    #[must_use]
+    pub fn tracked_status_slot_count(&self) -> usize {
+        self.frozen_slots.len() + self.dead_slots.len()
+    }
+
+    #[must_use]
     pub fn frozen_slots(&self) -> Vec<u64> {
         self.frozen_slots.iter().copied().collect()
+    }
+
+    #[must_use]
+    pub fn is_frozen(&self, slot: u64) -> bool {
+        self.frozen_slots.contains(&slot)
+    }
+
+    #[must_use]
+    pub fn is_dead(&self, slot: u64) -> bool {
+        self.dead_slots.contains(&slot)
     }
 
     #[must_use]
@@ -1307,8 +1343,12 @@ impl ForkLedger {
                 Some((_, root)) => {
                     self.is_ancestor(root, &node.blockhash)
                         && !self.branch_contains_dead_slot(&node.blockhash)
+                        && self.frozen_slots.contains(&node.slot)
                 }
-                None => !self.branch_contains_dead_slot(&node.blockhash),
+                None => {
+                    !self.branch_contains_dead_slot(&node.blockhash)
+                        && self.frozen_slots.contains(&node.slot)
+                }
             })
             .max_by(|left, right| {
                 (left.slot, left.receive_sequence, &left.blockhash).cmp(&(
@@ -1335,18 +1375,28 @@ pub struct IndexedAccountVersion {
     pub branch: IndexedBranch,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinalizedAccountAbsence {
+    pub release_key: String,
+    pub slot: u64,
+    pub receive_sequence: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IndexCapacity {
     pub maximum_addresses: usize,
     pub maximum_versions_per_address: usize,
+    pub maximum_fork_nodes: usize,
 }
 
+#[derive(Clone)]
 pub struct CanonicalAccountIndex {
     plan: RpcIndexPlan,
     context: CanonicalDecoderContext,
     capacity: IndexCapacity,
     forks: ForkLedger,
     versions: BTreeMap<Address, Vec<IndexedAccountVersion>>,
+    finalized_absences: BTreeMap<Address, FinalizedAccountAbsence>,
 }
 
 impl CanonicalAccountIndex {
@@ -1357,7 +1407,10 @@ impl CanonicalAccountIndex {
     ) -> Result<Self> {
         plan.validate()
             .map_err(|_| AccountIndexError::UnknownRelease)?;
-        if capacity.maximum_addresses == 0 || capacity.maximum_versions_per_address == 0 {
+        if capacity.maximum_addresses == 0
+            || capacity.maximum_versions_per_address == 0
+            || capacity.maximum_fork_nodes == 0
+        {
             return Err(AccountIndexError::CapacityExceeded);
         }
         Ok(Self {
@@ -1366,14 +1419,29 @@ impl CanonicalAccountIndex {
             capacity,
             forks: ForkLedger::default(),
             versions: BTreeMap::new(),
+            finalized_absences: BTreeMap::new(),
         })
     }
 
     pub fn observe_slot(&mut self, slot: ObservedSlot) -> Result<()> {
+        if !self.forks.contains_hash(&slot.blockhash)
+            && self.forks.node_count() >= self.capacity.maximum_fork_nodes
+        {
+            return Err(AccountIndexError::CapacityExceeded);
+        }
         self.forks.observe(slot, &self.plan.cluster.key())
     }
 
     pub fn observe_slot_update(&mut self, update: ObservedSlotUpdate) -> Result<()> {
+        if matches!(
+            update.kind,
+            ObservedSlotUpdateKind::Frozen | ObservedSlotUpdateKind::Dead
+        ) && !self.forks.is_frozen(update.slot)
+            && !self.forks.is_dead(update.slot)
+            && self.forks.tracked_status_slot_count() >= self.capacity.maximum_fork_nodes
+        {
+            return Err(AccountIndexError::CapacityExceeded);
+        }
         self.forks.observe_update(update, &self.plan.cluster.key())
     }
 
@@ -1418,13 +1486,44 @@ impl CanonicalAccountIndex {
         Ok(())
     }
 
+    pub fn reconcile_finalized_scan(
+        &mut self,
+        release_key: &str,
+        slot: u64,
+        receive_sequence: u64,
+        seen: &BTreeSet<Address>,
+    ) -> Result<()> {
+        if self.release(release_key).is_none() {
+            return Err(AccountIndexError::UnknownRelease);
+        }
+        for (address, versions) in &self.versions {
+            let belongs_to_release = versions
+                .iter()
+                .any(|version| version.account.provenance.release_key == release_key);
+            if belongs_to_release && !seen.contains(address) {
+                let absence = FinalizedAccountAbsence {
+                    release_key: release_key.to_string(),
+                    slot,
+                    receive_sequence,
+                };
+                let should_replace = self.finalized_absences.get(address).is_none_or(|prior| {
+                    (prior.slot, prior.receive_sequence) < (absence.slot, absence.receive_sequence)
+                });
+                if should_replace {
+                    self.finalized_absences.insert(*address, absence);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn current(
         &self,
         address: Address,
         commitment: RpcCommitment,
     ) -> Option<&IndexedAccountVersion> {
         let versions = self.versions.get(&address)?;
-        match commitment {
+        let selected = match commitment {
             RpcCommitment::Processed => {
                 let tip = self.forks.processed_tip();
                 versions
@@ -1451,7 +1550,13 @@ impl CanonicalAccountIndex {
                         _ => false,
                     })
             }
-        }
+        };
+        selected.filter(|version| {
+            self.finalized_absences.get(&address).is_none_or(|absence| {
+                absence.release_key != version.account.provenance.release_key
+                    || version.account.provenance.slot > absence.slot
+            })
+        })
     }
 
     pub fn current_accounts(&self, commitment: RpcCommitment) -> Vec<&IndexedAccountVersion> {
@@ -1459,6 +1564,11 @@ impl CanonicalAccountIndex {
             .keys()
             .filter_map(|address| self.current(*address, commitment))
             .collect()
+    }
+
+    #[must_use]
+    pub fn finalized_absence(&self, address: Address) -> Option<&FinalizedAccountAbsence> {
+        self.finalized_absences.get(&address)
     }
 
     #[must_use]

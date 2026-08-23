@@ -352,6 +352,85 @@ pub struct PlannedRpcRequest {
     pub body: Value,
 }
 
+pub fn decode_response_result<'a>(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    response: &'a Value,
+) -> Result<&'a Value> {
+    require_bounded_json(plan, response)?;
+    if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || response.get("id").and_then(Value::as_u64) != Some(request.request_id)
+        || response.get("error").is_some_and(|error| !error.is_null())
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    response
+        .get("result")
+        .ok_or(RpcIndexError::MalformedResponse)
+}
+
+fn require_notification_envelope(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    notification: &Value,
+) -> Result<()> {
+    require_bounded_json(plan, notification)?;
+    let method = match request.purpose {
+        RpcRequestPurpose::ProgramSubscription => "programNotification",
+        RpcRequestPurpose::BlockSubscription => "blockNotification",
+        RpcRequestPurpose::SlotSubscription => "slotsUpdatesNotification",
+        RpcRequestPurpose::RootSubscription => "rootNotification",
+        RpcRequestPurpose::ProgramScan => return Err(RpcIndexError::WrongRequest),
+    };
+    if notification.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || notification.get("method").and_then(Value::as_str) != Some(method)
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    notification_subscription_id(notification)?;
+    Ok(())
+}
+
+/// Admit the server-assigned subscription coordinate for one exact planned
+/// request. The engine retains the resulting binding for every notification.
+pub fn decode_subscription_registration(
+    plan: &RpcIndexPlan,
+    request: &PlannedRpcRequest,
+    response: &Value,
+) -> Result<u64> {
+    plan.validate()?;
+    let result = decode_response_result(plan, request, response)?;
+    match request.purpose {
+        RpcRequestPurpose::ProgramSubscription => {
+            let release = plan.release(&request.release_key)?;
+            if request.commitment != RpcCommitment::Processed
+                || request.program_id != release.program_id
+            {
+                return Err(RpcIndexError::WrongRequest);
+            }
+        }
+        RpcRequestPurpose::BlockSubscription
+        | RpcRequestPurpose::SlotSubscription
+        | RpcRequestPurpose::RootSubscription => {
+            require_topology_request(plan, request, request.purpose)?;
+        }
+        RpcRequestPurpose::ProgramScan => return Err(RpcIndexError::WrongRequest),
+    }
+    result
+        .as_u64()
+        .filter(|subscription| *subscription > 0)
+        .ok_or(RpcIndexError::MalformedResponse)
+}
+
+pub fn notification_subscription_id(notification: &Value) -> Result<u64> {
+    notification
+        .get("params")
+        .and_then(|value| value.get("subscription"))
+        .and_then(Value::as_u64)
+        .filter(|subscription| *subscription > 0)
+        .ok_or(RpcIndexError::MalformedResponse)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcObservationSource {
     FinalizedScan,
@@ -435,7 +514,7 @@ pub fn decode_block_notification(
     receive_sequence: u64,
 ) -> Result<ObservedSlot> {
     require_topology_request(plan, request, RpcRequestPurpose::BlockSubscription)?;
-    require_bounded_json(plan, notification)?;
+    require_notification_envelope(plan, request, notification)?;
     let value = notification
         .get("params")
         .and_then(|value| value.get("result"))
@@ -484,7 +563,7 @@ pub fn decode_slot_update_notification(
     receive_sequence: u64,
 ) -> Result<ObservedSlotUpdate> {
     require_topology_request(plan, request, RpcRequestPurpose::SlotSubscription)?;
-    require_bounded_json(plan, notification)?;
+    require_notification_envelope(plan, request, notification)?;
     let result = notification
         .get("params")
         .and_then(|value| value.get("result"))
@@ -523,7 +602,7 @@ pub fn decode_root_notification(
     notification: &Value,
 ) -> Result<u64> {
     require_topology_request(plan, request, RpcRequestPurpose::RootSubscription)?;
-    require_bounded_json(plan, notification)?;
+    require_notification_envelope(plan, request, notification)?;
     notification
         .get("params")
         .and_then(|value| value.get("result"))
@@ -585,6 +664,7 @@ pub fn decode_program_scan_result(
     }
     let mut total = 0usize;
     let mut output = Vec::with_capacity(values.len());
+    let mut addresses = BTreeSet::new();
     for (index, value) in values.iter().enumerate() {
         let address = value
             .get("pubkey")
@@ -600,8 +680,12 @@ pub fn decode_program_scan_result(
         if total > plan.bounds.maximum_total_response_bytes {
             return Err(RpcIndexError::ResponseTooLarge);
         }
+        let address = Address::from_str(address).map_err(|_| RpcIndexError::InvalidAccount)?;
+        if !addresses.insert(address) {
+            return Err(RpcIndexError::InvalidAccount);
+        }
         output.push(ObservedRpcAccount {
-            address: Address::from_str(address).map_err(|_| RpcIndexError::InvalidAccount)?,
+            address,
             owner: data.owner,
             lamports: data.lamports,
             executable: data.executable,
@@ -622,6 +706,14 @@ pub fn decode_program_scan_result(
     Ok(output)
 }
 
+pub fn program_scan_context_slot(result: &Value) -> Result<u64> {
+    result
+        .get("context")
+        .and_then(|value| value.get("slot"))
+        .and_then(Value::as_u64)
+        .ok_or(RpcIndexError::MalformedResponse)
+}
+
 pub fn decode_program_notification(
     plan: &RpcIndexPlan,
     request: &PlannedRpcRequest,
@@ -634,11 +726,11 @@ pub fn decode_program_notification(
     {
         return Err(RpcIndexError::WrongRequest);
     }
+    require_notification_envelope(plan, request, notification)?;
     let release = plan.release(&request.release_key)?;
     if release.program_id != request.program_id {
         return Err(RpcIndexError::WrongRequest);
     }
-    require_bounded_json(plan, notification)?;
     let params = notification
         .get("params")
         .ok_or(RpcIndexError::MalformedResponse)?;

@@ -5,22 +5,19 @@
 //! untrusted projection and deterministic unsigned-workflow cursors.
 
 use crate::http::{JsonReadResponse, ReadApi};
-use clutch_local_real_pyth::account_index::CanonicalAccountIndex;
+use clutch_local_real_pyth::index_service::RpcIndexEngine;
 use clutch_local_real_pyth::operatord::{OperatorJsonApi, ResumableKeeperSelector};
 use serde_json::json;
 use std::sync::{Arc, RwLock};
 
 pub struct SharedIndexApi {
-    index: Arc<RwLock<CanonicalAccountIndex>>,
+    engine: Arc<RwLock<RpcIndexEngine>>,
     selector: ResumableKeeperSelector,
 }
 
 impl SharedIndexApi {
-    pub fn new(
-        index: Arc<RwLock<CanonicalAccountIndex>>,
-        selector: ResumableKeeperSelector,
-    ) -> Self {
-        Self { index, selector }
+    pub fn new(engine: Arc<RwLock<RpcIndexEngine>>, selector: ResumableKeeperSelector) -> Self {
+        Self { engine, selector }
     }
 
     /// Produce the GET-only route callback accepted by the loopback server.
@@ -29,13 +26,30 @@ impl SharedIndexApi {
             if !target.starts_with("/v1/") {
                 return None;
             }
-            let Ok(index) = self.index.read() else {
+            let Ok(engine) = self.engine.read() else {
                 return Some(JsonReadResponse {
                     status: 500,
                     body: json!({"error": "operator index lock is unavailable"}),
                 });
             };
-            let reply = OperatorJsonApi::new(&index, self.selector).handle(method, target);
+            if method == "GET" && target == "/v1/acquisition" {
+                let status = engine.status();
+                return Some(JsonReadResponse {
+                    status: 200,
+                    body: json!({
+                        "bootstrapComplete": status.bootstrap_complete,
+                        "remainingScans": status.remaining_scans.to_string(),
+                        "remainingSubscriptionRegistrations": status.remaining_subscription_registrations.to_string(),
+                        "activeSubscriptions": status.active_subscriptions.to_string(),
+                        "pendingAccounts": status.pending_accounts.to_string(),
+                        "pendingAccountBytes": status.pending_account_bytes.to_string(),
+                        "pendingRoot": status.pending_root.map(|slot| slot.to_string()),
+                        "nextReceiveSequence": status.next_receive_sequence.to_string(),
+                        "authority": "untrusted read model"
+                    }),
+                });
+            }
+            let reply = OperatorJsonApi::new(engine.index(), self.selector).handle(method, target);
             Some(JsonReadResponse {
                 status: reply.status,
                 body: reply.body,

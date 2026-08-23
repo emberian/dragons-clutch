@@ -9,6 +9,8 @@
 pub mod account_index;
 mod capture;
 #[cfg(feature = "operator")]
+pub mod index_service;
+#[cfg(feature = "operator")]
 pub mod operatord;
 pub mod plane;
 #[cfg(feature = "campaign")]
