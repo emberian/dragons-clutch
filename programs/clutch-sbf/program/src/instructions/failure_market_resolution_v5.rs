@@ -273,6 +273,8 @@ pub(crate) fn activate_failure_market_resolution_v5<'a, 'root, 'link, 'post>(
             && root.resolution_activation_receipt_id() == ContentId::ZERO
             && link.phase() == SeriesMarketLinkPhaseV1::Active
             && link.active_failure_sessions() == 1
+            && failure_facts.session_binding_id.bytes()
+                == link.failure_session_transcript_id().bytes()
             && failure_facts.market_instance_id == root_binding.market_instance_id
             && failure_facts.generation == root_binding.generation
             && failure_resolution.failure_policy_binding_id().bytes()
@@ -312,21 +314,19 @@ pub(crate) fn activate_failure_market_resolution_v5<'a, 'root, 'link, 'post>(
         slot10,
     )?;
 
-    let expected_hoard_after = HoardV2 {
+    let expected_hoard_after_id = HoardV2 {
         lifecycle: MarketLiabilityLifecycleV1::Resolved,
         ..liabilities.hoard
-    };
-    let expected_claim_ledger_after = ClaimLedgerV3 {
+    }
+    .semantic_id(&RuntimeSha256)
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_claim_ledger_after_id = ClaimLedgerV3 {
         resolution_account: CollateralId::from_bytes(resolution_account.key.to_bytes()),
         lifecycle: MarketLiabilityLifecycleV1::Resolved,
         ..liabilities.claim_ledger
-    };
-    let expected_hoard_after_id = expected_hoard_after
-        .semantic_id(&RuntimeSha256)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let expected_claim_ledger_after_id = expected_claim_ledger_after
-        .semantic_id(&RuntimeSha256)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    }
+    .semantic_id(&RuntimeSha256)
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
     let finalization_evidence_id = derive_finalization_evidence_id_v5(
         live_root,
@@ -384,9 +384,7 @@ pub(crate) fn activate_failure_market_resolution_v5<'a, 'root, 'link, 'post>(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        activation_plan.hoard_after() == expected_hoard_after
-            && activation_plan.hoard_after_id() == expected_hoard_after_id
-            && activation_plan.claim_ledger_after() == expected_claim_ledger_after
+        activation_plan.hoard_after_id() == expected_hoard_after_id
             && activation_plan.claim_ledger_after_id() == expected_claim_ledger_after_id,
         ClutchError::MismatchedState,
     )?;
@@ -767,19 +765,6 @@ fn write_collateral_activation_postimages_v5<'a>(
 ) -> Outcome<()> {
     let hoard_lamports_before = hoard_account.lamports();
     let claim_ledger_lamports_before = claim_ledger_account.lamports();
-    let mut resolution_bytes = [0u8; RESOLUTION_V5_BYTES];
-    let mut hoard_bytes = [0u8; HOARD_V2_BYTES];
-    let mut claim_ledger_bytes = [0u8; CLAIM_LEDGER_V3_BYTES];
-    resolution
-        .encode(&mut resolution_bytes)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    hoard_after
-        .encode(&mut hoard_bytes)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    claim_ledger_after
-        .encode(&mut claim_ledger_bytes)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-
     let bump_seed = [resolution_bump];
     let signer_seeds: [&[u8]; 3] = [seeds::SEED_RESOLUTION_V5, &market_instance_id, &bump_seed];
     let allocate = Instruction::new_with_bytes(
@@ -818,19 +803,25 @@ fn write_collateral_activation_postimages_v5<'a>(
             data.iter().all(|byte| *byte == 0),
             ClutchError::AlreadyInitialized,
         )?;
-        data.copy_from_slice(&resolution_bytes);
+        resolution
+            .encode(&mut data)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     }
     {
         let mut data = hoard_account
             .try_borrow_mut_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        data.copy_from_slice(&hoard_bytes);
+        hoard_after
+            .encode(&mut data)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     }
     {
         let mut data = claim_ledger_account
             .try_borrow_mut_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        data.copy_from_slice(&claim_ledger_bytes);
+        claim_ledger_after
+            .encode(&mut data)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     }
     require(
         resolution_account.lamports() == expected_resolution_balance
