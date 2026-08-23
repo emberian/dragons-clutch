@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
     CoveredDealerSelectionV1, DealerActionReceiptV1, DealerFacilityReplayV1,
-    DealerFeeTerminalJoinV1, DealerLeaseV2, DealerRuntimeActionV1, DealerStateV2,
+    DealerEpochBindingV2, DealerFeeTerminalJoinV1, DealerLeaseV2, DealerRuntimeActionV1, DealerStateV2,
     DeletableRentOwnerV1, Error, FixedCodec, Id, PreparedDealerLeasePotCloseV3, Result,
     SettlementPotV2, DEALER_COVERED_SELECTION_BYTES_V1, DELETABLE_RENT_OWNER_BYTES,
 };
@@ -30,7 +30,7 @@ pub const DEALER_COVERED_TERMINAL_BYTES_V2: usize = DEALER_COVERED_SELECTION_BYT
 pub const DEALER_COVERED_TERMINAL_CONTENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-covered-terminal/v2\0";
 
-const TERMINAL_IDENTITY_COUNT_V2: usize = 33;
+const TERMINAL_IDENTITY_COUNT_V2: usize = 34;
 const TERMINAL_U64_COUNT_V2: usize = 7;
 const TERMINAL_SCALAR_BYTES_V2: usize = 8;
 const TERMINAL_RESERVED_BYTES_V2: usize = DEALER_COVERED_TERMINAL_BYTES_V2
@@ -77,6 +77,7 @@ pub struct CoveredDealerTerminalV2 {
     liveness_receipt_account_id: Id,
     liveness_receipt_semantic_id: Id,
     fee_terminal_receipt_id: Id,
+    general_epoch_account_id: Id,
     dealer_generation_before: u64,
     dealer_generation_after: u64,
     general_epoch_generation: u64,
@@ -96,6 +97,7 @@ impl CoveredDealerTerminalV2 {
     #[allow(clippy::too_many_arguments)]
     pub fn from_prepared(
         selection: &CoveredDealerSelectionV1,
+        epoch: &DealerEpochBindingV2,
         state_before: &DealerStateV2,
         lease: &DealerLeaseV2,
         pot: &SettlementPotV2,
@@ -106,6 +108,7 @@ impl CoveredDealerTerminalV2 {
         terminal_slot: u64,
     ) -> Result<Self> {
         selection.validate()?;
+        epoch.validate()?;
         state_before.validate()?;
         lease.validate()?;
         pot.validate_against_lease(lease)?;
@@ -139,6 +142,10 @@ impl CoveredDealerTerminalV2 {
             || selection.facility_position_binding_id
                 != state_before.facility_position_binding_id
             || selection.dealer_state_account_id != close.state_account_id()
+            || selection.epoch_id != epoch.epoch_id
+            || selection.epoch_binding_account_id != epoch.epoch_binding_account_id
+            || selection.general_epoch_generation != epoch.general_epoch_generation
+            || selection.settlement_candidate_id != epoch.settlement_candidate_id
             || selection.lease_account_id != lease.lease_account_id
             || selection.settlement_pot_account_id != close.pot_account_id()
             || selection.settlement_candidate_id != fee_terminal.settlement_candidate_id
@@ -209,6 +216,7 @@ impl CoveredDealerTerminalV2 {
             liveness_receipt_account_id: action_receipt.receipt_account_id,
             liveness_receipt_semantic_id,
             fee_terminal_receipt_id: fee_terminal.terminal_receipt_id,
+            general_epoch_account_id: epoch.epoch_account_id,
             dealer_generation_before: state_before.generation,
             dealer_generation_after: state_after.generation,
             general_epoch_generation: selection.general_epoch_generation,
@@ -236,6 +244,7 @@ impl CoveredDealerTerminalV2 {
         let physical = [
             self.selection_account_id,
             self.dealer_state_account_id,
+            self.general_epoch_account_id,
             self.epoch_binding_account_id,
             self.settlement_root_account_id,
             self.retained_feed_account_id,
@@ -266,6 +275,7 @@ impl CoveredDealerTerminalV2 {
                     .checked_add(1)
                     .ok_or(Error::ArithmeticOverflow)?
             || self.general_epoch_generation == 0
+            || self.general_epoch_account_id == self.epoch_id
             || self.selected_ordinal == 0
             || self.replay_ordinal_after
                 != self
@@ -333,6 +343,8 @@ impl CoveredDealerTerminalV2 {
     pub const fn dealer_state_account_id(&self) -> Id { self.dealer_state_account_id }
     /// Semantic Dealer Epoch.
     pub const fn epoch_id(&self) -> Id { self.epoch_id }
+    /// Physical General Epoch account used in the canonical `0xae` PDA seed.
+    pub const fn general_epoch_account_id(&self) -> Id { self.general_epoch_account_id }
     /// Counted Dealer Epoch-binding account.
     pub const fn epoch_binding_account_id(&self) -> Id { self.epoch_binding_account_id }
     /// General retained Feed account.
@@ -409,6 +421,7 @@ impl CoveredDealerTerminalV2 {
             self.facility_replay_account_id, self.replay_pre_semantic_id,
             self.replay_post_semantic_id, self.liveness_receipt_account_id,
             self.liveness_receipt_semantic_id, self.fee_terminal_receipt_id,
+            self.general_epoch_account_id,
         ]
     }
 
@@ -471,7 +484,8 @@ impl FixedCodec for CoveredDealerTerminalV2 {
             position_post_semantic_id: identities[26], facility_replay_account_id: identities[27],
             replay_pre_semantic_id: identities[28], replay_post_semantic_id: identities[29],
             liveness_receipt_account_id: identities[30], liveness_receipt_semantic_id: identities[31],
-            fee_terminal_receipt_id: identities[32], dealer_generation_before: numbers[0],
+            fee_terminal_receipt_id: identities[32], general_epoch_account_id: identities[33],
+            dealer_generation_before: numbers[0],
             dealer_generation_after: numbers[1], general_epoch_generation: numbers[2],
             selected_ordinal: numbers[3], replay_ordinal_before: numbers[4],
             replay_ordinal_after: numbers[5], terminal_slot: numbers[6], action, outcome,
@@ -517,7 +531,7 @@ fn decode_outcome(value: u8) -> Result<FeeTerminalOutcomeV1> {
 }
 
 const _: () = assert!(DEALER_COVERED_TERMINAL_BYTES_V2 == 5_436);
-const _: () = assert!(TERMINAL_RESERVED_BYTES_V2 == 4_144);
+const _: () = assert!(TERMINAL_RESERVED_BYTES_V2 == 4_112);
 
 #[cfg(test)]
 mod adversarial_tests {
@@ -550,6 +564,7 @@ mod adversarial_tests {
             replay_pre_semantic_id: identities[28], replay_post_semantic_id: identities[29],
             liveness_receipt_account_id: identities[30], liveness_receipt_semantic_id: identities[31],
             fee_terminal_receipt_id: identities[32], dealer_generation_before: 7,
+            general_epoch_account_id: identities[33],
             dealer_generation_after: 8, general_epoch_generation: 9, selected_ordinal: 10,
             replay_ordinal_before: 11, replay_ordinal_after: 12, terminal_slot: 13,
             action: DealerRuntimeActionV1::FinalizeSettlement,
@@ -600,5 +615,8 @@ mod adversarial_tests {
         let mut wrong_sink = terminal();
         wrong_sink.action_receipt_rent.neutral_sink = id(102);
         assert_eq!(wrong_sink.validate(), Err(Error::InvalidParameter));
+        let mut semantic_epoch_as_seed = terminal();
+        semantic_epoch_as_seed.general_epoch_account_id = semantic_epoch_as_seed.epoch_id;
+        assert_eq!(semantic_epoch_as_seed.validate(), Err(Error::InvalidParameter));
     }
 }

@@ -568,7 +568,7 @@ pub(crate) fn authenticate_covered_dealer_terminal_postwrite_for_retirement_v2(
         account.key,
         seeds::dealer_covered_selection_pda(
             program_id,
-            &terminal.epoch_id().bytes(),
+            &terminal.general_epoch_account_id().bytes(),
             &terminal.settlement_candidate_id().bytes(),
         ),
         Some(bump),
@@ -5949,7 +5949,7 @@ fn finalize_or_abort_lease_pot(
         accounts[18].key,
         seeds::dealer_covered_selection_pda(
             program_id,
-            &selection.epoch_id.bytes(),
+            &epoch.epoch_account_id.bytes(),
             &selection.settlement_candidate_id.bytes(),
         ),
         Some(selection_bump),
@@ -6127,6 +6127,7 @@ fn finalize_or_abort_lease_pot(
     .map_err(dealer_fault)?;
     let terminal = CoveredDealerTerminalV2::from_prepared(
         &selection,
+        &epoch,
         &state,
         &lease,
         &pot,
