@@ -861,7 +861,72 @@ pub fn seal_empty_book_candidate_v1<B: Sha256BackendV1>(
     binding: MarketBindingV1,
     economic_domain: EconomicDomainV2AccountV1,
 ) -> Result<CandidateFeedHeaderV2, CodecError> {
+    let economic_digest = economic_domain_digest_v2(backend, economic_domain.transcript)?;
+    let empty_order_set = empty_order_set_digest_v1(backend, economic_digest)?;
+    seal_candidate_common_v2(
+        backend,
+        candidate_feed,
+        stage_bytes,
+        node,
+        binding,
+        economic_domain,
+        empty_order_set,
+        true,
+    )
+}
+
+/// Validate a complete nonempty-capable FeedStage before changing only its
+/// tag/version into the sealed Feed coordinate.
+///
+/// This action authenticates the submitted bytes and their canonical bundle,
+/// price, witness, Product, Epoch, and order-set identities. It deliberately
+/// does not accept or refuse RelationV2 economics; the resumable Work pass is
+/// the sole owner of that later decision.
+pub fn seal_candidate_v2<B: Sha256BackendV1>(
+    backend: &B,
+    candidate_feed: Id32,
+    stage_bytes: &[u8],
+    node: AdmissionNodeV3AccountV1,
+    binding: MarketBindingV1,
+    economic_domain: EconomicDomainV2AccountV1,
+    epoch: GeneralEpochV6AccountV1,
+) -> Result<CandidateFeedHeaderV2, CodecError> {
+    epoch.validate()?;
+    if epoch.phase != GeneralEpochPhaseV1::Frozen
+        || epoch.market_runtime != node.market
+        || epoch.market_binding != binding.binding
+        || epoch.economic_domain != economic_domain.domain
+        || epoch.generation != node.epoch_generation
+        || economic_domain.epoch != node.epoch
+        || epoch.order_set.is_zero()
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    seal_candidate_common_v2(
+        backend,
+        candidate_feed,
+        stage_bytes,
+        node,
+        binding,
+        economic_domain,
+        epoch.order_set,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_candidate_common_v2<B: Sha256BackendV1>(
+    backend: &B,
+    candidate_feed: Id32,
+    stage_bytes: &[u8],
+    node: AdmissionNodeV3AccountV1,
+    binding: MarketBindingV1,
+    economic_domain: EconomicDomainV2AccountV1,
+    expected_order_set: Id32,
+    require_empty: bool,
+) -> Result<CandidateFeedHeaderV2, CodecError> {
     require_live(candidate_feed)?;
+    require_live(expected_order_set)?;
     node.validate()?;
     binding.validate()?;
     economic_domain.validate()?;
@@ -879,8 +944,7 @@ pub fn seal_empty_book_candidate_v1<B: Sha256BackendV1>(
         || header.base_relation_candidate_id != node.base_relation_candidate_id
         || header.settlement_witness_digest != node.settlement_witness_digest
         || binding.market != node.market
-        || header.order_count != 0
-        || header.slice_count != 0
+        || (require_empty && (header.order_count != 0 || header.slice_count != 0))
         || economic_domain.epoch != node.epoch
         || economic_domain.transcript.market_instance_v2_id != binding.market_instance_v2_id
         || economic_domain.transcript.relation_policy_id != binding.relation_policy_id
@@ -895,14 +959,19 @@ pub fn seal_empty_book_candidate_v1<B: Sha256BackendV1>(
         || header.native_claim_basis_id != binding.native_claim_basis_id
         || header.price_measure_policy_v1_id != binding.price_measure_policy_v1_id
         || header.economic_domain_digest != economic_digest
-        || header.order_set != empty_order_set_digest_v1(backend, economic_digest)?
+        || header.order_set != expected_order_set
     {
         return Err(CodecError::MismatchedBinding);
     }
     let body = quantized_witness_body_digest_v3(backend, candidate_feed, stage_bytes, false)?;
     let bundle = candidate_bundle_digest_v1(backend, stage_bytes, false)?;
-    let witness = empty_settlement_witness_digest_v1(backend, header.base_relation_candidate_id)?;
     let tail = candidate_feed_tail_v2(stage_bytes, header)?;
+    let witness = settlement_witness_digest_v1(
+        backend,
+        header.base_relation_candidate_id,
+        header.slice_count,
+        tail.slices_le(),
+    )?;
     let mut prices = [0u64; MAX_OUTCOMES];
     for (index, record) in tail.prices_le().chunks_exact(8).enumerate() {
         let mut bytes = [0u8; 8];
@@ -1077,6 +1146,164 @@ pub fn init_clear_work_poststate_v1(
     })
 }
 
+/// Authenticated action-10 inputs for the resumable RelationV2 Work V3 path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitClearWorkV3TransitionV1<'a> {
+    /// Actual Epoch PDA.
+    pub epoch_id: Id32,
+    /// Actual sealed Feed PDA.
+    pub feed_id: Id32,
+    /// Newly derived V3 Work PDA.
+    pub work_id: Id32,
+    /// Exact V3 Work rent compartment funded at reveal.
+    pub work_rent: DeletableRentOwnerV1,
+    /// V3 Work PDA bump.
+    pub work_bump: u8,
+    /// Prestate counted Epoch.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Prestate revealed node.
+    pub node: &'a AdmissionNodeV3AccountV1,
+    /// Authenticated sealed Feed header.
+    pub feed: &'a CandidateFeedHeaderV2,
+    /// Immutable Market binding.
+    pub binding: &'a MarketBindingV1,
+}
+
+/// Exact action-10 resumable Work V3 poststate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitClearWorkV3PoststateV1 {
+    /// Epoch after incrementing its authoritative Work count.
+    pub epoch: GeneralEpochV6AccountV1,
+    /// Node after moving its entire Work compartment.
+    pub node: AdmissionNodeV3AccountV1,
+    /// Newly initialized resumable Work.
+    pub work: ClearWorkV3AccountV1,
+    /// Exact active-width Work allocation bytes.
+    pub work_account_bytes: usize,
+}
+
+/// Move the reveal-funded, width-priced Work compartment into a V3 account.
+pub fn init_clear_work_v3_poststate_v1(
+    request: InitClearWorkV3TransitionV1<'_>,
+) -> Result<InitClearWorkV3PoststateV1, CodecError> {
+    request.epoch.validate()?;
+    request.node.validate()?;
+    request.feed.validate(true)?;
+    request.binding.validate()?;
+    request.work_rent.validate()?;
+    for identity in [request.epoch_id, request.feed_id, request.work_id] {
+        require_live(identity)?;
+    }
+    if request.epoch.phase != GeneralEpochPhaseV1::Frozen
+        || request.node.status != AdmissionNodeStatusV1::Revealed
+        || request.node.epoch != request.epoch_id
+        || request.feed.epoch != request.epoch_id
+        || request.feed.node != request.node.node
+        || request.feed.market != request.epoch.market_runtime
+        || request.node.market != request.epoch.market_runtime
+        || request.feed.epoch_generation != request.epoch.generation
+        || request.node.epoch_generation != request.epoch.generation
+        || request.feed.order_set != request.epoch.order_set
+        || request.binding.binding != request.epoch.market_binding
+        || request.binding.market != request.epoch.market_runtime
+        || request.feed.relation_policy_id != request.binding.relation_policy_id
+        || request.node.relation_policy_id != request.binding.relation_policy_id
+        || request.node.score_policy_id != request.binding.score_policy_id
+        || request.feed.native_claim_basis_id != request.binding.native_claim_basis_id
+        || request.feed.price_measure_policy_v1_id != request.binding.price_measure_policy_v1_id
+        || request.feed.outcome_count != request.binding.outcome_count
+        || request.feed.basis_degree != request.binding.basis_degree
+        || request.feed.price_scale != request.binding.price_scale
+        || request.feed.candidate_kind != request.node.candidate_kind
+        || request.feed.settlement_candidate_id != request.node.settlement_candidate_id
+        || request.feed.base_relation_candidate_id != request.node.base_relation_candidate_id
+        || request.feed.settlement_witness_digest != request.node.settlement_witness_digest
+        || request.work_rent.payer != request.node.payer
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let funding = required_candidate_funding_v1(
+        *request.binding,
+        request.feed.order_count,
+        request.feed.slice_count,
+        request.node.rent,
+        request.feed.rent,
+        request.work_rent,
+    )?;
+    if request.node.work_escrow_lamports != funding.work_allocation
+        || request.node.work_funding_initial != funding.work_allocation
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let work = ClearWorkV3AccountV1 {
+        epoch: request.epoch_id,
+        node: request.node.node,
+        market: request.epoch.market_runtime,
+        order_set: request.epoch.order_set,
+        feed: request.feed_id,
+        candidate_bundle_digest: request.node.candidate_bundle_digest,
+        settlement_candidate_id: request.feed.settlement_candidate_id,
+        base_relation_candidate_id: request.feed.base_relation_candidate_id,
+        relation_policy_id: request.feed.relation_policy_id,
+        economic_domain_digest: request.feed.economic_domain_digest,
+        native_claim_basis_id: request.feed.native_claim_basis_id,
+        candidate_price_digest: request.feed.candidate_price_digest,
+        price_measure_policy_v1_id: request.feed.price_measure_policy_v1_id,
+        score_policy_id: request.node.score_policy_id,
+        price_body_digest: request.feed.price_body_digest,
+        previous_order_id: Id32::ZERO,
+        epoch_generation: request.epoch.generation,
+        rent: request.work_rent,
+        reward_remaining: funding.work_reward_reserve,
+        reward_earned: 0,
+        slice_count: request.feed.slice_count,
+        slice_cursor: 0,
+        page_count: 0,
+        page_cursor: 0,
+        outcome_count: request.feed.outcome_count,
+        order_count: request.feed.order_count,
+        order_cursor: 0,
+        slot_cursor: 0,
+        phase: 0,
+        candidate_kind: request.feed.candidate_kind,
+        price_witness_schema: request.feed.price_witness_schema,
+        quantized_semantics_version: request.feed.quantized_semantics_version,
+        stored_bump: request.work_bump,
+        verification_state: ClearWorkVerificationStateV1::Pending,
+        flags: 0,
+        sha256: Sha256CheckpointV1 {
+            state: SHA256_INITIAL_STATE_V1,
+            block: [0; 64],
+            block_len: 0,
+            total_len: 0,
+        },
+    };
+    let epoch = GeneralEpochV6AccountV1 {
+        work_count: request
+            .epoch
+            .work_count
+            .checked_add(1)
+            .ok_or(CodecError::ArithmeticOverflow)?,
+        ..*request.epoch
+    };
+    let node = AdmissionNodeV3AccountV1 {
+        work_escrow_lamports: 0,
+        ..*request.node
+    };
+    work.validate()?;
+    epoch.validate()?;
+    node.validate()?;
+    Ok(InitClearWorkV3PoststateV1 {
+        epoch,
+        node,
+        work,
+        work_account_bytes: clear_work_v3_account_len(
+            request.feed.outcome_count,
+            request.feed.order_count,
+        )?,
+    })
+}
+
 /// RelationV2/PriceMeasure result projected into the General mutation owner.
 ///
 /// This is deliberately a forgeable pure-data projection, not a verified
@@ -1088,6 +1315,65 @@ pub enum EmptyBookVerificationVerdictV1 {
     Valid(ScoreV2QComponentsV1),
     /// Well-formed and authenticated, but economically invalid.
     Refused,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AppliedCandidateVerdictV1 {
+    node: AdmissionNodeV3AccountV1,
+    window: CandidateWindowV4AccountV1,
+    verification_state: ClearWorkVerificationStateV1,
+}
+
+fn apply_candidate_verdict_v1(
+    verdict: EmptyBookVerificationVerdictV1,
+    node: AdmissionNodeV3AccountV1,
+    window: CandidateWindowV4AccountV1,
+) -> Result<AppliedCandidateVerdictV1, CodecError> {
+    let mut node = node;
+    let mut window = window;
+    window.verdict_count = window
+        .verdict_count
+        .checked_add(1)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let verification_state = match verdict {
+        EmptyBookVerificationVerdictV1::Valid(score) => {
+            if score.settlement_candidate_id != node.settlement_candidate_id {
+                return Err(CodecError::MismatchedBinding);
+            }
+            let rank = encode_score_v2_q_first_admitted_tie_v1(
+                score,
+                FirstAdmittedTieV1 {
+                    ordinal: node.ordinal,
+                },
+            )?;
+            node.rank_key = rank;
+            node.rank_key_len =
+                u8::try_from(SCORE_V2_Q_ACTIVE_RANK_BYTES).map_err(|_| CodecError::InvalidCount)?;
+            node.status = AdmissionNodeStatusV1::VerifiedValid;
+            window.valid_verdict_count = window
+                .valid_verdict_count
+                .checked_add(1)
+                .ok_or(CodecError::ArithmeticOverflow)?;
+            if window.best_candidate_node.is_zero() || rank > window.best_rank_key {
+                window.best_candidate_node = node.node;
+                window.best_settlement_candidate_id = node.settlement_candidate_id;
+                window.best_rank_key = rank;
+                window.best_ordinal = node.ordinal;
+            }
+            ClearWorkVerificationStateV1::Valid
+        }
+        EmptyBookVerificationVerdictV1::Refused => {
+            node.rank_key = [0; SCORE_V2_Q_RANK_CAPACITY];
+            node.rank_key_len = 0;
+            node.status = AdmissionNodeStatusV1::VerifiedRefused;
+            ClearWorkVerificationStateV1::Refused
+        }
+    };
+    Ok(AppliedCandidateVerdictV1 {
+        node,
+        window,
+        verification_state,
+    })
 }
 
 /// Authenticated action-14 inputs for the bounded empty-book verifier.
@@ -1185,44 +1471,9 @@ pub fn complete_candidate_verification_poststate_v1(
         .reward_earned
         .checked_add(keeper_reward)
         .ok_or(CodecError::ArithmeticOverflow)?;
-    let mut node = *request.node;
-    let mut window = *request.window;
-    window.verdict_count = window
-        .verdict_count
-        .checked_add(1)
-        .ok_or(CodecError::ArithmeticOverflow)?;
-    match request.verdict {
-        EmptyBookVerificationVerdictV1::Valid(score) => {
-            if score.settlement_candidate_id != node.settlement_candidate_id {
-                return Err(CodecError::MismatchedBinding);
-            }
-            let rank = encode_score_v2_q_first_admitted_tie_v1(
-                score,
-                FirstAdmittedTieV1 {
-                    ordinal: node.ordinal,
-                },
-            )?;
-            node.rank_key = rank;
-            node.rank_key_len =
-                u8::try_from(SCORE_V2_Q_ACTIVE_RANK_BYTES).map_err(|_| CodecError::InvalidCount)?;
-            node.status = AdmissionNodeStatusV1::VerifiedValid;
-            window.valid_verdict_count = window
-                .valid_verdict_count
-                .checked_add(1)
-                .ok_or(CodecError::ArithmeticOverflow)?;
-            if window.best_candidate_node.is_zero() || rank > window.best_rank_key {
-                window.best_candidate_node = node.node;
-                window.best_settlement_candidate_id = node.settlement_candidate_id;
-                window.best_rank_key = rank;
-                window.best_ordinal = node.ordinal;
-            }
-        }
-        EmptyBookVerificationVerdictV1::Refused => {
-            node.rank_key = [0; SCORE_V2_Q_RANK_CAPACITY];
-            node.rank_key_len = 0;
-            node.status = AdmissionNodeStatusV1::VerifiedRefused;
-        }
-    }
+    let applied = apply_candidate_verdict_v1(request.verdict, *request.node, *request.window)?;
+    let mut node = applied.node;
+    let window = applied.window;
     node.terminal_slot = request.current_slot;
     let work = ClearWorkHeaderV2 {
         reward_remaining,
@@ -1235,6 +1486,131 @@ pub fn complete_candidate_verification_poststate_v1(
     work.validate()?;
     Ok(CompleteCandidateVerificationPoststateV1 {
         window,
+        node,
+        work,
+        keeper_reward,
+    })
+}
+
+/// Authenticated compatibility inputs for terminal empty-book verification
+/// after action 10 has migrated to the fresh V3 Work account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompleteEmptyBookWorkV3TransitionV1<'a> {
+    /// Current Clock slot.
+    pub current_slot: u64,
+    /// Private checked runtime verdict.
+    pub verdict: EmptyBookVerificationVerdictV1,
+    /// Prestate Epoch.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Prestate Window.
+    pub window: &'a CandidateWindowV4AccountV1,
+    /// Prestate revealed node.
+    pub node: &'a AdmissionNodeV3AccountV1,
+    /// Prestate idle V3 Work.
+    pub work: &'a ClearWorkV3AccountV1,
+    /// Immutable Market binding.
+    pub binding: &'a MarketBindingV1,
+}
+
+/// Exact empty-book action-14 poststate using the V3 Work envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompleteEmptyBookWorkV3PoststateV1 {
+    /// Window after the checked verdict and possible best replacement.
+    pub window: CandidateWindowV4AccountV1,
+    /// Terminal valid or refused node.
+    pub node: AdmissionNodeV3AccountV1,
+    /// Terminal V3 Work with only its close reward remaining.
+    pub work: ClearWorkV3AccountV1,
+    /// Exact present-funded reward authorized now.
+    pub keeper_reward: u64,
+}
+
+/// Preserve the bounded empty-book laboratory while action 10 moves to Work
+/// V3. Nonempty candidates instead pass action 12, the separately owned slice
+/// pass, and the future cost-bound action-14 successor.
+pub fn complete_empty_book_work_v3_poststate_v1(
+    request: CompleteEmptyBookWorkV3TransitionV1<'_>,
+) -> Result<CompleteEmptyBookWorkV3PoststateV1, CodecError> {
+    request.epoch.validate()?;
+    request.window.validate()?;
+    request.node.validate()?;
+    request.work.validate()?;
+    request.binding.validate()?;
+    if request.epoch.phase != GeneralEpochPhaseV1::Frozen
+        || request.node.status != AdmissionNodeStatusV1::Revealed
+        || request.work.phase != 0
+        || request.work.verification_state != ClearWorkVerificationStateV1::Pending
+        || request.work.reward_earned != 0
+        || request.epoch.work_count == 0
+        || request.work.order_count != 0
+        || request.work.slice_count != 0
+        || request.work.order_cursor != 0
+        || request.work.slice_cursor != 0
+        || request.work.page_count != 0
+        || request.work.page_cursor != 0
+        || request.work.slot_cursor != 0
+        || !request.work.previous_order_id.is_zero()
+        || request.node.epoch != request.work.epoch
+        || request.node.node != request.work.node
+        || request.node.market != request.work.market
+        || request.node.epoch_generation != request.work.epoch_generation
+        || request.epoch.generation != request.work.epoch_generation
+        || request.window.epoch != request.work.epoch
+        || request.window.epoch_generation != request.work.epoch_generation
+        || request.current_slot < request.window.submission_closes_slot
+        || request.current_slot >= request.window.verification_closes_slot
+        || request.work.candidate_bundle_digest != request.node.candidate_bundle_digest
+        || request.work.settlement_candidate_id != request.node.settlement_candidate_id
+        || request.work.base_relation_candidate_id != request.node.base_relation_candidate_id
+        || request.work.relation_policy_id != request.node.relation_policy_id
+        || request.work.score_policy_id != request.node.score_policy_id
+        || request.binding.binding != request.epoch.market_binding
+        || request.binding.market != request.work.market
+        || request.binding.relation_policy_id != request.work.relation_policy_id
+        || request.binding.score_policy_id != request.work.score_policy_id
+        || request.work.sha256
+            != (Sha256CheckpointV1 {
+                state: SHA256_INITIAL_STATE_V1,
+                block: [0; 64],
+                block_len: 0,
+                total_len: 0,
+            })
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let keeper_reward = request
+        .binding
+        .price_check_reward
+        .checked_add(request.binding.completion_reward)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let reward_remaining = request
+        .work
+        .reward_remaining
+        .checked_sub(keeper_reward)
+        .ok_or(CodecError::InvalidState)?;
+    if reward_remaining != request.binding.work_close_reward {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let reward_earned = request
+        .work
+        .reward_earned
+        .checked_add(keeper_reward)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let applied = apply_candidate_verdict_v1(request.verdict, *request.node, *request.window)?;
+    let mut node = applied.node;
+    node.terminal_slot = request.current_slot;
+    let work = ClearWorkV3AccountV1 {
+        reward_remaining,
+        reward_earned,
+        phase: 3,
+        verification_state: applied.verification_state,
+        ..*request.work
+    };
+    node.validate()?;
+    applied.window.validate()?;
+    work.validate()?;
+    Ok(CompleteEmptyBookWorkV3PoststateV1 {
+        window: applied.window,
         node,
         work,
         keeper_reward,
@@ -2149,6 +2525,176 @@ pub fn close_clear_work_poststate_v1(
     )?;
     credits.add(request.neutral_sink_id, request.work.rent.donation_floor)?;
     credits.add(request.keeper_destination_id, request.work.reward_remaining)?;
+    Ok(CloseClearWorkPoststateV1 {
+        epoch,
+        close_work: true,
+        credits,
+    })
+}
+
+/// Authenticated action-32 inputs for terminal resumable Work V3 closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseClearWorkV3TransitionV1<'a> {
+    /// Actual parent Epoch PDA.
+    pub epoch_id: Id32,
+    /// Actual terminal AdmissionNode PDA.
+    pub node_id: Id32,
+    /// Actual V3 Work PDA being closed.
+    pub work_id: Id32,
+    /// Canonical Feed PDA derived from the same AdmissionNode.
+    pub derived_feed_id: Id32,
+    /// Permissionless close-reward destination.
+    pub keeper_destination_id: Id32,
+    /// Recorded Work-rent and unused-work refund destination.
+    pub payer_destination_id: Id32,
+    /// Immutable neutral-sink destination.
+    pub neutral_sink_id: Id32,
+    /// Strict action-32 selector.
+    pub payload: EpochNodePayloadV1,
+    /// Frozen or finalized Epoch prestate.
+    pub epoch: &'a GeneralEpochV6AccountV1,
+    /// Verified-valid or checked-refused node prestate.
+    pub node: &'a AdmissionNodeV3AccountV1,
+    /// Terminal resumable Work prestate.
+    pub work: &'a ClearWorkV3AccountV1,
+    /// Immutable policy and funding owner.
+    pub binding: &'a MarketBindingV1,
+}
+
+/// Close terminal Work V3 while returning unused early-refusal work capital
+/// to its original payer and paying only the named close reward to the keeper.
+pub fn close_clear_work_v3_poststate_v1(
+    request: CloseClearWorkV3TransitionV1<'_>,
+) -> Result<CloseClearWorkPoststateV1, CodecError> {
+    request.epoch.validate()?;
+    request.node.validate()?;
+    request.work.validate()?;
+    request.binding.validate()?;
+    for identity in [
+        request.epoch_id,
+        request.node_id,
+        request.work_id,
+        request.derived_feed_id,
+        request.keeper_destination_id,
+        request.payer_destination_id,
+        request.neutral_sink_id,
+        request.payload.epoch,
+        request.payload.node,
+    ] {
+        require_live(identity)?;
+    }
+    let verdict_matches = matches!(
+        (request.node.status, request.work.verification_state),
+        (
+            AdmissionNodeStatusV1::VerifiedValid,
+            ClearWorkVerificationStateV1::Valid
+        ) | (
+            AdmissionNodeStatusV1::VerifiedRefused,
+            ClearWorkVerificationStateV1::Refused
+        )
+    );
+    if !matches!(
+        request.epoch.phase,
+        GeneralEpochPhaseV1::Frozen | GeneralEpochPhaseV1::Finalized
+    ) || request.epoch.work_count == 0
+        || !verdict_matches
+        || request.work.phase != 3
+        || request.payload.epoch != request.epoch_id
+        || request.payload.node != request.node_id
+        || request.node.node != request.node_id
+        || request.node.epoch != request.epoch_id
+        || request.work.epoch != request.epoch_id
+        || request.work.node != request.node_id
+        || request.work.feed != request.derived_feed_id
+        || request.node.market != request.epoch.market_runtime
+        || request.work.market != request.epoch.market_runtime
+        || request.node.epoch_generation != request.epoch.generation
+        || request.work.epoch_generation != request.epoch.generation
+        || request.work.order_set != request.epoch.order_set
+        || request.work.candidate_bundle_digest != request.node.candidate_bundle_digest
+        || request.work.settlement_candidate_id != request.node.settlement_candidate_id
+        || request.work.base_relation_candidate_id != request.node.base_relation_candidate_id
+        || request.work.relation_policy_id != request.node.relation_policy_id
+        || request.work.score_policy_id != request.node.score_policy_id
+        || request.work.candidate_kind != request.node.candidate_kind
+        || request.binding.binding != request.epoch.market_binding
+        || request.binding.market != request.epoch.market_runtime
+        || request.binding.relation_policy_id != request.work.relation_policy_id
+        || request.binding.score_policy_id != request.work.score_policy_id
+        || request.binding.price_measure_policy_v1_id != request.work.price_measure_policy_v1_id
+        || request.binding.native_claim_basis_id != request.work.native_claim_basis_id
+        || request.node.work_escrow_lamports != 0
+        || request.work.reward_remaining < request.binding.work_close_reward
+        || request.work.rent.payer != request.payer_destination_id
+        || request.binding.neutral_sink != request.neutral_sink_id
+        || request.work_id == request.epoch_id
+        || request.work_id == request.node_id
+        || request.work_id == request.derived_feed_id
+        || request.derived_feed_id == request.epoch_id
+        || request.derived_feed_id == request.node_id
+        || request.work_id == request.keeper_destination_id
+        || request.work_id == request.payer_destination_id
+        || request.work_id == request.neutral_sink_id
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let expected_total = request
+        .binding
+        .price_check_reward
+        .checked_add(
+            request
+                .binding
+                .order_reward
+                .checked_mul(u64::from(request.work.order_count))
+                .ok_or(CodecError::ArithmeticOverflow)?,
+        )
+        .and_then(|value| {
+            request
+                .binding
+                .slice_reward
+                .checked_mul(u64::from(request.work.slice_count))
+                .and_then(|slice| value.checked_add(slice))
+        })
+        .and_then(|value| value.checked_add(request.binding.completion_reward))
+        .and_then(|value| value.checked_add(request.binding.work_close_reward))
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if request
+        .work
+        .reward_remaining
+        .checked_add(request.work.reward_earned)
+        != Some(expected_total)
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    let unused_reward = request
+        .work
+        .reward_remaining
+        .checked_sub(request.binding.work_close_reward)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    let epoch = GeneralEpochV6AccountV1 {
+        work_count: request
+            .epoch
+            .work_count
+            .checked_sub(1)
+            .ok_or(CodecError::ArithmeticOverflow)?,
+        ..*request.epoch
+    };
+    epoch.validate()?;
+    let mut credits = CloseClearWorkCreditsV1::new();
+    credits.add(
+        request.payer_destination_id,
+        request
+            .work
+            .rent
+            .refundable_principal
+            .checked_add(unused_reward)
+            .ok_or(CodecError::ArithmeticOverflow)?,
+    )?;
+    credits.add(request.neutral_sink_id, request.work.rent.donation_floor)?;
+    credits.add(
+        request.keeper_destination_id,
+        request.binding.work_close_reward,
+    )?;
     Ok(CloseClearWorkPoststateV1 {
         epoch,
         close_work: true,

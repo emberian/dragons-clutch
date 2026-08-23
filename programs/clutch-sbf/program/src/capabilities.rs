@@ -212,7 +212,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(76, 1, 1), (76, 1, 2), (76, 1, 3), (76, 1, 4)];
 
-/// Exact identity, unrevealed-expiry, and solver-claim action set.
+/// Exact non-production General V2 laboratory action set.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 2),
@@ -221,6 +221,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 8),
     (74, 1, 9),
     (74, 1, 10),
+    (74, 1, 12),
     (74, 1, 14),
     (74, 1, 15),
     (74, 1, 16),

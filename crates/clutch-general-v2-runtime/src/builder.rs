@@ -662,7 +662,7 @@ impl From<EconomicErrorV2> for CandidateBuilderErrorV1 {
     }
 }
 
-fn relation_domain_from_account(
+pub(crate) fn relation_domain_from_account(
     account: &EconomicDomainV2AccountV1,
 ) -> Result<EconomicDomainV2, CandidateBuilderErrorV1> {
     account.validate()?;
@@ -1509,7 +1509,7 @@ impl<'a> PreparedBuilderContextV1<'a> {
     }
 }
 
-fn project_owner_blind_slot(
+pub(crate) fn project_owner_blind_slot(
     slot: OrderSlot,
     domain: &EconomicDomainV2,
 ) -> Result<Option<(EconomicOrderV2, FrozenOrderMembershipV1)>, CandidateBuilderErrorV1> {

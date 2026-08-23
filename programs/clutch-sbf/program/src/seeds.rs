@@ -214,6 +214,8 @@ pub const SEED_GENERAL_V2_NODE: &[u8] = clutch_general_v2_contract::CANDIDATE_NO
 pub const SEED_GENERAL_V2_FEED: &[u8] = clutch_general_v2_contract::CANDIDATE_FEED_SEED_DOMAIN_V1;
 /// General V2 active-width ClearWork seed prefix.
 pub const SEED_GENERAL_V2_WORK: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V1;
+/// Disabled resumable RelationV2 ClearWork V3 seed prefix.
+pub const SEED_GENERAL_V2_WORK_V3: &[u8] = clutch_general_v2_contract::CLEAR_WORK_SEED_DOMAIN_V3;
 /// General V2 selected settlement-authority seed prefix.
 pub const SEED_GENERAL_V2_SELECTED: &[u8] =
     clutch_general_v2_contract::SELECTED_CANDIDATE_SEED_DOMAIN_V1;
@@ -246,6 +248,9 @@ pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
 /// Disabled buyer-first candidate settlement cash-pot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
+/// Counted candidate-scoped General V2 SettlementRoot seed prefix.
+pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
+    clutch_general_v2_contract::SETTLEMENT_ROOT_SEED_DOMAIN_V1;
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
@@ -521,6 +526,11 @@ pub fn general_v2_work_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8)
     find(program_id, &[SEED_GENERAL_V2_WORK, node])
 }
 
+/// Disabled canonical General V2 resumable ClearWork V3 PDA.
+pub fn general_v2_work_v3_pda(program_id: &Pubkey, node: &[u8; 32]) -> (Pubkey, u8) {
+    find(program_id, &[SEED_GENERAL_V2_WORK_V3, node])
+}
+
 /// Canonical General V2 selected settlement-authority PDA.
 pub fn general_v2_selected_pda(
     program_id: &Pubkey,
@@ -710,6 +720,18 @@ pub fn general_v2_settlement_cash_pot_pda(
             epoch,
             settlement_candidate,
         ],
+    )
+}
+
+/// Canonical counted General V2 SettlementRoot PDA.
+pub fn general_v2_settlement_root_pda(
+    program_id: &Pubkey,
+    epoch: &[u8; 32],
+    settlement_candidate: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_SETTLEMENT_ROOT, epoch, settlement_candidate],
     )
 }
 
