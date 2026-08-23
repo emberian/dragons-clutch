@@ -1,11 +1,13 @@
 use clutch_retirement::{
-    ChildGenerationV1, EpochChildCountsV1, EpochChildKindV1, EpochRetirementTailV1,
-    GeneralEpochTombstoneV1, Identity32V1, MarketEpochCursorV1, PositionRetirementTailV1,
-    PositionTombstoneV1, RentSplitV2, ReservationCountTailV1, ReservationStateV1,
-    CHILD_GENERATION_V1_BYTES, EPOCH_CHILD_COUNTS_V1_BYTES, EPOCH_RETIREMENT_TAIL_V1_BYTES,
+    ChildGenerationV1, DeletableRentOwnerV1, EpochChildCountsV1, EpochChildKindV1,
+    EpochRetirementTailV1, GeneralEpochTombstoneV1, Identity32V1, MarketEpochCursorV1,
+    PositionRetirementTailV1, PositionTombstoneV1, RentSplitV2, ReservationCountTailV1,
+    ReservationRetirementTailV2, ReservationStateV1, CHILD_GENERATION_V1_BYTES,
+    DELETABLE_RENT_OWNER_V1_BYTES, EPOCH_CHILD_COUNTS_V1_BYTES, EPOCH_RETIREMENT_TAIL_V1_BYTES,
     GENERAL_EPOCH_TOMBSTONE_V1_BYTES, MARKET_EPOCH_CURSOR_V1_BYTES,
-    POSITION_RETIREMENT_TAIL_V1_BYTES, POSITION_TOMBSTONE_V1_BYTES, RENT_SPLIT_V2_BYTES,
-    RESERVATION_COUNT_TAIL_V1_BYTES,
+    POSITION_RETIREMENT_TAIL_V1_BYTES, POSITION_TOMBSTONE_V1_BYTES,
+    PROJECTED_REPLAY_SUCCESSOR_BYTES, REFERENCE_REPLAY_V1_BYTES, RENT_SPLIT_V2_BYTES,
+    RESERVATION_COUNT_TAIL_V1_BYTES, RESERVATION_RETIREMENT_TAIL_V2_BYTES,
 };
 
 fn id(byte: u8) -> Identity32V1 {
@@ -37,6 +39,12 @@ const RENT_HEX: &str = concat!(
     "2827262524232221"
 );
 
+const DELETABLE_RENT_HEX: &str = concat!(
+    "3333333333333333333333333333333333333333333333333333333333333333",
+    "0807060504030201",
+    "1817161514131211"
+);
+
 const COUNTS_HEX: &str = concat!(
     "01000000", "02000000", "03000000", "04000000", "05000000", "06000000", "07000000", "08000000",
     "01000000"
@@ -44,9 +52,24 @@ const COUNTS_HEX: &str = concat!(
 
 #[test]
 fn retirement_tails_have_frozen_little_endian_vectors() {
+    assert_eq!(REFERENCE_REPLAY_V1_BYTES, 84);
+    assert_eq!(PROJECTED_REPLAY_SUCCESSOR_BYTES, 132);
     let rent_bytes = from_hex::<RENT_SPLIT_V2_BYTES>(RENT_HEX);
     assert_eq!(rent().encode().unwrap(), rent_bytes);
     assert_eq!(RentSplitV2::decode(&rent_bytes).unwrap(), rent());
+
+    let deletable_rent = DeletableRentOwnerV1::from_persisted(
+        id(0x33),
+        0x0102_0304_0506_0708,
+        0x1112_1314_1516_1718,
+    )
+    .unwrap();
+    let deletable_bytes = from_hex::<DELETABLE_RENT_OWNER_V1_BYTES>(DELETABLE_RENT_HEX);
+    assert_eq!(deletable_rent.encode().unwrap(), deletable_bytes);
+    assert_eq!(
+        DeletableRentOwnerV1::decode(&deletable_bytes).unwrap(),
+        deletable_rent
+    );
 
     let position = PositionRetirementTailV1 {
         outstanding_reservations: 0x0a0b_0c0d,
@@ -122,6 +145,27 @@ fn retirement_tails_have_frozen_little_endian_vectors() {
     assert_eq!(
         ReservationCountTailV1::decode(&reservation_bytes).unwrap(),
         reservation
+    );
+
+    let reservation_retirement = ReservationRetirementTailV2 {
+        count: reservation,
+        rent: deletable_rent,
+    };
+    let reservation_retirement_hex = concat!(
+        "080706050403020101",
+        "3333333333333333333333333333333333333333333333333333333333333333",
+        "0807060504030201",
+        "1817161514131211"
+    );
+    let reservation_retirement_bytes =
+        from_hex::<RESERVATION_RETIREMENT_TAIL_V2_BYTES>(reservation_retirement_hex);
+    assert_eq!(
+        reservation_retirement.encode().unwrap(),
+        reservation_retirement_bytes
+    );
+    assert_eq!(
+        ReservationRetirementTailV2::decode(&reservation_retirement_bytes).unwrap(),
+        reservation_retirement
     );
 
     let generation = ChildGenerationV1 {
@@ -201,7 +245,10 @@ fn every_persisted_discriminant_is_frozen() {
         EpochChildKindV1::FinalPot,
     ];
     for (byte, kind) in kinds.into_iter().enumerate() {
-        assert_eq!(EpochChildKindV1::try_from(byte as u8), Ok(kind));
+        assert_eq!(
+            EpochChildKindV1::try_from(u8::try_from(byte).unwrap()),
+            Ok(kind)
+        );
     }
 
     for (byte, state) in [
@@ -213,6 +260,9 @@ fn every_persisted_discriminant_is_frozen() {
     .into_iter()
     .enumerate()
     {
-        assert_eq!(ReservationStateV1::try_from(byte as u8), Ok(state));
+        assert_eq!(
+            ReservationStateV1::try_from(u8::try_from(byte).unwrap()),
+            Ok(state)
+        );
     }
 }

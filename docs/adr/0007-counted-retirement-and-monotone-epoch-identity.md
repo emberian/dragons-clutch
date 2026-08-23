@@ -1,8 +1,9 @@
 # ADR-0007: counted retirement and monotone epoch identity
 
-Status: proposed 2026-08-22; production codec/transition seam implemented in
-`crates/clutch-retirement`, but **not integrated into live accounts and not
-authorization to re-enable either close**
+Status: proposed 2026-08-22; frozen codecs and successor pure evidence are
+implemented in `crates/clutch-retirement`, but **root open and retirement are
+deliberately STOP, no successor is routed in SBF, and this is not authorization
+to re-enable either close**
 
 ## Context
 
@@ -38,8 +39,9 @@ The production-bound pure seam is
 [`crates/clutch-retirement`](../../crates/clutch-retirement/README.md). It owns
 the fixed extension/tombstone codecs and checked post-state transitions without
 allocating a live instruction or touching the SBF dispatcher. Its tests close
-the host codec/state obligations only; its provisional tombstone tag bytes are
-not live wire allocations, and the Promotion gate below remains open.
+the host codec/state obligations only. The central collision ledger reserves
+its tombstone coordinates as disabled, but no live codec/SBF route follows from
+that reservation, and the Promotion gate below remains open.
 
 The isolated
 [`clutch-retirement-adapter`](../../crates/clutch-retirement-adapter/README.md)
@@ -109,6 +111,13 @@ exactly the permanent minimum in the tombstone, and sends all surplus to the
 frozen neutral sink. Hoard principal, collateral, fees, or future revenue fund
 none of this.
 
+Position reopen and fresh generation-scoped Replay creation are one funding
+bundle. Each account has its own hostile-prefund admission and persisted rent
+owner, but repeated payer identities must present the same authenticated
+starting balance. Their full debits are coalesced and checked before either
+account changes. Position/Replay target aliases, target/payer aliases, and
+target/neutral-sink aliases refuse.
+
 Every reservation family that can own Position assets participates, including
 general and direct reservations. There is no DREGG-specific branch.
 
@@ -119,20 +128,48 @@ Every successor reservation persists:
 ```text
 epoch_generation: u64
 position_counted: u8   # canonical 1 in ACTIVE/ENTITLED, 0 in terminal states
+rent_payer: Pubkey
+refundable_principal: u64
+donation_floor: u64
 ```
 
-The reservation version is bumped. General Reservation uses V5 and direct
-Reservation uses V6: tag 19/version 3 is a retired general-Reservation wire
-schema and cannot be reused. The marker is not a client hint: it is the
-once-only debit state owned by the reservation.
+The already-committed general V5 and direct V6 schemas remain frozen count-only
+envelopes: `618 + 9 = 627` bytes. Neither owns deletion funding, and neither may
+authorize a live deletable creation or rent-close. Their exact decoders and
+committed pure count transitions remain available so old bytes and downstream
+source are never reinterpreted.
 
-Reservation creation is one Solana transaction that:
+The exhaustive 23-variant `RetirementErrorV1` and frozen pure signatures retain
+their committed source behavior. Successor-only APIs use
+`RetirementErrorV2`; adapter successor APIs similarly use
+`RetirementAdapterErrorV2`. Only exhaustive, lossless V1-to-V2 conversions
+exist, and compile fixtures freeze both V1 error variant sets and prove that
+historical exhaustive matches still compile.
+
+Deletable general Reservation V7 and direct Reservation V8 are fresh successor
+schemas. Each is exactly `618 + 9 + 48 = 675` bytes. The count marker is not a
+client hint: it is the once-only debit state owned by the reservation. The
+48-byte funding owner has no tombstone compartment because the terminal
+Reservation is fully deleted. V7/V8 have exact version discrimination and no
+fallback to V5/V6.
+
+Creation transfers the full recorded principal from the stored payer even if
+the canonical target was hostilely prefunded. Initial prefund becomes
+`donation_floor`; it never discounts principal. Close requires at least
+`principal + donation_floor`, returns exactly principal to the stored payer,
+routes all other lamports to the frozen neutral sink, and leaves zero balance.
+The current direct V2 base already carries an equivalent historical funding
+ledger. The isolated adapter requires exact equality with the appended owner;
+a clean direct base successor that removes this compatibility mirror remains a
+central-layout activation decision.
+
+Successor V7/V8 Reservation creation is one future Solana transaction that:
 
 1. authenticates an OPEN Position V2 and OPEN counted Epoch;
 2. checks both counters can increment;
 3. moves the exact cash/Egg envelope out of Position;
-4. creates and writes the reservation with both parent generations and
-   `position_counted = 1`;
+4. creates and writes the reservation with both parent generations, the
+   authenticated Position owner, and `position_counted = 1`;
 5. increments `PositionV2.outstanding_reservations`; and
 6. increments the Epoch's `reservation_archives` count.
 
@@ -156,15 +193,60 @@ ACTIVE-to-ENTITLED transition do not decrement. A terminal replay sees
 `position_counted = 0`/a terminal state and refuses without mutation; counter
 underflow is always a refusal, never a clamp.
 
+Terminal debit cross-binds the Reservation's authenticated Market and owner to
+the exact Position in addition to matching Position generation. Archive close
+cross-binds the Reservation's Market and Epoch identities to its general
+parent. Equal generations alone never authorize a cross-Position or
+cross-Epoch debit.
+
 Rent-close of the terminal reservation is a different transition. It requires
 `position_counted = 0`, deletes the reservation bundle exactly once, and
 decrements the Epoch's `reservation_archives` count in that same transaction.
 It never touches the Position counter.
 
+Direct Reservation generation is not an instruction scalar. The isolated
+adapter authenticates exact Direct Epoch V4 owner/PDA/header/length/bump bytes,
+runs the authoritative decoder, and derives the child generation as checked
+`epoch_index + 1`. It also projects the exact six-state lifecycle, and V8
+registration requires pre-freeze-open; frozen, selected, settled, and
+prefreeze-aborted parents refuse. Index `u64::MAX` refuses. The pure DTO is
+forgeable and no live route calls the bridge, so runtime activation must
+consume that exact adapter path and never accept a caller projection or scalar.
+
 `ClosePositionV2` authenticates local economic zero *and*
 `outstanding_reservations == 0`, then writes the tombstone/refund split
 atomically. Solana's writable account lock is the race barrier; every
 reservation creator must therefore include the Position writable.
+
+### 2a. Replay is a closeable generation sibling
+
+The reference Replay sequence is scoped to one Position generation. Retaining
+one Replay account forever for every closed generation leaks rent; deleting it
+separately from Position permits a half-close. The counted successor therefore
+models Replay as a separately funded sibling carrying the same exact 48-byte
+deletable funding owner.
+
+Position retirement has no live-authorizable standalone successor plan. The
+frozen root-only pure symbols retain their committed behavior for source
+compatibility, but no runtime route may use them. One atomic successor plan
+must authenticate exact `(market, owner, position_generation)` equality, precompute
+the Position tombstone split and Replay deletion, coalesce payer/sink credits,
+then write both or neither. Reopen requires old Replay absence, increments the
+Position generation with checked arithmetic, and creates a fresh sequence-zero
+Replay for that generation with full-principal hostile-prefund admission.
+The adapter must authenticate the absent prior-generation Replay PDA and the
+distinct next-generation Replay target; the pure plan cross-binds the absence
+proof to the Position tombstone's exact Market, owner, and generation before
+admitting reopen.
+
+The current reference Replay body is 84 bytes, so the projected successor is
+132 bytes. The existing Replay PDA seed is already generation-bearing. An
+central registry reserves `0x7a/v1` as `ReservedDisabled`, and an in-flight
+external general-v2 contract proposes the 132-byte shape. Neither this ADR nor
+the retirement crates provide its authoritative composition codec/SBF route.
+Exact codec composition, a seed audit, and SBF rollback tests remain activation
+blockers. Legacy Replay routes remain
+unchanged and cannot enable Position retirement.
 
 ### 3. Market owns the monotone epoch cursor
 
@@ -174,6 +256,16 @@ default, not a protocol requirement. `InitEpochV5` requires the intent index to
 equal this cursor and rejects `u64::MAX`, then creates the complete root and
 advances the cursor by exactly one in the same transaction. Retirement never
 changes the cursor.
+
+The pure successor root constructor checks Market cursor advancement and models
+Epoch, Window, and candidate-work Budget together. Their independent rent-only
+admission projections are bound to the same sink and coalesced by payer balance
+before any modeled debit. That arithmetic is non-executable evidence: the
+authoritative Budget owner has not supplied its complete reward-funding
+capability, so every otherwise-valid root open returns
+`BudgetFundingUnauthenticated` and creates nothing. General
+`epoch_generation` is canonically `epoch_index + 1` in the fresh-root
+constructor; `u64::MAX` refuses.
 
 Market V1 cannot initialize this field safely: historical Epoch indices were
 caller-selected and there is no bounded, onchain maximum-index census. A claim
@@ -199,8 +291,12 @@ final_pots              # constrained to 0 or 1
 ```
 
 At the current 329-byte Epoch V2 width this yields a 429-byte live general Epoch V5.
-`EpochWindow` also receives the epoch generation. Epoch, Window, and their
-mandatory funding state are one root bundle, so Window is not self-counted.
+`EpochWindow` and `EpochCandidateWorkBudget` also receive the epoch generation.
+Epoch, Window, and Budget are one root bundle, so neither sibling is
+self-counted. Their funding is nevertheless disjoint: Epoch owns only its live
+refund plus permanent tombstone split, Window owns one deletable payer/
+principal/donation record, and Budget owns another. No compartment funds
+another.
 
 Each child version persists the parent's epoch generation and is accepted only
 after program-owner, exact tag/version/length, full identity fields, and
@@ -212,7 +308,7 @@ canonical PDA checks. Required bumps are:
   persist the same `epoch_generation: u64` in their first counted versions;
 - ClearWork V2 (growing and complete headers): append
   `epoch_generation: u64`;
-- OrderPage V5, Reservation V5, SettlementReceipt V3, and FinalPot V3: append
+- OrderPage V5, deletable Reservation V7, SettlementReceipt V3, and FinalPot V3: append
   `epoch_generation: u64`.
 
 One `candidate_bundle` is CandidateRecord + CandidateFeed + their funding
@@ -226,20 +322,22 @@ decrements once. The current feed-optional close shape is not carried into the
 counted successor family.
 
 The retirement seam does not re-declare either candidate state machine. Its
-adapter projection carries an opaque `(candidate tag, candidate version,
-status)` witness produced only after that schema's owning decoder and lifecycle
-validator succeed. Status updates preserve the registered tag/version and do
-not touch the count. Thus exhaustive counting covers every admitted status
-without creating a second semantic owner or making retirement interpret a
-candidate terminality byte.
+pure projection carries `(candidate tag, candidate version, status)` only after
+the caller claims owning-decoder/lifecycle validation. That DTO is not runtime
+authority. Status updates preserve tag/version and do not touch the count; the
+future live adapter must supply exact codec/PDA/owner validation.
 
 ADR-0006's CandidateIndex pages, CandidateVerdicts, and CandidateEscrows have
 independent creation and close times, so each has its own counter. Their close
 routes authenticate only their epoch generation and canonical identities; they
-must not require an already-closable CandidateRecord to remain present. The
-epoch-level `EpochCandidateWorkBudgetV2` is created and closed atomically with
-the root bundle; if implementation gives it an independent lifetime, it must
-instead gain a tenth counter before creation is enabled.
+must not require an already-closable CandidateRecord to remain present.
+CandidateWindowV4's admission-node ledger is a different ownership domain:
+admission nodes are not retrofitted into a tenth frozen V1 Epoch count. Root
+retirement requires a private-field pure witness that the complete Window
+ledger is finalized, headless, and fully closed. Exact Window codec/PDA/owner
+authentication is still missing. Budget has an independent root lifetime and
+cannot close until its authoritative economic owner supplies an opaque terminal
+disposition.
 
 One `clear_work_bundle` is a growing or complete ClearWork plus its funding
 identity. `InitClearWork` increments once at first-stage creation; grow and
@@ -253,6 +351,13 @@ receipt on its second endpoint does not increment. Every governed account and
 funding ledger/tail is created and closed atomically as one counted bundle.
 Counter overflow/underflow refuses before mutation.
 
+Creation phase is exact rather than merely "not terminal": OrderPage and
+Reservation archive creation require OPEN; candidate bundles, CandidateIndex
+pages, CandidateVerdicts, CandidateEscrows, and ClearWork bundles require
+FROZEN; SettlementReceipts and FinalPot require CLEARED. SETTLED and LAPSED
+admit no new child. The lifecycle owner still validates each family's economic
+preconditions before supplying its counted transition.
+
 This list is exhaustive for the union of the current general-epoch account DAG
 and ADR-0006's proposed candidate-lifecycle children. Adding another
 epoch-owned PDA family requires an Epoch version bump and a new counter (or a
@@ -261,7 +366,7 @@ created. A reserved counter is not silently repurposed.
 
 ### 5. Epoch retirement leaves an identity tombstone
 
-After the Epoch reaches its existing terminal economic phase, child rent-close
+After the Epoch reaches SETTLED or LAPSED, child rent-close
 order is:
 
 1. settle or release every reservation economically;
@@ -276,8 +381,8 @@ Steps within a dependency level may be permuted. A root close additionally
 checks the canonical child slots it receives where applicable, but no presented
 list is treated as the aggregate proof; the counters are authoritative.
 
-The terminal root transition closes Window and its funding identity and
-reallocates general Epoch V5 at the same PDA to an exact 84-byte
+The intended terminal root transition would close Window and Budget and
+reallocate general Epoch V5 at the same PDA to an exact 84-byte
 `GENERAL_EPOCH_TOMBSTONE`:
 
 ```text
@@ -290,19 +395,23 @@ phase:            1    # CLOSED only
 stored_bump:      1
 ```
 
-Creation prepays the full 84-byte permanent minimum independently. Root close
-refunds only the recorded live delta, routes surplus to the neutral sink, and
-leaves exactly that minimum. `InitEpochV5` requires the tombstone target to be
-absent and the Market cursor to match, so neither deletion, replay, nor a
-residual child can reopen an old identity.
+Creation must prepay the full 84-byte permanent minimum independently. Root
+close may refund only Epoch's recorded live delta and Window's separately
+recorded principal. Budget reward liabilities, cleanup markers, and funding
+disposition are not modeled as surplus. Consequently public root close always
+returns `BudgetRetirementUnauthenticated`; the internal rent-only coalescing
+calculation is explicitly non-executable evidence. Source aliases and scalar
+sink substitution still refuse before that STOP where applicable.
 
 ### 6. Atomicity and adapter write order
 
 No counter transition is split across transactions. For each instruction the
 adapter must:
 
-1. decode and authenticate every account and generation;
-2. compute the complete post-state in local values with checked arithmetic;
+1. decode and authenticate every account and generation in the live adapter;
+2. reject source/source and source/recipient aliases and compute the complete
+   post-state plus coalesced funding debits or recipient credits with checked
+   arithmetic;
 3. perform any CPI account creation/resize;
 4. encode every post-state and execute transfers; and
 5. return success only after every component is written.
@@ -312,6 +421,14 @@ that guesses whether a counter write happened. Durable `position_counted` plus
 child account presence are the only once-only markers. Keeper retries are
 ordinary replays and must either reach the next valid transition or return the
 same refusal with byte-identical prestate.
+
+Current public `Adapter*ProjectionV1` structs are forgeable pure DTOs. Only the
+private-field `ValidatedAdmissionLedgerRetiredV1` proves complete pure Window
+terminal structure, and even it proves no runtime owner/PDA/account bytes. The
+Direct Epoch V4 bridge is the only exact end-to-end account projection in the
+isolated adapter; its projected lifecycle is checked again by successor
+registration. General neutral-sink provenance, Position/Replay identity and
+absence, Window V4, and Budget capabilities are promotion blockers.
 
 ## Invariants
 
@@ -340,6 +457,13 @@ preserve them. No admin repair instruction may assign a count directly.
 Neither current close may be re-enabled until all of the following land for one
 newly built, digest-recorded ELF:
 
+- authoritative Budget funding and terminal-disposition capabilities covering
+  every reward liability, cleanup marker, and economic compartment;
+- exact runtime bridges for CandidateWindowV4, general Market/Realm neutral
+  sink, Position/Replay identities, and generation-scoped Replay absence;
+- an exact Replay successor composition codec/seed and SBF route (the central
+  `0x7a/v1` coordinate is reserved disabled; the external 132-byte proposal is
+  not an executable implementation here);
 - exact codecs, length/version refusal tests, seed tests, and rent-split tests
   for every new account shape;
 - host transition tests covering every reservation creator and every release,
@@ -371,6 +495,15 @@ generation/cursor monotonicity, exact-once replay refusal, forged count/ticket
 refusal, every child family, and injected rollback at modeled write boundaries.
 It does not verify Solana account locking, codec correspondence, CPI behavior,
 rent arithmetic, or an ELF.
+
+The current general SBF lifecycle treats CLEARED as its post-selection working
+phase and does not stamp the layout's SETTLED phase before legacy cleanup/root
+close. Counted retirement deliberately does not collapse CLEARED into
+terminality: the successor runtime must add and authenticate an exact SETTLED
+transition after every settlement dependency is economically terminal. Until
+that wider lifecycle change and its rollback tests land, general counted child
+cleanup and root retirement cannot be activated. LAPSED remains independently
+terminal.
 
 ## Consequences
 

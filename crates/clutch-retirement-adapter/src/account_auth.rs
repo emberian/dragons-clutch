@@ -2,19 +2,23 @@
 
 use clutch_retirement::{
     Identity32V1, RetirementErrorV1, DIRECT_RESERVATION_ACCOUNT_VERSION_V6,
-    DIRECT_RESERVATION_V6_BYTES, EPOCH_ACCOUNT_TAG, EPOCH_ACCOUNT_VERSION_V5, EPOCH_V5_BYTES,
+    DIRECT_RESERVATION_ACCOUNT_VERSION_V8, DIRECT_RESERVATION_V6_BYTES,
+    DIRECT_RESERVATION_V8_BYTES, EPOCH_ACCOUNT_TAG, EPOCH_ACCOUNT_VERSION_V5, EPOCH_V5_BYTES,
     GENERAL_EPOCH_TOMBSTONE_TAG, GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
     GENERAL_EPOCH_TOMBSTONE_VERSION_V1, MARKET_ACCOUNT_TAG, MARKET_ACCOUNT_VERSION_V2,
     MARKET_V2_BYTES, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V2, POSITION_TOMBSTONE_TAG,
     POSITION_TOMBSTONE_V1_BYTES, POSITION_TOMBSTONE_VERSION_V1, POSITION_V2_BYTES,
-    RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_V5_BYTES,
+    RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7,
+    RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
 };
+use clutch_solana_layout::direct_selection_v3::{DIRECT_EPOCH_V4_BYTES, DIRECT_EPOCH_V4_VERSION};
 
-use crate::RetirementAdapterErrorV1;
+use crate::{RetirementAdapterErrorV1, RetirementAdapterErrorV2};
 
 const POSITION_STORED_BUMP_OFFSET: usize = 218;
 const MARKET_STORED_BUMP_OFFSET: usize = 132;
 const EPOCH_STORED_BUMP_OFFSET: usize = 327;
+const DIRECT_EPOCH_V4_STORED_BUMP_OFFSET: usize = 343;
 const RESERVATION_STORED_BUMP_OFFSET: usize = 312;
 const POSITION_TOMBSTONE_STORED_BUMP_OFFSET: usize = 75;
 const EPOCH_TOMBSTONE_STORED_BUMP_OFFSET: usize = 83;
@@ -157,6 +161,7 @@ fn authenticate<'a>(
     program_id: Identity32V1,
     canonical_pda: CanonicalPdaV1,
     expected: ExpectedAccountV1,
+    require_writable: bool,
 ) -> Result<AuthenticatedAccountV1<'a>, RetirementAdapterErrorV1> {
     if view.address != canonical_pda.address {
         return Err(RetirementAdapterErrorV1::WrongPda);
@@ -164,7 +169,7 @@ fn authenticate<'a>(
     if view.owner != program_id {
         return Err(RetirementAdapterErrorV1::WrongOwner);
     }
-    if !view.is_writable {
+    if require_writable && !view.is_writable {
         return Err(RetirementAdapterErrorV1::NotWritable);
     }
     if view.data.len() < expected.len {
@@ -207,6 +212,7 @@ pub fn authenticate_position_v2<'a>(
             len: POSITION_V2_BYTES,
             bump_offset: POSITION_STORED_BUMP_OFFSET,
         },
+        true,
     )
 }
 
@@ -226,6 +232,7 @@ pub fn authenticate_market_v2<'a>(
             len: MARKET_V2_BYTES,
             bump_offset: MARKET_STORED_BUMP_OFFSET,
         },
+        true,
     )
 }
 
@@ -245,7 +252,30 @@ pub fn authenticate_general_epoch_v5<'a>(
             len: EPOCH_V5_BYTES,
             bump_offset: EPOCH_STORED_BUMP_OFFSET,
         },
+        true,
     )
+}
+
+/// Authenticate one read-only or writable Direct Epoch V4 before its
+/// authoritative codec projects the parent identity, admission lifecycle, and
+/// persisted neutral sink.
+pub fn authenticate_direct_epoch_v4<'a>(
+    view: AccountViewV1<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV1<'a>, RetirementAdapterErrorV2> {
+    Ok(authenticate(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: EPOCH_ACCOUNT_TAG,
+            version: DIRECT_EPOCH_V4_VERSION,
+            len: DIRECT_EPOCH_V4_BYTES,
+            bump_offset: DIRECT_EPOCH_V4_STORED_BUMP_OFFSET,
+        },
+        false,
+    )?)
 }
 
 /// Authenticate one writable counted general Reservation V5.
@@ -264,6 +294,7 @@ pub fn authenticate_general_reservation_v5<'a>(
             len: RESERVATION_V5_BYTES,
             bump_offset: RESERVATION_STORED_BUMP_OFFSET,
         },
+        true,
     )
 }
 
@@ -283,7 +314,48 @@ pub fn authenticate_direct_reservation_v6<'a>(
             len: DIRECT_RESERVATION_V6_BYTES,
             bump_offset: RESERVATION_STORED_BUMP_OFFSET,
         },
+        true,
     )
+}
+
+/// Authenticate one writable deletable counted general Reservation V7.
+pub fn authenticate_general_reservation_v7<'a>(
+    view: AccountViewV1<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV1<'a>, RetirementAdapterErrorV2> {
+    Ok(authenticate(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: RESERVATION_ACCOUNT_TAG,
+            version: RESERVATION_ACCOUNT_VERSION_V7,
+            len: RESERVATION_V7_BYTES,
+            bump_offset: RESERVATION_STORED_BUMP_OFFSET,
+        },
+        true,
+    )?)
+}
+
+/// Authenticate one writable deletable counted direct Reservation V8.
+pub fn authenticate_direct_reservation_v8<'a>(
+    view: AccountViewV1<'a>,
+    program_id: Identity32V1,
+    canonical_pda: CanonicalPdaV1,
+) -> Result<AuthenticatedAccountV1<'a>, RetirementAdapterErrorV2> {
+    Ok(authenticate(
+        view,
+        program_id,
+        canonical_pda,
+        ExpectedAccountV1 {
+            tag: RESERVATION_ACCOUNT_TAG,
+            version: DIRECT_RESERVATION_ACCOUNT_VERSION_V8,
+            len: DIRECT_RESERVATION_V8_BYTES,
+            bump_offset: RESERVATION_STORED_BUMP_OFFSET,
+        },
+        true,
+    )?)
 }
 
 /// Authenticate one writable permanent Position tombstone.
@@ -302,6 +374,7 @@ pub fn authenticate_position_tombstone_v1<'a>(
             len: POSITION_TOMBSTONE_V1_BYTES,
             bump_offset: POSITION_TOMBSTONE_STORED_BUMP_OFFSET,
         },
+        true,
     )
 }
 
@@ -321,6 +394,7 @@ pub fn authenticate_general_epoch_tombstone_v1<'a>(
             len: GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
             bump_offset: EPOCH_TOMBSTONE_STORED_BUMP_OFFSET,
         },
+        true,
     )
 }
 
@@ -342,10 +416,14 @@ pub fn authenticate_counted_child<'a>(
             len: schema.counted_len,
             bump_offset: schema.stored_bump_offset,
         },
+        true,
     )
 }
 
 const _: () = assert!(POSITION_STORED_BUMP_OFFSET < POSITION_V2_BYTES);
 const _: () = assert!(MARKET_STORED_BUMP_OFFSET < MARKET_V2_BYTES);
 const _: () = assert!(EPOCH_STORED_BUMP_OFFSET < EPOCH_V5_BYTES);
+const _: () = assert!(DIRECT_EPOCH_V4_STORED_BUMP_OFFSET < DIRECT_EPOCH_V4_BYTES);
 const _: () = assert!(RESERVATION_STORED_BUMP_OFFSET < RESERVATION_V5_BYTES);
+const _: () = assert!(RESERVATION_STORED_BUMP_OFFSET < RESERVATION_V7_BYTES);
+const _: () = assert!(RESERVATION_STORED_BUMP_OFFSET < DIRECT_RESERVATION_V8_BYTES);

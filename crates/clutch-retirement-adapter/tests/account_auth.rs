@@ -1,12 +1,23 @@
 mod common;
 
-use clutch_retirement::{GeneralEpochTombstoneV1, PositionTombstoneV1, RetirementErrorV1};
+use clutch_retirement::{
+    DirectEpochLifecyclePhaseV1, GeneralEpochTombstoneV1, PositionTombstoneV1, RetirementErrorV1,
+    RetirementErrorV2, GENERAL_EPOCH_TOMBSTONE_TAG, GENERAL_EPOCH_TOMBSTONE_VERSION_V1,
+    POSITION_TOMBSTONE_TAG, POSITION_TOMBSTONE_VERSION_V1, PROJECTED_REPLAY_SUCCESSOR_BYTES,
+};
 use clutch_retirement_adapter::{
-    authenticate_counted_child, authenticate_direct_reservation_v6,
-    authenticate_general_epoch_tombstone_v1, authenticate_general_epoch_v5,
-    authenticate_general_reservation_v5, authenticate_market_v2,
-    authenticate_position_tombstone_v1, authenticate_position_v2, AccountViewV1, CanonicalPdaV1,
-    CountedChildSchemaV1, RetirementAdapterErrorV1,
+    authenticate_counted_child, authenticate_direct_epoch_v4, authenticate_direct_reservation_v6,
+    authenticate_direct_reservation_v8, authenticate_general_epoch_tombstone_v1,
+    authenticate_general_epoch_v5, authenticate_general_reservation_v5,
+    authenticate_general_reservation_v7, authenticate_market_v2,
+    authenticate_position_tombstone_v1, authenticate_position_v2,
+    project_authenticated_direct_epoch_v4, AccountViewV1, CanonicalPdaV1, CountedChildSchemaV1,
+    RetirementAdapterErrorV1, RetirementAdapterErrorV2,
+};
+use clutch_solana_layout::direct_selection_v3::DIRECT_EPOCH_V4_BYTES;
+use clutch_solana_layout::registry::{
+    AllocationCoordinates, AllocationStatus, WireNamespace, CENTRAL_COLLISION_LEDGER,
+    REPLAY_SUCCESSOR_ACCOUNT_TAG, REPLAY_SUCCESSOR_ACCOUNT_VERSION,
 };
 
 fn view<'a>(data: &'a [u8], bump: u8) -> (AccountViewV1<'a>, CanonicalPdaV1) {
@@ -23,6 +34,47 @@ fn view<'a>(data: &'a [u8], bump: u8) -> (AccountViewV1<'a>, CanonicalPdaV1) {
 }
 
 #[test]
+fn retirement_coordinates_match_central_reserved_disabled_registry_entries() {
+    let expected = [
+        (
+            POSITION_TOMBSTONE_TAG,
+            POSITION_TOMBSTONE_VERSION_V1,
+            "retirement-provisional-position-tombstone-v1-account",
+        ),
+        (
+            GENERAL_EPOCH_TOMBSTONE_TAG,
+            GENERAL_EPOCH_TOMBSTONE_VERSION_V1,
+            "retirement-provisional-general-epoch-tombstone-v1-account",
+        ),
+        (
+            REPLAY_SUCCESSOR_ACCOUNT_TAG,
+            REPLAY_SUCCESSOR_ACCOUNT_VERSION,
+            "replay-successor-v1-account",
+        ),
+    ];
+    for (tag, version, name) in expected {
+        let mut matches = 0u8;
+        for entry in CENTRAL_COLLISION_LEDGER {
+            if entry.coordinates
+                == (AllocationCoordinates::Exact {
+                    namespace: WireNamespace::MainAccount,
+                    tag,
+                    version,
+                })
+            {
+                matches += 1;
+                assert_eq!(entry.status, AllocationStatus::ReservedDisabled);
+                assert_eq!(entry.name, name);
+            }
+        }
+        assert_eq!(matches, 1);
+    }
+    assert_eq!(REPLAY_SUCCESSOR_ACCOUNT_TAG, 0x7a);
+    assert_eq!(REPLAY_SUCCESSOR_ACCOUNT_VERSION, 1);
+    assert_eq!(PROJECTED_REPLAY_SUCCESSOR_BYTES, 132);
+}
+
+#[test]
 fn every_promoted_root_family_authenticates_owner_pda_length_header_and_bump() {
     let position = common::position_v2().encode().unwrap();
     let (position_view, position_pda) = view(&position, 9);
@@ -36,6 +88,17 @@ fn every_promoted_root_family_authenticates_owner_pda_length_header_and_bump() {
     let (epoch_view, epoch_pda) = view(&epoch, 12);
     assert!(authenticate_general_epoch_v5(epoch_view, common::id(100), epoch_pda).is_ok());
 
+    let direct_epoch = common::direct_epoch_v4(7);
+    let mut direct_epoch_bytes = [0u8; DIRECT_EPOCH_V4_BYTES];
+    assert_eq!(
+        direct_epoch.encode(&mut direct_epoch_bytes),
+        Ok(DIRECT_EPOCH_V4_BYTES)
+    );
+    let (direct_epoch_view, direct_epoch_pda) = view(&direct_epoch_bytes, 17);
+    assert!(
+        authenticate_direct_epoch_v4(direct_epoch_view, common::id(100), direct_epoch_pda).is_ok()
+    );
+
     let general = common::general_reservation_v5().encode().unwrap();
     let (general_view, general_pda) = view(&general, 13);
     assert!(
@@ -47,6 +110,18 @@ fn every_promoted_root_family_authenticates_owner_pda_length_header_and_bump() {
         .unwrap();
     let (direct_view, direct_pda) = view(&direct, 14);
     assert!(authenticate_direct_reservation_v6(direct_view, common::id(100), direct_pda).is_ok());
+
+    let general = common::general_reservation_v7().encode().unwrap();
+    let (general_view, general_pda) = view(&general, 13);
+    assert!(
+        authenticate_general_reservation_v7(general_view, common::id(100), general_pda).is_ok()
+    );
+
+    let direct = common::direct_reservation_v8()
+        .encode(common::direct_sink())
+        .unwrap();
+    let (direct_view, direct_pda) = view(&direct, 14);
+    assert!(authenticate_direct_reservation_v8(direct_view, common::id(100), direct_pda).is_ok());
 
     let position_tombstone = PositionTombstoneV1 {
         market: common::id(1),
@@ -80,6 +155,87 @@ fn every_promoted_root_family_authenticates_owner_pda_length_header_and_bump() {
         epoch_tombstone_pda
     )
     .is_ok());
+}
+
+#[test]
+fn direct_epoch_v4_authentication_projects_canonical_generation_and_persisted_sink() {
+    let direct_epoch = common::direct_epoch_v4(7);
+    let mut bytes = [0u8; DIRECT_EPOCH_V4_BYTES];
+    direct_epoch.encode(&mut bytes).unwrap();
+    let (account, pda) = view(&bytes, 17);
+    let authenticated = authenticate_direct_epoch_v4(account, common::id(100), pda).unwrap();
+    let (parent, sink) = project_authenticated_direct_epoch_v4(authenticated).unwrap();
+    assert_eq!(parent.account, common::id(101));
+    assert_eq!(parent.market, common::id(1));
+    assert_eq!(
+        parent.epoch.bytes(),
+        direct_epoch.direct.common.epoch.bytes()
+    );
+    assert_eq!(parent.epoch_index, 7);
+    assert_eq!(
+        parent.lifecycle_phase,
+        DirectEpochLifecyclePhaseV1::PrefreezeOpen
+    );
+    assert_eq!(parent.reservation_generation(), Ok(8));
+    assert_eq!(sink.market, common::id(1));
+    assert_eq!(sink.neutral_sink, common::id(90));
+    let mut read_only = account;
+    read_only.is_writable = false;
+    assert!(authenticate_direct_epoch_v4(read_only, common::id(100), pda).is_ok());
+    assert_eq!(
+        authenticate_direct_epoch_v4(
+            account,
+            common::id(100),
+            CanonicalPdaV1::after_derivation(account.address, 16),
+        ),
+        Err(RetirementAdapterErrorV2::WrongBump)
+    );
+
+    let lifecycle_cases = [
+        (
+            common::direct_epoch_v4_frozen_empty(7),
+            DirectEpochLifecyclePhaseV1::FrozenEmpty,
+        ),
+        (
+            common::direct_epoch_v4_selected(7),
+            DirectEpochLifecyclePhaseV1::Selected,
+        ),
+        (
+            common::direct_epoch_v4_prefreeze_aborted(7),
+            DirectEpochLifecyclePhaseV1::Terminal,
+        ),
+        (
+            common::direct_epoch_v4_settled(7),
+            DirectEpochLifecyclePhaseV1::Terminal,
+        ),
+    ];
+    for (direct_epoch, expected_phase) in lifecycle_cases {
+        direct_epoch.encode(&mut bytes).unwrap();
+        let (account, pda) = view(&bytes, 17);
+        let authenticated = authenticate_direct_epoch_v4(account, common::id(100), pda).unwrap();
+        let (parent, _) = project_authenticated_direct_epoch_v4(authenticated).unwrap();
+        assert_eq!(parent.lifecycle_phase, expected_phase);
+    }
+
+    let exhausted = common::direct_epoch_v4(u64::MAX);
+    exhausted.encode(&mut bytes).unwrap();
+    let (account, pda) = view(&bytes, 17);
+    let authenticated = authenticate_direct_epoch_v4(account, common::id(100), pda).unwrap();
+    let (parent, _) = project_authenticated_direct_epoch_v4(authenticated).unwrap();
+    assert_eq!(
+        parent.reservation_generation(),
+        Err(RetirementErrorV2::EpochIndexExhausted)
+    );
+
+    let mut legacy = bytes;
+    legacy[1] = clutch_solana_layout::direct_selection::DIRECT_EPOCH_VERSION;
+    let (account, pda) = view(&legacy, 17);
+    assert_eq!(
+        authenticate_direct_epoch_v4(account, common::id(100), pda),
+        Err(RetirementAdapterErrorV2::Retirement(
+            RetirementErrorV2::WrongVersion
+        ))
+    );
 }
 
 #[test]

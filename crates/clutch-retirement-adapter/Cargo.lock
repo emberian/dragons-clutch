@@ -32,17 +32,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+
+[[package]]
 name = "clutch-liveness"
 version = "0.1.0"
 
 [[package]]
 name = "clutch-retirement"
 version = "0.1.0"
+dependencies = [
+ "clutch-candidate-lifecycle",
+]
 
 [[package]]
 name = "clutch-retirement-adapter"
 version = "0.1.0"
 dependencies = [
+ "clutch-batch-policy-identity",
  "clutch-retirement",
  "clutch-solana-layout",
 ]

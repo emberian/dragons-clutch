@@ -1,33 +1,63 @@
-# Counted-retirement live-layout adapter seam
+# Counted-retirement layout adapter
 
-`clutch-retirement-adapter` composes ADR-0007's new tails with the exact base
+`clutch-retirement-adapter` composes retirement tails with the exact base
 account codecs owned by `clutch-solana-layout`. It is production-bound source,
-but it is not connected to the SBF dispatcher and is not deployment evidence.
+but it has no SBF dispatcher route and is not deployment evidence.
 
-The composition decoders require an exact promoted header and length, restore
-only the legacy version byte in a fixed-size copy, and invoke the authoritative
-base decoder. This avoids duplicating Market, Position, Epoch, or Reservation
-semantics. General Reservation `v4→v5` and direct Reservation `v2→v6` remain
-distinct even though both share tag 19 and both promoted bodies are 627 bytes.
-Direct V3 is not reusable: it is a retired general-Reservation wire schema.
+Composition decoders require exact length/tag/version, restore only the frozen
+base version byte in a fixed-size copy, and invoke the authoritative base
+decoder. Frozen and successor Reservation schemas are deliberately distinct:
 
-The runtime account boundary separately checks:
+Committed authentication/composition APIs retain exhaustive
+`RetirementAdapterErrorV1`. Direct Epoch, V7/V8, and successor projection APIs
+use `RetirementAdapterErrorV2`, which embeds `RetirementErrorV2`. Only lossless
+V1-to-V2 conversions exist; exhaustive compile fixtures freeze both V1 error
+variant sets and prove that historical exhaustive matches still compile.
 
-- the actual key against a canonical PDA and bump already derived from exact
-  seeds by the Solana adapter;
-- the actual owner against the authenticated program id;
-- writability before a mutation path;
-- exact account length, tag, version, and stored bump; and
-- the complete semantic body through its owning decoder.
+| Schema | Exact bytes | Tail | Deletion-capable |
+| --- | ---: | --- | --- |
+| general V5 | 627 | 9-byte count | no |
+| direct V6 | 627 | 9-byte count | no |
+| general V7 | 675 | 9-byte count + 48-byte owner | yes, pure only |
+| direct V8 | 675 | 9-byte count + 48-byte owner | yes, pure only |
 
-The generic counted-child codec is usable only after a child tag/version,
-legacy width, and bump offset are allocated by the authoritative registry. It
-does not make a caller-proposed schema live.
+V7 and V8 have fresh version discrimination and never fall back to V5/V6.
+Equal-length general/direct siblings cross-decode only as `WrongVersion`.
+Direct V8 also requires its appended payer/principal/donation owner to mirror
+the direct V2 base funding ledger exactly.
 
-The proposed tombstone tags `0x75/0x76` are collision-free at the audited HEAD,
-but remain codec-local and non-wire until the central account registry exports
-them. See
-[`COUNTED_RETIREMENT_LIVE_PROMOTION.md`](../../docs/implementation/COUNTED_RETIREMENT_LIVE_PROMOTION.md).
+General Epoch V5 remains exactly 429 bytes. Its frozen codec accepts the
+committed nonzero generation semantics; it does not reinterpret V5 by enforcing
+`index + 1`. The separate successor projection
+`project_live_general_epoch_retirement_v2` maps the exact five authoritative
+phase bytes and requires `generation == epoch_index + 1`. Every unknown phase
+refuses.
+
+The runtime metadata boundary checks actual key, owner, writable bit, exact
+length, tag/version, stored bump, and a canonical PDA already derived from
+registered seeds. `AuthenticatedAccountV1` has private fields and can be minted
+only by those checks. The exact Direct Epoch V4 bridge then runs its
+authoritative codec and projects market, semantic Epoch id, index, canonical
+checked Reservation generation, all six lifecycle phases, and its persisted
+neutral sink. Direct V8 registration independently requires the projected
+phase to be exactly pre-freeze-open; frozen, selected, settled, and
+prefreeze-aborted parents refuse.
+
+Most types consumed by the pure crate are still forgeable
+`Adapter*ProjectionV1` DTOs. Only the Direct Epoch bridge is implemented end to
+end here. Missing exact bridges for CandidateWindowV4, authoritative Budget
+funding/disposition, general Realm/Market neutral-sink provenance,
+Position/Replay identities, and Replay absence are activation blockers. No
+pure plan should be described as runtime authorization until those boundaries
+and their SBF routes exist.
+
+The generic counted-child codec is usable only after the authoritative central
+registry supplies a tag, frozen/counting version pair, exact base width, and
+stored-bump offset. It does not make caller-proposed geometry live. Tombstone
+coordinates `0x75/v1`, `0x76/v1`, and Replay `0x7a/v1` are centrally
+`ReservedDisabled`; an adapter regression test binds those entries to the
+retirement constants. They remain non-executable until exact codecs and SBF
+routes land; the Replay 132-byte composition is still external/in-flight.
 
 Run:
 

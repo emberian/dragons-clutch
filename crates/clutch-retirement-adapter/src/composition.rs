@@ -1,22 +1,69 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use clutch_retirement::{
-    ChildGenerationV1, EpochRetirementTailV1, MarketEpochCursorV1, PositionRetirementTailV1,
-    ReservationCountTailV1, RetirementErrorV1, DIRECT_RESERVATION_ACCOUNT_VERSION_V6,
-    DIRECT_RESERVATION_V2_BYTES, DIRECT_RESERVATION_V6_BYTES, EPOCH_ACCOUNT_TAG,
-    EPOCH_ACCOUNT_VERSION_V5, EPOCH_V2_BYTES, EPOCH_V5_BYTES, MARKET_ACCOUNT_TAG,
-    MARKET_ACCOUNT_VERSION_V2, MARKET_V1_BYTES, MARKET_V2_BYTES, POSITION_ACCOUNT_TAG,
-    POSITION_ACCOUNT_VERSION_V2, POSITION_V1_BYTES, POSITION_V2_BYTES, RESERVATION_ACCOUNT_TAG,
-    RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_V4_BYTES, RESERVATION_V5_BYTES,
+    canonical_epoch_generation, AdapterDirectEpochProjectionV1,
+    AdapterNeutralSinkBindingProjectionV1, ChildGenerationV1, DirectEpochLifecyclePhaseV1,
+    EpochRetirementTailV1, GeneralEpochPhaseV2, Identity32V1, LiveGeneralEpochProjectionV2,
+    MarketEpochCursorV1, PositionRetirementTailV1, ReservationCountTailV1,
+    ReservationRetirementTailV2, RetirementErrorV1, RetirementErrorV2,
+    DIRECT_RESERVATION_ACCOUNT_VERSION_V6, DIRECT_RESERVATION_ACCOUNT_VERSION_V8,
+    DIRECT_RESERVATION_V2_BYTES, DIRECT_RESERVATION_V6_BYTES, DIRECT_RESERVATION_V8_BYTES,
+    EPOCH_ACCOUNT_TAG, EPOCH_ACCOUNT_VERSION_V5, EPOCH_V2_BYTES, EPOCH_V5_BYTES,
+    MARKET_ACCOUNT_TAG, MARKET_ACCOUNT_VERSION_V2, MARKET_V1_BYTES, MARKET_V2_BYTES,
+    POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V2, POSITION_V1_BYTES, POSITION_V2_BYTES,
+    RESERVATION_ACCOUNT_TAG, RESERVATION_ACCOUNT_VERSION_V5, RESERVATION_ACCOUNT_VERSION_V7,
+    RESERVATION_V4_BYTES, RESERVATION_V5_BYTES, RESERVATION_V7_BYTES,
 };
 use clutch_solana_layout::{
     account_len, account_version,
-    direct_selection_v3::DirectReservationV2Account,
+    direct_selection_v3::{
+        DirectReservationV2Account, DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY,
+        DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN, DIRECT_LIFECYCLE_PHASE_SELECTED,
+        DIRECT_LIFECYCLE_PHASE_TERMINAL, DIRECT_LIFECYCLE_PHASE_VERIFYING,
+        DIRECT_LIFECYCLE_PHASE_WINDOW_OPEN,
+    },
     reservation::{ReservationAccount, RESERVATION_STATE_ACTIVE, RESERVATION_STATE_ENTITLED},
-    EpochAccount, MarketAccount, PositionAccount,
+    EpochAccount, MarketAccount, PositionAccount, EPOCH_PHASE_CLEARED, EPOCH_PHASE_FROZEN,
+    EPOCH_PHASE_LAPSED, EPOCH_PHASE_OPEN, EPOCH_PHASE_SETTLED,
 };
 
-use crate::{CountedChildSchemaV1, RetirementAdapterErrorV1};
+use crate::{
+    AuthenticatedAccountV1, CountedChildSchemaV1, RetirementAdapterErrorV1,
+    RetirementAdapterErrorV2,
+};
+
+fn identity(value: clutch_solana_layout::Hash32) -> Result<Identity32V1, RetirementAdapterErrorV1> {
+    Identity32V1::new(value.bytes()).map_err(Into::into)
+}
+
+fn project_direct_epoch_lifecycle_phase_v1(
+    phase: u8,
+) -> Result<DirectEpochLifecyclePhaseV1, RetirementAdapterErrorV2> {
+    match phase {
+        DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN => Ok(DirectEpochLifecyclePhaseV1::PrefreezeOpen),
+        DIRECT_LIFECYCLE_PHASE_FROZEN_EMPTY => Ok(DirectEpochLifecyclePhaseV1::FrozenEmpty),
+        DIRECT_LIFECYCLE_PHASE_WINDOW_OPEN => Ok(DirectEpochLifecyclePhaseV1::WindowOpen),
+        DIRECT_LIFECYCLE_PHASE_VERIFYING => Ok(DirectEpochLifecyclePhaseV1::Verifying),
+        DIRECT_LIFECYCLE_PHASE_SELECTED => Ok(DirectEpochLifecyclePhaseV1::Selected),
+        DIRECT_LIFECYCLE_PHASE_TERMINAL => Ok(DirectEpochLifecyclePhaseV1::Terminal),
+        _ => Err(RetirementErrorV2::InvalidEnum.into()),
+    }
+}
+
+/// Project the authoritative five-state general-Epoch wire phase without an
+/// unchecked cast or permissive fallback.
+pub fn project_general_epoch_phase_v2(
+    phase: u8,
+) -> Result<GeneralEpochPhaseV2, RetirementAdapterErrorV2> {
+    match phase {
+        EPOCH_PHASE_OPEN => Ok(GeneralEpochPhaseV2::Open),
+        EPOCH_PHASE_FROZEN => Ok(GeneralEpochPhaseV2::Frozen),
+        EPOCH_PHASE_CLEARED => Ok(GeneralEpochPhaseV2::Cleared),
+        EPOCH_PHASE_SETTLED => Ok(GeneralEpochPhaseV2::Settled),
+        EPOCH_PHASE_LAPSED => Ok(GeneralEpochPhaseV2::Lapsed),
+        _ => Err(RetirementErrorV2::InvalidEnum.into()),
+    }
+}
 
 fn exact(input: &[u8], expected: usize) -> Result<(), RetirementAdapterErrorV1> {
     if input.len() < expected {
@@ -66,6 +113,20 @@ fn validate_position_count_marker(
     );
     if count.position_counted != expected {
         return Err(RetirementErrorV1::NonCanonicalState.into());
+    }
+    Ok(())
+}
+
+fn validate_direct_funding_mirror(
+    funding: clutch_solana_layout::direct_selection_v3::DirectFundingLedgerV3,
+    rent: clutch_retirement::DeletableRentOwnerV1,
+) -> Result<(), RetirementAdapterErrorV2> {
+    rent.validate()?;
+    if funding.payer.bytes() != rent.payer().bytes()
+        || funding.payer_principal_lamports != rent.refundable_principal()
+        || funding.prior_donation_lamports != rent.donation_floor()
+    {
+        return Err(RetirementErrorV2::NonCanonicalState.into());
     }
     Ok(())
 }
@@ -194,6 +255,55 @@ impl GeneralEpochAccountV5 {
     }
 }
 
+/// Project one already-decoded general Epoch V5 into the pure retirement
+/// model, preserving distinct semantic Epoch and runtime account namespaces.
+pub fn project_live_general_epoch_retirement_v2(
+    account: GeneralEpochAccountV5,
+) -> Result<LiveGeneralEpochProjectionV2, RetirementAdapterErrorV2> {
+    if account.retirement.epoch_generation != canonical_epoch_generation(account.base.epoch_index)?
+    {
+        return Err(RetirementErrorV2::WrongGeneration.into());
+    }
+    Ok(LiveGeneralEpochProjectionV2 {
+        market: identity(account.base.market)?,
+        epoch: identity(account.base.epoch)?,
+        epoch_index: account.base.epoch_index,
+        phase: project_general_epoch_phase_v2(account.base.phase)?,
+        stored_bump: account.base.stored_bump,
+        retirement: account.retirement,
+    })
+}
+
+/// Decode an authenticated Direct Epoch V4 and project the exact parent
+/// identity, canonical index, and persisted Market/Realm neutral sink used by
+/// direct Reservation retirement.
+pub fn project_authenticated_direct_epoch_v4(
+    account: AuthenticatedAccountV1<'_>,
+) -> Result<
+    (
+        AdapterDirectEpochProjectionV1,
+        AdapterNeutralSinkBindingProjectionV1,
+    ),
+    RetirementAdapterErrorV2,
+> {
+    let direct =
+        clutch_solana_layout::direct_selection_v3::DirectEpochV4Account::decode(account.data())?;
+    let market = identity(direct.direct.common.market)?;
+    Ok((
+        AdapterDirectEpochProjectionV1 {
+            account: account.address(),
+            market,
+            epoch: identity(direct.direct.common.epoch)?,
+            epoch_index: direct.direct.common.epoch_index,
+            lifecycle_phase: project_direct_epoch_lifecycle_phase_v1(direct.lifecycle_phase)?,
+        },
+        AdapterNeutralSinkBindingProjectionV1 {
+            market,
+            neutral_sink: identity(direct.neutral_lamport_sink)?,
+        },
+    ))
+}
+
 /// Exact general Reservation V5 composition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralReservationAccountV5 {
@@ -286,6 +396,101 @@ impl DirectReservationAccountV6 {
     }
 }
 
+/// Exact deletable general Reservation V7 successor composition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralReservationAccountV7 {
+    /// General Reservation V4 decoded by its authoritative owner.
+    pub base: ReservationAccount,
+    /// Count marker plus exact payer-owned deletion funding.
+    pub retirement: ReservationRetirementTailV2,
+}
+
+impl GeneralReservationAccountV7 {
+    /// Encode exactly 675 bytes under shared Reservation tag/version 7.
+    pub fn encode(self) -> Result<[u8; RESERVATION_V7_BYTES], RetirementAdapterErrorV2> {
+        validate_position_count_marker(self.base.state, self.retirement.count)?;
+        let mut output = [0u8; RESERVATION_V7_BYTES];
+        let written = self.base.encode(&mut output[..RESERVATION_V4_BYTES])?;
+        if written != RESERVATION_V4_BYTES {
+            return Err(RetirementAdapterErrorV2::BaseLengthMismatch);
+        }
+        output[1] = RESERVATION_ACCOUNT_VERSION_V7;
+        output[RESERVATION_V4_BYTES..].copy_from_slice(&self.retirement.encode()?);
+        Ok(output)
+    }
+
+    /// Decode exactly one V7 envelope through the V4 semantic owner.
+    pub fn decode(input: &[u8]) -> Result<Self, RetirementAdapterErrorV2> {
+        let mut base_bytes = [0u8; RESERVATION_V4_BYTES];
+        checked_base(
+            input,
+            RESERVATION_V7_BYTES,
+            RESERVATION_V4_BYTES,
+            RESERVATION_ACCOUNT_TAG,
+            RESERVATION_ACCOUNT_VERSION_V7,
+            clutch_solana_layout::reservation::RESERVATION_ACCOUNT_VERSION,
+            &mut base_bytes,
+        )?;
+        let base = ReservationAccount::decode(&base_bytes)?;
+        let retirement = ReservationRetirementTailV2::decode(&input[RESERVATION_V4_BYTES..])?;
+        validate_position_count_marker(base.state, retirement.count)?;
+        Ok(Self { base, retirement })
+    }
+}
+
+/// Exact deletable direct Reservation V8 successor composition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectReservationAccountV8 {
+    /// Direct Reservation V2 decoded by its authoritative owner.
+    pub base: DirectReservationV2Account,
+    /// Count marker plus exact mirrored payer-owned deletion funding.
+    pub retirement: ReservationRetirementTailV2,
+}
+
+impl DirectReservationAccountV8 {
+    /// Encode exactly 675 bytes under shared Reservation tag/version 8.
+    pub fn encode(
+        self,
+        neutral_sink: clutch_solana_layout::Hash32,
+    ) -> Result<[u8; DIRECT_RESERVATION_V8_BYTES], RetirementAdapterErrorV2> {
+        validate_position_count_marker(self.base.reservation.state, self.retirement.count)?;
+        validate_direct_funding_mirror(self.base.funding, self.retirement.rent)?;
+        let mut output = [0u8; DIRECT_RESERVATION_V8_BYTES];
+        let written = self
+            .base
+            .encode(neutral_sink, &mut output[..DIRECT_RESERVATION_V2_BYTES])?;
+        if written != DIRECT_RESERVATION_V2_BYTES {
+            return Err(RetirementAdapterErrorV2::BaseLengthMismatch);
+        }
+        output[1] = DIRECT_RESERVATION_ACCOUNT_VERSION_V8;
+        output[DIRECT_RESERVATION_V2_BYTES..].copy_from_slice(&self.retirement.encode()?);
+        Ok(output)
+    }
+
+    /// Decode exactly one V8 envelope through the direct V2 semantic owner.
+    pub fn decode(
+        input: &[u8],
+        neutral_sink: clutch_solana_layout::Hash32,
+    ) -> Result<Self, RetirementAdapterErrorV2> {
+        let mut base_bytes = [0u8; DIRECT_RESERVATION_V2_BYTES];
+        checked_base(
+            input,
+            DIRECT_RESERVATION_V8_BYTES,
+            DIRECT_RESERVATION_V2_BYTES,
+            RESERVATION_ACCOUNT_TAG,
+            DIRECT_RESERVATION_ACCOUNT_VERSION_V8,
+            clutch_solana_layout::direct_selection_v3::DIRECT_RESERVATION_V2_VERSION,
+            &mut base_bytes,
+        )?;
+        let base = DirectReservationV2Account::decode(&base_bytes, neutral_sink)?;
+        let retirement =
+            ReservationRetirementTailV2::decode(&input[DIRECT_RESERVATION_V2_BYTES..])?;
+        validate_position_count_marker(base.reservation.state, retirement.count)?;
+        validate_direct_funding_mirror(base.funding, retirement.rent)?;
+        Ok(Self { base, retirement })
+    }
+}
+
 /// Promote one already-authoritatively-decoded child base and append its
 /// parent-generation tail into an exact caller-provided output buffer.
 pub fn encode_counted_child_after_base_validation(
@@ -354,3 +559,8 @@ const _: () = assert!(
         != clutch_solana_layout::direct_selection_v3::DIRECT_RESERVATION_V2_VERSION
 );
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_VERSION_V6 != RESERVATION_ACCOUNT_VERSION_V5);
+const _: () = assert!(RESERVATION_ACCOUNT_VERSION_V7 != RESERVATION_ACCOUNT_VERSION_V5);
+const _: () = assert!(RESERVATION_ACCOUNT_VERSION_V7 != DIRECT_RESERVATION_ACCOUNT_VERSION_V6);
+const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_VERSION_V8 != RESERVATION_ACCOUNT_VERSION_V7);
+const _: () =
+    assert!(DIRECT_RESERVATION_ACCOUNT_VERSION_V8 != DIRECT_RESERVATION_ACCOUNT_VERSION_V6);

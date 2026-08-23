@@ -1,58 +1,123 @@
 # Counted retirement seam
 
-`clutch-retirement` is the production-bound, allocation-free `no_std` owner of
-ADR-0007's retirement-specific bytes and pure state transitions. It does not
-yet allocate a live instruction, dispatch a request, perform a CPI, resize an
-account, or re-enable either legacy close.
+`clutch-retirement` is an allocation-free `no_std` owner of retirement-specific
+codecs and pure state-transition evidence. It does not allocate a live tag or
+instruction, dispatch a request, perform CPI, mutate a Solana account, or
+authorize deployment. Every current legacy runtime close remains fail-closed.
 
-The existing `clutch-sbf` program remains fail-closed. A future adapter composes
-these exact tails with the base account bodies still owned by
-`clutch-solana-layout`:
+## Frozen and successor envelopes
 
-- Position V2: existing 220 bytes + exact 60-byte retirement tail = 280;
-- general Epoch V5: existing 329 bytes + exact 100-byte retirement tail = 429;
-- Market V2: existing 726 bytes + exact 8-byte cursor = 734;
-- Reservation V5: existing 618 bytes + exact 9-byte count tail = 627;
-- direct Reservation V6: existing 618 bytes + exact 9-byte count tail = 627;
-- Position tombstone: complete exact 76-byte codec; and
-- general Epoch tombstone: complete exact 84-byte codec.
+The committed envelopes remain byte-for-byte frozen:
 
-The pure transitions calculate complete post-state values for each modeled
-root before returning. An error returns no post-state, so a caller can encode
-only after every checked transition succeeds. The Epoch root plan deliberately
-does not model its mandatory Window/funding siblings; the live adapter must
-precompute their closures too. This is the host half of rollback safety;
-Solana account locking, resize/CPI rollback, lamport movement, PDA
-authentication, and ELF correspondence still require local-bank tests.
+| Family | Composition | Exact bytes | Meaning |
+| --- | --- | ---: | --- |
+| Position V2 | 220-byte base + 60-byte tail | 280 | counted Position |
+| general Epoch V5 | 329-byte base + 100-byte tail | 429 | nine counts, generation, rent split |
+| Market V2 | 726-byte base + 8-byte cursor | 734 | monotone general-Epoch cursor |
+| general Reservation V5 | 618-byte base + 9-byte count tail | 627 | frozen count-only schema |
+| direct Reservation V6 | 618-byte base + 9-byte count tail | 627 | frozen count-only schema |
 
-The appended byte order is frozen:
+V5 and V6 do not own deletion funding and must never route Reservation
+deletion. Their exact codecs and accepted byte sets remain available for
+compatibility. Their frozen pure count transitions retain committed behavior,
+but no live creation/deletion route may use them to authorize a deletable
+Reservation.
 
-| Tail | Offsets | Bytes |
-| --- | --- | ---: |
-| Position retirement | `0..4 outstanding`, `4..60 rent split` | 60 |
-| Epoch retirement | `0..8 generation`, `8..44 nine counts`, `44..100 rent split` | 100 |
-| Market cursor | `0..8 next_general_epoch_index` | 8 |
-| Reservation count | `0..8 epoch_generation`, `8 counted boolean` | 9 |
-| Other child generation | `0..8 epoch_generation` | 8 |
+The exhaustive 23-variant `RetirementErrorV1` and every frozen pure signature
+retain their committed source behavior. Successor-only APIs use the distinct
+`RetirementErrorV2`; the only cross-version conversion is lossless V1 to V2.
+An exhaustive downstream compile fixture freezes the V1 variant set and proves
+that historical exhaustive matches still compile. The declaration order is
+also retained exactly, as checked against the committed source.
 
-The nine count words are candidate bundle, CandidateIndex page, candidate
-verdict, candidate escrow, ClearWork bundle, order page, reservation archive,
-settlement receipt, and final pot, in that order. Every integer is little
-endian. Tombstone vectors use codec-local provisional `0x75/0x76` tag bytes.
-They are not live wire allocations: integration must first reconcile and
-reserve them in the authoritative account-tag registry and live router.
+The deletable successors are distinct schemas:
 
-Candidate lifecycle state is not a second wire truth here. The transition seam
-accepts an opaque `(candidate tag, candidate version, status)` witness only
-after the owning candidate decoder and state machine validate it. Retirement
-never interprets that status: every admitted status keeps exactly one candidate
-bundle counted, and a status update cannot silently switch account schemas.
+| Family | Composition | Exact bytes | Status |
+| --- | --- | ---: | --- |
+| general Reservation V7 | 618 + 9 + 48 | 675 | codec-local, no SBF route |
+| direct Reservation V8 | 618 + 9 + 48 | 675 | codec-local, no SBF route |
 
-Exact composition with the authoritative base codecs and runtime
-owner/PDA/length/header/bump authentication lives in the isolated
-[`clutch-retirement-adapter`](../clutch-retirement-adapter/README.md). The
-promotion and local-bank test gates are recorded in
-[`COUNTED_RETIREMENT_LIVE_PROMOTION.md`](../../docs/implementation/COUNTED_RETIREMENT_LIVE_PROMOTION.md).
+The 48-byte owner is exactly `payer[32] + refundable_principal:u64 +
+donation_floor:u64`. It has no tombstone compartment. Admission always charges
+the payer's full principal even if the target PDA was hostilely prefunded;
+prefund becomes donation. Close refunds exact principal to the persisted payer,
+routes the complete remaining balance to the Realm-selected neutral sink, and
+leaves the Reservation absent. Direct V8 additionally requires an exact mirror
+of the direct V2 base funding ledger until a clean central direct base successor
+removes that compatibility duplication.
+
+Position and general-Epoch tombstones have exact 76-byte and 84-byte codecs.
+The central collision ledger reserves their `0x75/v1` and `0x76/v1`
+coordinates as `ReservedDisabled`. This crate owns the exact local codecs, but
+the reservation alone supplies neither live routing nor activation authority.
+
+## Pure trust boundary
+
+Types named `Adapter*ProjectionV1` and the projected live/account sibling
+structs are public, forgeable DTOs. Pure transitions cross-bind their semantic
+fields and reject aliases, wrong parents, wrong generations, wrong funding
+targets, and scalar sink substitution. Those checks do not prove runtime owner,
+PDA, executable, codec, balance, or account-byte authenticity.
+
+`ValidatedAdmissionLedgerRetiredV1` is different: its fields are private and
+its only constructor validates the complete pure `CandidateWindowV4` terminal
+shape. It proves semantic Window structure only. There is no exact Window V4
+account codec/PDA/owner/SBF adapter, so it is not runtime authentication and
+cannot authorize root close.
+
+The adapter now has one exact Direct Epoch V4 bridge: owner/PDA/header/length/
+bump authentication, authoritative V4 decode, canonical checked
+`epoch_index + 1`, projection of all six lifecycle phases, and projection of
+the persisted neutral sink. Direct V8 registration requires pre-freeze-open;
+frozen, selected, settled, and prefreeze-aborted parents refuse. No live route
+uses that bridge. General neutral-sink provenance and Position/Replay
+account/absence derivation remain explicit activation blockers.
+
+## Atomic plans and enforced STOPs
+
+The successor Position plan requires a separately funded, generation-scoped
+Replay sibling. Position tombstoning and Replay deletion share one alias-safe,
+coalesced credit plan. Reopen proves the prior Replay absence projection,
+increments generation with checked arithmetic, and creates a new sequence-zero
+Replay with its own full-principal admission. The frozen standalone Position
+close/plan/reopen symbols retain their committed root-only pure behavior for
+source compatibility, but they are not successor authorization and no live
+route may call them. Only the V2 Position/Replay bundle models safe activation.
+
+At the 84-byte reference Replay body, the deletion owner projects to 132 bytes.
+The central collision ledger reserves `0x7a/v1` as `ReservedDisabled`, while an
+in-flight external general-v2 contract proposes the 132-byte composition.
+Retirement does not own its exact base codec or route it in SBF.
+
+Epoch funding compartments are modeled as three disjoint principals: Epoch's
+live/tombstone split, Window deletion funding, and Budget deletion funding.
+Internal arithmetic coalesces repeated payer debits and close recipients before
+any modeled write. It is deliberately non-executable evidence:
+
+- `open_general_epoch_root` always returns
+  `BudgetFundingUnauthenticated`; and
+- `plan_epoch_root_retirement` always returns
+  `BudgetRetirementUnauthenticated` after earlier malformed-input checks.
+
+The authoritative Budget owner still needs an opaque funding/disposition
+capability covering reward liabilities, cleanup markers, and every economic
+compartment. Unpaid rewards are not surplus. The frozen standalone Epoch
+open/close/plan symbols retain their committed root-only pure behavior for
+source compatibility; no live route may treat them as complete root plans.
+
+The frozen `LiveEpochV5` API retains its original three-state phase and accepts
+the committed nonzero generation semantics. The successor
+`LiveGeneralEpochProjectionV2` uses the exact five wire phases OPEN, FROZEN,
+CLEARED, SETTLED, and LAPSED. Adapter promotion to that successor checks
+`generation == epoch_index + 1`; the frozen V5 codec itself remains permissive.
+Current general SBF does not stamp SETTLED, so terminal promotion remains
+blocked.
+
+The nine frozen Epoch count words are candidate bundle, CandidateIndex page,
+candidate verdict, candidate escrow, ClearWork bundle, order page, Reservation
+archive, settlement receipt, and final pot, in that order. Candidate admission
+nodes are owned by `CandidateWindowV4`'s admission ledger, not a retrofitted
+tenth V1 count.
 
 Run:
 

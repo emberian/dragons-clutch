@@ -18,3 +18,6 @@ profile-general-source-v2-point = ["clutch-solana-layout/profile-general-source-
 [dependencies]
 clutch-retirement = { path = "../clutch-retirement" }
 clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }
+
+[dev-dependencies]
+clutch-batch-policy-identity = { path = "../../research/batch-policy-identity" }

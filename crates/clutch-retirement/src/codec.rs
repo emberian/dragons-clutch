@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::{
-    EpochChildKindV1, RetirementErrorV1, CHILD_GENERATION_V1_BYTES, EPOCH_CHILD_COUNTS_V1_BYTES,
+    retirement_error_v2_from_v1, EpochChildKindV1, RetirementErrorV1, RetirementErrorV2,
+    CHILD_GENERATION_V1_BYTES, DELETABLE_RENT_OWNER_V1_BYTES, EPOCH_CHILD_COUNTS_V1_BYTES,
     EPOCH_RETIREMENT_TAIL_V1_BYTES, GENERAL_EPOCH_TOMBSTONE_TAG, GENERAL_EPOCH_TOMBSTONE_V1_BYTES,
     GENERAL_EPOCH_TOMBSTONE_VERSION_V1, IDENTITY_BYTES, MARKET_EPOCH_CURSOR_V1_BYTES,
     POSITION_RETIREMENT_TAIL_V1_BYTES, POSITION_TOMBSTONE_TAG, POSITION_TOMBSTONE_V1_BYTES,
     POSITION_TOMBSTONE_VERSION_V1, RENT_SPLIT_V2_BYTES, RESERVATION_COUNT_TAIL_V1_BYTES,
+    RESERVATION_RETIREMENT_TAIL_V2_BYTES,
 };
 
 fn exact(input: &[u8], expected: usize) -> Result<(), RetirementErrorV1> {
@@ -117,6 +119,88 @@ impl RentSplitV2 {
     }
 }
 
+/// Exact payer-owned funding record embedded in an account deleted at close.
+///
+/// Unlike [`RentSplitV2`], this shape has no permanent-tombstone compartment.
+/// The recorded principal is returned only to `payer`; the donation floor and
+/// every later unsolicited lamport are routed to the frozen neutral sink.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeletableRentOwnerV1 {
+    payer: Identity32V1,
+    refundable_principal: u64,
+    donation_floor: u64,
+}
+
+impl DeletableRentOwnerV1 {
+    /// Reconstruct an already-admitted persisted funding owner.
+    ///
+    /// Creation code should use the hostile-prefund admission transition so
+    /// the payer cannot receive a prefund discount. This constructor exists
+    /// for checked decoding and state reconstruction.
+    pub const fn from_persisted(
+        payer: Identity32V1,
+        refundable_principal: u64,
+        donation_floor: u64,
+    ) -> Result<Self, RetirementErrorV2> {
+        let value = Self {
+            payer,
+            refundable_principal,
+            donation_floor,
+        };
+        match value.validate() {
+            Ok(()) => Ok(value),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Exact payer and sole recipient of refundable principal.
+    pub const fn payer(self) -> Identity32V1 {
+        self.payer
+    }
+
+    /// Full principal paid at admission and returned at close.
+    pub const fn refundable_principal(self) -> u64 {
+        self.refundable_principal
+    }
+
+    /// Initial hostile prefund that can never discount payer principal.
+    pub const fn donation_floor(self) -> u64 {
+        self.donation_floor
+    }
+
+    /// Validate nonzero principal and exact checked funding geometry.
+    pub const fn validate(self) -> Result<(), RetirementErrorV2> {
+        if self.refundable_principal == 0 {
+            return Err(RetirementErrorV2::NonCanonicalState);
+        }
+        match self.refundable_principal.checked_add(self.donation_floor) {
+            Some(_) => Ok(()),
+            None => Err(RetirementErrorV2::ArithmeticOverflow),
+        }
+    }
+
+    /// Encode the exact 48-byte payer/principal/donation record.
+    pub fn encode(self) -> Result<[u8; DELETABLE_RENT_OWNER_V1_BYTES], RetirementErrorV2> {
+        self.validate()?;
+        let mut out = [0u8; DELETABLE_RENT_OWNER_V1_BYTES];
+        out[..32].copy_from_slice(&self.payer.bytes());
+        out[32..40].copy_from_slice(&self.refundable_principal.to_le_bytes());
+        out[40..48].copy_from_slice(&self.donation_floor.to_le_bytes());
+        Ok(out)
+    }
+
+    /// Decode exactly 48 bytes and refuse a zero payer, zero principal, or
+    /// overflowing persisted funding geometry.
+    pub fn decode(input: &[u8]) -> Result<Self, RetirementErrorV2> {
+        exact(input, DELETABLE_RENT_OWNER_V1_BYTES).map_err(retirement_error_v2_from_v1)?;
+        Self::from_persisted(
+            read_identity(input, 0).map_err(retirement_error_v2_from_v1)?,
+            read_u64(input, 32),
+            read_u64(input, 40),
+        )
+    }
+}
+
 /// Exact appended Position V2 accounting tail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PositionRetirementTailV1 {
@@ -153,7 +237,7 @@ impl PositionRetirementTailV1 {
     }
 }
 
-/// Nine exhaustive, typed child counts owned by one Epoch generation.
+/// Nine frozen, exhaustive Epoch-owned child counts for one generation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EpochChildCountsV1 {
     /// Candidate record/feed/funding bundles.
@@ -320,7 +404,7 @@ impl EpochRetirementTailV1 {
         }
     }
 
-    /// Encode the exact 100-byte Epoch extension.
+    /// Encode the exact frozen 100-byte Epoch extension.
     pub fn encode(self) -> Result<[u8; EPOCH_RETIREMENT_TAIL_V1_BYTES], RetirementErrorV1> {
         self.validate()?;
         let mut out = [0u8; EPOCH_RETIREMENT_TAIL_V1_BYTES];
@@ -370,10 +454,51 @@ impl MarketEpochCursorV1 {
 /// Position counter marker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReservationCountTailV1 {
-    /// Authenticated parent Epoch generation.
+    /// Persisted parent Epoch generation.
     pub epoch_generation: u64,
     /// Whether this reservation is included in Position's outstanding count.
     pub position_counted: bool,
+}
+
+/// Exact appended retirement tail for every deletable Reservation successor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReservationRetirementTailV2 {
+    /// Persisted generation and once-only Position counter marker.
+    pub count: ReservationCountTailV1,
+    /// Embedded payer/principal/donation owner; no tombstone compartment.
+    pub rent: DeletableRentOwnerV1,
+}
+
+impl ReservationRetirementTailV2 {
+    /// Validate both the semantic count marker and funding owner.
+    pub const fn validate(self) -> Result<(), RetirementErrorV2> {
+        match self.count.validate() {
+            Ok(()) => self.rent.validate(),
+            Err(error) => Err(retirement_error_v2_from_v1(error)),
+        }
+    }
+
+    /// Encode the exact 57-byte count-plus-funding tail.
+    pub fn encode(self) -> Result<[u8; RESERVATION_RETIREMENT_TAIL_V2_BYTES], RetirementErrorV2> {
+        self.validate()?;
+        let mut out = [0u8; RESERVATION_RETIREMENT_TAIL_V2_BYTES];
+        out[..RESERVATION_COUNT_TAIL_V1_BYTES]
+            .copy_from_slice(&self.count.encode().map_err(retirement_error_v2_from_v1)?);
+        out[RESERVATION_COUNT_TAIL_V1_BYTES..].copy_from_slice(&self.rent.encode()?);
+        Ok(out)
+    }
+
+    /// Decode exactly 57 bytes and validate both nested components.
+    pub fn decode(input: &[u8]) -> Result<Self, RetirementErrorV2> {
+        exact(input, RESERVATION_RETIREMENT_TAIL_V2_BYTES).map_err(retirement_error_v2_from_v1)?;
+        let value = Self {
+            count: ReservationCountTailV1::decode(&input[..RESERVATION_COUNT_TAIL_V1_BYTES])
+                .map_err(retirement_error_v2_from_v1)?,
+            rent: DeletableRentOwnerV1::decode(&input[RESERVATION_COUNT_TAIL_V1_BYTES..])?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
 }
 
 impl ReservationCountTailV1 {
@@ -415,7 +540,7 @@ impl ReservationCountTailV1 {
 /// Exact generation-only extension for non-reservation Epoch children.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChildGenerationV1 {
-    /// Authenticated parent Epoch generation.
+    /// Persisted parent Epoch generation.
     pub epoch_generation: u64,
 }
 
@@ -520,7 +645,7 @@ pub struct GeneralEpochTombstoneV1 {
 }
 
 impl GeneralEpochTombstoneV1 {
-    /// Validate nonzero generation. Index zero is a normal first Epoch.
+    /// Validate the frozen V1 nonzero-generation invariant.
     pub const fn validate(self) -> Result<(), RetirementErrorV1> {
         if self.epoch_generation == 0 {
             Err(RetirementErrorV1::WrongGeneration)

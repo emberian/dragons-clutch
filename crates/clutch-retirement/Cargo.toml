@@ -11,3 +11,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
+
+[dependencies]
+clutch-candidate-lifecycle = { path = "../clutch-candidate-lifecycle" }
