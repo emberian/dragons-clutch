@@ -3,7 +3,8 @@
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
 use clutch_owner_settlement::{
     owner_debit_atoms, CandidateSettlementTotalsV1, CandidateSettlementTotalsV2,
-    OwnerSettlementExpectationV2, SelectedOwnerFeeV1, MAX_ORDERS,
+    OwnerSettlementExpectationBasisV2, OwnerSettlementExpectationV2, SelectedOwnerFeeV1,
+    MAX_ORDERS,
 };
 
 use crate::allocation::{
@@ -281,28 +282,25 @@ pub fn project_terminal_owner_fee_v1(
     })
 }
 
-/// Project one terminal owner carry through the presence-explicit V2 owner row.
+/// Project one terminal owner carry before the V2 owner row exists.
 ///
-/// The authenticated V2 expectation is the sole owner of side presence,
-/// consideration, and reserved buy cash. In particular, zero consideration is
-/// valid when the buy side is present. The payer snapshot is reconstructed
-/// from every signed pre-transition envelope before its complete bytes may be
-/// used as Replay evidence and atomically deleted.
+/// General's complete action-24 materializer owns the pre-fee basis. The fee
+/// runtime owns assessment/carry/payer validation and returns only the exact
+/// `(owner, fee_atoms)` row. Owner settlement then seals the final expectation
+/// with `basis.with_selected_fee(row)`, avoiding a circular dependency. Zero
+/// consideration remains valid when the basis says the buy side is present.
 #[allow(clippy::too_many_arguments)]
-pub fn project_terminal_owner_fee_v2(
+pub fn project_pre_row_owner_fee_v2(
     selected: &SelectedCompositeFeeV1,
     transition: &OwnerFeeTransitionIntentV1,
     carry: &OwnerFeeCarryV1,
     assessment: &OwnerFeeAssessmentV1,
     payer: &PayerAllocationV1,
-    expectation: OwnerSettlementExpectationV2,
+    basis: OwnerSettlementExpectationBasisV2,
     envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
     envelope_len: u8,
 ) -> Result<AuthenticatedSelectedOwnerFeeV2> {
-    expectation
-        .validate()
-        .map_err(|_| Error::InvalidAccountData)?;
-    let owner = Id(expectation.owner);
+    let owner = Id(basis.owner());
     live(owner)?;
     if transition.fee_record().identity() != selected.fee_record()
         || transition.settlement_candidate() != selected.selected_candidate()
@@ -317,9 +315,10 @@ pub fn project_terminal_owner_fee_v2(
         || payer.fee_record() != selected.fee_record()
         || payer.owner() != owner
         || payer.carry_denominator() != selected.carry_denominator()
-        || expectation.candidate != selected.selected_candidate().0
-        || expectation.price_scale != selected.price_scale()
-        || expectation.selected_fee_atoms != carry.paid_atoms()
+        || basis.market() != selected.market().0
+        || basis.epoch() != selected.epoch().0
+        || basis.candidate() != selected.selected_candidate().0
+        || basis.price_scale() != selected.price_scale()
     {
         return Err(Error::MismatchedBinding);
     }
@@ -338,7 +337,7 @@ pub fn project_terminal_owner_fee_v2(
         return Err(Error::MismatchedBinding);
     }
 
-    let has_buy = expectation.expected_buy_order_mask != 0;
+    let has_buy = basis.expected_buy_order_mask() != 0;
     let mut post_debited_atoms = 0u128;
     let mut has_buy_envelope = false;
     let mut index = 0usize;
@@ -363,14 +362,22 @@ pub fn project_terminal_owner_fee_v2(
         return Err(Error::SellerFeeForbidden);
     }
     let required = owner_debit_atoms(
-        expectation.expected_buy_price_units.value,
-        expectation.price_scale,
+        basis.expected_buy_price_units().value,
+        basis.price_scale(),
         carry.paid_atoms(),
     )
     .map_err(|_| Error::ArithmeticOverflow)?;
-    if required > expectation.reserved_cash_atoms {
+    if required > basis.reserved_cash_atoms() {
         return Err(Error::InsufficientBuyReservation);
     }
+
+    let row = SelectedOwnerFeeV1 {
+        owner: basis.owner(),
+        fee_atoms: carry.paid_atoms(),
+    };
+    basis
+        .with_selected_fee(row)
+        .map_err(|_| Error::InvalidAccountData)?;
 
     Ok(AuthenticatedSelectedOwnerFeeV2 {
         fee_record: selected.fee_record(),
@@ -379,11 +386,38 @@ pub fn project_terminal_owner_fee_v2(
         owner_settlement_account: transition.owner_settlement().identity(),
         settlement_candidate: selected.selected_candidate(),
         revenue_policy: selected.revenue_policy(),
-        row: SelectedOwnerFeeV1 {
-            owner: expectation.owner,
-            fee_atoms: carry.paid_atoms(),
-        },
+        row,
     })
+}
+
+/// Reauthenticate a terminal fee projection against an already sealed V2 row.
+#[allow(clippy::too_many_arguments)]
+pub fn project_terminal_owner_fee_v2(
+    selected: &SelectedCompositeFeeV1,
+    transition: &OwnerFeeTransitionIntentV1,
+    carry: &OwnerFeeCarryV1,
+    assessment: &OwnerFeeAssessmentV1,
+    payer: &PayerAllocationV1,
+    expectation: OwnerSettlementExpectationV2,
+    envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
+    envelope_len: u8,
+) -> Result<AuthenticatedSelectedOwnerFeeV2> {
+    let basis = OwnerSettlementExpectationBasisV2::from_expectation(expectation)
+        .map_err(|_| Error::InvalidAccountData)?;
+    let projection = project_pre_row_owner_fee_v2(
+        selected,
+        transition,
+        carry,
+        assessment,
+        payer,
+        basis,
+        envelopes,
+        envelope_len,
+    )?;
+    if expectation.selected_fee_atoms != projection.row().fee_atoms {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(projection)
 }
 
 /// Require one authenticated projection for every canonical participating
