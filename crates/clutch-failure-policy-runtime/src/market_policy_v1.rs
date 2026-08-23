@@ -32,7 +32,7 @@ const MARKET_ADMISSION_STATE_MAGIC_V1: [u8; 8] = *b"DCFMRKT1";
 const MARKET_ADMISSION_STATE_SCHEMA_V1: u16 = 1;
 
 /// Exact canonical width of one shared-Market Failure admission state.
-pub const FAILURE_MARKET_ADMISSION_STATE_BYTES_V1: usize = 1_136;
+pub const FAILURE_MARKET_ADMISSION_STATE_BYTES_V1: usize = 1_168;
 
 /// Typed physical account identity used by the Market policy join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,7 +163,7 @@ pub struct FailureMarketPolicyFactsV1 {
     pub recovery_quote_schedule_id: LivenessId,
     /// Program owner required on Failure work and terminal receipts.
     pub recovery_receipt_program_id: LivenessId,
-    /// Immutable recipient of unused work and refundable rent principal.
+    /// Immutable recipient of unused Recovery work and Recovery-account rent.
     pub recovery_refund_owner: LivenessId,
     /// Immutable destination for donations and failure residue.
     pub neutral_sink: LivenessId,
@@ -352,6 +352,52 @@ pub struct FailureMarketAdmissionStateV1 {
     root_funding: FailureMarketRootFundingReceiptV1,
 }
 
+/// Exact root-account lamport split after an independent terminal join.
+///
+/// This is not close authority. It only projects the immutable payer principal
+/// and the complete donation residue from an already authenticated balance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRootBalanceDispositionV1 {
+    root_account_id: FailureMarketAccountIdV1,
+    rent_refund_owner: FailureMarketAccountIdV1,
+    neutral_sink: FailureMarketAccountIdV1,
+    expected_root_pre_balance: u64,
+    rent_refund_lamports: u64,
+    donation_neutral_lamports: u64,
+}
+
+impl FailureMarketRootBalanceDispositionV1 {
+    /// Exact root account whose balance was classified.
+    pub const fn root_account_id(self) -> FailureMarketAccountIdV1 {
+        self.root_account_id
+    }
+
+    /// Immutable recipient of refundable rent principal.
+    pub const fn rent_refund_owner(self) -> FailureMarketAccountIdV1 {
+        self.rent_refund_owner
+    }
+
+    /// Immutable sink receiving every non-principal lamport.
+    pub const fn neutral_sink(self) -> FailureMarketAccountIdV1 {
+        self.neutral_sink
+    }
+
+    /// Exact authenticated balance before closure.
+    pub const fn expected_root_pre_balance(self) -> u64 {
+        self.expected_root_pre_balance
+    }
+
+    /// Exact refundable principal, never a donation.
+    pub const fn rent_refund_lamports(self) -> u64 {
+        self.rent_refund_lamports
+    }
+
+    /// Exact initial and later donation residue sent to the neutral sink.
+    pub const fn donation_neutral_lamports(self) -> u64 {
+        self.donation_neutral_lamports
+    }
+}
+
 impl FailureMarketAdmissionStateV1 {
     /// Join already authenticated policy and present-funding receipts.
     pub fn from_receipts(
@@ -381,6 +427,37 @@ impl FailureMarketAdmissionStateV1 {
     /// Exact refundable shared-root funding receipt.
     pub const fn root_funding(self) -> FailureMarketRootFundingReceiptV1 {
         self.root_funding
+    }
+
+    /// Project the only admissible lamport split for eventual root closure.
+    ///
+    /// A separate exhaustive Market Failure terminal receipt remains required
+    /// before an adapter may execute this movement.
+    pub fn project_root_balance_disposition(
+        self,
+        current_balance_lamports: u64,
+    ) -> Result<FailureMarketRootBalanceDispositionV1> {
+        self.validate()?;
+        let root = self.root_funding.facts;
+        if current_balance_lamports < root.observed_balance_lamports {
+            return Err(Error::BindingMismatch);
+        }
+        let donation_neutral_lamports = current_balance_lamports
+            .checked_sub(root.rent_principal_lamports)
+            .ok_or(Error::BindingMismatch)?;
+        if donation_neutral_lamports < root.donation_floor_lamports {
+            return Err(Error::BindingMismatch);
+        }
+        Ok(FailureMarketRootBalanceDispositionV1 {
+            root_account_id: root.root_account_id,
+            rent_refund_owner: root.rent_payer,
+            neutral_sink: FailureMarketAccountIdV1::from_bytes(
+                self.binding.facts.neutral_sink.bytes(),
+            ),
+            expected_root_pre_balance: current_balance_lamports,
+            rent_refund_lamports: root.rent_principal_lamports,
+            donation_neutral_lamports,
+        })
     }
 
     /// Encode every semantic byte and canonical reserved byte.
@@ -416,6 +493,7 @@ impl FailureMarketAdmissionStateV1 {
         writer.u64(funding.maximum_lamports_per_call)?;
         let root_funding = self.root_funding.facts;
         writer.id(root_funding.prepaid_debit_receipt_id.bytes())?;
+        writer.id(root_funding.rent_payer.bytes())?;
         writer.u64(root_funding.rent_principal_lamports)?;
         writer.u64(root_funding.donation_floor_lamports)?;
         writer.u64(root_funding.observed_balance_lamports)?;
@@ -507,7 +585,7 @@ impl FailureMarketAdmissionStateV1 {
                 reader.id()?,
             ),
             root_account_id: FailureMarketAccountIdV1::from_bytes(policy.recovery_state_id.bytes()),
-            rent_payer: FailureMarketAccountIdV1::from_bytes(policy.recovery_refund_owner.bytes()),
+            rent_payer: FailureMarketAccountIdV1::from_bytes(reader.id()?),
             rent_principal_lamports: reader.u64()?,
             donation_floor_lamports: reader.u64()?,
             observed_balance_lamports: reader.u64()?,
@@ -539,6 +617,11 @@ impl FailureMarketAdmissionStateV1 {
         }
         validate_root_funding(self.binding, self.root_funding.facts)?;
         if hash_root_funding(self.root_funding.facts) != self.root_funding.id {
+            return Err(Error::BindingMismatch);
+        }
+        if self.root_funding.facts.prepaid_debit_receipt_id
+            == self.recovery_funding.facts.prepaid_debit_receipt_id
+        {
             return Err(Error::BindingMismatch);
         }
         Ok(())
@@ -692,7 +775,6 @@ fn validate_root_funding(
             .iter()
             .all(|byte| *byte == 0)
         || facts.root_account_id.bytes() != policy.recovery_state_id.bytes()
-        || facts.rent_payer.bytes() != policy.recovery_refund_owner.bytes()
         || facts.root_account_id == facts.rent_payer
         || facts.root_account_id.bytes() == policy.neutral_sink.bytes()
         || facts.rent_payer.bytes() == policy.neutral_sink.bytes()
@@ -1104,7 +1186,7 @@ mod tests {
             failure_policy_binding_id: binding.id(),
             prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes([92; 32]),
             root_account_id: FailureMarketAccountIdV1::from_bytes(policy.recovery_state_id.bytes()),
-            rent_payer: FailureMarketAccountIdV1::from_bytes(policy.recovery_refund_owner.bytes()),
+            rent_payer: FailureMarketAccountIdV1::from_bytes([93; 32]),
             rent_principal_lamports: 3_000,
             donation_floor_lamports: 11,
             observed_balance_lamports: 3_011,
@@ -1345,6 +1427,26 @@ mod tests {
         let mut encoded = [0u8; FAILURE_MARKET_ADMISSION_STATE_BYTES_V1];
         state.encode_into(&mut encoded).unwrap();
         assert_eq!(FailureMarketAdmissionStateV1::decode(&encoded), Ok(state));
+        let disposition = state.project_root_balance_disposition(3_019).unwrap();
+        assert_eq!(disposition.rent_refund_lamports(), 3_000);
+        assert_eq!(disposition.donation_neutral_lamports(), 19);
+        assert_eq!(
+            state.project_root_balance_disposition(3_010),
+            Err(Error::BindingMismatch)
+        );
+
+        let mut aliased_debit_facts = root_funding_facts;
+        aliased_debit_facts.prepaid_debit_receipt_id = funding_facts.prepaid_debit_receipt_id;
+        let aliased_debit = admit_failure_market_root_funding_v1(
+            &ExactRootFunding(aliased_debit_facts),
+            binding,
+            aliased_debit_facts,
+        )
+        .unwrap();
+        assert_eq!(
+            FailureMarketAdmissionStateV1::from_receipts(binding, recovery_funding, aliased_debit,),
+            Err(Error::BindingMismatch)
+        );
 
         let mut bad_padding = encoded;
         bad_padding[10] = 1;
@@ -1376,7 +1478,7 @@ mod tests {
     }
 
     #[test]
-    fn root_funding_requires_exact_payer_principal_and_donation_floor() {
+    fn root_funding_persists_independent_payer_principal_and_donation_floor() {
         let policy_facts = facts();
         let binding = admit_failure_market_policy_v1(&Exact(policy_facts), policy_facts).unwrap();
         let exact = root_funding(binding);
@@ -1384,8 +1486,13 @@ mod tests {
             admit_failure_market_root_funding_v1(&ExactRootFunding(exact), binding, exact,).is_ok()
         );
 
+        assert_ne!(
+            exact.rent_payer.bytes(),
+            binding.facts().recovery_refund_owner.bytes()
+        );
         let mut wrong_payer = exact;
-        wrong_payer.rent_payer = FailureMarketAccountIdV1::from_bytes([99; 32]);
+        wrong_payer.rent_payer =
+            FailureMarketAccountIdV1::from_bytes(binding.facts().neutral_sink.bytes());
         assert_eq!(
             admit_failure_market_root_funding_v1(
                 &ExactRootFunding(wrong_payer),

@@ -16,7 +16,7 @@ pub const FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2: usize = 2_168;
 pub const FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1: usize =
     FAILURE_ACCOUNT_HEADER_BYTES_V1 + FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2;
 /// Exact semantic body used by the shared-Market admission codec.
-pub const FAILURE_MARKET_ADMISSION_BODY_BYTES_V1: usize = 1_136;
+pub const FAILURE_MARKET_ADMISSION_BODY_BYTES_V1: usize = 1_168;
 /// Reserved zero bytes retained inside the existing funded `0xa0` width.
 pub const FAILURE_MARKET_ROOT_RESERVED_BYTES_V2: usize =
     FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2 - FAILURE_MARKET_ADMISSION_BODY_BYTES_V1;
