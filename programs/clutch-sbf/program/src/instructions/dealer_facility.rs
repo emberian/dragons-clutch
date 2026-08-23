@@ -33,7 +33,8 @@ use clutch_dealer_runtime_contract::{
     DealerLivenessCompartmentV1, DealerLivenessScheduleV1, DealerPhaseV2,
     DealerPositionMarketJoinV1, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
-    DealerStateV2, DealerTransferPositionV3, DealerLeasePotCloseRentV3, DealerLeaseV2,
+    DealerSeriesObligationBindingV1, DealerSeriesObligationPhaseV1, DealerStateV2, DealerStateV3,
+    DealerTransferPositionV3, DealerLeasePotCloseRentV3, DealerLeaseV2,
     DeletableRentOwnerV1,
     FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, RootRentOwnerV1,
     SettlementPotPhaseV1, SettlementPotV2, SponsorCapitalDispositionV1,
@@ -119,8 +120,8 @@ use clutch_solana_layout::registry::{
     DEALER_LEASE_V2_ACCOUNT_BYTES, DEALER_LEASE_V2_ACCOUNT_TAG,
     DEALER_LEASE_V2_ACCOUNT_VERSION, DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES,
     DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG, DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
-    DEALER_STATE_V2_ACCOUNT_BYTES,
-    DEALER_STATE_V2_ACCOUNT_TAG, DEALER_STATE_V2_ACCOUNT_VERSION,
+    DEALER_STATE_V2_ACCOUNT_BYTES, DEALER_STATE_V2_ACCOUNT_TAG, DEALER_STATE_V2_ACCOUNT_VERSION,
+    DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
 };
 use clutch_solana_layout::order_page_v5::{
     verify_page_set_v5_streaming, OrderPageHeaderV5, OrderSlotCursorV5, ORDER_PAGE_V5_BYTES,
@@ -149,6 +150,7 @@ use super::product_artifact::{
 };
 use crate::instructions_sysvar::{InstructionsSysvarV1, SYSVAR_OWNER_ID};
 use super::dealer_runtime::{
+    authenticate_dealer_series_obligation_v1, authenticate_dealer_state_v3,
     decode_dealer_account_body_v1, encode_dealer_account_body_v1, DealerRuntimePayloadV1,
 };
 use super::genesis::{
@@ -165,8 +167,8 @@ const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize = 20;
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
 const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 40;
-const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 33;
-const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 29;
+const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 34;
+const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30;
 
 /// Static source for the adapter's heap-resident complete RelationV2 book.
 ///
@@ -366,6 +368,32 @@ fn authenticate_state_with_access(
 
 fn authenticate_state(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<DealerStateV2> {
     authenticate_state_with_access(program_id, account, true)
+}
+
+fn authenticate_live_series_obligation_for_state_v3(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    state_account: &AccountInfo<'_>,
+    state: &DealerStateV3,
+) -> Outcome<DealerSeriesObligationBindingV1> {
+    let authenticated = authenticate_dealer_series_obligation_v1(program_id, account, false)?;
+    let binding = *authenticated.binding();
+    let binding_id = binding.binding_id().map_err(dealer_fault)?;
+    require(
+        state.series_obligation_children == 1
+            && state.series_obligation_binding_account_id == authenticated.account_id()
+            && state.series_obligation_binding_id == binding_id
+            && binding.phase == DealerSeriesObligationPhaseV1::Live
+            && binding.key.binding_account_id == authenticated.account_id()
+            && binding.key.policy_id == state.base.policy_id
+            && binding.key.facility_id == state.base.facility_id
+            && binding.key.dealer_state_account_id == id(state_account.key)
+            && binding.key.facility_position_binding_id
+                == state.base.facility_position_binding_id
+            && binding.rent.neutral_sink == state.base.rent.neutral_sink,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(binding)
 }
 
 fn authenticate_dependency(
@@ -5161,10 +5189,18 @@ fn collect_or_deliver_row(
     require_aliases(accounts, (0, 17))?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
-    let state = authenticate_state_with_access(program_id, &accounts[2], false)?;
+    let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], false)?;
+    let state_v3 = *authenticated_state.state();
+    let state = state_v3.base;
     require(
         state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
         ClutchError::MismatchedState,
+    )?;
+    let _series_obligation = authenticate_live_series_obligation_for_state_v3(
+        program_id,
+        &accounts[33],
+        &accounts[2],
+        &state_v3,
     )?;
     let (position_binding, _facility_position, facility_replay, replay_binding) =
         authenticate_position_and_replay(
@@ -5794,10 +5830,18 @@ fn finalize_or_abort_lease_pot(
     require_finalize_abort_aliases(accounts)?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
-    let state = authenticate_state(program_id, &accounts[2])?;
+    let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+    let state_v3 = *authenticated_state.state();
+    let state = state_v3.base;
     require(
         state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
         ClutchError::MismatchedState,
+    )?;
+    let _series_obligation = authenticate_live_series_obligation_for_state_v3(
+        program_id,
+        &accounts[29],
+        &accounts[2],
+        &state_v3,
     )?;
     let (position_binding, facility_position, facility_replay, replay_binding) =
         authenticate_position_and_replay(
@@ -6113,13 +6157,15 @@ fn finalize_or_abort_lease_pot(
                 .encode()
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         );
-    let state_bump = accounts[2].data.borrow()[2];
+    let state_after = state_v3
+        .with_base(prepared.state_after())
+        .map_err(dealer_fault)?;
     write_dealer_body(
         &accounts[2],
-        DEALER_STATE_V2_ACCOUNT_TAG,
-        DEALER_STATE_V2_ACCOUNT_VERSION,
-        state_bump,
-        &prepared.state_after(),
+        DEALER_STATE_V3_ACCOUNT_TAG,
+        DEALER_STATE_V3_ACCOUNT_VERSION,
+        authenticated_state.bump(),
+        &state_after,
     )?;
     prepared
         .replay()
@@ -6239,6 +6285,7 @@ mod select_begin_adversarial_tests {
 #[cfg(test)]
 mod collect_deliver_adversarial_tests {
     use super::DealerRuntimePayloadV1;
+    use crate::instructions::dealer_runtime::{meta_contract_v1, DealerMetaRoleV1};
     use clutch_solana_layout::registry::{
         DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
     };
@@ -6286,6 +6333,22 @@ mod collect_deliver_adversarial_tests {
                 action.tag(),
             ));
         }
+    }
+
+    #[test]
+    fn row_frame_authenticates_the_counted_facility_product_obligation_before_pages() {
+        let decoded = DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::Collect,
+            &payload(),
+        )
+        .unwrap();
+        let metas = meta_contract_v1(DealerFacilityAction::Collect, decoded).unwrap();
+        assert_eq!(metas.len(), 38);
+        assert_eq!(metas[33].role, DealerMetaRoleV1::SeriesObligation);
+        assert!(!metas[33].writable);
+        assert!(metas[34..]
+            .iter()
+            .all(|meta| meta.role == DealerMetaRoleV1::OrderPage));
     }
 }
 
@@ -6337,8 +6400,15 @@ mod finalize_abort_adversarial_tests {
         .unwrap();
         let finalize = meta_contract_v1(DealerFacilityAction::FinalizeSettlement, decoded).unwrap();
         let abort = meta_contract_v1(DealerFacilityAction::AbortBeforeCollection, decoded).unwrap();
-        assert_eq!(finalize.len(), 29);
-        assert_eq!(abort.len(), 29);
+        assert_eq!(finalize.len(), 30);
+        assert_eq!(abort.len(), 30);
+        assert_eq!(
+            finalize[29].role,
+            DealerMetaRoleV1::SeriesObligation
+        );
+        assert_eq!(abort[29].role, DealerMetaRoleV1::SeriesObligation);
+        assert!(!finalize[29].writable);
+        assert!(!abort[29].writable);
         let finalize_settlement = finalize
             .iter()
             .find(|meta| meta.role == DealerMetaRoleV1::LivenessSettlement)

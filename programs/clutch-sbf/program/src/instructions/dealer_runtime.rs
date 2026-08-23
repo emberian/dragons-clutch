@@ -945,6 +945,8 @@ pub enum DealerMetaRoleV1 {
     PriceMeasurePolicy,
     /// Newly materialized counted CoveredDealer selection certificate.
     CoveredSelection,
+    /// Counted facility-lifetime Product Series obligation binding.
+    SeriesObligation,
     /// Canonical frozen General OrderPage V5.
     OrderPage,
     /// Sole refundable-rent recipient.
@@ -1222,7 +1224,7 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
 
-const COLLECT_DELIVER_FIXED_COUNT: usize = 33;
+const COLLECT_DELIVER_FIXED_COUNT: usize = 34;
 const COLLECT_DELIVER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1257,13 +1259,14 @@ const COLLECT_DELIVER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::MarketBinding, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::PriceGrid, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::MarketGenesis, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
 
-const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 29;
+const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30;
 const fn finalize_abort_contract(finalize: bool) -> [DealerMetaSpecV1; FINALIZE_ABORT_ACCOUNT_COUNT] {
     [
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
@@ -1295,6 +1298,7 @@ const fn finalize_abort_contract(finalize: bool) -> [DealerMetaSpecV1; FINALIZE_
     meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
     meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
     ]
 }
 const FINALIZE_SETTLEMENT: &[DealerMetaSpecV1] = &finalize_abort_contract(true);
