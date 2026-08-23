@@ -114,6 +114,21 @@ pub const ACTIVATE_SERIES_ARTIFACT_START_V2: usize = 34;
 /// Exclusive end of the nine ordered immutable Series artifacts.
 pub const ACTIVATE_SERIES_ARTIFACT_END_V2: usize = 43;
 
+/// Exact current physical FundingV2 retirement account count.
+pub const CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 41;
+/// First of five ordered Realm-selected collateral vaults at retirement.
+pub const CLOSE_SERIES_COLLATERAL_VAULT_START_V2: usize = 13;
+/// Exclusive end of five ordered collateral vaults at retirement.
+pub const CLOSE_SERIES_COLLATERAL_VAULT_END_V2: usize = 18;
+/// First of six ordered System-owned lamport vaults at retirement.
+pub const CLOSE_SERIES_LAMPORT_VAULT_START_V2: usize = 18;
+/// Exclusive end of six ordered lamport vaults at retirement.
+pub const CLOSE_SERIES_LAMPORT_VAULT_END_V2: usize = 24;
+/// First of nine immutable Series artifacts at retirement.
+pub const CLOSE_SERIES_ARTIFACT_START_V2: usize = 32;
+/// Exclusive end of nine immutable Series artifacts at retirement.
+pub const CLOSE_SERIES_ARTIFACT_END_V2: usize = 41;
+
 /// Semantic role of one ordered current FundingV2 activation account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivateSeriesFundingAccountRoleV2 {
@@ -203,6 +218,142 @@ pub enum ActivateSeriesFundingAccountRoleV2 {
     FundingQuote,
     /// SeriesAttachmentPlanV4 artifact.
     AttachmentPlan,
+}
+
+/// Semantic role of one ordered current FundingV2 retirement account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseSeriesFundingAccountRoleV2 {
+    /// Writable persistent Series registry/replay owner.
+    Registry,
+    /// Writable current FundingV2 PDA retired by this action.
+    Funding,
+    /// Terms-bound payer lamport-principal and account-rent refund destination.
+    LamportPrincipalRefund,
+    /// Terms-bound neutral lamport donation/surplus sink.
+    NeutralLamportSink,
+    /// Terms-bound receive-only collateral-principal refund account.
+    CollateralPrincipalRefund,
+    /// Terms-bound receive-only neutral collateral disposition account.
+    NeutralCollateralDisposition,
+    /// Canonical Series collateral-vault authority PDA.
+    CollateralAuthority,
+    /// Immutable Realm account.
+    Realm,
+    /// Immutable ProfileV2 account.
+    Profile,
+    /// Exact collateral-policy artifact.
+    CollateralPolicy,
+    /// Realm-selected collateral mint.
+    CollateralMint,
+    /// Realm-selected collateral token program.
+    CollateralTokenProgram,
+    /// Exact linked collateral ProgramData account.
+    CollateralTokenProgramData,
+    /// MarketCore collateral vault.
+    CollateralVaultMarketCore,
+    /// RecoveryReserve collateral vault.
+    CollateralVaultRecoveryReserve,
+    /// SourceWork collateral vault.
+    CollateralVaultSourceWork,
+    /// LiquidityFacility collateral vault.
+    CollateralVaultLiquidityFacility,
+    /// WrapperSet collateral vault.
+    CollateralVaultWrapperSet,
+    /// MarketCore lamport custody PDA.
+    LamportVaultMarketCore,
+    /// SeriesAdmission lamport custody PDA.
+    LamportVaultSeriesAdmission,
+    /// RecoveryReserve lamport custody PDA.
+    LamportVaultRecoveryReserve,
+    /// SourceWork lamport custody PDA.
+    LamportVaultSourceWork,
+    /// LiquidityFacility lamport custody PDA.
+    LamportVaultLiquidityFacility,
+    /// WrapperSet lamport custody PDA.
+    LamportVaultWrapperSet,
+    /// System Program.
+    SystemProgram,
+    /// Rent sysvar.
+    RentSysvar,
+    /// Executing Clutch program account.
+    ExecutingProgram,
+    /// Linked Clutch ProgramData account.
+    ExecutingProgramData,
+    /// Exact RegistryRelease artifact.
+    RegistryRelease,
+    /// Exact CapabilityProfile artifact.
+    CapabilityProfile,
+    /// Exact Source release account.
+    SourceRelease,
+    /// Exact compiled BundleV5 artifact.
+    CompilerBundle,
+    /// SeriesPlanV5 artifact.
+    SeriesPlan,
+    /// SeriesFundingTermsV2 artifact.
+    FundingTerms,
+    /// ProductTemplateV4 artifact.
+    ProductTemplate,
+    /// NativeClaimBasisV1 artifact.
+    NativeClaimBasis,
+    /// EvidenceOnlyRecoveryPolicyV1 artifact.
+    RecoveryPolicy,
+    /// PriceMeasurePolicyV1 artifact.
+    PricePolicy,
+    /// MarketGenesisProfileV2 artifact.
+    MarketGenesis,
+    /// SeriesFundingQuoteV4 artifact.
+    FundingQuote,
+    /// SeriesAttachmentPlanV4 artifact.
+    AttachmentPlan,
+}
+
+impl CloseSeriesFundingAccountRoleV2 {
+    /// Exact index in the current FundingV2 retirement account list.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Registry => 0,
+            Self::Funding => 1,
+            Self::LamportPrincipalRefund => 2,
+            Self::NeutralLamportSink => 3,
+            Self::CollateralPrincipalRefund => 4,
+            Self::NeutralCollateralDisposition => 5,
+            Self::CollateralAuthority => 6,
+            Self::Realm => 7,
+            Self::Profile => 8,
+            Self::CollateralPolicy => 9,
+            Self::CollateralMint => 10,
+            Self::CollateralTokenProgram => 11,
+            Self::CollateralTokenProgramData => 12,
+            Self::CollateralVaultMarketCore => 13,
+            Self::CollateralVaultRecoveryReserve => 14,
+            Self::CollateralVaultSourceWork => 15,
+            Self::CollateralVaultLiquidityFacility => 16,
+            Self::CollateralVaultWrapperSet => 17,
+            Self::LamportVaultMarketCore => 18,
+            Self::LamportVaultSeriesAdmission => 19,
+            Self::LamportVaultRecoveryReserve => 20,
+            Self::LamportVaultSourceWork => 21,
+            Self::LamportVaultLiquidityFacility => 22,
+            Self::LamportVaultWrapperSet => 23,
+            Self::SystemProgram => 24,
+            Self::RentSysvar => 25,
+            Self::ExecutingProgram => 26,
+            Self::ExecutingProgramData => 27,
+            Self::RegistryRelease => 28,
+            Self::CapabilityProfile => 29,
+            Self::SourceRelease => 30,
+            Self::CompilerBundle => 31,
+            Self::SeriesPlan => 32,
+            Self::FundingTerms => 33,
+            Self::ProductTemplate => 34,
+            Self::NativeClaimBasis => 35,
+            Self::RecoveryPolicy => 36,
+            Self::PricePolicy => 37,
+            Self::MarketGenesis => 38,
+            Self::FundingQuote => 39,
+            Self::AttachmentPlan => 40,
+        }
+    }
 }
 
 impl ActivateSeriesFundingAccountRoleV2 {
@@ -409,6 +560,132 @@ where
         }
         if observed.signer != effective_signer || observed.writable != effective_writable {
             return Err(CodecError::MismatchedBinding);
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+/// Required effective Solana privileges for one retirement role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloseSeriesFundingAccountMetaV2 {
+    /// Exact semantic role at this index.
+    pub role: CloseSeriesFundingAccountRoleV2,
+    /// Required signer bit.
+    pub signer: bool,
+    /// Required writable bit.
+    pub writable: bool,
+    /// Required executable bit.
+    pub executable: bool,
+}
+
+/// Observed retirement key and privileges without a Solana SDK dependency.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ObservedCloseSeriesFundingAccountMetaV2 {
+    /// Exact runtime account key.
+    pub key: [u8; HASH_BYTES],
+    /// Effective transaction signer bit.
+    pub signer: bool,
+    /// Effective transaction writable bit.
+    pub writable: bool,
+    /// Runtime executable bit.
+    pub executable: bool,
+}
+
+const fn close_meta(
+    role: CloseSeriesFundingAccountRoleV2,
+    signer: bool,
+    writable: bool,
+    executable: bool,
+) -> CloseSeriesFundingAccountMetaV2 {
+    CloseSeriesFundingAccountMetaV2 {
+        role,
+        signer,
+        writable,
+        executable,
+    }
+}
+
+/// Frozen full account order for current FundingV2 physical retirement.
+pub const CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2:
+    [CloseSeriesFundingAccountMetaV2; CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
+    close_meta(CloseSeriesFundingAccountRoleV2::Registry, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::Funding, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::NeutralLamportSink, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralPrincipalRefund, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::NeutralCollateralDisposition, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralAuthority, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::Realm, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::Profile, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralPolicy, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralMint, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralTokenProgram, false, false, true),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralTokenProgramData, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultMarketCore, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultRecoveryReserve, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultSourceWork, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultLiquidityFacility, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CollateralVaultWrapperSet, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultMarketCore, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultSeriesAdmission, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultRecoveryReserve, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultSourceWork, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultLiquidityFacility, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::LamportVaultWrapperSet, false, true, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::SystemProgram, false, false, true),
+    close_meta(CloseSeriesFundingAccountRoleV2::RentSysvar, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::ExecutingProgram, false, false, true),
+    close_meta(CloseSeriesFundingAccountRoleV2::ExecutingProgramData, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::RegistryRelease, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CapabilityProfile, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::SourceRelease, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::CompilerBundle, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::SeriesPlan, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::FundingTerms, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::ProductTemplate, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::NativeClaimBasis, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::RecoveryPolicy, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::PricePolicy, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::MarketGenesis, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::FundingQuote, false, false, false),
+    close_meta(CloseSeriesFundingAccountRoleV2::AttachmentPlan, false, false, false),
+];
+
+/// Validate exact retirement count, order-derived privileges, executability,
+/// nonzero keys, and total pairwise role separation.
+pub fn validate_close_series_funding_account_metas_v2<F>(
+    observed_len: usize,
+    mut observed_at: F,
+) -> Result<()>
+where
+    F: FnMut(usize) -> Option<ObservedCloseSeriesFundingAccountMetaV2>,
+{
+    if observed_len < CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        return Err(CodecError::Truncated);
+    }
+    if observed_len > CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        return Err(CodecError::TrailingBytes);
+    }
+    let mut index = 0usize;
+    while index < CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+        let observed = observed_at(index).ok_or(CodecError::InvalidCount)?;
+        let requirement = CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[index];
+        if (is_zero(&observed.key)
+            && requirement.role != CloseSeriesFundingAccountRoleV2::SystemProgram)
+            || observed.signer != requirement.signer
+            || observed.writable != requirement.writable
+            || observed.executable != requirement.executable
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let mut other_index = index + 1;
+        while other_index < CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2 {
+            let other = observed_at(other_index).ok_or(CodecError::InvalidCount)?;
+            if observed.key == other.key {
+                return Err(CodecError::MismatchedBinding);
+            }
+            other_index += 1;
         }
         index += 1;
     }
@@ -1515,6 +1792,21 @@ mod tests {
         }
     }
 
+    fn observed_close_meta(index: usize) -> ObservedCloseSeriesFundingAccountMetaV2 {
+        let requirement = CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[index];
+        let key_byte = u8::try_from(index.checked_add(1).unwrap()).unwrap();
+        ObservedCloseSeriesFundingAccountMetaV2 {
+            key: if requirement.role == CloseSeriesFundingAccountRoleV2::SystemProgram {
+                [0; HASH_BYTES]
+            } else {
+                [key_byte; HASH_BYTES]
+            },
+            signer: requirement.signer,
+            writable: requirement.writable,
+            executable: requirement.executable,
+        }
+    }
+
     fn registry_v2() -> SeriesRegistryAccountV2 {
         SeriesRegistryAccountV2 {
             series_plan_id: SeriesPlanV5Id::from_bytes([1; HASH_BYTES]),
@@ -1791,6 +2083,77 @@ mod tests {
                 &[0u8; ACTIVATE_SERIES_FUNDING_PAYLOAD_BYTES_V1]
             ),
             Err(CodecError::ZeroIdentity)
+        );
+    }
+
+    #[test]
+    fn close_account_contract_is_exact_and_has_no_alias_exception() {
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| Some(observed_close_meta(index)),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[CLOSE_SERIES_COLLATERAL_VAULT_START_V2].role,
+            CloseSeriesFundingAccountRoleV2::CollateralVaultMarketCore
+        );
+        assert_eq!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[CLOSE_SERIES_LAMPORT_VAULT_START_V2].role,
+            CloseSeriesFundingAccountRoleV2::LamportVaultMarketCore
+        );
+        assert_eq!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2[CLOSE_SERIES_ARTIFACT_START_V2].role,
+            CloseSeriesFundingAccountRoleV2::SeriesPlan
+        );
+        let refund = CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund.index();
+        let sink = CloseSeriesFundingAccountRoleV2::NeutralLamportSink.index();
+        let refund_key = observed_close_meta(refund).key;
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == sink {
+                        observed.key = refund_key;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn close_account_contract_refuses_wrong_flags_and_count() {
+        let funding = CloseSeriesFundingAccountRoleV2::Funding.index();
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == funding {
+                        observed.writable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2.checked_sub(1).unwrap(),
+                |_| None,
+            ),
+            Err(CodecError::Truncated)
+        );
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2.checked_add(1).unwrap(),
+                |_| None,
+            ),
+            Err(CodecError::TrailingBytes)
         );
     }
 }
