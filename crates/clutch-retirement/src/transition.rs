@@ -22,6 +22,50 @@ pub struct RentDispositionV2 {
     pub neutral_lamports: u64,
 }
 
+/// Complete precomputed output of one root account's shrink and lamport split.
+///
+/// The adapter performs no write, realloc, or transfer for this root until this
+/// value exists. Other accounts in a required bundle are deliberately outside
+/// this type and require their own precomputed plans before the transaction's
+/// first mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetirementCommitPlanV2<State> {
+    /// Complete post-transition live-or-tombstone state.
+    pub post_state: State,
+    /// Exact stored payer receiving the refundable principal.
+    pub payer: Identity32V1,
+    /// Payer balance after its checked credit.
+    pub payer_balance_after: u64,
+    /// Exact frozen neutral sink receiving all surplus.
+    pub neutral_sink: Identity32V1,
+    /// Neutral-sink balance after its checked credit.
+    pub neutral_balance_after: u64,
+    /// Exact lamports retained by the resized tombstone account.
+    pub tombstone_balance_after: u64,
+}
+
+fn commit_plan<State>(
+    post_state: State,
+    disposition: RentDispositionV2,
+    payer_balance_before: u64,
+    neutral_balance_before: u64,
+) -> Result<RetirementCommitPlanV2<State>, RetirementErrorV1> {
+    let payer_balance_after = payer_balance_before
+        .checked_add(disposition.payer_refund_lamports)
+        .ok_or(RetirementErrorV1::ArithmeticOverflow)?;
+    let neutral_balance_after = neutral_balance_before
+        .checked_add(disposition.neutral_lamports)
+        .ok_or(RetirementErrorV1::ArithmeticOverflow)?;
+    Ok(RetirementCommitPlanV2 {
+        post_state,
+        payer: disposition.payer,
+        payer_balance_after,
+        neutral_sink: disposition.neutral_sink,
+        neutral_balance_after,
+        tombstone_balance_after: disposition.tombstone_lamports,
+    })
+}
+
 fn rent_disposition(
     rent: RentSplitV2,
     actual_balance: u64,
@@ -87,7 +131,7 @@ pub struct LivePositionV2 {
     pub market: Identity32V1,
     /// Owner identity authenticated from the base Position body.
     pub owner: Identity32V1,
-    /// Current nonzero Position generation.
+    /// Current Position generation; zero is the canonical founding generation.
     pub generation: u64,
     /// Stored canonical PDA bump.
     pub stored_bump: u8,
@@ -97,9 +141,6 @@ pub struct LivePositionV2 {
 
 impl LivePositionV2 {
     fn validate(self) -> Result<(), RetirementErrorV1> {
-        if self.generation == 0 {
-            return Err(RetirementErrorV1::WrongGeneration);
-        }
         self.retirement.validate()
     }
 }
@@ -145,6 +186,25 @@ pub fn close_position(
     Ok((PositionLifecycleStateV2::Tombstone(tombstone), disposition))
 }
 
+/// Precompute the Position root's tombstone, payer credit, sink credit, and
+/// retained balance before an adapter mutates any account.
+pub fn plan_position_retirement(
+    state: PositionLifecycleStateV2,
+    economic: PositionEconomicStateV1,
+    actual_balance: u64,
+    neutral_sink: Identity32V1,
+    payer_balance_before: u64,
+    neutral_balance_before: u64,
+) -> Result<RetirementCommitPlanV2<PositionLifecycleStateV2>, RetirementErrorV1> {
+    let (post_state, disposition) = close_position(state, economic, actual_balance, neutral_sink)?;
+    commit_plan(
+        post_state,
+        disposition,
+        payer_balance_before,
+        neutral_balance_before,
+    )
+}
+
 /// Reopen the next Position generation at the same permanent identity.
 ///
 /// The adapter independently proves the retained tombstone minimum and exact
@@ -179,9 +239,9 @@ pub fn reopen_position(
     }))
 }
 
-/// Authenticated live general Epoch V3 projection used by pure transitions.
+/// Authenticated live general Epoch V5 projection used by pure transitions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LiveEpochV3 {
+pub struct LiveEpochV5 {
     /// Market identity authenticated from the base Epoch body.
     pub market: Identity32V1,
     /// Canonical Epoch identity authenticated from the base Epoch body.
@@ -196,7 +256,7 @@ pub struct LiveEpochV3 {
     pub retirement: EpochRetirementTailV1,
 }
 
-impl LiveEpochV3 {
+impl LiveEpochV5 {
     fn validate(self) -> Result<(), RetirementErrorV1> {
         self.retirement.validate()
     }
@@ -204,9 +264,9 @@ impl LiveEpochV3 {
 
 /// Live-or-tombstone general Epoch state; absence is deliberately unrepresentable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EpochLifecycleStateV3 {
-    /// Full live general Epoch V3.
-    Live(LiveEpochV3),
+pub enum EpochLifecycleStateV5 {
+    /// Full live general Epoch V5.
+    Live(LiveEpochV5),
     /// Compact permanent general Epoch tombstone.
     Tombstone(GeneralEpochTombstoneV1),
 }
@@ -223,7 +283,7 @@ pub fn open_general_epoch(
     epoch: Identity32V1,
     stored_bump: u8,
     rent: RentSplitV2,
-) -> Result<(MarketEpochCursorV1, LiveEpochV3), RetirementErrorV1> {
+) -> Result<(MarketEpochCursorV1, LiveEpochV5), RetirementErrorV1> {
     if requested_index != cursor.next_general_epoch_index {
         return Err(RetirementErrorV1::NonmonotoneEpoch);
     }
@@ -234,7 +294,7 @@ pub fn open_general_epoch(
     let next_index = requested_index
         .checked_add(1)
         .ok_or(RetirementErrorV1::EpochIndexExhausted)?;
-    let live = LiveEpochV3 {
+    let live = LiveEpochV5 {
         market,
         epoch,
         epoch_index: requested_index,
@@ -257,13 +317,13 @@ pub fn open_general_epoch(
 
 /// Close a terminal child-free Epoch into its permanent identity tombstone.
 pub fn close_epoch(
-    state: EpochLifecycleStateV3,
+    state: EpochLifecycleStateV5,
     actual_balance: u64,
     neutral_sink: Identity32V1,
-) -> Result<(EpochLifecycleStateV3, RentDispositionV2), RetirementErrorV1> {
+) -> Result<(EpochLifecycleStateV5, RentDispositionV2), RetirementErrorV1> {
     let live = match state {
-        EpochLifecycleStateV3::Live(live) => live,
-        EpochLifecycleStateV3::Tombstone(_) => return Err(RetirementErrorV1::AlreadyTerminal),
+        EpochLifecycleStateV5::Live(live) => live,
+        EpochLifecycleStateV5::Tombstone(_) => return Err(RetirementErrorV1::AlreadyTerminal),
     };
     live.validate()?;
     if live.phase == GeneralEpochPhaseV1::Open {
@@ -281,7 +341,28 @@ pub fn close_epoch(
         stored_bump: live.stored_bump,
     };
     tombstone.validate()?;
-    Ok((EpochLifecycleStateV3::Tombstone(tombstone), disposition))
+    Ok((EpochLifecycleStateV5::Tombstone(tombstone), disposition))
+}
+
+/// Precompute the Epoch root account's tombstone, payer credit, sink credit,
+/// and retained balance before an adapter mutates any account.
+///
+/// This does not plan the mandatory EpochWindow or funding-identity closures;
+/// a live adapter must plan and validate that complete root bundle separately.
+pub fn plan_epoch_retirement(
+    state: EpochLifecycleStateV5,
+    actual_balance: u64,
+    neutral_sink: Identity32V1,
+    payer_balance_before: u64,
+    neutral_balance_before: u64,
+) -> Result<RetirementCommitPlanV2<EpochLifecycleStateV5>, RetirementErrorV1> {
+    let (post_state, disposition) = close_epoch(state, actual_balance, neutral_sink)?;
+    commit_plan(
+        post_state,
+        disposition,
+        payer_balance_before,
+        neutral_balance_before,
+    )
 }
 
 /// Counted reservation projection spanning its existing body and new tail.
@@ -297,9 +378,6 @@ pub struct CountedReservationV1 {
 
 impl CountedReservationV1 {
     fn validate(self) -> Result<(), RetirementErrorV1> {
-        if self.position_generation == 0 {
-            return Err(RetirementErrorV1::WrongGeneration);
-        }
         self.count.validate()?;
         if self.state.is_position_counted() != self.count.position_counted {
             return Err(RetirementErrorV1::NonCanonicalState);
@@ -345,11 +423,11 @@ pub fn register_direct_reservation(
 /// Register a general reservation in both authoritative aggregates atomically.
 pub fn register_general_reservation(
     position: LivePositionV2,
-    epoch: LiveEpochV3,
+    epoch: LiveEpochV5,
 ) -> Result<
     (
         LivePositionV2,
-        LiveEpochV3,
+        LiveEpochV5,
         CountedReservationV1,
         ChildSlotV1,
     ),
@@ -477,7 +555,7 @@ pub enum ChildSlotV1 {
     Present(AuthenticatedEpochChildV1),
 }
 
-fn require_open_epoch(epoch: LiveEpochV3) -> Result<(), RetirementErrorV1> {
+fn require_open_epoch(epoch: LiveEpochV5) -> Result<(), RetirementErrorV1> {
     epoch.validate()?;
     if epoch.phase != GeneralEpochPhaseV1::Open {
         Err(RetirementErrorV1::WrongPhase)
@@ -486,7 +564,7 @@ fn require_open_epoch(epoch: LiveEpochV3) -> Result<(), RetirementErrorV1> {
     }
 }
 
-fn require_terminal_epoch(epoch: LiveEpochV3) -> Result<(), RetirementErrorV1> {
+fn require_terminal_epoch(epoch: LiveEpochV5) -> Result<(), RetirementErrorV1> {
     epoch.validate()?;
     if epoch.phase == GeneralEpochPhaseV1::Open {
         Err(RetirementErrorV1::WrongPhase)
@@ -501,10 +579,10 @@ fn require_terminal_epoch(epoch: LiveEpochV3) -> Result<(), RetirementErrorV1> {
 /// archives must use [`register_general_reservation`] so their Position and
 /// Epoch counts cannot diverge.
 pub fn create_epoch_child(
-    epoch: LiveEpochV3,
+    epoch: LiveEpochV5,
     slot: ChildSlotV1,
     kind: EpochChildKindV1,
-) -> Result<(LiveEpochV3, ChildSlotV1), RetirementErrorV1> {
+) -> Result<(LiveEpochV5, ChildSlotV1), RetirementErrorV1> {
     require_open_epoch(epoch)?;
     if matches!(
         kind,
@@ -529,10 +607,10 @@ pub fn create_epoch_child(
 
 /// Create one candidate bundle after its lifecycle owner validates its state.
 pub fn create_registered_candidate_after_validation(
-    epoch: LiveEpochV3,
+    epoch: LiveEpochV5,
     slot: ChildSlotV1,
     status: CandidateStatusWitnessV1,
-) -> Result<(LiveEpochV3, ChildSlotV1), RetirementErrorV1> {
+) -> Result<(LiveEpochV5, ChildSlotV1), RetirementErrorV1> {
     require_open_epoch(epoch)?;
     if slot != ChildSlotV1::Absent {
         return Err(RetirementErrorV1::ChildAlreadyPresent);
@@ -585,7 +663,7 @@ pub fn update_registered_candidate_status_after_validation(
 }
 
 fn authenticated_present(
-    epoch: LiveEpochV3,
+    epoch: LiveEpochV5,
     slot: ChildSlotV1,
 ) -> Result<AuthenticatedEpochChildV1, RetirementErrorV1> {
     let child = match slot {
@@ -605,9 +683,9 @@ fn authenticated_present(
 /// Candidate bundles and reservation archives are deliberately refused here;
 /// their specialized functions enforce additional dependencies.
 pub fn close_epoch_child(
-    epoch: LiveEpochV3,
+    epoch: LiveEpochV5,
     slot: ChildSlotV1,
-) -> Result<(LiveEpochV3, ChildSlotV1), RetirementErrorV1> {
+) -> Result<(LiveEpochV5, ChildSlotV1), RetirementErrorV1> {
     require_terminal_epoch(epoch)?;
     let child = authenticated_present(epoch, slot)?;
     if matches!(
@@ -624,10 +702,10 @@ pub fn close_epoch_child(
 
 /// Close one candidate bundle in any status after its canonical ClearWork is absent.
 pub fn close_registered_candidate(
-    epoch: LiveEpochV3,
+    epoch: LiveEpochV5,
     slot: ChildSlotV1,
     canonical_clear_work_present: bool,
-) -> Result<(LiveEpochV3, ChildSlotV1), RetirementErrorV1> {
+) -> Result<(LiveEpochV5, ChildSlotV1), RetirementErrorV1> {
     require_terminal_epoch(epoch)?;
     let child = authenticated_present(epoch, slot)?;
     if child.kind != EpochChildKindV1::CandidateBundle {
@@ -650,10 +728,10 @@ pub fn close_registered_candidate(
 /// This decrements only the Epoch archive count. The Position count was
 /// already decremented by [`terminate_reservation`].
 pub fn close_general_reservation_archive(
-    epoch: LiveEpochV3,
+    epoch: LiveEpochV5,
     slot: ChildSlotV1,
     reservation: CountedReservationV1,
-) -> Result<(LiveEpochV3, ChildSlotV1), RetirementErrorV1> {
+) -> Result<(LiveEpochV5, ChildSlotV1), RetirementErrorV1> {
     reservation.validate()?;
     if !reservation.state.is_terminal() || reservation.count.position_counted {
         return Err(RetirementErrorV1::ReservationOutstanding);

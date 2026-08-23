@@ -5,7 +5,7 @@ use clutch_retirement::{
     register_general_reservation, reopen_position, terminate_reservation,
     update_registered_candidate_status_after_validation, AuthenticatedEpochChildV1,
     CandidateStatusWitnessV1, ChildSlotV1, EpochChildCountsV1, EpochChildKindV1,
-    EpochLifecycleStateV3, EpochRetirementTailV1, GeneralEpochPhaseV1, Identity32V1, LiveEpochV3,
+    EpochLifecycleStateV5, EpochRetirementTailV1, GeneralEpochPhaseV1, Identity32V1, LiveEpochV5,
     LivePositionV2, MarketEpochCursorV1, PositionEconomicStateV1, PositionLifecycleStateV2,
     PositionRetirementTailV1, RentSplitV2, ReservationStateV1, RetirementErrorV1,
 };
@@ -36,7 +36,7 @@ fn position() -> LivePositionV2 {
     }
 }
 
-fn epoch() -> LiveEpochV3 {
+fn epoch() -> LiveEpochV5 {
     open_general_epoch(
         MarketEpochCursorV1 {
             next_general_epoch_index: 0,
@@ -51,7 +51,7 @@ fn epoch() -> LiveEpochV3 {
     .1
 }
 
-fn terminal(mut epoch: LiveEpochV3) -> LiveEpochV3 {
+fn terminal(mut epoch: LiveEpochV5) -> LiveEpochV5 {
     epoch.phase = GeneralEpochPhaseV1::Lapsed;
     epoch
 }
@@ -150,7 +150,7 @@ fn cursor_is_exact_monotone_and_retirement_never_reopens_identity() {
     assert_eq!(epoch.retirement.epoch_generation, 42);
     epoch.phase = GeneralEpochPhaseV1::Cleared;
     let (closed, disposition) =
-        close_epoch(EpochLifecycleStateV3::Live(epoch), 31, id(250)).unwrap();
+        close_epoch(EpochLifecycleStateV5::Live(epoch), 31, id(250)).unwrap();
     assert_eq!(disposition.payer_refund_lamports, 11);
     assert_eq!(disposition.tombstone_lamports, 7);
     assert_eq!(disposition.neutral_lamports, 13);
@@ -191,7 +191,7 @@ fn every_generic_child_class_blocks_root_and_closes_once() {
         assert_eq!(live.retirement.children.get(kind), 1);
         let terminal = terminal(live);
         assert_eq!(
-            close_epoch(EpochLifecycleStateV3::Live(terminal), 23, id(250)),
+            close_epoch(EpochLifecycleStateV5::Live(terminal), 23, id(250)),
             Err(RetirementErrorV1::ChildOutstanding)
         );
         let (empty, absent) = close_epoch_child(terminal, child).unwrap();
@@ -200,7 +200,7 @@ fn every_generic_child_class_blocks_root_and_closes_once() {
             close_epoch_child(empty, absent),
             Err(RetirementErrorV1::ChildAbsent)
         );
-        assert!(close_epoch(EpochLifecycleStateV3::Live(empty), 23, id(250)).is_ok());
+        assert!(close_epoch(EpochLifecycleStateV5::Live(empty), 23, id(250)).is_ok());
     }
 }
 
@@ -223,7 +223,7 @@ fn admitted_candidate_statuses_are_exhaustively_counted_without_semantic_duplica
             assert_eq!(live.retirement.children.candidate_bundles, 1);
             let terminal = terminal(live);
             assert_eq!(
-                close_epoch(EpochLifecycleStateV3::Live(terminal), 23, id(250)),
+                close_epoch(EpochLifecycleStateV5::Live(terminal), 23, id(250)),
                 Err(RetirementErrorV1::ChildOutstanding)
             );
             assert_eq!(
@@ -427,6 +427,25 @@ fn close_refusals_preserve_inputs_and_exact_rent_compartments() {
 
 #[test]
 fn reopen_is_monotone_and_generation_overflow_is_permanent_stop() {
+    let mut founding = position();
+    founding.generation = 0;
+    let (founding, reservation) = register_direct_reservation(founding, 9).unwrap();
+    assert_eq!(reservation.position_generation, 0);
+    let (founding, _) =
+        terminate_reservation(founding, reservation, ReservationStateV1::Consumed).unwrap();
+    let (founding_tombstone, _) = close_position(
+        PositionLifecycleStateV2::Live(founding),
+        PositionEconomicStateV1::ZERO,
+        23,
+        id(250),
+    )
+    .unwrap();
+    let founding_reopened = reopen_position(founding_tombstone, rent(), id(250)).unwrap();
+    let PositionLifecycleStateV2::Live(founding_reopened) = founding_reopened else {
+        panic!("founding Position did not reopen")
+    };
+    assert_eq!(founding_reopened.generation, 1);
+
     let (closed, _) = close_position(
         PositionLifecycleStateV2::Live(position()),
         PositionEconomicStateV1::ZERO,
@@ -509,7 +528,7 @@ fn malformed_live_epoch_tail_never_authorizes_root_close() {
     let mut corrupt = terminal(epoch());
     corrupt.retirement.children.candidate_bundles = 1;
     assert_eq!(
-        close_epoch(EpochLifecycleStateV3::Live(corrupt), 23, id(250)),
+        close_epoch(EpochLifecycleStateV5::Live(corrupt), 23, id(250)),
         Err(RetirementErrorV1::ChildOutstanding)
     );
 
@@ -520,7 +539,7 @@ fn malformed_live_epoch_tail_never_authorizes_root_close() {
         rent: rent(),
     };
     assert_eq!(
-        close_epoch(EpochLifecycleStateV3::Live(invalid), 23, id(250)),
+        close_epoch(EpochLifecycleStateV5::Live(invalid), 23, id(250)),
         Err(RetirementErrorV1::WrongGeneration)
     );
 }

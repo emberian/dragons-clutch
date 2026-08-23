@@ -156,6 +156,13 @@ fn permanent_tombstones_have_frozen_tagged_vectors() {
         PositionTombstoneV1::decode(&position_bytes).unwrap(),
         position
     );
+    let founding = PositionTombstoneV1 {
+        generation: 0,
+        ..position
+    };
+    let founding_bytes = founding.encode().unwrap();
+    assert_eq!(&founding_bytes[66..74], &[0; 8]);
+    assert_eq!(PositionTombstoneV1::decode(&founding_bytes), Ok(founding));
 
     let epoch = GeneralEpochTombstoneV1 {
         epoch: id(0xcc),

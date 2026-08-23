@@ -1,0 +1,20 @@
+[package]
+name = "clutch-retirement-adapter"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Authenticated live-layout composition seam for counted retirement"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["profile-full"]
+profile-full = ["clutch-solana-layout/profile-full"]
+profile-direct-v3-source-v2-point = ["clutch-solana-layout/profile-direct-v3-source-v2-point"]
+profile-general-source-v2-point = ["clutch-solana-layout/profile-general-source-v2-point"]
+
+[dependencies]
+clutch-retirement = { path = "../clutch-retirement" }
+clutch-solana-layout = { path = "../../programs/solana-layout", default-features = false }

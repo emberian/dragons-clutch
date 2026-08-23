@@ -41,6 +41,14 @@ allocating a live instruction or touching the SBF dispatcher. Its tests close
 the host codec/state obligations only; its provisional tombstone tag bytes are
 not live wire allocations, and the Promotion gate below remains open.
 
+The isolated
+[`clutch-retirement-adapter`](../../crates/clutch-retirement-adapter/README.md)
+now composes those tails with the authoritative base layout decoders and owns
+the owner/PDA/length/header/bump validation interface. This is still host
+source, not a live registry allocation or SBF integration. The registry audit
+and remaining bank campaign are in
+[`COUNTED_RETIREMENT_LIVE_PROMOTION.md`](../implementation/COUNTED_RETIREMENT_LIVE_PROMOTION.md).
+
 ## Decision
 
 Adopt the following design for a new account-version family only. Legacy
@@ -48,8 +56,10 @@ Position V1, Market V1, and Epoch V2 accounts are not locally migratable and
 retain their current fail-closed behavior. Version numbers below advance the
 current codec versions. ADR-0006's `V2` candidate-intent names are family
 placeholders, not permission to reuse an occupied account version; a combined
-implementation allocates fresh tags/versions and ships a counted Epoch V3 (or
-later), never an intermediate new epoch that still lacks retirement facts.
+implementation allocates fresh tags/versions and ships a counted general Epoch
+V5 (the first free version under Epoch tag 11), never an intermediate new epoch
+that still lacks retirement facts. Direct Epoch versions 3 and 4 remain owned
+by their existing schemas.
 
 ### 1. Position identity is never deleted
 
@@ -82,9 +92,10 @@ stored_bump: 1
 ```
 
 The account is reallocated and rewritten to this tombstone; its address is
-never made absent. Reopen validates that exact tombstone, increments generation
-with checked arithmetic, reallocates to Position V2, and writes a fresh rent
-split. Generation zero remains reserved. Overflow refuses permanently.
+never made absent. The founding generation is zero, matching the authoritative
+Position initializer. Reopen validates that exact tombstone, increments
+generation with checked arithmetic, reallocates to Position V2, and writes a
+fresh rent split. Overflow refuses permanently.
 
 At initial creation, the payer transfers the full live rent-exempt minimum even
 if the PDA was prefunded. On reopen, the tombstone's independently prepaid
@@ -110,7 +121,9 @@ epoch_generation: u64
 position_counted: u8   # canonical 1 in ACTIVE/ENTITLED, 0 in terminal states
 ```
 
-The reservation version is bumped. The marker is not a client hint: it is the
+The reservation version is bumped. General Reservation uses V5 and direct
+Reservation uses V6: tag 19/version 3 is a retired general-Reservation wire
+schema and cannot be reused. The marker is not a client hint: it is the
 once-only debit state owned by the reservation.
 
 Reservation creation is one Solana transaction that:
@@ -157,7 +170,7 @@ reservation creator must therefore include the Position writable.
 
 Market V2 appends one `next_general_epoch_index: u64` (734 bytes at the current
 Market width). Market creation selects the first index once; zero is a normal
-default, not a protocol requirement. `InitEpochV3` requires the intent index to
+default, not a protocol requirement. `InitEpochV5` requires the intent index to
 equal this cursor and rejects `u64::MAX`, then creates the complete root and
 advances the cursor by exactly one in the same transaction. Retirement never
 changes the cursor.
@@ -168,9 +181,9 @@ that an old Market has no omitted Epoch PDA is not an authenticated migration
 proof. Legacy Markets therefore keep their roots occupied indefinitely; a new
 Market V2 is required for counted retirement.
 
-### 4. Epoch V3 counts every independently addressed child bundle
+### 4. General Epoch V5 counts every independently addressed child bundle
 
-Epoch V3 adds `epoch_generation: u64`, nine `u32` counters, and the same 56-byte
+General Epoch V5 adds `epoch_generation: u64`, nine `u32` counters, and the same 56-byte
 rent split:
 
 ```text
@@ -185,7 +198,7 @@ settlement_receipts
 final_pots              # constrained to 0 or 1
 ```
 
-At the current 329-byte Epoch V2 width this yields a 429-byte live Epoch V3.
+At the current 329-byte Epoch V2 width this yields a 429-byte live general Epoch V5.
 `EpochWindow` also receives the epoch generation. Epoch, Window, and their
 mandatory funding state are one root bundle, so Window is not self-counted.
 
@@ -209,7 +222,8 @@ sealed-unverified, verified-retained, superseded, and refused states and
 ADR-0006 staging, sealed, verified-valid/refused, expired, and selected states
 are equally live children. The close requires the complete candidate bundle
 present and its canonical ClearWork absent, then closes the bundle and
-decrements once. The current feed-optional close shape is not carried into V3.
+decrements once. The current feed-optional close shape is not carried into the
+counted successor family.
 
 The retirement seam does not re-declare either candidate state machine. Its
 adapter projection carries an opaque `(candidate tag, candidate version,
@@ -263,7 +277,7 @@ checks the canonical child slots it receives where applicable, but no presented
 list is treated as the aggregate proof; the counters are authoritative.
 
 The terminal root transition closes Window and its funding identity and
-reallocates Epoch V3 at the same PDA to an exact 84-byte
+reallocates general Epoch V5 at the same PDA to an exact 84-byte
 `GENERAL_EPOCH_TOMBSTONE`:
 
 ```text
@@ -278,7 +292,7 @@ stored_bump:      1
 
 Creation prepays the full 84-byte permanent minimum independently. Root close
 refunds only the recorded live delta, routes surplus to the neutral sink, and
-leaves exactly that minimum. `InitEpochV3` requires the tombstone target to be
+leaves exactly that minimum. `InitEpochV5` requires the tombstone target to be
 absent and the Market cursor to match, so neither deletion, replay, nor a
 residual child can reopen an old identity.
 
@@ -301,7 +315,7 @@ same refusal with byte-identical prestate.
 
 ## Invariants
 
-For every reachable V2/V3 state:
+For every reachable counted-successor state:
 
 ```text
 Position.outstanding_reservations

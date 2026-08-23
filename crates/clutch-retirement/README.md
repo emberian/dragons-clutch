@@ -10,17 +10,20 @@ these exact tails with the base account bodies still owned by
 `clutch-solana-layout`:
 
 - Position V2: existing 220 bytes + exact 60-byte retirement tail = 280;
-- Epoch V3: existing 329 bytes + exact 100-byte retirement tail = 429;
+- general Epoch V5: existing 329 bytes + exact 100-byte retirement tail = 429;
 - Market V2: existing 726 bytes + exact 8-byte cursor = 734;
 - Reservation V5: existing 618 bytes + exact 9-byte count tail = 627;
+- direct Reservation V6: existing 618 bytes + exact 9-byte count tail = 627;
 - Position tombstone: complete exact 76-byte codec; and
 - general Epoch tombstone: complete exact 84-byte codec.
 
-The pure transitions calculate complete post-state values before returning.
-An error returns no post-state, so a caller can encode only after every checked
-transition succeeds. That is the host half of rollback safety; Solana account
-locking, resize/CPI rollback, lamport movement, PDA authentication, and ELF
-correspondence still require local-bank tests.
+The pure transitions calculate complete post-state values for each modeled
+root before returning. An error returns no post-state, so a caller can encode
+only after every checked transition succeeds. The Epoch root plan deliberately
+does not model its mandatory Window/funding siblings; the live adapter must
+precompute their closures too. This is the host half of rollback safety;
+Solana account locking, resize/CPI rollback, lamport movement, PDA
+authentication, and ELF correspondence still require local-bank tests.
 
 The appended byte order is frozen:
 
@@ -44,6 +47,12 @@ accepts an opaque `(candidate tag, candidate version, status)` witness only
 after the owning candidate decoder and state machine validate it. Retirement
 never interprets that status: every admitted status keeps exactly one candidate
 bundle counted, and a status update cannot silently switch account schemas.
+
+Exact composition with the authoritative base codecs and runtime
+owner/PDA/length/header/bump authentication lives in the isolated
+[`clutch-retirement-adapter`](../clutch-retirement-adapter/README.md). The
+promotion and local-bank test gates are recorded in
+[`COUNTED_RETIREMENT_LIVE_PROMOTION.md`](../../docs/implementation/COUNTED_RETIREMENT_LIVE_PROMOTION.md).
 
 Run:
 

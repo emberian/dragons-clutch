@@ -297,7 +297,7 @@ impl EpochChildCountsV1 {
     }
 }
 
-/// Exact appended Epoch V3 retirement tail.
+/// Exact appended counted-general-Epoch retirement tail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EpochRetirementTailV1 {
     /// Nonzero generation copied into every child version.
@@ -460,13 +460,10 @@ pub struct PositionTombstoneV1 {
 }
 
 impl PositionTombstoneV1 {
-    /// Validate nonzero generation. Identities are valid by construction.
+    /// Validate fields owned by this codec. Identities are valid by
+    /// construction and generation zero is the canonical founding generation.
     pub const fn validate(self) -> Result<(), RetirementErrorV1> {
-        if self.generation == 0 {
-            Err(RetirementErrorV1::WrongGeneration)
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     /// Encode the exact 76-byte tagged tombstone. Byte 74 is the frozen CLOSED
@@ -516,7 +513,7 @@ pub struct GeneralEpochTombstoneV1 {
     pub market: Identity32V1,
     /// Monotone index consumed from Market V2.
     pub epoch_index: u64,
-    /// Closed generation copied from live Epoch V3.
+    /// Closed generation copied from the live counted general Epoch.
     pub epoch_generation: u64,
     /// Stored PDA bump.
     pub stored_bump: u8,

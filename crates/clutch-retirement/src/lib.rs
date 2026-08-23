@@ -23,11 +23,12 @@ pub use codec::{
 pub use transition::{
     close_epoch, close_epoch_child, close_general_reservation_archive, close_position,
     close_registered_candidate, create_epoch_child, create_registered_candidate_after_validation,
-    entitle_reservation, open_general_epoch, register_direct_reservation,
-    register_general_reservation, reopen_position, terminate_reservation,
-    update_registered_candidate_status_after_validation, AuthenticatedEpochChildV1, ChildSlotV1,
-    CountedReservationV1, EpochLifecycleStateV3, LiveEpochV3, LivePositionV2,
-    PositionEconomicStateV1, PositionLifecycleStateV2, RentDispositionV2,
+    entitle_reservation, open_general_epoch, plan_epoch_retirement, plan_position_retirement,
+    register_direct_reservation, register_general_reservation, reopen_position,
+    terminate_reservation, update_registered_candidate_status_after_validation,
+    AuthenticatedEpochChildV1, ChildSlotV1, CountedReservationV1, EpochLifecycleStateV5,
+    LiveEpochV5, LivePositionV2, PositionEconomicStateV1, PositionLifecycleStateV2,
+    RentDispositionV2, RetirementCommitPlanV2,
 };
 
 /// Number of bytes in every persisted identity.
@@ -42,7 +43,10 @@ pub const POSITION_ACCOUNT_VERSION_V2: u8 = 2;
 /// Existing Epoch account discriminator.
 pub const EPOCH_ACCOUNT_TAG: u8 = 11;
 /// Counted general Epoch schema.
-pub const EPOCH_ACCOUNT_VERSION_V3: u8 = 3;
+///
+/// Versions 3 and 4 are already occupied by direct-Epoch families under the
+/// same tag, so the first noncolliding counted general version is 5.
+pub const EPOCH_ACCOUNT_VERSION_V5: u8 = 5;
 /// Existing Market account discriminator.
 pub const MARKET_ACCOUNT_TAG: u8 = 3;
 /// Monotone-cursor Market schema.
@@ -51,6 +55,14 @@ pub const MARKET_ACCOUNT_VERSION_V2: u8 = 2;
 pub const RESERVATION_ACCOUNT_TAG: u8 = 19;
 /// Counted general reservation schema.
 pub const RESERVATION_ACCOUNT_VERSION_V5: u8 = 5;
+/// Existing direct Reservation V2 schema under the shared discriminator.
+pub const DIRECT_RESERVATION_ACCOUNT_VERSION_V2: u8 = 2;
+/// Counted direct Reservation schema.
+///
+/// Version 3 was a historical general-Reservation wire schema, version 4 is
+/// current general, and version 5 is the counted general successor. Direct
+/// promotion therefore uses the next never-allocated version, 6.
+pub const DIRECT_RESERVATION_ACCOUNT_VERSION_V6: u8 = 6;
 
 /// Codec-local provisional Position tombstone discriminator.
 ///
@@ -75,6 +87,8 @@ pub const EPOCH_V2_BYTES: usize = 329;
 pub const MARKET_V1_BYTES: usize = 726;
 /// Existing general Reservation V4 bytes, owned by `clutch-solana-layout`.
 pub const RESERVATION_V4_BYTES: usize = 618;
+/// Existing direct Reservation V2 bytes, owned by `clutch-solana-layout`.
+pub const DIRECT_RESERVATION_V2_BYTES: usize = 618;
 
 /// Exact rent split tail width.
 pub const RENT_SPLIT_V2_BYTES: usize = 56;
@@ -93,21 +107,25 @@ pub const CHILD_GENERATION_V1_BYTES: usize = 8;
 
 /// Exact full Position V2 width after composition.
 pub const POSITION_V2_BYTES: usize = POSITION_V1_BYTES + POSITION_RETIREMENT_TAIL_V1_BYTES;
-/// Exact full Epoch V3 width after composition.
-pub const EPOCH_V3_BYTES: usize = EPOCH_V2_BYTES + EPOCH_RETIREMENT_TAIL_V1_BYTES;
+/// Exact full general Epoch V5 width after composition.
+pub const EPOCH_V5_BYTES: usize = EPOCH_V2_BYTES + EPOCH_RETIREMENT_TAIL_V1_BYTES;
 /// Exact full Market V2 width after composition.
 pub const MARKET_V2_BYTES: usize = MARKET_V1_BYTES + MARKET_EPOCH_CURSOR_V1_BYTES;
 /// Exact full general Reservation V5 width after composition.
 pub const RESERVATION_V5_BYTES: usize = RESERVATION_V4_BYTES + RESERVATION_COUNT_TAIL_V1_BYTES;
+/// Exact full direct Reservation V6 width after composition.
+pub const DIRECT_RESERVATION_V6_BYTES: usize =
+    DIRECT_RESERVATION_V2_BYTES + RESERVATION_COUNT_TAIL_V1_BYTES;
 /// Exact Position tombstone width.
 pub const POSITION_TOMBSTONE_V1_BYTES: usize = 76;
 /// Exact general Epoch tombstone width.
 pub const GENERAL_EPOCH_TOMBSTONE_V1_BYTES: usize = 84;
 
 const _: () = assert!(POSITION_V2_BYTES == 280);
-const _: () = assert!(EPOCH_V3_BYTES == 429);
+const _: () = assert!(EPOCH_V5_BYTES == 429);
 const _: () = assert!(MARKET_V2_BYTES == 734);
 const _: () = assert!(RESERVATION_V5_BYTES == 627);
+const _: () = assert!(DIRECT_RESERVATION_V6_BYTES == 627);
 
 /// Refusals owned by the counted-retirement seam.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
