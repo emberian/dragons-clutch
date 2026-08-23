@@ -22,8 +22,9 @@ use clutch_general_v2_contract::{
     IdentityLabPayloadV1, Sha256BackendV1, WriteCandidateFeedPayloadV1,
 };
 use clutch_general_v2_runtime::{
-    advance_clear_order_v1, relation_v2_policy_id_v1, score_v2_q_policy_id_v1,
-    verify_smooth_direct_candidate_v1, GeneralV2RuntimeError, GeneralV2WorkErrorV1,
+    advance_clear_order_v1, quantized_relation_v2_policy_id_v2, score_v2_q_policy_id_v1,
+    verify_quantized_relation_candidate_v2, verify_quantized_relation_price_admission_v2,
+    GeneralV2RuntimeError, GeneralV2WorkErrorV1,
 };
 use clutch_product_series::{
     FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
@@ -531,7 +532,8 @@ fn authenticate_product(
     let policy_data = borrow_data(policy_account)?;
     let policy =
         PriceMeasurePolicyV1::decode(&policy_data).map_err(|_| ClutchError::NonCanonical)?;
-    let relation_policy = relation_v2_policy_id_v1().map_err(|_| ClutchError::MismatchedState)?;
+    let relation_policy =
+        quantized_relation_v2_policy_id_v2().map_err(|_| ClutchError::MismatchedState)?;
     let score_policy = score_v2_q_policy_id_v1().map_err(|_| ClutchError::MismatchedState)?;
     require(
         basis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
@@ -1542,10 +1544,23 @@ fn init_clear_work(
             && feed.market == epoch.market_runtime
             && basis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
                 == binding.native_claim_basis_id.bytes()
+            && basis.edge_policy_registry_value == 1
             && slot >= window.submission_closes_slot
             && slot < window.verification_closes_slot,
         ClutchError::MismatchedState,
     )?;
+    {
+        let feed_data = borrow_data(&accounts[6])?;
+        verify_quantized_relation_price_admission_v2(
+            id(accounts[6].key),
+            &feed_data,
+            &domain,
+            &binding,
+            &basis,
+            QuantizedEdgePolicyV1::Clamp,
+        )
+        .map_err(|_| ClutchError::MismatchedState)?;
+    }
     let feed_pda = seeds::general_v2_feed_pda(program_id, &accounts[5].key.to_bytes());
     require(
         *accounts[6].key == feed_pda.0 && feed.stored_bump == feed_pda.1,
@@ -1942,20 +1957,23 @@ fn checked_empty_book_verdict(
             && basis.edge_policy_registry_value == 1,
         ClutchError::MismatchedState,
     )?;
-    let verified = match verify_smooth_direct_candidate_v1(
+    market_instance
+        .validate_bindings(&template, &basis, &policy, &genesis)
+        .map_err(|_| ClutchError::MismatchedState)?;
+    require(
+        genesis.id().map_err(|_| ClutchError::NonCanonical)?.bytes()
+            == binding.market_genesis_profile_v2_id.bytes()
+            && genesis.coordinate_domain_min == domain.transcript.coordinate_domain_min
+            && genesis.coordinate_domain_max == domain.transcript.coordinate_domain_max,
+        ClutchError::MismatchedState,
+    )?;
+    let admission = match verify_quantized_relation_price_admission_v2(
         id(feed_key),
         feed_data,
-        &node,
         &domain,
         &binding,
-        &price_grid,
-        &template,
         &basis,
-        &policy,
-        &genesis,
-        &market_instance,
         QuantizedEdgePolicyV1::Clamp,
-        &EconomicBookV2::empty(),
     ) {
         Ok(value) => value,
         Err(error) if runtime_error_is_checked_refusal(error) => {
@@ -1964,27 +1982,57 @@ fn checked_empty_book_verdict(
         Err(_) => return Err(ClutchError::MismatchedState.into()),
     };
     let header = contract::CandidateFeedHeaderV2::decode_account(feed_data, true)?;
+    let mut outcome = 0usize;
+    while outcome < usize::from(header.outcome_count) {
+        if price_grid
+            .tick_of(admission.price().prices[outcome])
+            .is_err()
+        {
+            return Ok(CheckedVerdict::Refused);
+        }
+        outcome += 1;
+    }
+    let verified = match verify_quantized_relation_candidate_v2(
+        admission,
+        &EconomicBookV2::empty(),
+        &clutch_batch::relation_v2::EconomicCandidateV2::EMPTY,
+    ) {
+        Ok(value) => value,
+        Err(error) if runtime_error_is_checked_refusal(error) => {
+            return Ok(CheckedVerdict::Refused)
+        }
+        Err(_) => return Err(ClutchError::MismatchedState.into()),
+    };
     let base = header.base_relation_candidate_id;
     require(
         header.settlement_witness_digest
             == contract::empty_settlement_witness_digest_v1(&RuntimeSha256, base)?
             && node.settlement_witness_digest == header.settlement_witness_digest
             && node.candidate_bundle_digest
-                == contract::candidate_bundle_digest_v1(&RuntimeSha256, feed_data, true)?,
+                == contract::candidate_bundle_digest_v1(&RuntimeSha256, feed_data, true)?
+            && verified.candidate_digest() == base.bytes()
+            && verified.candidate_digest() == header.settlement_candidate_id.bytes(),
         ClutchError::MismatchedState,
     )?;
     let economics = verified.economics();
-    Ok(CheckedVerdict::Valid {
-        score: contract::ScoreV2QComponentsV1 {
-            certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
-            cash_equivalent_direct_flow_atoms: economics
-                .score
-                .score()
-                .cash_equivalent_direct_flow_atoms,
-            virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
-            settlement_candidate_id: base,
+    let score = contract::ScoreV2QComponentsV1 {
+        certified_risk_flow_atoms: economics.score.score().risk.certified_risk_flow_atoms,
+        cash_equivalent_direct_flow_atoms: economics
+            .score
+            .score()
+            .cash_equivalent_direct_flow_atoms,
+        virtual_churn_atoms: economics.score.score().virtual_churn_atoms,
+        settlement_candidate_id: base,
+    };
+    let expected_rank = contract::encode_score_v2_q_first_admitted_tie_v1(
+        score,
+        contract::FirstAdmittedTieV1 {
+            ordinal: node.ordinal,
         },
-        expected_rank: *verified.rank_key(),
+    )?;
+    Ok(CheckedVerdict::Valid {
+        score,
+        expected_rank,
     })
 }
 
