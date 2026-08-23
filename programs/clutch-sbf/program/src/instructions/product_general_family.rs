@@ -301,6 +301,28 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .content_id();
+    let physical_accounts = [
+        *root_account.key,
+        *link_account.key,
+        *market_instance_account.key,
+        *series_plan_account.key,
+        *compiler_bundle_account.key,
+        *capability_profile_account.key,
+        *attachment_plan_account.key,
+        general_account,
+    ];
+    let mut left = 0usize;
+    while left < physical_accounts.len() {
+        let mut right = left + 1;
+        while right < physical_accounts.len() {
+            require(
+                physical_accounts[left] != physical_accounts[right],
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
     require(
         root.state().phase() == MarketLifecyclePhaseV1::Founding
             && link.state().phase() == SeriesMarketLinkPhaseV1::PendingMarket
@@ -416,7 +438,13 @@ fn require_matching_general_postwrite<P: AuthenticatedGeneralMarketPostwriteV1 +
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     }
     require(
-        postwrite.account() == preauthorization.general_market_owner_account
+        postwrite.semantic_id() != postwrite.data_id()
+            && postwrite.semantic_id() != postwrite.authentication_id()
+            && postwrite.data_id() != postwrite.authentication_id()
+            && postwrite.semantic_id() != preauthorization.preauthorization_id
+            && postwrite.data_id() != preauthorization.preauthorization_id
+            && postwrite.authentication_id() != preauthorization.preauthorization_id
+            && postwrite.account() == preauthorization.general_market_owner_account
             && postwrite.owner_program() == preauthorization.program_id
             && postwrite.market_instance_v2_id() == preauthorization.market_instance_v2_id
             && postwrite.product_generation() == preauthorization.product_generation
