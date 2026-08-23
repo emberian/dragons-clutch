@@ -33,6 +33,9 @@ use clutch_failure_policy_runtime::external_v2::{
     FailureExternalAdmissionReceiptV2, FailureExternalTransitionPlanV2,
     FailureRecoveryTerminalReceiptV2, FailureRuntimeExternalV2,
 };
+use clutch_failure_policy_runtime::relation_execution_v1::{
+    ExecutedFailureRelationV1, FailureRelationDispositionV1,
+};
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_compartment_account_v1, decode_runtime_policy_account_v1,
     RuntimeAdmissionAccountPlanV1, RuntimeAtomicTransitionV1, RuntimePersistedAccountViewV1,
@@ -44,13 +47,14 @@ use clutch_solana_layout::failure_recovery::{
     account_metas_v1, decode_failure_account_body_v1, decode_payload_v1,
     encode_failure_account_header_v1, AcceptRecoveryWorkV1, AdvanceRecoveryScheduleV1,
     CloseRecoveryFundingV1, FailureRecoveryPayloadV1, FailureReplayTombstonePhaseV1,
-    FailureReplayTombstoneV1, RecoveryAccountRoleV1, RecoveryCommonV1, TriggerSourceFailureV1,
+    FailureReplayTombstoneV1, RecoveryAccountRoleV1, RecoveryCommonV1, ResolveCallerFundedV1,
+    ResolvePaidRecoveryV1, TriggerRelationRefusalV1, TriggerSourceFailureV1,
     ACCEPT_RECOVERY_WORK_METAS_V1, CLOSE_RECOVERY_FUNDING_METAS_V1,
     FAILURE_ACCOUNT_HEADER_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
     FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1,
     FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
     FAILURE_LIVENESS_POLICY_BODY_BYTES_V1, FAILURE_REPLAY_TOMBSTONE_ACCOUNT_BYTES_V1,
-    INITIALIZE_FAILURE_ROOT_METAS_V1,
+    INITIALIZE_FAILURE_ROOT_METAS_V1, RESOLVE_PAID_RECOVERY_METAS_V1,
 };
 use clutch_solana_layout::registry::{self, RecoveryAction};
 use clutch_source_plane_v3_runtime::{
@@ -61,6 +65,18 @@ use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+/// Domain label whose SHA-256 bytes identify the exact relation semantics in
+/// this adapter. It is not an ELF, ProgramData, deployment, or source digest;
+/// deployed-code authentication remains a separate release-manifest boundary.
+pub const FAILURE_RELATION_EXECUTOR_RELEASE_LABEL_V1: &str =
+    "dragons-clutch/failure-relation-executor/v1";
+
+/// Frozen semantic release identity used to derive every Failure relation policy.
+pub const FAILURE_RELATION_EXECUTOR_RELEASE_ID_V1: [u8; 32] = [
+    0x4a, 0x73, 0x54, 0xfb, 0x45, 0xb4, 0xb9, 0x7e, 0x23, 0x80, 0x67, 0xd3, 0x1d, 0x09, 0x45, 0x8b,
+    0xa3, 0x13, 0x88, 0x26, 0x96, 0x93, 0xeb, 0xf4, 0x32, 0xac, 0xa3, 0x53, 0x65, 0x2d, 0x38, 0x54,
+];
 
 /// Capability guard for the disabled family.
 ///
@@ -84,12 +100,11 @@ pub fn process(
     Err(ClutchError::UnsupportedInstruction.into())
 }
 
-// Relation-refusal, both resolution actions, and semantic-root close
-// intentionally have no mutation helpers here. Their allocated wire shapes do
-// not grant authority: the repository has no persisted relation-execution
-// result owner and no per-occurrence zero-liability retirement owner yet.
-// Keeping these paths absent prevents caller-built relation or retirement DTOs
-// from becoming executable authority while those separate owners are built.
+// Semantic-root close intentionally has no mutation helper here. Its allocated
+// wire shape grants no authority while Product has no per-occurrence
+// zero-liability terminal owner. Relation mutations below are complete but can
+// only consume the private atomic capability minted by the still-separate
+// Product/registry authentication seam.
 
 /// Source-owned maturity-failure join. Private fields prevent ID-only use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,6 +192,52 @@ impl AuthenticatedSourceSuccessJoinV1 {
             handoff,
             source,
         })
+    }
+}
+
+/// SBF-private proof that one Source/Product relation was executed from
+/// authenticated accounts in this same atomic instruction.
+///
+/// There is deliberately no public constructor or hostile-byte decoder. The
+/// registry/Product adapter seam mints it only after fresh account
+/// authentication, and the three relation handlers consume it immediately.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFailureRelationExecutionV1 {
+    relation: ExecutedFailureRelationV1,
+    relation_accounts: [Pubkey; 10],
+}
+
+impl AuthenticatedFailureRelationExecutionV1 {
+    /// Exact immutable policy committed by Product and the Failure root.
+    pub const fn relation_policy_id(self) -> [u8; 32] {
+        self.relation.relation_policy_id().bytes()
+    }
+
+    /// Canonical auditable relation record identity.
+    pub const fn relation_record_id(self) -> [u8; 32] {
+        self.relation.record_id().bytes()
+    }
+
+    /// Atomic execution capability identity.
+    pub const fn relation_execution_id(self) -> [u8; 32] {
+        self.relation.id().bytes()
+    }
+
+    fn relation(self) -> ExecutedFailureRelationV1 {
+        self.relation
+    }
+
+    fn require_accounts(self, accounts: &[AccountInfo<'_>]) -> Outcome<()> {
+        require_count(accounts, self.relation_accounts.len())?;
+        let mut index = 0usize;
+        while index < self.relation_accounts.len() {
+            require(
+                *accounts[index].key == self.relation_accounts[index],
+                ClutchError::MismatchedState,
+            )?;
+            index += 1;
+        }
+        Ok(())
     }
 }
 
@@ -725,6 +786,66 @@ pub fn plan_accept_recovery_work_v1(
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
+/// Plan a deterministic relation refusal from one same-instruction execution.
+pub fn plan_relation_refusal_v1(
+    root: AuthenticatedExternalRootV2,
+    source: AuthenticatedSourceSuccessJoinV1,
+    execution: AuthenticatedFailureRelationExecutionV1,
+) -> Outcome<FailureExternalTransitionPlanV2> {
+    require(
+        matches!(
+            execution.relation().disposition(),
+            FailureRelationDispositionV1::Refused(_)
+        ),
+        ClutchError::MismatchedState,
+    )?;
+    root.runtime()
+        .plan_trigger_relation_refusal(source.handoff, execution.relation(), source.release)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+/// Plan accepted caller-funded resolution with no Recovery-compartment debit.
+pub fn plan_caller_funded_resolution_v1(
+    root: AuthenticatedExternalRootV2,
+    source: AuthenticatedSourceSuccessJoinV1,
+    execution: AuthenticatedFailureRelationExecutionV1,
+) -> Outcome<FailureExternalTransitionPlanV2> {
+    require(
+        execution.relation().disposition() == FailureRelationDispositionV1::Accepted,
+        ClutchError::MismatchedState,
+    )?;
+    let accepted = root
+        .runtime()
+        .accept_resolution(source.handoff, execution.relation(), source.release)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    root.runtime()
+        .plan_resolve_caller_funded(accepted)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+/// Plan accepted final repair and its sole liveness-funded keeper payment.
+pub fn plan_paid_resolution_v1(
+    root: AuthenticatedExternalRootV2,
+    source: AuthenticatedSourceSuccessJoinV1,
+    execution: AuthenticatedFailureRelationExecutionV1,
+    reward_recipient: &Pubkey,
+    scheduled_ceiling_lamports: u64,
+) -> Outcome<FailureExternalTransitionPlanV2> {
+    require(
+        execution.relation().disposition() == FailureRelationDispositionV1::Accepted,
+        ClutchError::MismatchedState,
+    )?;
+    root.runtime()
+        .plan_resolve_paid_repair(
+            source.handoff,
+            execution.relation(),
+            source.release,
+            RecoveryIdentity::from_bytes(reward_recipient.to_bytes()),
+            scheduled_ceiling_lamports,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
 /// Execute the complete typed Source-failure trigger handler.
 pub fn handle_source_failure_v1<'a>(
     program_id: &Pubkey,
@@ -744,6 +865,119 @@ pub fn handle_source_failure_v1<'a>(
     let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
     let plan = plan_source_failure_v1(root, source)?;
     apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
+}
+
+/// Execute one deterministic relation-refusal trigger without persisting a
+/// relation-result account or moving liveness funds.
+pub fn handle_relation_refusal_v1<'a>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'a>],
+    payload: TriggerRelationRefusalV1,
+    source: AuthenticatedSourceSuccessJoinV1,
+    execution: AuthenticatedFailureRelationExecutionV1,
+) -> Outcome<ExternalSemanticMutationV2> {
+    authenticate_ordered_metas_v1(RecoveryAction::TriggerRelationRefusal, accounts)?;
+    require_relation_commitments(
+        source,
+        execution,
+        payload.source_success_handoff_id,
+        payload.relation_policy_id,
+        payload.relation_record_id,
+        payload.relation_execution_id,
+        Some(payload.refusal_code),
+    )?;
+    execution.require_accounts(&accounts[1..11])?;
+    require_source_action(
+        source.source,
+        payload.common,
+        payload.source_success_handoff_id,
+        source.handoff.occurrence().market_instance_id().bytes(),
+    )?;
+    require_success_source_accounts(source, &accounts[11..15])?;
+    require_current_after(accounts, 15, source.handoff.clock())?;
+    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let plan = plan_relation_refusal_v1(root, source, execution)?;
+    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
+}
+
+/// Execute accepted caller-funded resolution with no Recovery custody debit.
+pub fn handle_caller_funded_resolution_v1<'a>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'a>],
+    payload: ResolveCallerFundedV1,
+    source: AuthenticatedSourceSuccessJoinV1,
+    execution: AuthenticatedFailureRelationExecutionV1,
+) -> Outcome<ExternalSemanticMutationV2> {
+    authenticate_ordered_metas_v1(RecoveryAction::ResolveCallerFunded, accounts)?;
+    require_relation_commitments(
+        source,
+        execution,
+        payload.source_success_handoff_id,
+        payload.relation_policy_id,
+        payload.relation_record_id,
+        payload.relation_execution_id,
+        None,
+    )?;
+    execution.require_accounts(&accounts[1..11])?;
+    require_source_action(
+        source.source,
+        payload.common,
+        payload.source_success_handoff_id,
+        source.handoff.occurrence().market_instance_id().bytes(),
+    )?;
+    require_success_source_accounts(source, &accounts[11..15])?;
+    require_current_after(accounts, 15, source.handoff.clock())?;
+    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let plan = plan_caller_funded_resolution_v1(root, source, execution)?;
+    apply_semantic_transition_v1(program_id, &accounts[0], payload.common, plan)
+}
+
+/// Execute accepted final repair and the one joined liveness-funded payment.
+pub fn handle_paid_resolution_v1<'a>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'a>],
+    payload: ResolvePaidRecoveryV1,
+    source: AuthenticatedSourceSuccessJoinV1,
+    execution: AuthenticatedFailureRelationExecutionV1,
+) -> Outcome<ExternalWorkMutationV2> {
+    authenticate_ordered_metas_v1(RecoveryAction::ResolvePaidRecovery, accounts)?;
+    require_relation_commitments(
+        source,
+        execution,
+        payload.source_success_handoff_id,
+        payload.relation_policy_id,
+        payload.relation_record_id,
+        payload.relation_execution_id,
+        None,
+    )?;
+    execution.require_accounts(&accounts[3..13])?;
+    require_source_action(
+        source.source,
+        payload.common,
+        payload.source_success_handoff_id,
+        source.handoff.occurrence().market_instance_id().bytes(),
+    )?;
+    require_success_source_accounts(source, &accounts[13..17])?;
+    require_current_after(accounts, 19, source.handoff.clock())?;
+    require(
+        accounts[17].key.to_bytes() == payload.reward_recipient,
+        ClutchError::MismatchedState,
+    )?;
+    let root = authenticate_failure_root_v1(program_id, &accounts[0], payload.common)?;
+    let plan = plan_paid_resolution_v1(
+        root,
+        source,
+        execution,
+        accounts[17].key,
+        payload.scheduled_ceiling_lamports,
+    )?;
+    apply_work_transition_v1(
+        program_id,
+        RecoveryAction::ResolvePaidRecovery,
+        accounts,
+        &FailureRecoveryPayloadV1::ResolvePaidRecovery(payload),
+        plan,
+    )
 }
 
 /// Execute one immutable schedule advance using the canonical Clock.
@@ -837,6 +1071,18 @@ fn apply_work_transition_v1<'a>(
                 ACCEPT_RECOVERY_WORK_METAS_V1,
                 7usize,
                 8usize,
+                value.common,
+                value.source_success_handoff_id,
+                value.reward_recipient,
+                value.scheduled_ceiling_lamports,
+            ),
+            (
+                RecoveryAction::ResolvePaidRecovery,
+                FailureRecoveryPayloadV1::ResolvePaidRecovery(value),
+            ) => (
+                RESOLVE_PAID_RECOVERY_METAS_V1,
+                17usize,
+                18usize,
                 value.common,
                 value.source_success_handoff_id,
                 value.reward_recipient,
@@ -1305,6 +1551,31 @@ fn require_source_action(
             && source.failure_policy_binding_id().bytes() == common.binding_id
             && source.generation() == common.generation
             && source_market_instance_v2_id == common.market_instance_v2_id,
+        ClutchError::MismatchedState,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_relation_commitments(
+    source: AuthenticatedSourceSuccessJoinV1,
+    execution: AuthenticatedFailureRelationExecutionV1,
+    source_success_handoff_id: [u8; 32],
+    relation_policy_id: [u8; 32],
+    relation_record_id: [u8; 32],
+    relation_execution_id: [u8; 32],
+    refusal_code: Option<u32>,
+) -> Outcome<()> {
+    let relation = execution.relation();
+    let observed_refusal = relation.refusal_code();
+    require(
+        source.handoff.id().bytes() == source_success_handoff_id
+            && relation.source_success_handoff_id().bytes() == source_success_handoff_id
+            && execution.relation_policy_id() == relation_policy_id
+            && execution.relation_record_id() == relation_record_id
+            && execution.relation_execution_id() == relation_execution_id
+            && refusal_code.map_or(observed_refusal == 0, |expected| {
+                expected == observed_refusal && observed_refusal != 0
+            }),
         ClutchError::MismatchedState,
     )
 }
