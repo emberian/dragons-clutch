@@ -20,6 +20,112 @@ pub const CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3: usize = 14;
 /// Fixed RedeemExternal prefix before one mint per active outcome.
 pub const EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3: usize = 17;
 
+/// Canonical indices shared by Endow and WithdrawCash.
+pub mod collateral_cash_indices_v3 {
+    /// Owner/authority signer.
+    pub const ACTOR: usize = 0;
+    /// Immutable Realm.
+    pub const REALM: usize = 1;
+    /// Immutable Profile V2.
+    pub const PROFILE: usize = 2;
+    /// Collateral policy artifact.
+    pub const POLICY: usize = 3;
+    /// Realm-selected collateral token program.
+    pub const TOKEN_PROGRAM: usize = 4;
+    /// General MarketBinding.
+    pub const MARKET_BINDING: usize = 5;
+    /// General MarketRuntime.
+    pub const MARKET_RUNTIME: usize = 6;
+    /// Product MarketInstance artifact.
+    pub const MARKET_INSTANCE: usize = 7;
+    /// Canonical Hoard V2.
+    pub const HOARD: usize = 8;
+    /// Canonical ClaimLedger V3.
+    pub const CLAIM_LEDGER: usize = 9;
+    /// Canonical Position V3.
+    pub const POSITION: usize = 10;
+    /// Canonical GEN1 Replay.
+    pub const REPLAY: usize = 11;
+    /// Realm-selected collateral mint.
+    pub const COLLATERAL_MINT: usize = 12;
+    /// Endow source or withdrawal destination.
+    pub const DESTINATION: usize = 13;
+    /// Hoard token authority.
+    pub const HOARD_AUTHORITY: usize = 14;
+    /// Hoard token account.
+    pub const HOARD_TOKEN: usize = 15;
+    /// Endow-only System Program.
+    pub const SYSTEM: usize = 16;
+    /// Endow-only Rent sysvar.
+    pub const RENT: usize = 17;
+}
+
+/// Canonical indices for Split and Merge.
+pub mod complete_set_indices_v3 {
+    pub use super::collateral_cash_indices_v3::{
+        ACTOR, CLAIM_LEDGER, COLLATERAL_MINT, HOARD, HOARD_TOKEN, MARKET_BINDING, MARKET_INSTANCE,
+        MARKET_RUNTIME, POLICY, POSITION, PROFILE, REALM, REPLAY, TOKEN_PROGRAM,
+    };
+}
+
+/// Canonical indices for Materialize and Dematerialize.
+pub mod claim_representation_indices_v3 {
+    /// Owner signer.
+    pub const ACTOR: usize = 0;
+    pub use super::collateral_cash_indices_v3::{
+        CLAIM_LEDGER, HOARD, MARKET_BINDING, MARKET_INSTANCE, MARKET_RUNTIME, POLICY, POSITION,
+        PROFILE, REALM, REPLAY,
+    };
+    /// Realm-selected collateral token program.
+    pub const COLLATERAL_TOKEN_PROGRAM: usize = 4;
+    /// Independently selected outcome token program.
+    pub const OUTCOME_TOKEN_PROGRAM: usize = 12;
+    /// Holder claim token account.
+    pub const HOLDER_TOKEN: usize = 13;
+    /// First canonical outcome-mint role.
+    pub const OUTCOME_MINTS: usize = super::CLAIM_REPRESENTATION_PREFIX_ACCOUNTS_V3;
+}
+
+/// Canonical indices for exact-whole external redemption.
+pub mod external_redemption_indices_v3 {
+    /// Bearer claimant signer.
+    pub const CLAIMANT: usize = 0;
+    /// Immutable Realm.
+    pub const REALM: usize = 1;
+    /// Immutable Profile V2.
+    pub const PROFILE: usize = 2;
+    /// Collateral policy artifact.
+    pub const POLICY: usize = 3;
+    /// Realm-selected collateral token program.
+    pub const COLLATERAL_TOKEN_PROGRAM: usize = 4;
+    /// General MarketBinding.
+    pub const MARKET_BINDING: usize = 5;
+    /// General MarketRuntime.
+    pub const MARKET_RUNTIME: usize = 6;
+    /// Product MarketInstance artifact.
+    pub const MARKET_INSTANCE: usize = 7;
+    /// Canonical Hoard V2.
+    pub const HOARD: usize = 8;
+    /// Canonical ClaimLedger V3.
+    pub const CLAIM_LEDGER: usize = 9;
+    /// Finalized Resolution V5.
+    pub const RESOLUTION: usize = 10;
+    /// Realm-selected collateral mint.
+    pub const COLLATERAL_MINT: usize = 11;
+    /// Collateral payout destination.
+    pub const DESTINATION: usize = 12;
+    /// Hoard token authority.
+    pub const HOARD_AUTHORITY: usize = 13;
+    /// Hoard token account.
+    pub const HOARD_TOKEN: usize = 14;
+    /// Independently selected outcome token program.
+    pub const OUTCOME_TOKEN_PROGRAM: usize = 15;
+    /// Bearer claim token source.
+    pub const SOURCE: usize = 16;
+    /// First canonical outcome-mint role.
+    pub const OUTCOME_MINTS: usize = super::EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3;
+}
+
 /// Enabled full-width collateral action family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CollateralActionV3 {
@@ -155,7 +261,7 @@ impl CollateralAccountContractV3 {
     }
 
     /// Exact total account count.
-    pub const fn len(self) -> usize {
+    pub fn len(self) -> usize {
         let prefix = match self.action {
             CollateralActionV3::Endow => ENDOW_ACCOUNT_COUNT_V3,
             CollateralActionV3::WithdrawCash => WITHDRAW_ACCOUNT_COUNT_V3,
@@ -166,7 +272,7 @@ impl CollateralAccountContractV3 {
             CollateralActionV3::RedeemExternal => EXTERNAL_REDEMPTION_PREFIX_ACCOUNTS_V3,
         };
         if self.action.has_outcome_mint_suffix() {
-            prefix + self.outcome_count as usize
+            prefix + usize::from(self.outcome_count)
         } else {
             prefix
         }
@@ -207,9 +313,10 @@ impl CollateralAccountContractV3 {
         if outcome >= usize::from(self.outcome_count) {
             return None;
         }
+        let outcome = u8::try_from(outcome).ok()?;
         Some(meta(
-            CollateralAccountRoleV3::OutcomeMint(outcome as u8),
-            self.selected_outcome == Some(outcome as u8),
+            CollateralAccountRoleV3::OutcomeMint(outcome),
+            self.selected_outcome == Some(outcome),
             false,
         ))
     }
@@ -397,12 +504,12 @@ const EXTERNAL_REDEMPTION_METAS_V3: &[CollateralAccountMetaV3;
 /// Every market width is in `1..=MAX_OUTCOMES`. Fixed routes require no
 /// selected outcome; claim representation and external redemption require one
 /// selected ordinal strictly inside the active prefix.
-pub const fn account_contract_v3(
+pub fn account_contract_v3(
     action: CollateralActionV3,
     outcome_count: u8,
     selected_outcome: Option<u8>,
 ) -> Result<CollateralAccountContractV3> {
-    if outcome_count == 0 || outcome_count as usize > MAX_OUTCOMES {
+    if outcome_count == 0 || usize::from(outcome_count) > MAX_OUTCOMES {
         return Err(CodecError::InvalidCount);
     }
     if action.has_outcome_mint_suffix() {
@@ -431,21 +538,43 @@ pub fn validate_collateral_account_metas_v3(
     selected_outcome: Option<u8>,
     observed: &[ObservedCollateralAccountMetaV3],
 ) -> Result<()> {
+    validate_collateral_account_metas_with_v3(
+        action,
+        outcome_count,
+        selected_outcome,
+        observed.len(),
+        |index| observed.get(index).copied(),
+    )
+}
+
+/// Allocation-free validator over a caller-owned account observation source.
+pub fn validate_collateral_account_metas_with_v3<F>(
+    action: CollateralActionV3,
+    outcome_count: u8,
+    selected_outcome: Option<u8>,
+    observed_len: usize,
+    mut observed_at: F,
+) -> Result<()>
+where
+    F: FnMut(usize) -> Option<ObservedCollateralAccountMetaV3>,
+{
     let contract = account_contract_v3(action, outcome_count, selected_outcome)?;
-    if observed.len() < contract.len() {
+    if observed_len < contract.len() {
         return Err(CodecError::Truncated);
     }
-    if observed.len() > contract.len() {
+    if observed_len > contract.len() {
         return Err(CodecError::TrailingBytes);
     }
-    for (index, account) in observed.iter().enumerate() {
+    for index in 0..observed_len {
+        let account = observed_at(index).ok_or(CodecError::Truncated)?;
         if account.key.iter().all(|byte| *byte == 0) {
             return Err(CodecError::ZeroIdentity);
         }
         let requirement = contract.meta(index).ok_or(CodecError::InvalidCount)?;
         let mut effective_writable = requirement.writable;
         let mut effective_signer = requirement.signer;
-        for (other_index, other) in observed.iter().enumerate() {
+        for other_index in 0..observed_len {
+            let other = observed_at(other_index).ok_or(CodecError::Truncated)?;
             if index == other_index || account.key != other.key {
                 continue;
             }
@@ -469,8 +598,6 @@ pub fn validate_collateral_account_metas_v3(
     Ok(())
 }
 
-const _: () = assert!(MAX_OUTCOMES <= u8::MAX as usize);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,7 +614,7 @@ mod tests {
         for index in 0..contract.len() {
             let requirement = contract.meta(index).unwrap();
             accounts.push(ObservedCollateralAccountMetaV3 {
-                key: [(index + 1) as u8; HASH_BYTES],
+                key: [u8::try_from(index + 1).unwrap(); HASH_BYTES],
                 writable: requirement.writable,
                 signer: requirement.signer,
             });
@@ -539,13 +666,86 @@ mod tests {
     }
 
     #[test]
+    fn exported_indices_are_the_contracts_semantic_order() {
+        let cash = account_contract_v3(CollateralActionV3::Endow, 2, None).unwrap();
+        assert_eq!(
+            cash.meta(collateral_cash_indices_v3::MARKET_INSTANCE)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::MarketInstanceArtifact
+        );
+        assert_eq!(
+            cash.meta(collateral_cash_indices_v3::DESTINATION)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::CollateralSource
+        );
+        assert_eq!(
+            cash.meta(collateral_cash_indices_v3::RENT).unwrap().role,
+            CollateralAccountRoleV3::RentSysvar
+        );
+
+        let complete = account_contract_v3(CollateralActionV3::Merge, 2, None).unwrap();
+        assert_eq!(
+            complete
+                .meta(complete_set_indices_v3::CLAIM_LEDGER)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::ClaimLedger
+        );
+        assert_eq!(
+            complete
+                .meta(complete_set_indices_v3::HOARD_TOKEN)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::HoardToken
+        );
+
+        let claim = account_contract_v3(CollateralActionV3::Materialize, 2, Some(1)).unwrap();
+        assert_eq!(
+            claim
+                .meta(claim_representation_indices_v3::OUTCOME_TOKEN_PROGRAM)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::OutcomeTokenProgram
+        );
+        assert_eq!(
+            claim
+                .meta(claim_representation_indices_v3::OUTCOME_MINTS + 1)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::OutcomeMint(1)
+        );
+
+        let external = account_contract_v3(CollateralActionV3::RedeemExternal, 2, Some(1)).unwrap();
+        assert_eq!(
+            external
+                .meta(external_redemption_indices_v3::RESOLUTION)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::ResolutionV5
+        );
+        assert_eq!(
+            external
+                .meta(external_redemption_indices_v3::SOURCE)
+                .unwrap()
+                .role,
+            CollateralAccountRoleV3::ExternalClaimSource
+        );
+    }
+
+    #[test]
     fn widths_and_selection_are_canonical() {
         assert_eq!(
             account_contract_v3(CollateralActionV3::Endow, 0, None),
             Err(CodecError::InvalidCount)
         );
         assert_eq!(
-            account_contract_v3(CollateralActionV3::Endow, (MAX_OUTCOMES + 1) as u8, None),
+            account_contract_v3(
+                CollateralActionV3::Endow,
+                u8::try_from(MAX_OUTCOMES + 1).unwrap(),
+                None,
+            ),
             Err(CodecError::InvalidCount)
         );
         assert_eq!(
@@ -564,7 +764,7 @@ mod tests {
 
     #[test]
     fn selected_mint_is_the_only_writable_mint_at_minimum_and_maximum_width() {
-        for (count, selected) in [(1_u8, 0_u8), (MAX_OUTCOMES as u8, 7_u8)] {
+        for (count, selected) in [(1_u8, 0_u8), (u8::try_from(MAX_OUTCOMES).unwrap(), 7_u8)] {
             for action in [
                 CollateralActionV3::Materialize,
                 CollateralActionV3::Dematerialize,
