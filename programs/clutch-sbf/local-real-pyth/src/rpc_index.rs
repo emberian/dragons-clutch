@@ -14,6 +14,10 @@ use std::str::FromStr;
 pub type Result<T> = core::result::Result<T, RpcIndexError>;
 
 pub const RPC_ENDPOINT_BINDING_DOMAIN_V1: &[u8] = b"dragons-clutch/rpc-endpoint-binding/v1\0";
+pub const DEPLOYMENT_WORKFLOW_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/operator-deployment-workflow/v3\0";
+pub const RELEASE_DEPLOYMENT_BINDING_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/operator-release-deployment-binding/v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcIndexError {
@@ -99,6 +103,7 @@ impl RpcClusterBinding {
             && self
                 .rpc_websocket_url
                 .starts_with("ws://127.0.0.1:");
+        let genesis = Address::from_str(&self.genesis_hash).ok();
         if self.cluster_name.trim().is_empty()
             || self.genesis_hash.len() < 32
             || self.genesis_hash.len() > 64
@@ -106,6 +111,7 @@ impl RpcClusterBinding {
             || !safe_endpoint(&self.rpc_http_url, false)
             || !safe_endpoint(&self.rpc_websocket_url, true)
             || (local_validator && !local_endpoints)
+            || genesis.is_none_or(|identity| identity == Address::default())
         {
             return Err(RpcIndexError::InvalidCluster);
         }
@@ -115,6 +121,22 @@ impl RpcClusterBinding {
     #[must_use]
     pub fn key(&self) -> String {
         format!("{}:{}", self.cluster_name, self.genesis_hash)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReleaseCoordinateLocusV2 {
+    SynthesizedGenesisZero,
+    ObservedPositive,
+}
+
+impl ReleaseCoordinateLocusV2 {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::SynthesizedGenesisZero => "synthesized-genesis-zero",
+            Self::ObservedPositive => "observed-positive",
+        }
     }
 }
 
@@ -186,11 +208,15 @@ pub fn public_rpc_endpoint_binding(url: &str) -> PublicRpcEndpointBinding {
 pub struct IndexedProgramRelease {
     pub program_id: Address,
     pub program_data: Address,
+    pub program_data_sha256: [u8; 32],
     pub elf_sha256: [u8; 32],
     pub deployment_slot: u64,
+    pub release_locus: ReleaseCoordinateLocusV2,
     /// Canonical digest of the checked capability-profile manifest that owns
     /// the semantic release description. This is not supplied by the browser.
-    pub release_manifest_sha256: [u8; 32],
+    pub capability_manifest_id: [u8; 32],
+    /// Product-owned content identity of the exact RegistryProgramReleaseV2.
+    pub registry_release_id: [u8; 32],
     pub capability_profile_id: [u8; 32],
     pub source_commit: String,
     /// Only centrally registered coordinates present in the checked manifest.
@@ -211,8 +237,10 @@ impl IndexedProgramRelease {
         if self.program_id == Address::default()
             || self.program_data == Address::default()
             || self.program_id == self.program_data
+            || self.program_data_sha256 == [0; 32]
             || self.elf_sha256 == [0; 32]
-            || self.release_manifest_sha256 == [0; 32]
+            || self.capability_manifest_id == [0; 32]
+            || self.registry_release_id == [0; 32]
             || self.capability_profile_id == [0; 32]
             || !matches!(self.source_commit.len(), 40 | 64)
             || !self
@@ -221,6 +249,25 @@ impl IndexedProgramRelease {
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
             || self.source_commit.bytes().all(|byte| byte == b'0')
             || self.families.is_empty()
+        {
+            return Err(RpcIndexError::InvalidRelease);
+        }
+        let slot_matches_locus = match self.release_locus {
+            ReleaseCoordinateLocusV2::SynthesizedGenesisZero => self.deployment_slot == 0,
+            ReleaseCoordinateLocusV2::ObservedPositive => self.deployment_slot != 0,
+        };
+        let semantic_identities = [
+            self.program_id.to_bytes(),
+            self.program_data.to_bytes(),
+            self.program_data_sha256,
+            self.capability_manifest_id,
+        ];
+        if !slot_matches_locus
+            || semantic_identities.iter().enumerate().any(|(index, identity)| {
+                semantic_identities[..index]
+                    .iter()
+                    .any(|previous| previous == identity)
+            })
         {
             return Err(RpcIndexError::InvalidRelease);
         }
@@ -246,13 +293,7 @@ impl IndexedProgramRelease {
 
     #[must_use]
     pub fn key(&self) -> String {
-        format!(
-            "{}:{}:{}:{}",
-            self.program_id,
-            self.deployment_slot,
-            hex(&self.elf_sha256),
-            hex(&self.release_manifest_sha256)
-        )
+        format!("registry-release-v2:{}", hex(&self.registry_release_id))
     }
 }
 
@@ -303,23 +344,62 @@ impl RpcCommitment {
 pub struct RpcIndexPlan {
     pub cluster: RpcClusterBinding,
     pub releases: Vec<IndexedProgramRelease>,
+    pub deployment_manifest_id: [u8; 32],
+    pub deployment_workflow_id: [u8; 32],
+    pub release_deployment_binding_id: [u8; 32],
     pub bounds: RpcAcquisitionBounds,
+}
+
+#[must_use]
+pub fn deployment_workflow_id_v3(
+    network_genesis: Address,
+    deployment_manifest_id: [u8; 32],
+    registry_release_id: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(DEPLOYMENT_WORKFLOW_DOMAIN_V3);
+    hasher.update(network_genesis.as_ref());
+    hasher.update(deployment_manifest_id);
+    hasher.update(registry_release_id);
+    hasher.finalize().into()
+}
+
+#[must_use]
+pub fn release_deployment_binding_id_v1(
+    network_genesis: Address,
+    deployment_manifest_id: [u8; 32],
+    deployment_workflow_id: [u8; 32],
+    registry_release_id: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(RELEASE_DEPLOYMENT_BINDING_DOMAIN_V1);
+    hasher.update(network_genesis.as_ref());
+    hasher.update(deployment_manifest_id);
+    hasher.update(deployment_workflow_id);
+    hasher.update(registry_release_id);
+    hasher.finalize().into()
 }
 
 impl RpcIndexPlan {
     pub fn validate(&self) -> Result<()> {
         self.cluster.validate()?;
         self.bounds.validate()?;
-        if self.releases.is_empty() || self.releases.len() > self.bounds.maximum_subscriptions {
+        if self.releases.len() != 1 || self.releases.len() > self.bounds.maximum_subscriptions {
             return Err(RpcIndexError::InvalidBound);
+        }
+        if self.deployment_manifest_id == [0; 32]
+            || self.deployment_workflow_id == [0; 32]
+            || self.release_deployment_binding_id == [0; 32]
+        {
+            return Err(RpcIndexError::InvalidRelease);
         }
         let mut programs = BTreeSet::new();
         for release in &self.releases {
             release.validate()?;
             let slot_matches_cluster = if self.cluster.cluster_name == "local-validator" {
-                release.deployment_slot == 0
+                release.release_locus == ReleaseCoordinateLocusV2::SynthesizedGenesisZero
             } else {
-                release.deployment_slot != 0
+                release.release_locus == ReleaseCoordinateLocusV2::ObservedPositive
             };
             if !slot_matches_cluster {
                 return Err(RpcIndexError::InvalidRelease);
@@ -327,6 +407,25 @@ impl RpcIndexPlan {
             if !programs.insert(release.program_id) {
                 return Err(RpcIndexError::DuplicateRelease);
             }
+        }
+        let genesis = Address::from_str(&self.cluster.genesis_hash)
+            .map_err(|_| RpcIndexError::InvalidCluster)?;
+        let release = &self.releases[0];
+        let expected_workflow = deployment_workflow_id_v3(
+            genesis,
+            self.deployment_manifest_id,
+            release.registry_release_id,
+        );
+        let expected_binding = release_deployment_binding_id_v1(
+            genesis,
+            self.deployment_manifest_id,
+            expected_workflow,
+            release.registry_release_id,
+        );
+        if self.deployment_workflow_id != expected_workflow
+            || self.release_deployment_binding_id != expected_binding
+        {
+            return Err(RpcIndexError::InvalidRelease);
         }
         Ok(())
     }
@@ -1048,9 +1147,12 @@ mod tests {
         IndexedProgramRelease {
             program_id: Address::new_from_array([0x31; 32]),
             program_data: Address::new_from_array([0x32; 32]),
+            program_data_sha256: [0x33; 32],
             elf_sha256: [0x33; 32],
             deployment_slot: 1,
-            release_manifest_sha256: [0x34; 32],
+            release_locus: ReleaseCoordinateLocusV2::ObservedPositive,
+            capability_manifest_id: [0x34; 32],
+            registry_release_id: [0x37; 32],
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
             enabled_intents: vec![],
@@ -1100,14 +1202,30 @@ mod tests {
         };
         let mut local_release = release();
         local_release.deployment_slot = 0;
+        local_release.release_locus = ReleaseCoordinateLocusV2::SynthesizedGenesisZero;
+        let genesis = Address::new_from_array([0x44; 32]);
+        let deployment_manifest_id = [0x45; 32];
+        let deployment_workflow_id = deployment_workflow_id_v3(
+            genesis,
+            deployment_manifest_id,
+            local_release.registry_release_id,
+        );
         let mut plan = RpcIndexPlan {
             cluster: RpcClusterBinding {
                 cluster_name: "local-validator".to_string(),
-                genesis_hash: "11".repeat(16),
+                genesis_hash: genesis.to_string(),
                 rpc_http_url: "http://127.0.0.1:9137".to_string(),
                 rpc_websocket_url: "ws://127.0.0.1:9138".to_string(),
             },
             releases: vec![local_release],
+            deployment_manifest_id,
+            deployment_workflow_id,
+            release_deployment_binding_id: release_deployment_binding_id_v1(
+                genesis,
+                deployment_manifest_id,
+                deployment_workflow_id,
+                [0x37; 32],
+            ),
             bounds,
         };
         assert!(plan.validate().is_ok());
@@ -1117,6 +1235,7 @@ mod tests {
         plan.cluster.cluster_name = "solana-devnet".to_string();
         plan.cluster.rpc_http_url = "https://api.devnet.solana.com".to_string();
         plan.cluster.rpc_websocket_url = "wss://api.devnet.solana.com/".to_string();
+        plan.releases[0].release_locus = ReleaseCoordinateLocusV2::ObservedPositive;
         assert!(plan.validate().is_ok());
         plan.releases[0].deployment_slot = 0;
         assert_eq!(plan.validate(), Err(RpcIndexError::InvalidRelease));

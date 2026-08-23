@@ -21,7 +21,7 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 /// Marker proving a directory was created by this lifecycle owner.
 pub const SESSION_MARKER: &str = "dragons-clutch/local-validator-session/v1\n";
 /// Public, secret-free configuration artifact written into every session.
-pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v6";
+pub const PUBLIC_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v7";
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -241,12 +241,15 @@ impl RealSourceConfigV3 {
 /// Agave's `--bpf-program` genesis path writes a ProgramData slot of zero, so
 /// local release coordinates require that exact slot. Public-cluster release
 /// coordinates are owned by a separate manifest and must not use this type.
-/// Construction records Program, ProgramData, and ELF digest; the process
-/// launcher remains responsible for checking the ELF bytes before using argv.
+/// Construction records Program, ProgramData, the complete synthesized
+/// ProgramData-data digest, and the ELF digest; the process launcher remains
+/// responsible for checking the ELF bytes before using argv.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalProgramRelease {
     pub program_id: Address,
     pub program_data: Address,
+    /// SHA-256 of the complete ProgramData account data synthesized at genesis.
+    pub program_data_sha256: [u8; 32],
     pub deployment_slot: u64,
     pub elf_sha256: [u8; 32],
     pub elf_path: PathBuf,
@@ -291,6 +294,7 @@ impl LocalProgramRelease {
         if self.program_id == Address::default()
             || self.program_data == Address::default()
             || self.program_id == self.program_data
+            || self.program_data_sha256 == [0; 32]
             || self.deployment_slot != 0
             || !self.elf_path.is_absolute()
             || self.elf_path == Path::new("/")
@@ -470,6 +474,8 @@ impl SessionLayout {
         writeln!(body, "schema={PUBLIC_MANIFEST_SCHEMA}").expect("String write is infallible");
         writeln!(body, "network=local-validator").expect("String write is infallible");
         writeln!(body, "release_coordinates=sealed").expect("String write is infallible");
+        writeln!(body, "clutch_release_locus=synthesized-genesis-zero")
+            .expect("String write is infallible");
         writeln!(
             body,
             "decoder_set={}",
@@ -527,6 +533,12 @@ impl SessionLayout {
         .expect("String write is infallible");
         writeln!(
             body,
+            "clutch_program_data_sha256={}",
+            hex(&config.clutch_release.program_data_sha256)
+        )
+        .expect("String write is infallible");
+        writeln!(
+            body,
             "clutch_deployment_slot={}",
             config.clutch_release.deployment_slot
         )
@@ -560,6 +572,12 @@ impl SessionLayout {
                 body,
                 "external_program_{index}_program_data={}",
                 release.program_data
+            )
+            .expect("String write is infallible");
+            writeln!(
+                body,
+                "external_program_{index}_program_data_sha256={}",
+                hex(&release.program_data_sha256)
             )
             .expect("String write is infallible");
             writeln!(
@@ -1103,6 +1121,7 @@ mod tests {
         let program = |byte, digest, name: &str| LocalProgramRelease {
             program_id: Address::new_from_array([byte; 32]),
             program_data: Address::new_from_array([byte + 20; 32]),
+            program_data_sha256: [digest + 20; 32],
             deployment_slot: 0,
             elf_sha256: [digest; 32],
             elf_path: PathBuf::from(format!("/tmp/{name}.so")),

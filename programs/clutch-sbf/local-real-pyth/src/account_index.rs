@@ -2799,23 +2799,41 @@ mod processed_fork_tests {
         let release = IndexedProgramRelease {
             program_id: Address::new_from_array([0x31; 32]),
             program_data: Address::new_from_array([0x32; 32]),
+            program_data_sha256: [0x33; 32],
             elf_sha256: [0x33; 32],
             deployment_slot: 1,
-            release_manifest_sha256: [0x34; 32],
+            release_locus: crate::rpc_index::ReleaseCoordinateLocusV2::ObservedPositive,
+            capability_manifest_id: [0x34; 32],
+            registry_release_id: [0x37; 32],
             capability_profile_id: [0x35; 32],
             source_commit: "36".repeat(20),
             enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         };
         let release_key = release.key();
+        let genesis = Address::new_from_array([0x44; 32]);
+        let deployment_manifest_id = [0x45; 32];
+        let deployment_workflow_id = crate::rpc_index::deployment_workflow_id_v3(
+            genesis,
+            deployment_manifest_id,
+            release.registry_release_id,
+        );
         let plan = RpcIndexPlan {
             cluster: RpcClusterBinding {
                 cluster_name: "test".to_string(),
-                genesis_hash: "11111111111111111111111111111111".to_string(),
+                genesis_hash: genesis.to_string(),
                 rpc_http_url: "http://127.0.0.1:8899".to_string(),
                 rpc_websocket_url: "ws://127.0.0.1:8900".to_string(),
             },
             releases: vec![release.clone()],
+            deployment_manifest_id,
+            deployment_workflow_id,
+            release_deployment_binding_id: crate::rpc_index::release_deployment_binding_id_v1(
+                genesis,
+                deployment_manifest_id,
+                deployment_workflow_id,
+                release.registry_release_id,
+            ),
             bounds: RpcAcquisitionBounds {
                 maximum_accounts_per_scan: 8,
                 maximum_account_data_bytes: 1024,

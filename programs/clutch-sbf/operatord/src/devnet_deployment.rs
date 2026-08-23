@@ -6,24 +6,21 @@
 //! `chain-serve`; it has no wallet, signer, blockhash, faucet, deployment, or
 //! transaction-submission capability.
 
-use crate::compose_chain_config::{
-    checked_capability_release, compose_checked_chain_config, DeploymentSlotPolicy,
-};
+use crate::compose_chain_config::{checked_capability_release, compose_checked_chain_config};
 use crate::Result;
+use clutch_local_real_pyth::rpc_index::ReleaseCoordinateLocusV2;
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 pub const DEVNET_DEPLOYMENT_MANIFEST_SCHEMA: &str =
-    "dragons-clutch/devnet-deployment-manifest/v1";
+    "dragons-clutch/devnet-deployment-manifest/v2";
 pub const DEVNET_GENESIS_HASH: &str = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 pub const DEVNET_RPC_HTTP: &str = "https://api.devnet.solana.com";
 pub const DEVNET_RPC_WEBSOCKET: &str = "wss://api.devnet.solana.com/";
 const MAX_DEPLOYMENT_MANIFEST_BYTES: usize = 65_536;
 const MAX_ELF_BYTES: usize = 10 * 1024 * 1024;
-const WORKFLOW_BINDING_DOMAIN: &[u8] =
-    b"dragons-clutch/devnet-deployment-workflow-binding/v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComposeDevnetOptions {
@@ -34,7 +31,7 @@ pub struct ComposeDevnetOptions {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct DevnetDeploymentManifestV1 {
+struct DevnetDeploymentManifestV2 {
     schema: String,
     network: String,
     genesis_hash: String,
@@ -43,6 +40,7 @@ struct DevnetDeploymentManifestV1 {
     release_coordinates: String,
     program_id: String,
     program_data: String,
+    program_data_sha256: String,
     deployment_slot: String,
     elf_sha256: String,
     capability_manifest_sha256: String,
@@ -158,7 +156,7 @@ fn canonical_positive(text: &str, name: &str) -> Result<u64> {
     Ok(value)
 }
 
-fn parse_manifest(path: &Path) -> Result<(DevnetDeploymentManifestV1, [u8; 32])> {
+fn parse_manifest(path: &Path) -> Result<(DevnetDeploymentManifestV2, [u8; 32])> {
     let bytes = bounded_read(
         path,
         MAX_DEPLOYMENT_MANIFEST_BYTES,
@@ -167,7 +165,7 @@ fn parse_manifest(path: &Path) -> Result<(DevnetDeploymentManifestV1, [u8; 32])>
     if !bytes.is_ascii() {
         return Err("devnet deployment manifest must be ASCII".into());
     }
-    let manifest: DevnetDeploymentManifestV1 = serde_json::from_slice(&bytes)?;
+    let manifest: DevnetDeploymentManifestV2 = serde_json::from_slice(&bytes)?;
     let mut canonical = serde_json::to_vec(&manifest)?;
     canonical.push(b'\n');
     if bytes != canonical {
@@ -237,12 +235,8 @@ pub fn compose(options: &ComposeDevnetOptions) -> Result<String> {
     }
     let program = Address::from_str(&manifest.program_id)?;
     let program_data = Address::from_str(&manifest.program_data)?;
+    let program_data_sha256 = hash32(&manifest.program_data_sha256, "program_data_sha256")?;
     let slot = canonical_positive(&manifest.deployment_slot, "deployment_slot")?;
-    let mut workflow_preimage = Vec::with_capacity(WORKFLOW_BINDING_DOMAIN.len() + 64);
-    workflow_preimage.extend_from_slice(WORKFLOW_BINDING_DOMAIN);
-    workflow_preimage.extend_from_slice(&deployment_manifest_sha256);
-    workflow_preimage.extend_from_slice(&checked.manifest_sha256);
-    let workflow_binding = solana_sha256_hasher::hash(&workflow_preimage).to_bytes();
     compose_checked_chain_config(
         &checked,
         "solana-devnet",
@@ -251,11 +245,12 @@ pub fn compose(options: &ComposeDevnetOptions) -> Result<String> {
         DEVNET_RPC_WEBSOCKET,
         program,
         program_data,
+        program_data_sha256,
         slot,
-        DeploymentSlotPolicy::ObservedPublicPositive,
+        ReleaseCoordinateLocusV2::ObservedPositive,
         &manifest.source_neutral_sink,
         &manifest.compiler_release_sha256,
-        &workflow_binding,
+        deployment_manifest_sha256,
     )
 }
 
@@ -263,8 +258,8 @@ pub fn compose(options: &ComposeDevnetOptions) -> Result<String> {
 mod tests {
     use super::*;
 
-    fn manifest() -> DevnetDeploymentManifestV1 {
-        DevnetDeploymentManifestV1 {
+    fn manifest() -> DevnetDeploymentManifestV2 {
+        DevnetDeploymentManifestV2 {
             schema: DEVNET_DEPLOYMENT_MANIFEST_SCHEMA.to_string(),
             network: "solana-devnet".to_string(),
             genesis_hash: DEVNET_GENESIS_HASH.to_string(),
@@ -273,6 +268,7 @@ mod tests {
             release_coordinates: "observed-finalized".to_string(),
             program_id: "11111111111111111111111111111112".to_string(),
             program_data: "11111111111111111111111111111113".to_string(),
+            program_data_sha256: "66".repeat(32),
             deployment_slot: "7".to_string(),
             elf_sha256: "11".repeat(32),
             capability_manifest_sha256: "22".repeat(32),
@@ -293,8 +289,8 @@ mod tests {
         assert!(!text.contains("session"));
         assert!(!text.contains("wallet"));
         assert!(!text.contains("keypair"));
-        assert!(serde_json::from_slice::<DevnetDeploymentManifestV1>(
-            br#"{"schema":"dragons-clutch/local-validator-public-manifest/v6"}"#,
+        assert!(serde_json::from_slice::<DevnetDeploymentManifestV2>(
+            br#"{"schema":"dragons-clutch/local-validator-public-manifest/v7"}"#,
         )
         .is_err());
         Ok(())

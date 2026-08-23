@@ -2,7 +2,7 @@
 //!
 //! This is deliberately separate from the historical mock modes.  It accepts
 //! only explicit built-release, capability-profile, compiler, neutral-sink,
-//! source, validator, and genesis coordinates; creates the v6 sealed session
+//! source, validator, and genesis coordinates; creates the v7 sealed session
 //! through its semantic owner; composes the read-only chain configuration;
 //! and can supervise that exact validator while `chain-serve` runs.  It never
 //! reads a Solana CLI wallet, creates a key, signs, submits, deploys, or calls
@@ -315,6 +315,15 @@ fn verify_file_digest(
     maximum: usize,
     name: &str,
 ) -> Result<usize> {
+    Ok(verified_file_bytes(path, expected, maximum, name)?.len())
+}
+
+fn verified_file_bytes(
+    path: &Path,
+    expected: [u8; 32],
+    maximum: usize,
+    name: &str,
+) -> Result<Vec<u8>> {
     let resolved = resolve_existing_input(path, name)?;
     if resolved.as_path() != path {
         return Err(format!("{name} resolved path changed").into());
@@ -323,7 +332,23 @@ fn verify_file_digest(
     if solana_sha256_hasher::hash(&bytes).to_bytes() != expected {
         return Err(format!("{name} bytes disagree with their exact digest").into());
     }
-    Ok(bytes.len())
+    Ok(bytes)
+}
+
+fn synthesized_program_data_sha256(elf: &[u8]) -> Result<[u8; 32]> {
+    let capacity = clutch_sbf::loader_state::PROGRAMDATA_METADATA_LEN
+        .checked_add(elf.len())
+        .ok_or("synthesized ProgramData length overflowed")?;
+    let mut body = Vec::with_capacity(capacity);
+    body.extend_from_slice(&clutch_sbf::loader_state::LOADER_TAG_PROGRAMDATA.to_le_bytes());
+    body.extend_from_slice(&0_u64.to_le_bytes());
+    body.push(clutch_sbf::loader_state::OPTION_SOME);
+    body.extend_from_slice(&[0; 32]);
+    if body.len() != clutch_sbf::loader_state::PROGRAMDATA_METADATA_LEN {
+        return Err("pinned Agave ProgramData metadata width changed".into());
+    }
+    body.extend_from_slice(elf);
+    Ok(solana_sha256_hasher::hash(&body).to_bytes())
 }
 
 fn add_bounded_size(total: &mut usize, size: usize, maximum: usize, name: &str) -> Result<()> {
@@ -403,7 +428,7 @@ fn release(
         return Err("external program ELF input must be an absolute .so path".into());
     }
     let elf_sha256 = digest(&wire.elf_sha256, "external elf_sha256")?;
-    let elf_bytes = verify_file_digest(
+    let elf = verified_file_bytes(
         &elf_source,
         elf_sha256,
         MAX_ELF_BYTES,
@@ -416,6 +441,7 @@ fn release(
     let release = LocalProgramRelease {
         program_id,
         program_data,
+        program_data_sha256: synthesized_program_data_sha256(&elf)?,
         deployment_slot: local_synthesized_slot(
             &wire.deployment_slot,
             "external deployment_slot",
@@ -433,7 +459,7 @@ fn release(
             mode: 0o400,
             name: "external program ELF",
         },
-        elf_bytes,
+        elf.len(),
     ))
 }
 
@@ -538,7 +564,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
         return Err("Clutch release ELF input must be an absolute .so path".into());
     }
     let clutch_elf_path = sealed_inputs.join("clutch_sbf.so");
-    let clutch_elf_bytes = verify_file_digest(
+    let clutch_elf = verified_file_bytes(
         &clutch_elf_source,
         checked.elf_sha256,
         MAX_ELF_BYTES,
@@ -546,7 +572,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     )?;
     add_bounded_size(
         &mut staged_input_bytes,
-        clutch_elf_bytes,
+        clutch_elf.len(),
         MAX_STAGED_INPUT_BYTES,
         "staged input",
     )?;
@@ -582,6 +608,7 @@ fn prepare(options: &LocalLaunchOptions) -> Result<PreparedLocalChain> {
     let clutch_release = LocalProgramRelease {
         program_id: clutch_program,
         program_data: clutch_program_data,
+        program_data_sha256: synthesized_program_data_sha256(&clutch_elf)?,
         deployment_slot: local_synthesized_slot(
             &wire.release.deployment_slot,
             "deployment_slot",
@@ -1069,6 +1096,25 @@ mod tests {
             "genesis_accounts"
         )
         .is_err());
+    }
+
+    #[test]
+    fn synthesized_programdata_hash_covers_exact_metadata_and_elf() {
+        let elf = b"exact-sbf-elf";
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&clutch_sbf::loader_state::LOADER_TAG_PROGRAMDATA.to_le_bytes());
+        expected.extend_from_slice(&0_u64.to_le_bytes());
+        expected.push(clutch_sbf::loader_state::OPTION_SOME);
+        expected.extend_from_slice(&[0; 32]);
+        expected.extend_from_slice(elf);
+        let digest = synthesized_program_data_sha256(elf).expect("exact metadata is valid");
+        assert_eq!(digest, solana_sha256_hasher::hash(&expected).to_bytes());
+        assert_ne!(digest, solana_sha256_hasher::hash(elf).to_bytes());
+        assert_ne!(
+            digest,
+            synthesized_program_data_sha256(b"different-sbf-elf")
+                .expect("exact metadata is valid")
+        );
     }
 
     #[test]

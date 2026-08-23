@@ -8,7 +8,13 @@
 
 use crate::{chain_server, repo_path, Result};
 use clutch_local_real_pyth::account_index::CANONICAL_ACCOUNT_DECODER_SET;
-use clutch_local_real_pyth::rpc_index::CanonicalFamily;
+use clutch_local_real_pyth::rpc_index::{
+    deployment_workflow_id_v3, release_deployment_binding_id_v1, CanonicalFamily,
+    ReleaseCoordinateLocusV2,
+};
+use clutch_product_series::{
+    ContentId, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
+};
 use serde_json::{json, Value};
 use solana_address::Address;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,26 +27,10 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const LOCAL_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v6";
+const LOCAL_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v7";
 const MAX_LOCAL_MANIFEST_BYTES: usize = 262_144;
 const MAX_CAPABILITY_MANIFEST_BYTES: usize = 1_048_576;
-const WORKFLOW_DOMAIN: &[u8] = b"dragons-clutch/operatord-chain-config-workflow/v2\0";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeploymentSlotPolicy {
-    SynthesizedLocalZero,
-    ObservedPublicPositive,
-}
-
-impl DeploymentSlotPolicy {
-    const fn accepts(self, slot: u64) -> bool {
-        match self {
-            Self::SynthesizedLocalZero => slot == 0,
-            Self::ObservedPublicPositive => slot != 0,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComposeOptions {
@@ -117,7 +107,7 @@ fn bounded_read(path: &Path, maximum: usize, name: &str) -> Result<Vec<u8>> {
     bounded_read_resolved(&resolved, maximum, name)
 }
 
-fn parse_local_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
+fn parse_local_manifest(path: &Path) -> Result<(BTreeMap<String, String>, [u8; 32])> {
     let resolved = resolve_existing_input(path, "local release manifest")?;
     let bytes = bounded_read_resolved(
         &resolved,
@@ -147,6 +137,7 @@ fn parse_local_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
     if field(&fields, "schema")? != LOCAL_MANIFEST_SCHEMA
         || field(&fields, "network")? != "local-validator"
         || field(&fields, "release_coordinates")? != "sealed"
+        || field(&fields, "clutch_release_locus")? != "synthesized-genesis-zero"
         || field(&fields, "decoder_set")? != CANONICAL_ACCOUNT_DECODER_SET
         || field(&fields, "signing")? != "not-exposed"
         || field(&fields, "submission")? != "not-exposed"
@@ -161,6 +152,7 @@ fn parse_local_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
         "source_neutral_sink",
         "clutch_program",
         "clutch_program_data",
+        "clutch_program_data_sha256",
         "clutch_deployment_slot",
         "clutch_elf_sha256",
         "clutch_elf_path",
@@ -176,7 +168,8 @@ fn parse_local_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
     {
         return Err("local release manifest session owner marker mismatches".into());
     }
-    Ok(fields)
+    let manifest_id = solana_sha256_hasher::hash(&bytes).to_bytes();
+    Ok((fields, manifest_id))
 }
 
 fn field<'a>(fields: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str> {
@@ -456,14 +449,6 @@ fn enabled_intents(summary: &Value) -> Result<Vec<[u8; 3]>> {
     Ok(output)
 }
 
-fn sha_join(parts: &[&[u8]]) -> [u8; 32] {
-    let mut bytes = Vec::new();
-    for part in parts {
-        bytes.extend_from_slice(part);
-    }
-    solana_sha256_hasher::hash(&bytes).to_bytes()
-}
-
 pub(crate) fn validate_upgradeable_release_coordinates(
     program: Address,
     program_data: Address,
@@ -477,7 +462,8 @@ pub(crate) fn validate_upgradeable_release_coordinates(
 }
 
 pub fn compose(options: &ComposeOptions) -> Result<String> {
-    let local = parse_local_manifest(&options.local_release_manifest)?;
+    let (local, deployment_manifest_id) =
+        parse_local_manifest(&options.local_release_manifest)?;
     if field(&local, "rpc_http")? != options.rpc_http_url
         || field(&local, "rpc_websocket")? != options.rpc_websocket_url
     {
@@ -529,11 +515,15 @@ pub fn compose(options: &ComposeOptions) -> Result<String> {
         &options.rpc_websocket_url,
         program,
         program_data,
+        hash32(
+            field(&local, "clutch_program_data_sha256")?,
+            "clutch_program_data_sha256",
+        )?,
         slot,
-        DeploymentSlotPolicy::SynthesizedLocalZero,
+        ReleaseCoordinateLocusV2::SynthesizedGenesisZero,
         field(&local, "source_neutral_sink")?,
         field(&local, "compiler_release_sha256")?,
-        &checked.manifest_sha256,
+        deployment_manifest_id,
     )
 }
 
@@ -546,11 +536,12 @@ pub(crate) fn compose_checked_chain_config(
     rpc_websocket_url: &str,
     program: Address,
     program_data: Address,
+    program_data_sha256: [u8; 32],
     slot: u64,
-    slot_policy: DeploymentSlotPolicy,
+    release_locus: ReleaseCoordinateLocusV2,
     source_neutral_sink: &str,
     compiler_release_sha256: &str,
-    workflow_binding: &[u8; 32],
+    deployment_manifest_id: [u8; 32],
 ) -> Result<String> {
     let intents = enabled_intents(&checked.summary)?;
     let families = selected_families(&checked.summary)?;
@@ -560,23 +551,47 @@ pub(crate) fn compose_checked_chain_config(
     }
     hash32(compiler_release_sha256, "compiler_release_sha256")?;
     validate_upgradeable_release_coordinates(program, program_data)?;
-    if !slot_policy.accepts(slot)
-        || workflow_binding == &[0; 32]
+    let genesis = Address::from_str(expected_genesis)?;
+    if genesis == Address::default()
+        || program_data_sha256 == [0; 32]
+        || deployment_manifest_id == [0; 32]
         || cluster_name.is_empty()
-        || expected_genesis.is_empty()
         || rpc_http_url.is_empty()
         || rpc_websocket_url.is_empty()
     {
         return Err("chain configuration coordinates are incomplete".into());
     }
-    let workflow_id = sha_join(&[
-        WORKFLOW_DOMAIN,
-        workflow_binding,
-        expected_genesis.as_bytes(),
-        program.as_ref(),
-    ]);
+    let product_locus = match release_locus {
+        ReleaseCoordinateLocusV2::SynthesizedGenesisZero => {
+            RegistryReleaseLocusV2::SynthesizedGenesisZero
+        }
+        ReleaseCoordinateLocusV2::ObservedPositive => RegistryReleaseLocusV2::ObservedPositive,
+    };
+    let registry_release_id = RegistryProgramReleaseV2::new(
+        ContentId::from_bytes(program.to_bytes()),
+        ContentId::from_bytes(program_data.to_bytes()),
+        ContentId::from_bytes(program_data_sha256),
+        ContentId::from_bytes(checked.manifest_sha256),
+        slot,
+        product_locus,
+    )
+    .map_err(|_| "Product RegistryProgramReleaseV2 rejected release coordinates")?
+    .id()
+    .map_err(|_| "Product RegistryProgramReleaseV2 rejected release coordinates")?
+    .bytes();
+    let workflow_id = deployment_workflow_id_v3(
+        genesis,
+        deployment_manifest_id,
+        registry_release_id,
+    );
+    let release_deployment_binding_id = release_deployment_binding_id_v1(
+        genesis,
+        deployment_manifest_id,
+        workflow_id,
+        registry_release_id,
+    );
     let value = json!({
-        "schema": "dragons-clutch/operatord-chain-config/v2",
+        "schema": "dragons-clutch/operatord-chain-config/v3",
         "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
         "cluster": {
             "name": cluster_name,
@@ -587,9 +602,12 @@ pub(crate) fn compose_checked_chain_config(
         "releases": [{
             "programId": program.to_string(),
             "programData": program_data.to_string(),
+            "programDataSha256": hex(program_data_sha256),
             "elfSha256": hex(checked.elf_sha256),
             "deploymentSlot": slot.to_string(),
-            "releaseManifestSha256": hex(checked.manifest_sha256),
+            "releaseLocus": release_locus.name(),
+            "capabilityManifestId": hex(checked.manifest_sha256),
+            "registryReleaseId": hex(registry_release_id),
             "capabilityProfileId": hex(checked.profile_identity),
             "sourceCommit": checked.source_commit.as_str(),
             "enabledIntents": intents.iter().map(|triple| json!({
@@ -600,7 +618,9 @@ pub(crate) fn compose_checked_chain_config(
             "families": families.iter().map(|family| family.name()).collect::<Vec<_>>()
         }],
         "sourceNeutralSink": source_neutral_sink,
+        "deploymentManifestId": hex(deployment_manifest_id),
         "workflowId": hex(workflow_id),
+        "releaseDeploymentBindingId": hex(release_deployment_binding_id),
         "maximumKeeperActions": "4096",
         "bounds": {
             "maximumAccountsPerScan": "65536",
@@ -645,10 +665,17 @@ mod tests {
     }
 
     #[test]
-    fn deployment_slot_policies_are_disjoint() {
-        assert!(DeploymentSlotPolicy::SynthesizedLocalZero.accepts(0));
-        assert!(!DeploymentSlotPolicy::SynthesizedLocalZero.accepts(1));
-        assert!(!DeploymentSlotPolicy::ObservedPublicPositive.accepts(0));
-        assert!(DeploymentSlotPolicy::ObservedPublicPositive.accepts(1));
+    fn deployment_workflow_binds_genesis_manifest_and_product_release() {
+        let genesis = Address::new_from_array([0x11; 32]);
+        let manifest = [0x22; 32];
+        let release = [0x33; 32];
+        let workflow = deployment_workflow_id_v3(genesis, manifest, release);
+        assert_ne!(workflow, deployment_workflow_id_v3(Address::new_from_array([0x44; 32]), manifest, release));
+        assert_ne!(workflow, deployment_workflow_id_v3(genesis, [0x55; 32], release));
+        assert_ne!(workflow, deployment_workflow_id_v3(genesis, manifest, [0x66; 32]));
+        assert_ne!(
+            release_deployment_binding_id_v1(genesis, manifest, workflow, release),
+            release_deployment_binding_id_v1(genesis, manifest, [0x77; 32], release),
+        );
     }
 }

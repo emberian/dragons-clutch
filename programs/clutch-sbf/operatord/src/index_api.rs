@@ -440,9 +440,12 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
                 "releaseKey": release.key(),
                 "programId": release.program_id.to_string(),
                 "programData": release.program_data.to_string(),
+                "programDataSha256": hex32(release.program_data_sha256),
                 "deploymentSlot": release.deployment_slot.to_string(),
+                "releaseLocus": release.release_locus.name(),
                 "elfSha256": hex32(release.elf_sha256),
-                "releaseManifestSha256": hex32(release.release_manifest_sha256),
+                "capabilityManifestId": hex32(release.capability_manifest_id),
+                "registryReleaseId": hex32(release.registry_release_id),
                 "capabilityProfileId": hex32(release.capability_profile_id),
                 "sourceCommit": release.source_commit,
                 "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
@@ -457,13 +460,16 @@ fn transport_binding(plan: &clutch_local_real_pyth::rpc_index::RpcIndexPlan) -> 
     let http = public_rpc_endpoint_binding(&plan.cluster.rpc_http_url);
     let websocket = public_rpc_endpoint_binding(&plan.cluster.rpc_websocket_url);
     json!({
-        "schema": "dragons-clutch/operator-rpc-transport-binding/v3",
+        "schema": "dragons-clutch/operator-rpc-transport-binding/v4",
         "verificationDisposition": "last-complete-untrusted-http-release-bracket",
         "authorityEligible": false,
         "clusterName": plan.cluster.cluster_name,
         "genesisHash": plan.cluster.genesis_hash,
         "clusterKey": plan.cluster.key(),
         "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
+        "deploymentManifestId": hex32(plan.deployment_manifest_id),
+        "workflowId": hex32(plan.deployment_workflow_id),
+        "releaseDeploymentBindingId": hex32(plan.release_deployment_binding_id),
         "rpcHttpEndpoint": {
             "redacted": http.redacted,
             "bindingSha256": hex32(http.binding_sha256)

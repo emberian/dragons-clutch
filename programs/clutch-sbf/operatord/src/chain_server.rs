@@ -20,7 +20,10 @@ use clutch_local_real_pyth::index_service::RpcIndexEngine;
 use clutch_local_real_pyth::operatord::ResumableKeeperSelector;
 use clutch_local_real_pyth::rpc_index::{
     CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, PlannedRpcRequest,
-    RpcAcquisitionBounds, RpcClusterBinding, RpcIndexPlan,
+    ReleaseCoordinateLocusV2, RpcAcquisitionBounds, RpcClusterBinding, RpcIndexPlan,
+};
+use clutch_product_series::{
+    ContentId, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
 };
 use clutch_sbf::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_METADATA_LEN,
@@ -36,7 +39,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
-const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v2";
+const CONFIG_SCHEMA: &str = "dragons-clutch/operatord-chain-config/v3";
 const MAX_CONFIG_BYTES: usize = 262_144;
 
 #[derive(Debug, Deserialize)]
@@ -47,7 +50,9 @@ struct ChainConfigWire {
     cluster: ClusterWire,
     releases: Vec<ReleaseWire>,
     source_neutral_sink: String,
+    deployment_manifest_id: String,
     workflow_id: String,
+    release_deployment_binding_id: String,
     maximum_keeper_actions: String,
     bounds: BoundsWire,
     polling_interval_milliseconds: String,
@@ -71,9 +76,12 @@ struct ClusterWire {
 struct ReleaseWire {
     program_id: String,
     program_data: String,
+    program_data_sha256: String,
     elf_sha256: String,
     deployment_slot: String,
-    release_manifest_sha256: String,
+    release_locus: String,
+    capability_manifest_id: String,
+    registry_release_id: String,
     capability_profile_id: String,
     source_commit: String,
     enabled_intents: Vec<IntentWire>,
@@ -205,7 +213,7 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
     }
     let wire: ChainConfigWire = serde_json::from_slice(&bytes)?;
     if wire.schema != CONFIG_SCHEMA {
-        return Err("chain config schema is not operatord-chain-config/v2".into());
+        return Err("chain config schema is not operatord-chain-config/v3".into());
     }
     if wire.decoder_set != CANONICAL_ACCOUNT_DECODER_SET {
         return Err(format!(
@@ -213,9 +221,15 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
         )
         .into());
     }
-    if wire.releases.is_empty() || wire.releases.len() > 64 {
-        return Err("chain config must contain 1..=64 explicit releases".into());
+    if wire.releases.len() != 1 {
+        return Err("chain config must contain exactly one explicit release".into());
     }
+    let deployment_manifest_id = hash32(&wire.deployment_manifest_id, "deploymentManifestId")?;
+    let deployment_workflow_id = hash32(&wire.workflow_id, "workflowId")?;
+    let release_deployment_binding_id = hash32(
+        &wire.release_deployment_binding_id,
+        "releaseDeploymentBindingId",
+    )?;
     let mut releases = Vec::with_capacity(wire.releases.len());
     for (index, release) in wire.releases.into_iter().enumerate() {
         let families = release
@@ -243,21 +257,66 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        releases.push(IndexedProgramRelease {
-            program_id: address(&release.program_id, &format!("releases[{index}].programId"))?,
-            program_data: address(
+        let program_id = address(&release.program_id, &format!("releases[{index}].programId"))?;
+        let program_data = address(
                 &release.program_data,
                 &format!("releases[{index}].programData"),
-            )?,
-            elf_sha256: hash32(&release.elf_sha256, &format!("releases[{index}].elfSha256"))?,
-            deployment_slot: parse_unsigned(
+            )?;
+        crate::compose_chain_config::validate_upgradeable_release_coordinates(
+            program_id,
+            program_data,
+        )?;
+        let program_data_sha256 = hash32(
+            &release.program_data_sha256,
+            &format!("releases[{index}].programDataSha256"),
+        )?;
+        let deployment_slot = parse_unsigned(
                 &release.deployment_slot,
                 &format!("releases[{index}].deploymentSlot"),
-            )?,
-            release_manifest_sha256: hash32(
-                &release.release_manifest_sha256,
-                &format!("releases[{index}].releaseManifestSha256"),
-            )?,
+            )?;
+        let release_locus = match release.release_locus.as_str() {
+            "synthesized-genesis-zero" => ReleaseCoordinateLocusV2::SynthesizedGenesisZero,
+            "observed-positive" => ReleaseCoordinateLocusV2::ObservedPositive,
+            _ => return Err(format!("releases[{index}].releaseLocus is unknown").into()),
+        };
+        let product_locus = match release_locus {
+            ReleaseCoordinateLocusV2::SynthesizedGenesisZero => {
+                RegistryReleaseLocusV2::SynthesizedGenesisZero
+            }
+            ReleaseCoordinateLocusV2::ObservedPositive => RegistryReleaseLocusV2::ObservedPositive,
+        };
+        let capability_manifest_id = hash32(
+            &release.capability_manifest_id,
+            &format!("releases[{index}].capabilityManifestId"),
+        )?;
+        let registry_release_id = hash32(
+            &release.registry_release_id,
+            &format!("releases[{index}].registryReleaseId"),
+        )?;
+        let derived_registry_release_id = RegistryProgramReleaseV2::new(
+            ContentId::from_bytes(program_id.to_bytes()),
+            ContentId::from_bytes(program_data.to_bytes()),
+            ContentId::from_bytes(program_data_sha256),
+            ContentId::from_bytes(capability_manifest_id),
+            deployment_slot,
+            product_locus,
+        )
+        .map_err(|_| format!("releases[{index}] is not a valid RegistryProgramReleaseV2"))?
+        .id()
+        .map_err(|_| format!("releases[{index}] is not a valid RegistryProgramReleaseV2"))?
+        .bytes();
+        if registry_release_id != derived_registry_release_id {
+            return Err(format!("releases[{index}].registryReleaseId is not Product-derived").into());
+        }
+        releases.push(IndexedProgramRelease {
+            program_id,
+            program_data,
+            program_data_sha256,
+            elf_sha256: hash32(&release.elf_sha256, &format!("releases[{index}].elfSha256"))?,
+            deployment_slot,
+            release_locus,
+            capability_manifest_id,
+            registry_release_id,
             capability_profile_id: hash32(
                 &release.capability_profile_id,
                 &format!("releases[{index}].capabilityProfileId"),
@@ -275,6 +334,9 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
             rpc_websocket_url: wire.cluster.rpc_websocket_url,
         },
         releases,
+        deployment_manifest_id,
+        deployment_workflow_id,
+        release_deployment_binding_id,
         bounds: RpcAcquisitionBounds {
             maximum_accounts_per_scan: parse_unsigned(
                 &wire.bounds.maximum_accounts_per_scan,
@@ -342,7 +404,7 @@ fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
         return Err("WebSocket reconnect bounds require initial 100..=10000ms and initial<=maximum<=60000ms".into());
     }
     let selector = ResumableKeeperSelector {
-        workflow_id: hash32(&wire.workflow_id, "workflowId")?,
+        workflow_id: deployment_workflow_id,
         maximum_actions: parse_unsigned(&wire.maximum_keeper_actions, "maximumKeeperActions")?,
     };
     selector.validate()?;
@@ -524,6 +586,11 @@ pub(crate) fn verify_chain_bindings(plan: &RpcIndexPlan, timeout_seconds: u64) -
         {
             return Err(format!("release {index} ProgramData address or slot differs").into());
         }
+        if solana_sha256_hasher::hash(&programdata.data).to_bytes()
+            != release.program_data_sha256
+        {
+            return Err(format!("release {index} complete ProgramData SHA-256 differs").into());
+        }
         let elf = programdata
             .data
             .get(PROGRAMDATA_METADATA_LEN..)
@@ -678,4 +745,114 @@ pub fn serve(port: u16, statics: PathBuf, config_path: &Path) -> Result<()> {
     );
     server.serve_forever();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clutch_local_real_pyth::rpc_index::{
+        deployment_workflow_id_v3, release_deployment_binding_id_v1,
+    };
+
+    fn hex(bytes: [u8; 32]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn valid_config() -> Value {
+        let program = Address::new_from_array([0x11; 32]);
+        let loader = Address::new_from_array(clutch_sbf::loader_state::UPGRADEABLE_LOADER_ID);
+        let program_data = Address::find_program_address(&[program.as_ref()], &loader).0;
+        let program_data_sha256 = [0x22; 32];
+        let capability_manifest_id = [0x33; 32];
+        let registry_release_id = RegistryProgramReleaseV2::new(
+            ContentId::from_bytes(program.to_bytes()),
+            ContentId::from_bytes(program_data.to_bytes()),
+            ContentId::from_bytes(program_data_sha256),
+            ContentId::from_bytes(capability_manifest_id),
+            7,
+            RegistryReleaseLocusV2::ObservedPositive,
+        )
+        .expect("fixture release is valid")
+        .id()
+        .expect("fixture release has an identity")
+        .bytes();
+        let genesis = Address::new_from_array([0x44; 32]);
+        let deployment_manifest_id = [0x55; 32];
+        let workflow_id = deployment_workflow_id_v3(
+            genesis,
+            deployment_manifest_id,
+            registry_release_id,
+        );
+        let binding_id = release_deployment_binding_id_v1(
+            genesis,
+            deployment_manifest_id,
+            workflow_id,
+            registry_release_id,
+        );
+        json!({
+            "schema": CONFIG_SCHEMA,
+            "decoderSet": CANONICAL_ACCOUNT_DECODER_SET,
+            "cluster": {
+                "name": "solana-devnet",
+                "genesisHash": genesis.to_string(),
+                "rpcHttpUrl": "https://api.devnet.solana.com",
+                "rpcWebsocketUrl": "wss://api.devnet.solana.com/"
+            },
+            "releases": [{
+                "programId": program.to_string(),
+                "programData": program_data.to_string(),
+                "programDataSha256": hex(program_data_sha256),
+                "elfSha256": hex([0x66; 32]),
+                "deploymentSlot": "7",
+                "releaseLocus": "observed-positive",
+                "capabilityManifestId": hex(capability_manifest_id),
+                "registryReleaseId": hex(registry_release_id),
+                "capabilityProfileId": hex([0x77; 32]),
+                "sourceCommit": "88".repeat(20),
+                "enabledIntents": [],
+                "families": ["general"]
+            }],
+            "sourceNeutralSink": Address::new_from_array([0x99; 32]).to_string(),
+            "deploymentManifestId": hex(deployment_manifest_id),
+            "workflowId": hex(workflow_id),
+            "releaseDeploymentBindingId": hex(binding_id),
+            "maximumKeeperActions": "4096",
+            "bounds": {
+                "maximumAccountsPerScan": "1",
+                "maximumAccountDataBytes": "1",
+                "maximumTotalResponseBytes": "1",
+                "maximumSubscriptions": "4",
+                "maximumAddresses": "8",
+                "maximumVersionsPerAddress": "4",
+                "maximumForkNodes": "8"
+            },
+            "pollingIntervalMilliseconds": "5000",
+            "rpcTimeoutSeconds": "30",
+            "websocketReconnectInitialMilliseconds": "500",
+            "websocketReconnectMaximumMilliseconds": "30000",
+            "compilerReleaseSha256": hex([0xaa; 32])
+        })
+    }
+
+    #[test]
+    fn chain_config_refuses_forged_product_and_operator_identities() {
+        let valid = valid_config();
+        assert!(parse_config_bytes(&serde_json::to_vec(&valid).unwrap()).is_ok());
+
+        let mut forged_release = valid.clone();
+        forged_release["releases"][0]["registryReleaseId"] = Value::String("bb".repeat(32));
+        assert!(parse_config_bytes(&serde_json::to_vec(&forged_release).unwrap()).is_err());
+
+        let mut forged_manifest = valid;
+        forged_manifest["deploymentManifestId"] = Value::String("cc".repeat(32));
+        assert!(parse_config_bytes(&serde_json::to_vec(&forged_manifest).unwrap()).is_err());
+    }
+
+    #[test]
+    fn chain_config_refuses_cross_locus_slots() {
+        let mut value = valid_config();
+        value["releases"][0]["releaseLocus"] =
+            Value::String("synthesized-genesis-zero".to_string());
+        assert!(parse_config_bytes(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
 }

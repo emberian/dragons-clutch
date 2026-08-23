@@ -416,6 +416,7 @@ impl<'index> OperatorJsonApi<'index> {
     }
 
     fn releases(&self) -> OperatorJsonResponse {
+        let plan = self.index.acquisition_plan();
         let releases: Vec<Value> = self
             .index
             .releases()
@@ -425,9 +426,12 @@ impl<'index> OperatorJsonApi<'index> {
                     "releaseKey": release.key(),
                     "programId": release.program_id.to_string(),
                     "programData": release.program_data.to_string(),
+                    "programDataSha256": hex32(release.program_data_sha256),
                     "elfSha256": hex32(release.elf_sha256),
                     "deploymentSlot": release.deployment_slot.to_string(),
-                    "releaseManifestSha256": hex32(release.release_manifest_sha256),
+                    "releaseLocus": release.release_locus.name(),
+                    "capabilityManifestId": hex32(release.capability_manifest_id),
+                    "registryReleaseId": hex32(release.registry_release_id),
                     "capabilityProfileId": hex32(release.capability_profile_id),
                     "sourceCommit": release.source_commit,
                     "enabledIntents": release.enabled_intents.iter().map(|intent| json!({
@@ -441,7 +445,15 @@ impl<'index> OperatorJsonApi<'index> {
             .collect();
         response(
             200,
-            json!({"cluster": self.index.cluster_key(), "authorityEligible": false, "releases": releases}),
+            json!({
+                "schema": "dragons-clutch/operator-release-projection/v2",
+                "cluster": self.index.cluster_key(),
+                "authorityEligible": false,
+                "deploymentManifestId": hex32(plan.deployment_manifest_id),
+                "workflowId": hex32(plan.deployment_workflow_id),
+                "releaseDeploymentBindingId": hex32(plan.release_deployment_binding_id),
+                "releases": releases
+            }),
         )
     }
 
