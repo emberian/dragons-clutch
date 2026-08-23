@@ -25,6 +25,7 @@ use crate::instructions::product_artifact::{
     authenticate_series_registry_capability_refs_v2_for_mutation,
     AuthenticatedRegistryCapabilityReleaseV3, AuthenticatedRegistryCapabilityV3,
 };
+use crate::instructions::product_market::AuthenticatedSeriesMarketLinkActivationV1;
 use crate::instructions::series_failure_funding::{
     mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
 };
@@ -49,7 +50,8 @@ use clutch_product_series::{
     AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV1,
     CompiledProductSeriesBundleV1Id, CompiledProductSeriesBundleV5,
     CompiledProductSeriesBundleV5Id, CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
-    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, MarketInstanceV2Id,
+    NativeClaimBasisV1, PriceMeasurePolicyV1,
     ProductSeriesBundleInputsV5, ProductTemplateV4, RegistryCapabilityProjectionV2,
     SeriesActivationContextV1, SeriesAttachmentPlanV1, SeriesAttachmentPlanV4,
     AuthenticatedSeriesFundingAuthorityV2, SeriesFundingComponentV1, SeriesFundingComponentV2,
@@ -88,6 +90,9 @@ use solana_pubkey::Pubkey;
 pub const SERIES_CUSTODY_COUNT_V1: usize = SERIES_FUNDING_COMPONENT_COUNT;
 /// Canonical generation of the sole funding activation permitted by V1.
 pub const SERIES_ACTIVATION_GENERATION_V1: u64 = 1;
+
+const SERIES_OCCURRENCE_COMPLETION_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-occurrence-completion-authentication/v2";
 
 /// Exact read-only Product/Series artifact count used by registration and
 /// every later transition that reconstructs the immutable join.
@@ -1241,6 +1246,212 @@ impl AuthenticatedSeriesFundingAccountV2 {
     /// Exact hostile-decoded current body.
     pub const fn value(self) -> SeriesFundingAccountV2 {
         self.value
+    }
+}
+
+/// Private Product replay evidence that one exact pending FundingV2 ordinal
+/// was completed only after its `0xaa` admission and `0xad` activation were
+/// durably reauthenticated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesOccurrenceCompletionV2 {
+    id: ContentId,
+    funding_account: Pubkey,
+    funding_state_before_id: ContentId,
+    funding_state_after_id: ContentId,
+    link_activation_id: ContentId,
+    link_account: Pubkey,
+    link_semantic_before_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    generation: u64,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    disposition: clutch_product_series::SeriesMarketDispositionV1,
+    reservation_receipt_id: ContentId,
+    market_admission_receipt_id: ContentId,
+}
+
+impl AuthenticatedSeriesOccurrenceCompletionV2 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn funding_account(self) -> Pubkey {
+        self.funding_account
+    }
+
+    pub(crate) const fn funding_state_before_id(self) -> ContentId {
+        self.funding_state_before_id
+    }
+
+    pub(crate) const fn funding_state_after_id(self) -> ContentId {
+        self.funding_state_after_id
+    }
+
+    pub(crate) const fn link_activation_id(self) -> ContentId {
+        self.link_activation_id
+    }
+
+    pub(crate) const fn link_account(self) -> Pubkey {
+        self.link_account
+    }
+
+    pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    pub(crate) const fn source_occurrence_id(self) -> SourceOccurrenceV1Id {
+        self.source_occurrence_id
+    }
+
+    pub(crate) const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) const fn series_plan_id(self) -> SeriesPlanV5Id {
+        self.series_plan_id
+    }
+
+    pub(crate) const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+
+    pub(crate) const fn reservation_receipt_id(self) -> ContentId {
+        self.reservation_receipt_id
+    }
+
+    pub(crate) const fn market_admission_receipt_id(self) -> ContentId {
+        self.market_admission_receipt_id
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SeriesOccurrenceCompletionFactsV2 {
+    link_activation_id: ContentId,
+    link_account: Pubkey,
+    link_semantic_before_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    generation: u64,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    disposition: clutch_product_series::SeriesMarketDispositionV1,
+    reservation_receipt_id: ContentId,
+    market_admission_receipt_id: ContentId,
+    compiler_bundle_id: ContentId,
+}
+
+impl SeriesOccurrenceCompletionFactsV2 {
+    fn from_link_activation(activation: AuthenticatedSeriesMarketLinkActivationV1) -> Self {
+        Self {
+            link_activation_id: activation.id(),
+            link_account: activation.link_account(),
+            link_semantic_before_id: activation.link_semantic_before().content_id(),
+            market_instance_id: activation.market_instance_id(),
+            source_occurrence_id: activation.source_occurrence_id(),
+            generation: activation.generation(),
+            series_plan_id: activation.series_plan_id(),
+            ordinal: activation.ordinal(),
+            disposition: activation.disposition(),
+            reservation_receipt_id: activation.funding_reservation_receipt_id(),
+            market_admission_receipt_id: activation.market_admission_receipt_id(),
+            compiler_bundle_id: activation.compiler_bundle_id(),
+        }
+    }
+}
+
+fn require_series_occurrence_completion_join_v2(
+    state: &SeriesFundingStateV2,
+    completion_receipt_id: ContentId,
+    facts: SeriesOccurrenceCompletionFactsV2,
+) -> clutch_product_series::Result<()> {
+    if facts.link_activation_id.is_zero()
+        || facts.market_admission_receipt_id.is_zero()
+        || facts.generation == 0
+        || completion_receipt_id != facts.link_activation_id
+        || state.phase != clutch_product_series::SeriesFundingPhaseV2::Pending
+        || state.series_plan_id != facts.series_plan_id
+        || state.compiler_bundle_id.bytes() != facts.compiler_bundle_id.bytes()
+        || state.pending_ordinal != facts.ordinal
+        || state.pending_market_instance_id != facts.market_instance_id.content_id()
+        || state.pending_source_occurrence_id != facts.source_occurrence_id.content_id()
+        || state.pending_series_market_link_id != facts.link_semantic_before_id
+        || state.pending_disposition != Some(facts.disposition)
+        || state.pending_reservation_receipt_id != facts.reservation_receipt_id
+    {
+        return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SeriesOccurrenceCompletionAuthorityV2 {
+    facts: SeriesOccurrenceCompletionFactsV2,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV2 for SeriesOccurrenceCompletionAuthorityV2 {
+    fn authenticate_activation(
+        &self,
+        _series: &SeriesPlanV5,
+        _funding_terms_id: SeriesFundingTermsV2Id,
+        _compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+        _quote: &SeriesFundingQuoteV4,
+        _attachment: &SeriesAttachmentPlanV4,
+        _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn current_bucket(&self, _series: &SeriesPlanV5) -> clutch_product_series::Result<u64> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_reservation(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _ordinal: u32,
+        _market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        _source_occurrence_id: SourceOccurrenceV1Id,
+        _series_market_link_id: ContentId,
+        _disposition: clutch_product_series::SeriesMarketDispositionV1,
+        _debits: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _reservation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_completion(
+        &self,
+        state: &SeriesFundingStateV2,
+        completion_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        require_series_occurrence_completion_join_v2(state, completion_receipt_id, self.facts)
+    }
+
+    fn authenticate_pending_abort(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _abort_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_donation(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _component: SeriesFundingComponentV2,
+        _amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_close(
+        &self,
+        _state: &SeriesFundingStateV2,
+        _terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
     }
 }
 
@@ -5761,7 +5972,7 @@ fn authenticate_live_series_funding_value_v2(
 
 /// Reserve the next current ordinal without advancing its cursor.
 #[allow(clippy::too_many_arguments)]
-pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
@@ -5797,7 +6008,7 @@ pub fn reserve_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?
 }
 
 /// Commit the exact pending ordinal after its link/Market transition succeeds.
-pub fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
@@ -5822,8 +6033,111 @@ pub fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + 
     Ok((written, ordinal))
 }
 
+/// Complete one pending ordinal only from Product's exact post-admission
+/// `0xaa`/`0xad` receipt. The FundingV2 prestate is hostile-reopened by the
+/// raw writer immediately before mutation and the complete poststate is
+/// hostile-reopened before this receipt is minted.
+pub(crate) fn complete_series_occurrence_from_market_link_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    current: AuthenticatedSeriesFundingAccountV2,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    link_activation: AuthenticatedSeriesMarketLinkActivationV1,
+    rent: &RentParameters,
+) -> Outcome<(
+    AuthenticatedSeriesFundingAccountV2,
+    AuthenticatedSeriesOccurrenceCompletionV2,
+)> {
+    let facts = SeriesOccurrenceCompletionFactsV2::from_link_activation(link_activation);
+    require_series_occurrence_completion_join_v2(
+        &current.value().state,
+        facts.link_activation_id,
+        facts,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_state_before_id = current
+        .value()
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let authority = SeriesOccurrenceCompletionAuthorityV2 { facts };
+    let (written, ordinal) = complete_series_occurrence_v2(
+        program_id,
+        account,
+        current,
+        artifacts,
+        &authority,
+        facts.link_activation_id,
+        rent,
+    )?;
+    require(ordinal == facts.ordinal, ClutchError::Replay)?;
+    let funding_state_after_id = written
+        .value()
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        funding_state_after_id != funding_state_before_id
+            && written.value().state.pending_reservation_receipt_id == ContentId::ZERO
+            && written.value().state.next_ordinal
+                == ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::MismatchedState,
+    )?;
+    let disposition_byte = match facts.disposition {
+        clutch_product_series::SeriesMarketDispositionV1::Founder => 1_u8,
+        clutch_product_series::SeriesMarketDispositionV1::Converger => 2_u8,
+    };
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_OCCURRENCE_COMPLETION_AUTHENTICATION_DOMAIN_V2,
+            program_id.as_ref(),
+            account.key.as_ref(),
+            &funding_state_before_id.bytes(),
+            &funding_state_after_id.bytes(),
+            &facts.link_activation_id.bytes(),
+            facts.link_account.as_ref(),
+            &facts.link_semantic_before_id.bytes(),
+            &facts.market_instance_id.bytes(),
+            &facts.source_occurrence_id.bytes(),
+            &facts.generation.to_le_bytes(),
+            &facts.series_plan_id.bytes(),
+            &facts.ordinal.to_le_bytes(),
+            &[disposition_byte],
+            &facts.reservation_receipt_id.bytes(),
+            &facts.market_admission_receipt_id.bytes(),
+            &facts.compiler_bundle_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok((
+        written,
+        AuthenticatedSeriesOccurrenceCompletionV2 {
+            id,
+            funding_account: *account.key,
+            funding_state_before_id,
+            funding_state_after_id,
+            link_activation_id: facts.link_activation_id,
+            link_account: facts.link_account,
+            link_semantic_before_id: facts.link_semantic_before_id,
+            market_instance_id: facts.market_instance_id,
+            source_occurrence_id: facts.source_occurrence_id,
+            generation: facts.generation,
+            series_plan_id: facts.series_plan_id,
+            ordinal: facts.ordinal,
+            disposition: facts.disposition,
+            reservation_receipt_id: facts.reservation_receipt_id,
+            market_admission_receipt_id: facts.market_admission_receipt_id,
+        },
+    ))
+}
+
 /// Restore exact pending principal only after authenticated inert reverse-close.
-pub fn abort_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+fn abort_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
@@ -7431,5 +7745,144 @@ mod collateral_activation_v2_adversarial_tests {
         assert_ne!(encoded, swapped_encoded);
         assert_eq!(&encoded[0..32], &first.bytes());
         assert_eq!(&encoded[32..64], &second.bytes());
+    }
+}
+
+#[cfg(test)]
+mod occurrence_completion_v2_adversarial_tests {
+    use super::*;
+
+    fn id(byte: u8) -> ContentId {
+        ContentId::from_bytes([byte; 32])
+    }
+
+    fn facts() -> SeriesOccurrenceCompletionFactsV2 {
+        SeriesOccurrenceCompletionFactsV2 {
+            link_activation_id: id(1),
+            link_account: Pubkey::new_from_array([2; 32]),
+            link_semantic_before_id: id(3),
+            market_instance_id: MarketInstanceV2Id::from_bytes([4; 32]),
+            source_occurrence_id: SourceOccurrenceV1Id::from_bytes([5; 32]),
+            generation: 1,
+            series_plan_id: SeriesPlanV5Id::from_bytes([6; 32]),
+            ordinal: 7,
+            disposition: clutch_product_series::SeriesMarketDispositionV1::Founder,
+            reservation_receipt_id: id(8),
+            market_admission_receipt_id: id(9),
+            compiler_bundle_id: id(10),
+        }
+    }
+
+    fn pending(facts: SeriesOccurrenceCompletionFactsV2) -> SeriesFundingStateV2 {
+        SeriesFundingStateV2 {
+            series_plan_id: facts.series_plan_id,
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes([11; 32]),
+            funding_quote_id: clutch_product_series::SeriesFundingQuoteV4Id::from_bytes([12; 32]),
+            attachment_plan_id: clutch_product_series::SeriesAttachmentPlanV4Id::from_bytes([
+                13; 32
+            ]),
+            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes(
+                facts.compiler_bundle_id.bytes(),
+            ),
+            instance_count: 9,
+            next_ordinal: facts.ordinal,
+            lapsed_count: 0,
+            transition_sequence: 12,
+            phase: clutch_product_series::SeriesFundingPhaseV2::Pending,
+            pending_disposition: Some(facts.disposition),
+            pending_market_instance_id: facts.market_instance_id.content_id(),
+            pending_source_occurrence_id: facts.source_occurrence_id.content_id(),
+            pending_series_market_link_id: facts.link_semantic_before_id,
+            pending_ordinal: facts.ordinal,
+            pending_reservation_receipt_id: facts.reservation_receipt_id,
+            pending_debits: [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2],
+            components: [clutch_product_series::SeriesComponentCapitalV2::ZERO;
+                SERIES_FUNDING_COMPONENT_COUNT_V2],
+        }
+    }
+
+    #[test]
+    fn exact_link_activation_completes_only_its_pending_ordinal() {
+        let facts = facts();
+        let state = pending(facts);
+        assert!(require_series_occurrence_completion_join_v2(
+            &state,
+            facts.link_activation_id,
+            facts,
+        )
+        .is_ok());
+
+        let mut substituted = facts;
+        substituted.source_occurrence_id = SourceOccurrenceV1Id::from_bytes([14; 32]);
+        assert!(require_series_occurrence_completion_join_v2(
+            &state,
+            facts.link_activation_id,
+            substituted,
+        )
+        .is_err());
+
+        substituted = facts;
+        substituted.compiler_bundle_id = id(15);
+        assert!(require_series_occurrence_completion_join_v2(
+            &state,
+            facts.link_activation_id,
+            substituted,
+        )
+        .is_err());
+
+        substituted = facts;
+        substituted.link_semantic_before_id = id(16);
+        assert!(require_series_occurrence_completion_join_v2(
+            &state,
+            facts.link_activation_id,
+            substituted,
+        )
+        .is_err());
+
+        assert!(require_series_occurrence_completion_join_v2(&state, id(17), facts).is_err());
+    }
+
+    #[test]
+    fn stale_or_spliced_pending_state_refuses_completion() {
+        let facts = facts();
+        let state = pending(facts);
+
+        let mut changed = state;
+        changed.phase = clutch_product_series::SeriesFundingPhaseV2::Active;
+        assert!(require_series_occurrence_completion_join_v2(
+            &changed,
+            facts.link_activation_id,
+            facts,
+        )
+        .is_err());
+
+        changed = state;
+        changed.pending_market_instance_id = id(18);
+        assert!(require_series_occurrence_completion_join_v2(
+            &changed,
+            facts.link_activation_id,
+            facts,
+        )
+        .is_err());
+
+        changed = state;
+        changed.pending_disposition = Some(
+            clutch_product_series::SeriesMarketDispositionV1::Converger,
+        );
+        assert!(require_series_occurrence_completion_join_v2(
+            &changed,
+            facts.link_activation_id,
+            facts,
+        )
+        .is_err());
+
+        changed = state;
+        changed.pending_reservation_receipt_id = id(19);
+        assert!(require_series_occurrence_completion_join_v2(
+            &changed,
+            facts.link_activation_id,
+            facts,
+        )
+        .is_err());
     }
 }
