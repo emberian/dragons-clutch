@@ -16,6 +16,7 @@
 mod descriptor;
 mod position_transfer;
 mod runtime;
+mod wire;
 
 pub use descriptor::{
     reconstruct_descriptor_identity_v1, DescriptorBasisV1, DescriptorIdentityV1,
@@ -30,6 +31,13 @@ pub use runtime::{
     prepare_unwrap_canonical_v1, prepare_wrap_canonical_v1, CanonicalUnwrapRequestV1,
     CanonicalWrapRequestV1, StructuredClaimRuntimeAddressesV1, WrapperMintProjectionV1,
     WrapperTokenProjectionV1, WrapperTransitionPlanV1,
+};
+pub use wire::{
+    decode_structured_claim_payload_v1, CreateDescriptorPayloadV1, StructuredClaimActionV1,
+    StructuredClaimPayloadV1, VaultMutationPayloadV1, WrapperQuantityPayloadV1,
+    CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
+    STRUCTURED_CLAIM_FAMILY_VERSION, VAULT_MUTATION_PAYLOAD_BYTES,
+    WRAPPER_QUANTITY_PAYLOAD_BYTES,
 };
 
 /// Maximum native outcome width shared with the structured-claim kernel.
@@ -73,6 +81,8 @@ pub enum Error {
     InvariantViolation,
     /// The authoritative structured-claim economic machine refused the route.
     EconomicTransitionRefused,
+    /// The family-local action is unallocated.
+    UnknownAction,
 }
 
 /// Result alias for adapter contracts.
