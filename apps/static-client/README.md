@@ -2,8 +2,9 @@
 
 Glass is the dependency-free, static-hostable read-only console for Dragon's
 Clutch. It has no configured network, program, release, wallet, signer, or
-transaction submission path at startup. A user must explicitly select every
-chain and release coordinate before the page can make a bounded read.
+transaction submission path at startup. A user selects only an operatord and
+browser read bounds. The daemon projects one offline-composed, genesis-bound
+checked release; the browser cannot supply those chain facts.
 
 The application has three narrow jobs:
 
@@ -15,19 +16,19 @@ The application has three narrow jobs:
 It is not an explorer, index authority, compiler implementation, wallet, or
 release manifest.
 
-## Explicit target
+## Explicit operator target
 
-The form requires these values and embeds none of them as defaults:
+The form requires and embeds no more than:
 
 - operatord base URL;
-- cluster name and genesis hash;
-- validator HTTP and WebSocket URLs used by the daemon's acquisition plan;
-- exact `dragons-clutch/canonical-account-decoders/v1-source-v3-current`
-  decoder-set identity;
 - processed or finalized commitment;
-- program and ProgramData addresses, deployment slot, ELF SHA-256;
-- release-manifest SHA-256, source commit, capability-profile identity; and
 - browser account, response-byte, timeout, and slot-lag bounds.
+
+Cluster/genesis identity, credential-redacted endpoint bindings, the current
+decoder set, Program/ProgramData/slot/ELF tuple, canonical capability-manifest
+digest, measured source commit, capability-profile identity, decoder families,
+and centrally enabled intent triples arrive only in `/v1/acquisition`. Glass
+requires exactly one release and rechecks it against `/v1/releases`.
 
 The validator URLs are configuration bindings only. Browser code contacts the
 selected operatord URL and only with sequential `GET` requests to:
@@ -43,7 +44,8 @@ selected operatord URL and only with sequential `GET` requests to:
 
 Response bodies are byte-budgeted while streaming and then shape-bounded.
 Account quantities remain canonical decimal strings. The release join requires
-exact program, ProgramData, deployment-slot, ELF, and release-key equality.
+exact program, ProgramData, deployment-slot, ELF, manifest, profile, source,
+enabled-intent, and release-key equality.
 Rows from other releases are counted and ignored rather than blended.
 
 `operatord chain-serve --config FILE` is the live owner of these routes. Before
@@ -57,8 +59,8 @@ release-bracketed scan, replay, disconnect, rollback, and capped reconnect
 backoff. Before subscribing, the exact WebSocket connection must answer
 `getGenesisHash` with the selected genesis. The acquisition response publishes
 credential-safe redacted/SHA-256 bindings for the exact daemon HTTP+WebSocket
-coordinates plus the release coordinates; the browser hashes its selections
-and refuses any mismatch. See
+coordinates plus the checked release. The browser never receives the raw RPC
+URLs and refuses an inconsistent or changing daemon projection. See
 [`CHAIN_SERVE.md`](CHAIN_SERVE.md).
 
 The config must name the current `source-v3-current` canonical decoder set.
@@ -106,9 +108,10 @@ Successor coordinates are not mirrored into the browser. A semantic-owner
 draft must state its exact family tag/version/action bytes, which remain
 untrusted construction material. Projected keeper cursors are non-selectable
 until operatord exposes a release-authenticated coordinate. A decoded family
-is not executable capability admission, and the current operatord API does not
-authenticate the user-declared manifest, source commit, or capability-profile
-identity.
+is not executable capability admission. The daemon reports the offline
+manifest/profile/source/ELF join and its enabled registry coordinates, but that
+report remains an untrusted projection and is not a current-account runtime
+admission verdict.
 
 Product/Series registration and Owner/Position V3 lifecycle appear as separate
 `not-authenticated` capability cards. This avoids treating Product compiler
@@ -138,7 +141,7 @@ configuration join, not a measurement of the running binary. It
 then displays exact-in-span versus certified-approximation status, all exact
 rational error bounds, the canonical 2,352-byte native-basis proposal, its
   certificate, and the 528-byte bundle plus all sixteen typed identities. The
-bundle capability-profile ID must match the explicit release selection. An
+bundle capability-profile ID must match the daemon-projected checked release. An
 analytic result also carries its exact certification subdivision depth.
 
 The compiler endpoint is loopback-only and has no RPC, wallet, signing,
@@ -172,7 +175,7 @@ workflow node states that authoritative accounts must be reloaded.
 
 ## Files
 
-- `chain-client.js`: explicit configuration and bounded operatord transport.
+- `chain-client.js`: operatord-only target and bounded projection transport.
 - `successor-builder.js`: exact outer message and unsigned transaction bytes.
 - `compiler-proposal.js`: bounded pure-compiler transport and exact proposal
   validation; no compiler math.

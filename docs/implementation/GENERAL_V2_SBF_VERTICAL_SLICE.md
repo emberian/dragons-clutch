@@ -20,6 +20,20 @@ liquidity, entitlement, token settlement, source/provider integration,
 deployability evidence, or mainnet evidence. Those capabilities require later
 vertical slices and must remain disabled until their own evidence gates pass.
 
+The current source successor is narrower and stronger than the original
+degree-zero-through-three price declaration below. It admits only degree-two
+and degree-three bases to candidate ranking because those are the degrees
+covered by the exact finite production atom-mixture verifier. The successor
+Relation policy identity commits that restriction and the certificate profile.
+`InitClearWork` verifies the sealed feed against that certificate before
+creating resumable work. Every streamed-order and settlement-slice resume
+remints the full Product/Grid capability before consuming Work, and terminal
+completion repeats the same admission before projecting ScoreV2-Q. ClearWork V3's
+retained identities are not treated as proof of a verifier version it predates.
+The witness body stays outside candidate identity; the exact semantic price and
+successor policy stay inside it. This checkpoint has not been built or executed
+and does not activate a production profile.
+
 ## 1. Why this is a separate profile
 
 The General V2 extension family is centrally reserved at outer intent family
@@ -218,10 +232,12 @@ PriceMeasurePolicyV1, and eventually MarketGenesisProfileV2 and SeriesPlanV5.
 It must authenticate exact codecs and content-derived PDAs rather than adding a
 generic blob kind.
 
-The selected Product policy admits QuantizedIntegerGrid V3 degrees zero through
-three. General V2 pins that same finite range, witness schema V3, and quantized
-semantics V1; it has no continuous or floating-point fallback. The initial lab
-uses a degree-two fixture but that fixture does not narrow the declared policy.
+The legacy selected Product policy admits QuantizedIntegerGrid V3 degrees zero
+through three. The exact finite Relation successor deliberately narrows live
+candidate admission to degree two and three, witness schema V3, and quantized
+semantics V1; it has no continuous or floating-point fallback. Degree zero and
+one require their own equally exact admitted-certificate profile before they
+can re-enter successor ranking.
 
 ### 3.4 RelationV2 verification
 
@@ -526,11 +542,52 @@ economic-validity verdict.
 9. System program, read-only and executable
 10. Rent sysvar, read-only
 11. Clock sysvar, read-only
+12. canonical PriceGrid PDA, read-only and program-owned
+13. authenticated ProductTemplateV4 artifact, read-only and program-owned
+14. authenticated MarketGenesisProfileV2 artifact, read-only and program-owned
+15. authenticated PriceMeasurePolicyV1 artifact, read-only and program-owned
+16. content-addressed MarketInstancePreimageV2 artifact, read-only
 
 This action is permissionless. Move the exact pre-funded work rent and reward
 reserve from the program-owned node compartment, allocate and assign the exact
 active-width Work PDA, decrement node escrow, and increment the Epoch's work
-count atomically. Do not reinstate the legacy roughly 50 KiB staged-grow path.
+count atomically. Before any allocation, the successor handler authenticates
+the complete MarketInstance/Template/Basis/Policy/Genesis/coordinate-domain
+tuple, exact PriceGrid PDA and active tick membership, successor Relation and
+Score policies, and the finite production atom-mixture certificate. The
+isolated handler owns this 17-account expectation; shared account-meta and
+capability registration must adopt the tuple atomically before enabling the
+route. Do not reinstate the legacy roughly 50 KiB staged-grow path.
+
+#### 6.6a `AdvanceClearOrders` / `AdvanceClearSlices` successor seam
+
+0. keeper reward destination, writable
+1. Epoch, read-only
+2. Window, read-only
+3. MarketBinding, read-only
+4. EconomicDomain, read-only
+5. AdmissionNode, read-only
+6. sealed CandidateFeed, read-only
+7. ClearWork V3, writable
+8 through `8 + page_count - 1`. complete canonical OrderPage V5 set, read-only
+`8 + page_count`. Clock sysvar, read-only
+`9 + page_count`. canonical PriceGrid PDA, read-only and program-owned
+`10 + page_count`. authenticated ProductTemplateV4 artifact, read-only
+`11 + page_count`. authenticated NativeClaimBasis artifact, read-only
+`12 + page_count`. authenticated MarketGenesisProfileV2 artifact, read-only
+`13 + page_count`. authenticated PriceMeasurePolicyV1 artifact, read-only
+`14 + page_count`. authenticated MarketInstancePreimageV2 artifact, read-only
+
+Both actions use the same exact account list and count: `15 + page_count`, for
+`1 <= page_count <= 4`.
+Before borrowing any OrderPage body, a separate bounded frame authenticates
+content-derived Product artifact PDAs, the canonical Grid PDA and every active
+price tick, recreates the finite atom-mixture capability, and joins its full
+MarketBinding/Genesis/MarketInstance/feed/domain/body/price/policy/basis facts
+to ClearWork. ClearWork V3 retaining the same IDs, or merely naming the
+successor Relation policy, is not a substitute for that call-local capability.
+The raw V1 order and slice transitions remain available to legacy callers only;
+the successor SBF source calls the capability-requiring V2 wrappers.
 
 ### 6.7 `CompleteCandidateVerification`
 
@@ -550,10 +607,12 @@ count atomically. Do not reinstate the legacy roughly 50 KiB staged-grow path.
 13. ClearWork, writable
 14. Clock sysvar, read-only
 
-Only `[S,V)` admits ordinary completion. The identity-only lab consumes
-`clutch-general-v2-runtime::verify_smooth_direct_candidate_v1` over the bounded
-zero-order/zero-slice RelationV2 book. That private-construction result joins
-the full Product/Genesis/MarketInstance/PriceGrid bodies, canonical policy IDs,
+Only `[S,V)` admits ordinary completion. The active-width lab consumes
+`clutch-general-v2-runtime::verify_quantized_relation_product_price_admission_v2`
+and `verify_quantized_relation_candidate_v2` over the exact empty or projected
+active-width RelationV2 book. It also exact-joins the call-local Product/Grid
+capability to terminal ClearWork before ranking. That private-construction result joins the full
+Product/Genesis/MarketInstance/PriceGrid bodies, canonical policy IDs,
 the V3 quantized witness, owner-blind RelationV2, and ScoreV2-Q. A well-formed,
 authenticated but economically invalid candidate returns success after
 terminalizing the node as `VerifiedRefused`. Malformed bytes, bad authority,
@@ -706,8 +765,10 @@ All other General V2 actions remain disabled. In particular:
   or trades;
 - action 11 `GrowClearWork` remains permanently disabled because active-width
   work fits under the one-creation ceiling;
-- actions 12-13 are not needed by the bounded empty-book lab; generic streaming
-  RelationV2 progress needs its own contract before activation;
+- actions 12-13 now have capability-requiring exact-admission source seams.
+  The existing non-production profile identity predates their hardened
+  `15 + page_count` ABI and must rotate atomically before an artifact can claim
+  the new semantics;
 - actions 17-19, 22-31, and 33-38 remain disabled, including the remaining
   candidate terminal paths, entitlements, settlement, selected-artifact
   retirement, root retirement, and the reserved Position asset-transfer

@@ -8,8 +8,7 @@
 use crate::codec::{Reader, Writer};
 use crate::{
     content_id, ComponentDebitV1, ContentId, Error, FixedCodec, MarketFoundationScheduleV1Id,
-    RecoveryAttemptFundingV1, Result, SeriesAttachmentPlanId, SeriesFundingQuoteV2Id,
-    MAX_RECOVERY_ATTEMPTS,
+    Result, SeriesAttachmentPlanId, SeriesFundingQuoteV2Id,
 };
 
 const QUOTE_MAGIC_V2: [u8; 8] = *b"DCFQUOT2";
@@ -32,7 +31,7 @@ pub const MARKET_FOUNDATION_SLOT_COUNT_V1: usize =
 /// Six disjoint Series funding compartments.
 pub const SERIES_FUNDING_COMPONENT_COUNT_V2: usize = 6;
 /// Exact hostile-codec width of [`SeriesFundingQuoteV2`].
-pub const SERIES_FUNDING_QUOTE_BYTES_V2: usize = 648;
+pub const SERIES_FUNDING_QUOTE_BYTES_V2: usize = 584;
 /// Exact hostile-codec width of [`SeriesAttachmentPlanV2`].
 pub const SERIES_ATTACHMENT_PLAN_BYTES_V2: usize = 112;
 
@@ -44,7 +43,8 @@ pub enum SeriesFundingComponentV2 {
     MarketCore = 0,
     /// Per-ordinal `0xad` admission-link rent, always consumed.
     SeriesAdmission = 1,
-    /// Evidence-only Recovery work and rent.
+    /// Founder-only shared evidence-Recovery work and rent. Convergers prove
+    /// this quote's exact market-liveness references but debit this component zero times.
     RecoveryReserve = 2,
     /// Source/archive/window/statistic work.
     SourceWork = 3,
@@ -173,15 +173,18 @@ impl MarketFoundationScheduleV1 {
 pub struct SeriesFundingQuoteV2 {
     /// Exact evidence-only Recovery policy.
     pub evidence_only_recovery_policy_id: ContentId,
-    /// Six independently accounted per-ordinal allocations.
+    /// Existing market-scoped runtime-liveness policy semantic owner.
+    pub failure_liveness_policy_id: ContentId,
+    /// Exact Recovery-compartment schedule owned by that liveness policy.
+    pub failure_recovery_quote_schedule_id: ContentId,
+    /// Six independently accounted maxima. SeriesAdmission is per ordinal;
+    /// MarketCore and RecoveryReserve are consumed only by the founder.
     pub components: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     /// Sole decomposition of MarketCore lamports.
     pub foundation: MarketFoundationScheduleV1,
-    /// Active Recovery attempt count.
-    pub recovery_attempt_count: u8,
-    /// Exact active attempts followed by canonical zero padding.
-    pub recovery_attempt_funding: [RecoveryAttemptFundingV1; MAX_RECOVERY_ATTEMPTS],
-    /// Separately named Recovery account rent principal.
+    /// Separately named Recovery account rent principal. The remainder of the
+    /// RecoveryReserve allocation is present work capital and must match the
+    /// authenticated runtime-liveness policy at admission.
     pub recovery_rent_principal_lamports: u64,
 }
 
@@ -189,6 +192,8 @@ impl SeriesFundingQuoteV2 {
     /// Validate compartment separation and exact Recovery/Foundation sums.
     pub fn validate(&self) -> Result<()> {
         self.evidence_only_recovery_policy_id.validate()?;
+        self.failure_liveness_policy_id.validate()?;
+        self.failure_recovery_quote_schedule_id.validate()?;
         self.foundation.validate()?;
         let market_core = self.components[SeriesFundingComponentV2::MarketCore.index()];
         let admission = self.components[SeriesFundingComponentV2::SeriesAdmission.index()];
@@ -199,33 +204,10 @@ impl SeriesFundingQuoteV2 {
             || admission.collateral_atoms != 0
             || recovery.collateral_atoms != 0
             || self.recovery_rent_principal_lamports == 0
-        {
-            return Err(Error::InvalidParameter);
-        }
-        let count = usize::from(self.recovery_attempt_count);
-        if count == 0 || count > MAX_RECOVERY_ATTEMPTS {
-            return Err(Error::InvalidParameter);
-        }
-        let mut work = 0u64;
-        let mut index = 0usize;
-        while index < MAX_RECOVERY_ATTEMPTS {
-            let attempt = self.recovery_attempt_funding[index];
-            if index < count {
-                if attempt.max_progress_units == 0 || attempt.lamports_per_progress_unit == 0 {
-                    return Err(Error::InvalidParameter);
-                }
-                work = work
-                    .checked_add(attempt.maximum_lamports()?)
-                    .ok_or(Error::ArithmeticOverflow)?;
-            } else if attempt != RecoveryAttemptFundingV1::ZERO {
-                return Err(Error::NonCanonicalPadding);
-            }
-            index += 1;
-        }
-        if work
-            .checked_add(self.recovery_rent_principal_lamports)
-            .ok_or(Error::ArithmeticOverflow)?
-            != recovery.lamports
+            || recovery.lamports <= self.recovery_rent_principal_lamports
+            || self.evidence_only_recovery_policy_id == self.failure_liveness_policy_id
+            || self.evidence_only_recovery_policy_id == self.failure_recovery_quote_schedule_id
+            || self.failure_liveness_policy_id == self.failure_recovery_quote_schedule_id
         {
             return Err(Error::InvalidParameter);
         }
@@ -251,9 +233,10 @@ impl FixedCodec for SeriesFundingQuoteV2 {
         writer.bytes(&QUOTE_MAGIC_V2);
         writer.u16(QUOTE_SCHEMA_V2);
         writer.u8(self.foundation.outcome_count);
-        writer.u8(self.recovery_attempt_count);
-        writer.reserved(4);
+        writer.reserved(5);
         writer.id(self.evidence_only_recovery_policy_id);
+        writer.id(self.failure_liveness_policy_id);
+        writer.id(self.failure_recovery_quote_schedule_id);
         for component in self.components {
             writer.u64(component.lamports);
             writer.u64(component.collateral_atoms);
@@ -263,10 +246,6 @@ impl FixedCodec for SeriesFundingQuoteV2 {
         }
         writer.u64(self.foundation.founding_timeout_buckets);
         writer.u64(self.recovery_rent_principal_lamports);
-        for attempt in self.recovery_attempt_funding {
-            writer.u64(attempt.max_progress_units);
-            writer.u64(attempt.lamports_per_progress_unit);
-        }
         writer.finish()
     }
 
@@ -277,9 +256,10 @@ impl FixedCodec for SeriesFundingQuoteV2 {
             return Err(Error::BadVersion);
         }
         let outcome_count = reader.u8();
-        let recovery_attempt_count = reader.u8();
-        reader.reserved(4)?;
+        reader.reserved(5)?;
         let evidence_only_recovery_policy_id = reader.id();
+        let failure_liveness_policy_id = reader.id();
+        let failure_recovery_quote_schedule_id = reader.id();
         let mut components = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
         for component in &mut components {
             component.lamports = reader.u64();
@@ -291,22 +271,17 @@ impl FixedCodec for SeriesFundingQuoteV2 {
         }
         let founding_timeout_buckets = reader.u64();
         let recovery_rent_principal_lamports = reader.u64();
-        let mut recovery_attempt_funding = [RecoveryAttemptFundingV1::ZERO; MAX_RECOVERY_ATTEMPTS];
-        for attempt in &mut recovery_attempt_funding {
-            attempt.max_progress_units = reader.u64();
-            attempt.lamports_per_progress_unit = reader.u64();
-        }
         reader.finish()?;
         let value = Self {
             evidence_only_recovery_policy_id,
+            failure_liveness_policy_id,
+            failure_recovery_quote_schedule_id,
             components,
             foundation: MarketFoundationScheduleV1 {
                 outcome_count,
                 slot_principal_lamports,
                 founding_timeout_buckets,
             },
-            recovery_attempt_count,
-            recovery_attempt_funding,
             recovery_rent_principal_lamports,
         };
         value.validate()?;
@@ -414,17 +389,12 @@ mod tests {
             foundation.total_principal_lamports().unwrap();
         components[SeriesFundingComponentV2::SeriesAdmission.index()].lamports = 20;
         components[SeriesFundingComponentV2::RecoveryReserve.index()].lamports = 31;
-        let mut recovery_attempt_funding = [RecoveryAttemptFundingV1::ZERO; MAX_RECOVERY_ATTEMPTS];
-        recovery_attempt_funding[0] = RecoveryAttemptFundingV1 {
-            max_progress_units: 3,
-            lamports_per_progress_unit: 7,
-        };
         SeriesFundingQuoteV2 {
             evidence_only_recovery_policy_id: id(1),
+            failure_liveness_policy_id: id(2),
+            failure_recovery_quote_schedule_id: id(3),
             components,
             foundation,
-            recovery_attempt_count: 1,
-            recovery_attempt_funding,
             recovery_rent_principal_lamports: 10,
         }
     }
@@ -438,8 +408,8 @@ mod tests {
 
         let attachment = SeriesAttachmentPlanV2 {
             funding_quote_id: quote.id().unwrap(),
-            liquidity_facility_plan_id: id(2),
-            wrapper_recipe_set_id: id(3),
+            liquidity_facility_plan_id: id(4),
+            wrapper_recipe_set_id: id(5),
         };
         let mut attachment_bytes = [0u8; SERIES_ATTACHMENT_PLAN_BYTES_V2];
         attachment.encode_into(&mut attachment_bytes).unwrap();
@@ -464,5 +434,17 @@ mod tests {
             wrapper_recipe_set_id: id(4),
         };
         assert_eq!(attachment.validate(), Err(Error::MismatchedArtifact));
+    }
+
+    #[test]
+    fn quote_refuses_series_shaped_replacement_of_market_liveness_authority() {
+        let mut aliased = quote();
+        aliased.failure_recovery_quote_schedule_id = aliased.failure_liveness_policy_id;
+        assert_eq!(aliased.validate(), Err(Error::InvalidParameter));
+
+        let original = quote();
+        let mut substituted = original;
+        substituted.failure_recovery_quote_schedule_id = id(9);
+        assert_ne!(substituted.id().unwrap(), original.id().unwrap());
     }
 }

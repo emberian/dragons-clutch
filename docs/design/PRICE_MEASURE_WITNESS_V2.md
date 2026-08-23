@@ -1,21 +1,31 @@
 # Price-measure witness V2
 
-Status: **PURE-CORE GENERAL V2 JOIN / NOT SELECTED BY SBF**.
+Status: **EXACT FINITE CERTIFICATE IN GENERAL V2 SOURCE ADMISSION /
+NON-PRODUCTION PROFILE ONLY**.
 
 `crates/clutch-price-measure` implements two deliberately separate exact
 certificate interfaces. The continuous per-span Bernstein witness reproduces
 `research/price-measure-witness`. The finite atom witness targets the actual
 integer-coordinate, largest-remainder-quantized `clutch-bspline` payout map.
-Both are safe, `no_std`, allocation-free, fixed-capacity Rust. No SBF
-dispatcher or persisted verified-price checkpoint selects either checker; the
-General V2 feed layout that carries the V3 body remains disabled.
+Both are safe, `no_std`, allocation-free, fixed-capacity Rust. The isolated
+General SBF source now selects the finite production atom-mixture checker before
+creating resumable work, on every streamed order and settlement-slice resume,
+and at terminal completion. It persists no parallel verified-price truth. Because
+ClearWork V3 predates this exact policy, retained feed/body/price/policy IDs are
+necessary joins but not sufficient proof that the full Product/Grid tuple was
+checked. Every successor resume remints a private capability from that full
+tuple and exact-joins it to the retained Work identities. Production
+capability profiles remain disabled.
 
 `crates/clutch-general-v2-runtime` now composes the V3 quantized checker with
 the sealed General V2 feed codec, exact Product V2 bodies, canonical
 PriceGrid membership, owner-blind RelationV2, and ScoreV2-Q for smooth degrees
-two and three. That pure composition freezes the canonical fixed-width V3
+two and three. That composition freezes the canonical fixed-width V3
 witness-body digest and keeps it outside the economic candidate identity and
-rank. It still persists no checkpoint and activates no SBF capability.
+rank. A successor RelationV2 policy digest commits the exact finite-certificate
+profile, and a private authority minted from the checked certificate is now
+required before the builder or public sealed-feed API can invoke successor
+ranking.
 
 ## 1. Critical semantic split
 
@@ -210,10 +220,49 @@ Both the one-atom witness at 6 and the equal two-atom mixture at 5 and 7 are
 primitive certificates for the same price. The body digest authenticates the
 chosen sidecar but cannot enter the candidate's economic or tie-breaking key.
 
+### Exact bounded atom construction
+
+The kernel now also exposes `solve_quantized_atom_pair_hull_v1`, an inverse
+constructor for singleton and two-atom representations over a caller-declared
+canonical finite coordinate set. It searches singletons and lexicographic
+pairs, derives the unique primitive rational interpolation weight directly
+from the first differing payout coordinate, exact-checks every active payout
+equation, and sends the constructed certificate through the production
+quantized verifier. It never enumerates denominators, uses floating residuals,
+or introduces a second rounding boundary.
+
+The constructor has a positive caller-declared pair-evaluation limit. Its
+result separates a verified solution, exhaustion of every singleton and pair
+in the declared set, and work-limit truncation. Its report records whether the
+declared set was the complete integer Terms domain. Even complete-domain
+exhaustion is only a negative result for support of size at most two; it is not
+a full finite-polytope membership decision because an exact representation may
+require three through `outcome_count` atoms.
+
+The returned binding bytes remain authority-neutral. The constructor does not
+own accounts, hashes, lifecycle, candidate identity, ranking, or execution;
+the adapter must authenticate the same complete Product/Market/Grid tuple as
+the verifier path before accepting the emitted sidecar.
+
+The additive `solve_quantized_atom_support3_hull_v1` continues through
+lexicographic coordinate triples under a separate triple work bound. It solves
+an affine-independent triple by exact barycentric 2-by-2 determinants, checks
+every payout equation, reduces the whole mass vector by an exact common gcd,
+and then invokes the same production verifier. A fixed two-`u128`-limb
+substrate holds signed determinant magnitudes and reconstruction products; its
+binary gcd and fixed-iteration division use no allocation, unchecked cast,
+float, or rounding.
+
+An exhaustive support-three result distinguishes absence of an exact positive
+singleton/pair/triple from existence of exact triples whose reduced masses or
+denominator exceed the V1 `u64` certificate profile. A work-limited result
+claims only its deterministic search prefix. None of these outcomes decides
+representability with support four through `outcome_count`.
+
 ## 4. Adapter certificate interface
 
 `AdapterBindingsV2` is a typed trust-boundary input, not an account layout. The
-adapter must derive from owner-checked immutable state:
+General successor adapter derives from owner-checked immutable state:
 
 - the candidate-feed identity;
 - the relation-domain digest;
@@ -222,11 +271,13 @@ adapter must derive from owner-checked immutable state:
 - the exact candidate-price digest; and
 - the observed digest of the canonical witness body excluding its digest field.
 
-The crate compares those bytes and validates the supplied `BasisSpec`, but does
-not implement a hash, parser, PDA rule, lifecycle, or account mutation. An SBF
-adapter must compute the digests itself, refuse trailing bytes and unknown enum
-values, and persist success only to a separately versioned candidate
-checkpoint. A witness may authenticate a candidate but must not redefine it.
+The price-measure crate compares those bytes and validates the supplied
+`BasisSpec`, but does not implement a hash, parser, PDA rule, lifecycle, or
+account mutation. General's runtime seam now owns that adapter work: it decodes
+the exact sealed feed, rederives the domain/body/price identities, joins the
+MarketBinding and NativeClaimBasis, and admits only the current authenticated
+Clamp registry selector. A witness may authenticate a candidate but does not
+redefine it.
 
 At maximum width the continuous body has 14 stride-four rows, or 56 `u64`
 cells. The quantized body has 16 `(u128 coordinate,u64 mass)` slots. Exact
@@ -251,18 +302,22 @@ settlement, or vice versa.
 
 ## 6. Remaining promotion gates
 
-Before an SBF profile selects either checker:
+Before a production SBF profile selects the finite checker:
 
-1. authenticate the already-frozen Product basis, RelationV2 price, General
-   domain/feed, and V3 body preimages at the SBF owner/PDA boundary;
+1. rotate the non-production capability manifest for the hardened
+   `15 + page_count` action-12/action-13 tuple; every resumed and terminal call
+   already remints the exact Product/Grid capability rather than trusting a
+   policy bit;
 2. independently generate the transfer templates and derivation manifest;
-3. add a solver that emits exact continuous moments or quantized atoms without
-   treating floating residuals as consensus evidence;
+3. extend the exact support-three constructor through `outcome_count` atoms,
+   or retain that restriction explicitly in every
+   proposing client; no floating residual may become consensus evidence;
 4. decide whether the `u64` denominator lattice is a deliberate sufficient
    inner profile or prove a constructive completeness bound;
 5. measure host, SBF, streamed-resume, stack, account-rent, and close costs;
-6. bind successful verification to candidate lifecycle without letting an
-   incomplete sidecar evict a verified candidate;
+6. carry the successor policy through selected-candidate and settlement
+   lifecycle joins without letting an incomplete sidecar evict a verified
+   candidate;
 7. keep witness bytes outside score and digest tie-breaking despite
    representation nonuniqueness;
 8. update or retire V1b claims and profiles against the actual payout map; and

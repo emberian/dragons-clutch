@@ -1,6 +1,7 @@
 use super::portfolio_book_v2::{
     authenticate_complete_portfolio_book_for_root_transition_v2,
-    authenticate_complete_portfolio_book_v2, PortfolioBookAccountExpectationV2,
+    authenticate_complete_portfolio_book_ref_v2, authenticate_complete_portfolio_book_v2,
+    PortfolioBookAccountExpectationV2,
     PortfolioBookAccountRoleV2, PortfolioBookAdapterV2, PortfolioBookAuthorityErrorV2,
     PortfolioBookPageSetRecordV2, PortfolioCompleteBookProjectionExpectationV2,
     PORTFOLIO_BOOK_AUTHORITY_VERSION_V2, PORTFOLIO_BOOK_MAX_PAGES_V2,
@@ -133,6 +134,13 @@ impl PortfolioBookAdapterV2 for BookAdapter {
     ) -> Option<EconomicBookV2> {
         self.projected_book
     }
+
+    fn project_complete_economic_book_ref<'a>(
+        &'a self,
+        _expected: &PortfolioCompleteBookProjectionExpectationV2,
+    ) -> Option<&'a EconomicBookV2> {
+        self.projected_book.as_ref()
+    }
 }
 
 #[test]
@@ -160,6 +168,30 @@ fn adapter_privately_projects_all_active_pages_into_one_book() {
     assert_eq!(authenticated.settlement_candidate_id(), id(25));
     assert_eq!(authenticated.settlement_witness_id(), id(26));
     assert_eq!(authenticated.traversal_index(), 12);
+}
+
+#[test]
+fn borrowed_capability_keeps_the_maximum_book_in_adapter_storage() {
+    let maximum = u8::try_from(MAX_ORDERS).unwrap();
+    let adapter = BookAdapter {
+        projected_book: Some(economic_book(maximum)),
+        reject_role: None,
+        root_writable: false,
+        observed_pages: Cell::new(0),
+    };
+    let authenticated = authenticate_complete_portfolio_book_ref_v2(
+        &adapter,
+        id(200),
+        &domain(),
+        page_set(maximum),
+    )
+    .unwrap();
+    assert_eq!(authenticated.page_count(), 4);
+    assert_eq!(authenticated.order_count(), maximum);
+    assert_eq!(
+        authenticated.economic_book(),
+        adapter.projected_book.as_ref().unwrap()
+    );
 }
 
 #[test]

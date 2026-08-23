@@ -11,10 +11,10 @@
 
 use clutch_batch::dealer_leg_v2::{
     AggregateDealerTradeV2, DealerCashAllocationV2, DealerCashPolicyV2,
-    DealerFacilityBindingV2, DealerFillRowV2, DealerLegCandidateV2,
+    DealerFacilityBindingV2, DealerFillRowV2, DealerLegCandidateV2, DealerLegVerdictV2,
     DealerQuotePreconditionV2, DealerQuoteRowV2, DealerReceiptV2,
-    VerifiedDealerLegV2, EMPTY_DEALER_CASH_ALLOCATION_V2, EMPTY_DEALER_FILL_ROW_V2,
-    EMPTY_DEALER_QUOTE_ROW_V2, MAX_DEALER_ROWS_V2,
+    VerifiedDealerLegRefV2, VerifiedDealerLegV2, EMPTY_DEALER_CASH_ALLOCATION_V2,
+    EMPTY_DEALER_FILL_ROW_V2, EMPTY_DEALER_QUOTE_ROW_V2, MAX_DEALER_ROWS_V2,
 };
 use clutch_general_v2_contract::{
     SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootV1AccountV1,
@@ -372,6 +372,64 @@ pub struct CoveredDealerSelectionV1 {
 }
 
 impl CoveredDealerSelectionV1 {
+    /// Canonical invalid target for heap-first construction by adapters.
+    pub const ZEROED: Self = Self {
+        selection_account_id: Id::ZERO,
+        policy_id: Id::ZERO,
+        facility_id: Id::ZERO,
+        facility_position_binding_id: Id::ZERO,
+        dealer_state_account_id: Id::ZERO,
+        market_instance_v2_id: Id::ZERO,
+        epoch_id: Id::ZERO,
+        epoch_binding_account_id: Id::ZERO,
+        settlement_root_account_id: Id::ZERO,
+        retained_feed_account_id: Id::ZERO,
+        order_set_id: Id::ZERO,
+        settlement_candidate_id: Id::ZERO,
+        upstream_economic_candidate_id: Id::ZERO,
+        candidate_bundle_digest: Id::ZERO,
+        settlement_witness_digest: Id::ZERO,
+        economic_domain_id: Id::ZERO,
+        curve_price_certificate_id: Id::ZERO,
+        quote_authority: Id::ZERO,
+        quote_admission_id: Id::ZERO,
+        quote_semantics_id: Id::ZERO,
+        batch_policy_id: Id::ZERO,
+        score_policy_id: Id::ZERO,
+        selected_fee_record_account_id: Id::ZERO,
+        selected_fee_record_semantic_id: Id::ZERO,
+        selected_fee_binding_digest: Id::ZERO,
+        fee_revenue_policy_id: Id::ZERO,
+        lease_account_id: Id::ZERO,
+        settlement_pot_account_id: Id::ZERO,
+        dealer_generation: 0,
+        general_epoch_generation: 0,
+        selected_ordinal: 0,
+        created_slot: 0,
+        quote_expires_slot: 0,
+        collect_deadline_slot: 0,
+        deliver_deadline_slot: 0,
+        receipt: DealerReceiptV2 {
+            dealer_net_cash_in_atoms: 0,
+            dealer_net_cash_out_atoms: 0,
+        },
+        trade: AggregateDealerTradeV2 {
+            sell_to_users: [0; MAX_OUTCOMES],
+            buy_from_users: [0; MAX_OUTCOMES],
+        },
+        allocations: [EMPTY_DEALER_CASH_ALLOCATION_V2; MAX_DEALER_ROWS_V2],
+        total_external_fee_atoms: 0,
+        outcome_count: 0,
+        allocation_count: 0,
+        stored_bump: 0,
+        rent: DeletableRentOwnerV1 {
+            payer: Id::ZERO,
+            neutral_sink: Id::ZERO,
+            refundable_principal: 0,
+            donation_floor: 0,
+        },
+    };
+
     /// Create the sole canonical Dealer attachment from private verifier
     /// capabilities and authenticated General/fee owners.
     #[allow(clippy::too_many_arguments)]
@@ -386,6 +444,94 @@ impl CoveredDealerSelectionV1 {
         price: &VerifiedPriceMeasureV3,
         selected_fee: &DealerSelectedFeeRecordBindingV1,
     ) -> Result<Self> {
+        let mut value = Self::ZEROED;
+        Self::populate_from_verified_verdict(
+            context,
+            policy,
+            state,
+            epoch,
+            root,
+            quote_admission,
+            dealer.verdict(),
+            price,
+            selected_fee,
+            &mut value,
+        )?;
+        Ok(value)
+    }
+
+    /// Create the same attachment from the frame-bounded borrowed Dealer
+    /// verifier capability.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_verified_ref(
+        context: CoveredDealerSelectionContextV1,
+        policy: &DealerPolicyV1,
+        state: &DealerStateV2,
+        epoch: &DealerEpochBindingV2,
+        root: &SettlementRootV1AccountV1,
+        quote_admission: &DealerQuoteAdmissionV1,
+        dealer: &VerifiedDealerLegRefV2<'_>,
+        price: &VerifiedPriceMeasureV3,
+        selected_fee: &DealerSelectedFeeRecordBindingV1,
+    ) -> Result<Self> {
+        let mut value = Self::ZEROED;
+        Self::from_verified_ref_into(
+            context,
+            policy,
+            state,
+            epoch,
+            root,
+            quote_admission,
+            dealer,
+            price,
+            selected_fee,
+            &mut value,
+        )?;
+        Ok(value)
+    }
+
+    /// Construct directly into caller-owned storage from the borrowed
+    /// frame-bounded verifier capability.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_verified_ref_into(
+        context: CoveredDealerSelectionContextV1,
+        policy: &DealerPolicyV1,
+        state: &DealerStateV2,
+        epoch: &DealerEpochBindingV2,
+        root: &SettlementRootV1AccountV1,
+        quote_admission: &DealerQuoteAdmissionV1,
+        dealer: &VerifiedDealerLegRefV2<'_>,
+        price: &VerifiedPriceMeasureV3,
+        selected_fee: &DealerSelectedFeeRecordBindingV1,
+        output: &mut Self,
+    ) -> Result<()> {
+        Self::populate_from_verified_verdict(
+            context,
+            policy,
+            state,
+            epoch,
+            root,
+            quote_admission,
+            dealer.verdict(),
+            price,
+            selected_fee,
+            output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn populate_from_verified_verdict(
+        context: CoveredDealerSelectionContextV1,
+        policy: &DealerPolicyV1,
+        state: &DealerStateV2,
+        epoch: &DealerEpochBindingV2,
+        root: &SettlementRootV1AccountV1,
+        quote_admission: &DealerQuoteAdmissionV1,
+        dealer: &DealerLegVerdictV2,
+        price: &VerifiedPriceMeasureV3,
+        selected_fee: &DealerSelectedFeeRecordBindingV1,
+        output: &mut Self,
+    ) -> Result<()> {
         policy.validate()?;
         state.validate_against_policy(policy)?;
         epoch.validate()?;
@@ -406,8 +552,8 @@ impl CoveredDealerSelectionV1 {
             identity.validate_live()?;
         }
         let counts = root.counts();
-        let final_candidate = Id::from_bytes(*dealer.dealer_economic_candidate_digest());
-        let quote_semantics = Id::from_bytes(*dealer.dealer_quote_semantics_digest());
+        let final_candidate = Id::from_bytes(dealer.dealer_economic_candidate_digest);
+        let quote_semantics = Id::from_bytes(dealer.dealer_quote_semantics_digest);
         let price_bindings = price.bindings();
         let price_body = Id::from_bytes(price.body_digest());
         let selected_fee_digest = selected_fee.binding_digest()?;
@@ -451,8 +597,8 @@ impl CoveredDealerSelectionV1 {
             || root.epoch_generation() != epoch.general_epoch_generation
             || root.selected_ordinal() == 0
             || root.outcome_count() != policy.outcome_count
-            || dealer.outcome_count() != policy.outcome_count
-            || dealer.allocation_count() == 0
+            || dealer.outcome_count != policy.outcome_count
+            || dealer.allocation_count == 0
             || Id::from_bytes(root.batch_policy_id().bytes()) != selected_fee.batch_policy_id
             || Id::from_bytes(root.score_policy_id().bytes()) == Id::ZERO
             || Id::from_bytes(root.fee_record().bytes()) != selected_fee.fee_record_account_id
@@ -471,12 +617,12 @@ impl CoveredDealerSelectionV1 {
         let mut user_cash_in_atoms = 0u64;
         let mut user_cash_out_atoms = 0u64;
         let mut row = 0usize;
-        while row < usize::from(dealer.allocation_count()) {
+        while row < usize::from(dealer.allocation_count) {
             user_cash_in_atoms = user_cash_in_atoms
-                .checked_add(dealer.allocations()[row].user_cash_in_atoms)
+                .checked_add(dealer.allocations[row].user_cash_in_atoms)
                 .ok_or(Error::ArithmeticOverflow)?;
             user_cash_out_atoms = user_cash_out_atoms
-                .checked_add(dealer.allocations()[row].user_cash_out_atoms)
+                .checked_add(dealer.allocations[row].user_cash_out_atoms)
                 .ok_or(Error::ArithmeticOverflow)?;
             row += 1;
         }
@@ -491,56 +637,53 @@ impl CoveredDealerSelectionV1 {
                 dealer_net_cash_out_atoms: user_cash_out_atoms - user_cash_in_atoms,
             }
         };
-        if receipt != quote_admission.quote.receipt || dealer.trade() != &quote_admission.quote.trade {
+        if receipt != quote_admission.quote.receipt || dealer.trade != quote_admission.quote.trade {
             return Err(Error::ConservationFailure);
         }
-        let value = Self {
-            selection_account_id: context.selection_account_id,
-            policy_id,
-            facility_id: state.facility_id,
-            facility_position_binding_id: state.facility_position_binding_id,
-            dealer_state_account_id: epoch.dealer_state_account_id,
-            market_instance_v2_id: policy.market_instance_v2_id,
-            epoch_id: epoch.epoch_id,
-            epoch_binding_account_id: epoch.epoch_binding_account_id,
-            settlement_root_account_id: context.settlement_root_account_id,
-            retained_feed_account_id: context.retained_feed_account_id,
-            order_set_id: Id::from_bytes(root.order_set().bytes()),
-            settlement_candidate_id: final_candidate,
-            upstream_economic_candidate_id: context.upstream_economic_candidate_id,
-            candidate_bundle_digest: context.candidate_bundle_digest,
-            settlement_witness_digest: context.settlement_witness_digest,
-            economic_domain_id: epoch.economic_domain_id,
-            curve_price_certificate_id: price_body,
-            quote_authority: policy.quote_authority,
-            quote_admission_id: quote_admission.admission_id()?,
-            quote_semantics_id: quote_semantics,
-            batch_policy_id: selected_fee.batch_policy_id,
-            score_policy_id: Id::from_bytes(root.score_policy_id().bytes()),
-            selected_fee_record_account_id: selected_fee.fee_record_account_id,
-            selected_fee_record_semantic_id: selected_fee.fee_record_semantic_id,
-            selected_fee_binding_digest: selected_fee_digest,
-            fee_revenue_policy_id: selected_fee.revenue_policy_id,
-            lease_account_id: context.lease_account_id,
-            settlement_pot_account_id: context.settlement_pot_account_id,
-            dealer_generation: state.generation,
-            general_epoch_generation: epoch.general_epoch_generation,
-            selected_ordinal: root.selected_ordinal(),
-            created_slot: context.current_slot,
-            quote_expires_slot: quote_admission.expires_slot,
-            collect_deadline_slot: quote_admission.collect_deadline_slot,
-            deliver_deadline_slot: quote_admission.deliver_deadline_slot,
-            receipt,
-            trade: *dealer.trade(),
-            allocations: *dealer.allocations(),
-            total_external_fee_atoms: dealer.total_external_fee_atoms(),
-            outcome_count: dealer.outcome_count(),
-            allocation_count: dealer.allocation_count(),
-            stored_bump: context.stored_bump,
-            rent: context.rent,
-        };
-        value.validate()?;
-        Ok(value)
+        output.selection_account_id = context.selection_account_id;
+        output.policy_id = policy_id;
+        output.facility_id = state.facility_id;
+        output.facility_position_binding_id = state.facility_position_binding_id;
+        output.dealer_state_account_id = epoch.dealer_state_account_id;
+        output.market_instance_v2_id = policy.market_instance_v2_id;
+        output.epoch_id = epoch.epoch_id;
+        output.epoch_binding_account_id = epoch.epoch_binding_account_id;
+        output.settlement_root_account_id = context.settlement_root_account_id;
+        output.retained_feed_account_id = context.retained_feed_account_id;
+        output.order_set_id = Id::from_bytes(root.order_set().bytes());
+        output.settlement_candidate_id = final_candidate;
+        output.upstream_economic_candidate_id = context.upstream_economic_candidate_id;
+        output.candidate_bundle_digest = context.candidate_bundle_digest;
+        output.settlement_witness_digest = context.settlement_witness_digest;
+        output.economic_domain_id = epoch.economic_domain_id;
+        output.curve_price_certificate_id = price_body;
+        output.quote_authority = policy.quote_authority;
+        output.quote_admission_id = quote_admission.admission_id()?;
+        output.quote_semantics_id = quote_semantics;
+        output.batch_policy_id = selected_fee.batch_policy_id;
+        output.score_policy_id = Id::from_bytes(root.score_policy_id().bytes());
+        output.selected_fee_record_account_id = selected_fee.fee_record_account_id;
+        output.selected_fee_record_semantic_id = selected_fee.fee_record_semantic_id;
+        output.selected_fee_binding_digest = selected_fee_digest;
+        output.fee_revenue_policy_id = selected_fee.revenue_policy_id;
+        output.lease_account_id = context.lease_account_id;
+        output.settlement_pot_account_id = context.settlement_pot_account_id;
+        output.dealer_generation = state.generation;
+        output.general_epoch_generation = epoch.general_epoch_generation;
+        output.selected_ordinal = root.selected_ordinal();
+        output.created_slot = context.current_slot;
+        output.quote_expires_slot = quote_admission.expires_slot;
+        output.collect_deadline_slot = quote_admission.collect_deadline_slot;
+        output.deliver_deadline_slot = quote_admission.deliver_deadline_slot;
+        output.receipt = receipt;
+        output.trade = dealer.trade;
+        output.allocations.copy_from_slice(&dealer.allocations);
+        output.total_external_fee_atoms = dealer.total_external_fee_atoms;
+        output.outcome_count = dealer.outcome_count;
+        output.allocation_count = dealer.allocation_count;
+        output.stored_bump = context.stored_bump;
+        output.rent = context.rent;
+        output.validate()
     }
 
     /// Validate the immutable body without claiming the creation-time

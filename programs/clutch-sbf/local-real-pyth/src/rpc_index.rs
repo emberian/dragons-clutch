@@ -182,7 +182,22 @@ pub struct IndexedProgramRelease {
     pub program_data: Address,
     pub elf_sha256: [u8; 32],
     pub deployment_slot: u64,
+    /// Canonical digest of the checked capability-profile manifest that owns
+    /// the semantic release description. This is not supplied by the browser.
+    pub release_manifest_sha256: [u8; 32],
+    pub capability_profile_id: [u8; 32],
+    pub source_commit: String,
+    /// Only centrally registered coordinates present in the checked manifest.
+    /// A decoded family without a coordinate remains non-actionable.
+    pub enabled_intents: Vec<CanonicalIntentCoordinate>,
     pub families: Vec<CanonicalFamily>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CanonicalIntentCoordinate {
+    pub family_tag: u8,
+    pub family_version: u8,
+    pub local_action: u8,
 }
 
 impl IndexedProgramRelease {
@@ -192,6 +207,14 @@ impl IndexedProgramRelease {
             || self.program_id == self.program_data
             || self.elf_sha256 == [0; 32]
             || self.deployment_slot == 0
+            || self.release_manifest_sha256 == [0; 32]
+            || self.capability_profile_id == [0; 32]
+            || !matches!(self.source_commit.len(), 40 | 64)
+            || !self
+                .source_commit
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || self.source_commit.bytes().all(|byte| byte == b'0')
             || self.families.is_empty()
         {
             return Err(RpcIndexError::InvalidRelease);
@@ -203,16 +226,27 @@ impl IndexedProgramRelease {
             }
             previous = Some(*family);
         }
+        let mut previous_intent = None;
+        for intent in &self.enabled_intents {
+            if intent.family_tag == 0
+                || intent.family_version == 0
+                || previous_intent.is_some_and(|value| value >= *intent)
+            {
+                return Err(RpcIndexError::InvalidRelease);
+            }
+            previous_intent = Some(*intent);
+        }
         Ok(())
     }
 
     #[must_use]
     pub fn key(&self) -> String {
         format!(
-            "{}:{}:{}",
+            "{}:{}:{}:{}",
             self.program_id,
             self.deployment_slot,
-            hex(&self.elf_sha256)
+            hex(&self.elf_sha256),
+            hex(&self.release_manifest_sha256)
         )
     }
 }
@@ -1003,6 +1037,10 @@ mod tests {
             program_data: Address::new_from_array([0x32; 32]),
             elf_sha256: [0x33; 32],
             deployment_slot: 1,
+            release_manifest_sha256: [0x34; 32],
+            capability_profile_id: [0x35; 32],
+            source_commit: "36".repeat(20),
+            enabled_intents: vec![],
             families: vec![CanonicalFamily::General],
         }
     }
@@ -1030,6 +1068,13 @@ mod tests {
         assert!(!first.redacted.contains("secret"));
         assert!(!first.redacted.contains("alpha"));
         assert_ne!(first.binding_sha256, second.binding_sha256);
+    }
+
+    #[test]
+    fn release_identity_refuses_a_zero_source_commit() {
+        let mut value = release();
+        value.source_commit = "0".repeat(40);
+        assert_eq!(value.validate(), Err(RpcIndexError::InvalidRelease));
     }
 
     #[test]

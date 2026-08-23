@@ -19,8 +19,8 @@ use clutch_local_real_pyth::account_index::{
 use clutch_local_real_pyth::index_service::RpcIndexEngine;
 use clutch_local_real_pyth::operatord::ResumableKeeperSelector;
 use clutch_local_real_pyth::rpc_index::{
-    CanonicalFamily, IndexedProgramRelease, PlannedRpcRequest, RpcAcquisitionBounds,
-    RpcClusterBinding, RpcIndexPlan,
+    CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, PlannedRpcRequest,
+    RpcAcquisitionBounds, RpcClusterBinding, RpcIndexPlan,
 };
 use clutch_sbf::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_METADATA_LEN,
@@ -73,7 +73,19 @@ struct ReleaseWire {
     program_data: String,
     elf_sha256: String,
     deployment_slot: String,
+    release_manifest_sha256: String,
+    capability_profile_id: String,
+    source_commit: String,
+    enabled_intents: Vec<IntentWire>,
     families: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct IntentWire {
+    family_tag: String,
+    family_version: String,
+    local_action: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +192,14 @@ fn family(text: &str) -> Result<CanonicalFamily> {
 
 fn parse_config(path: &Path) -> Result<ChainConfig> {
     let bytes = std::fs::read(path)?;
+    parse_config_bytes(&bytes)
+}
+
+pub(crate) fn validate_chain_config_bytes(bytes: &[u8]) -> Result<()> {
+    parse_config_bytes(bytes).map(|_| ())
+}
+
+fn parse_config_bytes(bytes: &[u8]) -> Result<ChainConfig> {
     if bytes.is_empty() || bytes.len() > MAX_CONFIG_BYTES {
         return Err(format!("chain config must contain 1..={MAX_CONFIG_BYTES} bytes").into());
     }
@@ -198,17 +218,31 @@ fn parse_config(path: &Path) -> Result<ChainConfig> {
     }
     let mut releases = Vec::with_capacity(wire.releases.len());
     for (index, release) in wire.releases.into_iter().enumerate() {
-        let mut families = release
+        let families = release
             .families
             .iter()
             .map(|name| family(name))
             .collect::<Result<Vec<_>>>()?;
-        families.sort_unstable();
-        let before = families.len();
-        families.dedup();
-        if families.len() != before {
-            return Err(format!("releases[{index}].families contains a duplicate").into());
-        }
+        let enabled_intents = release
+            .enabled_intents
+            .into_iter()
+            .map(|intent| {
+                Ok(CanonicalIntentCoordinate {
+                    family_tag: parse_unsigned(
+                        &intent.family_tag,
+                        &format!("releases[{index}].enabledIntents.familyTag"),
+                    )?,
+                    family_version: parse_unsigned(
+                        &intent.family_version,
+                        &format!("releases[{index}].enabledIntents.familyVersion"),
+                    )?,
+                    local_action: parse_unsigned(
+                        &intent.local_action,
+                        &format!("releases[{index}].enabledIntents.localAction"),
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         releases.push(IndexedProgramRelease {
             program_id: address(&release.program_id, &format!("releases[{index}].programId"))?,
             program_data: address(
@@ -220,6 +254,16 @@ fn parse_config(path: &Path) -> Result<ChainConfig> {
                 &release.deployment_slot,
                 &format!("releases[{index}].deploymentSlot"),
             )?,
+            release_manifest_sha256: hash32(
+                &release.release_manifest_sha256,
+                &format!("releases[{index}].releaseManifestSha256"),
+            )?,
+            capability_profile_id: hash32(
+                &release.capability_profile_id,
+                &format!("releases[{index}].capabilityProfileId"),
+            )?,
+            source_commit: release.source_commit,
+            enabled_intents,
             families,
         });
     }

@@ -23,7 +23,7 @@ const ROOT_MAGIC_V1: [u8; 8] = *b"DCMKRTV1";
 const ROOT_VERSION_V1: u16 = 1;
 const LINK_MAGIC_V1: [u8; 8] = *b"DCSMLKV1";
 const LINK_VERSION_V1: u16 = 1;
-const MARKET_BINDING_ID_COUNT_V1: usize = 32;
+const MARKET_BINDING_ID_COUNT_V1: usize = 33;
 const LINK_BINDING_ID_COUNT_V1: usize = 25;
 
 /// Exact number of mandatory shared-core terminal owners outside the product-family aggregator.
@@ -31,9 +31,9 @@ pub const MARKET_SHARED_CORE_COUNT_V1: usize = 5;
 /// Exact number of Series-link-scoped attachment obligations.
 pub const SERIES_LINK_OBLIGATION_COUNT_V1: usize = 4;
 /// Exact shared `0xaa` semantic body width.
-pub const MARKET_LIFECYCLE_ROOT_BYTES_V1: usize = 2_416;
+pub const MARKET_LIFECYCLE_ROOT_BYTES_V1: usize = 2_448;
 /// Exact per-Series `0xad` semantic body width.
-pub const SERIES_MARKET_LINK_BYTES_V1: usize = 1_104;
+pub const SERIES_MARKET_LINK_BYTES_V1: usize = 1_232;
 
 /// Shared Market binding identity domain.
 pub const MARKET_LIFECYCLE_BINDING_DOMAIN_V1: &[u8] = b"dragons-clutch/market-lifecycle-binding/v1";
@@ -67,10 +67,10 @@ pub enum MarketFoundationSlotV1 {
     FailureRuntimeRoot,
     /// Permanent Failure root replay receipt.
     FailureReplay,
-    /// Failure interval work account.
+    /// Reusable exclusive Failure interval session cell; retained until Market terminal.
     FailureIntervalWork,
-    /// Permanent Failure interval replay receipt.
-    FailureIntervalReplay,
+    /// Append-only Failure interval aggregate history; folded before each session reset.
+    FailureIntervalHistory,
     /// Full-width Resolution V5 account.
     ResolutionV5,
     /// Fractional market policy.
@@ -96,7 +96,7 @@ impl MarketFoundationSlotV1 {
             Self::FailureRuntimeRoot => Ok(6),
             Self::FailureReplay => Ok(7),
             Self::FailureIntervalWork => Ok(8),
-            Self::FailureIntervalReplay => Ok(9),
+            Self::FailureIntervalHistory => Ok(9),
             Self::ResolutionV5 => Ok(10),
             Self::FractionalPolicy => Ok(11),
             Self::FractionalLedger => Ok(12),
@@ -133,7 +133,7 @@ impl MarketFoundationSlotV1 {
             6 => Ok(Self::FailureRuntimeRoot),
             7 => Ok(Self::FailureReplay),
             8 => Ok(Self::FailureIntervalWork),
-            9 => Ok(Self::FailureIntervalReplay),
+            9 => Ok(Self::FailureIntervalHistory),
             10 => Ok(Self::ResolutionV5),
             11 => Ok(Self::FractionalPolicy),
             12 => Ok(Self::FractionalLedger),
@@ -323,7 +323,9 @@ pub struct MarketLifecycleBindingV1 {
     pub recovery_state_id: ContentId,
     /// Central-derived interval-consensus profile.
     pub interval_consensus_profile_id: ContentId,
-    /// Founder quote/schedule retained by Recovery liveness.
+    /// Existing authenticated market-scoped runtime-liveness policy.
+    pub failure_liveness_policy_id: ContentId,
+    /// Exact Recovery-compartment schedule owned by that liveness policy.
     pub failure_liveness_quote_schedule_id: ContentId,
     /// Canonical Resolution V5 account.
     pub resolution_account_id: ContentId,
@@ -377,7 +379,7 @@ impl MarketLifecycleBindingV1 {
     /// Domain-separated identity of the complete binding.
     pub fn id(self) -> Result<ContentId> {
         self.validate()?;
-        let mut body = [0u8; 1_055];
+        let mut body = [0u8; 1_087];
         let mut at = 0usize;
         for id in self.identity_ids() {
             body[at..at + 32].copy_from_slice(&id.bytes());
@@ -421,6 +423,7 @@ impl MarketLifecycleBindingV1 {
             self.market_failure_policy_binding_id,
             self.recovery_state_id,
             self.interval_consensus_profile_id,
+            self.failure_liveness_policy_id,
             self.failure_liveness_quote_schedule_id,
             self.resolution_account_id,
             self.foundation_vault_id,
@@ -816,10 +819,12 @@ impl SeriesLinkObligationConfigurationV1 {
         self.capability_profile_id.validate()?;
         self.attachment_plan_id.validate()?;
         if self.capability_profile_id == self.attachment_plan_id
-            || self
-                .initial_statuses
-                .iter()
-                .any(|status| *status == SeriesLinkObligationStatusV1::Terminal)
+            || self.initial_statuses.iter().any(|status| {
+                matches!(
+                    status,
+                    SeriesLinkObligationStatusV1::Live | SeriesLinkObligationStatusV1::Terminal
+                )
+            })
         {
             return Err(Error::InvalidParameter);
         }
@@ -1067,6 +1072,39 @@ pub struct SeriesLinkObligationTerminalProjectionV1 {
     pub owner_terminal_receipt_id: ContentId,
 }
 
+/// One authenticated Series-scoped child admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesLinkObligationAdmissionProjectionV1 {
+    /// Exact link state before admission.
+    pub link_semantic_id: SeriesMarketLinkV1Id,
+    /// Exact obligation family.
+    pub obligation: SeriesLinkObligationV1,
+    /// Link transition sequence after admission.
+    pub link_transition_sequence: u64,
+    /// Family-owned admission receipt.
+    pub owner_admission_receipt_id: ContentId,
+}
+
+impl SeriesLinkObligationAdmissionProjectionV1 {
+    /// Deterministic receipt identity.
+    pub fn id(self) -> Result<ContentId> {
+        self.link_semantic_id.validate()?;
+        self.owner_admission_receipt_id.validate()?;
+        if self.link_transition_sequence == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        let mut body = [0u8; 73];
+        body[0] = self.obligation.byte();
+        body[1..33].copy_from_slice(&self.link_semantic_id.bytes());
+        body[33..41].copy_from_slice(&self.link_transition_sequence.to_le_bytes());
+        body[41..73].copy_from_slice(&self.owner_admission_receipt_id.bytes());
+        Ok(content_id(
+            b"dragons-clutch/series-link-obligation-admission/v1",
+            &body,
+        ))
+    }
+}
+
 impl SeriesLinkObligationTerminalProjectionV1 {
     /// Deterministic receipt identity.
     pub fn id(self) -> Result<ContentId> {
@@ -1100,8 +1138,10 @@ pub struct SeriesMarketLinkV1 {
     donation_floor_lamports: u64,
     current_donation_lamports: u64,
     obligation_statuses: [SeriesLinkObligationStatusV1; SERIES_LINK_OBLIGATION_COUNT_V1],
+    admission_receipts: [ContentId; SERIES_LINK_OBLIGATION_COUNT_V1],
     terminal_receipts: [ContentId; SERIES_LINK_OBLIGATION_COUNT_V1],
     active_failure_sessions: u32,
+    failure_sessions_started: u32,
     failure_session_transcript_id: ContentId,
 }
 
@@ -1137,8 +1177,10 @@ impl SeriesMarketLinkV1 {
             donation_floor_lamports,
             current_donation_lamports: donation_floor_lamports,
             obligation_statuses: obligation_configuration.initial_statuses,
+            admission_receipts: [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1],
             terminal_receipts: [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1],
             active_failure_sessions: 0,
+            failure_sessions_started: 0,
             failure_session_transcript_id: ContentId::ZERO,
         };
         value.validate()?;
@@ -2027,11 +2069,14 @@ impl FixedCodec for SeriesMarketLinkV1 {
             writer.u8(status.byte());
         }
         writer.reserved(4);
+        for receipt in self.admission_receipts {
+            writer.id(receipt);
+        }
         for receipt in self.terminal_receipts {
             writer.id(receipt);
         }
         writer.u32(self.active_failure_sessions);
-        writer.reserved(4);
+        writer.u32(self.failure_sessions_started);
         writer.id(self.failure_session_transcript_id);
         writer.finish()
     }
@@ -2073,12 +2118,16 @@ impl FixedCodec for SeriesMarketLinkV1 {
             *status = SeriesLinkObligationStatusV1::decode(reader.u8())?;
         }
         reader.reserved(4)?;
+        let mut admission_receipts = [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1];
+        for receipt in &mut admission_receipts {
+            *receipt = reader.id();
+        }
         let mut terminal_receipts = [ContentId::ZERO; SERIES_LINK_OBLIGATION_COUNT_V1];
         for receipt in &mut terminal_receipts {
             *receipt = reader.id();
         }
         let active_failure_sessions = reader.u32();
-        reader.reserved(4)?;
+        let failure_sessions_started = reader.u32();
         let failure_session_transcript_id = reader.id();
         reader.finish()?;
         let value = Self {
@@ -2091,8 +2140,10 @@ impl FixedCodec for SeriesMarketLinkV1 {
             donation_floor_lamports,
             current_donation_lamports,
             obligation_statuses,
+            admission_receipts,
             terminal_receipts,
             active_failure_sessions,
+            failure_sessions_started,
             failure_session_transcript_id,
         };
         value.validate()?;
@@ -2135,16 +2186,17 @@ fn binding_from_ids(
         market_failure_policy_binding_id: ids[19],
         recovery_state_id: ids[20],
         interval_consensus_profile_id: ids[21],
-        failure_liveness_quote_schedule_id: ids[22],
-        resolution_account_id: ids[23],
-        foundation_vault_id: ids[24],
-        foundation_account_graph_id: MarketFoundationAccountGraphV1Id::from_bytes(ids[25].bytes()),
-        foundation_schedule_id: MarketFoundationScheduleV1Id::from_bytes(ids[26].bytes()),
-        market_liability_founding_id: ids[27],
-        claim_mint_founding_plan_id: ids[28],
-        claim_issuance_binding_id: ids[29],
-        general_founding_capability_id: ids[30],
-        founding_abort_policy_id: ids[31],
+        failure_liveness_policy_id: ids[22],
+        failure_liveness_quote_schedule_id: ids[23],
+        resolution_account_id: ids[24],
+        foundation_vault_id: ids[25],
+        foundation_account_graph_id: MarketFoundationAccountGraphV1Id::from_bytes(ids[26].bytes()),
+        foundation_schedule_id: MarketFoundationScheduleV1Id::from_bytes(ids[27].bytes()),
+        market_liability_founding_id: ids[28],
+        claim_mint_founding_plan_id: ids[29],
+        claim_issuance_binding_id: ids[30],
+        general_founding_capability_id: ids[31],
+        founding_abort_policy_id: ids[32],
         founding_deadline_bucket,
         maximum_interval_width,
         maximum_coordinates_per_advance,
@@ -2277,6 +2329,51 @@ fn rolling_id(domain: &[u8], previous: ContentId, receipt: ContentId, sequence: 
 }
 
 impl SeriesMarketLinkV1 {
+    /// Admit one exact Series-scoped obligation child once.
+    pub fn admit_obligation(
+        self,
+        projection: SeriesLinkObligationAdmissionProjectionV1,
+    ) -> Result<Self> {
+        self.validate()?;
+        if self.phase != SeriesMarketLinkPhaseV1::Active
+            || projection.link_semantic_id != self.semantic_id()?
+            || projection.link_transition_sequence
+                != self
+                    .transition_sequence
+                    .checked_add(1)
+                    .ok_or(Error::ArithmeticOverflow)?
+        {
+            return Err(Error::UnauthenticatedAuthority);
+        }
+        let index = projection.obligation.index();
+        if self.obligation_statuses[index] != SeriesLinkObligationStatusV1::EnabledNeverFounded
+            || self.admission_receipts[index] != ContentId::ZERO
+        {
+            return Err(Error::WorkStateMismatch);
+        }
+        let receipt = projection.id()?;
+        if self
+            .admission_receipts
+            .iter()
+            .chain(self.terminal_receipts.iter())
+            .any(|seen| *seen == receipt)
+        {
+            return Err(Error::UnauthenticatedAuthority);
+        }
+        let mut admission_receipts = self.admission_receipts;
+        admission_receipts[index] = receipt;
+        let mut obligation_statuses = self.obligation_statuses;
+        obligation_statuses[index] = SeriesLinkObligationStatusV1::Live;
+        let next = Self {
+            transition_sequence: projection.link_transition_sequence,
+            obligation_statuses,
+            admission_receipts,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Pin the initiating Source occurrence while one Failure interval session is live.
     pub fn pin_failure_session(self, failure_begin_receipt_id: ContentId) -> Result<Self> {
         self.validate()?;
@@ -2298,6 +2395,10 @@ impl SeriesMarketLinkV1 {
             transition_sequence: sequence,
             active_failure_sessions: self
                 .active_failure_sessions
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?,
+            failure_sessions_started: self
+                .failure_sessions_started
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
             failure_session_transcript_id: transcript,
@@ -2367,7 +2468,12 @@ impl SeriesMarketLinkV1 {
         }
         let receipt = projection.id()?;
         let mut terminal_receipts = self.terminal_receipts;
-        if terminal_receipts.iter().any(|seen| *seen == receipt) {
+        if self
+            .admission_receipts
+            .iter()
+            .chain(terminal_receipts.iter())
+            .any(|seen| *seen == receipt)
+        {
             return Err(Error::UnauthenticatedAuthority);
         }
         terminal_receipts[index] = receipt;
@@ -2487,6 +2593,10 @@ impl SeriesMarketLinkV1 {
     pub const fn active_failure_sessions(self) -> u32 {
         self.active_failure_sessions
     }
+    /// Monotone number of Failure sessions ever pinned to this link.
+    pub const fn failure_sessions_started(self) -> u32 {
+        self.failure_sessions_started
+    }
     /// Persistent transcript proving whether any Failure session was ever pinned.
     pub const fn failure_session_transcript_id(self) -> ContentId {
         self.failure_session_transcript_id
@@ -2497,6 +2607,13 @@ impl SeriesMarketLinkV1 {
         obligation: SeriesLinkObligationV1,
     ) -> SeriesLinkObligationStatusV1 {
         self.obligation_statuses[obligation.index()]
+    }
+    /// Exact owner admission transcript for one live/terminal obligation.
+    pub const fn obligation_admission_receipt_id(
+        self,
+        obligation: SeriesLinkObligationV1,
+    ) -> ContentId {
+        self.admission_receipts[obligation.index()]
     }
     /// Link transition sequence.
     pub const fn transition_sequence(self) -> u64 {
@@ -2570,9 +2687,17 @@ impl SeriesMarketLinkV1 {
         }
         let mut index = 0usize;
         while index < SERIES_LINK_OBLIGATION_COUNT_V1 {
-            if (self.obligation_statuses[index] != SeriesLinkObligationStatusV1::Terminal)
-                != (self.terminal_receipts[index] == ContentId::ZERO)
-            {
+            let admission_present = self.admission_receipts[index] != ContentId::ZERO;
+            let terminal_present = self.terminal_receipts[index] != ContentId::ZERO;
+            let receipts_match = match self.obligation_statuses[index] {
+                SeriesLinkObligationStatusV1::CapabilityDisabled
+                | SeriesLinkObligationStatusV1::EnabledNeverFounded => {
+                    !admission_present && !terminal_present
+                }
+                SeriesLinkObligationStatusV1::Live => admission_present && !terminal_present,
+                SeriesLinkObligationStatusV1::Terminal => terminal_present,
+            };
+            if !receipts_match {
                 return Err(Error::WorkStateMismatch);
             }
             index += 1;
@@ -2587,7 +2712,9 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::WorkStateMismatch);
         }
-        if self.active_failure_sessions > 0 && self.failure_session_transcript_id == ContentId::ZERO
+        if self.active_failure_sessions > self.failure_sessions_started
+            || (self.failure_sessions_started == 0)
+                != (self.failure_session_transcript_id == ContentId::ZERO)
         {
             return Err(Error::WorkStateMismatch);
         }

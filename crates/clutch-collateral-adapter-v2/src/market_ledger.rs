@@ -16,9 +16,10 @@ use clutch_retirement::{
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    admit_collateral_account_v2, digest, AcceptedClaimRedemptionCollateralV2,
-    AcceptedPositionCollateralTransferV3, BoundCollateralProfileV2, CustodyTransferKindV2, Error,
-    Id, Result, RuntimeAccountViewV2, TokenAccountRoleV2,
+    admit_collateral_account_v2, digest, AcceptedBearerRedemptionCollateralV3,
+    AcceptedClaimRedemptionCollateralV2, AcceptedPositionCollateralTransferV3,
+    BoundCollateralProfileV2, ClaimRedemptionCollateralRequestV2, CollateralBackingV2,
+    CustodyTransferKindV2, Error, Id, Result, RuntimeAccountViewV2, TokenAccountRoleV2,
 };
 
 /// Reused historical Hoard discriminator under the full-width V2 layout.
@@ -753,8 +754,16 @@ pub enum FractionalClaimSupplyMutationV3 {
     Unchanged,
     /// Burn Position-owned native claims at one outcome.
     BurnInternal { outcome: u8, amount: u64 },
-    /// Burn materialized bearer claims at one outcome.
-    BurnMaterialized { outcome: u8, amount: u64 },
+    /// Burn materialized bearer claims after synchronizing the canonical
+    /// aggregate to exact Token-2022 mint supplies observed before the burn.
+    BurnMaterialized {
+        /// Selected native outcome.
+        outcome: u8,
+        /// Exact bearer atoms burned.
+        amount: u64,
+        /// Runtime-authenticated supplies for every active outcome before burn.
+        observed_before: [u64; MAX_OUTCOMES],
+    },
 }
 
 /// Exact atomic ClaimLedger half of one separately authenticated 0xa5 plan.
@@ -774,6 +783,8 @@ pub struct FractionalClaimLedgerPlanV3 {
     transition_id: Id,
     /// Exact consumed cross-ledger ordinal.
     consumed_sequence: u64,
+    /// Exact canonical supply effect committed by this transition.
+    supply_mutation: FractionalClaimSupplyMutationV3,
 }
 
 impl FractionalClaimLedgerPlanV3 {
@@ -811,6 +822,11 @@ impl FractionalClaimLedgerPlanV3 {
     pub const fn consumed_sequence(self) -> u64 {
         self.consumed_sequence
     }
+
+    /// Exact canonical supply effect committed by this transition.
+    pub const fn supply_mutation(self) -> FractionalClaimSupplyMutationV3 {
+        self.supply_mutation
+    }
 }
 
 /// Project the ClaimLedger successor paired with exact 0xa5 pre/post IDs.
@@ -840,6 +856,7 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
     let claim_ledger_before_id = claim_ledger.semantic_id(backend)?;
     let mut aggregate_internal_supply = claim_ledger.aggregate_internal_supply;
     let mut aggregate_materialized_supply = claim_ledger.aggregate_materialized_supply;
+    let mut observed_commitment = [0u8; MAX_OUTCOMES * 8];
     let (kind, outcome, amount) = match mutation {
         FractionalClaimSupplyMutationV3::Unchanged => (0u8, 0u8, 0u64),
         FractionalClaimSupplyMutationV3::BurnInternal { outcome, amount } => {
@@ -852,10 +869,29 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
             .ok_or(Error::AggregateLiabilityInsufficient)?;
             (1, outcome, amount)
         }
-        FractionalClaimSupplyMutationV3::BurnMaterialized { outcome, amount } => {
+        FractionalClaimSupplyMutationV3::BurnMaterialized {
+            outcome,
+            amount,
+            observed_before,
+        } => {
             if outcome >= claim_ledger.outcome_count || amount == 0 {
                 return Err(Error::InvalidParameter);
             }
+            let mut index = 0usize;
+            while index < MAX_OUTCOMES {
+                if index < usize::from(claim_ledger.outcome_count) {
+                    if observed_before[index] > aggregate_materialized_supply[index] {
+                        return Err(Error::AggregateLiabilityInsufficient);
+                    }
+                } else if observed_before[index] != 0 {
+                    return Err(Error::NonCanonicalPadding);
+                }
+                let offset = index * 8;
+                observed_commitment[offset..offset + 8]
+                    .copy_from_slice(&observed_before[index].to_le_bytes());
+                index += 1;
+            }
+            aggregate_materialized_supply = observed_before;
             aggregate_materialized_supply[usize::from(outcome)] = aggregate_materialized_supply
                 [usize::from(outcome)]
             .checked_sub(amount)
@@ -864,21 +900,40 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
         }
     };
     let next_fractional_sequence = consumed_sequence.checked_add(1).ok_or(Error::Arithmetic)?;
-    let transition_id = digest(
-        FRACTIONAL_CLAIM_LEDGER_TRANSITION_DOMAIN_V3,
-        &[
-            &claim_ledger.market_instance_id.bytes(),
-            &claim_ledger.fractional_policy_id.bytes(),
-            &claim_ledger.fractional_ledger_account.bytes(),
-            &fractional_ledger_before_id.bytes(),
-            &fractional_ledger_after_id.bytes(),
-            &claim_ledger_before_id.bytes(),
-            &consumed_sequence.to_le_bytes(),
-            &[kind],
-            &[outcome],
-            &amount.to_le_bytes(),
-        ],
-    );
+    let transition_id = if kind == 2 {
+        digest(
+            FRACTIONAL_CLAIM_LEDGER_TRANSITION_DOMAIN_V3,
+            &[
+                &claim_ledger.market_instance_id.bytes(),
+                &claim_ledger.fractional_policy_id.bytes(),
+                &claim_ledger.fractional_ledger_account.bytes(),
+                &fractional_ledger_before_id.bytes(),
+                &fractional_ledger_after_id.bytes(),
+                &claim_ledger_before_id.bytes(),
+                &consumed_sequence.to_le_bytes(),
+                &[kind],
+                &[outcome],
+                &amount.to_le_bytes(),
+                &observed_commitment,
+            ],
+        )
+    } else {
+        digest(
+            FRACTIONAL_CLAIM_LEDGER_TRANSITION_DOMAIN_V3,
+            &[
+                &claim_ledger.market_instance_id.bytes(),
+                &claim_ledger.fractional_policy_id.bytes(),
+                &claim_ledger.fractional_ledger_account.bytes(),
+                &fractional_ledger_before_id.bytes(),
+                &fractional_ledger_after_id.bytes(),
+                &claim_ledger_before_id.bytes(),
+                &consumed_sequence.to_le_bytes(),
+                &[kind],
+                &[outcome],
+                &amount.to_le_bytes(),
+            ],
+        )
+    };
     transition_id.require_live()?;
     let claim_ledger_after = ClaimLedgerV3 {
         aggregate_internal_supply,
@@ -900,6 +955,7 @@ pub fn prepare_fractional_claim_ledger_successor_v3<B: PositionV3Sha256Backend>(
         fractional_ledger_after_id,
         transition_id,
         consumed_sequence,
+        supply_mutation: mutation,
     })
 }
 
@@ -1184,6 +1240,197 @@ pub enum FractionalPayoutDispositionV3 {
         /// Exact accepted claim-redemption custody movement when nonzero.
         accepted: Option<AcceptedClaimRedemptionCollateralV2>,
     },
+}
+
+/// Prepared external fractional payout whose custody result remains
+/// unavailable until the exact bearer burn and Realm-selected collateral
+/// postcondition have both been accepted by their owning adapters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedFractionalExternalClaimRedemptionV3 {
+    fractional: FractionalClaimLedgerPlanV3,
+    hoard_before_id: Id,
+    hoard_after: HoardV2,
+    hoard_after_id: Id,
+    payout_atoms: u64,
+    request: ClaimRedemptionCollateralRequestV2,
+}
+
+impl PreparedFractionalExternalClaimRedemptionV3 {
+    /// Exact ClaimLedger/0xa5 successor used to authenticate the bearer burn.
+    pub const fn fractional(self) -> FractionalClaimLedgerPlanV3 {
+        self.fractional
+    }
+
+    /// Exact collateral request exposed only by the Fractional burn-acceptance stage.
+    pub const fn collateral_request(self) -> ClaimRedemptionCollateralRequestV2 {
+        self.request
+    }
+
+    /// Canonical ClaimLedger successor after the exact bearer burn.
+    pub const fn claim_ledger_after(self) -> ClaimLedgerV3 {
+        self.fractional.claim_ledger_after()
+    }
+
+    /// Canonical Hoard successor after the exact whole-atom payout.
+    pub const fn hoard_after(self) -> HoardV2 {
+        self.hoard_after
+    }
+
+    /// Exact whole collateral payout.
+    pub const fn payout_atoms(self) -> u64 {
+        self.payout_atoms
+    }
+}
+
+/// Prepare the semantic half of one external Fractional redemption.
+///
+/// The returned request is structural, not authority. A live adapter must
+/// first accept the exact Token-2022 bearer burn tied to `fractional()` and
+/// only then expose `collateral_request()` to the Realm collateral adapter.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_fractional_external_claim_redemption_v3<B: PositionV3Sha256Backend>(
+    hoard: HoardV2,
+    claim_ledger: ClaimLedgerV3,
+    fractional_ledger_before_id: Id,
+    fractional_ledger_after_id: Id,
+    consumed_sequence: u64,
+    outcome: u8,
+    quantity: u64,
+    observed_materialized_before: [u64; MAX_OUTCOMES],
+    payout_atoms: u64,
+    claimant: Id,
+    destination_token_account: Id,
+    backend: &B,
+) -> Result<PreparedFractionalExternalClaimRedemptionV3> {
+    hoard.validate()?;
+    claim_ledger.validate()?;
+    claimant.require_live()?;
+    destination_token_account.require_live()?;
+    if claimant == destination_token_account
+        || hoard.market_instance_id != claim_ledger.market_instance_id
+        || hoard.realm_id != claim_ledger.realm_id
+        || hoard.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || claim_ledger.lifecycle != MarketLiabilityLifecycleV1::Resolved
+        || hoard.outcome_count != claim_ledger.outcome_count
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let fractional = prepare_fractional_claim_ledger_successor_v3(
+        claim_ledger,
+        fractional_ledger_before_id,
+        fractional_ledger_after_id,
+        consumed_sequence,
+        FractionalClaimSupplyMutationV3::BurnMaterialized {
+            outcome,
+            amount: quantity,
+            observed_before: observed_materialized_before,
+        },
+        backend,
+    )?;
+    let hoard_before_id = hoard.semantic_id(backend)?;
+    let locked_claim_principal_atoms = hoard
+        .locked_claim_principal_atoms
+        .checked_sub(payout_atoms)
+        .ok_or(Error::AggregateLiabilityInsufficient)?;
+    let hoard_after = HoardV2 {
+        locked_claim_principal_atoms,
+        ..hoard
+    };
+    hoard_after.validate()?;
+    let hoard_after_id = hoard_after.semantic_id(backend)?;
+    if payout_atoms == 0 && hoard_after_id != hoard_before_id {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(PreparedFractionalExternalClaimRedemptionV3 {
+        fractional,
+        hoard_before_id,
+        hoard_after,
+        hoard_after_id,
+        payout_atoms,
+        request: ClaimRedemptionCollateralRequestV2 {
+            claim_redemption_id: fractional.transition_id(),
+            destination_token_account,
+            claim_semantic_owner: claimant,
+            payout_atoms,
+            backing_before: CollateralBackingV2 {
+                locked_atoms: hoard.locked_claim_principal_atoms,
+                cap_atoms: hoard.collateral_cap_atoms,
+            },
+        },
+    })
+}
+
+/// Accept the exact zero/nonzero collateral postcondition and publish the
+/// canonical Hoard/ClaimLedger successor. The bearer burn must be accepted by
+/// the claim adapter before a caller is permitted to invoke this function.
+pub fn accept_fractional_external_claim_redemption_v3(
+    prepared: PreparedFractionalExternalClaimRedemptionV3,
+    accepted: AcceptedBearerRedemptionCollateralV3,
+) -> Result<FractionalClaimRedemptionPlanV3> {
+    let required_custody_atoms = prepared
+        .hoard_after
+        .cash_liability_atoms
+        .checked_add(prepared.hoard_after.locked_claim_principal_atoms)
+        .ok_or(Error::Arithmetic)?;
+    let (accepted_nonzero, custody_receipt_id) = match accepted {
+        AcceptedBearerRedemptionCollateralV3::Zero(accepted) => {
+            if prepared.payout_atoms != 0
+                || accepted.request() != prepared.request
+                || accepted.backing_after().locked_atoms
+                    != prepared.hoard_after.locked_claim_principal_atoms
+                || accepted.backing_after().cap_atoms != prepared.hoard_after.collateral_cap_atoms
+                || accepted.visible_hoard_atoms_after() < required_custody_atoms
+            {
+                return Err(Error::PostAdmissionFailed);
+            }
+            (None, accepted.receipt_id())
+        }
+        AcceptedBearerRedemptionCollateralV3::Nonzero(accepted) => {
+            let custody = accepted.custody();
+            if prepared.payout_atoms == 0
+                || accepted.request() != prepared.request
+                || custody.kind != CustodyTransferKindV2::ClaimRedemption
+                || custody.source_semantic_owner != prepared.hoard_after.market_instance_id
+                || custody.amount_atoms != prepared.payout_atoms
+                || accepted.backing_after().locked_atoms
+                    != prepared.hoard_after.locked_claim_principal_atoms
+                || accepted.backing_after().cap_atoms != prepared.hoard_after.collateral_cap_atoms
+                || custody
+                    .hoard_atoms_after
+                    .ok_or(Error::PostAdmissionFailed)?
+                    < required_custody_atoms
+            {
+                return Err(Error::PostAdmissionFailed);
+            }
+            (Some(accepted), accepted.receipt_id())
+        }
+    };
+    let receipt_id = digest(
+        FRACTIONAL_CLAIM_REDEMPTION_DOMAIN_V3,
+        &[
+            &[2],
+            &prepared.hoard_after.market_instance_id.bytes(),
+            &prepared.fractional.transition_id().bytes(),
+            &prepared.fractional.claim_ledger_before_id().bytes(),
+            &prepared.fractional.claim_ledger_after_id().bytes(),
+            &prepared.hoard_before_id.bytes(),
+            &prepared.hoard_after_id.bytes(),
+            &prepared.payout_atoms.to_le_bytes(),
+            &custody_receipt_id.bytes(),
+        ],
+    );
+    receipt_id.require_live()?;
+    Ok(FractionalClaimRedemptionPlanV3 {
+        fractional: prepared.fractional,
+        hoard_before_id: prepared.hoard_before_id,
+        hoard_after: prepared.hoard_after,
+        hoard_after_id: prepared.hoard_after_id,
+        payout_atoms: prepared.payout_atoms,
+        disposition: FractionalPayoutDispositionV3::ExternalCustodyTransfer {
+            accepted: accepted_nonzero,
+        },
+        receipt_id,
+    })
 }
 
 /// Burn or preserve native supply, advance the 0xa5 latch, and release exactly

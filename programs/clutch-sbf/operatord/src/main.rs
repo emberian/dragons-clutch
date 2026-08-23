@@ -20,6 +20,7 @@ mod bot;
 mod builders;
 mod bus;
 mod chain_server;
+mod compose_chain_config;
 mod crank;
 mod decode;
 mod friday;
@@ -70,7 +71,9 @@ fn usage() -> ! {
          operatord replay <plan-dir>\n  \
          operatord compiler-serve --compiler-release-sha256 HASH [--port N] [--static DIR]\n  \
          operatord compile-payoff --compiler-release-sha256 HASH < request.json\n  \
-         operatord chain-serve --config FILE [--port N] [--static DIR]"
+         operatord chain-serve --config FILE [--port N] [--static DIR]\n  \
+         operatord compose-chain-config --local-release-manifest FILE --capability-manifest FILE \
+         --cluster-name NAME --expected-genesis HASH --rpc-http-url URL --rpc-websocket-url URL"
     );
     process::exit(2)
 }
@@ -122,6 +125,41 @@ struct ChainServeOptions {
     port: u16,
     statics: PathBuf,
     config: PathBuf,
+}
+
+fn parse_compose_chain_config(
+    mut args: impl Iterator<Item = String>,
+) -> Result<compose_chain_config::ComposeOptions> {
+    let mut local_release_manifest = None;
+    let mut capability_manifest = None;
+    let mut cluster_name = None;
+    let mut expected_genesis = None;
+    let mut rpc_http_url = None;
+    let mut rpc_websocket_url = None;
+    while let Some(flag) = args.next() {
+        let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+        match flag.as_str() {
+            "--local-release-manifest" => local_release_manifest = Some(PathBuf::from(value()?)),
+            "--capability-manifest" => capability_manifest = Some(PathBuf::from(value()?)),
+            "--cluster-name" => cluster_name = Some(value()?),
+            "--expected-genesis" => expected_genesis = Some(value()?),
+            "--rpc-http-url" => rpc_http_url = Some(value()?),
+            "--rpc-websocket-url" => rpc_websocket_url = Some(value()?),
+            other => return Err(format!("unknown compose-chain-config flag {other}").into()),
+        }
+    }
+    Ok(compose_chain_config::ComposeOptions {
+        local_release_manifest: local_release_manifest
+            .ok_or("compose-chain-config requires --local-release-manifest FILE")?,
+        capability_manifest: capability_manifest
+            .ok_or("compose-chain-config requires --capability-manifest FILE")?,
+        cluster_name: cluster_name.ok_or("compose-chain-config requires --cluster-name NAME")?,
+        expected_genesis: expected_genesis
+            .ok_or("compose-chain-config requires --expected-genesis HASH")?,
+        rpc_http_url: rpc_http_url.ok_or("compose-chain-config requires --rpc-http-url URL")?,
+        rpc_websocket_url: rpc_websocket_url
+            .ok_or("compose-chain-config requires --rpc-websocket-url URL")?,
+    })
 }
 
 fn parse_chain_serve(mut args: impl Iterator<Item = String>) -> Result<ChainServeOptions> {
@@ -529,6 +567,10 @@ fn main() {
         "compile-payoff" => parse_compiler_release(args).and_then(payoff_compiler::compile_cli),
         "chain-serve" => parse_chain_serve(args).and_then(|options| {
             chain_server::serve(options.port, options.statics, &options.config)
+        }),
+        "compose-chain-config" => parse_compose_chain_config(args).and_then(|options| {
+            print!("{}", compose_chain_config::compose(&options)?);
+            Ok(())
         }),
         _ => usage(),
     };

@@ -1,17 +1,21 @@
 use super::portfolio_execution_v2::{
-    authenticate_exact_portfolio_pair_v2, authenticate_selected_portfolio_order_v2,
-    portfolio_pair_transition_commitment_v2, prepare_portfolio_pair_execution_v2,
+    authenticate_exact_portfolio_pair_v2, authenticate_portfolio_receipt_sibling_set_v2,
+    authenticate_selected_portfolio_order_v2, portfolio_pair_transition_commitment_v2,
+    prepare_portfolio_pair_execution_borrowed_v2, prepare_portfolio_pair_execution_v2,
     AuthenticatedPortfolioPairV2, PortfolioAccountExpectationV2, PortfolioAccountRoleV2,
     PortfolioAdapterV2, PortfolioExecutionErrorV2, PortfolioPairExecutionInputV2,
     PortfolioPairPostSemanticIdsV2, PortfolioPositionPrestateV2,
+    PortfolioReceiptSiblingTraversalSetV2, PortfolioReceiptSiblingTraversalV2,
     PortfolioReplayPrestateV2, PortfolioReservationLifecycleV2,
     PortfolioReservationPrestateV2, PortfolioSourceOrderKindV2,
     PortfolioSelectionMembershipExpectationV2, PortfolioSettlementReceiptV5Prestate,
+    PortfolioSettlementReceiptV5SetPrestate,
     PortfolioSettlementReceiptV5TransitionExpectationV2, PortfolioTransitionExpectationV2,
     PortfolioValuationBoundaryV2,
     SettlementReceiptTransitionKindV2,
     SelectedPortfolioOrderRecordV2, PORTFOLIO_EXECUTION_VERSION_V2,
-    PORTFOLIO_PAIR_RECEIPT_V2_BYTES, SELECTED_PORTFOLIO_ORDER_V2_BYTES,
+    PORTFOLIO_PAIR_MAX_RECEIPTS_V2, PORTFOLIO_PAIR_RECEIPT_V2_BYTES,
+    SELECTED_PORTFOLIO_ORDER_V2_BYTES,
 };
 use super::relation_v1::MAX_OUTCOMES;
 use super::relation_v2::{
@@ -57,14 +61,20 @@ impl PortfolioAdapterV2 for TestAdapter {
         self.reject_transition != Some(expected.role)
     }
 
-    fn derive_settlement_receipt_v5_post_data_id(
+    fn derive_settlement_receipt_v5_post_data_ids(
         &self,
         _expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
-    ) -> Option<[u8; 32]> {
+    ) -> Option<[[u8; 32]; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]> {
         if self.reject_transition == Some(PortfolioAccountRoleV2::SettlementReceipt) {
             None
         } else {
-            Some(id(66))
+            let mut ids = [[0u8; 32]; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+            let mut index = 0usize;
+            while index < usize::from(_expected.prestate.receipt_count) {
+                ids[index] = id(66u8.checked_add(u8::try_from(index).ok()?).ok()?);
+                index += 1;
+            }
+            Some(ids)
         }
     }
 }
@@ -91,15 +101,15 @@ impl PortfolioAdapterV2 for CapturingAdapter {
         true
     }
 
-    fn derive_settlement_receipt_v5_post_data_id(
+    fn derive_settlement_receipt_v5_post_data_ids(
         &self,
         expected: &PortfolioSettlementReceiptV5TransitionExpectationV2,
-    ) -> Option<[u8; 32]> {
-        if expected.prestate.transition_kind
-            != SettlementReceiptTransitionKindV2::PortfolioPairV2
-            || expected.prestate.transition_commitment != [0; 32]
-            || expected.prestate.accounted_end_mask != expected.prestate.expected_end_mask
-            || expected.prestate.delivered_end_mask != 0
+    ) -> Option<[[u8; 32]; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]> {
+        let entry = expected.prestate.receipts[0];
+        if entry.transition_kind != SettlementReceiptTransitionKindV2::PortfolioPairV2
+            || entry.transition_commitment != [0; 32]
+            || entry.accounted_end_mask != entry.expected_end_mask
+            || entry.delivered_end_mask != 0
             || expected.post_transition_kind
                 != SettlementReceiptTransitionKindV2::PortfolioPairV2
             || expected.transition_commitment == [0; 32]
@@ -107,7 +117,13 @@ impl PortfolioAdapterV2 for CapturingAdapter {
             return None;
         }
         self.commitment.set(expected.transition_commitment);
-        Some(id(66))
+        let mut ids = [[0u8; 32]; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+        let mut index = 0usize;
+        while index < usize::from(expected.prestate.receipt_count) {
+            ids[index] = id(66u8.checked_add(u8::try_from(index).ok()?).ok()?);
+            index += 1;
+        }
+        Some(ids)
     }
 }
 
@@ -303,20 +319,39 @@ fn authenticated_pair(fixture: &PairFixture) -> AuthenticatedPortfolioPairV2 {
 }
 
 fn execution_input(fixture: &PairFixture) -> PortfolioPairExecutionInputV2 {
+    let mut receipts =
+        [PortfolioSettlementReceiptV5Prestate::EMPTY; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+    let mut receipt_count = 0usize;
+    let mut outcome = 0usize;
+    while outcome < MAX_OUTCOMES {
+        if fixture.payoff[outcome] != 0 {
+            let at = receipt_count;
+            let slice_index = 10u16.checked_add(u16::try_from(at).unwrap()).unwrap();
+            receipts[at] = PortfolioSettlementReceiptV5Prestate {
+                account_id: id(80u8.checked_add(u8::try_from(at).unwrap()).unwrap()),
+                pre_data_id: id(100u8.checked_add(u8::try_from(at).unwrap()).unwrap()),
+                slice_index,
+                sequence: u64::from(slice_index).checked_add(1).unwrap(),
+                outcome: u8::try_from(outcome).unwrap(),
+                quantity: fixture.payoff[outcome],
+                price: fixture.price.prices[outcome],
+                accounted_end_mask: 3,
+                delivered_end_mask: 0,
+                expected_end_mask: 3,
+                transition_kind: SettlementReceiptTransitionKindV2::PortfolioPairV2,
+                transition_commitment: [0; 32],
+                rent_owner_id: id(82),
+                rent_principal_lamports: 2_000_000,
+                rent_donation_floor_lamports: 17,
+            };
+            receipt_count += 1;
+        }
+        outcome += 1;
+    }
     PortfolioPairExecutionInputV2 {
-        settlement_receipt: PortfolioSettlementReceiptV5Prestate {
-            account_id: id(80),
-            pre_data_id: id(81),
-            slice_index: 10,
-            sequence: 11,
-            accounted_end_mask: 3,
-            delivered_end_mask: 0,
-            expected_end_mask: 3,
-            transition_kind: SettlementReceiptTransitionKindV2::PortfolioPairV2,
-            transition_commitment: [0; 32],
-            rent_owner_id: id(82),
-            rent_principal_lamports: 2_000_000,
-            rent_donation_floor_lamports: 17,
+        settlement_receipts: PortfolioSettlementReceiptV5SetPrestate {
+            receipt_count: u8::try_from(receipt_count).unwrap(),
+            receipts,
         },
         buyer_reservation: PortfolioReservationPrestateV2 {
             account_id: id(40),
@@ -327,6 +362,9 @@ fn execution_input(fixture: &PairFixture) -> PortfolioPairExecutionInputV2 {
             order_id: fixture.buyer_record.order_id,
             position_account_id: fixture.buyer_record.position_account_id,
             position_generation: fixture.buyer_record.position_generation,
+            entitled_units: fixture.buyer_record.selected_fill_units,
+            consumed_units: 0,
+            paid_units: 0,
             remaining_cash_atoms: 200,
             remaining_claim_atoms: [0; MAX_OUTCOMES],
             maximum_fee_atoms: 0,
@@ -340,6 +378,9 @@ fn execution_input(fixture: &PairFixture) -> PortfolioPairExecutionInputV2 {
             order_id: fixture.seller_record.order_id,
             position_account_id: fixture.seller_record.position_account_id,
             position_generation: fixture.seller_record.position_generation,
+            entitled_units: fixture.seller_record.selected_fill_units,
+            consumed_units: 0,
+            paid_units: 0,
             remaining_cash_atoms: 0,
             remaining_claim_atoms: fixture.payoff,
             maximum_fee_atoms: 0,
@@ -381,8 +422,34 @@ fn execution_input(fixture: &PairFixture) -> PortfolioPairExecutionInputV2 {
             seller_position: id(63),
             buyer_replay: id(64),
             seller_replay: id(65),
-            settlement_receipt: [0; 32],
+            settlement_receipts: [[0; 32]; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
         },
+    }
+}
+
+fn sibling_traversal(
+    fixture: &PairFixture,
+    input: &PortfolioPairExecutionInputV2,
+) -> PortfolioReceiptSiblingTraversalSetV2 {
+    let mut siblings =
+        [PortfolioReceiptSiblingTraversalV2::EMPTY; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+    let mut index = 0usize;
+    while index < usize::from(input.settlement_receipts.receipt_count) {
+        let receipt = input.settlement_receipts.receipts[index];
+        siblings[index] = PortfolioReceiptSiblingTraversalV2 {
+            slice_index: receipt.slice_index,
+            sequence: receipt.sequence,
+            buy_order_index: fixture.buyer_record.order_index,
+            sell_order_index: fixture.seller_record.order_index,
+            outcome: receipt.outcome,
+            quantity: receipt.quantity,
+            price: receipt.price,
+        };
+        index += 1;
+    }
+    PortfolioReceiptSiblingTraversalSetV2 {
+        sibling_count: input.settlement_receipts.receipt_count,
+        siblings,
     }
 }
 
@@ -402,6 +469,15 @@ fn full_sixteen_outcome_pair_values_once_and_freezes_exact_effects() {
         execution_input(&fixture),
     )
     .unwrap();
+    let borrowed_input = execution_input(&fixture);
+    let borrowed = prepare_portfolio_pair_execution_borrowed_v2(
+        &TestAdapter::ACCEPT,
+        id(200),
+        &pair,
+        &borrowed_input,
+    )
+    .unwrap();
+    assert_eq!(borrowed, prepared);
     assert_eq!(prepared.effects().buyer_cash_debit_atoms(), 170);
     assert_eq!(prepared.effects().buyer_cash_refund_atoms(), 30);
     assert_eq!(prepared.effects().seller_cash_credit_atoms(), 170);
@@ -434,7 +510,8 @@ fn receipt_v5_sets_one_typed_commitment_in_the_authenticated_postimage() {
     )
     .unwrap();
     assert_eq!(adapter.commitment.get(), prepared.transition_commitment());
-    assert_eq!(prepared.post_semantic_ids().settlement_receipt, id(66));
+    assert_eq!(prepared.post_semantic_ids().settlement_receipts[0], id(66));
+    assert_eq!(prepared.receipt().receipt_count(), 16);
 }
 
 #[test]
@@ -442,7 +519,7 @@ fn receipt_v5_post_data_identity_is_never_a_caller_fact() {
     let fixture = pair_fixture(20);
     let pair = authenticated_pair(&fixture);
     let mut input = execution_input(&fixture);
-    input.post_semantic_ids.settlement_receipt = id(66);
+    input.post_semantic_ids.settlement_receipts[0] = id(66);
     assert_eq!(
         prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, input),
         Err(PortfolioExecutionErrorV2::PostSemanticMismatch)
@@ -501,9 +578,91 @@ fn selected_membership_and_receipt_codecs_refuse_noncanonical_padding() {
         portfolio_pair_transition_commitment_v2(&decoded).unwrap(),
         prepared.transition_commitment()
     );
-    receipt[11] = 1;
+    receipt[14] = 1;
     assert_eq!(
         super::portfolio_execution_v2::PortfolioPairReceiptV2::decode(&receipt),
+        Err(PortfolioExecutionErrorV2::NonCanonicalPadding)
+    );
+}
+
+#[test]
+fn complete_receipt_set_refuses_missing_duplicate_reordered_and_nonzero_tail() {
+    let fixture = pair_fixture(20);
+    let pair = authenticated_pair(&fixture);
+    let base = execution_input(&fixture);
+
+    let mut missing = base;
+    missing.settlement_receipts.receipt_count = 15;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, missing),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch)
+    );
+
+    let mut duplicate = base;
+    duplicate.settlement_receipts.receipts[1].account_id =
+        duplicate.settlement_receipts.receipts[0].account_id;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, duplicate),
+        Err(PortfolioExecutionErrorV2::AliasedAccount)
+    );
+
+    let mut reordered = base;
+    reordered.settlement_receipts.receipts.swap(0, 1);
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, reordered),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch)
+    );
+
+    let sparse = zero_consideration_fixture(20);
+    let sparse_pair = authenticated_pair(&sparse);
+    let mut nonzero_tail = execution_input(&sparse);
+    nonzero_tail.settlement_receipts.receipts[1] =
+        nonzero_tail.settlement_receipts.receipts[0];
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(
+            &TestAdapter::ACCEPT,
+            id(200),
+            sparse_pair,
+            nonzero_tail,
+        ),
+        Err(PortfolioExecutionErrorV2::NonCanonicalPadding)
+    );
+}
+
+#[test]
+fn retained_feed_sibling_capability_is_exhaustive_and_not_count_authority() {
+    let fixture = pair_fixture(20);
+    let pair = authenticated_pair(&fixture);
+    let input = execution_input(&fixture);
+    let traversal = sibling_traversal(&fixture, &input);
+    let capability =
+        authenticate_portfolio_receipt_sibling_set_v2(pair, traversal).unwrap();
+    assert_eq!(capability.sibling_count(), input.settlement_receipts.receipt_count);
+    assert_eq!(capability.sibling(0).unwrap().slice_index, 10);
+    assert_eq!(capability.pair(), pair);
+
+    let mut missing = traversal;
+    missing.sibling_count -= 1;
+    assert_eq!(
+        authenticate_portfolio_receipt_sibling_set_v2(pair, missing),
+        Err(PortfolioExecutionErrorV2::SettlementReceiptSetMismatch)
+    );
+
+    let mut duplicate = traversal;
+    duplicate.siblings[1].slice_index = duplicate.siblings[0].slice_index;
+    duplicate.siblings[1].sequence = duplicate.siblings[0].sequence;
+    assert_eq!(
+        authenticate_portfolio_receipt_sibling_set_v2(pair, duplicate),
+        Err(PortfolioExecutionErrorV2::FeedTraversalMismatch)
+    );
+
+    let sparse = zero_consideration_fixture(20);
+    let sparse_pair = authenticated_pair(&sparse);
+    let sparse_input = execution_input(&sparse);
+    let mut extra_tail = sibling_traversal(&sparse, &sparse_input);
+    extra_tail.siblings[1] = extra_tail.siblings[0];
+    assert_eq!(
+        authenticate_portfolio_receipt_sibling_set_v2(sparse_pair, extra_tail),
         Err(PortfolioExecutionErrorV2::NonCanonicalPadding)
     );
 }
@@ -604,6 +763,37 @@ fn reservation_funding_fee_and_claim_mutants_refuse_before_authority() {
         Err(PortfolioExecutionErrorV2::ReservationMismatch)
     );
 
+    let mut wrong_stamp = base;
+    wrong_stamp.buyer_reservation.entitled_units -= 1;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, wrong_stamp),
+        Err(PortfolioExecutionErrorV2::ReservationMismatch)
+    );
+
+    let mut partially_consumed = base;
+    partially_consumed.seller_reservation.consumed_units = 1;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(
+            &TestAdapter::ACCEPT,
+            id(200),
+            pair,
+            partially_consumed,
+        ),
+        Err(PortfolioExecutionErrorV2::ReservationMismatch)
+    );
+
+    let mut partially_paid = base;
+    partially_paid.seller_reservation.paid_units = 1;
+    assert_eq!(
+        prepare_portfolio_pair_execution_v2(
+            &TestAdapter::ACCEPT,
+            id(200),
+            pair,
+            partially_paid,
+        ),
+        Err(PortfolioExecutionErrorV2::ReservationMismatch)
+    );
+
     let mut underfunded = base;
     underfunded.buyer_reservation.remaining_cash_atoms = 169;
     underfunded.buyer_position.reserved_cash_atoms = 169;
@@ -625,43 +815,44 @@ fn receipt_v5_requires_pending_kind_accounting_and_zero_precommitment() {
     let base = execution_input(&fixture);
 
     let mut sequence = base;
-    sequence.settlement_receipt.sequence += 1;
+    sequence.settlement_receipts.receipts[0].sequence += 1;
     assert_eq!(
         prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, sequence),
         Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
     );
 
     let mut wrong_kind = base;
-    wrong_kind.settlement_receipt.transition_kind = SettlementReceiptTransitionKindV2::None;
+    wrong_kind.settlement_receipts.receipts[0].transition_kind =
+        SettlementReceiptTransitionKindV2::None;
     assert_eq!(
         prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, wrong_kind),
         Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
     );
 
     let mut unaccounted = base;
-    unaccounted.settlement_receipt.accounted_end_mask = 0;
+    unaccounted.settlement_receipts.receipts[0].accounted_end_mask = 0;
     assert_eq!(
         prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, unaccounted),
         Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
     );
 
     let mut delivered = base;
-    delivered.settlement_receipt.delivered_end_mask = 3;
+    delivered.settlement_receipts.receipts[0].delivered_end_mask = 3;
     assert_eq!(
         prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, delivered),
         Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
     );
 
     let mut replay = base;
-    replay.settlement_receipt.transition_commitment = id(99);
+    replay.settlement_receipts.receipts[0].transition_commitment = id(99);
     assert_eq!(
         prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, replay),
         Err(PortfolioExecutionErrorV2::SettlementReceiptMismatch)
     );
 
     let mut wrong_traversal = base;
-    wrong_traversal.settlement_receipt.slice_index = 9;
-    wrong_traversal.settlement_receipt.sequence = 10;
+    wrong_traversal.settlement_receipts.receipts[0].slice_index = 9;
+    wrong_traversal.settlement_receipts.receipts[0].sequence = 10;
     assert_eq!(
         prepare_portfolio_pair_execution_v2(
             &TestAdapter::ACCEPT,
@@ -761,6 +952,34 @@ fn replay_prestate_is_in_the_transition_and_receipt_identity() {
         prepare_portfolio_pair_execution_v2(&TestAdapter::ACCEPT, id(200), pair, overflow),
         Err(PortfolioExecutionErrorV2::ReplayOverflow)
     );
+}
+
+#[test]
+fn every_sibling_preimage_is_in_the_shared_transition_commitment() {
+    let fixture = pair_fixture(20);
+    let pair = authenticated_pair(&fixture);
+    let first = prepare_portfolio_pair_execution_v2(
+        &TestAdapter::ACCEPT,
+        id(200),
+        pair,
+        execution_input(&fixture),
+    )
+    .unwrap();
+
+    let mut changed = execution_input(&fixture);
+    changed.settlement_receipts.receipts[MAX_OUTCOMES - 1].pre_data_id = id(199);
+    let second = prepare_portfolio_pair_execution_v2(
+        &TestAdapter::ACCEPT,
+        id(200),
+        pair,
+        changed,
+    )
+    .unwrap();
+    assert_ne!(
+        first.receipt().settlement_receipt_set_digest(),
+        second.receipt().settlement_receipt_set_digest()
+    );
+    assert_ne!(first.transition_commitment(), second.transition_commitment());
 }
 
 #[test]

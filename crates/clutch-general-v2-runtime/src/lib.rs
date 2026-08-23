@@ -20,12 +20,12 @@
 //! - This join owns only the canonical fixed policy identities selecting those
 //!   already-owned semantics for General V2.
 //!
-//! [`verify_smooth_direct_candidate_v1`] retains its original API name but now
-//! admits the complete Product-selected V3 quantized family: mapped degree
-//! zero and smooth degrees one through three. It verifies one already-submitted
-//! candidate and returns a canonical rank. It does not establish global
-//! optimality, authorize settlement, authenticate a Solana account owner/PDA,
-//! or move assets.
+//! [`verify_smooth_direct_candidate_v1`] remains the legacy complete V3-family
+//! reference API. The successor builder and SBF source path instead require
+//! [`verify_quantized_relation_price_admission_v2`] and admit only degrees two
+//! and three covered by the exact finite atom-mixture verifier. Neither path
+//! establishes global optimality, authorizes settlement, authenticates a
+//! Solana account owner/PDA, or moves assets.
 //!
 //! There is exactly one payout rounding boundary: the Product-selected
 //! largest-remainder/lowest-outcome-index quantizer executed by the immutable
@@ -67,6 +67,8 @@ use sha2::{Digest, Sha256};
 mod builder;
 mod candidate_cost;
 mod covered_dealer;
+mod quantized_relation_v2;
+mod portfolio_retirement;
 mod settlement;
 mod settlement_root_projection;
 mod work;
@@ -74,6 +76,8 @@ mod work;
 pub use builder::*;
 pub use candidate_cost::*;
 pub use covered_dealer::*;
+pub use quantized_relation_v2::*;
+pub use portfolio_retirement::*;
 pub use settlement::*;
 pub use settlement_root_projection::*;
 pub use work::*;
@@ -504,7 +508,7 @@ pub enum GeneralV2RuntimeError {
     InvalidAdmissionState,
     /// A Product, Market, Epoch, domain, feed, or policy identity disagreed.
     BindingMismatch,
-    /// An authenticated basis was outside the V3 degree-zero-through-three domain.
+    /// An authenticated basis was outside the selected verifier's degree domain.
     UnsupportedSmoothDegree,
     /// Witness schema or quantized semantic version was not the frozen pair.
     UnsupportedWitnessVersion,

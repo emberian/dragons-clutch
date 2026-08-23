@@ -37,10 +37,12 @@ pub const PROFILE_LABEL: &str = "dragons-clutch/capability-profile/general-sourc
 ))]
 pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v7";
-/// Non-production General V2 empty-book identity laboratory.
+/// Non-production General V2 quantized-candidate laboratory. Action 10 in
+/// this identity is the closed 17-account PriceGrid/Product tuple; no
+/// deployable profile admits the historical account frame.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-general-v2-empty-book-identity-lab/v5";
+    "dragons-clutch/capability-profile/non-production-general-v2-quantized-candidate-lab/v8-retained-price-authority";
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(all(
@@ -86,8 +88,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x6e, 0x0e, 0xb3, 0x55, 0xbd, 0x8b, 0xf2, 0x0b, 0xd6, 0x72, 0x2c, 0xfd, 0x32, 0x5c, 0x73, 0x08,
-    0x92, 0xb0, 0x23, 0x41, 0x0d, 0xc2, 0x88, 0x52, 0x05, 0xaf, 0x0f, 0xbe, 0x68, 0xb7, 0x0e, 0xda,
+    0x29, 0xd7, 0x42, 0x98, 0xe8, 0xf8, 0xed, 0xa1, 0x44, 0xcc, 0x88, 0xce, 0xd6, 0x2a, 0x23, 0xa1,
+    0xe7, 0xf1, 0xba, 0xa9, 0xd2, 0x8c, 0x99, 0x92, 0x96, 0xa6, 0x5e, 0xff, 0x14, 0x19, 0xfd, 0x14,
 ];
 
 /// Whether this artifact is the explicitly non-production identity lab.
@@ -240,6 +242,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 9),
     (74, 1, 10),
     (74, 1, 12),
+    (74, 1, 13),
     (74, 1, 14),
     (74, 1, 15),
     (74, 1, 16),
@@ -405,5 +408,13 @@ mod tests {
                 || GENERAL_V2_IDENTITY_LAB
                 || cfg!(feature = "profile-full"))
         );
+    }
+
+    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+    #[test]
+    fn general_active_width_clearing_is_one_coherent_capability_unit() {
+        for action in [10, 12, 13, 14] {
+            assert!(extension_intent_action_enabled(74, 1, action));
+        }
     }
 }

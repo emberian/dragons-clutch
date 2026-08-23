@@ -24,7 +24,8 @@ use crate::relation_v2::{
     EconomicErrorV2, PricePreconditionV2, Sha256V2,
 };
 use crate::score_v2::{
-    score_candidate_v2, CandidateDeltaV2, NormalizationPolicyV2, ScoreErrorV2, ScoreV2,
+    score_candidate_v2, CandidateDeltaV2, NormalizationPolicyV2, RiskObjectiveV2, ScoreErrorV2,
+    ScoreV2,
 };
 use crate::{Side, MAX_ORDERS};
 
@@ -222,6 +223,33 @@ pub struct DealerLegVerdictV2 {
     pub score: ScoreV2,
 }
 
+impl DealerLegVerdictV2 {
+    /// Canonical invalid output target for allocation-owning verifiers.
+    pub const ZEROED: Self = Self {
+        outcome_count: 0,
+        trade: AggregateDealerTradeV2 {
+            sell_to_users: [0; MAX_OUTCOMES],
+            buy_from_users: [0; MAX_OUTCOMES],
+        },
+        allocations: [EMPTY_DEALER_CASH_ALLOCATION_V2; MAX_DEALER_ROWS_V2],
+        allocation_count: 0,
+        total_external_fee_atoms: 0,
+        aggregate_buy_flow: [0; MAX_OUTCOMES],
+        aggregate_sell_flow: [0; MAX_OUTCOMES],
+        direct_flow: [0; MAX_OUTCOMES],
+        dealer_economic_candidate_digest: [0; 32],
+        dealer_quote_semantics_digest: [0; 32],
+        score: ScoreV2 {
+            risk: RiskObjectiveV2 {
+                certified_risk_flow_atoms: 0,
+            },
+            cash_equivalent_direct_flow_atoms: 0,
+            virtual_churn_atoms: 0,
+            digest: [0; 32],
+        },
+    };
+}
+
 /// In-memory capability minted only after full dealer-leg verification.
 ///
 /// The private field prevents safe downstream code from wrapping a fabricated
@@ -242,6 +270,22 @@ pub struct DealerLegVerdictV2 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedDealerLegV2 {
     verdict: DealerLegVerdictV2,
+}
+
+/// Borrowed verifier capability over caller-owned verdict storage.
+///
+/// Private construction preserves the same authority as
+/// [`VerifiedDealerLegV2`] without returning its allocation array by value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedDealerLegRefV2<'a> {
+    verdict: &'a DealerLegVerdictV2,
+}
+
+impl VerifiedDealerLegRefV2<'_> {
+    /// Read the exact fully verified verdict in caller-owned storage.
+    pub const fn verdict(&self) -> &DealerLegVerdictV2 {
+        self.verdict
+    }
 }
 
 impl VerifiedDealerLegV2 {
@@ -452,6 +496,34 @@ pub fn verify_economic_candidate_with_dealer_v2(
     dealer: &DealerLegCandidateV2,
     quote: &DealerQuotePreconditionV2,
 ) -> Result<VerifiedDealerLegV2, DealerErrorV2> {
+    let mut verdict = DealerLegVerdictV2::ZEROED;
+    verify_economic_candidate_with_dealer_into_v2(
+        domain,
+        book,
+        price,
+        candidate,
+        dealer,
+        quote,
+        &mut verdict,
+    )?;
+    Ok(VerifiedDealerLegV2 { verdict })
+}
+
+/// Verify one covered-Dealer leg directly into caller-owned storage.
+///
+/// The returned borrowed capability cannot outlive the exact verdict buffer
+/// filled by this call. This is the frame-bounded authority path for SBF;
+/// caller-provided verdict bytes are overwritten rather than trusted.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_economic_candidate_with_dealer_into_v2<'a>(
+    domain: &EconomicDomainV2,
+    book: &EconomicBookV2,
+    price: &PricePreconditionV2,
+    candidate: &EconomicCandidateV2,
+    dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
+    output: &'a mut DealerLegVerdictV2,
+) -> Result<VerifiedDealerLegRefV2<'a>, DealerErrorV2> {
     let unbalanced = derive_unbalanced_economics_v2(domain, book, price, candidate)?;
     let trade = derive_aggregate_dealer_trade(
         domain.outcome_count,
@@ -467,8 +539,15 @@ pub fn verify_economic_candidate_with_dealer_v2(
         &trade,
         &unbalanced.economic_candidate_digest,
     )?;
-    let row_economics = validate_rows(domain, book, candidate, dealer, quote, &trade)?;
-    let cash = allocate_cash(dealer, quote, &row_economics)?;
+    let total_external_fee_atoms = verify_cash_allocations_into(
+        domain,
+        book,
+        candidate,
+        dealer,
+        quote,
+        &trade,
+        &mut output.allocations,
+    )?;
 
     let mut aggregate_buy_flow = unbalanced.aggregate_buy_flow;
     let mut aggregate_sell_flow = unbalanced.aggregate_sell_flow;
@@ -515,21 +594,17 @@ pub fn verify_economic_candidate_with_dealer_v2(
         candidate_digest: digest,
     };
     let score = score_candidate_v2(&delta).map_err(DealerErrorV2::Score)?;
-    Ok(VerifiedDealerLegV2 {
-        verdict: DealerLegVerdictV2 {
-            outcome_count: domain.outcome_count,
-            trade,
-            allocations: cash.allocations,
-            allocation_count: dealer.row_count,
-            total_external_fee_atoms: cash.total_external_fee_atoms,
-            aggregate_buy_flow,
-            aggregate_sell_flow,
-            direct_flow,
-            dealer_economic_candidate_digest: digest,
-            dealer_quote_semantics_digest: quote.semantic_quote_digest,
-            score,
-        },
-    })
+    output.outcome_count = domain.outcome_count;
+    output.trade = trade;
+    output.allocation_count = dealer.row_count;
+    output.total_external_fee_atoms = total_external_fee_atoms;
+    output.aggregate_buy_flow = aggregate_buy_flow;
+    output.aggregate_sell_flow = aggregate_sell_flow;
+    output.direct_flow = direct_flow;
+    output.dealer_economic_candidate_digest = digest;
+    output.dealer_quote_semantics_digest = quote.semantic_quote_digest;
+    output.score = score;
+    Ok(VerifiedDealerLegRefV2 { verdict: output })
 }
 
 /// Compare an adapter-carried allocation with a fully verified dealer leg.
@@ -705,6 +780,7 @@ struct RowEconomicsV2 {
     total_external_fee_atoms: u128,
 }
 
+#[inline(never)]
 fn validate_rows(
     domain: &EconomicDomainV2,
     book: &EconomicBookV2,
@@ -808,17 +884,28 @@ fn validate_rows(
     Ok(row_economics)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CashResultV2 {
-    allocations: [DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
-    total_external_fee_atoms: u128,
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn verify_cash_allocations_into(
+    domain: &EconomicDomainV2,
+    book: &EconomicBookV2,
+    candidate: &EconomicCandidateV2,
+    dealer: &DealerLegCandidateV2,
+    quote: &DealerQuotePreconditionV2,
+    trade: &AggregateDealerTradeV2,
+    allocations: &mut [DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
+) -> Result<u128, DealerErrorV2> {
+    let economics = validate_rows(domain, book, candidate, dealer, quote, trade)?;
+    allocate_cash_into(dealer, quote, &economics, allocations)
 }
 
-fn allocate_cash(
+#[inline(never)]
+fn allocate_cash_into(
     dealer: &DealerLegCandidateV2,
     quote: &DealerQuotePreconditionV2,
     economics: &RowEconomicsV2,
-) -> Result<CashResultV2, DealerErrorV2> {
+    allocations: &mut [DealerCashAllocationV2; MAX_DEALER_ROWS_V2],
+) -> Result<u128, DealerErrorV2> {
     let receipt_in = u128::from(quote.receipt.dealer_net_cash_in_atoms);
     let receipt_out = u128::from(quote.receipt.dealer_net_cash_out_atoms);
     let minimum_receivers = economics.total_receiver_minimum;
@@ -856,7 +943,11 @@ fn allocate_cash(
         count,
     )?;
 
-    let mut allocations = [EMPTY_DEALER_CASH_ALLOCATION_V2; MAX_DEALER_ROWS_V2];
+    let mut clear = 0usize;
+    while clear < MAX_DEALER_ROWS_V2 {
+        allocations[clear] = EMPTY_DEALER_CASH_ALLOCATION_V2;
+        clear += 1;
+    }
     let mut aggregate_in = 0u128;
     let mut aggregate_out = 0u128;
     let mut row = 0usize;
@@ -900,10 +991,7 @@ fn allocate_cash(
     if left != right {
         return Err(DealerErrorV2::CashConservationMismatch);
     }
-    Ok(CashResultV2 {
-        allocations,
-        total_external_fee_atoms: economics.total_external_fee_atoms,
-    })
+    Ok(economics.total_external_fee_atoms)
 }
 
 fn hamilton_allocate(
