@@ -58,6 +58,10 @@ pub(crate) struct AuthenticatedGeneralFamilyPreauthorizationV1 {
     compiler_bundle_v5_id: ContentId,
     capability_profile_v4_id: ContentId,
     attachment_plan_v4_id: ContentId,
+    market_liability_founding_id: ContentId,
+    claim_mint_founding_plan_id: ContentId,
+    claim_issuance_binding_id: ContentId,
+    general_founding_capability_id: ContentId,
     general_market_owner_account: Pubkey,
     family_admission_sequence: u32,
     preauthorization_id: ContentId,
@@ -104,6 +108,18 @@ impl AuthenticatedGeneralFamilyPreauthorizationV1 {
     pub(crate) const fn attachment_plan_v4_id(self) -> ContentId {
         self.attachment_plan_v4_id
     }
+    pub(crate) const fn market_liability_founding_id(self) -> ContentId {
+        self.market_liability_founding_id
+    }
+    pub(crate) const fn claim_mint_founding_plan_id(self) -> ContentId {
+        self.claim_mint_founding_plan_id
+    }
+    pub(crate) const fn claim_issuance_binding_id(self) -> ContentId {
+        self.claim_issuance_binding_id
+    }
+    pub(crate) const fn general_founding_capability_id(self) -> ContentId {
+        self.general_founding_capability_id
+    }
     pub(crate) const fn general_market_owner_account(self) -> Pubkey {
         self.general_market_owner_account
     }
@@ -135,6 +151,10 @@ pub(crate) trait AuthenticatedGeneralMarketPostwriteV1 {
     fn series_market_link_account(&self) -> Pubkey;
     fn compiler_bundle_v5_id(&self) -> ContentId;
     fn attachment_plan_v4_id(&self) -> ContentId;
+    fn market_liability_founding_id(&self) -> ContentId;
+    fn claim_mint_founding_plan_id(&self) -> ContentId;
+    fn claim_issuance_binding_id(&self) -> ContentId;
+    fn general_founding_capability_id(&self) -> ContentId;
     fn product_preauthorization_id(&self) -> ContentId;
     fn semantic_id(&self) -> ContentId;
     fn data_id(&self) -> ContentId;
@@ -506,9 +526,12 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         &bundle_id.bytes(),
         &profile_id.bytes(),
         &attachment_id.bytes(),
+        &root_binding.market_liability_founding_id.bytes(),
+        &root_binding.claim_mint_founding_plan_id.bytes(),
+        &root_binding.claim_issuance_binding_id.bytes(),
+        &root_binding.general_founding_capability_id.bytes(),
         general_account.as_ref(),
         &family_admission_sequence.to_le_bytes(),
-        &root_binding.general_founding_capability_id.bytes(),
     ]);
     preauthorization_id
         .validate()
@@ -530,6 +553,10 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
         compiler_bundle_v5_id: bundle_id,
         capability_profile_v4_id: profile_id,
         attachment_plan_v4_id: attachment_id,
+        market_liability_founding_id: root_binding.market_liability_founding_id,
+        claim_mint_founding_plan_id: root_binding.claim_mint_founding_plan_id,
+        claim_issuance_binding_id: root_binding.claim_issuance_binding_id,
+        general_founding_capability_id: root_binding.general_founding_capability_id,
         general_market_owner_account: general_account,
         family_admission_sequence,
         preauthorization_id,
@@ -571,6 +598,14 @@ fn require_matching_general_postwrite<P: AuthenticatedGeneralMarketPostwriteV1 +
                 == preauthorization.series_market_link_account
             && postwrite.compiler_bundle_v5_id() == preauthorization.compiler_bundle_v5_id
             && postwrite.attachment_plan_v4_id() == preauthorization.attachment_plan_v4_id
+            && postwrite.market_liability_founding_id()
+                == preauthorization.market_liability_founding_id
+            && postwrite.claim_mint_founding_plan_id()
+                == preauthorization.claim_mint_founding_plan_id
+            && postwrite.claim_issuance_binding_id()
+                == preauthorization.claim_issuance_binding_id
+            && postwrite.general_founding_capability_id()
+                == preauthorization.general_founding_capability_id
             && postwrite.product_preauthorization_id() == preauthorization.preauthorization_id,
         ClutchError::MismatchedState,
     )
@@ -811,6 +846,18 @@ mod adversarial_tests {
         fn attachment_plan_v4_id(&self) -> ContentId {
             self.preauthorization.attachment_plan_v4_id
         }
+        fn market_liability_founding_id(&self) -> ContentId {
+            self.preauthorization.market_liability_founding_id
+        }
+        fn claim_mint_founding_plan_id(&self) -> ContentId {
+            self.preauthorization.claim_mint_founding_plan_id
+        }
+        fn claim_issuance_binding_id(&self) -> ContentId {
+            self.preauthorization.claim_issuance_binding_id
+        }
+        fn general_founding_capability_id(&self) -> ContentId {
+            self.preauthorization.general_founding_capability_id
+        }
         fn product_preauthorization_id(&self) -> ContentId {
             self.preauthorization.preauthorization_id
         }
@@ -837,6 +884,10 @@ mod adversarial_tests {
             compiler_bundle_v5_id: id(14),
             capability_profile_v4_id: id(15),
             attachment_plan_v4_id: id(16),
+            market_liability_founding_id: id(24),
+            claim_mint_founding_plan_id: id(25),
+            claim_issuance_binding_id: id(26),
+            general_founding_capability_id: id(27),
             general_market_owner_account: Pubkey::new_from_array([17; 32]),
             family_admission_sequence: 0,
             preauthorization_id: id(18),
@@ -893,6 +944,28 @@ mod adversarial_tests {
         let mut wrong_series = exact;
         wrong_series.preauthorization.series_ordinal = 11;
         assert!(require_matching_general_postwrite(preauthorization, &wrong_series).is_err());
+        for replacement in [id(30), id(31), id(32), id(33)] {
+            let mut wrong_founding = exact;
+            wrong_founding
+                .preauthorization
+                .market_liability_founding_id = replacement;
+            assert!(
+                require_matching_general_postwrite(preauthorization, &wrong_founding).is_err()
+            );
+            let mut wrong_mint = exact;
+            wrong_mint.preauthorization.claim_mint_founding_plan_id = replacement;
+            assert!(require_matching_general_postwrite(preauthorization, &wrong_mint).is_err());
+            let mut wrong_issuance = exact;
+            wrong_issuance.preauthorization.claim_issuance_binding_id = replacement;
+            assert!(
+                require_matching_general_postwrite(preauthorization, &wrong_issuance).is_err()
+            );
+            let mut wrong_capability = exact;
+            wrong_capability.preauthorization.general_founding_capability_id = replacement;
+            assert!(
+                require_matching_general_postwrite(preauthorization, &wrong_capability).is_err()
+            );
+        }
     }
 
     #[test]
