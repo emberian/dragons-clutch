@@ -1486,6 +1486,7 @@ def validate_manifest(
 
     return {
         "schema": MANIFEST_SCHEMA,
+        "manifest_canonical_sha256": canonical_json_sha256(data),
         "profile_identity_sha256": computed_identity,
         "classification": classification,
         "source_identity": build_contract["source_identity"],

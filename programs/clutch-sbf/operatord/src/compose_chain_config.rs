@@ -12,14 +12,20 @@ use clutch_local_real_pyth::rpc_index::CanonicalFamily;
 use serde_json::{json, Value};
 use solana_address::Address;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::OpenOptions;
+use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const LOCAL_MANIFEST_SCHEMA: &str = "dragons-clutch/local-validator-public-manifest/v6";
 const MAX_LOCAL_MANIFEST_BYTES: usize = 262_144;
 const MAX_CAPABILITY_MANIFEST_BYTES: usize = 1_048_576;
 const WORKFLOW_DOMAIN: &[u8] = b"dragons-clutch/operatord-chain-config-workflow/v2\0";
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComposeOptions {
@@ -129,16 +135,52 @@ fn hex(bytes: [u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+struct ExactManifestCopy {
+    path: PathBuf,
+}
+
+impl ExactManifestCopy {
+    fn create(bytes: &[u8]) -> Result<Self> {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        for _ in 0..32 {
+            let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "dragons-clutch-capability-manifest-{}-{nonce}-{sequence}.json",
+                std::process::id()
+            ));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    file.write_all(bytes)?;
+                    file.sync_all()?;
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err("could not exclusively create exact capability-manifest handoff".into())
+    }
+}
+
+impl Drop for ExactManifestCopy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn checked_capability_summary(path: &Path) -> Result<(Value, [u8; 32])> {
     let bytes = bounded_read(path, MAX_CAPABILITY_MANIFEST_BYTES, "capability manifest")?;
-    let value: Value = serde_json::from_slice(&bytes)?;
-    let canonical = serde_json::to_vec(&value)?;
-    let canonical_sha256 = solana_sha256_hasher::hash(&canonical).to_bytes();
+    let exact_copy = ExactManifestCopy::create(&bytes)?;
     let checker = repo_path("programs/clutch-sbf/scripts/check_capability_profile.py");
     let repo = repo_path("");
     let output = Command::new("python3")
         .arg(checker)
-        .arg(path)
+        .arg(&exact_copy.path)
         .arg("--repo")
         .arg(repo)
         .arg("--require-deployable")
@@ -163,6 +205,10 @@ fn checked_capability_summary(path: &Path) -> Result<(Value, [u8; 32])> {
     {
         return Err("capability profile is not a completely linked deployable input".into());
     }
+    let canonical_sha256 = hash32(
+        summary_string(&summary, &["manifest_canonical_sha256"])?,
+        "checked profile manifest_canonical_sha256",
+    )?;
     Ok((summary, canonical_sha256))
 }
 

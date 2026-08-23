@@ -252,6 +252,8 @@ pub struct LocalProgramRelease {
 /// checked owner to the exact deployed ELF and local runtime coordinates.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CheckedChainReleaseBinding {
+    /// SHA-256 of the capability manifest's sorted-key, compact, ASCII JSON
+    /// encoding, as emitted by `check_capability_profile.py`.
     pub capability_manifest_sha256: [u8; 32],
     pub capability_profile_id: [u8; 32],
     pub source_commit: String,
