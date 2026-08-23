@@ -19,9 +19,9 @@ use clutch_product_series::{
 use crate::{is_zero, registry, CodecError, Result, HASH_BYTES};
 
 /// Exact immutable registered-Series account width.
-pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 160;
+pub const SERIES_REGISTRY_ACCOUNT_BYTES_V1: usize = 168;
 /// Exact mutable Series-funding account width.
-pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize = 4 + SERIES_FUNDING_STATE_BYTES;
+pub const SERIES_FUNDING_ACCOUNT_BYTES_V1: usize = 4 + 8 + SERIES_FUNDING_STATE_BYTES;
 
 /// Exact `RegisterSeries` payload width.
 pub const REGISTER_SERIES_PAYLOAD_BYTES_V1: usize = 4 * HASH_BYTES;
@@ -94,6 +94,26 @@ fn take_id(input: &[u8], at: &mut usize) -> [u8; HASH_BYTES] {
     bytes
 }
 
+fn put_u64(out: &mut [u8], at: &mut usize, value: u64) {
+    out[*at..*at + 8].copy_from_slice(&value.to_le_bytes());
+    *at += 8;
+}
+
+fn take_u64(input: &[u8], at: &mut usize) -> u64 {
+    let value = u64::from_le_bytes([
+        input[*at],
+        input[*at + 1],
+        input[*at + 2],
+        input[*at + 3],
+        input[*at + 4],
+        input[*at + 5],
+        input[*at + 6],
+        input[*at + 7],
+    ]);
+    *at += 8;
+    value
+}
+
 fn require_reserved(input: &[u8]) -> Result<()> {
     if input.iter().any(|byte| *byte != 0) {
         Err(CodecError::NonCanonicalPadding)
@@ -120,6 +140,8 @@ pub struct SeriesRegistryAccountV1 {
     pub registry_release_id: ContentId,
     /// Exact registry capability profile selected through Genesis V2.
     pub capability_profile_id: ContentId,
+    /// Exact payer-owned rent principal locked at account creation.
+    pub rent_principal_lamports: u64,
     /// Canonical account PDA bump.
     pub stored_bump: u8,
     /// Reserved flags; must be zero.
@@ -135,6 +157,9 @@ impl SeriesRegistryAccountV1 {
             .map_err(map_product_error)?;
         require_live(self.registry_release_id.bytes())?;
         require_live(self.capability_profile_id.bytes())?;
+        if self.rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
         if self.flags != 0 {
             return Err(CodecError::InvalidEnum);
         }
@@ -156,6 +181,7 @@ impl SeriesRegistryAccountV1 {
         out[2] = self.stored_bump;
         out[3] = self.flags;
         let mut at = 4;
+        put_u64(out, &mut at, self.rent_principal_lamports);
         put_id(out, &mut at, self.series_plan_id.bytes());
         put_id(out, &mut at, self.funding_terms_id.bytes());
         put_id(out, &mut at, self.registry_release_id.bytes());
@@ -179,6 +205,7 @@ impl SeriesRegistryAccountV1 {
         let stored_bump = input[2];
         let flags = input[3];
         let mut at = 4;
+        let rent_principal_lamports = take_u64(input, &mut at);
         let series_plan_id = SeriesPlanV5Id::from_bytes(take_id(input, &mut at));
         let funding_terms_id = SeriesFundingTermsV2Id::from_bytes(take_id(input, &mut at));
         let registry_release_id = ContentId::from_bytes(take_id(input, &mut at));
@@ -193,6 +220,7 @@ impl SeriesRegistryAccountV1 {
             funding_terms_id,
             registry_release_id,
             capability_profile_id,
+            rent_principal_lamports,
             stored_bump,
             flags,
         };
@@ -205,11 +233,14 @@ impl SeriesRegistryAccountV1 {
 ///
 /// The embedded [`SeriesFundingStateV1`] is the sole semantic owner of cursor,
 /// payer-principal, donation, and allocation-consumption facts. The wrapper
-/// adds only global account discrimination and the canonical PDA bump.
+/// adds global account discrimination, the canonical PDA bump, and exact
+/// refundable account-rent principal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesFundingAccountV1 {
     /// Exact pure funding/lifecycle state.
     pub state: SeriesFundingStateV1,
+    /// Exact payer-owned rent principal locked at account creation.
+    pub rent_principal_lamports: u64,
     /// Canonical account PDA bump.
     pub stored_bump: u8,
     /// Reserved flags; must be zero.
@@ -220,6 +251,9 @@ impl SeriesFundingAccountV1 {
     /// Validate the complete pure state and account framing.
     pub fn validate(&self) -> Result<()> {
         self.state.validate().map_err(map_product_error)?;
+        if self.rent_principal_lamports == 0 {
+            return Err(CodecError::ZeroValue);
+        }
         if self.flags != 0 {
             return Err(CodecError::InvalidEnum);
         }
@@ -239,8 +273,9 @@ impl SeriesFundingAccountV1 {
         out[1] = registry::SOURCE_SERIES_FUNDING_ACCOUNT_VERSION;
         out[2] = self.stored_bump;
         out[3] = self.flags;
+        out[4..12].copy_from_slice(&self.rent_principal_lamports.to_le_bytes());
         self.state
-            .encode_into(&mut out[4..])
+            .encode_into(&mut out[12..])
             .map_err(map_product_error)
     }
 
@@ -254,7 +289,10 @@ impl SeriesFundingAccountV1 {
             return Err(CodecError::WrongVersion);
         }
         let value = Self {
-            state: SeriesFundingStateV1::decode(&input[4..]).map_err(map_product_error)?,
+            state: SeriesFundingStateV1::decode(&input[12..]).map_err(map_product_error)?,
+            rent_principal_lamports: u64::from_le_bytes(
+                input[4..12].try_into().map_err(|_| CodecError::Truncated)?,
+            ),
             stored_bump: input[2],
             flags: input[3],
         };

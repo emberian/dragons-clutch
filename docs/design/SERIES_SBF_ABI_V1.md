@@ -42,23 +42,29 @@ The global account ledger reserves:
 
 | tag/version | bytes | semantic owner |
 | --- | ---: | --- |
-| `0x7d/1` | 160 | immutable Series registration |
-| `0x7e/1` | 328 | mutable Series funding/lifecycle wrapper |
+| `0x7d/1` | 168 | immutable Series registration |
+| `0x7e/1` | 336 | mutable Series funding/lifecycle wrapper |
 
-The 160-byte registration stores only SeriesPlanV5Id, FundingTermsV2Id,
-RegistryReleaseId, CapabilityProfileId, PDA bump, and zero flags/reserved bytes.
+The 168-byte registration stores only SeriesPlanV5Id, FundingTermsV2Id,
+RegistryReleaseId, CapabilityProfileId, its exact payer-owned rent principal,
+PDA bump, and zero flags/reserved bytes.
 It does not persist `RegistryCapabilityProjectionV2`: the central release stays
 the single owner of selector mappings and every value-bearing consumer must
 reauthenticate and reconstruct the projection.
 
-The 328-byte funding account is exactly:
+The 336-byte funding account is exactly:
 
 ```text
-tag 0x7e | version 1 | bump | zero flags | SeriesFundingStateV1 (324)
+tag 0x7e | version 1 | bump | zero flags | rent principal LE u64
+| SeriesFundingStateV1 (324)
 ```
 
-The wrapper adds no phase, cursor, component amounts, or terminal ownership.
-Those facts remain owned by the pure state, quote, and FundingTerms V2.
+The wrappers add no phase, cursor, component amounts, or terminal ownership.
+Each stores the exact rent principal so a close can separate refundable payer
+principal from unsolicited account surplus even if runtime rent parameters
+later change. FundingTerms V2 remains the sole owner of the refund destination;
+surplus is donation residue for its neutral sink. All other facts remain owned
+by the pure state, quote, and FundingTerms V2.
 
 ## Address schema and custody
 

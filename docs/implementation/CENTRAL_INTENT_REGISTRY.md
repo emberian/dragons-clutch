@@ -99,10 +99,10 @@ source, collateral, liveness, and failure receipts are authenticated.
 
 The Source/Series account namespace reserves `0x7d/1` for the immutable Series
 registration and `0x7e/1` for the mutable Series-funding wrapper. Their exact
-160-byte and 328-byte codecs are fixed, but their allocation status is
-reserved-disabled. The funding wrapper adds only tag/version/bump/flags around
-the pure 324-byte `SeriesFundingStateV1`; it does not copy its cursor or balance
-facts.
+168-byte and 336-byte codecs are fixed, but their allocation status is
+reserved-disabled. The funding wrapper adds tag/version/bump/flags and exact
+refundable account-rent principal around the pure 324-byte
+`SeriesFundingStateV1`; it does not copy its cursor or component-balance facts.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
