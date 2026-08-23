@@ -278,12 +278,11 @@ that aggregate deliberately and refuses the state.
 
 ### 3.4 Internal and bearer implications
 
-For an internal Position, redemption can use the owner's credit PDA (or a
-future Position field), debit the local Egg balance, credit internal cash by
-whole atoms, and update `K`. A Position field is smaller in account count but
-makes credit transfer, close/reopen, and multi-Position aggregation depend on
-Position generation. A separate credit PDA is more explicit and lets internal
-and bearer paths share one liability owner.
+For an internal Position, the promoted runtime uses the owner's credit PDA,
+debits the canonical Position V3 Egg balance, credits internal cash by whole
+atoms, reclassifies the same amount of Hoard V2 locked principal into cash
+liability, and updates `K`. The separate credit PDA lets internal and bearer
+paths share one liability owner without adding another Position field.
 
 For an external bearer Egg, fractional redemption is no longer positionless.
 The claimant must present or create the credit PDA. In one Solana transaction:
@@ -291,10 +290,12 @@ The claimant must present or create the credit PDA. In one Solana transaction:
 1. authenticate Market, terms, immutable native Resolution, complete mint
    vector, Hoard, claimant source/destination, credit, aggregate credit ledger,
    and replay state;
-2. synchronize prior direct bearer burns as forfeitures;
+2. bind canonical ClaimLedger V3 materialized supply and reject any unprocessed
+   direct-burn donation delta;
 3. compute and validate the entire prospective state;
 4. burn exactly `q` bearer Eggs with claimant authority;
-5. transfer exactly `paid` collateral atoms from the Hoard (zero is allowed);
+5. externally transfer exactly `paid` collateral atoms from the Hoard under an
+   accepted release-selected receipt (zero emits no CPI);
 6. commit claim supply, Hoard accounting, credit numerator, aggregate `K`, and
    replay sequence; and
 7. re-read exact token deltas.
@@ -306,7 +307,8 @@ credit account because no collateral moved is silent confiscation.
 For a structured wrapper, the safest path remains unwrap then redeem native
 Eggs. An optimized aggregate redemption may use the same claimant credit,
 adding `q*dot(a,w)` to its numerator, only after the wrapper burn, native vault
-debit, base SupplyLedger debit, payout, and credit update form one checked
+debit, canonical ClaimLedger V3 debit, Hoard V2 reclassification/withdrawal,
+payout, and credit update form one checked
 transaction. Direct wrapper burns remain donations and create no credit.
 
 ## 4. Direct burns and donation surplus

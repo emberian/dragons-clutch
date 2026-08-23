@@ -14,8 +14,8 @@
 //!
 //! The Solana account adapter remains capability-disabled. It must establish
 //! program ownership, canonical PDAs, signers, the immutable Resolution and
-//! SupplyLedger projections, exact Token-2022 burn deltas, exact
-//! Realm-selected collateral deltas, rent exemption, and rollback before
+//! full-width ClaimLedger V3/Hoard V2 owners, exact Token-2022 burn deltas,
+//! exact Realm-selected collateral deltas, rent exemption, and rollback before
 //! committing one of this crate's complete plans.
 
 mod account;
@@ -64,7 +64,7 @@ pub enum Error {
     NonIntegralLot,
     /// The presented canonical supply was smaller than the burn.
     InsufficientClaims,
-    /// The presented claim-backing compartment was smaller than the payout.
+    /// Canonical Hoard locked claim principal was smaller than the payout.
     InsufficientBacking,
     /// A source credit did not contain the requested numerator.
     InsufficientCredit,

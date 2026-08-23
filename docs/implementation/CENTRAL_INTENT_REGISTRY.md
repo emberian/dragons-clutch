@@ -191,9 +191,11 @@ Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
 credit and live-credit count, `0xa6/1` for one owner-scoped canonical numerator,
 and `0xa7/1` for the permanent zero-credit replay tombstone. Their exact body
 widths are 296, 224, 296, and 232 bytes. Resolution owns the vector,
-SupplyLedger/ClaimLedger owns native claim supply and backing, Position V3 and
-Replay V3 own internal custody/replay, and the Realm collateral adapter owns
-Hoard transfers. The fractional accounts copy none of those mutable facts.
+ClaimLedger V3 owns native claim supply, Hoard V2 owns locked claim principal
+and cash classification, Position V3 and Replay V3 own internal
+custody/replay, and the Realm collateral adapter owns transfers. The fractional
+accounts copy none of those mutable facts; ClaimLedger and `0xa5` advance one
+sequence and exact cross-account semantic-ID receipt atomically.
 
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim

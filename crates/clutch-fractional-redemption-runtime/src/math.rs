@@ -90,6 +90,46 @@ impl PayoutVectorV1 {
         Ok(total)
     }
 
+    /// Check exact solvency for canonical ClaimLedger supply, Hoard locked
+    /// principal, and the separately owned aggregate numerator credit.
+    pub fn validate_solvency(
+        self,
+        supplies: [u64; MAX_OUTCOMES],
+        locked_claim_principal_atoms: u64,
+        aggregate_credit: u128,
+    ) -> Result<()> {
+        let backing = u128::from(locked_claim_principal_atoms)
+            .checked_mul(u128::from(self.denominator))
+            .ok_or(Error::Arithmetic)?;
+        let liability = self
+            .weighted_liability(supplies)?
+            .checked_add(aggregate_credit)
+            .ok_or(Error::Arithmetic)?;
+        if backing < liability {
+            Err(Error::Insolvent)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Numerator slack above all native claims and claimant credits.
+    pub fn solvency_slack(
+        self,
+        supplies: [u64; MAX_OUTCOMES],
+        locked_claim_principal_atoms: u64,
+        aggregate_credit: u128,
+    ) -> Result<u128> {
+        self.validate_solvency(supplies, locked_claim_principal_atoms, aggregate_credit)?;
+        let backing = u128::from(locked_claim_principal_atoms)
+            .checked_mul(u128::from(self.denominator))
+            .ok_or(Error::Arithmetic)?;
+        let liability = self
+            .weighted_liability(supplies)?
+            .checked_add(aggregate_credit)
+            .ok_or(Error::Arithmetic)?;
+        backing.checked_sub(liability).ok_or(Error::Insolvent)
+    }
+
     /// Least exact redemption lot for one resolved outcome.
     pub fn outcome_lot(self, outcome: u8) -> Result<u64> {
         self.validate()?;
@@ -127,51 +167,4 @@ pub const fn gcd(mut left: u64, mut right: u64) -> u64 {
         right = remainder;
     }
     left
-}
-
-/// Complete externally owned liability snapshot used by one atomic action.
-///
-/// `remaining_supply` remains owned by the canonical SupplyLedger and
-/// `claim_backing_atoms` by the canonical Market collateral accounting. This
-/// projection is deliberately not encodable as a fractional account.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LiabilitySnapshotV1 {
-    /// Total internal plus admitted bearer supply per native outcome.
-    pub remaining_supply: [u64; MAX_OUTCOMES],
-    /// Collateral atoms still assigned to resolved native-claim backing.
-    pub claim_backing_atoms: u64,
-}
-
-impl LiabilitySnapshotV1 {
-    /// Check exact solvency against the aggregate numerator-credit owner.
-    pub fn validate(self, payout: PayoutVectorV1, aggregate_credit: u128) -> Result<()> {
-        let backing = u128::from(self.claim_backing_atoms)
-            .checked_mul(u128::from(payout.denominator))
-            .ok_or(Error::Arithmetic)?;
-        let claims = payout.weighted_liability(self.remaining_supply)?;
-        let liability = claims
-            .checked_add(aggregate_credit)
-            .ok_or(Error::Arithmetic)?;
-        if backing < liability {
-            Err(Error::Insolvent)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Numerator slack above all native claims and claimant credits.
-    pub fn slack(self, payout: PayoutVectorV1, aggregate_credit: u128) -> Result<u128> {
-        self.validate(payout, aggregate_credit)?;
-        let backing = u128::from(self.claim_backing_atoms)
-            .checked_mul(u128::from(payout.denominator))
-            .ok_or(Error::Arithmetic)?;
-        backing
-            .checked_sub(
-                payout
-                    .weighted_liability(self.remaining_supply)?
-                    .checked_add(aggregate_credit)
-                    .ok_or(Error::Arithmetic)?,
-            )
-            .ok_or(Error::Insolvent)
-    }
 }

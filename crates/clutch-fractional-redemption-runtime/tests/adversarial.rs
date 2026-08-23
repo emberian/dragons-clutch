@@ -1,8 +1,8 @@
 use clutch_collateral_adapter_v2::{
     bind_claim_issuance_v1, bind_collateral_profile_v2, AdapterCatalogV2, AdapterReleaseV2,
-    ClaimIssuanceBindingV1, ClaimRuntimeObservationV1, CollateralPolicyV2, Id,
-    MarketCollateralBindingV2, ProfileCollateralBindingV2, RealmCollateralBindingV2,
-    RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
+    ClaimIssuanceBindingV1, ClaimLedgerV3, ClaimRuntimeObservationV1, CollateralPolicyV2, HoardV2,
+    Id, MarketCollateralBindingV2, MarketLiabilityLifecycleV1, ProfileCollateralBindingV2,
+    RealmCollateralBindingV2, RuntimeReleaseObservationV2, CLAIM_FLAGS_V1, TOKEN_2022_PROGRAM,
 };
 use clutch_fractional_redemption_runtime::*;
 use clutch_retirement::{DeletableRentOwnerV1, Identity32V1, RentSplitV2};
@@ -48,6 +48,9 @@ fn split_rent(payer: u8) -> RentSplitV2 {
 fn external_context(
     aggregate_credit: u128,
     active_credits: u64,
+    internal_supply: [u64; MAX_OUTCOMES],
+    materialized_supply: [u64; MAX_OUTCOMES],
+    locked_claim_principal_atoms: u64,
 ) -> (
     BoundFractionalContextV1,
     FractionalPolicyV1,
@@ -140,24 +143,63 @@ fn external_context(
     };
     let policy_account = rid(41);
     let ledger_account = rid(42);
+    let claim_ledger_account = rid(44);
+    let claim_ledger = ClaimLedgerV3 {
+        market_instance_id: cid(20),
+        realm_id: cid(10),
+        native_claim_basis_id: cid(33),
+        fractional_policy_id: cid(41),
+        fractional_ledger_account: cid(42),
+        resolution_account: cid(21),
+        aggregate_internal_supply: internal_supply,
+        aggregate_materialized_supply: materialized_supply,
+        next_fractional_sequence: 0,
+        last_fractional_transition_id: Id::ZERO,
+        lifecycle: MarketLiabilityLifecycleV1::Resolved,
+        outcome_count: 2,
+        stored_bump: 6,
+        rent: deletable_rent(44),
+    };
+    let hoard = HoardV2 {
+        market_instance_id: cid(20),
+        realm_id: cid(10),
+        profile_id: cid(11),
+        collateral_policy_id: policy_id,
+        collateral_release_id: COLLATERAL_RELEASE.id().unwrap(),
+        authority: cid(12),
+        token_account: cid(13),
+        collateral_cap_atoms: 100,
+        cash_liability_atoms: 0,
+        locked_claim_principal_atoms,
+        lifecycle: MarketLiabilityLifecycleV1::Resolved,
+        outcome_count: 2,
+        stored_bump: 7,
+        rent: deletable_rent(45),
+    };
+    let founding = initialize_fractional_ledger_v1(
+        policy_account,
+        policy,
+        ledger_account,
+        claim_ledger_account,
+        claim_ledger,
+        5,
+        deletable_rent(43),
+    )
+    .unwrap();
     let ledger = FractionalLedgerV1 {
         aggregate_credit_numerator: aggregate_credit,
         active_credit_accounts: active_credits,
-        ..initialize_fractional_ledger_v1(
-            policy_account,
-            policy,
-            ledger_account,
-            rid(44),
-            5,
-            deletable_rent(43),
-        )
-        .unwrap()
+        ..founding.ledger_after
     };
+    let claim_ledger = founding.claim_ledger.claim_ledger_after();
     let context = bind_fractional_context_v1(
         policy_account,
         policy,
         ledger_account,
         ledger,
+        claim_ledger_account,
+        claim_ledger,
+        hoard,
         vector,
         collateral,
         claims,
@@ -179,17 +221,19 @@ fn payout_lots_and_solvency_use_exact_integer_numerators() {
     let mut supply = [0; MAX_OUTCOMES];
     supply[0] = 1;
     supply[1] = 1;
-    let solvent = LiabilitySnapshotV1 {
-        remaining_supply: supply,
-        claim_backing_atoms: 1,
-    };
-    assert_eq!(solvent.validate(vector, 0), Ok(()));
-    assert_eq!(solvent.validate(vector, 1), Err(Error::Insolvent));
+    assert_eq!(vector.validate_solvency(supply, 1, 0), Ok(()));
+    assert_eq!(
+        vector.validate_solvency(supply, 1, 1),
+        Err(Error::Insolvent)
+    );
 }
 
 #[test]
 fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
-    let (_context, policy, ledger) = external_context(0, 0);
+    let mut supply = [0; MAX_OUTCOMES];
+    supply[0] = 1;
+    supply[1] = 1;
+    let (_context, policy, ledger) = external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
     let policy_bytes = policy.encode().unwrap();
     assert_eq!(FractionalPolicyV1::decode(&policy_bytes), Ok(policy));
     let mut hostile = policy_bytes;
@@ -200,6 +244,12 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
     );
     let ledger_bytes = ledger.encode().unwrap();
     assert_eq!(FractionalLedgerV1::decode(&ledger_bytes), Ok(ledger));
+    let mut hostile_ledger = ledger_bytes;
+    hostile_ledger[112] = 1;
+    assert_eq!(
+        FractionalLedgerV1::decode(&hostile_ledger),
+        Err(Error::NonCanonicalPadding)
+    );
 
     let credit = FractionalCreditV1 {
         policy_account: rid(41),
@@ -244,14 +294,11 @@ fn policy_ledger_credit_and_tombstone_codecs_refuse_hostile_bytes() {
 
 #[test]
 fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
-    let (context, _policy, _ledger) = external_context(0, 0);
-    let mut supply = [0; MAX_OUTCOMES];
-    supply[0] = 1;
-    supply[1] = 1;
-    let before = LiabilitySnapshotV1 {
-        remaining_supply: supply,
-        claim_backing_atoms: 1,
-    };
+    let mut internal = [0; MAX_OUTCOMES];
+    internal[1] = 1;
+    let mut materialized = [0; MAX_OUTCOMES];
+    materialized[0] = 1;
+    let (context, _policy, _ledger) = external_context(0, 0, internal, materialized, 1);
     let source = BearerClaimSourceV1 {
         claimant: rid(50),
         claim_token_account: rid(51),
@@ -259,10 +306,10 @@ fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
         collateral_destination: rid(53),
         claim_issuance_binding: context.policy().claim_issuance_binding,
         source_claim_atoms: 1,
+        accepted_collateral: None,
     };
     let plan = redeem_bearer_to_credit_v1(
         context,
-        before,
         1,
         1,
         CreditPrestateV1::Create(CreditCreationV1::Fresh {
@@ -279,33 +326,55 @@ fn arbitrary_bearer_burn_retains_the_exact_credit_and_conservation() {
     assert_eq!(plan.claimant_numerator_after, 1);
     assert_eq!(plan.ledger_after.aggregate_credit_numerator, 1);
     assert_eq!(plan.ledger_after.active_credit_accounts, 1);
-    assert_eq!(plan.liability_after.claim_backing_atoms, 1);
-    assert_eq!(plan.liability_after.remaining_supply[0], 0);
-    assert_eq!(plan.liability_after.slack(payout(), 1), Ok(0));
+    assert_eq!(
+        plan.custody_after
+            .hoard_after()
+            .locked_claim_principal_atoms,
+        1
+    );
+    assert_eq!(
+        plan.custody_after
+            .fractional()
+            .claim_ledger_after()
+            .aggregate_materialized_supply[0],
+        0
+    );
+    let mut after_supply = [0; MAX_OUTCOMES];
+    after_supply[1] = 1;
+    assert_eq!(payout().solvency_slack(after_supply, 1, 1), Ok(0));
+    assert_ne!(
+        plan.custody_after
+            .fractional()
+            .fractional_ledger_before_id(),
+        plan.custody_after.fractional().fractional_ledger_after_id()
+    );
 }
 
 #[test]
 fn irreducible_terminal_credit_blocks_every_close_and_names_no_sweep_recipient() {
-    let (context, _policy, _ledger) = external_context(1, 1);
-    let empty_supply = LiabilitySnapshotV1 {
-        remaining_supply: [0; MAX_OUTCOMES],
-        claim_backing_atoms: 1,
-    };
-    let sealed = seal_claims_exhausted_v1(context, empty_supply, 1).unwrap();
-    let terminal_context = context.with_ledger(sealed).unwrap();
-    let facts = terminal_facts_v1(terminal_context, empty_supply).unwrap();
+    let (context, _policy, _ledger) =
+        external_context(1, 1, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 1);
+    let sealed = seal_claims_exhausted_v1(context, 1).unwrap();
+    let terminal_context = context
+        .with_ledgers(
+            sealed.ledger_after,
+            sealed.claim_ledger_after.claim_ledger_after(),
+            context.hoard(),
+        )
+        .unwrap();
+    let facts = terminal_facts_v1(terminal_context).unwrap();
     assert_eq!(facts.aggregatable_credit_atoms, 0);
     assert_eq!(facts.irreducible_credit_numerator, 1);
     assert!(!facts.exactly_closable);
     assert_eq!(
-        close_empty_ledger_v1(terminal_context, empty_supply, 2, 103, rid(60)),
+        close_empty_ledger_v1(terminal_context, 2, 103, rid(60)),
         Err(Error::LiabilityOutstanding)
     );
 }
 
 #[test]
 fn close_refuses_a_nonzero_credit_without_changing_the_aggregate_owner() {
-    let (context, policy, ledger) = external_context(1, 1);
+    let (context, policy, ledger) = external_context(1, 1, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 1);
     let credit = FractionalCreditV1 {
         policy_account: context.policy_account(),
         ledger_account: context.ledger_account(),
@@ -325,6 +394,53 @@ fn close_refuses_a_nonzero_credit_without_changing_the_aggregate_owner() {
         Err(Error::CreditOutstanding)
     );
     assert_eq!(context.ledger(), ledger);
+}
+
+#[test]
+fn claim_ledger_and_fractional_sequences_cannot_advance_independently() {
+    let mut supply = [0; MAX_OUTCOMES];
+    supply[0] = 1;
+    supply[1] = 1;
+    let (context, _policy, _ledger) = external_context(0, 0, supply, [0; MAX_OUTCOMES], 1);
+    let skewed_claim_ledger = ClaimLedgerV3 {
+        next_fractional_sequence: context
+            .claim_ledger()
+            .next_fractional_sequence
+            .checked_add(1)
+            .unwrap(),
+        ..context.claim_ledger()
+    };
+    assert!(matches!(
+        context.with_ledgers(context.ledger(), skewed_claim_ledger, context.hoard()),
+        Err(Error::MismatchedBinding)
+    ));
+}
+
+#[test]
+fn exact_terminal_retirement_deletes_only_ledger_rent_and_latches_claim_ledger() {
+    let (context, _policy, _ledger) =
+        external_context(0, 0, [0; MAX_OUTCOMES], [0; MAX_OUTCOMES], 0);
+    let sealed = seal_claims_exhausted_v1(context, 1).unwrap();
+    let terminal_context = context
+        .with_ledgers(
+            sealed.ledger_after,
+            sealed.claim_ledger_after.claim_ledger_after(),
+            context.hoard(),
+        )
+        .unwrap();
+    let close = close_empty_ledger_v1(terminal_context, 2, 103, rid(60)).unwrap();
+    assert_eq!(
+        close.claim_ledger_after.claim_ledger_after().lifecycle,
+        MarketLiabilityLifecycleV1::Retiring
+    );
+    assert_eq!(close.payer, rid(43));
+    assert_eq!(close.payer_refund_lamports, 100);
+    assert_eq!(close.neutral_sink, rid(60));
+    assert_eq!(close.neutral_lamports, 3);
+    assert_ne!(
+        close.claim_ledger_after.fractional_ledger_before_id(),
+        close.claim_ledger_after.fractional_ledger_retirement_id()
+    );
 }
 
 #[test]

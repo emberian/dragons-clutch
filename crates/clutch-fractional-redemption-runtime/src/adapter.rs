@@ -328,29 +328,29 @@ pub const fn fractional_account_contract_v1(
 ) -> FractionalAccountContractV1 {
     match action {
         FractionalRedemptionActionV1::Initialize => FractionalAccountContractV1 {
-            account_count: 12,
-            writable_mask: 0b11_1100_000001,
-            signer_mask: 0b0000_000001,
+            account_count: 13,
+            writable_mask: 0b0_0001_1100_0001,
+            signer_mask: 0b0_0000_0000_0001,
         },
         FractionalRedemptionActionV1::RedeemInternalExact => FractionalAccountContractV1 {
             account_count: 9,
-            writable_mask: 0b1_1111_0001,
+            writable_mask: 0b0_1111_0100,
             signer_mask: 0b0000_0001,
         },
         FractionalRedemptionActionV1::RedeemBearerExact => FractionalAccountContractV1 {
             account_count: 14,
-            writable_mask: 0b00_1111_1110_0001,
+            writable_mask: 0b00_0011_1111_0100,
             signer_mask: 0b00_0000_0000_0001,
         },
         FractionalRedemptionActionV1::RedeemInternalCredit => FractionalAccountContractV1 {
             account_count: 13,
-            writable_mask: 0b1_1111_1110_0001,
-            signer_mask: 0b0_0000_0000_0001,
+            writable_mask: 0b1_0110_1111_0100,
+            signer_mask: 0b0_0100_0000_0001,
         },
         FractionalRedemptionActionV1::RedeemBearerCredit => FractionalAccountContractV1 {
             account_count: 18,
-            writable_mask: 0b00_1111_1111_1110_0001,
-            signer_mask: 0b00_0000_0000_0000_0001,
+            writable_mask: 0b10_1100_0011_1111_0100,
+            signer_mask: 0b00_1000_0000_0000_0001,
         },
         FractionalRedemptionActionV1::TransferCredit
         | FractionalRedemptionActionV1::MergeCredit => FractionalAccountContractV1 {
@@ -359,18 +359,18 @@ pub const fn fractional_account_contract_v1(
             signer_mask: 0b00_0000_0000_0000_0011,
         },
         FractionalRedemptionActionV1::CloseZeroCredit => FractionalAccountContractV1 {
-            account_count: 9,
-            writable_mask: 0b1_1110_0011,
-            signer_mask: 0b0_0000_0001,
+            account_count: 10,
+            writable_mask: 0b00_0111_1100,
+            signer_mask: 0b00_0000_0001,
         },
         FractionalRedemptionActionV1::SealClaimsExhausted => FractionalAccountContractV1 {
             account_count: 6,
-            writable_mask: 0b00_0010,
+            writable_mask: 0b00_1010,
             signer_mask: 0,
         },
         FractionalRedemptionActionV1::CloseEmptyLedger => FractionalAccountContractV1 {
             account_count: 8,
-            writable_mask: 0b1110_0010,
+            writable_mask: 0b1100_1010,
             signer_mask: 0,
         },
     }
@@ -390,7 +390,7 @@ pub struct SolanaAccountMetaProjectionV1 {
 /// Fail closed before parsing payload bytes or inspecting any account meta.
 ///
 /// A future activation must replace this function atomically with program
-/// ownership/PDA/Resolution/SupplyLedger/Position/Replay/token/rent adapters
+/// ownership/PDA/Resolution/ClaimLedger/Hoard/Position/Replay/token/rent adapters
 /// and add the exact tuple to the release's capability manifest.
 pub fn refuse_disabled_fractional_redemption_v1(
     _instruction_data: &[u8],
