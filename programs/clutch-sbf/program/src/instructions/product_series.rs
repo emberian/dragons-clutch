@@ -2760,15 +2760,23 @@ fn series_terminal_collateral_transfer_poststate_id_v2(
     accepted: AcceptedCollateralTransferV2,
     expected_kind: CustodyTransferKindV2,
 ) -> Outcome<ContentId> {
-    require(
-        expected_kind == CustodyTransferKindV2::PrincipalRefund
-            || expected_kind == CustodyTransferKindV2::DonationDisposition,
-        ClutchError::MismatchedState,
-    )?;
+    require_series_terminal_transfer_kind_v2(accepted.kind, expected_kind)?;
     series_collateral_transfer_poststate_id_with_kind_v2(
         SERIES_COLLATERAL_TERMINAL_TRANSFER_POSTSTATE_DOMAIN_V2,
         accepted,
         expected_kind,
+    )
+}
+
+fn require_series_terminal_transfer_kind_v2(
+    actual_kind: CustodyTransferKindV2,
+    expected_kind: CustodyTransferKindV2,
+) -> Outcome<()> {
+    require(
+        actual_kind == expected_kind
+            && (expected_kind == CustodyTransferKindV2::PrincipalRefund
+                || expected_kind == CustodyTransferKindV2::DonationDisposition),
+        ClutchError::MismatchedState,
     )
 }
 
@@ -8670,6 +8678,35 @@ mod collateral_activation_v2_adversarial_tests {
             terminal,
             series_terminal_funding_commitment_v2(&principal, &changed_donation).unwrap()
         );
+    }
+
+    #[test]
+    fn terminal_transfer_receipt_refuses_activation_and_cross_kind_substitution() {
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::PrincipalRefund,
+            CustodyTransferKindV2::PrincipalRefund,
+        )
+        .is_ok());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::DonationDisposition,
+            CustodyTransferKindV2::DonationDisposition,
+        )
+        .is_ok());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::SegregatedFunding,
+            CustodyTransferKindV2::PrincipalRefund,
+        )
+        .is_err());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::PrincipalRefund,
+            CustodyTransferKindV2::DonationDisposition,
+        )
+        .is_err());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::PrincipalRefund,
+            CustodyTransferKindV2::SegregatedFunding,
+        )
+        .is_err());
     }
 
     #[test]
