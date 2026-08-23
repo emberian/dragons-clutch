@@ -47,6 +47,41 @@ pub struct DealerSelectedFeeRecordBindingV1 {
 }
 
 impl DealerSelectedFeeRecordBindingV1 {
+    /// Construct only from the canonical selected fee owner now on main.
+    ///
+    /// Account/program/semantic identities remain adapter-authenticated facts;
+    /// every economic and policy field is copied from `SelectedCompositeFeeV1`.
+    pub fn from_canonical(
+        fee_program_id: Id,
+        fee_record_account_id: Id,
+        fee_record_semantic_id: Id,
+        selected: &clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1,
+    ) -> Result<Self> {
+        let value = Self {
+            fee_program_id,
+            fee_record_account_id,
+            fee_record_semantic_id,
+            realm_id: from_fee_id(selected.realm()),
+            market_instance_v2_id: from_fee_id(selected.market()),
+            epoch_id: from_fee_id(selected.epoch()),
+            settlement_candidate_id: from_fee_id(selected.selected_candidate()),
+            batch_policy_id: from_fee_id(selected.batch_policy()),
+            revenue_policy_id: from_fee_id(selected.revenue_policy()),
+            treasury_owner_id: from_fee_id(selected.treasury_owner()),
+            treasury_position_id: from_fee_id(selected.treasury_position()),
+            price_scale: selected.price_scale(),
+            outcome_count: selected.outcome_count(),
+            dispersion_bps: selected.dispersion_bps(),
+            floor_range_bps: selected.floor_range_bps(),
+            carry_denominator: selected.carry_denominator(),
+        };
+        if from_fee_id(selected.fee_record()) != fee_record_account_id {
+            return Err(Error::MismatchedBinding);
+        }
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Validate the exact selected record projection without inventing a fee vault.
     pub fn validate(&self) -> Result<()> {
         for identity in [
@@ -109,9 +144,9 @@ impl DealerSelectedFeeRecordBindingV1 {
 
 /// Candidate-wide completed owner-netted fee settlement projection.
 ///
-/// `owner_settlement_book_id` and both allocation IDs must come from the fee
-/// runtime's complete owner/intent folds. A single payer snapshot or caller-
-/// asserted raw fee atom is not an admissible construction.
+/// `owner_settlement_book_id` and `recipient_allocation_id` must come from the
+/// fee runtime's complete owner/intent folds. A single payer snapshot or
+/// caller-asserted raw fee atom is not an admissible construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerCandidateFeeSettlementBindingV1 {
     /// Selected record projection used for every owner carry and allocation.
@@ -124,8 +159,6 @@ pub struct DealerCandidateFeeSettlementBindingV1 {
     pub settlement_candidate_id: Id,
     /// Complete owner settlement-book identity.
     pub owner_settlement_book_id: Id,
-    /// Canonical strict intent-ordered payer allocation identity.
-    pub payer_allocation_id: Id,
     /// Complete candidate recipient allocation identity.
     pub recipient_allocation_id: Id,
     /// Fee-bearing candidate settlement identity.
@@ -140,8 +173,6 @@ pub struct DealerCandidateFeeSettlementBindingV1 {
     pub hoard_collateral_account_id: Id,
     /// Number of owners in the complete settlement book.
     pub owner_count: u32,
-    /// Number of strict intent-ID-ordered payer envelopes.
-    pub intent_count: u32,
     /// Exact owner-netted selected fee debited from ordinary owner Positions.
     pub selected_fee_debit_atoms: u128,
     /// Candidate-verified standing-liquidity maker rebates.
@@ -157,6 +188,64 @@ pub struct DealerCandidateFeeSettlementBindingV1 {
 }
 
 impl DealerCandidateFeeSettlementBindingV1 {
+    /// Construct the Dealer projection from the canonical complete fee book,
+    /// recipient allocation, and candidate-wide conservation owner.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_canonical(
+        selected_binding: &DealerSelectedFeeRecordBindingV1,
+        selected: &clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1,
+        owner_book: &clutch_fee_runtime_contract::projection::SelectedOwnerFeeBookV1,
+        recipients: &clutch_fee_runtime_contract::allocation::RecipientAllocationV1,
+        settlement: &clutch_fee_runtime_contract::integration::CandidateFeeSettlementV1,
+        owner_settlement_book_id: Id,
+        recipient_allocation_id: Id,
+        candidate_fee_settlement_id: Id,
+        fee_terminal_receipt_id: Id,
+        treasury_ledger_id: Id,
+        hoard_collateral_account_id: Id,
+    ) -> Result<Self> {
+        settlement
+            .validate(owner_book, recipients)
+            .map_err(|_| Error::ConservationFailure)?;
+        let canonical_selected = DealerSelectedFeeRecordBindingV1::from_canonical(
+            selected_binding.fee_program_id,
+            selected_binding.fee_record_account_id,
+            selected_binding.fee_record_semantic_id,
+            selected,
+        )?;
+        if canonical_selected != *selected_binding
+            || from_fee_id(owner_book.fee_record()) != selected_binding.fee_record_account_id
+            || from_fee_id(owner_book.settlement_candidate())
+                != selected_binding.settlement_candidate_id
+            || from_fee_id(recipients.fee_record()) != selected_binding.fee_record_account_id
+            || from_fee_id(settlement.fee_record) != selected_binding.fee_record_account_id
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            selected_fee_binding_digest: selected_binding.binding_digest()?,
+            fee_record_account_id: selected_binding.fee_record_account_id,
+            fee_record_semantic_id: selected_binding.fee_record_semantic_id,
+            settlement_candidate_id: selected_binding.settlement_candidate_id,
+            owner_settlement_book_id,
+            recipient_allocation_id,
+            candidate_fee_settlement_id,
+            fee_terminal_receipt_id,
+            treasury_ledger_id,
+            treasury_position_id: selected_binding.treasury_position_id,
+            hoard_collateral_account_id,
+            owner_count: u32::from(owner_book.owner_count()),
+            selected_fee_debit_atoms: settlement.selected_fee_debit_atoms,
+            maker_rebate_atoms: settlement.maker_rebate_atoms,
+            executor_atoms: settlement.executor_atoms,
+            treasury_atoms: settlement.treasury_credit_atoms,
+            hoard_collateral_before_atoms: settlement.hoard_collateral_before,
+            hoard_collateral_after_atoms: settlement.hoard_collateral_after,
+        };
+        value.validate_against(selected_binding)?;
+        Ok(value)
+    }
+
     /// Validate fee conservation, complete fold witnesses, and Hoard exclusion.
     pub fn validate_against(&self, selected: &DealerSelectedFeeRecordBindingV1) -> Result<()> {
         selected.validate()?;
@@ -166,7 +255,6 @@ impl DealerCandidateFeeSettlementBindingV1 {
             self.fee_record_semantic_id,
             self.settlement_candidate_id,
             self.owner_settlement_book_id,
-            self.payer_allocation_id,
             self.recipient_allocation_id,
             self.candidate_fee_settlement_id,
             self.fee_terminal_receipt_id,
@@ -186,7 +274,6 @@ impl DealerCandidateFeeSettlementBindingV1 {
             || self.settlement_candidate_id != selected.settlement_candidate_id
             || self.treasury_position_id != selected.treasury_position_id
             || self.owner_count == 0
-            || self.intent_count == 0
             || self.executor_atoms != 0
             || distributed != self.selected_fee_debit_atoms
             || self.hoard_collateral_before_atoms != self.hoard_collateral_after_atoms
@@ -205,7 +292,6 @@ impl DealerCandidateFeeSettlementBindingV1 {
             self.fee_record_semantic_id,
             self.settlement_candidate_id,
             self.owner_settlement_book_id,
-            self.payer_allocation_id,
             self.recipient_allocation_id,
             self.candidate_fee_settlement_id,
             self.fee_terminal_receipt_id,
@@ -223,7 +309,6 @@ impl DealerCandidateFeeSettlementBindingV1 {
             self.fee_record_semantic_id,
             self.settlement_candidate_id,
             self.owner_settlement_book_id,
-            self.payer_allocation_id,
             self.recipient_allocation_id,
             self.candidate_fee_settlement_id,
             self.fee_terminal_receipt_id,
@@ -234,7 +319,6 @@ impl DealerCandidateFeeSettlementBindingV1 {
             hasher.update(identity.bytes());
         }
         hasher.update(self.owner_count.to_le_bytes());
-        hasher.update(self.intent_count.to_le_bytes());
         hasher.update(self.selected_fee_debit_atoms.to_le_bytes());
         hasher.update(self.maker_rebate_atoms.to_le_bytes());
         hasher.update(self.executor_atoms.to_le_bytes());
@@ -243,6 +327,10 @@ impl DealerCandidateFeeSettlementBindingV1 {
         hasher.update(self.hoard_collateral_after_atoms.to_le_bytes());
         Ok(Id::from_bytes(hasher.finalize().into()))
     }
+}
+
+const fn from_fee_id(value: clutch_fee_runtime_contract::Id) -> Id {
+    Id::from_bytes(value.0)
 }
 
 /// Typed zero-debit abort/close projection for a selected fee record.

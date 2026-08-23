@@ -473,6 +473,96 @@ pub struct DealerRuntimeLivenessBindingV1 {
 }
 
 impl DealerRuntimeLivenessBindingV1 {
+    /// Construct the Dealer's immutable quote projection from the canonical
+    /// `clutch-liveness` policy and its seven persisted compartment bodies.
+    ///
+    /// This copies admission facts only; it does not create a second mutable
+    /// balance/call owner. Advanced compartments reconstruct the same binding
+    /// because capitalized principal, maxima, original donation, identities,
+    /// and policy terminal vectors are immutable.
+    pub fn from_canonical(
+        policy: &clutch_liveness::runtime_v1::RuntimeLivenessPolicyV1,
+        compartments: &[clutch_liveness::runtime_v1::RuntimeCompartmentV1;
+            DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+    ) -> Result<Self> {
+        policy
+            .validate()
+            .map_err(|_| Error::MismatchedBinding)?;
+        let mut value = Self {
+            runtime_policy_id: from_liveness_id(policy.policy_id),
+            realm_id: from_liveness_id(policy.realm_id),
+            lifecycle_id: from_liveness_id(compartments[0].identity.lifecycle_id),
+            neutral_sink: from_liveness_id(policy.neutral_sink),
+            account_ids: [Id::ZERO; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            owners: [Id::ZERO; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            payers: [Id::ZERO; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            quote_schedule_ids: [Id::ZERO; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            receipt_program_ids: [Id::ZERO; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            generations: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            funding_sources: [DealerLivenessFundingSourceV1::ExternalSignerNativeLamports;
+                DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            work_principal_lamports: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            rent_principal_lamports: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            maximum_calls: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            maximum_lamports_per_call: [0;
+                DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            account_balance_before: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            account_balance_after: [0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1],
+            terminal_path_calls: [[0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+                DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
+            terminal_path_work_lamports: [[0; DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1];
+                DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1],
+        };
+        let mut index = 0usize;
+        while index < DEALER_RUNTIME_LIVENESS_COMPARTMENT_COUNT_V1 {
+            let compartment = compartments[index];
+            compartment
+                .validate()
+                .map_err(|_| Error::MismatchedBinding)?;
+            if compartment.kind.index() != index
+                || compartment.identity.policy_id != policy.policy_id
+                || compartment.identity.lifecycle_id
+                    != compartments[0].identity.lifecycle_id
+                || compartment.identity.neutral_sink != policy.neutral_sink
+            {
+                return Err(Error::MismatchedBinding);
+            }
+            value.account_ids[index] = from_liveness_id(compartment.identity.account_id);
+            value.owners[index] = from_liveness_id(compartment.identity.owner);
+            value.payers[index] = from_liveness_id(compartment.identity.payer);
+            value.quote_schedule_ids[index] = from_liveness_id(compartment.quote_schedule_id);
+            value.receipt_program_ids[index] = from_liveness_id(compartment.receipt_program_id);
+            value.generations[index] = compartment.identity.generation;
+            value.funding_sources[index] = match compartment.funding_source {
+                clutch_liveness::runtime_v1::PresentFundingSourceV1::ExternalSignerNativeLamports => {
+                    DealerLivenessFundingSourceV1::ExternalSignerNativeLamports
+                }
+                clutch_liveness::runtime_v1::PresentFundingSourceV1::PrecapitalizedLivenessEndowment => {
+                    DealerLivenessFundingSourceV1::PrecapitalizedLivenessEndowment
+                }
+            };
+            value.work_principal_lamports[index] = compartment.capitalized_work_lamports;
+            value.rent_principal_lamports[index] = compartment.rent_principal_lamports;
+            value.maximum_calls[index] = compartment.maximum_calls;
+            value.maximum_lamports_per_call[index] = compartment.maximum_lamports_per_call;
+            value.account_balance_before[index] = compartment.donation_received_lamports;
+            value.account_balance_after[index] = compartment
+                .donation_received_lamports
+                .checked_add(compartment.capitalized_work_lamports)
+                .and_then(|amount| amount.checked_add(compartment.rent_principal_lamports))
+                .ok_or(Error::ArithmeticOverflow)?;
+            index += 1;
+        }
+        let mut path = 0usize;
+        while path < DEALER_RUNTIME_LIVENESS_TERMINAL_PATH_COUNT_V1 {
+            value.terminal_path_calls[path] = policy.terminal_paths[path].calls;
+            value.terminal_path_work_lamports[path] = policy.terminal_paths[path].work_lamports;
+            path += 1;
+        }
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Validate identities, account uniqueness, funding arithmetic, and bounds.
     pub fn validate(&self) -> Result<()> {
         for identity in [
@@ -640,6 +730,62 @@ pub struct DealerActionLivenessAuthorizationV1 {
 }
 
 impl DealerActionLivenessAuthorizationV1 {
+    /// Construct from the canonical external compartment, transition intent,
+    /// and adapter-authenticated receipt observation now on main.
+    pub fn from_canonical(
+        dealer_action: DealerRuntimeActionV1,
+        facility_generation: u64,
+        compartment: &clutch_liveness::runtime_v1::RuntimeCompartmentV1,
+        intent: &clutch_liveness::runtime_adapter_v1::RuntimeTransitionIntentV1,
+        receipt: &clutch_liveness::runtime_adapter_v1::RuntimeReceiptObservationV1,
+    ) -> Result<Self> {
+        compartment
+            .validate()
+            .map_err(|_| Error::MismatchedBinding)?;
+        intent.validate().map_err(|_| Error::MismatchedBinding)?;
+        if intent.action
+            != clutch_liveness::runtime_adapter_v1::RuntimeTransitionActionV1::SpendWork
+            || receipt.receipt_kind
+                != clutch_liveness::runtime_adapter_v1::RuntimeReceiptKindV1::WorkCompleted
+            || intent.kind != compartment.kind
+            || receipt.compartment_kind != compartment.kind
+            || intent.policy_id != compartment.identity.policy_id
+            || intent.lifecycle_id != compartment.identity.lifecycle_id
+            || intent.account_id != compartment.identity.account_id
+            || intent.semantic_owner != compartment.identity.owner
+            || intent.quote_schedule_id != compartment.quote_schedule_id
+            || intent.receipt_id != receipt.receipt_id
+            || receipt.receipt_account_owner_program_id != compartment.receipt_program_id
+            || receipt.semantic_owner != compartment.identity.owner
+            || receipt.lifecycle_id != compartment.identity.lifecycle_id
+            || receipt.quote_schedule_id != compartment.quote_schedule_id
+            || receipt.generation != compartment.identity.generation
+            || receipt.call_ordinal != intent.call_ordinal
+            || receipt.call_ceiling_lamports != intent.call_ceiling_lamports
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            action: dealer_action,
+            compartment: dealer_compartment_from_canonical(compartment.kind),
+            runtime_account_id: from_liveness_id(compartment.identity.account_id),
+            owner: from_liveness_id(compartment.identity.owner),
+            lifecycle_id: from_liveness_id(compartment.identity.lifecycle_id),
+            quote_schedule_id: from_liveness_id(compartment.quote_schedule_id),
+            receipt_account_id: from_liveness_id(receipt.receipt_account_id),
+            receipt_program_id: from_liveness_id(receipt.receipt_account_owner_program_id),
+            receipt_semantic_id: from_liveness_id(receipt.receipt_id),
+            generation: compartment.identity.generation,
+            facility_generation,
+            call_ordinal: intent.call_ordinal,
+            call_ceiling_lamports: intent.call_ceiling_lamports,
+        };
+        if value.canonical_receipt_semantic_id()? != value.receipt_semantic_id {
+            return Err(Error::MismatchedBinding);
+        }
+        Ok(value)
+    }
+
     /// Validate this action receipt against the immutable schedule and runtime projection.
     pub fn validate_against(
         &self,
@@ -710,6 +856,38 @@ impl DealerActionLivenessAuthorizationV1 {
         hasher.update(self.call_ordinal.to_le_bytes());
         hasher.update(self.call_ceiling_lamports.to_le_bytes());
         Ok(Id::from_bytes(hasher.finalize().into()))
+    }
+}
+
+const fn from_liveness_id(value: clutch_liveness::Id) -> Id {
+    Id::from_bytes(value.bytes())
+}
+
+const fn dealer_compartment_from_canonical(
+    value: clutch_liveness::runtime_v1::RuntimeCompartmentKindV1,
+) -> DealerLivenessCompartmentV1 {
+    match value {
+        clutch_liveness::runtime_v1::RuntimeCompartmentKindV1::Source => {
+            DealerLivenessCompartmentV1::Source
+        }
+        clutch_liveness::runtime_v1::RuntimeCompartmentKindV1::Candidate => {
+            DealerLivenessCompartmentV1::Candidate
+        }
+        clutch_liveness::runtime_v1::RuntimeCompartmentKindV1::Clearing => {
+            DealerLivenessCompartmentV1::Clearing
+        }
+        clutch_liveness::runtime_v1::RuntimeCompartmentKindV1::Settlement => {
+            DealerLivenessCompartmentV1::Settlement
+        }
+        clutch_liveness::runtime_v1::RuntimeCompartmentKindV1::Resolution => {
+            DealerLivenessCompartmentV1::Resolution
+        }
+        clutch_liveness::runtime_v1::RuntimeCompartmentKindV1::Retirement => {
+            DealerLivenessCompartmentV1::Retirement
+        }
+        clutch_liveness::runtime_v1::RuntimeCompartmentKindV1::Recovery => {
+            DealerLivenessCompartmentV1::Recovery
+        }
     }
 }
 
