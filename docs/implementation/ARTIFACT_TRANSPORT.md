@@ -11,7 +11,7 @@ generic blob account or a privileged uploader.
 
 ## Lifecycle
 
-The transport recognizes exactly three artifact kinds:
+Ordinary profiles recognize exactly three artifact kinds:
 
 | kind | exact body | final identity |
 | --- | ---: | --- |
@@ -20,6 +20,21 @@ The transport recognizes exactly three artifact kinds:
 | terms | frozen `TermsAccount` width | `terms(Realm, terms digest)` |
 
 There is deliberately no caller-defined artifact kind or length.
+
+The separately identified `non-production-product-series-lab` profile also
+recognizes the nine frozen `clutch-product-series` bodies at kind bytes
+`32..=40`: NativeClaimBasis V1, EvidenceOnlyRecoveryPolicy V1, ProductTemplate
+V4, PriceMeasurePolicy V1, MarketGenesisProfile V2, SeriesFundingQuote V1,
+SeriesAttachmentPlan V1, SeriesPlan V5, and SeriesFundingTerms V2. Their exact
+lengths come from their owning codecs. Ordinary profiles refuse all nine kind
+bytes during hostile intent decoding.
+
+These Product/Series bodies are globally reusable content, so their transport
+context is the canonical zero sentinel and their final PDA is
+`["dc:product-artifact:v1", kind, typed digest]`. The context of each legacy
+kind remains nonzero and its historical PDA is unchanged. Publication does
+not register or activate a Series, authenticate a registry selector, capitalize
+funding, compile an occurrence, or create a Market.
 
 1. `BeginArtifact` creates an exact-size uploader-keyed stage PDA.  Its header
    freezes the artifact kind, context, digest, exact length, funder, creation
@@ -74,8 +89,8 @@ refund role or second accounting balance.
 - Unwritten stage bytes must remain zero, including in hostile genesis images.
 - Writes and seals at slots after the frozen expiry refuse.  Public reap is
   admitted only strictly after expiry, so the boundary has no overlap.
-- A final policy, grid, or Terms body is not trusted because it hashes to the
-  requested address: it must also pass the owning semantic decoder.
+- A final body is not trusted because it hashes to the requested address: it
+  must also pass the owning semantic decoder for its exact kind.
 - All instructions use sequence zero because the stage cursor and lifecycle
   are the replay state.  A nonzero envelope sequence refuses rather than
   creating a second replay truth.
@@ -105,6 +120,12 @@ path changes the hashing implementation, not the domain, bytes, or admission
 relation.  The syscall and SVM runtime remain an explicitly unverified adapter
 boundary.
 
+In the non-production Product/Series profile, SBF likewise decodes every body
+through its owning pure-core codec and hashes the exact `typed domain || body`
+with the native SHA-256 wrapper. `NativeClaimBasisV1` decodes into heap-owned
+caller storage because its 2,352-byte value cannot safely be returned through
+one 4-KiB SBF frame. The other eight fixed bodies use their ordinary decoders.
+
 ## Evidence
 
 `programs/clutch-sbf/svm-tests/tests/artifact_transport.rs` drives the real SBF
@@ -126,6 +147,15 @@ ELF in `solana-program-test`.  Its restart case:
 A second bank case uploads and seals both other admitted artifact kinds and
 observes the exact canonical collateral-policy and price-grid bytes at their
 respective final PDAs under the default transaction budget.
+
+The explicit Product/Series laboratory campaign additionally publishes all
+nine Product/Series kinds through the real SBF ELF. It exercises 13 ordered
+writes for the 2,352-byte basis, zero-context and nonzero-sequence refusals,
+gap/duplicate/incomplete rollback, a canonical basis with a stale typed digest,
+exact-existing convergence, program ownership and rent, and a malformed but
+correctly self-hashed Recovery body that the owning codec refuses. The basis
+seal consumed 18,265 CU in the measured 2026-08-23 local run; this is evidence
+for that ELF, not a frozen cost promise.
 
 The prefunding cases start both a stage and final PDA as one-lamport,
 zero-data System accounts, observe successful signed allocation and
@@ -152,9 +182,11 @@ release attestation for the entire ELF.
 
 ## Deliberate limits
 
-- The only transported kinds are policy, grid, and Terms.  Source
-  specifications, archive pages, candidate feeds, and clearing artifacts need
-  an owning codec and an explicit new kind before they can use this path.
+- Production profiles transport only policy, grid, and Terms. The nine
+  Product/Series bodies are admitted only by the explicit non-production lab.
+  Source specifications, archive pages, candidate feeds, and clearing
+  artifacts need an owning codec and an explicit new kind before they can use
+  this path.
 - Expiry is a slot bound, not a wall-clock promise.
 - Program upgrade authority and loader provenance are outside this transport.
 - The bank restart is account-image rehydration, not validator-ledger replay.

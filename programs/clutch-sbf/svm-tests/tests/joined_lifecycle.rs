@@ -303,6 +303,21 @@ fn final_address(kind: ArtifactKind, context: Hash32, digest: Hash32) -> (Addres
         ArtifactKind::Terms => seeds::SEED_TERMS,
         ArtifactKind::BatchPolicy => seeds::SEED_BATCH_POLICY,
         ArtifactKind::DirectBatchPolicyV3 => seeds::SEED_DIRECT_BATCH_POLICY_V3,
+        kind @ (ArtifactKind::NativeClaimBasisV1
+        | ArtifactKind::EvidenceOnlyRecoveryPolicyV1
+        | ArtifactKind::ProductTemplateV4
+        | ArtifactKind::PriceMeasurePolicyV1
+        | ArtifactKind::MarketGenesisProfileV2
+        | ArtifactKind::SeriesFundingQuoteV1
+        | ArtifactKind::SeriesAttachmentPlanV1
+        | ArtifactKind::SeriesPlanV5
+        | ArtifactKind::SeriesFundingTermsV2) => {
+            return derive(&[
+                seeds::SEED_PRODUCT_ARTIFACT_V1,
+                &[kind.byte()],
+                &digest.bytes(),
+            ]);
+        }
     };
     derive(&[prefix, &context.bytes(), &digest.bytes()])
 }
