@@ -15,6 +15,48 @@ pub enum AssetTransferPhasePolicyV1 {
     ActiveOrResolved = 1,
 }
 
+/// Exact authority class for the General V2 Position-transfer adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AssetTransferAuthorityKindV1 {
+    /// The semantic source owner signs and is the exact authority identity.
+    OwnerSigner = 0,
+    /// A future typed custody capability authenticates a wrapper/descriptor PDA.
+    TypedCustodyCapability = 1,
+}
+
+impl AssetTransferAuthorityKindV1 {
+    /// Return the exact payload byte.
+    pub const fn to_byte(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one exact payload byte.
+    pub const fn from_byte(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::OwnerSigner),
+            1 => Ok(Self::TypedCustodyCapability),
+            _ => Err(Error::InvalidState),
+        }
+    }
+}
+
+impl AssetTransferPhasePolicyV1 {
+    /// Return the exact payload byte.
+    pub const fn to_byte(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one exact payload byte.
+    pub const fn from_byte(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::ActiveOnly),
+            1 => Ok(Self::ActiveOrResolved),
+            _ => Err(Error::InvalidState),
+        }
+    }
+}
+
 /// Authenticated semantic projection of one base Position and its Replay.
 ///
 /// This is not a persisted DTO. The SBF adapter reconstructs it from the

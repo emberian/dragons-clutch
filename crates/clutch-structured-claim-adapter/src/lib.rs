@@ -24,8 +24,9 @@ pub use descriptor::{
     DESCRIPTOR_ACCOUNT_TAG, DESCRIPTOR_ACCOUNT_VERSION,
 };
 pub use position_transfer::{
-    prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
-    AtomicPositionAssetTransferRequestV1, AtomicPositionAssetTransferResultV1, PositionProjectionV1,
+    prepare_atomic_position_asset_transfer_v1, AssetTransferAuthorityKindV1,
+    AssetTransferPhasePolicyV1, AtomicPositionAssetTransferRequestV1,
+    AtomicPositionAssetTransferResultV1, PositionProjectionV1,
 };
 pub use runtime::{
     prepare_unwrap_canonical_v1, prepare_wrap_canonical_v1, CanonicalUnwrapRequestV1,
@@ -34,8 +35,9 @@ pub use runtime::{
 };
 pub use wire::{
     decode_structured_claim_payload_v1, CreateDescriptorPayloadV1, StructuredClaimActionV1,
-    StructuredClaimPayloadV1, VaultMutationPayloadV1, WrapperQuantityPayloadV1,
-    CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
+    GeneralPositionAssetTransferPayloadV1, StructuredClaimPayloadV1, VaultMutationPayloadV1,
+    WrapperQuantityPayloadV1, CREATE_DESCRIPTOR_PAYLOAD_BYTES,
+    GENERAL_POSITION_ASSET_TRANSFER_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
     STRUCTURED_CLAIM_FAMILY_VERSION, VAULT_MUTATION_PAYLOAD_BYTES,
     WRAPPER_QUANTITY_PAYLOAD_BYTES,
 };

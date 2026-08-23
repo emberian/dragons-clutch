@@ -24,7 +24,7 @@ vertical slices and must remain disabled until their own evidence gates pass.
 
 The General V2 extension family is centrally reserved at outer intent family
 tag 74 decimal (`0x4a`), family version 1. Its family-local actions are
-allocated at `1..=34`. Allocation does not authorize execution.
+allocated at `1..=35`. Allocation does not authorize execution.
 
 Every production SBF profile has an empty General V2 extension capability table.
 The existing `profile-general-source-v2-point` is the legacy General V1
@@ -632,8 +632,9 @@ All other General V2 actions remain disabled. In particular:
   work fits under the one-creation ceiling;
 - actions 12-13 are not needed by the bounded empty-book lab; generic streaming
   RelationV2 progress needs its own contract before activation;
-- actions 16-19, 22-31, and 33-34 remain disabled, including expiry,
-  entitlements, settlement, selected-artifact retirement, and root retirement.
+- actions 16-19, 22-31, and 33-35 remain disabled, including expiry,
+  entitlements, settlement, selected-artifact retirement, root retirement, and
+  the reserved Position asset-transfer primitive.
 
 This lab can close completed Work and unlink terminal source nodes while
 retaining the selected Feed. It still leaves the retained Feed,

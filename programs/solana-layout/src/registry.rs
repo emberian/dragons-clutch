@@ -515,13 +515,15 @@ pub enum GeneralV2Action {
     CloseEpoch = 33,
     /// Close one position.
     ClosePosition = 34,
+    /// Atomically transfer free cash and native Eggs between two Positions.
+    TransferPositionAssets = 35,
 }
 
 impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 34;
+    pub const LAST_TAG: u8 = 35;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -560,6 +562,7 @@ impl GeneralV2Action {
             Self::CloseClearWork => 32,
             Self::CloseEpoch => 33,
             Self::ClosePosition => 34,
+            Self::TransferPositionAssets => 35,
         }
     }
 
@@ -600,6 +603,7 @@ impl GeneralV2Action {
             32 => Some(Self::CloseClearWork),
             33 => Some(Self::CloseEpoch),
             34 => Some(Self::ClosePosition),
+            35 => Some(Self::TransferPositionAssets),
             _ => None,
         }
     }

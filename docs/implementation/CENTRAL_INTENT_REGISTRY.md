@@ -31,7 +31,7 @@ family version creates a new namespace; it does not inherit capability.
 
 | family | decimal tag | hexadecimal tag | family version | runtime |
 | --- | ---: | ---: | ---: | --- |
-| General V2 | 74 | `0x4a` | 1 | disabled |
+| General V2 | 74 | `0x4a` | 1 | profile-gated non-production slice |
 | Structured claim | 75 | `0x4b` | 1 | disabled |
 | Covered dealer | 76 | `0x4c` | 1 | disabled |
 | Source plane / Series | 77 | `0x4d` | 2 | disabled |
@@ -40,7 +40,7 @@ family version creates a new namespace; it does not inherit capability.
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
 
-General V2 reserves local actions 1 through 34, in order:
+General V2 reserves local actions 1 through 35, in order:
 
 1. `CreateMarket`
 2. `InitEpoch`
@@ -76,11 +76,15 @@ General V2 reserves local actions 1 through 34, in order:
 32. `CloseClearWork`
 33. `CloseEpoch`
 34. `ClosePosition`
+35. `TransferPositionAssets`
 
-These names allocate local tags only. They do not freeze payload bytes, account
-lists, account codecs, or transition semantics. The other four family action
-spaces are empty: every local action is unknown until an atomic design wave
-fixes its payload and capability contract.
+These registry names allocate local tags only; this document does not freeze
+payload bytes, account lists, account codecs, transition semantics, or runtime
+capabilities. Action-specific contracts may do so separately. In particular,
+the non-production identity slice named below freezes a strict subset, and
+action 35 has a canonical payload/account contract while remaining disabled.
+The other four family action spaces are empty: every local action is unknown
+until an atomic design wave fixes its payload and capability contract.
 
 ## Decimal 74 is not hexadecimal `0x74`
 
@@ -104,11 +108,13 @@ account-layout inventory.
 ## Capability and activation rule
 
 Capability membership is keyed by the exact triple `(family tag, family
-version, local action)`. The executable set is currently empty. The SBF
-dispatcher recognizes an allocated General V2 triple only to return
-`UnsupportedInstruction` before reading accounts. Unknown family versions and
-unknown local actions fail strict decoding and cannot fall into a legacy
-handler.
+version, local action)`. Production profiles retain an empty General V2 set.
+The source-only
+`profile-non-production-general-v2-empty-book-identity-lab` enables only the
+actions listed in `GENERAL_V2_SBF_VERTICAL_SLICE.md`; all other allocated
+General actions return `UnsupportedInstruction` before their handlers read
+accounts. Unknown family versions and unknown local actions fail strict
+decoding and cannot fall into a legacy handler.
 
 A later activation must change the following atomically:
 
@@ -120,8 +126,10 @@ A later activation must change the following atomically:
 5. update this registry and its collision tests without changing legacy golden
    bytes or packet limits.
 
-General V2 local actions 1 through 34 listed above are already
-**reserved-disabled allocations**: their numeric coordinates are in the
-registry, but they have no payload codec or executable capability. Unlisted
-future local-action proposals, and every proposed account shape, stay outside
-the central ledger until their atomic review is complete.
+General V2 local actions 1 through 35 are allocated numeric coordinates, not a
+blanket activation. Actions 2, 6, 7, 8, 9, 10, 14, 15, 20, 21, and 32 are
+confined to the named non-production profile. Action 35 has a frozen canonical
+codec/account contract but remains `ReservedDisabled`. Every other General V2
+action remains allocation-only. Unlisted future local-action proposals, and
+every proposed account shape, stay outside the central ledger until their
+atomic review is complete.

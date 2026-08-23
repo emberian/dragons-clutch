@@ -151,7 +151,7 @@ be synchronized before activation.
 
 ## Action allocation and pure payload contracts
 
-General family `74/1` retains local action names `1..=34`. Strict allocation-free
+General family `74/1` retains local action names `1..=35`. Strict allocation-free
 payload decoders and pure poststate owners now exist for the identity-lab spine
 at actions 2, 6, 7, 8, 9, 10, 14, and 15, permissionless reverse-head cleanup
 at action 20, and the separately authenticated one-way solver-prize claim at

@@ -26,6 +26,13 @@ binds the wrapper product, user/vault generations, and both Replay sequences;
 trailing, truncated, zero-quantity, and unknown-action payloads have no
 interpretation.
 
+The adjacent General V2 base service reserves local action 35 for an atomic
+Position cash/native-Egg transfer. Its canonical payload is exactly 298 bytes
+and is decoded here beside the pure transfer planner. The central allocation
+remains runtime-disabled until exact PositionV2/Replay authentication and the
+typed custody-capability signer are implemented; allocation is not wrapper
+activation.
+
 The descriptor contains no mutable supply shadow. Actual wrapper supply must
 always come from the authenticated extension-free Token-2022 mint. Direct
 burns create beneficiary-free surplus backing, never a fee or treasury claim.
