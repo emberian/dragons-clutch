@@ -135,10 +135,11 @@ persisted body or second budget. Its digest binds the funded-dependency body to
 the separately authenticated seven-account runtime-liveness policy/bundle:
 policy, Realm, facility lifecycle, sink, account/owner/payer/quote-schedule/
 receipt-program IDs, funding classes, generations, exact work and rent
-principals, maximum calls and per-call ceilings, admission before/after
-balances, and four terminal-path call/work vectors. The external liveness
-runtime remains sole owner of mutable calls, balances, receipts, refunds,
-donations, and close transitions.
+principals, maximum calls and per-call ceilings, and four terminal-path
+call/work vectors. Physical admission and later donation balances are excluded:
+they are mutable runtime observations, not Dealer dependency facts. The external
+liveness runtime remains sole owner of mutable calls, balances, receipts,
+refunds, donations, and close transitions.
 
 The persisted funded-dependency body separately pins the deployed liveness
 program and physical immutable runtime-policy account. These are account
