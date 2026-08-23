@@ -37,11 +37,13 @@ pub const FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1: &[u8] =
     b"general-exact-order-locator:v1";
 /// Canonical one-per-Root selected-candidate adjacency PDA domain.
 pub const CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1: &[u8] =
-    b"general-exact-candidate-adjacency:v1";
+    b"general-exact-adjacency:v1";
 
 const _: () = assert!(SETTLEMENT_ROOT_ACCOUNT_BYTES == 980);
 const _: () = assert!(INDEXED_SETTLEMENT_ROOT_BYTES_V1 == 1_196);
 const _: () = assert!(INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
+const _: () = assert!(FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1.len() <= 32);
+const _: () = assert!(CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1.len() <= 32);
 
 /// Canonical in-place PDA coordinates retained by the indexed Root successor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

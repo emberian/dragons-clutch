@@ -542,6 +542,8 @@ const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_TAG == 0xb1);
 const _: () = assert!(DIRECT_SELECTION_ACCOUNT_TAG == 0xb2);
 const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
+const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
+const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -810,6 +812,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "direct-reservation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG,
+            version: GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-frozen-order-locator-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
+            version: GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-candidate-adjacency-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2958,6 +2978,14 @@ mod tests {
             (
                 GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG,
                 GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG,
+                GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG,
+                GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {
