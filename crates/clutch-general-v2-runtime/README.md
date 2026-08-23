@@ -71,6 +71,25 @@ CandidateFeedV2 serialization then takes all economic fields only from the
 checked builder result and all rank/policy/lifecycle fields from authenticated
 General accounts. No caller-supplied score or rank is representable.
 
+The preselection `CandidateCostCertificateV1` successor rejoins that private
+owner membership only after RelationV2 accepts the exact fills. It aggregates
+signed contingent payoff by semantic Position owner, subtracts each owner's
+minimum outcome coordinate (the risk-free complete-set quotient), then derives
+the exact quotient range and state-price value. The ranking coordinate is the
+sum of terminal-owner ceilings of those quotient values. Adding a constant
+complete set and its exact simplex cash equivalent therefore cannot improve the
+coordinate. The certificate also commits exact gross buy/sell consideration,
+terminal buyer-ceil/seller-floor residue, and virtual split/merge work, but does
+not reinterpret them as fee revenue, volume quality, identity/personhood,
+collateral funding, or evidence of optimal clearing.
+
+The certificate binds a canonical batch-policy preimage and its full content
+ID without accepting an authentication boolean. The current MarketBinding does
+not yet carry that batch-policy ID, so the cost-aware rank is an explicitly
+breaking, capability-disabled comparison successor. The existing ScoreV2-Q
+rank encoder and live action 14/15 ABI remain unchanged; a central successor
+must bind the immutable policy ID before persisting the cost-aware rank.
+
 The settlement constructor privately rejoins owner/replay membership retained
 from the complete frozen page projection, decodes and recomputes one active
 reservation envelope per live order, and constructs a deterministic

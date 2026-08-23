@@ -38,10 +38,12 @@ use clutch_batch::relation_v2::{
 };
 use clutch_general_v2_contract::{
     candidate_bundle_digest_v1, candidate_feed_tail_v2, economic_domain_digest_v2,
+    encode_score_v2_q_cost_first_admitted_tie_v1,
     encode_score_v2_q_first_admitted_tie_v1, quantized_witness_body_digest_v3,
     quantized_witness_parts_digest_v3, settlement_witness_digest_v1, AdmissionNodeStatusV1,
     AdmissionNodeV3AccountV1, CandidateFeedHeaderV2, CodecError, EconomicDomainV2AccountV1,
-    FirstAdmittedTieV1, Id32, MarketBindingV1, ScoreV2QComponentsV1, SettlementCandidateKindV1,
+    FirstAdmittedTieV1, Id32, MarketBindingV1, ScoreV2QComponentsV1,
+    ScoreV2QCostComponentsV1, SettlementCandidateKindV1,
     Sha256BackendV1, CANDIDATE_FEED_HEADER_BYTES, MAX_ORDERS, MAX_OUTCOMES, MAX_QUANTIZED_ATOMS,
     PRICE_MEASURE_WITNESS_SCHEMA_V3, QUANTIZED_ATOM_BYTES, QUANTIZED_PRICE_MEASURE_SEMANTICS_V1,
     QUANTIZED_WITNESS_BODY_V3_FIXED_BYTES, SCORE_V2_Q_RANK_CAPACITY,
@@ -62,9 +64,11 @@ use clutch_solana_layout::{CodecError as LayoutError, PriceGridAccount};
 use sha2::{Digest, Sha256};
 
 mod builder;
+mod candidate_cost;
 mod settlement;
 
 pub use builder::*;
+pub use candidate_cost::*;
 pub use settlement::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -408,6 +412,37 @@ impl VerifiedSmoothDirectCandidateV1 {
     }
 }
 
+/// Successful cost-aware successor of the existing Direct-candidate verifier.
+///
+/// The embedded V1 verdict retains exact price and RelationV2 ownership. The
+/// additional private certificate is derived from the same candidate plus the
+/// frozen owner membership and a content-addressed immutable batch policy.
+/// This result is not a fee assessment, selection authorization, or optimality
+/// certificate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedCostedSmoothDirectCandidateV1 {
+    verified_candidate: VerifiedSmoothDirectCandidateV1,
+    cost_certificate: CandidateCostCertificateV1,
+    rank_key: [u8; SCORE_V2_Q_RANK_CAPACITY],
+}
+
+impl VerifiedCostedSmoothDirectCandidateV1 {
+    /// Existing exact price/RelationV2 verdict.
+    pub const fn verified_candidate(&self) -> &VerifiedSmoothDirectCandidateV1 {
+        &self.verified_candidate
+    }
+
+    /// Owner-net, complete-set-quotiented preselection cost certificate.
+    pub const fn cost_certificate(&self) -> &CandidateCostCertificateV1 {
+        &self.cost_certificate
+    }
+
+    /// Breaking cost-aware rank successor consumed by a future action 14/15.
+    pub const fn rank_key(&self) -> &[u8; SCORE_V2_Q_RANK_CAPACITY] {
+        &self.rank_key
+    }
+}
+
 /// Deterministic refusal set for the General V2 pure runtime join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralV2RuntimeError {
@@ -423,6 +458,8 @@ pub enum GeneralV2RuntimeError {
     AtomMixture(AtomMixtureErrorV1),
     /// The owner-blind economic relation refused the candidate.
     Relation(EconomicErrorV2),
+    /// Owner membership, immutable policy, or exact cost derivation refused.
+    CandidateCost(CandidateCostErrorV1),
     /// This path admits Direct candidates only.
     UnsupportedCandidateKind,
     /// The authenticated AdmissionNode was not in the revealed pre-verdict state.
@@ -478,6 +515,12 @@ impl From<AtomMixtureErrorV1> for GeneralV2RuntimeError {
 impl From<EconomicErrorV2> for GeneralV2RuntimeError {
     fn from(value: EconomicErrorV2) -> Self {
         Self::Relation(value)
+    }
+}
+
+impl From<CandidateCostErrorV1> for GeneralV2RuntimeError {
+    fn from(value: CandidateCostErrorV1) -> Self {
+        Self::CandidateCost(value)
     }
 }
 
@@ -872,6 +915,108 @@ pub fn verify_smooth_direct_candidate_v1(
         price_measure,
         quantized_atom_mixture,
         economics,
+        rank_key,
+    })
+}
+
+/// Verify one Direct candidate and add its owner-net preselection cost tie.
+///
+/// This successor takes the private owner-bearing page projection rather than
+/// a caller-provided owner table. It reuses the V1 price/RelationV2 verifier,
+/// exact-joins that verdict back to the same frozen book, derives the cost
+/// certificate, then uses the breaking rank encoder. Current SBF actions remain
+/// capability-disabled until their immutable Market binding names the batch
+/// policy identity and their comparison state explicitly selects this rank
+/// version.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_smooth_direct_candidate_costed_v1(
+    candidate_feed_identity: Id32,
+    sealed_candidate_feed: &[u8],
+    admission_node: &AdmissionNodeV3AccountV1,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    price_grid: &PriceGridAccount,
+    product_template: &ProductTemplateV4,
+    native_basis: &NativeClaimBasisV1,
+    price_measure_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    market_instance: &MarketInstancePreimageV2,
+    authenticated_edge_policy: QuantizedEdgePolicyV1,
+    owner_projection: &OwnerBlindBookProjectionV2,
+    cost_policy: &CandidateCostPolicyV1,
+) -> Result<VerifiedCostedSmoothDirectCandidateV1, GeneralV2RuntimeError> {
+    let base = owner_projection.base();
+    let verified_candidate = verify_smooth_direct_candidate_v1(
+        candidate_feed_identity,
+        sealed_candidate_feed,
+        admission_node,
+        economic_domain_account,
+        market_binding,
+        price_grid,
+        product_template,
+        native_basis,
+        price_measure_policy,
+        genesis,
+        market_instance,
+        authenticated_edge_policy,
+        base.book(),
+    )?;
+    let (header, feed) = decode_sealed_candidate_feed_v1(sealed_candidate_feed)?;
+    let domain = base.domain();
+    let transcript = economic_domain_account.transcript;
+    if base.market_binding() != market_binding
+        || base.market() != header.market
+        || base.epoch() != header.epoch
+        || base.order_set() != header.order_set
+        || base.economic_domain_digest() != header.economic_domain_digest
+        || domain.market_semantics_digest != transcript.market_instance_v2_id.bytes()
+        || domain.epoch_semantics_digest != transcript.epoch_semantics_digest.bytes()
+        || domain.relation_policy_digest != transcript.relation_policy_id.bytes()
+        || domain.price_policy_digest != transcript.price_measure_policy_v1_id.bytes()
+        || domain.epoch_index != transcript.epoch_index
+        || domain.outcome_count != transcript.outcome_count
+        || domain.price_scale != transcript.price_scale
+    {
+        return Err(GeneralV2RuntimeError::BindingMismatch);
+    }
+    let price = PricePreconditionV2 {
+        policy_digest: transcript.price_measure_policy_v1_id.bytes(),
+        semantic_price_digest: header.candidate_price_digest.bytes(),
+        prices: feed.prices,
+    };
+    let candidate = EconomicCandidateV2 {
+        fills: feed.fills,
+        honored_aon_mask: header.honored_aon_mask,
+        virtual_split: header.virtual_split,
+        virtual_merge: header.virtual_merge,
+    };
+    let cost_certificate = derive_candidate_cost_certificate_v1(
+        owner_projection,
+        &price,
+        &candidate,
+        verified_candidate.economics(),
+        cost_policy,
+    )?;
+    let economics = verified_candidate.economics();
+    let rank_key = encode_score_v2_q_cost_first_admitted_tie_v1(
+        ScoreV2QCostComponentsV1 {
+            score: ScoreV2QComponentsV1 {
+                certified_risk_flow_atoms: economics.score.risk.certified_risk_flow_atoms,
+                cash_equivalent_direct_flow_atoms: economics
+                    .score
+                    .cash_equivalent_direct_flow_atoms,
+                virtual_churn_atoms: economics.score.virtual_churn_atoms,
+                settlement_candidate_id: header.settlement_candidate_id,
+            },
+            owner_net_cost_atoms: cost_certificate.owner_net_cost_atoms(),
+        },
+        FirstAdmittedTieV1 {
+            ordinal: admission_node.ordinal,
+        },
+    )?;
+    Ok(VerifiedCostedSmoothDirectCandidateV1 {
+        verified_candidate,
+        cost_certificate,
         rank_key,
     })
 }
