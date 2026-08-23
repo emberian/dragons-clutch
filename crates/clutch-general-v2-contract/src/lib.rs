@@ -20,6 +20,7 @@ mod owner_settlement;
 mod payload;
 mod position_replay;
 mod rank;
+mod settlement_root;
 mod state;
 mod transition;
 
@@ -38,6 +39,7 @@ pub use rank::{
     ScoreV2QComponentsV1, ScoreV2QCostComponentsV1, SCORE_V2_Q_ACTIVE_RANK_BYTES,
     SCORE_V2_Q_COST_ACTIVE_RANK_BYTES, SCORE_V2_Q_RANK_CAPACITY,
 };
+pub use settlement_root::*;
 pub use state::*;
 pub use transition::*;
 
@@ -116,6 +118,8 @@ pub const WINDOW_SEED_DOMAIN_V1: &[u8] = b"general-window:v4";
 pub const CANDIDATE_FEED_SEED_DOMAIN_V1: &[u8] = b"candidate-feed:v2";
 /// Fresh General V2 ClearWork PDA seed domain.
 pub const CLEAR_WORK_SEED_DOMAIN_V1: &[u8] = b"clear-work:v2";
+/// Resumable RelationV2 ClearWork successor PDA seed domain.
+pub const CLEAR_WORK_SEED_DOMAIN_V3: &[u8] = b"clear-work:v3";
 /// Fresh General V2 epoch-budget PDA seed domain.
 pub const EPOCH_BUDGET_SEED_DOMAIN_V1: &[u8] = b"candidate-budget:v2";
 /// Fresh immutable General V2 Market-binding PDA seed domain.
@@ -711,6 +715,8 @@ pub const CANDIDATE_FEED_STAGE_ACCOUNT_VERSION: u8 = 2;
 pub const CLEAR_WORK_ACCOUNT_TAG: u8 = 17;
 /// Active-width General V2 ClearWork version.
 pub const CLEAR_WORK_ACCOUNT_VERSION: u8 = 2;
+/// Resumable RelationV2 ClearWork successor version.
+pub const CLEAR_WORK_ACCOUNT_VERSION_V3: u8 = 3;
 /// Codec tag matching the disabled central admission-node reservation.
 pub const ADMISSION_NODE_ACCOUNT_TAG: u8 = 0x77;
 /// First funded admission-node account version.
@@ -762,7 +768,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 26] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 27] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -854,6 +860,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 26] = [
         owner: "clutch-general-v2-contract/ClearWorkV2",
     },
     AccountAllocationV1 {
+        tag: CLEAR_WORK_ACCOUNT_TAG,
+        version: CLEAR_WORK_ACCOUNT_VERSION_V3,
+        owner: "clutch-general-v2-contract/ClearWorkV3AccountV1",
+    },
+    AccountAllocationV1 {
         tag: ADMISSION_NODE_ACCOUNT_TAG,
         version: ADMISSION_NODE_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/AdmissionNodeV3AccountV1",
@@ -892,6 +903,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 26] = [
         tag: SELECTED_CANDIDATE_ACCOUNT_TAG,
         version: SELECTED_CANDIDATE_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/SelectedCandidateV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: SETTLEMENT_ROOT_ACCOUNT_TAG,
+        version: SETTLEMENT_ROOT_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/SettlementRootV1AccountV1",
     },
 ];
 
