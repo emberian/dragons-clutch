@@ -330,6 +330,22 @@ the ownership boundary:
   standing-maker Position weights. A nonzero executor share refuses because
   V1 authenticates no executor identity.
 
+The successor now joins the canonical General V2 owner-settlement builder:
+each lexicographically ordered participating owner supplies one authenticated
+terminal projection, including explicit zero rows for seller-only owners. The
+projection recomputes the terminal payer allocation from signed envelopes,
+requires cumulative post-transition envelope debits to equal the closed
+carry's cumulative paid atoms, and proves the whole buy consideration plus fee
+fits that owner's authenticated buy reservation. The candidate-selected fee
+total is the exact sum of all owner rows and is split once, candidate-wide.
+Per-owner recipient splitting is not an alternate route because its rounding
+would be different.
+
+Account-neutral inner codecs and typed action joins are frozen in
+`crates/clutch-fee-runtime-contract/SCHEMA.md`. They allocate no outer SBF tag,
+PDA seed, rent payer, action, or capability. Their temporary payer/recipient
+snapshot widths remain subject to rent and compute review before promotion.
+
 **(D7 revised): no per-intent carry PDA and no carry words in a reservation.**
 The reservation successor keeps the signed `max_fee_atoms` and cumulative
 intent debit. The owner carry must live once per owner in a versioned selected-

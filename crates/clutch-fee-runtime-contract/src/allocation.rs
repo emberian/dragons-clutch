@@ -7,9 +7,21 @@ use crate::{add, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
 /// One signed intent's remaining fee authorization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FeeEnvelopeFundingV1 {
+    /// No cash reservation exists for this intent. V1 seller intents use this
+    /// member and must authorize and pay exactly zero fee atoms.
+    NoCashReservation = 0,
+    /// Fee atoms are inside this buy intent's authenticated cash reservation.
+    BuyCashReservation = 1,
+}
+
+/// One signed intent's remaining fee authorization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FeeEnvelopeV1 {
     pub owner: Id,
     pub intent: Id,
+    pub funding: FeeEnvelopeFundingV1,
     pub max_fee_atoms: u64,
     pub debited_atoms: u64,
 }
@@ -103,6 +115,11 @@ pub fn allocate_payer_debit(
         }
         if envelope.debited_atoms > envelope.max_fee_atoms {
             return Err(Error::FeeEnvelopeExceeded);
+        }
+        if envelope.funding == FeeEnvelopeFundingV1::NoCashReservation
+            && (envelope.max_fee_atoms != 0 || envelope.debited_atoms != 0)
+        {
+            return Err(Error::SellerFeeForbidden);
         }
         capacity = capacity
             .checked_add(u128::from(envelope.max_fee_atoms - envelope.debited_atoms))

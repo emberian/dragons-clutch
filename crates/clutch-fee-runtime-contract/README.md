@@ -30,6 +30,20 @@ refusals:
   independently prepaid lamports. Hoard principal, redemption principal, and
   projected future fees are mechanically inadmissible as liveness capital.
 
+The owner-settlement bridge consumes the authenticated terminal owner carry,
+recomputes the terminal payer allocation from signed reservation envelopes,
+and proves cumulative envelope debits equal the closed carry total. It emits
+exactly one `clutch_owner_settlement::SelectedOwnerFeeV1` per lexicographically
+ordered participating owner. Seller-only owners are explicit zero rows; every
+positive row must fit that owner's aggregate buy cash reservation. The complete
+book must equal the selected candidate's `selected_fee_atoms` before recipient
+allocation or treasury credit.
+
+[`SCHEMA.md`](SCHEMA.md) freezes the account-neutral inner codec widths,
+discriminators, typed action joins, and mutation owners. The outer SBF account
+tags, PDA seeds, rent funding, actions, and capability profile remain centrally
+unallocated.
+
 The crate deliberately contains no Solana account tags, PDA recipes, codec,
 instruction, CPI, token movement, rate choice, treasury key, capability
 profile, or deployment claim. Those are adapter and release work. Old Realms,

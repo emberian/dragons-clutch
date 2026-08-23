@@ -1,43 +1,40 @@
 //! Settlement, redemption, and liveness integration contracts.
 
-use crate::allocation::{PayerAllocationV1, RecipientAllocationV1};
+use crate::allocation::RecipientAllocationV1;
+use crate::projection::SelectedOwnerFeeBookV1;
 use crate::{add, Error, Id, Result};
 
-/// Exact atom conservation for one fee-bearing settlement group.
+/// Candidate-wide conservation joining all explicit owner fee rows to the one
+/// recipient allocation and ordinary treasury Position credit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FeeBearingSettlementV1 {
+pub struct CandidateFeeSettlementV1 {
     pub fee_record: Id,
     pub hoard_collateral_before: u64,
     pub hoard_collateral_after: u64,
-    pub consideration_debit_atoms: u64,
-    pub seller_credit_atoms: u64,
-    pub rounding_residue_atoms: u64,
-    pub fee_debit_atoms: u64,
+    pub selected_fee_debit_atoms: u128,
     pub maker_rebate_atoms: u64,
     pub executor_atoms: u64,
     pub treasury_credit_atoms: u64,
 }
 
-impl FeeBearingSettlementV1 {
+impl CandidateFeeSettlementV1 {
     pub fn validate(
         &self,
-        payer: &PayerAllocationV1,
+        book: &SelectedOwnerFeeBookV1,
         recipients: &RecipientAllocationV1,
     ) -> Result<()> {
-        if self.fee_record != payer.fee_record()
+        if self.fee_record != book.fee_record()
             || self.fee_record != recipients.fee_record()
             || self.hoard_collateral_before != self.hoard_collateral_after
-            || add(self.seller_credit_atoms, self.rounding_residue_atoms)?
-                != self.consideration_debit_atoms
-            || add(
-                add(self.maker_rebate_atoms, self.executor_atoms)?,
-                self.treasury_credit_atoms,
-            )? != self.fee_debit_atoms
-            || self.fee_debit_atoms != payer.total_debit_atoms()
-            || self.fee_debit_atoms != recipients.collected_fee_atoms()
+            || self.selected_fee_debit_atoms != book.selected_fee_atoms()
+            || self.selected_fee_debit_atoms != u128::from(recipients.collected_fee_atoms())
             || self.maker_rebate_atoms != recipients.maker_rebate_total()
             || self.executor_atoms != recipients.executor_atoms()
             || self.treasury_credit_atoms != recipients.treasury_atoms()
+            || u128::from(add(
+                add(self.maker_rebate_atoms, self.executor_atoms)?,
+                self.treasury_credit_atoms,
+            )?) != self.selected_fee_debit_atoms
         {
             return Err(Error::ConservationFailure);
         }
