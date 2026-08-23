@@ -231,22 +231,25 @@ submission close it may terminalize only an unrevealed `Committed` node as
 lamport movement and does not infer revealed/Work expiry semantics.
 
 Actions 24 and 25 have strict disabled payload facts only. Action 24 is the
-96-byte selector `epoch || selected_candidate || owner`. Action 25 is renamed
-`AccountReceiptEnd` with no compatibility alias and uses the 160-byte selector
-`epoch || selected_candidate || owner_settlement || receipt ||
-receipt_accounting_id`. Slice, order, side, price, and completion are owned
-solely by the authenticated receipt and selected-order projection, never by
-caller bytes. The accounting ID is persisted and replay-checked separately
-from every later Egg-delivery transition ID.
+64-byte selector `epoch || selected_candidate`. Its strict next-slice planner
+derives one receipt and its one or two owners/orders; first canonical owner and
+order occurrences create pristine `0x81/2` rows and stamp Reservations, later
+occurrences require those exact states, and only then may the Selected cursor
+advance. Action 25 is `AccountReceiptEnd` with no compatibility alias and uses
+the 128-byte selector `epoch || selected_candidate || owner_settlement ||
+receipt`. Slice, order, side, price, completion, and the accounting transition
+ID are owned solely by the authenticated receipt and selected-order
+projection, never by caller bytes. Accounting replay remains distinct from
+every later Egg-delivery transition.
 
-Action 38 `FinalizeOwnerSettlement` has a strict disabled 192-byte selector
+Action 38 `FinalizeOwnerSettlement` has a strict disabled 160-byte selector
 `epoch || selected_candidate || owner_settlement || position ||
-settlement_cash_pot || owner_finalization_id`. It exists separately because a
+settlement_cash_pot`. It exists separately because a
 last receipt fragment may leave a credit-bearing owner waiting for earlier
 buyer or merge liquidity. Net owner debits are admitted into the pot first;
 credits refuse and retry without consuming replay or liveness when liquidity
-is absent. The request identity must equal the adapter-authenticated data ID of
-the canonical finalized 288-byte row; it is not copied into the row. The
+is absent. The adapter derives the canonical finalized 288-byte row data ID;
+it is neither caller supplied nor copied into the row. The
 one-way row state and in-place fee finalization receipt own persistent replay.
 No success transition exists: creating the 288-byte semantic body requires the
 complete authenticated filled-order set, exactly one selected-fee row per
@@ -257,7 +260,7 @@ zero flags. Its pre-fund-safe creation plan must atomically update the separate
 rent ledger that owns payer principal, refund recipient, and donation sink.
 
 Action 26 is renamed `ConsumeDirectReceiptEggs` and has the exact disabled
-96-byte selector `epoch || receipt || delivery_transition_id`. The imported
+64-byte selector `epoch || receipt`. The imported
 pure planner requires both real ends already accounting-latched and both owner
 rows already finalized by action 38, then
 atomically stages a distinct delivery latch, both Positions, and both
@@ -268,8 +271,8 @@ an exact Settlement-compartment liveness receipt, call ordinal, quote ceiling,
 keeper payment, and payer refund.
 
 Actions 36 `ConsumeVirtualSplitReceiptEggs` and 37
-`ConsumeVirtualMergeReceiptEggs` each have a distinct strict 96-byte disabled
-selector `epoch || receipt || delivery_transition_id`. They are not aliases
+`ConsumeVirtualMergeReceiptEggs` each have a distinct strict 64-byte disabled
+selector `epoch || receipt`. They are not aliases
 for action 26 or for each other. A future handler must bind one checked
 selected-candidate witness and transition ID across the 328-byte FinalPot's
 embedded virtual budget, Hoard/aggregate supply, one real receipt end, Position,
