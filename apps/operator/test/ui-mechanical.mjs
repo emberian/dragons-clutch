@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { encodeIntent, INTEGER_TRANSPORT } from "../action.js";
-import { createStore, eventHasSafeNumbers } from "../stream.js";
+import {
+  createStore,
+  eventHasSafeNumbers,
+  liveResultIsPresentable,
+  liveRunIsPresentable,
+} from "../stream.js";
 import { campaignIsPresentable } from "../pyth.js";
 import {
   decimalCents,
@@ -281,4 +286,114 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
     assert.match(pyth, new RegExp(phrase));
   }
   assert.doesNotMatch(pyth, /\bact\s*\(|fetch\s*\(|EventSource|signTransaction|sendTransaction/);
+});
+
+const liveResult = () => ({
+  type: "live-real-pyth-result",
+  schema: "dragons-clutch/operator/live-real-pyth-result/v1",
+  claim: "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+  campaign_mode: "joined-multiboundary-v1",
+  transcript_schema: "dragons-clutch/operator/local-real-pyth-multiboundary-joined-lifecycle/v1",
+  retained_transcript: false,
+  genesis_hash: "local-genesis",
+  boundary_count: "2",
+  step_count: "56",
+  sealed: true,
+  resolved_payout: "1",
+  archive_records: [
+    { index: "0", bucket: "10", lower: "999", upper: "1001", sequence: "120", write_slot: "20", publish_time: "120" },
+    { index: "1", bucket: "11", lower: "998", upper: "1002", sequence: "180", write_slot: "21", publish_time: "180" },
+  ],
+  source_archive: {
+    key: "archive-address",
+    owner: "clutch-program",
+    executable: false,
+    data_len: "2560",
+    body_sha256: "a".repeat(64),
+    page_commitment: "b".repeat(64),
+    feed_id: "c".repeat(64),
+    window_id: "d".repeat(64),
+    record_count: "2",
+  },
+  out_of_order_boundary_rollback: {
+    ok: true,
+    skipped_update_account: "skipped-receiver-account",
+    skipped_update_absent_after_refusal: true,
+    instruction_error: { instruction_index: "2", custom_code: "122", custom_code_hex: "0x7a" },
+    watched_accounts: [],
+    before_snapshot_sha256: "e".repeat(64),
+    after_snapshot_sha256: "e".repeat(64),
+    snapshots_equal: true,
+  },
+  trade_status: "settled",
+  collateral_atoms: "128",
+  terminal: {
+    buyer_position_cash_atoms: "0",
+    buyer_position_internal: ["0", "0", "0", "0"],
+    seller_position_cash_atoms: "0",
+    seller_position_internal: ["0", "0", "0", "0"],
+    supply_internal: ["0", "0", "0", "0"],
+    hoard_collateral_atoms: "0",
+    hoard_token_atoms: "0",
+    buyer_token_atoms: "76",
+    seller_token_atoms: "52",
+  },
+});
+
+test("live Pyth projection admits only exact unretained terminal closure", () => {
+  const run = {
+    type: "live-real-pyth-run",
+    schema: "dragons-clutch/operator/live-real-pyth-run/v1",
+    mode: "pyth-live",
+    phase: "running",
+    campaign_mode: "joined-multiboundary-v1",
+    retained_transcript: false,
+    rpc_url: "http://127.0.0.1:9137",
+    websocket_url: "ws://127.0.0.1:9138",
+    faucet: "127.0.0.1:9139",
+    gossip: "127.0.0.1:9200",
+    dynamic_port_range: "9201-9250",
+    authority: "read-only live child telemetry; no retained transcript; no browser key material",
+  };
+  assert.equal(liveRunIsPresentable(run), true);
+  assert.equal(liveRunIsPresentable({ ...run, retained_transcript: true }), false);
+  assert.equal(liveRunIsPresentable({ ...run, rpc_port: 9137 }), false);
+
+  assert.equal(liveResultIsPresentable(liveResult()), true);
+  const numericSubstitution = liveResult();
+  numericSubstitution.out_of_order_boundary_rollback.watched_accounts.push({ lamports: 1 });
+  assert.equal(liveResultIsPresentable(numericSubstitution), false);
+  const wrongRefusal = liveResult();
+  wrongRefusal.out_of_order_boundary_rollback.instruction_error.custom_code = "121";
+  assert.equal(liveResultIsPresentable(wrongRefusal), false);
+  const skippedBucket = liveResult();
+  skippedBucket.archive_records[1].bucket = "12";
+  assert.equal(liveResultIsPresentable(skippedBucket), false);
+  const residue = liveResult();
+  residue.terminal.supply_internal[2] = "1";
+  assert.equal(liveResultIsPresentable(residue), false);
+});
+
+test("the live Pyth page is read-only and the launcher disables transcript retention", async () => {
+  const [app, live, launcher, daemon] = await Promise.all([
+    source("app.js"),
+    source("live-pyth.js"),
+    readFile(new URL("../../scripts/run_operator_real_pyth_live.sh", here), "utf8"),
+    readFile(new URL("../../programs/clutch-sbf/operatord/src/pyth_live.rs", here), "utf8"),
+  ]);
+  assert.match(app, /LIVE CHILD \/ NOT RETAINED \/ BROWSER READ-ONLY/);
+  assert.match(app, /identity\.mode === "pyth-live"/);
+  for (const phrase of [
+    "LIVE, NOT RETAINED",
+    "real captured router/receiver laboratory",
+    "Ephemeral payer and owner keys remain inside",
+    "does not independently query RPC",
+  ]) {
+    assert.match(live, new RegExp(phrase));
+  }
+  assert.doesNotMatch(live, /\bact\s*\(|fetch\s*\(|EventSource|signTransaction|sendTransaction|privateKey|secretKey/);
+  assert.match(launcher, /unset CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR/);
+  assert.doesNotMatch(launcher, /--transcript/);
+  assert.match(daemon, /env_remove\("CLUTCH_LOCAL_REAL_PYTH_TRANSCRIPT_DIR"\)/);
+  assert.match(daemon, /"live-output"/);
 });

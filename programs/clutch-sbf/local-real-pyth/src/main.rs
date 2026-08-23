@@ -74,6 +74,10 @@ const VALIDATOR_PROVENANCE: &str = "../../../tools/agave-loopback-validator/PROV
 const VALIDATOR_PINS: &str = "../../../tools/agave-loopback-validator/pins.env";
 const VALIDATOR_PATCH: &str = "../../../tools/agave-loopback-validator/agave-4.0.2-loopback.patch";
 const ROLLBACK_SNAPSHOT_DOMAIN: &[u8] = b"dragons-clutch/local-real-pyth/rollback-snapshot/v1";
+const OPERATOR_EVENT_ENV: &str = "CLUTCH_LOCAL_REAL_PYTH_OPERATOR_EVENTS";
+const OPERATOR_EVENT_PREFIX: &str = "CLUTCH_OPERATOR_EVENT ";
+const OPERATOR_MANIFEST_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-manifest/v1";
+const OPERATOR_RESULT_SCHEMA: &str = "dragons-clutch/operator/live-real-pyth-result/v1";
 
 struct Args {
     command: String,
@@ -161,6 +165,170 @@ fn require(condition: bool, message: impl Into<String>) -> Result<()> {
         Ok(())
     } else {
         Err(message.into().into())
+    }
+}
+
+/// Convert every JSON integer to a canonical decimal string before it crosses
+/// the daemon/browser boundary. The retained campaign schema is unchanged;
+/// this applies only to the opt-in live Operator event channel.
+fn exact_decimal_transport(value: Value) -> Value {
+    match value {
+        Value::Number(number) => Value::String(number.to_string()),
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(exact_decimal_transport).collect())
+        }
+        Value::Object(values) => Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, exact_decimal_transport(value)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn required_value<'a>(value: &'a Value, field: &str, role: &str) -> Result<&'a Value> {
+    value
+        .get(field)
+        .ok_or_else(|| format!("{role} has no {field}").into())
+}
+
+fn required_string<'a>(value: &'a Value, field: &str, role: &str) -> Result<&'a str> {
+    required_value(value, field, role)?
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| format!("{role}.{field} is not a nonempty string").into())
+}
+
+fn operator_manifest_event(manifest: &Value) -> Result<Value> {
+    require(
+        required_string(manifest, "claim", "campaign manifest")? == CLAIM,
+        "campaign manifest truth label differs before Operator publication",
+    )?;
+    require(
+        required_string(manifest, "campaign_mode", "campaign manifest")?
+            == MULTIBOUNDARY_JOINED_MODE,
+        "live Operator events require the joined multi-boundary campaign",
+    )?;
+    require(
+        required_string(manifest, "transcript_schema", "campaign manifest")?
+            == MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA,
+        "live Operator manifest has the wrong transcript schema",
+    )?;
+    let source_profile = required_value(manifest, "source_profile_snapshot", "campaign manifest")?;
+    let provider = required_value(manifest, "provider", "campaign manifest")?
+        .as_array()
+        .ok_or("campaign manifest provider is not an array")?;
+    require(
+        provider.len() == 4,
+        "live Operator manifest requires four captured provider loader accounts",
+    )?;
+    let genesis_roles = required_value(manifest, "genesis_accounts", "campaign manifest")?
+        .as_array()
+        .ok_or("campaign manifest genesis_accounts is not an array")?
+        .iter()
+        .map(|row| required_string(row, "role", "genesis account").map(ToString::to_string))
+        .collect::<Result<Vec<_>>>()?;
+    let boundary_count = required_value(manifest, "boundary_count", "campaign manifest")?
+        .as_u64()
+        .ok_or("campaign manifest boundary_count is not an unsigned integer")?;
+    require(
+        boundary_count == 2,
+        "live Operator manifest requires exactly two source boundaries",
+    )?;
+
+    Ok(exact_decimal_transport(json!({
+        "type": "live-real-pyth-manifest",
+        "schema": OPERATOR_MANIFEST_SCHEMA,
+        "claim": CLAIM,
+        "campaign_mode": MULTIBOUNDARY_JOINED_MODE,
+        "transcript_schema": MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA,
+        "retained_transcript": false,
+        "repository_head": required_string(manifest, "dragons_clutch_repository_head", "campaign manifest")?,
+        "program_id": required_string(manifest, "program_id", "campaign manifest")?,
+        "clutch_elf_sha256": required_string(manifest, "clutch_elf_sha256", "campaign manifest")?,
+        "validator_binary_sha256": required_string(manifest, "validator_binary_sha256", "campaign manifest")?,
+        "source_profile_snapshot_sha256": required_string(source_profile, "sha256", "source profile snapshot")?,
+        "boundary_count": boundary_count,
+        "provider": provider,
+        "genesis_prerequisite_roles": genesis_roles,
+    })))
+}
+
+fn operator_result_event(result: &Value) -> Result<Value> {
+    require(
+        required_string(result, "claim", "campaign result")? == CLAIM,
+        "campaign result truth label differs before Operator publication",
+    )?;
+    require(
+        required_string(result, "campaign_mode", "campaign result")? == MULTIBOUNDARY_JOINED_MODE,
+        "live Operator result requires the joined multi-boundary campaign",
+    )?;
+    require(
+        required_string(result, "transcript_schema", "campaign result")?
+            == MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA,
+        "live Operator result has the wrong transcript schema",
+    )?;
+    let steps = required_value(result, "steps", "campaign result")?
+        .as_array()
+        .ok_or("campaign result steps is not an array")?;
+    require(
+        steps.len() == 56,
+        "live Operator result requires the exact 56-step campaign",
+    )?;
+    let boundary_count = required_value(result, "boundary_count", "campaign result")?
+        .as_u64()
+        .ok_or("campaign result boundary_count is not an unsigned integer")?;
+    require(
+        boundary_count == 2,
+        "live Operator result requires two boundaries",
+    )?;
+    let lifecycle = required_value(result, "lifecycle", "campaign result")?;
+    let trade = required_value(lifecycle, "trade", "campaign lifecycle")?;
+    require(
+        required_string(trade, "status", "campaign trade")? == "settled",
+        "live Operator result did not settle the signed trade",
+    )?;
+    let terminal = required_value(lifecycle, "terminal", "campaign lifecycle")?;
+    let rollback = required_value(result, "out_of_order_boundary_rollback", "campaign result")?;
+    require(
+        rollback.get("ok").and_then(Value::as_bool) == Some(true)
+            && rollback
+                .get("skipped_update_absent_after_refusal")
+                .and_then(Value::as_bool)
+                == Some(true)
+            && rollback.get("snapshots_equal").and_then(Value::as_bool) == Some(true),
+        "live Operator result did not retain the complete out-of-order rollback closure",
+    )?;
+    require(
+        result.get("sealed").and_then(Value::as_bool) == Some(true),
+        "live Operator result did not seal the source archive",
+    )?;
+
+    Ok(exact_decimal_transport(json!({
+        "type": "live-real-pyth-result",
+        "schema": OPERATOR_RESULT_SCHEMA,
+        "claim": CLAIM,
+        "campaign_mode": MULTIBOUNDARY_JOINED_MODE,
+        "transcript_schema": MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA,
+        "retained_transcript": false,
+        "genesis_hash": required_string(result, "genesis_hash", "campaign result")?,
+        "boundary_count": boundary_count,
+        "step_count": steps.len(),
+        "sealed": true,
+        "resolved_payout": required_value(result, "resolved_payout", "campaign result")?,
+        "archive_records": required_value(result, "archive_records", "campaign result")?,
+        "source_archive": required_value(result, "source_archive", "campaign result")?,
+        "out_of_order_boundary_rollback": rollback,
+        "trade_status": "settled",
+        "collateral_atoms": required_string(lifecycle, "collateral_atoms", "campaign lifecycle")?,
+        "terminal": terminal,
+    })))
+}
+
+fn emit_operator_event(event: &Value) {
+    if env::var(OPERATOR_EVENT_ENV).ok().as_deref() == Some("1") {
+        println!("{OPERATOR_EVENT_PREFIX}{event}");
     }
 }
 
@@ -905,6 +1073,9 @@ fn prepare(
         work.join("campaign.json"),
         serde_json::to_vec_pretty(&manifest)?,
     )?;
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        emit_operator_event(&operator_manifest_event(&manifest)?);
+    }
     println!("{CLAIM}");
     println!("prepared {} exact genesis accounts", rows.len());
     Ok(())
@@ -3129,6 +3300,9 @@ fn run(
         serde_json::to_vec_pretty(&result)?,
     )?;
     if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
+        emit_operator_event(&operator_result_event(&result)?);
+    }
+    if campaign_mode == MULTIBOUNDARY_JOINED_MODE {
         println!("PASS: signed PriceGrid/policy artifacts -> CreateMarket -> two-owner funded general book -> freeze -> best valid submitted candidate verification/selection -> entitlement/settlement -> real router/receiver source window -> Resolve(1) -> two-owner redemption/withdrawal");
     } else if campaign_mode == JOINED_LIFECYCLE_MODE {
         println!("PASS: signed PriceGrid/policy artifacts -> CreateMarket -> two-owner funded general book -> freeze -> best valid submitted candidate verification/selection -> entitlement/settlement -> real router/receiver source -> Resolve(1) -> two-owner redemption/withdrawal");
@@ -3352,6 +3526,94 @@ mod argument_tests {
             digest
         );
         assert!(rollback_snapshot_sha256(&keys[..1], &baseline).is_err());
+    }
+
+    #[test]
+    fn live_operator_events_are_nonretained_and_exact_decimal() {
+        let manifest = json!({
+            "claim": CLAIM,
+            "campaign_mode": MULTIBOUNDARY_JOINED_MODE,
+            "transcript_schema": MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA,
+            "dragons_clutch_repository_head": "a".repeat(40),
+            "program_id": PROGRAM_ID.to_string(),
+            "clutch_elf_sha256": "b".repeat(64),
+            "validator_binary_sha256": "c".repeat(64),
+            "source_profile_snapshot": {"sha256": "d".repeat(64)},
+            "boundary_count": 2,
+            "provider": [
+                {"role": "receiver-program"},
+                {"role": "receiver-programdata"},
+                {"role": "router-program"},
+                {"role": "router-programdata"},
+            ],
+            "genesis_accounts": [
+                {"role": "clutch-program"},
+                {"role": "receiver-program"},
+            ],
+        });
+        let published = operator_manifest_event(&manifest).unwrap();
+        assert_eq!(published["schema"], OPERATOR_MANIFEST_SCHEMA);
+        assert_eq!(published["retained_transcript"], false);
+        assert_eq!(published["boundary_count"], "2");
+        assert_eq!(published["genesis_prerequisite_roles"][0], "clutch-program");
+
+        let snapshot = "e".repeat(64);
+        let result = json!({
+            "claim": CLAIM,
+            "campaign_mode": MULTIBOUNDARY_JOINED_MODE,
+            "transcript_schema": MULTIBOUNDARY_JOINED_TRANSCRIPT_SCHEMA,
+            "genesis_hash": "local-genesis",
+            "boundary_count": 2,
+            "sealed": true,
+            "resolved_payout": 1,
+            "steps": (0..56).map(|index| json!({"ordinal": index})).collect::<Vec<_>>(),
+            "archive_records": [{
+                "index": 0,
+                "bucket": "29792340",
+                "lower": "99980929",
+                "upper": "100019071",
+                "sequence": "1787540400",
+                "write_slot": "460336348",
+                "publish_time": "1787540400",
+            }],
+            "source_archive": {
+                "key": "archive",
+                "owner": PROGRAM_ID.to_string(),
+                "executable": false,
+                "data_len": u64::MAX,
+                "body_sha256": "f".repeat(64),
+                "page_commitment": "1".repeat(64),
+                "feed_id": "2".repeat(64),
+                "window_id": "3".repeat(64),
+                "record_count": 2,
+            },
+            "out_of_order_boundary_rollback": {
+                "ok": true,
+                "skipped_update_absent_after_refusal": true,
+                "snapshots_equal": true,
+                "before_snapshot_sha256": snapshot,
+                "after_snapshot_sha256": snapshot,
+            },
+            "lifecycle": {
+                "collateral_atoms": "128",
+                "trade": {"status": "settled"},
+                "terminal": {
+                    "buyer_token_atoms": "76",
+                    "seller_token_atoms": "52",
+                    "hoard_token_atoms": "0",
+                },
+            },
+        });
+        let published = operator_result_event(&result).unwrap();
+        assert_eq!(published["schema"], OPERATOR_RESULT_SCHEMA);
+        assert_eq!(published["retained_transcript"], false);
+        assert_eq!(published["step_count"], "56");
+        assert_eq!(published["resolved_payout"], "1");
+        assert_eq!(published["archive_records"][0]["index"], "0");
+        assert_eq!(
+            published["source_archive"]["data_len"],
+            u64::MAX.to_string()
+        );
     }
 
     #[test]
