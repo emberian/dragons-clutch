@@ -32,7 +32,7 @@ const INTENT_MAGIC: [u8; 8] = *b"DCFAILI1";
 const INTENT_SCHEMA: u16 = 1;
 
 /// Exact canonical durable failure-root width.
-pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_924;
+pub const FAILURE_ROOT_ACCOUNT_V1_BYTES: usize = 1_940;
 /// Exact canonical failure intent width.
 pub const FAILURE_INTENT_V1_BYTES: usize = 344;
 

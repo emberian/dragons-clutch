@@ -1837,6 +1837,8 @@ mod tests {
         SeriesFundingQuoteV1 {
             evidence_only_recovery_policy_id: policy_id(),
             market_core: ComponentDebitV1::ZERO,
+            failure_root_rent_principal_lamports: 0,
+            failure_replay_tombstone_rent_principal_lamports: 0,
             recovery_reserve: ComponentDebitV1 {
                 lamports: 40,
                 collateral_atoms: 0,
