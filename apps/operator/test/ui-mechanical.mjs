@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { encodeIntent, INTEGER_TRANSPORT } from "../action.js";
 import { eventHasSafeNumbers } from "../stream.js";
+import { campaignIsPresentable } from "../pyth.js";
 import {
   decimalCents,
   decimalDifference,
@@ -74,6 +75,59 @@ test("the untrusted event projection refuses unsafe JSON numbers", () => {
   );
 });
 
+test("Pyth presentation keeps retained history and refuses transitional joined-v3", () => {
+  const base = {
+    claim: "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE",
+    retained_transcript: true,
+    provider: [],
+    steps: [],
+    rollbacks: [],
+    source: {},
+  };
+  assert.equal(campaignIsPresentable({
+    ...base,
+    schema: "dragons-clutch/operator/local-real-pyth-transcript/v1",
+    campaign_mode: "source-only-v1",
+  }), true);
+  assert.equal(campaignIsPresentable({
+    ...base,
+    schema: "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2",
+    campaign_mode: "joined-user-lifecycle-v1",
+    lifecycle: {},
+  }), true);
+
+  const currentSource = {
+    registered_source_plane_count: "1",
+    wrong_feed_verified_vaa_account: "wrong-feed-vaa",
+    wrong_feed_observation: {},
+    freshness: {
+      scope: "append-time freshness; final Clock informational",
+      append_age_seconds: "240",
+      final_age_seconds: "1240",
+    },
+  };
+  assert.equal(campaignIsPresentable({
+    ...base,
+    schema: "dragons-clutch/operator/local-real-pyth-transcript/v2",
+    campaign_mode: "source-only-v1",
+    source: currentSource,
+  }), true);
+  assert.equal(campaignIsPresentable({
+    ...base,
+    schema: "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4",
+    campaign_mode: "joined-user-lifecycle-v1",
+    source: currentSource,
+    lifecycle: {},
+  }), true);
+  assert.equal(campaignIsPresentable({
+    ...base,
+    schema: "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v3",
+    campaign_mode: "joined-user-lifecycle-v1",
+    source: currentSource,
+    lifecycle: {},
+  }), false);
+});
+
 test("the document and generated controls expose the accessibility contract", async () => {
   const [html, app, trade] = await Promise.all([
     source("index.html"),
@@ -115,8 +169,9 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
     "NO VALUE",
     "not devnet price evidence",
     "joined-user-lifecycle-v1",
+    "local-real-pyth-transcript/v2",
     "local-real-pyth-joined-lifecycle/v2",
-    "local-real-pyth-joined-lifecycle/v3",
+    "local-real-pyth-joined-lifecycle/v4",
     "TRADE BLOCKED / NOT SUBSTITUTED",
     "missing-sealed-price-grid-and-epoch-plane",
     "TRADE SETTLED / NOT SUBSTITUTED",

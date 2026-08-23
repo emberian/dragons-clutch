@@ -19,9 +19,13 @@ use std::time::Duration;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const CLAIM: &str = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
-const SOURCE_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const FRESHNESS_SCOPE: &str = "freshness authenticated at adjacent PostUpdate plus AppendSourceArchiveV2; final lifecycle consumes the sealed archive";
+const SOURCE_V1_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const SOURCE_V2_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-transcript/v2";
 const JOINED_V2_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
-const JOINED_V3_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v3";
+const JOINED_V3_TRANSITIONAL_SCHEMA: &str =
+    "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v3";
+const JOINED_V4_SCHEMA: &str = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4";
 const SOURCE_ONLY_MODE: &str = "source-only-v1";
 const JOINED_LIFECYCLE_MODE: &str = "joined-user-lifecycle-v1";
 const PROFILE: &str = "NON-PRODUCTION-non-production-real-pyth-lab";
@@ -31,7 +35,7 @@ const PROVIDER_ROLES: [(&str, bool); 4] = [
     ("router-program", true),
     ("router-programdata", false),
 ];
-const SOURCE_STEP_LABELS: [&str; 13] = [
+const SOURCE_V1_STEP_LABELS: [&str; 13] = [
     "router-initialize",
     "router-init-and-write-encoded-vaa",
     "router-write-and-verify-encoded-vaa",
@@ -69,15 +73,30 @@ const JOINED_V2_STEP_LABELS: [&str; 21] = [
     "joined-redeem-internal-outcome-3",
     "joined-withdraw-redeemed-collateral",
 ];
-const JOINED_V3_STEP_LABELS: [&str; 52] = [
+const SOURCE_V2_STEP_LABELS: [&str; 13] = [
     "router-initialize",
     "router-init-and-write-encoded-vaa",
     "router-write-and-verify-encoded-vaa",
     "receiver-initialize",
     "correct-init-source-spec-v2",
     "correct-init-source-archive-v2",
-    "wrong-feed-init-source-spec-v2",
-    "wrong-feed-init-source-archive-v2",
+    "wrong-feed-router-init-and-write-encoded-vaa",
+    "wrong-feed-router-write-and-verify-encoded-vaa",
+    "wrong-config-post-update-plus-append-rollback",
+    "wrong-feed-post-update-plus-append-rollback",
+    "real-post-update-plus-clutch-append-atomic",
+    "seal-source-archive-v2",
+    "categorical-resolve-cell-1",
+];
+const JOINED_V4_STEP_LABELS: [&str; 52] = [
+    "router-initialize",
+    "router-init-and-write-encoded-vaa",
+    "router-write-and-verify-encoded-vaa",
+    "receiver-initialize",
+    "correct-init-source-spec-v2",
+    "correct-init-source-archive-v2",
+    "wrong-feed-router-init-and-write-encoded-vaa",
+    "wrong-feed-router-write-and-verify-encoded-vaa",
     "wrong-config-post-update-plus-append-rollback",
     "wrong-feed-post-update-plus-append-rollback",
     "real-post-update-plus-clutch-append-atomic",
@@ -125,9 +144,11 @@ const JOINED_V3_STEP_LABELS: [&str; 52] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum JoinedSchema {
-    V2,
-    V3,
+enum TranscriptSchema {
+    SourceV1,
+    SourceV2,
+    JoinedV2,
+    JoinedV4,
 }
 
 pub struct Options {
@@ -173,6 +194,14 @@ fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
         .ok_or_else(|| format!("{field} is absent or is not a nonempty string").into())
 }
 
+fn object_string<'a>(value: &'a Map<String, Value>, field: &str, role: &str) -> Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| format!("{role}.{field} is absent or is not a nonempty string").into())
+}
+
 fn boolean(value: &Value, field: &str) -> Result<bool> {
     value
         .get(field)
@@ -210,6 +239,16 @@ fn lowercase_hex(text: &str, bytes: usize, role: &str) -> Result<String> {
         return Err(format!("{role} is not lowercase {bytes}-byte hex").into());
     }
     Ok(text.to_string())
+}
+
+fn canonical_address<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
+    let text = string(value, field)?;
+    let bytes = crate::rpc::base58_decode_32(text)
+        .map_err(|error| format!("{field} is not a 32-byte base58 address: {error}"))?;
+    if clutch_sbf_harness::base58_of(&bytes) != text {
+        return Err(format!("{field} is not a canonical 32-byte base58 address").into());
+    }
+    Ok(text)
 }
 
 fn decimal(value: u64) -> String {
@@ -373,6 +412,338 @@ fn providers(manifest: &Value) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+/// Validate the corrected producer's alternate signed observation.
+///
+/// Source-v2/joined-v4 register only the `correct` SourceSpec/Archive plane.
+/// The wrong-feed negative owns a second router-verified VAA, not a second
+/// registered source plane. Exact keys make the distinction structural instead
+/// of relying on a UI sentence.
+#[allow(clippy::too_many_lines)]
+fn current_wrong_feed(manifest: &Value, result: &Value, joined: bool) -> Result<Value> {
+    let correct = object(manifest, "correct")?;
+    exact_keys(
+        correct,
+        &[
+            "feed_id_hex",
+            "source_spec",
+            "archive",
+            "market",
+            "market_genesis_assisted",
+            "user_collateral_token",
+            "second_owner",
+            "second_owner_collateral_token",
+        ],
+        "current correct source plane",
+    )?;
+    let genesis = array(manifest, "genesis_accounts")?;
+    let mut saw_correct_plane = false;
+    for row in genesis {
+        let role = string(row, "role")?;
+        saw_correct_plane |= role.starts_with("correct-plane-");
+        if role.starts_with("wrong-feed-") {
+            return Err(
+                "current transcript genesis contains a second wrong-feed source plane".into(),
+            );
+        }
+    }
+    if !saw_correct_plane {
+        return Err("current transcript genesis has no registered correct source plane".into());
+    }
+    let market_genesis_assisted = correct
+        .get("market_genesis_assisted")
+        .and_then(Value::as_bool)
+        .ok_or("current correct.market_genesis_assisted is not boolean")?;
+    if market_genesis_assisted == joined {
+        return Err("current market genesis-assistance flag differs from campaign mode".into());
+    }
+    for field in [
+        "user_collateral_token",
+        "second_owner",
+        "second_owner_collateral_token",
+    ] {
+        let value = correct
+            .get(field)
+            .ok_or_else(|| format!("current correct.{field} is absent"))?;
+        if joined {
+            if value.as_str().is_none_or(str::is_empty) {
+                return Err(format!("current joined correct.{field} is not populated").into());
+            }
+        } else if !value.is_null() {
+            return Err(format!("current source-only correct.{field} is not null").into());
+        }
+    }
+    let wrong = object(manifest, "wrong_feed")?;
+    exact_keys(
+        wrong,
+        &[
+            "feed_id_hex",
+            "vaa_sha256",
+            "post_update_data_sha256",
+            "merkle_price_update_sha256",
+        ],
+        "current wrong-feed signed observation",
+    )?;
+    let correct_feed = lowercase_hex(
+        object_string(correct, "feed_id_hex", "correct")?,
+        32,
+        "correct feed id",
+    )?;
+    if correct_feed != feed_id(result)? {
+        return Err("current registered SourceSpec feed differs from the result feed".into());
+    }
+    let wrong_feed = lowercase_hex(
+        object_string(wrong, "feed_id_hex", "wrong_feed")?,
+        32,
+        "wrong feed id",
+    )?;
+    if wrong_feed == correct_feed {
+        return Err("current wrong-feed VAA carries the registered feed identity".into());
+    }
+    let verified = canonical_address(result, "verified_vaa_account")?;
+    let wrong_verified = canonical_address(result, "wrong_feed_verified_vaa_account")?;
+    if wrong_verified == verified {
+        return Err("correct and wrong-feed observations reuse one Verified VAA account".into());
+    }
+    if wrong_verified == canonical_address(result, "update_account")? {
+        return Err("wrong-feed Verified VAA account aliases the receiver update account".into());
+    }
+    let wrong_vaa_hash = lowercase_hex(
+        object_string(wrong, "vaa_sha256", "wrong_feed")?,
+        32,
+        "wrong-feed VAA hash",
+    )?;
+    let wrong_post_hash = lowercase_hex(
+        object_string(wrong, "post_update_data_sha256", "wrong_feed")?,
+        32,
+        "wrong-feed PostUpdate hash",
+    )?;
+    let wrong_merkle_hash = lowercase_hex(
+        object_string(wrong, "merkle_price_update_sha256", "wrong_feed")?,
+        32,
+        "wrong-feed Merkle update hash",
+    )?;
+    if wrong_vaa_hash == lowercase_hex(string(manifest, "vaa_sha256")?, 32, "VAA hash")?
+        || wrong_post_hash
+            == lowercase_hex(
+                string(manifest, "post_update_data_sha256")?,
+                32,
+                "PostUpdate data hash",
+            )?
+        || wrong_merkle_hash
+            == lowercase_hex(
+                string(manifest, "merkle_price_update_sha256")?,
+                32,
+                "Merkle update hash",
+            )?
+    {
+        return Err("wrong-feed signed observation aliases the correct observation hashes".into());
+    }
+    Ok(json!({
+        "provider_feed_id_hex": wrong_feed,
+        "verified_vaa_account": wrong_verified,
+        "vaa_sha256": wrong_vaa_hash,
+        "post_update_data_sha256": wrong_post_hash,
+        "merkle_price_update_sha256": wrong_merkle_hash,
+    }))
+}
+
+fn clock_projection(value: &Value, role: &str) -> Result<(Value, u64, i64)> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| format!("{role} is not an object"))?;
+    exact_keys(
+        fields,
+        &[
+            "slot",
+            "epoch_start_timestamp",
+            "epoch",
+            "leader_schedule_epoch",
+            "unix_timestamp",
+        ],
+        role,
+    )?;
+    let slot = unsigned(value, "slot")?;
+    let unix_timestamp = signed(value, "unix_timestamp")?;
+    Ok((
+        json!({
+            "slot": decimal(slot),
+            "epoch_start_timestamp": signed_decimal(signed(value, "epoch_start_timestamp")?),
+            "epoch": decimal(unsigned(value, "epoch")?),
+            "leader_schedule_epoch": decimal(unsigned(value, "leader_schedule_epoch")?),
+            "unix_timestamp": signed_decimal(unix_timestamp),
+        }),
+        slot,
+        unix_timestamp,
+    ))
+}
+
+fn current_source_freshness(manifest: &Value, result: &Value) -> Result<Value> {
+    let freshness_value = result
+        .get("source_freshness")
+        .ok_or("current result.source_freshness is absent")?;
+    let freshness = freshness_value
+        .as_object()
+        .ok_or("current result.source_freshness is not an object")?;
+    exact_keys(
+        freshness,
+        &[
+            "scope",
+            "append_clock",
+            "append_age_seconds",
+            "final_clock",
+            "final_age_seconds",
+        ],
+        "current source_freshness",
+    )?;
+    if string(freshness_value, "scope")? != FRESHNESS_SCOPE {
+        return Err("current source_freshness scope differs".into());
+    }
+    let append_value = freshness
+        .get("append_clock")
+        .ok_or("current source_freshness.append_clock is absent")?;
+    let final_value = freshness
+        .get("final_clock")
+        .ok_or("current source_freshness.final_clock is absent")?;
+    if result.get("clock") != Some(final_value) {
+        return Err("current result.clock differs from source_freshness.final_clock".into());
+    }
+    let (append_clock, append_slot, append_time) =
+        clock_projection(append_value, "current append_clock")?;
+    let (final_clock, final_slot, final_time) =
+        clock_projection(final_value, "current final_clock")?;
+    let step_rows = array(result, "steps")?;
+    let append_step_slot = unsigned(
+        step_rows
+            .get(10)
+            .ok_or("current transcript has no append transaction")?,
+        "slot",
+    )?;
+    let seal_step_slot = unsigned(
+        step_rows
+            .get(11)
+            .ok_or("current transcript has no seal transaction")?,
+        "slot",
+    )?;
+    let final_step_slot = unsigned(
+        step_rows
+            .last()
+            .ok_or("current transcript has no final transaction")?,
+        "slot",
+    )?;
+    let warp_slot = unsigned(manifest, "warp_slot")?;
+    if append_slot < warp_slot
+        || append_slot < append_step_slot
+        || append_slot > seal_step_slot
+        || final_slot < final_step_slot
+        || final_slot < append_slot
+        || final_time < append_time
+    {
+        return Err("current append/final Clock ordering differs".into());
+    }
+    let publish_time = signed(result, "publish_time")?;
+    if signed(manifest, "publish_time")? != publish_time {
+        return Err("current manifest/result publish_time differs".into());
+    }
+    let append_age = append_time
+        .checked_sub(publish_time)
+        .ok_or("current append Clock age underflow")?;
+    let final_age = final_time
+        .checked_sub(publish_time)
+        .ok_or("current final Clock age underflow")?;
+    if !(60..=300).contains(&append_age) {
+        return Err("current append Clock is outside the 60..=300 second source window".into());
+    }
+    if signed(freshness_value, "append_age_seconds")? != append_age
+        || signed(freshness_value, "final_age_seconds")? != final_age
+    {
+        return Err("current source_freshness age does not match its authenticated Clock".into());
+    }
+    Ok(json!({
+        "scope": FRESHNESS_SCOPE,
+        "append_clock": append_clock,
+        "append_age_seconds": signed_decimal(append_age),
+        "final_clock": final_clock,
+        "final_age_seconds": signed_decimal(final_age),
+    }))
+}
+
+fn exact_current_document_keys(manifest: &Value, result: &Value) -> Result<()> {
+    exact_keys(
+        manifest
+            .as_object()
+            .ok_or("current campaign manifest is not an object")?,
+        &[
+            "claim",
+            "transcript_schema",
+            "campaign_mode",
+            "network",
+            "observation",
+            "value",
+            "upstream_pyth_crosschain_commit",
+            "dragons_clutch_repository_head",
+            "fixture_provenance",
+            "source_profile_snapshot",
+            "validator_build_provenance",
+            "guardian_laboratory",
+            "publish_time",
+            "clock_probe_unix_timestamp",
+            "publish_time_derivation",
+            "start_bucket",
+            "end_bucket_exclusive",
+            "warp_slot",
+            "payer",
+            "second_owner",
+            "program_id",
+            "clutch_elf_sha256",
+            "validator_binary",
+            "validator_binary_sha256",
+            "build_toolchain",
+            "vaa_sha256",
+            "post_update_data_sha256",
+            "merkle_price_update_sha256",
+            "source_admission_limits",
+            "genesis_accounts",
+            "provider",
+            "correct",
+            "wrong_feed",
+        ],
+        "current campaign manifest",
+    )?;
+    exact_keys(
+        result
+            .as_object()
+            .ok_or("current campaign result is not an object")?,
+        &[
+            "claim",
+            "transcript_schema",
+            "campaign_mode",
+            "network",
+            "genesis_hash",
+            "clock",
+            "source_freshness",
+            "publish_time",
+            "provider_feed_id",
+            "price",
+            "confidence",
+            "exponent",
+            "interval",
+            "verified_vaa_account",
+            "wrong_feed_verified_vaa_account",
+            "update_account",
+            "joined_post_append_signature",
+            "seal_signature",
+            "resolve_signature",
+            "wrong_config_rollback",
+            "wrong_feed_rollback",
+            "sealed",
+            "resolved_payout",
+            "lifecycle",
+            "steps",
+        ],
+        "current campaign result",
+    )
+}
+
 fn source_admission_refusal(error: &Value) -> bool {
     error
         .get("InstructionError")
@@ -398,6 +769,58 @@ fn campaign_mode(manifest: &Value, result: &Value) -> Result<&'static str> {
             _ => Err("campaign_mode is not recognized".into()),
         },
         _ => Err("manifest/result campaign_mode differs or is absent on one side".into()),
+    }
+}
+
+/// Select one exact retained producer schema.
+///
+/// The two historical captures predate `transcript_schema`: source-v1 is the
+/// only unversioned 13-step source capture and joined-v2 is the only
+/// unversioned 21-step joined capture. The unretained 52-step joined-v3 shape
+/// is never inferred from its length. Current source-v2 and joined-v4 must name
+/// the same schema in both producer documents.
+fn transcript_schema(
+    manifest: &Value,
+    result: &Value,
+    campaign_mode: &str,
+) -> Result<TranscriptSchema> {
+    let manifest_schema = manifest.get("transcript_schema");
+    let result_schema = result.get("transcript_schema");
+    let step_count = array(result, "steps")?.len();
+    match (manifest_schema, result_schema) {
+        (None, None) => match (campaign_mode, step_count) {
+            (SOURCE_ONLY_MODE, count) if count == SOURCE_V1_STEP_LABELS.len() => {
+                Ok(TranscriptSchema::SourceV1)
+            }
+            (JOINED_LIFECYCLE_MODE, count) if count == JOINED_V2_STEP_LABELS.len() => {
+                Ok(TranscriptSchema::JoinedV2)
+            }
+            (JOINED_LIFECYCLE_MODE, count) if count == JOINED_V4_STEP_LABELS.len() => Err(
+                "unversioned 52-step joined-v3 was transitional and was not retained; refusing to reinterpret it as current joined-v4"
+                    .into(),
+            ),
+            _ => Err("unversioned transcript does not match retained source-v1 or joined-v2".into()),
+        },
+        (Some(left), Some(right)) if left == right => match left.as_str() {
+            Some(SOURCE_V2_SCHEMA) if campaign_mode == SOURCE_ONLY_MODE => {
+                Ok(TranscriptSchema::SourceV2)
+            }
+            Some(JOINED_V4_SCHEMA) if campaign_mode == JOINED_LIFECYCLE_MODE => {
+                Ok(TranscriptSchema::JoinedV4)
+            }
+            Some(JOINED_V3_TRANSITIONAL_SCHEMA) => Err(
+                "joined-v3 is an unretained transitional schema and is not presentable"
+                    .into(),
+            ),
+            Some(SOURCE_V1_SCHEMA | JOINED_V2_SCHEMA) => Err(
+                "retained source-v1 and joined-v2 documents did not carry transcript_schema; refusing a rewritten historical transcript"
+                    .into(),
+            ),
+            Some(_) => Err("transcript_schema is not recognized for this campaign mode".into()),
+            None => Err("transcript_schema is not a string".into()),
+        },
+        (Some(_), Some(_)) => Err("manifest/result transcript_schema differs".into()),
+        _ => Err("transcript_schema is absent from only one producer document".into()),
     }
 }
 
@@ -686,10 +1109,10 @@ fn joined_lifecycle_v2(manifest: &Value, result: &Value, steps: &[Value]) -> Res
 }
 
 #[allow(clippy::too_many_lines)]
-fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Result<Value> {
+fn joined_lifecycle_v4(manifest: &Value, result: &Value, steps: &[Value]) -> Result<Value> {
     let correct = object(manifest, "correct")?;
     if boolean(&Value::Object(correct.clone()), "market_genesis_assisted")? {
-        return Err("joined-v3 market is marked genesis-assisted".into());
+        return Err("joined-v4 market is marked genesis-assisted".into());
     }
     let payer = string(manifest, "payer")?;
     let second_owner = correct
@@ -732,14 +1155,14 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
             "terminal",
             "trade",
         ],
-        "joined-v3 lifecycle",
+        "joined-v4 lifecycle",
     )?;
     if boolean(lifecycle_value, "market_genesis_assisted")? {
-        return Err("joined-v3 lifecycle is marked genesis-assisted".into());
+        return Err("joined-v4 lifecycle is marked genesis-assisted".into());
     }
     let market = string(lifecycle_value, "market")?;
     if correct.get("market").and_then(Value::as_str) != Some(market) {
-        return Err("joined-v3 lifecycle market differs from the prepared manifest".into());
+        return Err("joined-v4 lifecycle market differs from the prepared manifest".into());
     }
     let users = exact_strings(
         lifecycle
@@ -756,7 +1179,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
         "user_collateral_tokens",
     )?;
     if canonical_unsigned_decimal(lifecycle, "collateral_atoms")? != "128" {
-        return Err("joined-v3 collateral quantity is not the exact 128 atoms".into());
+        return Err("joined-v4 collateral quantity is not the exact 128 atoms".into());
     }
 
     for (field, label) in [
@@ -774,7 +1197,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
         ),
     ] {
         if string(lifecycle_value, field)? != signature_for(steps, label)? {
-            return Err(format!("joined-v3 lifecycle {field} differs from {label}").into());
+            return Err(format!("joined-v4 lifecycle {field} differs from {label}").into());
         }
     }
 
@@ -793,7 +1216,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
     ];
     let redeem = array(lifecycle_value, "redeem_internal")?;
     if redeem.len() != expected_redeem.len() {
-        return Err("joined-v3 lifecycle must retain exactly five redemption rows".into());
+        return Err("joined-v4 lifecycle must retain exactly five redemption rows".into());
     }
     let mut projected_redeem = Vec::with_capacity(expected_redeem.len());
     for (index, (row, (owner, outcome, quantity, payout, label))) in
@@ -843,7 +1266,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
             "buyer_token_atoms",
             "seller_token_atoms",
         ],
-        "joined-v3 terminal",
+        "joined-v4 terminal",
     )?;
     for (field, expected) in [
         ("buyer_position_cash_atoms", "0"),
@@ -854,7 +1277,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
         ("seller_token_atoms", "52"),
     ] {
         if canonical_unsigned_decimal(terminal, field)? != expected {
-            return Err(format!("joined-v3 terminal {field} is not {expected}").into());
+            return Err(format!("joined-v4 terminal {field} is not {expected}").into());
         }
     }
     let zero_outcomes = ["0", "0", "0", "0"];
@@ -915,10 +1338,10 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
             "settlement_signature",
             "post_settlement",
         ],
-        "joined-v3 trade",
+        "joined-v4 trade",
     )?;
     if string(trade_value, "status")? != "settled" {
-        return Err("joined-v3 trade is not exactly settled".into());
+        return Err("joined-v4 trade is not exactly settled".into());
     }
     for field in [
         "grid_genesis_assisted",
@@ -927,7 +1350,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
         "candidate_genesis_assisted",
     ] {
         if boolean(trade_value, field)? {
-            return Err(format!("joined-v3 {field} is true").into());
+            return Err(format!("joined-v4 {field} is true").into());
         }
     }
 
@@ -1052,7 +1475,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
         "candidate fills",
     )?;
     if unsigned(trade_value, "witness_slices")? != 1 {
-        return Err("joined-v3 witness slice count is not exactly one".into());
+        return Err("joined-v4 witness slice count is not exactly one".into());
     }
 
     let post_value = trade
@@ -1110,7 +1533,7 @@ fn joined_lifecycle_v3(manifest: &Value, result: &Value, steps: &[Value]) -> Res
     .into_iter()
     .collect::<BTreeSet<_>>();
     if unique_addresses.len() != 7 {
-        return Err("joined-v3 projected identities alias".into());
+        return Err("joined-v4 projected identities alias".into());
     }
 
     let projected_terminal = json!({
@@ -1227,24 +1650,18 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
     }
 
     let campaign_mode = campaign_mode(manifest, result)?;
-    let joined_schema = if campaign_mode == JOINED_LIFECYCLE_MODE {
-        match array(result, "steps")?.len() {
-            count if count == JOINED_V2_STEP_LABELS.len() => Some(JoinedSchema::V2),
-            count if count == JOINED_V3_STEP_LABELS.len() => Some(JoinedSchema::V3),
-            count => {
-                return Err(format!(
-                    "joined transcript has {count} steps, expected exact v2 or v3 count"
-                )
-                .into())
-            }
-        }
-    } else {
-        None
-    };
-    let (schema, expected_labels): (&str, &[&str]) = match joined_schema {
-        Some(JoinedSchema::V2) => (JOINED_V2_SCHEMA, &JOINED_V2_STEP_LABELS),
-        Some(JoinedSchema::V3) => (JOINED_V3_SCHEMA, &JOINED_V3_STEP_LABELS),
-        None => (SOURCE_SCHEMA, &SOURCE_STEP_LABELS),
+    let transcript_schema = transcript_schema(manifest, result, campaign_mode)?;
+    if matches!(
+        transcript_schema,
+        TranscriptSchema::SourceV2 | TranscriptSchema::JoinedV4
+    ) {
+        exact_current_document_keys(manifest, result)?;
+    }
+    let (schema, expected_labels): (&str, &[&str]) = match transcript_schema {
+        TranscriptSchema::SourceV1 => (SOURCE_V1_SCHEMA, &SOURCE_V1_STEP_LABELS),
+        TranscriptSchema::SourceV2 => (SOURCE_V2_SCHEMA, &SOURCE_V2_STEP_LABELS),
+        TranscriptSchema::JoinedV2 => (JOINED_V2_SCHEMA, &JOINED_V2_STEP_LABELS),
+        TranscriptSchema::JoinedV4 => (JOINED_V4_SCHEMA, &JOINED_V4_STEP_LABELS),
     };
     let steps = steps(result, expected_labels)?;
     for (field, label) in [
@@ -1267,10 +1684,10 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
         return Err("source interval lower exceeds upper".into());
     }
 
-    let lifecycle = match joined_schema {
-        Some(JoinedSchema::V2) => joined_lifecycle_v2(manifest, result, &steps)?,
-        Some(JoinedSchema::V3) => joined_lifecycle_v3(manifest, result, &steps)?,
-        None => {
+    let lifecycle = match transcript_schema {
+        TranscriptSchema::JoinedV2 => joined_lifecycle_v2(manifest, result, &steps)?,
+        TranscriptSchema::JoinedV4 => joined_lifecycle_v4(manifest, result, &steps)?,
+        TranscriptSchema::SourceV1 | TranscriptSchema::SourceV2 => {
             if result
                 .get("lifecycle")
                 .is_some_and(|value| !value.is_null())
@@ -1280,6 +1697,47 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
                 );
             }
             Value::Null
+        }
+    };
+    let wrong_feed = match transcript_schema {
+        TranscriptSchema::SourceV2 | TranscriptSchema::JoinedV4 => Some(current_wrong_feed(
+            manifest,
+            result,
+            transcript_schema == TranscriptSchema::JoinedV4,
+        )?),
+        TranscriptSchema::SourceV1 | TranscriptSchema::JoinedV2 => None,
+    };
+    let freshness = match transcript_schema {
+        TranscriptSchema::SourceV2 | TranscriptSchema::JoinedV4 => {
+            Some(current_source_freshness(manifest, result)?)
+        }
+        TranscriptSchema::SourceV1 | TranscriptSchema::JoinedV2 => None,
+    };
+    let mut source = json!({
+        "provider_feed_id_hex": feed_id(result)?,
+        "price": signed_decimal(signed(result, "price")?),
+        "confidence": decimal(unsigned(result, "confidence")?),
+        "exponent": signed_decimal(signed(result, "exponent")?),
+        "publish_time": signed_decimal(signed(result, "publish_time")?),
+        "interval_lower": lower,
+        "interval_upper": upper,
+        "verified_vaa_account": string(result, "verified_vaa_account")?,
+        "update_account": string(result, "update_account")?,
+    });
+    if let Some(wrong_feed) = wrong_feed {
+        source["registered_source_plane_count"] = json!("1");
+        source["wrong_feed_verified_vaa_account"] = wrong_feed["verified_vaa_account"].clone();
+        source["wrong_feed_observation"] = wrong_feed;
+    }
+    if let Some(freshness) = freshness {
+        source["freshness"] = freshness;
+    }
+    let wrong_feed_rollback_scope = match transcript_schema {
+        TranscriptSchema::SourceV2 | TranscriptSchema::JoinedV4 => {
+            "receiver-created update absent; registered source archive and treasury byte-identical"
+        }
+        TranscriptSchema::SourceV1 | TranscriptSchema::JoinedV2 => {
+            "receiver-created update absent; wrong-feed archive and treasury byte-identical"
         }
     };
 
@@ -1349,17 +1807,7 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
                 string(probe, "probe_after_sha256")?, 32, "post-campaign listener probe hash"
             )?,
         },
-        "source": {
-            "provider_feed_id_hex": feed_id(result)?,
-            "price": signed_decimal(signed(result, "price")?),
-            "confidence": decimal(unsigned(result, "confidence")?),
-            "exponent": signed_decimal(signed(result, "exponent")?),
-            "publish_time": signed_decimal(signed(result, "publish_time")?),
-            "interval_lower": lower,
-            "interval_upper": upper,
-            "verified_vaa_account": string(result, "verified_vaa_account")?,
-            "update_account": string(result, "update_account")?,
-        },
+        "source": source,
         "rollbacks": [
             {
                 "label": "wrong Config",
@@ -1369,7 +1817,7 @@ fn build_view(manifest: &Value, result: &Value, probe: &Value) -> Result<View> {
             {
                 "label": "wrong feed",
                 "ok": true,
-                "scope": "receiver-created update absent; wrong-feed archive and treasury byte-identical",
+                "scope": wrong_feed_rollback_scope,
             },
         ],
         "outcome": {
@@ -1429,13 +1877,19 @@ pub fn serve(options: Options) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_view, CLAIM, JOINED_LIFECYCLE_MODE, JOINED_V2_SCHEMA, JOINED_V2_STEP_LABELS,
-        JOINED_V3_SCHEMA, JOINED_V3_STEP_LABELS, SOURCE_SCHEMA, SOURCE_STEP_LABELS,
+        build_view, CLAIM, FRESHNESS_SCOPE, JOINED_LIFECYCLE_MODE, JOINED_V2_SCHEMA,
+        JOINED_V2_STEP_LABELS, JOINED_V3_TRANSITIONAL_SCHEMA, JOINED_V4_SCHEMA,
+        JOINED_V4_STEP_LABELS, SOURCE_ONLY_MODE, SOURCE_V1_SCHEMA, SOURCE_V1_STEP_LABELS,
+        SOURCE_V2_SCHEMA, SOURCE_V2_STEP_LABELS,
     };
     use serde_json::{json, Value};
 
     fn hash(byte: char) -> String {
         std::iter::repeat_n(byte, 64).collect()
+    }
+
+    fn address(byte: u8) -> String {
+        clutch_sbf_harness::base58_of(&[byte; 32])
     }
 
     fn fixtures() -> (Value, Value, Value) {
@@ -1453,7 +1907,7 @@ mod tests {
             })
         })
         .collect::<Vec<_>>();
-        let steps = SOURCE_STEP_LABELS
+        let steps = SOURCE_V1_STEP_LABELS
             .iter()
             .enumerate()
             .map(|(index, label)| {
@@ -1500,8 +1954,8 @@ mod tests {
             "confidence": 6_357,
             "exponent": -8,
             "interval": {"lower": "99980929", "upper": "100019071"},
-            "verified_vaa_account": "vaa111",
-            "update_account": "update111",
+            "verified_vaa_account": address(1),
+            "update_account": address(2),
             "joined_post_append_signature": "signature-10",
             "seal_signature": "signature-11",
             "resolve_signature": "signature-12",
@@ -1520,6 +1974,94 @@ mod tests {
             "selected_validator_sha256": hash('2'),
             "probe_before_sha256": hash('5'), "probe_after_sha256": hash('6'),
         });
+        (manifest, result, probe)
+    }
+
+    fn source_v2_fixtures() -> (Value, Value, Value) {
+        let (mut manifest, mut result, probe) = fixtures();
+        let steps = SOURCE_V2_STEP_LABELS
+            .iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let refused = label.contains("-rollback");
+                json!({
+                    "label": label,
+                    "signature": format!("signature-{index}"),
+                    "slot": 460_336_312_u64 + u64::try_from(index).unwrap(),
+                    "compute_units_consumed": 100_u64 + u64::try_from(index).unwrap(),
+                    "fee_lamports": 5000,
+                    "signed_wire_sha256": hash('b'),
+                    "program_order": ["ComputeBudget111", "Program111"],
+                    "error": if refused {
+                        json!({"InstructionError": [2, {"Custom": 122}]})
+                    } else {
+                        Value::Null
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        manifest["transcript_schema"] = json!(SOURCE_V2_SCHEMA);
+        manifest["campaign_mode"] = json!(SOURCE_ONLY_MODE);
+        manifest["fixture_provenance"] = json!("fixture-provenance111");
+        manifest["guardian_laboratory"] = json!({});
+        manifest["publish_time"] = json!(1_787_431_680_i64);
+        manifest["clock_probe_unix_timestamp"] = json!(1_787_431_860_i64);
+        manifest["publish_time_derivation"] = json!("fixture derivation");
+        manifest["start_bucket"] = json!(29_790_527_u64);
+        manifest["end_bucket_exclusive"] = json!(29_790_528_u64);
+        manifest["payer"] = json!("payer111");
+        manifest["second_owner"] = json!("second-owner111");
+        manifest["validator_binary"] = json!("validator111");
+        manifest["build_toolchain"] = json!({});
+        manifest["source_admission_limits"] = json!({});
+        manifest["genesis_accounts"] = json!([
+            {"role": "correct-plane-0"},
+            {"role": "receiver-program"},
+        ]);
+        manifest["merkle_price_update_sha256"] = json!(hash('0'));
+        manifest["correct"] = json!({
+            "feed_id_hex": "2a".repeat(32),
+            "source_spec": "correct-source-spec111",
+            "archive": "correct-archive111",
+            "market": "market111",
+            "market_genesis_assisted": true,
+            "user_collateral_token": Value::Null,
+            "second_owner": Value::Null,
+            "second_owner_collateral_token": Value::Null,
+        });
+        manifest["wrong_feed"] = json!({
+            "feed_id_hex": "2b".repeat(32),
+            "vaa_sha256": hash('7'),
+            "post_update_data_sha256": hash('8'),
+            "merkle_price_update_sha256": hash('9'),
+        });
+        result["transcript_schema"] = json!(SOURCE_V2_SCHEMA);
+        result["campaign_mode"] = json!(SOURCE_ONLY_MODE);
+        result["lifecycle"] = Value::Null;
+        result["wrong_feed_verified_vaa_account"] = json!(address(3));
+        let append_clock = json!({
+            "slot": 460_336_323,
+            "epoch_start_timestamp": 1_787_400_000_i64,
+            "epoch": 1065,
+            "leader_schedule_epoch": 1066,
+            "unix_timestamp": 1_787_431_920_i64,
+        });
+        let final_clock = json!({
+            "slot": 460_337_340,
+            "epoch_start_timestamp": 1_787_400_000_i64,
+            "epoch": 1065,
+            "leader_schedule_epoch": 1066,
+            "unix_timestamp": 1_787_432_920_i64,
+        });
+        result["clock"] = final_clock.clone();
+        result["source_freshness"] = json!({
+            "scope": FRESHNESS_SCOPE,
+            "append_clock": append_clock,
+            "append_age_seconds": 240,
+            "final_clock": final_clock,
+            "final_age_seconds": 1240,
+        });
+        result["steps"] = json!(steps);
         (manifest, result, probe)
     }
 
@@ -1591,10 +2133,10 @@ mod tests {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn joined_v3_fixtures() -> (Value, Value, Value) {
-        let (mut manifest, mut result, probe) = fixtures();
-        let signature = |index: usize| format!("joined-v3-signature-{index}");
-        let steps = JOINED_V3_STEP_LABELS
+    fn joined_v4_fixtures() -> (Value, Value, Value) {
+        let (mut manifest, mut result, probe) = source_v2_fixtures();
+        let signature = |index: usize| format!("joined-v4-signature-{index}");
+        let steps = JOINED_V4_STEP_LABELS
             .iter()
             .enumerate()
             .map(|(index, label)| {
@@ -1615,15 +2157,20 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
+        manifest["transcript_schema"] = json!(JOINED_V4_SCHEMA);
         manifest["campaign_mode"] = json!(JOINED_LIFECYCLE_MODE);
         manifest["payer"] = json!("buyer111");
         manifest["correct"] = json!({
+            "feed_id_hex": "2a".repeat(32),
+            "source_spec": "correct-source-spec111",
+            "archive": "correct-archive111",
             "market": "market111",
             "market_genesis_assisted": false,
             "user_collateral_token": "buyer-token111",
             "second_owner": "seller111",
             "second_owner_collateral_token": "seller-token111",
         });
+        result["transcript_schema"] = json!(JOINED_V4_SCHEMA);
         result["campaign_mode"] = json!(JOINED_LIFECYCLE_MODE);
         result["joined_post_append_signature"] = json!(signature(10));
         result["seal_signature"] = json!(signature(11));
@@ -1718,10 +2265,37 @@ mod tests {
         let (manifest, result, probe) = fixtures();
         let view = build_view(&manifest, &result, &probe).unwrap();
         assert_eq!(view.identity["mode"], "pyth-local");
-        assert_eq!(view.campaign["schema"], SOURCE_SCHEMA);
+        assert_eq!(view.campaign["schema"], SOURCE_V1_SCHEMA);
         assert_eq!(view.campaign["source"]["interval_lower"], "99980929");
         assert_eq!(view.campaign["steps"][0]["slot"], "460336312");
         assert_eq!(view.campaign["steps"][8]["state"], "refused-as-expected");
+    }
+
+    #[test]
+    fn source_v2_requires_the_router_verified_wrong_feed_without_a_second_plane() {
+        let (manifest, result, probe) = source_v2_fixtures();
+        let view = build_view(&manifest, &result, &probe).unwrap();
+        assert_eq!(view.campaign["schema"], SOURCE_V2_SCHEMA);
+        assert_eq!(
+            view.campaign["steps"][6]["label"],
+            "wrong-feed-router-init-and-write-encoded-vaa"
+        );
+        assert_eq!(
+            view.campaign["source"]["registered_source_plane_count"],
+            "1"
+        );
+        assert_eq!(
+            view.campaign["source"]["wrong_feed_verified_vaa_account"],
+            address(3)
+        );
+        assert_eq!(
+            view.campaign["source"]["freshness"]["append_age_seconds"],
+            "240"
+        );
+        assert_eq!(
+            view.campaign["source"]["freshness"]["final_age_seconds"],
+            "1240"
+        );
     }
 
     #[test]
@@ -1739,10 +2313,10 @@ mod tests {
     }
 
     #[test]
-    fn joined_v3_projects_exact_settled_trade_and_two_owner_terminal_state() {
-        let (manifest, result, probe) = joined_v3_fixtures();
+    fn joined_v4_projects_exact_settled_trade_and_two_owner_terminal_state() {
+        let (manifest, result, probe) = joined_v4_fixtures();
         let view = build_view(&manifest, &result, &probe).unwrap();
-        assert_eq!(view.campaign["schema"], JOINED_V3_SCHEMA);
+        assert_eq!(view.campaign["schema"], JOINED_V4_SCHEMA);
         assert_eq!(view.campaign["steps"].as_array().unwrap().len(), 52);
         assert_eq!(view.campaign["lifecycle"]["trade"]["status"], "settled");
         assert_eq!(
@@ -1763,24 +2337,78 @@ mod tests {
     }
 
     #[test]
-    fn joined_v3_refuses_a_substituted_candidate_or_terminal_atom() {
-        let (manifest, mut result, probe) = joined_v3_fixtures();
+    fn joined_v4_refuses_a_substituted_candidate_or_terminal_atom() {
+        let (manifest, mut result, probe) = joined_v4_fixtures();
         result["lifecycle"]["trade"]["prices"][1] = json!(2501);
         assert!(build_view(&manifest, &result, &probe).is_err());
 
-        let (manifest, mut result, probe) = joined_v3_fixtures();
+        let (manifest, mut result, probe) = joined_v4_fixtures();
         result["lifecycle"]["terminal"]["seller_token_atoms"] = json!("51");
         assert!(build_view(&manifest, &result, &probe).is_err());
     }
 
     #[test]
-    fn joined_v3_refuses_unknown_fields_and_signed_step_reordering() {
-        let (manifest, mut result, probe) = joined_v3_fixtures();
+    fn joined_v4_refuses_unknown_fields_and_signed_step_reordering() {
+        let (manifest, mut result, probe) = joined_v4_fixtures();
         result["lifecycle"]["trade"]["mock_source"] = json!(true);
         assert!(build_view(&manifest, &result, &probe).is_err());
 
-        let (manifest, mut result, probe) = joined_v3_fixtures();
+        let (manifest, mut result, probe) = joined_v4_fixtures();
         result["steps"].as_array_mut().unwrap().swap(39, 40);
+        assert!(build_view(&manifest, &result, &probe).is_err());
+    }
+
+    #[test]
+    fn joined_v3_is_explicitly_refused_instead_of_reinterpreted_as_v4() {
+        let (mut manifest, mut result, probe) = joined_v4_fixtures();
+        manifest["transcript_schema"] = json!(JOINED_V3_TRANSITIONAL_SCHEMA);
+        result["transcript_schema"] = json!(JOINED_V3_TRANSITIONAL_SCHEMA);
+        let error = build_view(&manifest, &result, &probe)
+            .err()
+            .expect("joined-v3 schema must be refused")
+            .to_string();
+        assert!(error.contains("unretained transitional schema"));
+
+        let (mut manifest, mut result, probe) = joined_v4_fixtures();
+        manifest
+            .as_object_mut()
+            .unwrap()
+            .remove("transcript_schema");
+        result.as_object_mut().unwrap().remove("transcript_schema");
+        let error = build_view(&manifest, &result, &probe)
+            .err()
+            .expect("unversioned 52-step schema must be refused")
+            .to_string();
+        assert!(error.contains("refusing to reinterpret it as current joined-v4"));
+    }
+
+    #[test]
+    fn current_schema_refuses_a_missing_vaa_or_a_second_wrong_feed_plane() {
+        let (manifest, mut result, probe) = source_v2_fixtures();
+        result
+            .as_object_mut()
+            .unwrap()
+            .remove("wrong_feed_verified_vaa_account");
+        assert!(build_view(&manifest, &result, &probe).is_err());
+
+        let (mut manifest, result, probe) = source_v2_fixtures();
+        manifest["wrong_feed"]["source_spec"] = json!("forbidden-second-source-spec");
+        assert!(build_view(&manifest, &result, &probe).is_err());
+
+        let (manifest, mut result, probe) = source_v2_fixtures();
+        result["unversioned_extra"] = json!(true);
+        assert!(build_view(&manifest, &result, &probe).is_err());
+    }
+
+    #[test]
+    fn current_schema_binds_append_freshness_without_rechecking_the_final_clock() {
+        let (manifest, mut result, probe) = source_v2_fixtures();
+        result["source_freshness"]["append_clock"]["unix_timestamp"] = json!(1_787_431_981_i64);
+        result["source_freshness"]["append_age_seconds"] = json!(301);
+        assert!(build_view(&manifest, &result, &probe).is_err());
+
+        let (manifest, mut result, probe) = source_v2_fixtures();
+        result["clock"]["slot"] = json!(460_337_341_u64);
         assert!(build_view(&manifest, &result, &probe).is_err());
     }
 

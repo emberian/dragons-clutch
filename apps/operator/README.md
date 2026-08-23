@@ -48,11 +48,11 @@ CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
   --transcript docs/reviews/evidence/local-real-pyth-joined-lifecycle-2026-08-22
-# current joined-v3 lifecycle: point at a freshly retained 52-step transcript
+# current joined-v4 lifecycle: point at a freshly retained 52-step transcript
 CARGO_NET_OFFLINE=true cargo run --offline \
   --manifest-path programs/clutch-sbf/operatord/Cargo.toml -- \
   serve --mode pyth-local \
-  --transcript /absolute/path/to/current-joined-v3-transcript
+  --transcript /absolute/path/to/current-joined-v4-transcript
 # then open 127.0.0.1:9130 in a browser
 ```
 
@@ -136,23 +136,40 @@ the semantic owners of persisted facts.
 
 | screen | what it reads |
 | --- | --- |
-| **Campaign** | exact captured receiver/router Program and ProgramData identities; campaign, validator, ELF, source-profile, VAA, and update hashes; loopback listener evidence; synthetic source value and conservative interval; both atomic rollback negatives; seal and categorical resolution; all signed transactions in retained order with signature, signed-wire hash, slot, compute units, fee, top-level program order, and exact error |
+| **Campaign** | exact captured receiver/router Program and ProgramData identities; campaign, validator, ELF, source-profile, VAA, and update hashes; loopback listener evidence; synthetic source value and conservative interval; both atomic rollback negatives; seal and categorical resolution; all signed transactions in retained order with signature, signed-wire hash, slot, compute units, fee, top-level program order, and exact error. Historical source-v1 remains readable. Current source-v2 requires one registered SourceSpec/Archive plane plus a distinct router-verified wrong-feed VAA account; it does not create a second wrong-feed source plane. |
 | **Historical signed user lifecycle (joined-v2)** | preserves the exact retained 21-step history: explicit non-genesis market creation; one ephemeral user and collateral identity; exact `CreateMarket`, `Endow`, `Split`, four `RedeemInternal`, and `WithdrawCash` signatures; final zero position/supply/Hoard obligations and the exact 64 atoms returned; trading remains **BLOCKED / NOT SUBSTITUTED** at `missing-sealed-price-grid-and-epoch-plane` |
-| **Current signed trade lifecycle (joined-v3)** | requires exactly 52 signed steps and two distinct owner/token identities; signed PriceGrid and allocation-policy uploads; non-genesis market, epoch, orders, and candidate; an exact funded buy/sell book; one-witness candidate verification, selection, entitlement, and settlement; real receiver/router source, resolution, five owner-bound redemptions, two withdrawals, and terminal zero liabilities with all 128 collateral atoms returned. The screen says **TRADE SETTLED / NOT SUBSTITUTED** and “best valid submitted candidate,” never “optimal clearing.” |
+| **Current signed trade lifecycle (joined-v4)** | requires exactly 52 signed steps and two distinct owner/token identities; signed PriceGrid and allocation-policy uploads; non-genesis market, epoch, orders, and candidate; an exact funded buy/sell book; one-witness candidate verification, selection, entitlement, and settlement; one registered source plane, a separately router-verified wrong-feed VAA negative, resolution, five owner-bound redemptions, two withdrawals, and terminal zero liabilities with all 128 collateral atoms returned. The screen says **TRADE SETTLED / NOT SUBSTITUTED** and “best valid submitted candidate,” never “optimal clearing.” |
 
 All integers cross the daemon/browser boundary as decimal strings. The daemon
 refuses the presentation unless the three inputs carry the exact boundary,
 provider role set, mode-specific thirteen-, twenty-one-, or fifty-two-step order,
 instruction-2 `SourceAdmissionFailed` rollback errors, matching terminal
-signatures, closed rollback checks, seal, and payout cell 1. Joined-v2 also
+signatures, closed rollback checks, seal, and payout cell 1. Source-v2 and
+joined-v4 additionally require matching producer schema tags, steps 7 and 8 as
+the wrong-feed router VAA allocation/write and verification transactions, no
+wrong-feed SourceSpec/Archive or genesis plane, and a distinct
+`wrong_feed_verified_vaa_account`. They also retain two exact Clock readings:
+the append-time Clock must put the observation inside its 60–300 second source
+window, while the final authenticated Clock may be later after the protocol's
+fixed 1,000-slot selection window. Final age is reported, not incorrectly
+re-applied as an append-freshness condition. Joined-v2 also
 requires exact four-outcome redemption arithmetic, terminal conservation, and
-the named un-substituted trading blocker. Joined-v3 instead requires the exact
+the named un-substituted trading blocker. Joined-v4 instead requires the exact
 two-owner identities, funding, signed artifact sequences, orders, candidate
 prices/fills, settlement state, five owner-bound redemptions, two withdrawals,
 and terminal conservation emitted by the current campaign. Unknown or missing
-joined-v3 lifecycle, trade, funding, order, settlement, terminal, and redemption
+joined-v4 lifecycle, trade, funding, order, settlement, terminal, and redemption
 fields are refused. The static page remains an untrusted projection of that
 retained evidence; it neither discovers nor attests onchain state independently.
+The unretained joined-v3 transitional 52-step shape is explicitly refused; its
+step count is never silently interpreted as joined-v4.
+
+The wrong-feed VAA address is a checked producer-attested field. The retained
+step rows bind each signed transaction by `signed_wire_sha256` but do not retain
+the signed wire or account-meta list, so this reader cannot independently
+re-derive that step 10 consumed that address. A stronger claim requires a later
+transcript schema that retains the signed wire or an authenticated account-meta
+projection.
 
 ### Watch mode
 

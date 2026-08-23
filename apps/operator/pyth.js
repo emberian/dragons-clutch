@@ -7,13 +7,28 @@
 import { digest, el, fields, numeric, row } from "./dom.js";
 import { chip } from "./evidence.js";
 
-const SOURCE_SCHEMA = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const SOURCE_V1_SCHEMA = "dragons-clutch/operator/local-real-pyth-transcript/v1";
+const SOURCE_V2_SCHEMA = "dragons-clutch/operator/local-real-pyth-transcript/v2";
 const JOINED_V2_SCHEMA = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v2";
-const JOINED_V3_SCHEMA = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v3";
+const JOINED_V4_SCHEMA = "dragons-clutch/operator/local-real-pyth-joined-lifecycle/v4";
 const SOURCE_ONLY_MODE = "source-only-v1";
 const JOINED_LIFECYCLE_MODE = "joined-user-lifecycle-v1";
 const TRADE_BLOCKER = "missing-sealed-price-grid-and-epoch-plane";
 const CLAIM = "NON-PRODUCTION / SYNTHETIC OBSERVATION / LOCAL VALIDATOR ONLY / NO VALUE";
+
+const currentSourceIsPresentable = (source) => Boolean(
+  source
+  && source.registered_source_plane_count === "1"
+  && typeof source.wrong_feed_verified_vaa_account === "string"
+  && source.wrong_feed_verified_vaa_account.length > 0
+  && source.wrong_feed_observation
+  && typeof source.wrong_feed_observation === "object"
+  && source.freshness
+  && typeof source.freshness === "object"
+  && typeof source.freshness.scope === "string"
+  && typeof source.freshness.append_age_seconds === "string"
+  && typeof source.freshness.final_age_seconds === "string"
+);
 
 const boundary = () => {
   const card = el("section", "card pyth-boundary");
@@ -49,15 +64,30 @@ const pending = () => {
   return card;
 };
 
-const valid = (campaign) => Boolean(
+export const campaignIsPresentable = (campaign) => Boolean(
   campaign
   && (
-    (campaign.schema === SOURCE_SCHEMA && campaign.campaign_mode === SOURCE_ONLY_MODE)
+    (
+      campaign.schema === SOURCE_V1_SCHEMA
+      && campaign.campaign_mode === SOURCE_ONLY_MODE
+    )
     || (
-      (campaign.schema === JOINED_V2_SCHEMA || campaign.schema === JOINED_V3_SCHEMA)
+      campaign.schema === SOURCE_V2_SCHEMA
+      && campaign.campaign_mode === SOURCE_ONLY_MODE
+      && currentSourceIsPresentable(campaign.source)
+    )
+    || (
+      campaign.schema === JOINED_V2_SCHEMA
       && campaign.campaign_mode === JOINED_LIFECYCLE_MODE
       && campaign.lifecycle
       && typeof campaign.lifecycle === "object"
+    )
+    || (
+      campaign.schema === JOINED_V4_SCHEMA
+      && campaign.campaign_mode === JOINED_LIFECYCLE_MODE
+      && campaign.lifecycle
+      && typeof campaign.lifecycle === "object"
+      && currentSourceIsPresentable(campaign.source)
     )
   )
   && campaign.claim === CLAIM
@@ -151,6 +181,8 @@ const providerCard = (campaign) => {
 const sourceCard = (campaign) => {
   const source = campaign.source;
   const outcome = campaign.outcome;
+  const wrongFeed = source.wrong_feed_observation;
+  const freshness = source.freshness;
   const card = el("section", "card");
   const heading = el("div", "card-heading");
   heading.append(el("h2", null, "Receiver-written source, seal, and resolution"), chip("SBF_EXECUTED"));
@@ -166,9 +198,24 @@ const sourceCard = (campaign) => {
       ["Conservative interval upper", numeric(source.interval_upper)],
       ["Receiver-written update", digest(source.update_account)],
       ["Verified VAA account", digest(source.verified_vaa_account)],
+      ...(source.registered_source_plane_count === "1" ? [
+        ["Registered source planes", numeric(source.registered_source_plane_count)],
+        ["Wrong-feed Verified VAA account (producer-attested)", digest(source.wrong_feed_verified_vaa_account)],
+        ["Wrong-feed provider id", digest(wrongFeed.provider_feed_id_hex)],
+        ["Wrong-feed VAA sha256", digest(wrongFeed.vaa_sha256)],
+        ["Wrong-feed PostUpdate sha256", digest(wrongFeed.post_update_data_sha256)],
+        ["Wrong-feed Merkle update sha256", digest(wrongFeed.merkle_price_update_sha256)],
+        ["Append-time Clock slot", numeric(freshness.append_clock.slot)],
+        ["Append-time Clock timestamp", numeric(freshness.append_clock.unix_timestamp)],
+        ["Append-time source age seconds", numeric(freshness.append_age_seconds)],
+        ["Final Clock slot", numeric(freshness.final_clock.slot)],
+        ["Final Clock timestamp", numeric(freshness.final_clock.unix_timestamp)],
+        ["Final source age seconds (informational)", numeric(freshness.final_age_seconds)],
+      ] : []),
       ["Archive sealed", outcome.sealed ? "yes" : "no"],
       ["Resolved categorical payout", numeric(outcome.resolved_payout)]
     ]),
+    ...(freshness ? [el("p", "muted", freshness.scope)] : []),
     row(
       "callout callout-ok",
       el("strong", null, "INTERVAL SELECTS CELL 1"),
@@ -279,7 +326,7 @@ const lifecycleCardV2 = (campaign) => {
   return card;
 };
 
-const lifecycleCardV3 = (campaign) => {
+const lifecycleCardV4 = (campaign) => {
   const lifecycle = campaign.lifecycle;
   const terminal = lifecycle.terminal;
   const trade = lifecycle.trade;
@@ -438,8 +485,8 @@ const lifecycleCardV3 = (campaign) => {
 
 const lifecycleCard = (campaign) => {
   if (!campaign.lifecycle) return null;
-  return campaign.schema === JOINED_V3_SCHEMA
-    ? lifecycleCardV3(campaign)
+  return campaign.schema === JOINED_V4_SCHEMA
+    ? lifecycleCardV4(campaign)
     : lifecycleCardV2(campaign);
 };
 
@@ -496,7 +543,7 @@ export const renderPyth = (state) => {
     cards.push(pending());
     return cards;
   }
-  if (!valid(state.pyth)) {
+  if (!campaignIsPresentable(state.pyth)) {
     cards.push(unavailable(state.pyth));
     return cards;
   }
