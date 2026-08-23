@@ -1,9 +1,10 @@
 //! Disabled current Direct `80/1` account authentication and writeback plane.
 //!
-//! This module is intentionally not routed by `dispatch` or admitted by a
-//! capability profile. It owns the hostile Solana boundary for the fresh
-//! `0xb1..=0xb4/v1` family while economic state and transition identities stay
-//! exclusively in `clutch-direct-market-runtime`.
+//! The dispatcher recognizes this module only behind the exact central
+//! capability check, and every `80/1/1..=13` capability remains false. It owns
+//! the hostile Solana boundary for the fresh `0xb1..=0xb4/v1` family while
+//! economic state and transition identities stay exclusively in
+//! `clutch-direct-market-runtime`.
 
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
