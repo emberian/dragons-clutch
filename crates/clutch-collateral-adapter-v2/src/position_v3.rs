@@ -330,6 +330,7 @@ const fn transfer_kind_byte(kind: CustodyTransferKindV2) -> u8 {
         CustodyTransferKindV2::PrincipalRefund => 5,
         CustodyTransferKindV2::DonationDisposition => 6,
         CustodyTransferKindV2::ClaimRedemption => 7,
+        CustodyTransferKindV2::HoardSurplusDisposition => 8,
     }
 }
 

@@ -168,6 +168,9 @@ pub enum CustodyTransferKindV2 {
     DonationDisposition = 6,
     /// Market Hoard → exact claim-plane receive-only payout account.
     ClaimRedemption = 7,
+    /// Market Hoard → Realm-authenticated neutral receive-only account after
+    /// the owning protocol family destroys an exact cash liability.
+    HoardSurplusDisposition = 8,
 }
 
 /// Typed source or destination plus its singular semantic owner.
@@ -651,7 +654,9 @@ fn validate_transfer_shape(request: TransferRequestV2) -> Result<()> {
                 && (destination_is_holder || destination_is_receive_only)
                 && program_signer
         }
-        ClaimRedemption => source_is_hoard && destination_is_receive_only && program_signer,
+        ClaimRedemption | HoardSurplusDisposition => {
+            source_is_hoard && destination_is_receive_only && program_signer
+        }
     };
     if valid {
         Ok(())
