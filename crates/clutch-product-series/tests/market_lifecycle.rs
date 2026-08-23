@@ -1,10 +1,11 @@
 use clutch_product_series::{
     ContentId, Error, FixedCodec, MarketFoundationAccountGraphV1, MarketFoundationScheduleV1,
     MarketFoundationSlotV1, MarketInstanceV2Id, SeriesFundingQuoteV2Id, SeriesFundingTermsV2Id,
-    SeriesLinkObligationConfigurationV1, SeriesLinkObligationDispositionV1,
-    SeriesLinkObligationStatusV1, SeriesLinkObligationTerminalProjectionV1, SeriesLinkObligationV1,
-    SeriesMarketDispositionV1, SeriesMarketLinkBindingV1, SeriesMarketLinkV1, SeriesPlanV5Id,
-    SourceOccurrenceV1Id, MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
+    SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationConfigurationV1,
+    SeriesLinkObligationDispositionV1, SeriesLinkObligationStatusV1,
+    SeriesLinkObligationTerminalProjectionV1, SeriesLinkObligationV1, SeriesMarketDispositionV1,
+    SeriesMarketLinkBindingV1, SeriesMarketLinkV1, SeriesPlanV5Id, SourceOccurrenceV1Id,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V1, MARKET_FOUNDATION_MAX_OUTCOMES_V1,
     MARKET_FOUNDATION_SLOT_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1,
 };
 
@@ -19,7 +20,7 @@ fn configuration() -> SeriesLinkObligationConfigurationV1 {
         initial_statuses: [
             SeriesLinkObligationStatusV1::CapabilityDisabled,
             SeriesLinkObligationStatusV1::EnabledNeverFounded,
-            SeriesLinkObligationStatusV1::Live,
+            SeriesLinkObligationStatusV1::EnabledNeverFounded,
             SeriesLinkObligationStatusV1::CapabilityDisabled,
         ],
     }
@@ -110,6 +111,33 @@ fn configuration_refuses_caller_shaped_terminal_initial_state() {
 }
 
 #[test]
+fn configuration_refuses_caller_shaped_live_initial_state() {
+    let mut configuration = configuration();
+    configuration.initial_statuses[0] = SeriesLinkObligationStatusV1::Live;
+    assert_eq!(configuration.validate(), Err(Error::InvalidParameter));
+}
+
+#[test]
+fn obligation_admission_is_exact_and_replay_sequenced() {
+    let link = active_link();
+    let projection = SeriesLinkObligationAdmissionProjectionV1 {
+        link_semantic_id: link.semantic_id().unwrap(),
+        obligation: SeriesLinkObligationV1::Dealer,
+        link_transition_sequence: 2,
+        owner_admission_receipt_id: id(29),
+    };
+    let live = link.admit_obligation(projection).unwrap();
+    assert_eq!(
+        live.obligation_status(SeriesLinkObligationV1::Dealer),
+        SeriesLinkObligationStatusV1::Live
+    );
+    assert_eq!(
+        live.admit_obligation(projection),
+        Err(Error::UnauthenticatedAuthority)
+    );
+}
+
+#[test]
 fn disabled_and_enabled_unfounded_require_authenticated_absence() {
     let link = active_link();
     let wrong = SeriesLinkObligationTerminalProjectionV1 {
@@ -155,7 +183,16 @@ fn failure_transcript_survives_session_release() {
         .release_failure_session(id(28))
         .unwrap();
     assert_eq!(released.active_failure_sessions(), 0);
+    assert_eq!(released.failure_sessions_started(), 1);
     assert_ne!(released.failure_session_transcript_id(), ContentId::ZERO);
+
+    let mut body = [0_u8; SERIES_MARKET_LINK_BYTES_V1];
+    released.encode_into(&mut body).unwrap();
+    body[SERIES_MARKET_LINK_BYTES_V1 - 32..].fill(0);
+    assert_eq!(
+        SeriesMarketLinkV1::decode(&body),
+        Err(Error::WorkStateMismatch)
+    );
 }
 
 #[test]

@@ -578,8 +578,10 @@ impl AccountReceiptEndPayloadV1 {
 
 /// Action-26 `ConsumeDirectReceiptEggs` immutable selector.
 ///
-/// The delivery ID is derived from the authenticated direct receipt and its
-/// complete pure poststate plan. No economic or replay field is caller-owned.
+/// This action is single-outcome direct-only. Coefficient portfolios are
+/// refused and must use fresh action 42. The delivery ID is derived from the
+/// authenticated direct receipt and its complete pure poststate plan. No
+/// economic or replay field is caller-owned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConsumeDirectReceiptEggsPayloadV1 {
     /// Counted parent Epoch PDA.
@@ -915,6 +917,13 @@ pub enum SettlementRootPayloadV1 {
     ReleaseUnfilledReservation(ReleaseUnfilledReservationPayloadV1),
 }
 
+/// Strict payload fact for the exact coefficient-portfolio pair action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PortfolioSettlementPayloadV1 {
+    /// Action 42 selector; every economic and mutable fact is adapter-derived.
+    ConsumePortfolioPairEggs(ConsumePortfolioPairEggsPayloadV1),
+}
+
 /// Decode action 26 without adding it to the live-lab union.
 pub fn decode_direct_settlement_payload_v1(
     local_action: u8,
@@ -958,6 +967,19 @@ pub fn decode_settlement_root_payload_v1(
         )),
         41 => Ok(SettlementRootPayloadV1::ReleaseUnfilledReservation(
             ReleaseUnfilledReservationPayloadV1::decode(payload)?,
+        )),
+        _ => Err(CodecError::InvalidState),
+    }
+}
+
+/// Decode only fresh action 42 without widening the direct action-26 route.
+pub fn decode_portfolio_settlement_payload_v1(
+    local_action: u8,
+    payload: &[u8],
+) -> Result<PortfolioSettlementPayloadV1, CodecError> {
+    match local_action {
+        42 => Ok(PortfolioSettlementPayloadV1::ConsumePortfolioPairEggs(
+            ConsumePortfolioPairEggsPayloadV1::decode(payload)?,
         )),
         _ => Err(CodecError::InvalidState),
     }

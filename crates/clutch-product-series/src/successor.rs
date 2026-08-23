@@ -895,6 +895,12 @@ pub struct RegistryCapabilityProjectionV2 {
     pub max_window_span_buckets: u64,
     /// Maximum executable finite Series occurrence count.
     pub max_series_instance_count: u32,
+    /// Largest inclusive interval width admitted by Product work.
+    pub maximum_interval_width: u64,
+    /// Largest interval coordinate count admitted by one Product advance.
+    pub maximum_coordinates_per_advance: u16,
+    /// Largest Recovery progress delta admitted by one paid call.
+    pub maximum_recovery_progress_units_per_call: u64,
     /// Exact admitted semantic-owner identities, including price measure.
     pub semantic_owners: CapabilitySemanticOwnersV2,
     /// Exact immutable Realm/Profile collateral projection.
@@ -924,6 +930,9 @@ impl RegistryCapabilityProjectionV2 {
             || self.min_coverage_policy_parameter > self.max_coverage_policy_parameter
             || self.max_window_span_buckets == 0
             || self.max_series_instance_count == 0
+            || self.maximum_interval_width == u64::MAX
+            || self.maximum_coordinates_per_advance == 0
+            || self.maximum_recovery_progress_units_per_call == 0
         {
             return Err(Error::InvalidParameter);
         }

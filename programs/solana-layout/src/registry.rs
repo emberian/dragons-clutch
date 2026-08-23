@@ -454,10 +454,14 @@ pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG: u8 = 0xa9;
 pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact fixed width of the counted General V2 settlement root.
 pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
-/// Reserved Product occurrence-scoped terminal root discriminator.
-pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
-/// First reserved Product occurrence-root version.
-pub const PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Product shared Market lifecycle root discriminator.
+pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
+/// First Product shared Market lifecycle-root version.
+pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Product per-Series/ordinal Market-admission link discriminator.
+pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG: u8 = 0xad;
+/// First Product Series-Market-link version.
+pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION: u8 = 1;
 /// Counted Dealer CoveredDealer selection attachment discriminator.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 /// First Dealer CoveredDealer selection attachment version.
@@ -531,9 +535,10 @@ const _: () = assert!(DEALER_ROOT_TOMBSTONE_V2_ACCOUNT_TAG == 0x9e);
 const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
-const _: () = assert!(PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG == 0xaa);
+const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
+const _: () = assert!(PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG == 0xad);
 
 /// Disjoint wire namespaces represented in the collision ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1479,11 +1484,11 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
-            tag: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_TAG,
-            version: PRODUCT_OCCURRENCE_ROOT_ACCOUNT_VERSION,
+            tag: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
+            version: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-occurrence-root-v1-account",
+        name: "product-market-lifecycle-root-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1511,6 +1516,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "failure-interval-consensus-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
+            version: PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-series-market-link-v1-account",
     },
 ];
 
@@ -1708,6 +1722,8 @@ pub enum GeneralV2Action {
     FinalizeMergeReceiptPayment = 40,
     /// Release and close one exact zero-fill Reservation.
     ReleaseUnfilledReservation = 41,
+    /// Atomically consume one exact full coefficient-portfolio pair.
+    ConsumePortfolioPairEggs = 42,
 }
 
 /// Exact immutable artifact carried by the Dealer catalog transport.
@@ -1890,7 +1906,7 @@ impl GeneralV2Action {
     /// First allocated General V2 local action tag.
     pub const FIRST_TAG: u8 = 1;
     /// Last allocated General V2 local action tag.
-    pub const LAST_TAG: u8 = 41;
+    pub const LAST_TAG: u8 = 42;
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
@@ -1936,6 +1952,7 @@ impl GeneralV2Action {
             Self::InitializeSettlementRoot => 39,
             Self::FinalizeMergeReceiptPayment => 40,
             Self::ReleaseUnfilledReservation => 41,
+            Self::ConsumePortfolioPairEggs => 42,
         }
     }
 
@@ -1983,6 +2000,7 @@ impl GeneralV2Action {
             39 => Some(Self::InitializeSettlementRoot),
             40 => Some(Self::FinalizeMergeReceiptPayment),
             41 => Some(Self::ReleaseUnfilledReservation),
+            42 => Some(Self::ConsumePortfolioPairEggs),
             _ => None,
         }
     }

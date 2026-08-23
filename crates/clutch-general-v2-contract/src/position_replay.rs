@@ -47,6 +47,8 @@ const VIRTUAL_MERGE_SELLER_ROLE: u8 = 6;
 const STRUCTURED_GENERAL_ROLE: u8 = 7;
 const UNFILLED_RESERVATION_OWNER_ROLE: u8 = 8;
 const MERGE_PAYMENT_OWNER_ROLE: u8 = 9;
+const PORTFOLIO_PAIR_BUYER_ROLE: u8 = 10;
+const PORTFOLIO_PAIR_SELLER_ROLE: u8 = 11;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 
 /// Exhaustive General Replay transition partition for schema v1.
@@ -80,6 +82,10 @@ pub enum GeneralReplayTransitionKindV1 {
     ReleaseUnfilledReservation,
     /// Action 40 merge Reservation payment latch; Position is unchanged.
     FinalizeMergeReceiptPayment,
+    /// Action 42 exact coefficient-portfolio buyer endpoint.
+    PortfolioPairBuyer,
+    /// Action 42 exact coefficient-portfolio seller endpoint.
+    PortfolioPairSeller,
     /// Action 35 General Position endpoint of a structured exchange.
     StructuredGeneral,
     /// FractionalRedemption action 2 internal exact-lot endpoint.
@@ -178,6 +184,18 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 40,
                 MERGE_PAYMENT_OWNER_ROLE,
+            ),
+            Self::PortfolioPairBuyer => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                42,
+                PORTFOLIO_PAIR_BUYER_ROLE,
+            ),
+            Self::PortfolioPairSeller => (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                42,
+                PORTFOLIO_PAIR_SELLER_ROLE,
             ),
             Self::StructuredGeneral => (
                 STRUCTURED_EXCHANGE_FAMILY,
@@ -280,6 +298,18 @@ impl GeneralReplayTransitionKindV1 {
                 40,
                 MERGE_PAYMENT_OWNER_ROLE,
             ) => Ok(Self::FinalizeMergeReceiptPayment),
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                42,
+                PORTFOLIO_PAIR_BUYER_ROLE,
+            ) => Ok(Self::PortfolioPairBuyer),
+            (
+                SETTLEMENT_FAMILY,
+                TRANSITION_VERSION_V1,
+                42,
+                PORTFOLIO_PAIR_SELLER_ROLE,
+            ) => Ok(Self::PortfolioPairSeller),
             (STRUCTURED_EXCHANGE_FAMILY, TRANSITION_VERSION_V1, 35, STRUCTURED_GENERAL_ROLE) => {
                 Ok(Self::StructuredGeneral)
             }
@@ -953,6 +983,7 @@ where
             | GeneralReplayTransitionKindV1::Materialize
             | GeneralReplayTransitionKindV1::Dematerialize
             | GeneralReplayTransitionKindV1::DirectBuyer
+            | GeneralReplayTransitionKindV1::PortfolioPairBuyer
             | GeneralReplayTransitionKindV1::VirtualSplitBuyer
             | GeneralReplayTransitionKindV1::ReleaseUnfilledReservation
             | GeneralReplayTransitionKindV1::StructuredGeneral
@@ -1056,6 +1087,39 @@ mod tests {
         );
         assert_eq!(
             GeneralReplayExtensionV1::decode(&advanced_extension(40, OWNER_CASH_ROLE)),
+            Err(CodecError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn action42_roles_are_fresh_exhaustive_and_not_interchangeable() {
+        let buyer = GeneralReplayExtensionV1::decode(&advanced_extension(
+            42,
+            PORTFOLIO_PAIR_BUYER_ROLE,
+        ))
+        .unwrap();
+        let seller = GeneralReplayExtensionV1::decode(&advanced_extension(
+            42,
+            PORTFOLIO_PAIR_SELLER_ROLE,
+        ))
+        .unwrap();
+        assert_eq!(
+            buyer.last_kind(),
+            Some(GeneralReplayTransitionKindV1::PortfolioPairBuyer)
+        );
+        assert_eq!(
+            seller.last_kind(),
+            Some(GeneralReplayTransitionKindV1::PortfolioPairSeller)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(42, DIRECT_BUYER_ROLE)),
+            Err(CodecError::InvalidState)
+        );
+        assert_eq!(
+            GeneralReplayExtensionV1::decode(&advanced_extension(
+                26,
+                PORTFOLIO_PAIR_BUYER_ROLE,
+            )),
             Err(CodecError::InvalidState)
         );
     }

@@ -29,7 +29,7 @@ const RELEASE_VERSION: u16 = 1;
 pub const REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN: &[u8] =
     b"dragons-clutch/registry-capability-profile/v2";
 /// Exact canonical width of [`RegistryCapabilityProfileV2`].
-pub const REGISTRY_CAPABILITY_PROFILE_V2_BYTES: usize = 800;
+pub const REGISTRY_CAPABILITY_PROFILE_V2_BYTES: usize = 816;
 
 /// SHA-256 domain for [`RegistryProgramReleaseV1`].
 pub const REGISTRY_PROGRAM_RELEASE_V1_DOMAIN: &[u8] = b"dragons-clutch/registry-program-release/v1";
@@ -155,6 +155,12 @@ pub struct RegistryCapabilityProfileV2 {
     pub max_window_span_buckets: u64,
     /// Maximum executable finite Series occurrence count.
     pub max_series_instance_count: u32,
+    /// Largest inclusive interval width admitted by Product work.
+    pub maximum_interval_width: u64,
+    /// Largest interval coordinate count admitted by one Product advance.
+    pub maximum_coordinates_per_advance: u16,
+    /// Largest Recovery progress delta admitted by one paid call.
+    pub maximum_recovery_progress_units_per_call: u64,
     /// Exact admitted semantic-owner identities.
     pub semantic_owners: CapabilitySemanticOwnersV2,
     /// Exact reviewed evaluator semantics named by `semantic_owners`.
@@ -212,6 +218,9 @@ impl RegistryCapabilityProfileV2 {
             max_coverage_policy_parameter: self.max_coverage_policy_parameter,
             max_window_span_buckets: self.max_window_span_buckets,
             max_series_instance_count: self.max_series_instance_count,
+            maximum_interval_width: self.maximum_interval_width,
+            maximum_coordinates_per_advance: self.maximum_coordinates_per_advance,
+            maximum_recovery_progress_units_per_call: self.maximum_recovery_progress_units_per_call,
             semantic_owners: self.semantic_owners,
             realm_collateral: self.realm_collateral,
         }
@@ -280,7 +289,10 @@ impl FixedCodec for RegistryCapabilityProfileV2 {
         writer.u64(self.max_coverage_policy_parameter);
         writer.u64(self.max_window_span_buckets);
         writer.u32(self.max_series_instance_count);
-        writer.reserved(4);
+        writer.u16(self.maximum_coordinates_per_advance);
+        writer.reserved(2);
+        writer.u64(self.maximum_interval_width);
+        writer.u64(self.maximum_recovery_progress_units_per_call);
         encode_semantic_owners(&mut writer, self.semantic_owners);
         encode_realm_collateral(&mut writer, self.realm_collateral);
         let mut summary = [0; SUMMARY_PROGRAM_BYTES];
@@ -331,7 +343,10 @@ impl FixedCodec for RegistryCapabilityProfileV2 {
         let max_coverage_policy_parameter = reader.u64();
         let max_window_span_buckets = reader.u64();
         let max_series_instance_count = reader.u32();
-        reader.reserved(4)?;
+        let maximum_coordinates_per_advance = reader.u16();
+        reader.reserved(2)?;
+        let maximum_interval_width = reader.u64();
+        let maximum_recovery_progress_units_per_call = reader.u64();
         let semantic_owners = decode_semantic_owners(&mut reader);
         let realm_collateral = decode_realm_collateral(&mut reader);
         let summary_program = SourceFixedCodec::decode(&reader.bytes::<SUMMARY_PROGRAM_BYTES>())
@@ -355,6 +370,9 @@ impl FixedCodec for RegistryCapabilityProfileV2 {
             max_coverage_policy_parameter,
             max_window_span_buckets,
             max_series_instance_count,
+            maximum_interval_width,
+            maximum_coordinates_per_advance,
+            maximum_recovery_progress_units_per_call,
             semantic_owners,
             summary_program,
             realm_collateral,
