@@ -11,8 +11,8 @@
 //! prefunding becomes an economic asset.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV2Id, ContentId,
-    NativeClaimBasisV1, SeriesAttachmentPlanId,
+    CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV4Id, ContentId,
+    NativeClaimBasisV1, SeriesAttachmentPlanV4Id,
 };
 use clutch_retirement::{PositionAccountV3, PositionPurposeV3, ReplayV3Envelope};
 use clutch_retirement::{
@@ -342,8 +342,10 @@ fn authenticate_structured_product_authority_v1(
     let link_data = accounts[CV_SERIES_LINK]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let untrusted_link = SeriesMarketLinkAccountV1::decode(&link_data)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let untrusted_link = Box::new(
+        SeriesMarketLinkAccountV1::decode(&link_data)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?,
+    );
     drop(link_data);
     let untrusted_binding = untrusted_link.state.binding();
     require(
@@ -375,7 +377,7 @@ fn authenticate_structured_product_authority_v1(
             && authorization.rent_refund_owner().bytes() == accounts[CV_PAYER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV2>(
+    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV4>(
         program_id,
         &accounts[CV_COMPILER_BUNDLE],
         authorization.compiler_bundle_id(),
@@ -611,10 +613,10 @@ fn structured_root_binding_v1(
         ordinal: authorization.ordinal(),
         market_instance_id: authorization.market_instance_id(),
         generation: authorization.generation(),
-        attachment_plan_id: SeriesAttachmentPlanId::from_bytes(
+        attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes(
             authorization.attachment_plan_id().bytes(),
         ),
-        compiler_output_id: CompiledProductSeriesBundleV2Id::from_bytes(
+        compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes(
             authorization.compiler_bundle_id().bytes(),
         ),
         compiler_release_id,
@@ -1704,10 +1706,13 @@ mod tests {
     }
 
     #[test]
-    fn exact_profile_action_is_not_a_structured_family_mint_claim() {
+    fn coherent_profile_admits_only_structured_creation_and_base_custody() {
         assert!(crate::capabilities::extension_intent_action_enabled(74, 1, 35));
         for action in 1..=8 {
-            assert!(!crate::capabilities::extension_intent_action_enabled(75, 1, action));
+            assert_eq!(
+                crate::capabilities::extension_intent_action_enabled(75, 1, action),
+                action == 1,
+            );
         }
     }
 

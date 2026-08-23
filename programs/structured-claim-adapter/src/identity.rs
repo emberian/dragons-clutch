@@ -154,8 +154,11 @@ pub fn canonical_native_claim_id_v1(identity: &DescriptorIdentityV1) -> Result<K
     hash(&identity.native_claim_preimage)
 }
 
-/// SHA-256 the exact runtime-contract wrapper-product preimage.
-pub fn canonical_wrapper_product_id_v1(
+/// SHA-256 the historical deployment-only wrapper-product component.
+///
+/// This helper is intentionally private: only the current Series/root/recipe-
+/// scoped identity may cross the adapter API as an executable product.
+fn canonical_wrapper_product_id_v1(
     identity: &DescriptorIdentityV1,
     native_claim_id: Key,
 ) -> Result<Key> {

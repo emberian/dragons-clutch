@@ -1,13 +1,13 @@
 //! Series-link-scoped Structured market root.
 //!
-//! Product authenticates the exact active Series link, Bundle V2, and
-//! Attachment V2. Structured then owns this mutable descriptor-count root,
+//! Product authenticates the exact active Series link, Bundle V4, and
+//! Attachment V4. Structured then owns this mutable descriptor-count root,
 //! recipe membership, rent principal, donation residue, and terminal receipt.
 //! A caller-authored value is never authority; the live adapter must construct
 //! the authorization below only from Product's private authenticated receipt.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV2Id, ContentId, MarketInstanceV2Id, SeriesAttachmentPlanId,
+    CompiledProductSeriesBundleV4Id, ContentId, MarketInstanceV2Id, SeriesAttachmentPlanV4Id,
     SeriesPlanV5Id,
 };
 use clutch_structured_claim::DeploymentBinding;
@@ -37,6 +37,12 @@ pub const STRUCTURED_DESCRIPTOR_ADMISSION_DOMAIN_V1: &[u8] =
 /// Terminal transcript domain.
 pub const STRUCTURED_DESCRIPTOR_TERMINAL_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/descriptor-terminal/v1\0";
+/// Aggregate terminal-root receipt domain.
+pub const STRUCTURED_MARKET_TERMINAL_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/structured-claim/market-terminal/v1\0";
+/// Exact terminal-root preimage width after excluding its recursive receipt.
+pub const STRUCTURED_MARKET_TERMINAL_PREIMAGE_BYTES_V1: usize =
+    STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES - 32;
 
 /// Derive the sole deployment-owner release identity shared by both SBF
 /// adapters. This commits the exact wrapper, base, and Token-2022 loader
@@ -81,9 +87,9 @@ pub struct StructuredMarketRootBindingV1 {
     /// Product/Source generation.
     pub generation: u64,
     /// Exact successor attachment.
-    pub attachment_plan_id: SeriesAttachmentPlanId,
+    pub attachment_plan_id: SeriesAttachmentPlanV4Id,
     /// Exact successor compiler bundle.
-    pub compiler_output_id: CompiledProductSeriesBundleV2Id,
+    pub compiler_output_id: CompiledProductSeriesBundleV4Id,
     /// Exact compiler semantic owner.
     pub compiler_release_id: ContentId,
     /// Exact central capability profile.
@@ -333,7 +339,6 @@ impl StructuredMarketRootV1 {
         current_product_lineage: StructuredProductLineageV1,
         descriptor_id: ContentId,
         descriptor_terminal_receipt_id: ContentId,
-        aggregate_terminal_receipt_id: ContentId,
         hasher: &H,
     ) -> Result<Self> {
         self.validate()?;
@@ -359,9 +364,6 @@ impl StructuredMarketRootV1 {
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
         let is_family_terminal = live_descriptor_count == 0;
-        if is_family_terminal != !aggregate_terminal_receipt_id.is_zero() {
-            return Err(Error::InvariantViolation);
-        }
         let terminal_transcript_id = terminal_receipt(
             self.terminal_transcript_id,
             descriptor_id,
@@ -369,15 +371,18 @@ impl StructuredMarketRootV1 {
             transition_sequence,
             hasher,
         )?;
-        let next = Self {
+        let mut next = Self {
             product_lineage: current_product_lineage,
             transition_sequence,
             live_descriptor_count,
             terminal_descriptor_count,
             terminal_transcript_id,
-            aggregate_terminal_receipt_id,
+            aggregate_terminal_receipt_id: ContentId::ZERO,
             ..self
         };
+        if is_family_terminal {
+            next.aggregate_terminal_receipt_id = derive_market_terminal_receipt_v1(next, hasher)?;
+        }
         next.validate()?;
         Ok(next)
     }
@@ -538,6 +543,18 @@ impl StructuredMarketRootV1 {
             terminal_descriptor_count: self.terminal_descriptor_count,
             terminal_receipt_id: self.aggregate_terminal_receipt_id.bytes(),
         };
+        if state == StructuredMarketProjectionStateV1::Terminal {
+            let expected = derive_market_terminal_receipt_v1(
+                Self {
+                    aggregate_terminal_receipt_id: ContentId::ZERO,
+                    ..self
+                },
+                hasher,
+            )?;
+            if expected != self.aggregate_terminal_receipt_id {
+                return Err(Error::InvalidIdentity);
+            }
+        }
         projection.validate_counts()?;
         Ok(projection)
     }
@@ -565,11 +582,128 @@ impl StructuredMarketRootV1 {
             .ok_or(Error::ArithmeticOverflow)?;
         if (self.terminal_descriptor_count == 0) != self.terminal_transcript_id.is_zero()
             || (self.live_descriptor_count == 0) != !self.aggregate_terminal_receipt_id.is_zero()
+            || (!self.aggregate_terminal_receipt_id.is_zero()
+                && (self.aggregate_terminal_receipt_id == self.admission_transcript_id
+                    || self.aggregate_terminal_receipt_id == self.terminal_transcript_id
+                    || self.aggregate_terminal_receipt_id
+                        == self.product_lineage.link_authentication_id
+                    || self.aggregate_terminal_receipt_id
+                        == self.product_lineage.link_semantic_id
+                    || self.aggregate_terminal_receipt_id
+                        == self.product_lineage.product_admission_receipt_id))
         {
             return Err(Error::InvariantViolation);
         }
         Ok(())
     }
+}
+
+fn derive_market_terminal_receipt_v1<H: WrapperRecipeHashV1>(
+    terminal_without_receipt: StructuredMarketRootV1,
+    hasher: &H,
+) -> Result<ContentId> {
+    if terminal_without_receipt.admitted_descriptor_count == 0
+        || terminal_without_receipt.live_descriptor_count != 0
+        || terminal_without_receipt.terminal_descriptor_count
+            != terminal_without_receipt.admitted_descriptor_count
+        || terminal_without_receipt.terminal_transcript_id.is_zero()
+        || !terminal_without_receipt.aggregate_terminal_receipt_id.is_zero()
+    {
+        return Err(Error::InvariantViolation);
+    }
+    terminal_without_receipt.binding.validate()?;
+    terminal_without_receipt.product_lineage.validate()?;
+    let canonical_transition_sequence = u64::from(
+        terminal_without_receipt.admitted_descriptor_count,
+    )
+    .checked_add(u64::from(
+        terminal_without_receipt.terminal_descriptor_count,
+    ))
+    .ok_or(Error::ArithmeticOverflow)?;
+    if terminal_without_receipt.transition_sequence != canonical_transition_sequence
+        || terminal_without_receipt.admission_transcript_id.is_zero()
+        || terminal_without_receipt.rent_principal_lamports == 0
+        || terminal_without_receipt.current_donation_lamports
+            < terminal_without_receipt.donation_floor_lamports
+    {
+        return Err(Error::InvariantViolation);
+    }
+    terminal_without_receipt
+        .rent_principal_lamports
+        .checked_add(terminal_without_receipt.current_donation_lamports)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let mut preimage = [0_u8; STRUCTURED_MARKET_TERMINAL_PREIMAGE_BYTES_V1];
+    let mut cursor = 0_usize;
+    put(
+        &mut preimage,
+        &mut cursor,
+        &[
+            STRUCTURED_MARKET_ROOT_ACCOUNT_TAG,
+            STRUCTURED_MARKET_ROOT_ACCOUNT_VERSION,
+            0,
+            0,
+        ],
+    )?;
+    put(
+        &mut preimage,
+        &mut cursor,
+        &terminal_without_receipt.binding.encode_preimage()?,
+    )?;
+    for id in [
+        terminal_without_receipt
+            .product_lineage
+            .link_authentication_id,
+        terminal_without_receipt.product_lineage.link_semantic_id,
+        terminal_without_receipt
+            .product_lineage
+            .product_admission_receipt_id,
+    ] {
+        put(&mut preimage, &mut cursor, &id.bytes())?;
+    }
+    for sequence in [
+        terminal_without_receipt
+            .product_lineage
+            .product_link_transition_sequence,
+        terminal_without_receipt.transition_sequence,
+    ] {
+        put(&mut preimage, &mut cursor, &sequence.to_le_bytes())?;
+    }
+    for count in [
+        terminal_without_receipt.admitted_descriptor_count,
+        terminal_without_receipt.live_descriptor_count,
+        terminal_without_receipt.terminal_descriptor_count,
+    ] {
+        put(&mut preimage, &mut cursor, &count.to_le_bytes())?;
+    }
+    for id in [
+        terminal_without_receipt.admission_transcript_id,
+        terminal_without_receipt.terminal_transcript_id,
+    ] {
+        put(&mut preimage, &mut cursor, &id.bytes())?;
+    }
+    for amount in [
+        terminal_without_receipt.rent_principal_lamports,
+        terminal_without_receipt.donation_floor_lamports,
+        terminal_without_receipt.current_donation_lamports,
+    ] {
+        put(&mut preimage, &mut cursor, &amount.to_le_bytes())?;
+    }
+    put(
+        &mut preimage,
+        &mut cursor,
+        &[terminal_without_receipt.root_bump],
+    )?;
+    put(&mut preimage, &mut cursor, &[0; 7])?;
+    if cursor != preimage.len() {
+        return Err(Error::InvalidLength);
+    }
+    let receipt = ContentId::from_bytes(
+        hasher.hashv(&[STRUCTURED_MARKET_TERMINAL_DOMAIN_V1, &preimage]),
+    );
+    if receipt.is_zero() {
+        return Err(Error::InvalidIdentity);
+    }
+    Ok(receipt)
 }
 
 /// Derive one exact root admission receipt before an atomic Product mutation.
@@ -652,8 +786,8 @@ fn decode_binding(input: [u8; STRUCTURED_MARKET_ROOT_BINDING_BYTES_V1]) -> Resul
         link_account: read_id(&input, &mut cursor)?,
         series_plan_id: SeriesPlanV5Id::from_bytes(read_id(&input, &mut cursor)?),
         market_instance_id: MarketInstanceV2Id::from_bytes(read_id(&input, &mut cursor)?),
-        attachment_plan_id: SeriesAttachmentPlanId::from_bytes(read_id(&input, &mut cursor)?),
-        compiler_output_id: CompiledProductSeriesBundleV2Id::from_bytes(read_id(&input, &mut cursor)?),
+        attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes(read_id(&input, &mut cursor)?),
+        compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes(read_id(&input, &mut cursor)?),
         compiler_release_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
         capability_profile_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
         wrapper_recipe_set_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
@@ -732,8 +866,8 @@ mod tests {
             ordinal: 3,
             market_instance_id: MarketInstanceV2Id::from_bytes([4; 32]),
             generation: 5,
-            attachment_plan_id: SeriesAttachmentPlanId::from_bytes([6; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV2Id::from_bytes([7; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([6; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV4Id::from_bytes([7; 32]),
             compiler_release_id: id(8),
             capability_profile_id: id(9),
             wrapper_recipe_set_id: id(10),
@@ -791,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_requires_exact_final_aggregate_receipt() {
+    fn terminal_receipt_commits_the_exact_final_root_lineage() {
         let hash = DeterministicHash;
         let root = StructuredMarketRootV1::initialize(
             binding(),
@@ -804,24 +938,20 @@ mod tests {
             &hash,
         )
         .unwrap();
-        assert_eq!(
-            root.seal_descriptor_terminal(
-                lineage(&hash),
-                id(17),
-                id(19),
-                ContentId::ZERO,
-                &hash,
-            ),
-            Err(Error::InvariantViolation)
-        );
         let terminal = root
-            .seal_descriptor_terminal(lineage(&hash), id(17), id(19), id(20), &hash)
+            .seal_descriptor_terminal(lineage(&hash), id(17), id(19), &hash)
             .unwrap();
         assert_eq!(terminal.live_descriptor_count, 0);
         assert_eq!(
             terminal.projection(&hash).unwrap().state,
             StructuredMarketProjectionStateV1::Terminal
         );
+        let mut forged = terminal;
+        forged.aggregate_terminal_receipt_id = id(20);
+        assert_eq!(forged.projection(&hash), Err(Error::InvalidIdentity));
+        forged = terminal;
+        forged.product_lineage.link_semantic_id = id(21);
+        assert_eq!(forged.projection(&hash), Err(Error::InvalidIdentity));
     }
 
     #[test]

@@ -1,14 +1,19 @@
 //! Exact account loading, CPI execution, and authoritative post-reconciliation.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV2, ContentId, FixedCodec, MarketInstancePreimageV2,
-    NativeClaimBasisV1, SeriesAttachmentPlanV2,
+    CompiledProductSeriesBundleV4, ContentId, FixedCodec, MarketInstancePreimageV2,
+    NativeClaimBasisV1, SeriesAttachmentPlanV4, SeriesLinkObligationStatusV1,
+    SeriesLinkObligationV1, SeriesMarketLinkPhaseV1,
 };
 use clutch_retirement::{
     PositionAccountV3, PositionPurposeV3, PositionV3Sha256Backend, ReplayV3Envelope,
     ReplayV3HashBackend,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
+use clutch_solana_layout::product_series::{
+    series_market_link_authentication_id_v1, SeriesMarketLinkAccountV1,
+    SERIES_MARKET_LINK_ACCOUNT_BYTES_V1,
+};
 use clutch_solana_layout::registry::{
     ExtensionAction, ExtensionFamily, GeneralV2Action, StructuredClaimAction,
 };
@@ -273,6 +278,7 @@ fn create(
         accounts,
         &bound,
         product_id,
+        market,
         root_before,
         deployments.binding,
     )?;
@@ -1297,6 +1303,7 @@ fn reconcile_create(
     accounts: &[AccountInfo<'_>],
     bound: &clutch_structured_claim_adapter::BoundDescriptorV1,
     product: [u8; 32],
+    market: MarketInstancePreimageV2,
     root_before: StructuredRootPrestateV1,
     deployment: DeploymentBinding,
 ) -> Result<()> {
@@ -1309,7 +1316,13 @@ fn reconcile_create(
         return Err(WrapperError::Identity);
     }
     drop(descriptor_data);
-    reconcile_structured_root(accounts, observed_descriptor, root_before, deployment)?;
+    reconcile_structured_root(
+        accounts,
+        observed_descriptor,
+        market,
+        root_before,
+        deployment,
+    )?;
     let position = decode_position(&accounts[CREATE_POSITION])?;
     let replay = decode_replay(&accounts[CREATE_REPLAY])?;
     let replay_data = accounts[CREATE_REPLAY]
@@ -1370,6 +1383,7 @@ fn reconcile_create(
 fn reconcile_structured_root(
     accounts: &[AccountInfo<'_>],
     descriptor: StructuredClaimDescriptorV2,
+    market: MarketInstancePreimageV2,
     before: StructuredRootPrestateV1,
     deployment: DeploymentBinding,
 ) -> Result<()> {
@@ -1408,6 +1422,7 @@ fn reconcile_structured_root(
             .bytes()
             != descriptor.structured_root_id
         || root.binding.link_account != accounts[CREATE_SERIES_LINK].key.to_bytes()
+        || root.binding.market_instance_id.bytes() != descriptor.market
         || root.binding.rent_refund_owner.bytes() != accounts[PAYER].key.to_bytes()
         || root.binding.owner_release_id
             != structured_owner_release_id_v1(deployment, &RuntimeSha)
@@ -1418,10 +1433,13 @@ fn reconcile_structured_root(
             != attachment.id().map_err(|_| WrapperError::Identity)?
         || root.binding.series_plan_id != bundle.series_plan_id
         || root.binding.attachment_plan_id != bundle.attachment_plan_id
-        || root.binding.capability_profile_id != bundle.capability_profile_id
+        || root.binding.capability_profile_id != bundle.capability_profile_id.content_id()
         || root.binding.compiler_release_id != bundle.product_compiler_release_id
         || root.binding.wrapper_recipe_set_id != attachment.wrapper_recipe_set_id
         || attachment.funding_quote_id != bundle.funding_quote_id
+        || bundle.native_claim_basis_id.bytes() != descriptor.terms_digest
+        || bundle.product_template_id != market.product_template_id
+        || bundle.market_genesis_profile_id != market.market_genesis_profile_id
         || root.live_descriptor_count == 0
         || accounts[CREATE_STRUCTURED_ROOT].lamports()
             != root
@@ -1431,6 +1449,7 @@ fn reconcile_structured_root(
     {
         return Err(WrapperError::BaseCustody);
     }
+    reconcile_product_series_link(accounts, &root)?;
     match before {
         StructuredRootPrestateV1::Empty {
             hostile_prefund_lamports,
@@ -1507,11 +1526,95 @@ fn reconcile_structured_root(
     Ok(())
 }
 
+fn reconcile_product_series_link(
+    accounts: &[AccountInfo<'_>],
+    root: &StructuredMarketRootV1,
+) -> Result<()> {
+    let account = &accounts[CREATE_SERIES_LINK];
+    if account.owner != accounts[CREATE_BASE_PROGRAM].key
+        || account.data_len() != SERIES_MARKET_LINK_ACCOUNT_BYTES_V1
+        || account.is_signer
+        || !account.is_writable
+        || account.executable
+        || account.key.to_bytes() != root.binding.link_account
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let framed_data_id = hashv(&[&data[..]]).to_bytes();
+    let link = Box::new(
+        SeriesMarketLinkAccountV1::decode(&data).map_err(|_| WrapperError::Identity)?,
+    );
+    drop(data);
+    let binding = link.state.binding();
+    let semantic_id = link
+        .state
+        .semantic_id()
+        .map_err(|_| WrapperError::Identity)?;
+    let ordinal = binding.ordinal.to_le_bytes();
+    let expected_pda = Pubkey::find_program_address(
+        &[
+            b"dc:series-market-link:v1",
+            &binding.series_plan_id.bytes(),
+            &ordinal,
+        ],
+        accounts[CREATE_BASE_PROGRAM].key,
+    );
+    let observed_lamports = account.lamports();
+    let accounted_lamports = link
+        .state
+        .rent_principal_lamports()
+        .checked_add(link.state.current_donation_lamports())
+        .ok_or(WrapperError::Arithmetic)?;
+    let authentication_id = ContentId::from_bytes(
+        series_market_link_authentication_id_v1(
+            account.key.to_bytes(),
+            accounts[CREATE_BASE_PROGRAM].key.to_bytes(),
+            framed_data_id,
+            semantic_id.bytes(),
+            binding.market_root_account_id.bytes(),
+            observed_lamports,
+        )
+        .0,
+    );
+    if *account.key != expected_pda.0
+        || link.stored_bump != expected_pda.1
+        || observed_lamports < accounted_lamports
+        || binding.series_plan_id != root.binding.series_plan_id
+        || binding.ordinal != root.binding.ordinal
+        || binding.market_instance_id != root.binding.market_instance_id
+        || binding.generation != root.binding.generation
+        || binding.attachment_plan_id != root.binding.attachment_plan_id.content_id()
+        || binding.compiler_output_id != root.binding.compiler_output_id.content_id()
+        || binding.capability_profile_id != root.binding.capability_profile_id
+        || binding.rent_refund_owner != root.binding.rent_refund_owner
+        || binding.neutral_lamport_sink != root.binding.neutral_lamport_sink
+        || link.state.phase() != SeriesMarketLinkPhaseV1::Active
+        || link
+            .state
+            .obligation_status(SeriesLinkObligationV1::Wrapper)
+            != SeriesLinkObligationStatusV1::Live
+        || link
+            .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV1::Wrapper)
+            != root.product_lineage.product_admission_receipt_id
+        || link.state.transition_sequence()
+            != root.product_lineage.product_link_transition_sequence
+        || ContentId::from_bytes(semantic_id.bytes()) != root.product_lineage.link_semantic_id
+        || authentication_id != root.product_lineage.link_authentication_id
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    Ok(())
+}
+
 fn decode_structured_product_artifacts(
     accounts: &[AccountInfo<'_>],
 ) -> Result<(
-    Box<CompiledProductSeriesBundleV2>,
-    Box<SeriesAttachmentPlanV2>,
+    Box<CompiledProductSeriesBundleV4>,
+    Box<SeriesAttachmentPlanV4>,
 )> {
     if accounts[CREATE_COMPILER_BUNDLE].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_ATTACHMENT].owner != accounts[CREATE_BASE_PROGRAM].key
@@ -1522,7 +1625,7 @@ fn decode_structured_product_artifacts(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let bundle = Box::new(
-        CompiledProductSeriesBundleV2::decode(&bundle_data)
+        CompiledProductSeriesBundleV4::decode(&bundle_data)
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(bundle_data);
@@ -1530,7 +1633,7 @@ fn decode_structured_product_artifacts(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let attachment = Box::new(
-        SeriesAttachmentPlanV2::decode(&attachment_data)
+        SeriesAttachmentPlanV4::decode(&attachment_data)
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(attachment_data);
@@ -1542,13 +1645,13 @@ fn decode_structured_product_artifacts(
     if *accounts[CREATE_COMPILER_BUNDLE].key
         != product_artifact_pda(
             accounts[CREATE_BASE_PROGRAM].key,
-            ArtifactKind::CompiledProductSeriesBundleV2.byte(),
+            ArtifactKind::CompiledProductSeriesBundleV4.byte(),
             bundle_id,
         )
         || *accounts[CREATE_ATTACHMENT].key
             != product_artifact_pda(
                 accounts[CREATE_BASE_PROGRAM].key,
-                ArtifactKind::SeriesAttachmentPlanV2.byte(),
+                ArtifactKind::SeriesAttachmentPlanV4.byte(),
                 attachment_id,
             )
     {
