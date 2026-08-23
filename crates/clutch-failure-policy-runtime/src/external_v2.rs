@@ -620,6 +620,12 @@ impl FailureRuntimeExternalV2 {
         LivenessId::from_bytes(self.recovery.funding().payer.bytes())
     }
 
+    /// Immutable refund owner for unused Recovery work and rent principal.
+    /// Funding may originate from prepaid custody; this identity need not sign.
+    pub fn recovery_refund_owner(self) -> LivenessId {
+        LivenessId::from_bytes(self.recovery.funding().payer.bytes())
+    }
+
     /// Immutable liveness/root donation and failure-residue sink.
     pub fn recovery_neutral_sink(self) -> LivenessId {
         LivenessId::from_bytes(self.recovery.funding().neutral_sink.bytes())
