@@ -9,12 +9,15 @@ The new persisted facts have one owner each:
 
 | account | owner | exact body |
 | --- | --- | ---: |
-| `0xa4/v1` | immutable Market/Resolution/Realm/claim policy and resolved common lot | 296 |
+| `0xa4/v1` | immutable Market/Resolution-V5-data/Realm/claim policy and resolved common lot | 296 |
 | `0xa5/v1` | ClaimLedger account binding, aggregate numerator `K`, live-credit count, and global replay sequence | 224 |
 | `0xa6/v1` | one claimant's canonical numerator `<D`, generation, replay, and rent | 296 |
 | `0xa7/v1` | permanent zero-credit close/reopen identity | 232 |
 
-Resolution/Terms remain the sole vector owner. Full-width ClaimLedger V3
+Resolution V5 remains the sole vector owner. The policy and every owner credit
+persist its exact PDA-bound Resolution data ID, while each transition also
+recomputes the body-only semantic ID and returns the V5 quotient/remainder
+projection that names the exact outcome and burned quantity. Full-width ClaimLedger V3
 remains the sole internal-plus-bearer supply owner. Hoard V2 remains the sole
 owner of locked claim principal and Position-cash collateral classification.
 Position V3 and its purpose-owned Replay V3 remain the only internal
@@ -41,6 +44,11 @@ Exact lots take a zero-credit fast path. Arbitrary quantities use one owner-
 scoped numerator credit; mixed outcomes aggregate under the same exact
 Market/Resolution/payout/generation domain. Credit transfers are custom
 same-domain operations rather than a second bearer mint.
+
+Resolution V5's direct bearer route remains exact-only. A nonzero V5 remainder
+is not a permanent amount restriction: it enters the credited Fractional route,
+whose single plan atomically binds the bearer burn, a5/owner-credit successor,
+ClaimLedger/Hoard successor, exact whole payout, and retained numerator.
 
 Whole internal payouts reclassify Hoard V2 locked principal into Position-cash
 liability without moving token custody. Whole external payouts require the
@@ -93,3 +101,12 @@ replace that refusal with owner/PDA/signature checks, canonical Resolution and
 ClaimLedger V3/Hoard V2 decoding, exact Token-2022 burn and Realm-collateral CPI
 postchecks, Position/Replay V3 writeback, rent admission, and a checked release
 manifest tuple.
+
+The SBF `fractional-redemption-adapter-seam` feature additionally compiles the
+private Product 0xaa terminal receipt composition. It still cannot mint its
+release receipt because action 10 is absent from every capability profile; it
+adds no dispatch route and executes no close. The frozen receipt binds the
+Product occurrence's exact registry release/profile, Series, Market,
+generation, Resolution V5 account/data/body identities, NativeClaimBasis,
+physical a4/a5 accounts, both terminal state IDs, ClaimLedger retirement latch,
+and independent payer/neutral rent dispositions.

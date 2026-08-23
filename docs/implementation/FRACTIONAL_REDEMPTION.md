@@ -34,11 +34,21 @@ only whole collateral atoms. No transition floors and forgets the remainder,
 credits it to treasury, makes it an executor bounty, or treats a direct holder
 burn as permission to withdraw surplus.
 
-The version-three native Resolution design supplies the immutable Market,
-common `D`, exact vector, and repair generation. A runtime integration must use
-the Resolution-owned vector (or the terms-owned preset), never a client copy or
-a second persisted vector. The model deliberately does not edit that active
-integration surface.
+Resolution V5 supplies the full-width immutable Market and NativeClaimBasis,
+common `D`, exact vector, generation, body semantic ID, and PDA-bound data ID.
+The runtime persists only the data-ID reference and reconstructs the vector
+from the authenticated V5 body on every transition. Its returned payout
+projection binds the exact outcome and burn quantity to `q*w = D*whole + r`;
+the direct route exact-refuses `r != 0`, while the credited Fractional route
+retains `r` atomically rather than flooring it or making it a permanent amount
+restriction.
+
+The disabled Product-terminal adapter seam also refuses a dual close unless
+the authenticated Product occurrence and Fractional release agree on the exact
+registry release/profile, Series, Market, generation, Resolution V5 account,
+and NativeClaimBasis. Its private receipt commits the Resolution semantic/data
+IDs, physical a4/a5 accounts, both terminal state IDs, and the ClaimLedger
+retirement latch before Product can consume the family terminal.
 
 ## 2. Exact lots
 

@@ -52,6 +52,11 @@ non-production-failure-recovery-lab = [
     "dep:clutch-failure-policy-adapter",
     "dep:clutch-failure-policy-runtime",
 ]
+# Compiles the typed Fractional/Product terminal composition seam. All 79/v1
+# capability tuples remain disabled, so this feature cannot execute a close.
+fractional-redemption-adapter-seam = [
+    "dep:clutch-fractional-redemption-runtime",
+]
 # Mutually exclusive deployable products. Each forwards the same identity to
 # both hostile wire crates so a narrow SBF cannot accidentally link the full
 # Intent decoder through a dependency's default features.
@@ -101,6 +106,7 @@ clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapt
 clutch-evidence-recovery = { path = "../../../crates/clutch-evidence-recovery", optional = true }
 clutch-failure-policy-adapter = { path = "../../../crates/clutch-failure-policy-adapter", optional = true }
 clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-runtime", optional = true }
+clutch-fractional-redemption-runtime = { path = "../../../crates/clutch-fractional-redemption-runtime", optional = true }
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
