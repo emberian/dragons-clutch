@@ -34,9 +34,10 @@
 sets, place and cancel portfolio orders, freeze the canonical book, check a
 submitted candidate through a resumable relation, select the best valid
 candidate admitted by the deadline, entitle its witness, and settle exact
-receipts and pots. The accepted Cycle-G registry does not yet uphold that
-selection property: unverified claims can exclude or evict valid candidates,
-and a verified-only repair is currently unsealed. A local
+receipts and pots. The accepted Cycle-G artifact does not yet uphold that
+selection property: unverified claims can exclude or evict valid candidates.
+The current unsealed source repairs it and passes the complete local bank
+matrix. A local
 keeper and the Operator Bench can drive that path without a Dragon-operated
 network service.</p>
 
@@ -57,8 +58,9 @@ evidence. They are not one tested Cartesian envelope.</p>
   <tbody>
     <tr><td>Outcome basis</td><td>categorical degree 0; B-spline degree 1–3</td><td>exact rational evaluation and integer quantization</td></tr>
     <tr><td>Width</td><td>16 outcomes/knots</td><td>structural bound; SBF campaigns reach eight outcomes</td></tr>
-    <tr><td>Book</td><td>64 orders in four pages</td><td>executed with 32 witness slices</td></tr>
-    <tr><td>Pairing witness</td><td>416 slices</td><td>structural bound; max-witness entitlement is not yet measured</td></tr>
+    <tr><td>Book</td><td>64 orders in four pages</td><td>direct entitlement executed with the maximum 416-slice witness; maximum-page portfolio variants remain separate rows</td></tr>
+    <tr><td>Pairing witness</td><td>416 slices</td><td>direct maximum executed at 803,935 CU</td></tr>
+    <tr><td>Source seam</td><td>captured deployed Pyth router + receiver</td><td>router persists a Verified synthetic local proof; a later transaction atomically posts and appends; not devnet price evidence</td></tr>
     <tr><td>Collateral adapter</td><td>Token-2022 only</td><td>the layout is broader; legacy SPL collateral is not runtime-drivable yet</td></tr>
     <tr><td>Fees</td><td>runtime routes force zero</td><td>no configured production revenue/carry policy</td></tr>
   </tbody>
@@ -108,6 +110,23 @@ invariants (still source/mechanical, not visual QA):</p>
 npm test
 npm run check</code></pre>
 
+<p>Run the local-real provider seam without devnet SOL or public RPC:</p>
+
+<pre><code>programs/clutch-sbf/svm-tests/run_svm_tests.sh \
+  --non-production-real-pyth-lab \
+  real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic</code></pre>
+
+<p>The captured deployed router persists a pinned, Verified locally signed
+synthetic proof. In a later transaction, the captured receiver writes a
+canonical price update immediately before Clutch appends it. Missing adjacency
+refuses with the archive unchanged; wrong Config or feed rolls back both the
+receiver-created update and archive. The Program/ProgramData bytes are captured
+deployment bytes; guardian and Config state is freshly initialized local fixture
+state. The one-record archive then seals and resolves payout cell 1 because the
+entire admitted conservative interval [99,980,929, 100,019,071] lies there.
+This is a real program/ABI/crypto seam in a local bank, not a current network
+price, redemption/multi-boundary campaign, or production source profile.</p>
+
 <p>Drive the complete local trading example:</p>
 
 <pre><code>CARGO_NET_OFFLINE=true scripts/run_operator_trade.sh</code></pre>
@@ -124,13 +143,13 @@ process-local capability cookie for its mutation and event endpoints.</p>
 <h2>The next architectural work</h2>
 
 <ol>
-  <li>Finish and adversarially test verified-only candidate admission; split submission and verification deadlines in the successor window.</li>
-  <li>Measure 416-slice entitlement and build authenticated location/adjacency indexes; a rank locator alone is only half the cost.</li>
-  <li>Repair the ResolutionWork model/runtime reward mismatch before using its liveness projection.</li>
-  <li>Optimize the streamed checkpoint and repeated FreezeEpoch walks without weakening hostile-byte refusals.</li>
-  <li>Version capacity profiles instead of quietly treating 16 outcomes and 64 orders as the product.</li>
+  <li>Separate candidate submission and verification deadlines, and replace ScoreV1 with a complete-set-invariant, Sybil-neutral objective.</li>
+  <li>Bind an exact semantic source profile and move the real-provider seam onto a signed-RPC local-validator campaign.</li>
+  <li>Build strict product-driven capability profiles; the current audited loader rent is 14.49529272 SOL, and the measured micro-optimization wave still leaves a 645,876-byte gap to ten SOL.</li>
+  <li>Add authenticated owner-reservation and epoch-child accounting before re-enabling Position or epoch-root deletion.</li>
+  <li>Build authenticated location/adjacency indexes and measure the maximum-page portfolio settlement variants; a rank locator alone is only half the cost.</li>
   <li>Separate Realm-selected collateral CPI from Token-2022 claim issuance so legacy collateral can be supported without a DREGG branch.</li>
-  <li>Promote the payoff compiler into an untrusted, independently checkable market-creation path.</li>
+  <li>Promote the payoff compiler into an independently checkable market-creation path, then add named transferable shaped claims, liquidity/exit, and wallet UX.</li>
 </ol>
 
 <p><a class="badge" href="evidence.html">READ THE EVIDENCE VOCABULARY — why

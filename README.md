@@ -50,11 +50,12 @@ with dependency/syscall and final-LTO stack checks green. These are local
 engineering results, not an accepted baseline, independent security audit,
 release, deployment, or formal verification of the whole program.
 
-The second-pass runtime input closure at `b3b43ae` is still **unsealed**, but it
-has now passed the complete offline artifact audit. Three independent builds,
-including a relocated Cargo home, produced the byte-identical 2,105,728-byte ELF
-`a56c7ce158dc0667fabbc6b9736699adf5e3495350cf8b56b7616bf56868e272`;
-the dependency/syscall, loader-shape, and final-LTO stack gates passed. The
+The second-pass runtime input closure at `169a1ba` is still **unsealed**, but it
+has passed the complete offline artifact audit. Three independent builds,
+including a relocated Cargo home, produced the byte-identical 2,082,320-byte ELF
+`193c08723eaefeff9a1c2aa53c9e3feb58960a919fb0bbb7ca5da3bd817aa95b`;
+the 129-file source closure, dependency/syscall surface, loader shape, and
+final-LTO stack gates passed. The
 review found that Position deletion could strand an all-in seller's live
 reservation, while epoch-root deletion could both reopen the same epoch
 identity and strand candidate/work accounts outside the retained top three.
@@ -62,11 +63,11 @@ Those two deletions now fail closed pending persisted reservation/child counts
 and a monotone epoch generation or tombstone. Artifact reproducibility is not a
 seal, release, deployment, or substitute for the complete bank and
 signed-validator promotion campaign. Against those frozen sources, the
-complete default empty-registry bank profile passed 165 tests with zero failures
-using that exact ELF. The separately compiled `non-production-mock-source`
-profile passed 168
-tests with zero failures using its distinct 2,133,648-byte ELF
-`8131e640af07fe1b064ef481db2bd5ba6755cead93070b1c9462afdec85f4d3f`.
+complete default production-inert bank profile (one unreachable fixture
+release, no production release) passed 165 tests with zero failures using that
+exact ELF. The separately compiled `non-production-mock-source`
+profile passed 168 tests with zero failures using its distinct 2,110,240-byte
+ELF `342fdfcb0e6b0836ec9ecd492d9a8577c87f493b49fd8c35e3cb47c448d06112`.
 The mock result exercises laboratory source/value paths and is not production
 source evidence.
 
@@ -121,11 +122,18 @@ test-only signers.
   lamports. This identity-bound overlay does not promote or relabel Cycle G.
 - The local pull-source path authenticates a receiver-written update and can
   resolve nonzero-confidence V2 categorical intervals. The actual deployed
-  Pyth receiver/router ELFs have separately verified a locally signed 13-of-19
-  guardian VAA and executed `PostUpdate`; this is real provider-program
-  execution with a synthetic observation, not devnet price evidence. That path
-  is not yet joined to Clutch, and production provider, program, feed,
-  stability, and trust-floor identities remain deliberately unpinned.
+  Pyth receiver/router ELFs now verify a locally signed 13-of-19 guardian VAA.
+  The real router first persists that Verified synthetic VAA. In a later
+  transaction, the real receiver's `PostUpdate` and `AppendSourceArchiveV2`
+  execute adjacently and atomically. Missing adjacency refuses with the archive
+  unchanged; wrong Config or feed rolls back both the receiver-created update
+  and archive. The Program/ProgramData bytes are captured deployment bytes;
+  the router guardian set and receiver Config are freshly initialized local
+  fixture state. This is real deployed provider-program/ABI/crypto execution
+  over a synthetic local observation, not devnet price evidence or a
+  same-market source-to-redemption lifecycle.
+  Production provider, feed-profile, stability, and trust-floor identities
+  remain deliberately unpinned.
 - Fixed bounds are one measured capacity profile, not a claim that the concept
   is limited to those widths.
 - Frozen ScoreV1 rewards risk-free complete-set wash flow and pubkey
@@ -135,12 +143,12 @@ test-only signers.
   than a complete no-arbitrage membership decision. The first public coupled
   profile should remain degree 0/1 until a full witness or safe inner
   representation exists.
-- The current 2,105,728-byte audited ELF costs 14.6582124 SOL in persistent
-  loader rent. Ten SOL is insufficient by 4.6582124 SOL before fees. The first
-  optimization/repair wave removed 54,344 bytes and 0.37823424 SOL from the
-  prior `a6381fbe…` artifact; reaching less than ten SOL still requires another
-  669,284 bytes, so it needs a product-driven capability profile rather than
-  only micro-optimization.
+- The current 2,082,320-byte audited ELF costs 14.49529272 SOL in persistent
+  loader rent. Ten SOL is insufficient by 4.49529272 SOL before fees. The
+  static-deduplication wave removed 54,344 bytes; eliminating the redundant
+  CreateMarket decode/re-encode removed another 23,408 bytes. Reaching less
+  than ten SOL still requires another 645,876 bytes, so it needs a
+  product-driven capability profile rather than only micro-optimization.
 
 See the current [architecture review](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
 for the source-backed findings and successor designs, the
@@ -205,14 +213,33 @@ programs/clutch-sbf/scripts/run_pyth_devnet_clone.sh
 It never reads a wallet, requests an airdrop, signs, or submits a public
 transaction. It does perform public RPC reads, so run it only within an
 explicitly authorized read window. The resulting validator is real-program
-local infrastructure, not a Clutch deployment and not proof that an actual
-encoded-VAA update has passed the complete integration. See the dated
+local infrastructure, not a Clutch deployment. The clone command alone does
+not exercise an encoded VAA or Clutch; the separate offline local-real campaign
+below does. See the dated
 [devnet source snapshot](docs/reviews/DEVNET_REAL_SOURCE_SNAPSHOT_2026-08-22.md)
 for the exact cloned identities, body digests, and remaining promotion gates.
 The [current unsealed SBF snapshot](docs/reviews/CURRENT_UNSEALED_SBF_SNAPSHOT_2026-08-22.md)
 records the clean input-closure ELF identity, complete offline artifact audit,
-final-LTO stack check, and provisional devnet rent arithmetic; it is not a
-release artifact.
+final-LTO stack check, exact local rent arithmetic, bank matrix, and keeper
+restart gate; it is not a release artifact.
+
+To run the reproducible local-real provider seam without any public RPC or
+faucet SOL:
+
+```sh
+programs/clutch-sbf/svm-tests/run_svm_tests.sh \
+  --non-production-real-pyth-lab \
+  real_pyth_router_verifies_then_post_update_and_clutch_append_are_atomic
+```
+
+This executes the captured deployed router and receiver programs through exact
+Upgradeable Loader accounts. The router persists the pinned Verified synthetic
+proof; in a later atomic transaction the receiver posts and Clutch appends it.
+The resulting one-record archive seals and resolves a categorical market whose
+selected cell contains the entire admitted conservative interval
+`[99,980,929, 100,019,071]`. The fixture provenance and every binary/input
+digest live under
+`programs/clutch-sbf/svm-tests/tests/fixtures/real-pyth-local/`.
 
 ### Run the local trading lifecycle
 

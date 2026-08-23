@@ -110,18 +110,28 @@ http://127.0.0.1:9147
 
 The four named accounts reloaded locally with the expected owners,
 executability, and sizes. This establishes a real-binary/account substrate for
-local integration work. It does **not** yet establish a successful real
-`post_update -> AppendSourceArchiveV2` transaction: that requires a verified
-encoded VAA or atomic proof payload plus the Clutch seam repairs identified by
-the architecture review.
+local integration work. Commit `169a1ba` added the pinned provider fixtures,
+reconstructed and hash-checked their complete Upgradeable Loader
+Program/ProgramData bodies, and executed persisted router verification followed
+by an adjacent atomic `PostUpdate -> AppendSourceArchiveV2` join. Missing
+adjacency refused with the archive unchanged; wrong Config or feed rolled back
+both the receiver-created update and archive. The Program/ProgramData bytes are
+captured deployment bytes; the 19-guardian router set and receiver Config are
+freshly initialized local fixture state. Commit `5ab10b0` then narrowed the
+campaign to a complete one-bucket categorical window, sealed it, and resolved
+payout cell 1 from the entire admitted conservative interval
+`[99,980,929, 100,019,071]`. This is real deployed program/ABI/crypto execution
+over a synthetic local observation. It is not a devnet
+price, provider-availability, current 3-of-5 trust-substrate, daemon,
+redemption, multi-boundary window, or production-profile claim.
 
 ## Required before release use
 
-Post-snapshot implementation status: items 1–4 below are repaired in the
-current unsealed working source. The fixture adapter release advanced from v2
-to v3; host tests and the laboratory SVM campaign cover exact ABI admission,
-receiver-written evidence, and rollback. Those results do not promote this
-snapshot or close items 5–7.
+Post-snapshot implementation status: items 1–4 and the local-program half of
+item 7 below are repaired in the current unsealed source. The fixture adapter
+release advanced from v2 to v3; host tests and the local-real SVM campaign cover
+exact ABI admission, receiver-written evidence, and rollback. Those results do
+not promote this snapshot or close the remaining release gates.
 
 1. **Repaired in-flight:** require the update account writable in the append
    transaction.
@@ -135,5 +145,11 @@ snapshot or close items 5–7.
    exact cluster/Profile digest. The first public profile should bind both.
 6. Re-capture ProgramData and Config after the announced upgrade boundary and
    over a named stability interval.
-7. Run the actual upstream receiver locally with a fully verified payload,
-   then rebuild, measure, reseal, and independently reproduce the Clutch ELF.
+7. **Local-program half complete:** the actual captured router and receiver
+   execute locally with a fully verified synthetic payload; a later atomic
+   transaction joins receiver post to Clutch append, seals the one-record
+   archive, and resolves a categorical market.
+   Still required: a current network-signed upgraded payload, exact semantic
+   feed-profile admission, daemon-level signed-RPC campaign, multi-boundary
+   window/redemption evidence, production-profile rebuild/reseal, and
+   independent reproduction.

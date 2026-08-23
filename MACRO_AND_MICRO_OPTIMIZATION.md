@@ -62,10 +62,10 @@ interpretations and one runtime/model consistency assumption do not.
    upper bound rather than a separately isolated result.
 7. **Ten SOL is an architecture target, not a micro-optimization target.** At
    default rent the complete loader-v3 resident must be at most 1,436,444
-   bytes. From the current 2,105,728 bytes that is another 669,284-byte /
-   31.78% reduction. The original `a6381fbe…` gap was 723,628 bytes / 33.50%.
-   Static deduplication plus removing the CreateMarket intent round-trip can at
-   most project roughly 68 KiB before LTO measurement. Exact `opt-level=s`
+   bytes. The second-pass runtime artifact audit at `169a1ba` produced a
+   2,082,320-byte
+   ELF, leaving another 645,876-byte / 31.02% reduction. The original
+   `a6381fbe…` gap was 723,628 bytes / 33.50%. Exact `opt-level=s`
    produced 1,725,512 bytes / 12.01190904 SOL, but is RED: final
    `artifact::validate_artifact` reaches `r10-5064`. Rehabilitating that profile
    requires a named function split and the complete same-ELF stack/bank/CU gate.
@@ -75,6 +75,16 @@ interpretations and one runtime/model consistency assumption do not.
    embedded mandatory funding tails, and specialized OrderPages. These change
    account formats, contention, and close geometry; they are macro work with
    explicit CU/rent/terminal tests, not packing tricks.
+9. **The CreateMarket decode round trip was a real but bounded micro win.** The
+   decoder now parses once, checks exact end-of-wire, and shares one semantic
+   field validator with the encoder instead of allocating a scratch buffer and
+   calling `Intent::encode`. The complete audit removed `Intent::encode` and
+   `Intent::encoded_len` from the final ELF and measured 23,408 fewer bytes /
+   162,919,680 fewer persistent-rent lamports than the prior 2,105,728-byte
+   artifact. The resulting default ELF is
+   `193c08723eaefeff9a1c2aa53c9e3feb58960a919fb0bbb7ca5da3bd817aa95b`;
+   all 165 default and 168 mock-profile bank tests pass. This is worth keeping,
+   but its scale reinforces rather than weakens the capability-profile verdict.
 
 The broader generality findings — collateral-program mismatch, owner-rounding
 admission restrictions, capacity profiles, and the payoff compiler — live in

@@ -132,36 +132,49 @@ an atomic portfolio order from a single transferable asset.
 The exact pushed checkpoint had no coherent full default/mock SVM run: three
 tests still encoded pre-repair candidate-retention semantics. Critical signed
 validator lanes (`run_general_committed`, keeper crash/resume, paces dry-run,
-Operator Trade/replay) were also absent from the baseline manifest. A cloned
-Pyth validator is useful substrate. Separately, the actual deployed receiver
-and router ELFs have now verified a locally signed 13-of-19 guardian VAA and
-executed `PostUpdate`; that is real provider-program execution over a synthetic
-local observation, not devnet price evidence. The receiver call is still not
-joined to the Clutch archive and same-market lifecycle.
+Operator Trade/replay) were also absent from the baseline manifest. The current
+keeper gate now survives a deliberate mid-walk kill, resumes from chain state,
+closes every currently safe leaf, and reaches the same fail-closed `Blocked`
+state across a second fresh restart while retaining the replay anchors. A
+cloned Pyth validator is useful substrate. More importantly, the captured
+deployed router and receiver now execute through exact Upgradeable Loader
+accounts in a feature-gated local bank. At `169a1ba`, the router first persists
+a Verified locally signed 13-of-19 synthetic VAA. In a later transaction, real
+`PostUpdate` and Clutch append execute adjacently and atomically. Missing
+adjacency refuses with the archive unchanged; wrong Config or feed rolls back
+both the receiver-created update and archive. At `5ab10b0`, the one-record
+archive seals and resolves payout cell 1 because the entire admitted
+conservative interval `[99,980,929, 100,019,071]` lies in that cell. The
+Program/ProgramData bytes are captured deployment bytes; guardian and Config
+state is freshly initialized local fixture state. This is real provider-program
+and ABI/crypto execution over a synthetic local observation, not devnet price
+evidence. Redemption and a multi-boundary shared window remain separate claims.
 
 The current repair wave passed three byte-identical artifact builds, including
 a relocated Cargo home: ELF
-`a56c7ce158dc0667fabbc6b9736699adf5e3495350cf8b56b7616bf56868e272`,
-2,105,728 bytes, with dependency/syscall, loader-shape, and final-LTO frame
-checks green. It costs 14.6582124 SOL of persistent loader rent; ten SOL is
-insufficient by 4.6582124 SOL before fees. The combined static-deduplication and
-fail-closed wave removed 54,344 bytes / 0.37823424 SOL from `a6381fbe…`.
-Getting under ten SOL still requires an ELF no larger than 1,436,444 bytes,
-another 669,284-byte reduction. Larger wins require
+`193c08723eaefeff9a1c2aa53c9e3feb58960a919fb0bbb7ca5da3bd817aa95b`,
+2,082,320 bytes, with dependency/syscall, loader-shape, and final-LTO frame
+checks green. It costs 14.49529272 SOL of persistent loader rent; ten SOL is
+insufficient by 4.49529272 SOL before fees. Static deduplication removed 54,344
+bytes from `a6381fbe…`; eliminating the redundant CreateMarket decoder round
+trip removed another 23,408 bytes / 0.16291968 SOL. Getting under ten SOL still
+requires an ELF no larger than 1,436,444 bytes, another 645,876-byte reduction.
+Larger wins require
 capability profiles and active-width account formats, not weakened exactness:
 binary ClearWork alone can shrink by 33,376 bytes per candidate, and receipt
 pages can remove most of the per-receipt account overhead. Historical rent
 evidence remains immutable; current-tree inventories must separately correct
 Direct Epoch V4 to 673 bytes and include the 404-byte SourceSpec V2.
 
-After freezing that source, the complete default empty-registry SVM profile
-passed 165 tests with zero failures against the audited `a56c7ce…` ELF. The
+After freezing that source, the complete default production-inert SVM profile
+(one unreachable fixture release; no production release) passed 165 tests with
+zero failures against the audited `193c0872…` ELF. The
 separately compiled `non-production-mock-source` profile passed 168 tests with
-zero failures against its distinct 2,133,648-byte ELF `8131e640…`. The profile
+zero failures against its distinct 2,110,240-byte ELF `342fdfcb…`. The profile
 distinction is part of the claim: the latter exercises funded laboratory
-source/value paths and is not production-source evidence. Signed loopback
-validator and Operator gates still remain before this wave can be considered a
-replacement evidence baseline.
+source/value paths and is not production-source evidence. Signed Operator gates
+and a current manifest/second-host seal still remain before this wave can be
+considered a replacement evidence baseline.
 
 ## Decisions to keep
 
@@ -410,9 +423,20 @@ through the canonical accumulator/reference authority: the 14-account bank
 success costs 166,465 CU, while boundary ambiguity and legacy buffer shapes
 refuse without state change.
 
-The default registry remains empty. The local Pyth clone supplies the real
-upgradeable receiver/router/config substrate, but no encoded-VAA update has yet
-driven the upstream receiver followed by Clutch append. Production identity
+The default artifact still has no production release; its sole default row is
+the fabricated off-curve fixture. A separate, unmistakably non-production
+feature pins captured deployed receiver/router binaries and their exact
+Upgradeable Loader Program/ProgramData bodies. The real router first persists
+a Verified locally signed 13-of-19 synthetic VAA. In a later transaction, the
+real receiver's `PostUpdate` and Clutch append execute adjacently and atomically.
+Missing adjacency refuses with the archive unchanged; wrong Config or feed
+rolls back both the receiver-created update and archive. The one-record archive
+then seals and resolves payout cell 1 because the entire admitted conservative
+interval `[99,980,929, 100,019,071]` lies in that cell.
+This closes the provider-program seam through one-bucket resolution over a
+synthetic local observation; it does not establish devnet price data, provider
+availability, the current upgraded 3-of-5 trust substrate, a semantic feed
+profile, redemption, or a multi-boundary shared window. Production identity
 constants, feed choice, stability interval, and trust floor remain deliberately
 unpinned. This is a release/profile boundary, not a reason to weaken source
 authentication.
