@@ -24,12 +24,22 @@ use clutch_direct_market_runtime::selection_v1::DirectSelectionV1;
 use clutch_direct_market_runtime::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketErrorV1, DirectMarketRootV1,
 };
+use clutch_batch::relation_v2::{
+    price_semantics_digest_v2, EconomicDomainV2, PricePreconditionV2,
+    ECONOMIC_RELATION_VERSION_V2,
+};
+use clutch_price_measure::PriceVectorV3;
+use clutch_product_series::{
+    CompiledProductSeriesBundleV5, ContentId, MarketGenesisProfileV2, NativeClaimBasisV1,
+    PriceMeasurePolicyV1,
+};
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
     DirectSelectionAccountV1, DIRECT_ACTION_REPLAY_BODY_BYTES_V1,
     DIRECT_MARKET_ROOT_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
     DIRECT_SELECTION_BODY_BYTES_V1,
 };
+use clutch_solana_layout::{account_len, PriceGridAccount};
 use clutch_solana_layout::registry::{
     DIRECT_ACTION_REPLAY_ACCOUNT_BYTES, DIRECT_MARKET_ROOT_ACCOUNT_BYTES,
     DIRECT_RESERVATION_ACCOUNT_BYTES, DIRECT_SELECTION_ACCOUNT_BYTES,
@@ -37,8 +47,12 @@ use clutch_solana_layout::registry::{
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
+use super::product_artifact::authenticate_product_artifact_v1;
+
 const DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/account-authentication/v1\0";
+const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/price-authentication/v1\0";
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == RUNTIME_ROOT_BODY_BYTES);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == RUNTIME_SELECTION_BODY_BYTES);
@@ -133,6 +147,157 @@ impl AuthenticatedDirectReservationV1 {
     pub(crate) const fn data_id(self) -> [u8; 32] { self.data_id }
     pub(crate) const fn semantic_id(self) -> [u8; 32] { self.semantic_id }
     pub(crate) const fn observed_lamports(self) -> u64 { self.observed_lamports }
+}
+
+/// Private Product/PriceGrid-authenticated action-4 input. Construction owns
+/// the complete immutable graph join; callers receive only the exact Relation
+/// domain and price precondition persisted by b2.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectPricePreconditionV1 {
+    domain: EconomicDomainV2,
+    price: PricePreconditionV2,
+    authentication_id: [u8; 32],
+}
+
+impl AuthenticatedDirectPricePreconditionV1 {
+    pub(crate) const fn domain(self) -> EconomicDomainV2 { self.domain }
+    pub(crate) const fn price(self) -> PricePreconditionV2 { self.price }
+    pub(crate) const fn authentication_id(self) -> [u8; 32] { self.authentication_id }
+}
+
+/// Authenticate the current Product bundle, native basis, price policy,
+/// Genesis V2, and immutable venue grid before b2 may own a price vector.
+/// Every active component must be an exact grid tick; every inactive component
+/// must be zero; Product independently checks width, scale, and simplex sum.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn authenticate_direct_price_precondition_v1(
+    program_id: &Pubkey,
+    root: AuthenticatedDirectMarketRootV1,
+    bundle_account: &AccountInfo<'_>,
+    basis_account: &AccountInfo<'_>,
+    price_policy_account: &AccountInfo<'_>,
+    genesis_account: &AccountInfo<'_>,
+    price_grid_account: &AccountInfo<'_>,
+    prices: [u64; 16],
+) -> Outcome<AuthenticatedDirectPricePreconditionV1> {
+    let binding = root.value().binding;
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
+        program_id,
+        bundle_account,
+        ContentId::from_bytes(binding.compiler_bundle_v5_id),
+    )?;
+    let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
+        program_id,
+        basis_account,
+        bundle.value().native_claim_basis_id.content_id(),
+    )?;
+    let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
+        program_id,
+        price_policy_account,
+        bundle.value().price_measure_policy_id.content_id(),
+    )?;
+    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
+        program_id,
+        genesis_account,
+        bundle.value().market_genesis_profile_id.content_id(),
+    )?;
+    require(
+        bundle.value().price_measure_policy_id.content_id().bytes() == binding.price_policy_id
+            && bundle.value().series_plan_id.bytes() == binding.founder_series_plan_id
+            && genesis.value().realm_id.bytes() == binding.realm_id
+            && genesis.value().profile_id.bytes() == binding.collateral_profile_id
+            && genesis.value().relation_policy_id.bytes() == binding.relation_policy_id
+            && genesis.value().price_measure_policy_id.content_id().bytes()
+                == binding.price_policy_id
+            && basis.value().outcome_count == binding.outcome_count,
+        ClutchError::MismatchedState,
+    )?;
+
+    require(
+        price_grid_account.owner == program_id
+            && !price_grid_account.is_signer
+            && !price_grid_account.executable
+            && !price_grid_account.is_writable
+            && price_grid_account.data_len() == account_len::PRICE_GRID,
+        ClutchError::MismatchedState,
+    )?;
+    let grid_data = price_grid_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let grid = PriceGridAccount::decode(&grid_data)?;
+    expect_pda(
+        price_grid_account.key,
+        seeds::grid_pda(program_id, &grid.realm.0, &grid.grid.0),
+        Some(grid.stored_bump),
+    )?;
+    require(
+        grid.realm.0 == binding.realm_id
+            && grid.grid.0 == genesis.value().price_grid_id.bytes()
+            && grid.price_scale == binding.price_scale,
+        ClutchError::MismatchedState,
+    )?;
+    let active = usize::from(binding.outcome_count);
+    let mut index = 0usize;
+    while index < prices.len() {
+        if index < active {
+            grid.tick_of(prices[index])?;
+        } else {
+            require(prices[index] == 0, ClutchError::NonCanonical)?;
+        }
+        index += 1;
+    }
+    let price_vector = PriceVectorV3 {
+        basis_degree: basis.value().basis_degree,
+        native_outcome_count: binding.outcome_count,
+        price_scale: grid.price_scale,
+        prices,
+    };
+    price_policy
+        .value()
+        .validate_candidate_price_contract(basis.value(), &price_vector, grid.price_scale)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let grid_data_id = solana_sha256_hasher::hashv(&[&grid_data[..]]).to_bytes();
+    drop(grid_data);
+
+    let domain = EconomicDomainV2 {
+        relation_version: ECONOMIC_RELATION_VERSION_V2,
+        market_semantics_digest: binding.market_instance_id,
+        epoch_semantics_digest: binding.resolution_semantic_id,
+        relation_policy_digest: binding.relation_policy_id,
+        price_policy_digest: binding.price_policy_id,
+        epoch_index: binding.generation,
+        outcome_count: binding.outcome_count,
+        price_scale: binding.price_scale,
+    };
+    let semantic_price_digest = price_semantics_digest_v2(&domain, &prices)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let price = PricePreconditionV2 {
+        policy_digest: binding.price_policy_id,
+        semantic_price_digest,
+        prices,
+    };
+    price
+        .validate(&domain)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let authentication_id = solana_sha256_hasher::hashv(&[
+        DIRECT_PRICE_AUTHENTICATION_DOMAIN_V1,
+        &root.semantic_id(),
+        bundle_account.key.as_ref(),
+        basis_account.key.as_ref(),
+        price_policy_account.key.as_ref(),
+        genesis_account.key.as_ref(),
+        price_grid_account.key.as_ref(),
+        &grid_data_id,
+        &semantic_price_digest,
+    ])
+    .to_bytes();
+    require_live_id_v1(authentication_id)?;
+    Ok(AuthenticatedDirectPricePreconditionV1 {
+        domain,
+        price,
+        authentication_id,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

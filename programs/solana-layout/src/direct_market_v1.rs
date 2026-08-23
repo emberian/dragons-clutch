@@ -5,6 +5,173 @@
 //! are interpreted exclusively by `clutch-direct-market-runtime`.
 
 use crate::{registry, CodecError, Result};
+use clutch_batch::direct_pair_v1::DirectEconomicCandidateV1;
+use clutch_batch::{PartialPolicy, Side};
+
+/// Exact action-1 schedule payload bytes.
+pub const DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1: usize = 40;
+/// Exact action-2 owner-blind order payload bytes.
+pub const DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1: usize = 80;
+/// Exact action-4 full-width price-simplex payload bytes.
+pub const DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1: usize = 128;
+/// Exact action-5 compact candidate payload bytes.
+pub const DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1: usize = 24;
+
+/// Strict action-1 schedule. Slot observation is always the Clock sysvar and
+/// therefore is not repeated here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectInitializeMarketPayloadV1 {
+    /// Inclusive Reservation admission open.
+    pub admission_opens_slot: u64,
+    /// Exclusive admission/cancellation close.
+    pub admission_closes_slot: u64,
+    /// Exclusive candidate submission close.
+    pub submission_closes_slot: u64,
+    /// Exclusive verification/selection close.
+    pub selection_deadline_slot: u64,
+    /// Exclusive selected-pair settlement close.
+    pub settlement_deadline_slot: u64,
+}
+
+impl DirectInitializeMarketPayloadV1 {
+    /// Decode exactly forty schedule bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_len(input, DIRECT_INITIALIZE_MARKET_PAYLOAD_BYTES_V1)?;
+        Ok(Self {
+            admission_opens_slot: u64_at(input, 0),
+            admission_closes_slot: u64_at(input, 8),
+            submission_closes_slot: u64_at(input, 16),
+            selection_deadline_slot: u64_at(input, 24),
+            settlement_deadline_slot: u64_at(input, 32),
+        })
+    }
+}
+
+/// Strict action-2 coordinates. Owner, Position, Replay, root, rent principal,
+/// hostile prefund, Reservation PDA, and the current action ordinal all come
+/// exclusively from authenticated accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectAdmitOrderPayloadV1 {
+    /// Caller-chosen owner-blind order identity, persisted exactly once by b4.
+    pub order_id: [u8; 32],
+    /// Buy or sell.
+    pub side: Side,
+    /// Native Egg outcome.
+    pub outcome: u8,
+    /// Partial-fill policy.
+    pub partial_policy: PartialPolicy,
+    /// Maximum Egg units.
+    pub quantity: u64,
+    /// Smallest admitted nonzero fill.
+    pub minimum_fill: u64,
+    /// Last eligible Direct generation.
+    pub expiry_epoch: u64,
+    /// Exact price units per Egg.
+    pub limit_price_units_per_egg: u128,
+}
+
+impl DirectAdmitOrderPayloadV1 {
+    /// Decode the exact canonical 80-byte order payload.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_len(input, DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1)?;
+        let side = match input[32] {
+            1 => Side::Buy,
+            2 => Side::Sell,
+            _ => return Err(CodecError::InvalidEnum),
+        };
+        let partial_policy = match input[34] {
+            1 => PartialPolicy::Allow,
+            2 => PartialPolicy::AllOrNone,
+            _ => return Err(CodecError::InvalidEnum),
+        };
+        if input[35..40].iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let mut order_id = [0u8; 32];
+        order_id.copy_from_slice(&input[..32]);
+        if order_id == [0; 32] {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(Self {
+            order_id,
+            side,
+            outcome: input[33],
+            partial_policy,
+            quantity: u64_at(input, 40),
+            minimum_fill: u64_at(input, 48),
+            expiry_epoch: u64_at(input, 56),
+            limit_price_units_per_egg: u128_at(input, 64),
+        })
+    }
+}
+
+/// Strict action-4 full-width exact price vector. Active width and zero tail
+/// are checked against Product and the root; grid membership is an SBF account
+/// join and is intentionally not represented by caller bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectFreezeBookPayloadV1 {
+    /// Sixteen exact integer price components.
+    pub prices: [u64; 16],
+}
+
+impl DirectFreezeBookPayloadV1 {
+    /// Decode exactly sixteen little-endian components.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_len(input, DIRECT_FREEZE_BOOK_PAYLOAD_BYTES_V1)?;
+        let mut prices = [0u64; 16];
+        let mut index = 0usize;
+        while index < prices.len() {
+            let start = index.checked_mul(8).ok_or(CodecError::ArithmeticOverflow)?;
+            prices[index] = u64_at(input, start);
+            index += 1;
+        }
+        Ok(Self { prices })
+    }
+}
+
+/// Strict action-5 compact two-row RelationV2 candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectSubmitCandidatePayloadV1 {
+    /// Exact compact candidate coordinates.
+    pub candidate: DirectEconomicCandidateV1,
+}
+
+impl DirectSubmitCandidatePayloadV1 {
+    /// Decode two fills, one AON mask, and seven canonical zero bytes.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_len(input, DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1)?;
+        if input[17..24].iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        Ok(Self {
+            candidate: DirectEconomicCandidateV1 {
+                fills: [u64_at(input, 0), u64_at(input, 8)],
+                honored_aon_mask: input[16],
+            },
+        })
+    }
+}
+
+/// Require the exact empty payload used by actions 3 and 6..=13.
+pub fn decode_direct_empty_payload_v1(input: &[u8]) -> Result<()> {
+    require_len(input, 0)
+}
+
+fn require_len(input: &[u8], expected: usize) -> Result<()> {
+    if input.len() == expected { Ok(()) } else { Err(CodecError::WrongLength) }
+}
+
+fn u64_at(input: &[u8], start: usize) -> u64 {
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&input[start..start + 8]);
+    u64::from_le_bytes(bytes)
+}
+
+fn u128_at(input: &[u8], start: usize) -> u128 {
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&input[start..start + 16]);
+    u128::from_le_bytes(bytes)
+}
 
 /// Exact `0xb1/1` semantic body bytes.
 pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize =
@@ -273,5 +440,37 @@ mod tests {
             Err(CodecError::NonCanonicalPadding)
         );
     }
-}
 
+    #[test]
+    fn direct_payloads_refuse_truncation_enums_and_padding() {
+        assert_eq!(
+            DirectInitializeMarketPayloadV1::decode(&[0; 39]),
+            Err(CodecError::WrongLength)
+        );
+        let mut order = [0u8; DIRECT_ADMIT_ORDER_PAYLOAD_BYTES_V1];
+        order[..32].fill(1);
+        order[32] = 1;
+        order[34] = 1;
+        order[40..48].copy_from_slice(&1u64.to_le_bytes());
+        assert!(DirectAdmitOrderPayloadV1::decode(&order).is_ok());
+        order[32] = 3;
+        assert_eq!(
+            DirectAdmitOrderPayloadV1::decode(&order),
+            Err(CodecError::InvalidEnum)
+        );
+        order[32] = 1;
+        order[35] = 1;
+        assert_eq!(
+            DirectAdmitOrderPayloadV1::decode(&order),
+            Err(CodecError::NonCanonicalPadding)
+        );
+
+        let mut candidate = [0u8; DIRECT_SUBMIT_CANDIDATE_PAYLOAD_BYTES_V1];
+        candidate[23] = 1;
+        assert_eq!(
+            DirectSubmitCandidatePayloadV1::decode(&candidate),
+            Err(CodecError::NonCanonicalPadding)
+        );
+        assert_eq!(decode_direct_empty_payload_v1(&[0]), Err(CodecError::WrongLength));
+    }
+}
