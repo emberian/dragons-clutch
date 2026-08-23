@@ -531,8 +531,16 @@ impl AuthenticatedMarketFounderFoundationV1 {
         self.root_account
     }
 
+    pub(crate) const fn root_authentication_id(self) -> ContentId {
+        self.root_authentication_id
+    }
+
     pub(crate) const fn link_account(self) -> Pubkey {
         self.link_account
+    }
+
+    pub(crate) const fn link_authentication_id(self) -> ContentId {
+        self.link_authentication_id
     }
 
     pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
@@ -555,8 +563,32 @@ impl AuthenticatedMarketFounderFoundationV1 {
         self.funding_quote_id
     }
 
+    pub(crate) const fn funding_terms_id(self) -> ContentId {
+        self.funding_terms_id
+    }
+
+    pub(crate) const fn attachment_plan_id(self) -> ContentId {
+        self.attachment_plan_id
+    }
+
     pub(crate) const fn compiler_bundle_id(self) -> ContentId {
         self.compiler_bundle_id
+    }
+
+    pub(crate) const fn registry_release_id(self) -> ContentId {
+        self.registry_release_id
+    }
+
+    pub(crate) const fn capability_profile_id(self) -> ContentId {
+        self.capability_profile_id
+    }
+
+    pub(crate) const fn foundation_schedule_id(self) -> ContentId {
+        self.foundation_schedule_id
+    }
+
+    pub(crate) const fn foundation_account_graph_id(self) -> ContentId {
+        self.foundation_account_graph_id
     }
 
     fn authenticate_debit(self, debit: AuthenticatedMarketFoundationDebitV1) -> Outcome<()> {
@@ -2328,6 +2360,10 @@ pub(crate) struct AuthenticatedMarketFoundationStepV2 {
     debit_id: ContentId,
     accepted_poststate_receipt_id: ContentId,
     root_account: Pubkey,
+    root_semantic_before: ContentId,
+    root_semantic_after: ContentId,
+    root_data_before: ContentId,
+    root_data_after: ContentId,
     root_authentication_before: ContentId,
     root_authentication_after: ContentId,
     slot: MarketFoundationSlotV2,
@@ -2337,6 +2373,10 @@ pub(crate) struct AuthenticatedMarketFoundationStepV2 {
 impl AuthenticatedMarketFoundationStepV2 {
     pub(crate) const fn id(self) -> ContentId {
         self.id
+    }
+
+    pub(crate) const fn founder_authorization_id(self) -> ContentId {
+        self.founder_authorization_id
     }
 
     pub(crate) const fn debit_id(self) -> ContentId {
@@ -2351,12 +2391,70 @@ impl AuthenticatedMarketFoundationStepV2 {
         self.root_account
     }
 
+    pub(crate) const fn root_semantic_before(self) -> ContentId {
+        self.root_semantic_before
+    }
+
+    pub(crate) const fn root_semantic_after(self) -> ContentId {
+        self.root_semantic_after
+    }
+
+    pub(crate) const fn root_data_before(self) -> ContentId {
+        self.root_data_before
+    }
+
+    pub(crate) const fn root_data_after(self) -> ContentId {
+        self.root_data_after
+    }
+
+    pub(crate) const fn root_authentication_before(self) -> ContentId {
+        self.root_authentication_before
+    }
+
+    pub(crate) const fn root_authentication_after(self) -> ContentId {
+        self.root_authentication_after
+    }
+
     pub(crate) const fn slot(self) -> MarketFoundationSlotV2 {
         self.slot
     }
 
     pub(crate) const fn account(self) -> Pubkey {
         self.account
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) const fn test_only(
+        id: ContentId,
+        founder_authorization_id: ContentId,
+        debit_id: ContentId,
+        accepted_poststate_receipt_id: ContentId,
+        root_account: Pubkey,
+        root_semantic_before: ContentId,
+        root_semantic_after: ContentId,
+        root_data_before: ContentId,
+        root_data_after: ContentId,
+        root_authentication_before: ContentId,
+        root_authentication_after: ContentId,
+        slot: MarketFoundationSlotV2,
+        account: Pubkey,
+    ) -> Self {
+        Self {
+            id,
+            founder_authorization_id,
+            debit_id,
+            accepted_poststate_receipt_id,
+            root_account,
+            root_semantic_before,
+            root_semantic_after,
+            root_data_before,
+            root_data_after,
+            root_authentication_before,
+            root_authentication_after,
+            slot,
+            account,
+        }
     }
 }
 
@@ -2647,6 +2745,11 @@ where
         debit.neutral_lamport_sink,
         accepted_poststate_receipt_id,
     )?;
+    let root_semantic_before = root
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_data_before = root.data_id();
     let root_authentication_before = root.authentication_id();
     let rebound = accept_market_foundation_postwrite_v1(
         program_id,
@@ -2668,11 +2771,20 @@ where
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let root_semantic_after = rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_data_after = rebound.data_id();
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             MARKET_FOUNDATION_STEP_AUTHENTICATION_DOMAIN_V2,
             program_id.as_ref(),
             root_account.key.as_ref(),
+            &root_semantic_before.bytes(),
+            &root_semantic_after.bytes(),
+            &root_data_before.bytes(),
+            &root_data_after.bytes(),
             &root_authentication_before.bytes(),
             &rebound.authentication_id().bytes(),
             &founder.id.bytes(),
@@ -2694,6 +2806,10 @@ where
             debit_id: debit.id,
             accepted_poststate_receipt_id,
             root_account: *root_account.key,
+            root_semantic_before,
+            root_semantic_after,
+            root_data_before,
+            root_data_after,
             root_authentication_before,
             root_authentication_after: rebound.authentication_id(),
             slot: debit.slot,
