@@ -27,17 +27,19 @@ use clutch_fee_runtime_contract::intent::{
 };
 use clutch_fee_runtime_contract::projection::{
     project_pre_row_owner_fee_v4, reauthenticate_persisted_payer_allocation_snapshot_v1,
-    AuthenticatedSelectedOwnerFeeV4,
+    AuthenticatedSelectedOwnerFeeV4, CertifiedRecipientAllocationV2,
 };
 use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
 use clutch_fee_runtime_contract::terminal::{
+    CandidateFeeAccountRoleV1, ExternalFeeAccountClosureV1, FeeTerminalOutcomeV1,
     OwnerFeeFinalizationBindingsV2, OwnerFeeFinalizationReceiptV1,
 };
 use clutch_general_v2_contract::{
     fee_runtime_semantic_release_id_v1, payer_allocation_account_data_id_v1,
     prepare_owner_fee_rent_transition_v3, project_general_replay_transition_v1,
     recipient_allocation_account_data_id_v2,
+    FeeLamportTransferV2,
     GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
     GeneralReplayTransitionPlanV1, Id32, MarketBindingV2, OwnerFeeCarryV3AccountV1,
     OwnerFeeFinalizationV4AccountV1, OwnerFeeRentTransitionAccountsV3,
@@ -51,11 +53,12 @@ use clutch_general_v2_contract::{
     SELECTED_FEE_RECORD_ACCOUNT_BYTES,
 };
 use clutch_general_v2_runtime::{
-    derive_root_owner_basis_v4, derive_zero_fee_owner_finalization_evidence_v5,
-    prepare_realize_owner_cash_v5,
+    derive_root_owner_basis_v4, derive_settlement_root_expectation_from_certified_fee_v2,
+    derive_zero_fee_owner_finalization_evidence_v5, prepare_realize_owner_cash_v5,
     project_owner_settlement_account_v5, CandidateEntitlementProjectionV4,
     OwnerCashRealizationPlanV5, OwnerRowFeeEvidenceV4, OwnerSettlementAccountProjectionV5,
-    OwnerSettlementAccountViewV5, SettlementTraversalProjectionV4,
+    OwnerSettlementAccountViewV5, SettlementRootExpectationProjectionV1,
+    SettlementTraversalProjectionV4,
 };
 use clutch_owner_settlement::{
     OwnerSettlementExpectationBasisV4, OwnerSettlementExpectationV4, OwnerSettlementStateV4,
@@ -152,6 +155,69 @@ pub struct CandidateFeeCollectionAccountFrameV5<'a, 'info> {
     pub revenue_policy_record: &'a AccountInfo<'info>,
 }
 
+/// Additional writable roles used only by the candidate-wide terminal close.
+///
+/// The immutable policy/selected-record roles remain in [`Self::collection`].
+/// The recipient account itself must be writable in this frame because the
+/// terminal handler deletes it after applying both exact lamport transfers.
+#[derive(Clone, Copy, Debug)]
+pub struct CandidateFeeCollectionClosureAccountFrameV5<'a, 'info> {
+    /// Same exact action-39 account graph, with the recipient role writable.
+    pub collection: CandidateFeeCollectionAccountFrameV5<'a, 'info>,
+    /// Counted-root-selected immutable MarketBinding V2.
+    pub market_binding: &'a AccountInfo<'info>,
+    /// Persisted recipient-account rent-principal owner.
+    pub rent_refund_owner: &'a AccountInfo<'info>,
+    /// MarketBinding-owned neutral destination for hostile prefunding/surplus.
+    pub neutral_sink: &'a AccountInfo<'info>,
+}
+
+/// Independently authenticated terminal authority facts for closing 0x85/v2.
+///
+/// This type is not terminal authority by itself. The caller must construct it
+/// from the candidate-wide fee terminal composer that simultaneously persists
+/// the closure manifest and terminal receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateFeeCollectionClosureExpectationV5 {
+    market_binding: Id32,
+    recipient_account_data_id: Id32,
+    runtime_release: Id32,
+    close_receipt: Id32,
+    outcome: FeeTerminalOutcomeV1,
+}
+
+impl CandidateFeeCollectionClosureExpectationV5 {
+    /// Bind a terminal composition to exact immutable and pre-close identities.
+    pub fn new(
+        market_binding: Id32,
+        recipient_account_data_id: Id32,
+        runtime_release: Id32,
+        close_receipt: Id32,
+        outcome: FeeTerminalOutcomeV1,
+    ) -> Outcome<Self> {
+        require(
+            !market_binding.is_zero()
+                && !recipient_account_data_id.is_zero()
+                && !runtime_release.is_zero()
+                && !close_receipt.is_zero()
+                && market_binding != recipient_account_data_id
+                && market_binding != runtime_release
+                && market_binding != close_receipt
+                && recipient_account_data_id != runtime_release
+                && recipient_account_data_id != close_receipt
+                && runtime_release != close_receipt,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            market_binding,
+            recipient_account_data_id,
+            runtime_release,
+            close_receipt,
+            outcome,
+        })
+    }
+}
+
 /// Independently authenticated action-39 facts expected from General.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CandidateFeeCollectionExpectationV5 {
@@ -215,18 +281,26 @@ impl CandidateFeeCollectionExpectationV5 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedCandidateFeeCollectionV5 {
     selected: SelectedCompositeFeeV1,
+    certified: CertifiedRecipientAllocationV2,
     recipient_account: Id32,
     recipient_account_data_id: Id32,
     owner_fee_book_data_id: FeeId,
     owner_order_set_digest: FeeId,
     owner_count: u16,
     selected_fee_atoms: u64,
+    recipient_rent: DeletableRentOwnerV1,
+    recipient_bump: u8,
 }
 
 impl PreparedCandidateFeeCollectionV5 {
     /// Exact selected composite-fee record.
     pub const fn selected(&self) -> SelectedCompositeFeeV1 {
         self.selected
+    }
+
+    /// Exact complete-book certificate authenticated from the 0x85/v2 outer.
+    pub const fn certified(&self) -> CertifiedRecipientAllocationV2 {
+        self.certified
     }
 
     /// Canonical 0x85/v2 recipient-allocation PDA.
@@ -257,6 +331,70 @@ impl PreparedCandidateFeeCollectionV5 {
     /// Sum of all complete-book owner fee rows.
     pub const fn selected_fee_atoms(&self) -> u64 {
         self.selected_fee_atoms
+    }
+
+    /// Exact persisted rent owner of the certified recipient account.
+    pub const fn recipient_rent(&self) -> DeletableRentOwnerV1 {
+        self.recipient_rent
+    }
+
+    /// Canonical stored bump of the certified recipient account.
+    pub const fn recipient_bump(&self) -> u8 {
+        self.recipient_bump
+    }
+}
+
+/// Fee-bearing action-39 input exact-joined to General's root expectation.
+///
+/// General remains the sole owner of SettlementRoot creation and counters.
+/// This value only pairs its exhaustive structural expectation with the O(1)
+/// authenticated complete-book fee certificate that supplied the fee total.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedCandidateFeeCollectionAction39V5 {
+    collection: PreparedCandidateFeeCollectionV5,
+    root_expectation: SettlementRootExpectationProjectionV1,
+}
+
+impl PreparedCandidateFeeCollectionAction39V5 {
+    /// Authenticated candidate-wide selected-fee collection.
+    pub const fn collection(&self) -> PreparedCandidateFeeCollectionV5 {
+        self.collection
+    }
+
+    /// Exact root/cash-pot expectation derived from exhaustive traversal.
+    pub const fn root_expectation(&self) -> SettlementRootExpectationProjectionV1 {
+        self.root_expectation
+    }
+}
+
+/// Exact rent-only disposition staged for the 0x85/v2 terminal close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedCandidateFeeCollectionClosureV5 {
+    collection: PreparedCandidateFeeCollectionV5,
+    closure: ExternalFeeAccountClosureV1,
+    principal_refund: FeeLamportTransferV2,
+    donation_credit: FeeLamportTransferV2,
+}
+
+impl PreparedCandidateFeeCollectionClosureV5 {
+    /// Reauthenticated candidate-wide fee collection consumed by the close.
+    pub const fn collection(&self) -> PreparedCandidateFeeCollectionV5 {
+        self.collection
+    }
+
+    /// Exact fee-runtime closure component for the terminal manifest.
+    pub const fn closure(&self) -> ExternalFeeAccountClosureV1 {
+        self.closure
+    }
+
+    /// Refund of only the persisted payer-funded rent principal.
+    pub const fn principal_refund(&self) -> FeeLamportTransferV2 {
+        self.principal_refund
+    }
+
+    /// Credit of all hostile prefunding and later native-lamport surplus.
+    pub const fn donation_credit(&self) -> FeeLamportTransferV2 {
+        self.donation_credit
     }
 }
 
@@ -787,6 +925,21 @@ fn require_fee_account_rent_v5(
     )
 }
 
+fn recipient_close_lamports_v5(
+    rent: DeletableRentOwnerV1,
+    balance_before: u64,
+) -> Outcome<(u64, u64)> {
+    rent.validate()?;
+    let donation = balance_before
+        .checked_sub(rent.refundable_principal)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        donation >= rent.donation_floor,
+        ClutchError::MismatchedState,
+    )?;
+    Ok((rent.refundable_principal, donation))
+}
+
 /// Authenticate the immutable complete-book fee certificate for action 39.
 ///
 /// This is O(1) only because 0x85/v2 is a fresh immutable program-owned
@@ -798,9 +951,57 @@ pub fn prepare_candidate_fee_collection_action39_v5(
     frame: CandidateFeeCollectionAccountFrameV5<'_, '_>,
     revenue_policy: &RevenuePolicyV1,
 ) -> Outcome<PreparedCandidateFeeCollectionV5> {
+    authenticate_candidate_fee_collection_v5(
+        program_id,
+        expected,
+        frame,
+        revenue_policy,
+        false,
+    )
+}
+
+/// Compose the fee-bearing action-39 root writeback expectation.
+///
+/// The 0x85/v2 creation contract consumes the complete owner fee book. This
+/// preparation seam authenticates that exact outer and joins it to General's
+/// exhaustive retained-feed/page traversal without rereading owner fee rows
+/// or accepting a caller-supplied aggregate. It does not create the
+/// SettlementRoot or mutate any root counter.
+pub fn compose_candidate_fee_collection_action39_v5(
+    program_id: &Pubkey,
+    expected: CandidateFeeCollectionExpectationV5,
+    frame: CandidateFeeCollectionAccountFrameV5<'_, '_>,
+    revenue_policy: &RevenuePolicyV1,
+    traversal: &SettlementTraversalProjectionV4,
+) -> Outcome<PreparedCandidateFeeCollectionAction39V5> {
+    let collection = prepare_candidate_fee_collection_action39_v5(
+        program_id,
+        expected,
+        frame,
+        revenue_policy,
+    )?;
+    let root_expectation = derive_settlement_root_expectation_from_certified_fee_v2(
+        traversal,
+        &collection.selected,
+        &collection.certified,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(PreparedCandidateFeeCollectionAction39V5 {
+        collection,
+        root_expectation,
+    })
+}
+
+#[inline(never)]
+fn authenticate_candidate_fee_collection_v5(
+    program_id: &Pubkey,
+    expected: CandidateFeeCollectionExpectationV5,
+    frame: CandidateFeeCollectionAccountFrameV5<'_, '_>,
+    revenue_policy: &RevenuePolicyV1,
+    recipient_writable: bool,
+) -> Outcome<PreparedCandidateFeeCollectionV5> {
     for account in [
         frame.selected_fee_record,
-        frame.certified_recipient_allocation,
         frame.batch_policy,
         frame.revenue_policy_record,
     ] {
@@ -821,10 +1022,11 @@ pub fn prepare_candidate_fee_collection_action39_v5(
         frame.selected_fee_record,
         SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     )?;
-    require_read_only_program_state(
+    require_snapshot_state(
         program_id,
         frame.certified_recipient_allocation,
         RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
+        recipient_writable,
     )?;
     require_read_only_program_state(program_id, frame.batch_policy, BATCH_POLICY_BYTES)?;
     require_read_only_program_state(
@@ -918,12 +1120,121 @@ pub fn prepare_candidate_fee_collection_action39_v5(
     )?;
     Ok(PreparedCandidateFeeCollectionV5 {
         selected: selected.semantic,
+        certified: recipient.semantic,
         recipient_account: id(frame.certified_recipient_allocation.key),
         recipient_account_data_id: recipient_data_id,
         owner_fee_book_data_id: recipient.semantic.owner_fee_book_data_id(),
         owner_order_set_digest: recipient.semantic.owner_order_set_digest(),
         owner_count: recipient.semantic.owner_count(),
         selected_fee_atoms: allocation.collected_fee_atoms(),
+        recipient_rent: recipient.rent,
+        recipient_bump: recipient.stored_bump,
+    })
+}
+
+/// Authenticate and stage the rent-only 0x85/v2 terminal close.
+///
+/// The returned [`ExternalFeeAccountClosureV1`] must be consumed by the same
+/// candidate-wide terminal composer that creates the named close receipt. No
+/// write or lamport transfer is performed here. The recipient account holds no
+/// fee value: its exact economic allocation remains ordinary Position-ledger
+/// accounting. Consequently only persisted native rent principal is refunded;
+/// every other lamport is a donation to the authenticated MarketBinding sink.
+pub fn prepare_candidate_fee_collection_terminal_close_v5(
+    program_id: &Pubkey,
+    expected: CandidateFeeCollectionExpectationV5,
+    authority: CandidateFeeCollectionClosureExpectationV5,
+    frame: CandidateFeeCollectionClosureAccountFrameV5<'_, '_>,
+    revenue_policy: &RevenuePolicyV1,
+) -> Outcome<PreparedCandidateFeeCollectionClosureV5> {
+    let collection = authenticate_candidate_fee_collection_v5(
+        program_id,
+        expected,
+        frame.collection,
+        revenue_policy,
+        true,
+    )?;
+    require(
+        collection.recipient_account_data_id == authority.recipient_account_data_id,
+        ClutchError::MismatchedState,
+    )?;
+    require_read_only_program_state(
+        program_id,
+        frame.market_binding,
+        MARKET_BINDING_ACCOUNT_BYTES_V2,
+    )?;
+    let market_binding = MarketBindingV2::decode(&borrow_data(frame.market_binding)?)?;
+    let binding = market_binding.base();
+    expect_pda(
+        frame.market_binding.key,
+        seeds::general_v2_market_binding_pda(
+            program_id,
+            &binding.market_instance_v2_id.bytes(),
+        ),
+        Some(binding.stored_bump),
+    )?;
+    let runtime_release = fee_runtime_semantic_release_id_v1(&RuntimeSha256)?;
+    require(
+        id(frame.market_binding.key) == authority.market_binding
+            && binding.market == expected.market
+            && market_binding.batch_policy_id() == expected.batch_policy
+            && id(frame.neutral_sink.key) == binding.neutral_sink
+            && id(frame.rent_refund_owner.key) == collection.recipient_rent.payer
+            && authority.runtime_release == runtime_release,
+        ClutchError::MismatchedState,
+    )?;
+    for destination in [frame.rent_refund_owner, frame.neutral_sink] {
+        require(!destination.executable, ClutchError::ExecutableAccount)?;
+        require(destination.is_writable, ClutchError::NotWritable)?;
+    }
+    require(
+        frame.rent_refund_owner.key != frame.neutral_sink.key
+            && frame.rent_refund_owner.key
+                != frame.collection.certified_recipient_allocation.key
+            && frame.neutral_sink.key != frame.collection.certified_recipient_allocation.key
+            && frame.market_binding.key != frame.collection.certified_recipient_allocation.key
+            && frame.market_binding.key != frame.rent_refund_owner.key
+            && frame.market_binding.key != frame.neutral_sink.key
+            && authority.close_receipt != collection.recipient_account
+            && authority.close_receipt != collection.recipient_rent.payer
+            && authority.close_receipt != id(frame.neutral_sink.key)
+            && authority.close_receipt != id(frame.market_binding.key),
+        ClutchError::AccountAlias,
+    )?;
+    let balance_before = frame.collection.certified_recipient_allocation.lamports();
+    let (principal_lamports, donation_lamports) =
+        recipient_close_lamports_v5(collection.recipient_rent, balance_before)?;
+    let account = FeeId(collection.recipient_account.bytes());
+    let rent_payer = FeeId(collection.recipient_rent.payer.bytes());
+    let neutral_sink = fee_id(frame.neutral_sink.key);
+    let closure = map_fee(ExternalFeeAccountClosureV1::admit(
+        CandidateFeeAccountRoleV1::RecipientAllocation,
+        authority.outcome,
+        FeeId(program_id.to_bytes()),
+        FeeId(runtime_release.bytes()),
+        collection.selected.fee_record(),
+        account,
+        FeeId([0; 32]),
+        FeeId(authority.close_receipt.bytes()),
+        rent_payer,
+        neutral_sink,
+        balance_before,
+        principal_lamports,
+        donation_lamports,
+    ))?;
+    Ok(PreparedCandidateFeeCollectionClosureV5 {
+        collection,
+        closure,
+        principal_refund: FeeLamportTransferV2 {
+            source: collection.recipient_account,
+            destination: collection.recipient_rent.payer,
+            lamports: principal_lamports,
+        },
+        donation_credit: FeeLamportTransferV2 {
+            source: collection.recipient_account,
+            destination: id(frame.neutral_sink.key),
+            lamports: donation_lamports,
+        },
     })
 }
 
@@ -1710,6 +2021,45 @@ mod tests {
                 row,
                 root,
                 1_040,
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
+        );
+    }
+
+    #[test]
+    fn candidate_certificate_close_never_turns_surplus_into_refund() {
+        let rent = DeletableRentOwnerV1 {
+            payer: Id32::from_bytes([41; 32]),
+            refundable_principal: 1_000,
+            donation_floor: 40,
+        };
+        assert_eq!(recipient_close_lamports_v5(rent, 1_075), Ok((1_000, 75)));
+        assert_eq!(recipient_close_lamports_v5(rent, 1_039), Err(
+            Refusal::Adapter(ClutchError::MismatchedState)
+        ));
+        assert_eq!(recipient_close_lamports_v5(rent, 999), Err(
+            Refusal::Adapter(ClutchError::Arithmetic)
+        ));
+    }
+
+    #[test]
+    fn candidate_certificate_close_authority_ids_are_disjoint() {
+        let outcome = FeeTerminalOutcomeV1::Settled;
+        assert!(CandidateFeeCollectionClosureExpectationV5::new(
+            Id32::from_bytes([51; 32]),
+            Id32::from_bytes([52; 32]),
+            Id32::from_bytes([53; 32]),
+            Id32::from_bytes([54; 32]),
+            outcome,
+        )
+        .is_ok());
+        assert_eq!(
+            CandidateFeeCollectionClosureExpectationV5::new(
+                Id32::from_bytes([51; 32]),
+                Id32::from_bytes([52; 32]),
+                Id32::from_bytes([53; 32]),
+                Id32::from_bytes([51; 32]),
+                outcome,
             ),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
